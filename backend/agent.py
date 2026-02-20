@@ -1,4 +1,4 @@
-from langchain_anthropic import ChatAnthropic
+from langchain_groq import ChatGroq
 from langchain.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 import datetime
@@ -26,7 +26,7 @@ TOOL_MAP = {
 }
 
 # Initialize Claude Sonnet 4.6
-llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0)
+llm = ChatGroq(model="openai/gpt-oss-120b", temperature=0)
 llm_with_tools = llm.bind_tools(tools)
 
 
