@@ -1,0 +1,41 @@
+# Environment variables (contains API keys)
+.env
+.env.local
+.env*.local
+
+# Node.js
+node_modules/
+
+# Python virtualenvs — covers any name
+venv/
+.venv/
+demoenv/
+env/
+*env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Next.js build output
+.next/
+out/
+build/
+
+# VS Code
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# TypeScript build info
+*.tsbuildinfo
+next-env.d.ts
