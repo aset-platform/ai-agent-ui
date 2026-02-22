@@ -94,6 +94,24 @@ docs: add MkDocs site with full project documentation
 ```
 13 files changed, 1,951 insertions
 
+### 11. Pre-push quality gate (hooks/pre-push)
+
+Added a git pre-push hook that enforces 5 mandatory steps before every push to `main`:
+
+| Check | Mechanism | On failure |
+|-------|-----------|------------|
+| No bare `print()` in backend Python | AST walk via `demoenv/bin/python` | Hard block (exit 1) |
+| Module-level docstrings on non-`__init__.py` files | AST walk | Warning only (exit 0) |
+| `mkdocs build` passes | Runs in `demoenv` | Hard block (exit 1) |
+| OOP architecture / standard practices | CLAUDE.md checklist (manual) | — |
+| CLAUDE.md + PROGRESS.md + docs updated | CLAUDE.md checklist (manual) | — |
+
+- Hook saved to `hooks/pre-push` (tracked by git — source of truth)
+- Install: `cp hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push`
+- Uses AST parsing (not `grep`) so `print()` inside docstring examples is not flagged
+- Only activates on pushes targeting `refs/heads/main`; other branches pass through
+- Added "Pre-Push Checklist" section to CLAUDE.md with the full 5-step gate
+
 ---
 
 ## Current State of the Codebase
@@ -112,7 +130,8 @@ docs: add MkDocs site with full project documentation
 | Frontend chat UI | ✅ Unchanged — working |
 | Multi-turn history | ✅ Working |
 | Documentation | ✅ MkDocs site — 11 pages, material theme (`mkdocs serve`) |
-| Git + GitHub | ✅ Clean — 6 commits pushed |
+| Pre-push hook | ✅ `hooks/pre-push` — print() + docstring + mkdocs checks |
+| Git + GitHub | ✅ Clean — 7 commits pushed |
 
 ---
 
@@ -175,6 +194,7 @@ npm run dev
 | `89d7eb4` | docs: update CLAUDE.md and add PROGRESS.md session log |
 | `fa20966` | refactor: OOP backend restructure with agents/, tools/ packages and structured logging |
 | `f7f1cbc` | docs: add MkDocs site with full project documentation |
+| `58bdd6a` | docs: update CLAUDE.md and PROGRESS.md with MkDocs session |
 
 ---
 

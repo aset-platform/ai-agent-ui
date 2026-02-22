@@ -95,6 +95,114 @@ mkdocs serve                           # → http://127.0.0.1:8000
 mkdocs build --site-dir site/          # static build
 ```
 
+### Install the pre-push hook (one-time setup)
+```bash
+cp hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+```
+
+The hook blocks pushes to `main` if bare `print()` calls exist in backend Python or `mkdocs build` fails. See [Pre-Push Checklist](#pre-push-checklist) below.
+
+To test the hook without pushing:
+```bash
+printf 'refs/heads/main 0000000000000000000000000000000000000000 refs/heads/main 0000000000000000000000000000000000000000\n' \
+  | bash hooks/pre-push
+```
+
+---
+
+## Pre-Push Checklist
+
+**Every push to `main` must pass all five steps.** The git hook (`hooks/pre-push`, installed to `.git/hooks/pre-push`) enforces steps 1, 3, and 5 automatically. Steps 2 and 4 are manual.
+
+---
+
+### Step 1 — Google-style docstrings on all backend Python files
+
+Every non-`__init__.py` file under `backend/` must have:
+- A **module-level docstring** as the first statement (before any imports)
+- **Class-level docstrings** on every class
+- **Method/function docstrings** on every public method and `@tool` function
+
+Format (Google style, Sphinx-compatible):
+```python
+"""One-sentence summary.
+
+Longer description if needed.
+
+Args:
+    param_name: Description.
+
+Returns:
+    Description.
+
+Raises:
+    ExceptionType: When raised.
+
+Example:
+    >>> result = my_function(arg)
+    >>> isinstance(result, str)
+    True
+"""
+```
+
+The hook **warns** (does not block) on missing module docstrings. Missing class/method docstrings are a manual check.
+
+---
+
+### Step 2 — OOP architecture and standard practices
+
+Before pushing, verify:
+
+- [ ] No new module-level mutable globals — all state in class instances
+- [ ] New agents extend `BaseAgent`; only `_build_llm()` is overridden
+- [ ] New tools registered via `ToolRegistry.register()` in `ChatServer._register_tools()`
+- [ ] No direct cross-module imports of tool/agent internals — use registries
+- [ ] Type annotations on all public function signatures
+- [ ] `Optional[X]` used (not `X | Y` union syntax) — Python 3.9 compat
+- [ ] New HTTP request/response bodies modelled as Pydantic classes in `main.py`
+- [ ] No bare `except:` — always `except Exception` or a specific type
+
+---
+
+### Step 3 — Appropriate logging (no bare print() in backend)
+
+The hook **hard blocks** pushes to `main` containing `print()` calls in backend Python.
+
+Rules:
+- Use `logging.getLogger(__name__)` per module (not a shared global)
+- `DEBUG` for internal state, `INFO` for lifecycle events, `WARNING` for recoverable issues, `ERROR` for failures
+- `print()` inside docstring examples is ignored (AST-based check, skips string literals)
+
+Fix pattern:
+```python
+logger = logging.getLogger(__name__)
+logger.debug("value: %s", x)   # NOT: print(x)
+```
+
+---
+
+### Step 4 — Code review checklist
+
+Self-review `git diff --staged` before committing:
+
+- [ ] No secrets, API keys, or `.env` files staged
+- [ ] No debug leftovers (`breakpoint()`, `# TODO`, temp `print()`)
+- [ ] Error paths raise `HTTPException` with correct status codes — no errors in `200` bodies
+- [ ] Tool failures return error strings (not exceptions) so LLM gets a `ToolMessage`
+- [ ] `requirements.txt` updated if new packages installed (`pip freeze > backend/requirements.txt`)
+- [ ] Commit message follows `type: description` convention (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`)
+
+---
+
+### Step 5 — Update docs and CLAUDE.md/PROGRESS.md
+
+The hook **hard blocks** if `mkdocs build` fails. You must also:
+
+- [ ] Update `PROGRESS.md` — add a dated session entry (what changed, why, commit hash)
+- [ ] Update `CLAUDE.md` — reflect any changes to project structure, API, decisions, or How to Run
+- [ ] Update the relevant `docs/` page(s) — new endpoints → `docs/backend/api.md`, decisions → `docs/dev/decisions.md`, etc.
+- [ ] Run `mkdocs serve` locally to verify rendered output before pushing
+
 ---
 
 ## Backend Details
@@ -215,6 +323,7 @@ Also update the `model` field in `create_general_agent()` to `"claude-sonnet-4-6
 - **Google-style Sphinx docstrings** added to all backend Python files (module-level + class + method)
 - **Python 3.9 type annotation compat** — `X | Y` union syntax (PEP 604, Python 3.10+) replaced with `Optional[X]` from `typing`, since `demoenv` runs Python 3.9.13
 - **MkDocs with material theme** — documentation site added; `mkdocs==1.6.1` and `mkdocs-material==9.7.2` installed in `demoenv`; 11 pages covering backend, frontend, API, decisions, and changelog; served with `mkdocs serve`
+- **Pre-push git hook** — `hooks/pre-push` (committed; install with `cp hooks/pre-push .git/hooks/pre-push && chmod +x`); AST-based checks for `print()` (hard block) and module docstrings (warning); `mkdocs build` (hard block); only enforced on pushes to `main`
 
 ---
 
