@@ -36,10 +36,22 @@ ai-agent-ui/
 │   └── postcss.config.mjs
 │
 └── backend/               # FastAPI server
-    ├── main.py            # HTTP server, /chat endpoint
-    ├── agent.py           # LangChain agent + tool definitions
-    ├── requirements.txt   # Frozen pip deps (from demoenv)
-    └── demoenv/           # Python virtualenv — NOT committed (in .gitignore)
+    ├── main.py              # ChatServer class + uvicorn entry point
+    ├── logging_config.py    # Centralised logging (console + rotating file)
+    ├── config.py            # Pydantic Settings (env vars / .env file)
+    ├── agents/
+    │   ├── __init__.py
+    │   ├── base.py          # AgentConfig dataclass + BaseAgent ABC
+    │   ├── registry.py      # AgentRegistry
+    │   └── general_agent.py # GeneralAgent (Groq) + factory function
+    ├── tools/
+    │   ├── __init__.py
+    │   ├── registry.py      # ToolRegistry
+    │   ├── time_tool.py     # get_current_time @tool
+    │   └── search_tool.py   # search_web @tool
+    ├── requirements.txt     # Frozen pip deps (from demoenv)
+    ├── logs/                # Created at runtime — gitignored
+    └── demoenv/             # Python virtualenv — NOT committed
 ```
 
 ---
@@ -57,6 +69,8 @@ export SERPAPI_API_KEY=...       # required for search_web tool
 uvicorn main:app --port 8181 --reload
 ```
 
+Optionally set `LOG_LEVEL` (default `DEBUG`) and `LOG_TO_FILE` (default `true`) as env vars, or put them in a `backend/.env` file.
+
 ### Frontend
 ```bash
 cd frontend
@@ -72,33 +86,68 @@ The frontend hardcodes the backend URL as `http://127.0.0.1:8181` (move to `.env
 ## Backend Details
 
 ### `backend/main.py`
-- FastAPI app with CORS open to all origins
-- Single POST endpoint: `/chat`
-- Request body:
-  ```json
-  { "message": "user text", "history": [{"role": "user"|"assistant", "content": "..."}] }
-  ```
-- Response: `{ "response": "assistant text" }`
+- All server state is encapsulated in `ChatServer`, which owns a `ToolRegistry`, an `AgentRegistry`, and the `FastAPI` app.
+- Module-level startup at the bottom creates the singleton and exposes `app` for uvicorn.
+- Two endpoints:
+  - **`POST /chat`** — request: `{"message": str, "history": [...], "agent_id": str = "general"}`; response: `{"response": str, "agent_id": str}`
+  - **`GET /agents`** — returns `{"agents": [{"id", "name", "description"}, ...]}`
+- Error handling: `404` when `agent_id` is not registered; `500` on unhandled agent exceptions. Both use `HTTPException`, not error strings in a `200` body.
 
-### `backend/agent.py`
-- **Current LLM**: `langchain_groq.ChatGroq(model="openai/gpt-oss-120b", temperature=0)` *(temporary)*
-- **Intended LLM**: `langchain_anthropic.ChatAnthropic(model="claude-sonnet-4-6", temperature=0)`
-- Tools bound via `llm.bind_tools(tools)`
-- **Agentic loop**: keeps invoking the model, executes all tool calls, feeds `ToolMessage` results back, repeats until no more tool calls — then returns `response.content`
-- History dicts are converted to `HumanMessage` / `AIMessage` objects before the loop
-- Two tools:
-  - `get_current_time()` — returns `datetime.datetime.now()`
-  - `search_web(query: str)` — calls `SerpAPIWrapper().run(query)` (requires `SERPAPI_API_KEY`)
+### `backend/logging_config.py`
+- Single public function: `setup_logging(level, log_to_file, log_dir)`.
+- Always adds a console (`stdout`) handler.
+- When `log_to_file=True`, adds a `TimedRotatingFileHandler` that writes to `logs/agent.log`, rotates at midnight, keeps 7 days.
+- Clears existing handlers before adding new ones so uvicorn hot-reload does not duplicate log lines.
+- Log format: `YYYY-MM-DD HH:MM:SS,mmm | LEVEL    | logger.name | message`
 
-### Switching back to Claude (2-line change in `agent.py`)
+### `backend/config.py`
+- `Settings` is a Pydantic `BaseSettings` model; fields: `groq_api_key`, `anthropic_api_key`, `serpapi_api_key`, `log_level` (`"DEBUG"`), `log_to_file` (`True`).
+- Reads from env vars; also reads `backend/.env` if present (env vars take precedence).
+- `get_settings()` is cached with `@lru_cache` — parsed once per process.
+
+### `backend/agents/`
+
+**`base.py`**
+- `AgentConfig` — dataclass with fields: `agent_id`, `name`, `description`, `model`, `temperature`, `system_prompt`, `tool_names`.
+- `BaseAgent` — ABC implementing the full agentic loop in `run()`:
+  1. Convert `history` dicts to `HumanMessage`/`AIMessage` objects.
+  2. Invoke `llm_with_tools`.
+  3. Execute all tool calls via `ToolRegistry.invoke()`, append `ToolMessage` results.
+  4. Repeat until the model returns no tool calls, then return `response.content`.
+- Subclasses only implement `_build_llm()` to supply a provider-specific chat model.
+
+**`registry.py`**
+- `AgentRegistry` — maps `agent_id` strings to `BaseAgent` instances.
+- `register(agent)`, `get(agent_id) -> Optional[BaseAgent]`, `list_agents() -> list[dict]`.
+- `get()` logs a `WARNING` (not an exception) when an ID is not found.
+
+**`general_agent.py`**
+- `GeneralAgent(BaseAgent)` — implements `_build_llm()` returning `ChatGroq(model=..., temperature=...)`.
+- `create_general_agent(tool_registry)` — factory that builds an `AgentConfig` with `agent_id="general"`, model `"openai/gpt-oss-120b"`, and tools `["get_current_time", "search_web"]`, then returns a `GeneralAgent`.
+
+### `backend/tools/`
+
+**`registry.py`**
+- `ToolRegistry` — maps tool name strings to LangChain `BaseTool` instances.
+- `register(tool)`, `get(name)`, `get_tools(names) -> list[BaseTool]`, `invoke(name, args) -> str`, `list_names() -> list[str]`.
+- `invoke()` returns `"Unknown tool: <name>"` rather than raising when a tool is missing, so the LLM receives a meaningful `ToolMessage`.
+
+**`time_tool.py`**
+- `get_current_time()` — `@tool`-decorated function; returns `str(datetime.datetime.now())`.
+
+**`search_tool.py`**
+- `search_web(query: str)` — `@tool`-decorated function; calls `SerpAPIWrapper().run(query)` (requires `SERPAPI_API_KEY`).
+- Wraps in `try/except`; on failure returns `"Search failed: <reason>"` so the LLM receives a `ToolMessage` rather than an unhandled exception.
+
+### Switching back to Claude (2-line change in `agents/general_agent.py`)
 ```python
 # Line 1 — change import
 from langchain_anthropic import ChatAnthropic
 
-# Line 29 — change model init
-llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0)
+# Line 2 — change return in GeneralAgent._build_llm()
+return ChatAnthropic(model=self.config.model, temperature=self.config.temperature)
 ```
-Then update the comment on line 28 and set `ANTHROPIC_API_KEY` instead of `GROQ_API_KEY`.
+Also update the `model` field in `create_general_agent()` to `"claude-sonnet-4-6"` and set `ANTHROPIC_API_KEY` instead of `GROQ_API_KEY`.
 
 ---
 
@@ -141,14 +190,20 @@ Then update the comment on line 28 and set `ANTHROPIC_API_KEY` instead of `GROQ_
 - **`frontend/.git` was removed** — it was a nested git repo causing submodule issues; frontend is now tracked as regular files inside the root repo
 - **SerpAPI chosen over Google Custom Search API** — simpler setup (one API key, no Google Cloud project), free tier is sufficient, already supported by `langchain-community`
 - **`requirements.txt` is now frozen** — populated from `demoenv` with `pip freeze`; update it whenever new packages are installed
+- **OOP refactor adopted** — backend restructured into `agents/` and `tools/` packages with `BaseAgent` ABC, `ToolRegistry`, and `AgentRegistry` for extensibility; adding a new agent or tool requires no changes to routing code
+- **`ChatServer` class in `main.py`** — all server-level state (registries, app) encapsulated in a single class; avoids module-level globals
+- **Structured logging over `print()`** — `logging_config.setup_logging()` configures the root logger; all modules use `logging.getLogger(__name__)` so log lines are filterable by module
+- **Rotating file logs** — `TimedRotatingFileHandler` writes to `backend/logs/agent.log`; rotates daily, keeps 7 days; `logs/` directory is gitignored
+- **`config.py` with Pydantic Settings** — env vars validated at startup; `.env` file supported; `get_settings()` cached with `@lru_cache`
+- **Google-style Sphinx docstrings** added to all backend Python files (module-level + class + method)
+- **Python 3.9 type annotation compat** — `X | Y` union syntax (PEP 604, Python 3.10+) replaced with `Optional[X]` from `typing`, since `demoenv` runs Python 3.9.13
 
 ---
 
 ## Known Limitations / TODOs
 
-- **Anthropic API not working** — currently on Groq as a workaround; switch back when resolved (see 2-line change above)
-- **`SERPAPI_API_KEY` must be set** — `search_web` will throw without it; get key at serpapi.com (100 free searches/month)
+- **Anthropic API not working** — currently on Groq as a workaround; switch back when resolved (see 2-line change in `agents/general_agent.py` → `_build_llm()` above)
+- **`SERPAPI_API_KEY` must be set** — `search_web` will return an error string without it; get key at serpapi.com (100 free searches/month)
 - **No streaming** — backend waits for full agentic loop before responding; SSE or WebSockets would improve perceived speed
 - **No session persistence** — history lives only in React state, lost on page refresh
 - **Backend URL hardcoded** — `http://127.0.0.1:8181` in `page.tsx`; move to `frontend/.env.local` before deploying
-- **No error handling on search_web** — SerpAPI calls can fail; should wrap in try/except
