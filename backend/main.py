@@ -46,6 +46,7 @@ from tools.time_tool import get_current_time
 from tools.search_tool import search_web
 from agents.registry import AgentRegistry
 from agents.general_agent import create_general_agent
+from tools.agent_tool import create_search_market_news_tool
 
 # === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
 # Does not modify existing chat agent functionality.
@@ -158,6 +159,10 @@ class ChatServer:
         """
         general = create_general_agent(self.tool_registry)
         self.agent_registry.register(general)
+
+        # Register news tool now that general agent exists (stock agent depends on it)
+        search_market_news = create_search_market_news_tool(general)
+        self.tool_registry.register(search_market_news)
 
         # === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
         stock = create_stock_agent(self.tool_registry)

@@ -93,12 +93,26 @@ const AGENTS = [
 // === END STOCK AGENT ROUTING ===
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [histories, setHistories] = useState<Record<string, Message[]>>({
+    general: [],
+    stock: [],
+  });
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   // === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
   const [agentId, setAgentId] = useState("general");
   // === END STOCK AGENT ROUTING ===
+
+  // Derived messages for the active agent
+  const messages = histories[agentId] ?? [];
+
+  // Scoped setter — always updates only the current agent's history
+  const setMessages = (updater: Message[] | ((prev: Message[]) => Message[])) => {
+    setHistories((h) => ({
+      ...h,
+      [agentId]: typeof updater === "function" ? updater(h[agentId] ?? []) : updater,
+    }));
+  };
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -189,7 +203,7 @@ export default function ChatPage() {
             {AGENTS.map((a) => (
               <button
                 key={a.id}
-                onClick={() => { setAgentId(a.id); setMessages([]); }}
+                onClick={() => setAgentId(a.id)}
                 className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${
                   agentId === a.id
                     ? "bg-white text-indigo-700 shadow-sm"

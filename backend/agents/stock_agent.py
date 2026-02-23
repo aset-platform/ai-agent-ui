@@ -59,7 +59,9 @@ STANDARD PIPELINE — follow this order for every single-stock request:
 2. Call get_stock_info to retrieve company metadata (name, sector, market cap, PE ratio).
 3. Call analyse_stock_price for full technical analysis and chart generation.
 4. Call forecast_stock for Prophet price targets and forecast chart.
-5. Synthesise all results into a clear, structured report.
+5. Call search_market_news with a query like "{TICKER} latest news earnings analyst 2026" \
+to include recent developments in the report.
+6. Synthesise all results into a clear, structured report.
 
 COMPARISON PIPELINE — for multi-stock requests:
 1. Call fetch_multiple_stocks with a comma-separated list of tickers.
@@ -149,6 +151,7 @@ def create_stock_agent(tool_registry: ToolRegistry) -> StockAgent:
             "list_available_stocks",
             "analyse_stock_price",
             "forecast_stock",
+            "search_market_news",
         ],
     )
     return StockAgent(config=config, tool_registry=tool_registry)

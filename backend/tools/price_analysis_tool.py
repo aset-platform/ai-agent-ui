@@ -28,6 +28,7 @@ Typical usage (via LangChain tool call)::
 
 import logging
 import math
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -47,10 +48,41 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _DATA_RAW = _PROJECT_ROOT / "data" / "raw"
 _CHARTS_ANALYSIS = _PROJECT_ROOT / "charts" / "analysis"
+_CACHE_DIR = _PROJECT_ROOT / "data" / "cache"
 
 # ---------------------------------------------------------------------------
 # Private helper functions
 # ---------------------------------------------------------------------------
+
+
+def _load_cache(ticker: str, key: str) -> Optional[str]:
+    """Return cached result text for today if it exists, otherwise None.
+
+    Args:
+        ticker: Stock ticker symbol (uppercased).
+        key: Cache key string, e.g. ``"analysis"``.
+
+    Returns:
+        The cached result string, or ``None`` if no cache file exists for today.
+    """
+    path = _CACHE_DIR / f"{ticker}_{key}_{date.today()}.txt"
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    return None
+
+
+def _save_cache(ticker: str, key: str, result: str) -> None:
+    """Write result text to a dated cache file.
+
+    Args:
+        ticker: Stock ticker symbol (uppercased).
+        key: Cache key string, e.g. ``"analysis"``.
+        result: The string result to cache.
+    """
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _CACHE_DIR / f"{ticker}_{key}_{date.today()}.txt"
+    path.write_text(result, encoding="utf-8")
+    logger.debug("Cache saved: %s", path)
 
 
 def _load_parquet(ticker: str) -> Optional[pd.DataFrame]:
@@ -474,6 +506,11 @@ def analyse_stock_price(ticker: str) -> str:
     ticker = ticker.upper().strip()
     logger.info("analyse_stock_price | ticker=%s", ticker)
 
+    cached = _load_cache(ticker, "analysis")
+    if cached:
+        logger.info("Returning cached analysis for %s", ticker)
+        return cached
+
     try:
         df = _load_parquet(ticker)
         if df is None:
@@ -520,6 +557,7 @@ def analyse_stock_price(ticker: str) -> str:
             f"  Saved to: {chart_path}\n"
         )
 
+        _save_cache(ticker, "analysis", report)
         logger.info("analyse_stock_price complete for %s", ticker)
         return report
 

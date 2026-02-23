@@ -45,6 +45,7 @@ next-env.d.ts
 data/raw/
 data/processed/
 data/forecasts/
+data/cache/
 
 # Stock agent — generated chart HTML files
 charts/analysis/

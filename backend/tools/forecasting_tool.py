@@ -47,10 +47,41 @@ _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _DATA_RAW = _PROJECT_ROOT / "data" / "raw"
 _DATA_FORECASTS = _PROJECT_ROOT / "data" / "forecasts"
 _CHARTS_FORECASTS = _PROJECT_ROOT / "charts" / "forecasts"
+_CACHE_DIR = _PROJECT_ROOT / "data" / "cache"
 
 # ---------------------------------------------------------------------------
 # Private helper functions
 # ---------------------------------------------------------------------------
+
+
+def _load_cache(ticker: str, key: str) -> Optional[str]:
+    """Return cached result text for today if it exists, otherwise None.
+
+    Args:
+        ticker: Stock ticker symbol (uppercased).
+        key: Cache key string, e.g. ``"forecast_9m"``.
+
+    Returns:
+        The cached result string, or ``None`` if no cache file exists for today.
+    """
+    path = _CACHE_DIR / f"{ticker}_{key}_{date.today()}.txt"
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    return None
+
+
+def _save_cache(ticker: str, key: str, result: str) -> None:
+    """Write result text to a dated cache file.
+
+    Args:
+        ticker: Stock ticker symbol (uppercased).
+        key: Cache key string, e.g. ``"forecast_9m"``.
+        result: The string result to cache.
+    """
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _CACHE_DIR / f"{ticker}_{key}_{date.today()}.txt"
+    path.write_text(result, encoding="utf-8")
+    logger.debug("Cache saved: %s", path)
 
 
 def _load_parquet(ticker: str) -> Optional[pd.DataFrame]:
@@ -468,6 +499,11 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
     months = max(1, int(months))
     logger.info("forecast_stock | ticker=%s | months=%d", ticker, months)
 
+    cached = _load_cache(ticker, f"forecast_{months}m")
+    if cached:
+        logger.info("Returning cached forecast for %s (%dm)", ticker, months)
+        return cached
+
     try:
         df = _load_parquet(ticker)
         if df is None:
@@ -531,6 +567,7 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             f"  Chart           : {chart_path}\n"
         )
 
+        _save_cache(ticker, f"forecast_{months}m", report)
         logger.info("forecast_stock complete for %s", ticker)
         return report
 
