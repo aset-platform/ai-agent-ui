@@ -7,10 +7,10 @@ The AI Stock Analysis Dashboard is a four-page interactive web app built with [P
 ## Running the Dashboard
 
 ```bash
-# From the project root with demoenv active:
-./run_dashboard.sh
+# Start all services at once (recommended):
+./run.sh start
 
-# Or manually:
+# Dashboard only:
 source backend/demoenv/bin/activate
 python dashboard/app.py
 ```

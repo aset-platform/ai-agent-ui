@@ -49,7 +49,7 @@ ai-agent-ui/
 │   ├── layouts.py         # Four page-layout factories + global NAVBAR
 │   └── assets/
 │       └── custom.css     # Dark theme overrides on top of DARKLY
-├── run_dashboard.sh       # Convenience launcher (activates demoenv, runs app.py)
+├── run.sh                 # Unified launcher — start/stop/status/restart all four services
 │
 ├── frontend/              # Next.js app
 │   ├── .gitignore         # Next.js-specific ignores (.next/, node_modules/, etc.)
@@ -92,48 +92,48 @@ ai-agent-ui/
 
 ## How to Run
 
-### Backend
+### All services at once (recommended)
 ```bash
-cd backend
-source demoenv/bin/activate
-
-export GROQ_API_KEY=...          # current LLM
+export GROQ_API_KEY=...          # required for chat backend
 export SERPAPI_API_KEY=...       # required for search_web tool
-# No extra env vars needed for stock agent — uses Yahoo Finance (no key required)
 
+./run.sh start      # starts all four services in the background
+./run.sh status     # show PID + URL for each service
+./run.sh stop       # stop everything
+./run.sh restart    # stop then start
+```
+
+| Service | URL |
+|---------|-----|
+| Backend (FastAPI) | http://127.0.0.1:8181 |
+| Frontend (Next.js) | http://localhost:3000 |
+| Docs (MkDocs) | http://127.0.0.1:8000 |
+| Dashboard (Dash) | http://127.0.0.1:8050 |
+
+Logs are written to `/tmp/ai-agent-ui-logs/`.
+
+### Individual services (manual)
+```bash
+# Backend
+cd backend && source demoenv/bin/activate
 uvicorn main:app --port 8181 --reload
+
+# Frontend
+cd frontend && npm install && npm run dev
+
+# Dashboard
+source backend/demoenv/bin/activate && python dashboard/app.py
+
+# Docs
+source backend/demoenv/bin/activate && mkdocs serve
 ```
 
 Optionally set `LOG_LEVEL` (default `DEBUG`) and `LOG_TO_FILE` (default `true`) as env vars, or put them in a `backend/.env` file.
 
-### Frontend
+### MkDocs — static build
 ```bash
-cd frontend
-npm install
-npm run dev
-# Runs on http://localhost:3000
-```
-
-The frontend hardcodes the backend URL as `http://127.0.0.1:8181` (move to `.env.local` before deploying).
-
-### Dashboard (Plotly Dash)
-```bash
-cd ai-agent-ui
-./run_dashboard.sh            # activates demoenv, starts on http://127.0.0.1:8050
-
-# Or manually:
 source backend/demoenv/bin/activate
-python dashboard/app.py
-```
-
-No extra env vars or API keys needed — reads parquet files from `data/`.
-
-### MkDocs (documentation)
-```bash
-cd ai-agent-ui
-source backend/demoenv/bin/activate   # mkdocs installed in demoenv
-mkdocs serve                           # → http://127.0.0.1:8000
-mkdocs build --site-dir site/          # static build
+mkdocs build --site-dir site/
 ```
 
 ### Stock agent — run pipeline manually (without the LLM)
@@ -391,15 +391,12 @@ Also update the `model` field in `create_general_agent()` to `"claude-sonnet-4-6
 
 ### How to Run the Dashboard
 ```bash
-# From project root with demoenv active:
-./run_dashboard.sh          # → http://127.0.0.1:8050
-
-# Or manually:
-source backend/demoenv/bin/activate
-python dashboard/app.py
+./run.sh start      # starts all four services including the dashboard
+./run.sh status     # shows PID + URL for each service
+./run.sh stop       # stops everything
 ```
 
-No backend API or API keys required — the dashboard reads local parquet files directly.
+Dashboard URL: `http://127.0.0.1:8050`. No API keys required — reads local parquet files directly.
 
 ### Four Pages
 

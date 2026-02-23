@@ -14,6 +14,42 @@
 
 ---
 
+## All Services at Once (Recommended)
+
+`run.sh` in the project root starts, stops, and monitors all four services.
+
+```bash
+export GROQ_API_KEY=gsk_...
+export SERPAPI_API_KEY=abc123...
+
+./run.sh start      # launch all four services in the background
+./run.sh status     # show PID + URL for each service
+./run.sh stop       # stop everything
+./run.sh restart    # stop then start
+```
+
+After `start`, the table output looks like:
+
+```
+  Service       PID       URL                               Status
+  ──────────────────────────────────────────────────────────────────────
+  backend       31842     http://127.0.0.1:8181             ● up
+  frontend      31901     http://localhost:3000             ● up
+  docs          31967     http://127.0.0.1:8000             ● up
+  dashboard     32014     http://127.0.0.1:8050             ● up
+```
+
+Logs are written to `/tmp/ai-agent-ui-logs/`:
+
+| File | Service |
+|------|---------|
+| `backend.log` | FastAPI / uvicorn output |
+| `frontend.log` | Next.js dev server output |
+| `docs.log` | MkDocs serve output |
+| `dashboard.log` | Plotly Dash output |
+
+---
+
 ## Backend
 
 ### 1. Activate the virtual environment
@@ -166,21 +202,15 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 ## Dashboard
 
-The dashboard runs independently — no backend server or API keys required.
-
-```bash
-cd ai-agent-ui
-./run_dashboard.sh          # activates demoenv, starts on http://127.0.0.1:8050
-```
-
-Or manually:
+The dashboard can be started on its own — no API keys required.
 
 ```bash
 source backend/demoenv/bin/activate
 python dashboard/app.py
+# → http://127.0.0.1:8050
 ```
 
-Open [http://127.0.0.1:8050](http://127.0.0.1:8050). The Home page will be empty until stock data has been fetched at least once via the chat interface or the pipeline below.
+The Home page will be empty until stock data has been fetched at least once via the chat interface or the stock pipeline below.
 
 ---
 
