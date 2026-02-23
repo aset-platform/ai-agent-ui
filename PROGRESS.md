@@ -2,6 +2,61 @@
 
 ---
 
+# Session: Feb 23, 2026
+
+## What We Built Today — Stock Analysis Agent
+
+Added a full stock analysis capability to the existing agentic chat app, following Option B (fit existing standards): all new code integrates into the existing `BaseAgent` / `ToolRegistry` / `AgentRegistry` framework rather than being standalone.
+
+### New Files Created
+
+| File | Description |
+|---|---|
+| `backend/agents/stock_agent.py` | `StockAgent(BaseAgent)` + `create_stock_agent()` factory |
+| `backend/tools/stock_data_tool.py` | 6 `@tool` functions — Yahoo Finance delta fetch + parquet storage |
+| `backend/tools/price_analysis_tool.py` | 1 `@tool` — technical indicators + 3-panel Plotly chart |
+| `backend/tools/forecasting_tool.py` | 1 `@tool` — Prophet forecast + confidence chart |
+| `docs/stock_agent.md` | Full MkDocs documentation page for the stock agent |
+| `data/metadata/stock_registry.json` | Live registry — 5 stocks fetched (AAPL, TSLA, RELIANCE.NS, MSFT, GOOGL) |
+| `data/raw/*.parquet` | 5 OHLCV parquet files (~130KB each, gitignored) |
+| `data/forecasts/*.parquet` | 6 forecast files (gitignored) |
+| `charts/analysis/*.html` | 5 interactive analysis charts (~5.4MB each, gitignored) |
+| `charts/forecasts/*.html` | 6 interactive forecast charts (~4.8MB each, gitignored) |
+
+### Files Modified
+
+| File | Change |
+|---|---|
+| `backend/agents/base.py` | Added `SystemMessage` import; `_build_messages()` now prepends system prompt when set |
+| `backend/main.py` | Registered 8 stock tools and `StockAgent` in `ChatServer` |
+| `frontend/app/page.tsx` | Added agent selector toggle (General / Stock Analysis); `agent_id` passed in requests |
+| `.gitignore` | Added `data/raw/`, `data/processed/`, `data/forecasts/`, `charts/analysis/`, `charts/forecasts/`, `site/` |
+| `mkdocs.yml` | Added Stock Agent nav section |
+| `backend/requirements.txt` | Frozen with 10 new stock agent dependencies |
+| `CLAUDE.md` | Updated project structure, backend details, dependencies, run commands |
+
+### Architecture Decisions
+
+- **Option B adopted** — stock agent extends `BaseAgent`, tools are `@tool` functions registered in `ToolRegistry`, routing via `agent_id="stock"` on `POST /chat`. No pattern matching.
+- **`src/` folder not created** — all Python code stays in `backend/agents/` and `backend/tools/`.
+- **`StockAgent` is not an orchestrator** — the LLM drives the pipeline via the system prompt.
+- **Tools return strings** — all `@tool` functions return formatted strings; DataFrames are stored to parquet and loaded internally by subsequent tools.
+- **Delta fetching** — `fetch_stock_data` checks `stock_registry.json` before fetching; only missing date range is downloaded on subsequent calls.
+- **pyarrow pinned to <18** — pyarrow 21.x has no pre-built wheel for Python 3.9 on macOS x86_64; pinned at 17.0.0.
+- **Plotly 6.x `add_vline` workaround** — replaced with `add_shape` + `add_annotation` due to a datetime axis incompatibility in Plotly 6.
+
+### Test Results
+
+| Test | Result |
+|---|---|
+| Data fetcher (4 tickers) | All pass — AAPL, TSLA, RELIANCE.NS, MSFT, GOOGL fetched |
+| Delta fetch | Correctly skips on same-day re-fetch |
+| Price analysis (5 tickers) | All pass — indicators, drawdown, Sharpe, charts |
+| Forecasting (3 tickers) | All pass — Prophet trained, targets at 3/6/9M, MAPE <11% for AAPL/TSLA/MSFT |
+| Chat interface (6 messages) | 6/6 pass — routing, content, error handling, general agent unchanged |
+
+---
+
 # Session: Feb 22, 2026
 
 ## What We Did Today

@@ -47,6 +47,8 @@ nav:
       - Tools: backend/tools.md
       - Configuration: backend/config.md
       - Logging: backend/logging.md
+  - Stock Agent:
+      - Overview: stock_agent.md
   - Frontend:
       - Overview: frontend/overview.md
   - Development:

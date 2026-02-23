@@ -1,0 +1,52 @@
+{
+  "AAPL": {
+    "ticker": "AAPL",
+    "last_fetch_date": "2026-02-23",
+    "total_rows": 2515,
+    "date_range": {
+      "start": "2016-02-22",
+      "end": "2026-02-20"
+    },
+    "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/AAPL_raw.parquet"
+  },
+  "TSLA": {
+    "ticker": "TSLA",
+    "last_fetch_date": "2026-02-23",
+    "total_rows": 2515,
+    "date_range": {
+      "start": "2016-02-22",
+      "end": "2026-02-20"
+    },
+    "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/TSLA_raw.parquet"
+  },
+  "RELIANCE.NS": {
+    "ticker": "RELIANCE.NS",
+    "last_fetch_date": "2026-02-23",
+    "total_rows": 2471,
+    "date_range": {
+      "start": "2016-02-23",
+      "end": "2026-02-23"
+    },
+    "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/RELIANCE.NS_raw.parquet"
+  },
+  "MSFT": {
+    "ticker": "MSFT",
+    "last_fetch_date": "2026-02-23",
+    "total_rows": 2515,
+    "date_range": {
+      "start": "2016-02-22",
+      "end": "2026-02-20"
+    },
+    "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/MSFT_raw.parquet"
+  },
+  "GOOGL": {
+    "ticker": "GOOGL",
+    "last_fetch_date": "2026-02-23",
+    "total_rows": 2515,
+    "date_range": {
+      "start": "2016-02-22",
+      "end": "2026-02-20"
+    },
+    "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/GOOGL_raw.parquet"
+  }
+}

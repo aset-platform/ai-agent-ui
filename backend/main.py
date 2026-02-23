@@ -47,6 +47,22 @@ from tools.search_tool import search_web
 from agents.registry import AgentRegistry
 from agents.general_agent import create_general_agent
 
+# === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
+# Does not modify existing chat agent functionality.
+# Stock agent is dispatched via agent_id="stock" on POST /chat.
+from tools.stock_data_tool import (
+    fetch_stock_data,
+    get_stock_info,
+    load_stock_data,
+    fetch_multiple_stocks,
+    get_dividend_history,
+    list_available_stocks,
+)
+from tools.price_analysis_tool import analyse_stock_price
+from tools.forecasting_tool import forecast_stock
+from agents.stock_agent import create_stock_agent
+# === END STOCK AGENT ROUTING ===
+
 
 class ChatRequest(BaseModel):
     """Request body for the ``POST /chat`` endpoint.
@@ -120,6 +136,18 @@ class ChatServer:
         """
         self.tool_registry.register(get_current_time)
         self.tool_registry.register(search_web)
+
+        # === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
+        self.tool_registry.register(fetch_stock_data)
+        self.tool_registry.register(get_stock_info)
+        self.tool_registry.register(load_stock_data)
+        self.tool_registry.register(fetch_multiple_stocks)
+        self.tool_registry.register(get_dividend_history)
+        self.tool_registry.register(list_available_stocks)
+        self.tool_registry.register(analyse_stock_price)
+        self.tool_registry.register(forecast_stock)
+        # === END STOCK AGENT ROUTING ===
+
         self.logger.info("Tools registered: %s", self.tool_registry.list_names())
 
     def _register_agents(self) -> None:
@@ -130,6 +158,12 @@ class ChatServer:
         """
         general = create_general_agent(self.tool_registry)
         self.agent_registry.register(general)
+
+        # === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
+        stock = create_stock_agent(self.tool_registry)
+        self.agent_registry.register(stock)
+        # === END STOCK AGENT ROUTING ===
+
         self.logger.info(
             "Agents registered: %s",
             [a["id"] for a in self.agent_registry.list_agents()],

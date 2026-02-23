@@ -39,7 +39,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, BaseMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, BaseMessage, SystemMessage
 
 from tools.registry import ToolRegistry
 
@@ -159,6 +159,8 @@ class BaseAgent(ABC):
             objects ready to be passed to the LLM.
         """
         messages: list[BaseMessage] = []
+        if self.config.system_prompt:
+            messages.append(SystemMessage(content=self.config.system_prompt))
         for msg in history:
             role = msg.get("role")
             content = msg.get("content", "")

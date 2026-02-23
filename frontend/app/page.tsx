@@ -27,10 +27,20 @@ function TypingDots() {
   );
 }
 
+// === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
+const AGENTS = [
+  { id: "general", label: "General", hint: "Ask me anything — I can search the web or check the time." },
+  { id: "stock",   label: "Stock Analysis", hint: 'Try: "Analyse AAPL" · "Forecast TSLA for 6 months" · "Compare AAPL and MSFT"' },
+];
+// === END STOCK AGENT ROUTING ===
+
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  // === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
+  const [agentId, setAgentId] = useState("general");
+  // === END STOCK AGENT ROUTING ===
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -62,6 +72,7 @@ export default function ChatPage() {
       const res = await axios.post("http://127.0.0.1:8181/chat", {
         message: userMessage.content,
         history: messages.map((m) => ({ role: m.role, content: m.content })),
+        agent_id: agentId, // === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
       });
 
       setMessages([
@@ -115,6 +126,23 @@ export default function ChatPage() {
             <h1 className="font-semibold text-gray-900 leading-tight">AI Agent</h1>
             <span className="text-xs text-indigo-600 font-medium">Claude Sonnet 4.6</span>
           </div>
+          {/* === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 === */}
+          <div className="flex items-center gap-1 ml-4 bg-gray-100 rounded-lg p-0.5">
+            {AGENTS.map((a) => (
+              <button
+                key={a.id}
+                onClick={() => { setAgentId(a.id); setMessages([]); }}
+                className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${
+                  agentId === a.id
+                    ? "bg-white text-indigo-700 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+          {/* === END STOCK AGENT ROUTING === */}
         </div>
 
         {messages.length > 0 && (
@@ -145,7 +173,11 @@ export default function ChatPage() {
             </div>
             <div>
               <p className="text-gray-700 font-medium text-lg">How can I help you today?</p>
-              <p className="text-gray-400 text-sm mt-1">Ask me anything — I can search the web or check the time.</p>
+              {/* === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 === */}
+              <p className="text-gray-400 text-sm mt-1">
+                {AGENTS.find((a) => a.id === agentId)?.hint}
+              </p>
+              {/* === END STOCK AGENT ROUTING === */}
             </div>
           </div>
         )}

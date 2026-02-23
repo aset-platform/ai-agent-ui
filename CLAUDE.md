@@ -21,16 +21,34 @@ ai-agent-ui/
 ├── .gitignore             # Root gitignore (covers both frontend + backend)
 ├── CLAUDE.md              # This file — project context for Claude Code
 ├── PROGRESS.md            # Session log: what was done, what's pending
+├── STOCK_AGENT_PLAN.md    # Build plan for the stock analysis agent
 ├── mkdocs.yml             # MkDocs config (material theme)
 ├── docs/                  # MkDocs source pages
 │   ├── index.md
+│   ├── stock_agent.md     # Stock agent documentation
 │   ├── backend/           # overview, api, agents, tools, config, logging
 │   ├── frontend/          # overview
 │   └── dev/               # how-to-run, decisions, changelog
+│
+├── data/                  # Stock data (gitignored except metadata/)
+│   ├── raw/               # OHLCV parquet files: {TICKER}_raw.parquet
+│   ├── processed/         # Dividend history parquet
+│   ├── forecasts/         # Prophet forecast parquet: {TICKER}_{N}m_forecast.parquet
+│   └── metadata/          # Tracked by git
+│       ├── stock_registry.json        # Fetch registry (ticker, date, rows, path)
+│       └── {TICKER}_info.json         # Company metadata cache (daily refresh)
+│
+├── charts/                # Generated Plotly HTML charts (gitignored)
+│   ├── analysis/          # {TICKER}_analysis.html — candlestick + volume + RSI
+│   └── forecasts/         # {TICKER}_forecast.html — price + confidence band
+│
+├── dashboard/             # Plotly Dash web dashboard (Phase 8 — not yet built)
+│   └── assets/
+│
 ├── frontend/              # Next.js app
 │   ├── .gitignore         # Next.js-specific ignores (.next/, node_modules/, etc.)
 │   ├── app/
-│   │   ├── page.tsx       # Main chat UI (the only page)
+│   │   ├── page.tsx       # Main chat UI — agent selector toggle added
 │   │   ├── layout.tsx     # Root layout
 │   │   └── globals.css    # Tailwind global styles
 │   ├── public/            # Static SVG assets
@@ -47,14 +65,18 @@ ai-agent-ui/
     ├── config.py            # Pydantic Settings (env vars / .env file)
     ├── agents/
     │   ├── __init__.py
-    │   ├── base.py          # AgentConfig dataclass + BaseAgent ABC
+    │   ├── base.py          # AgentConfig dataclass + BaseAgent ABC (SystemMessage support added)
     │   ├── registry.py      # AgentRegistry
-    │   └── general_agent.py # GeneralAgent (Groq) + factory function
+    │   ├── general_agent.py # GeneralAgent (Groq) + factory function
+    │   └── stock_agent.py   # StockAgent (Groq) + create_stock_agent factory
     ├── tools/
     │   ├── __init__.py
     │   ├── registry.py      # ToolRegistry
     │   ├── time_tool.py     # get_current_time @tool
-    │   └── search_tool.py   # search_web @tool
+    │   ├── search_tool.py   # search_web @tool
+    │   ├── stock_data_tool.py     # 6 @tools: fetch/load/list stock data (Yahoo Finance + parquet)
+    │   ├── price_analysis_tool.py # 1 @tool: technical indicators + 3-panel Plotly chart
+    │   └── forecasting_tool.py    # 1 @tool: Prophet forecast + confidence chart
     ├── requirements.txt     # Frozen pip deps (from demoenv)
     ├── logs/                # Created at runtime — gitignored
     └── demoenv/             # Python virtualenv — NOT committed
@@ -71,6 +93,7 @@ source demoenv/bin/activate
 
 export GROQ_API_KEY=...          # current LLM
 export SERPAPI_API_KEY=...       # required for search_web tool
+# No extra env vars needed for stock agent — uses Yahoo Finance (no key required)
 
 uvicorn main:app --port 8181 --reload
 ```
@@ -93,6 +116,23 @@ cd ai-agent-ui
 source backend/demoenv/bin/activate   # mkdocs installed in demoenv
 mkdocs serve                           # → http://127.0.0.1:8000
 mkdocs build --site-dir site/          # static build
+```
+
+### Stock agent — run pipeline manually (without the LLM)
+```bash
+cd ai-agent-ui
+source backend/demoenv/bin/activate
+python -c "
+import sys; sys.path.insert(0, 'backend')
+from tools.stock_data_tool import fetch_stock_data, list_available_stocks
+from tools.price_analysis_tool import analyse_stock_price
+from tools.forecasting_tool import forecast_stock
+
+print(fetch_stock_data.invoke({'ticker': 'AAPL'}))
+print(analyse_stock_price.invoke({'ticker': 'AAPL'}))
+print(forecast_stock.invoke({'ticker': 'AAPL', 'months': 9}))
+print(list_available_stocks.invoke({}))
+"
 ```
 
 ### Install the pre-push hook (one-time setup)
@@ -205,6 +245,27 @@ The hook **hard blocks** if `mkdocs build` fails. You must also:
 
 ---
 
+## Stock Agent Dependencies
+
+Installed into `demoenv` during the Feb 23, 2026 session:
+
+| Package | Version | Purpose |
+|---|---|---|
+| `yfinance` | 1.2.0 | Yahoo Finance OHLCV + company info |
+| `pandas` | 2.3.3 | DataFrame manipulation |
+| `numpy` | 2.0.2 | Numerical operations |
+| `scikit-learn` | 1.6.1 | Available for ML extensions |
+| `prophet` | 1.3.0 | Meta time-series forecasting |
+| `plotly` | 6.5.2 | Interactive HTML charts |
+| `ta` | 0.11.0 | Technical analysis indicators |
+| `pyarrow` | 17.0.0 | Parquet file read/write (capped <18 for Python 3.9) |
+| `dash` | 4.0.0 | Web dashboard framework (Phase 8) |
+| `dash-bootstrap-components` | 2.0.4 | Dashboard styling (Phase 8) |
+
+Yahoo Finance requires no API key. All stock data is stored locally in parquet format.
+
+---
+
 ## Backend Details
 
 ### `backend/main.py`
@@ -261,7 +322,42 @@ The hook **hard blocks** if `mkdocs build` fails. You must also:
 - `search_web(query: str)` — `@tool`-decorated function; calls `SerpAPIWrapper().run(query)` (requires `SERPAPI_API_KEY`).
 - Wraps in `try/except`; on failure returns `"Search failed: <reason>"` so the LLM receives a `ToolMessage` rather than an unhandled exception.
 
-### Switching back to Claude (2-line change in `agents/general_agent.py`)
+### `backend/agents/stock_agent.py`
+- `StockAgent(BaseAgent)` — extends `BaseAgent`, overrides only `_build_llm()` to return `ChatGroq`.
+- `_STOCK_SYSTEM_PROMPT` — instructs the LLM to follow the fetch → analyse → forecast pipeline and format responses as structured reports.
+- `create_stock_agent(tool_registry)` — factory; `agent_id="stock"`, model `"openai/gpt-oss-120b"`, 8 tool names.
+- Same 2-line Claude switch as `GeneralAgent`.
+
+### `backend/tools/stock_data_tool.py`
+Six `@tool` functions for Yahoo Finance data management:
+- `fetch_stock_data(ticker, period="10y")` — full fetch on first call, delta fetch on subsequent calls, skips if up to date. Saves to `data/raw/{TICKER}_raw.parquet`.
+- `get_stock_info(ticker)` — company metadata, cached to `data/metadata/{TICKER}_info.json` (daily refresh).
+- `load_stock_data(ticker)` — summary of locally stored parquet (no network call).
+- `fetch_multiple_stocks(tickers, period="10y")` — batch wrapper over `fetch_stock_data`.
+- `get_dividend_history(ticker)` — saves to `data/processed/{TICKER}_dividends.parquet`.
+- `list_available_stocks()` — reads `stock_registry.json`, prints formatted table.
+
+### `backend/tools/price_analysis_tool.py`
+One `@tool` function (`analyse_stock_price`) backed by private helpers:
+- Computes SMA 50/200, EMA 20, RSI 14, MACD, Bollinger Bands, ATR 14 using `ta` library.
+- Analyses bull/bear phases, max drawdown, support/resistance, annualised volatility, Sharpe ratio.
+- Generates 3-panel Plotly dark chart (candlestick + volume + RSI), saved to `charts/analysis/{TICKER}_analysis.html`.
+- Returns a formatted string report with all metrics.
+
+### `backend/tools/forecasting_tool.py`
+One `@tool` function (`forecast_stock`) backed by private helpers:
+- Prepares data in Prophet `ds`/`y` format using `Adj Close`.
+- Trains Prophet with yearly + weekly seasonality, US federal holidays, 80% confidence interval.
+- Generates price targets at 3, 6, 9 month marks.
+- Evaluates accuracy via 12-month in-sample backtest (MAE, RMSE, MAPE).
+- Saves forecast to `data/forecasts/{TICKER}_{N}m_forecast.parquet`.
+- Generates Plotly forecast chart (historical + forecast + confidence band + annotations), saved to `charts/forecasts/{TICKER}_forecast.html`.
+
+### `backend/agents/base.py` — fix applied Feb 23, 2026
+- `SystemMessage` import added; `_build_messages()` now prepends a `SystemMessage` when `config.system_prompt` is non-empty.
+- `GeneralAgent` unaffected (`system_prompt=""` by default).
+
+### Switching back to Claude (2-line change in `agents/general_agent.py` and `agents/stock_agent.py`)
 ```python
 # Line 1 — change import
 from langchain_anthropic import ChatAnthropic
@@ -329,7 +425,7 @@ Also update the `model` field in `create_general_agent()` to `"claude-sonnet-4-6
 
 ## Known Limitations / TODOs
 
-- **Anthropic API not working** — currently on Groq as a workaround; switch back when resolved (see 2-line change in `agents/general_agent.py` → `_build_llm()` above)
+- **Anthropic API not working** — currently on Groq as a workaround; switch back when resolved (see 2-line change in `agents/general_agent.py` and `agents/stock_agent.py` → `_build_llm()` above)
 - **`SERPAPI_API_KEY` must be set** — `search_web` will return an error string without it; get key at serpapi.com (100 free searches/month)
 - **No streaming** — backend waits for full agentic loop before responding; SSE or WebSockets would improve perceived speed
 - **No session persistence** — history lives only in React state, lost on page refresh

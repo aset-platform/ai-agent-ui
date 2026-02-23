@@ -40,3 +40,15 @@ logs/
 # TypeScript build info
 *.tsbuildinfo
 next-env.d.ts
+
+# Stock agent — generated data (gitignored; only metadata is tracked)
+data/raw/
+data/processed/
+data/forecasts/
+
+# Stock agent — generated chart HTML files
+charts/analysis/
+charts/forecasts/
+
+# MkDocs static build output
+site/
