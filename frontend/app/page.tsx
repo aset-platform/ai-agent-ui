@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect } from "react";
 import axios from "axios";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface Message {
   role: "user" | "assistant";
@@ -24,6 +26,62 @@ function TypingDots() {
         />
       ))}
     </div>
+  );
+}
+
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        h1: ({ children }) => <h1 className="text-lg font-bold mt-3 mb-1 first:mt-0">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-base font-semibold mt-3 mb-1 first:mt-0">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-sm font-semibold mt-2 mb-1 first:mt-0">{children}</h3>,
+        p:  ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+        ul: ({ children }) => <ul className="list-disc pl-5 mb-2 space-y-0.5">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal pl-5 mb-2 space-y-0.5">{children}</ol>,
+        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+        em:     ({ children }) => <em className="italic">{children}</em>,
+        hr: () => <hr className="border-gray-200 my-3" />,
+        blockquote: ({ children }) => (
+          <blockquote className="border-l-4 border-indigo-300 pl-3 italic text-gray-500 my-2">{children}</blockquote>
+        ),
+        a: ({ href, children }) => (
+          <a href={href} target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline hover:text-indigo-800">
+            {children}
+          </a>
+        ),
+        pre: ({ children }) => (
+          <pre className="bg-gray-900 text-gray-100 rounded-lg px-4 py-3 overflow-x-auto text-xs font-mono my-2">
+            {children}
+          </pre>
+        ),
+        code: ({ className, children }) =>
+          className ? (
+            <code className="font-mono">{children}</code>
+          ) : (
+            <code className="bg-gray-100 text-indigo-700 rounded px-1 py-0.5 text-[0.83em] font-mono">
+              {children}
+            </code>
+          ),
+        table: ({ children }) => (
+          <div className="overflow-x-auto my-2">
+            <table className="min-w-full text-xs border-collapse">{children}</table>
+          </div>
+        ),
+        thead: ({ children }) => <thead className="bg-gray-50">{children}</thead>,
+        th: ({ children }) => (
+          <th className="border border-gray-200 px-3 py-1.5 font-semibold text-left text-gray-700">{children}</th>
+        ),
+        td: ({ children }) => (
+          <td className="border border-gray-200 px-3 py-1.5 text-gray-700">{children}</td>
+        ),
+        tr: ({ children }) => <tr className="even:bg-gray-50">{children}</tr>,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
   );
 }
 
@@ -200,13 +258,13 @@ export default function ChatPage() {
 
             <div className={`flex flex-col gap-1 max-w-[72%] ${msg.role === "user" ? "items-end" : "items-start"}`}>
               <div
-                className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm ${
+                className={`px-4 py-2.5 rounded-2xl text-sm shadow-sm ${
                   msg.role === "user"
-                    ? "bg-indigo-600 text-white rounded-br-sm"
+                    ? "bg-indigo-600 text-white rounded-br-sm leading-relaxed whitespace-pre-wrap break-words"
                     : "bg-white text-gray-800 border border-gray-100 rounded-bl-sm"
                 }`}
               >
-                {msg.content}
+                {msg.role === "user" ? msg.content : <MarkdownContent content={msg.content} />}
               </div>
               <span className="text-[11px] text-gray-400 px-1">
                 {formatTime(msg.timestamp)}
