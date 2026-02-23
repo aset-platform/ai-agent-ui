@@ -1,0 +1,212 @@
+/* ============================================================
+   AI Stock Analysis Dashboard — Custom Styles
+   Applied on top of dash-bootstrap-components DARKLY theme.
+   ============================================================ */
+
+/* ── Global ──────────────────────────────────────────────── */
+
+body {
+  background-color: #1a1d23;
+  color: #e0e0e0;
+}
+
+/* ── Navigation ──────────────────────────────────────────── */
+
+.navbar-brand {
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.nav-link-custom {
+  font-size: 0.9rem;
+  padding: 0.4rem 0.8rem !important;
+  border-radius: 4px;
+  transition: background-color 0.2s ease;
+}
+
+.nav-link-custom:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+/* ── Stock cards (Home page) ─────────────────────────────── */
+
+.stock-card {
+  background-color: #22262e;
+  border: 1px solid #2e3340 !important;
+  border-radius: 8px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+  cursor: pointer;
+}
+
+.stock-card:hover {
+  border-color: #4c8eff !important;
+  box-shadow: 0 0 0 1px #4c8eff, 0 4px 16px rgba(76, 142, 255, 0.18);
+  transform: translateY(-2px);
+}
+
+/* ── Stat cards (Analysis / Forecast pages) ──────────────── */
+
+.stat-card {
+  background-color: #22262e;
+  border: 1px solid #2e3340 !important;
+  border-radius: 8px;
+  transition: border-color 0.2s ease;
+}
+
+.stat-card:hover {
+  border-color: #4c8eff !important;
+}
+
+/* ── Forecast target cards ────────────────────────────────── */
+
+.target-card {
+  background-color: #1e2228;
+  border-radius: 8px;
+  transition: box-shadow 0.2s ease;
+}
+
+.target-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Dropdowns (dark override) ────────────────────────────── */
+
+.dropdown-dark .Select-control,
+.dropdown-dark .VirtualizedSelectFocusedOption,
+.dropdown-dark .VirtualizedSelectOption,
+.Select.is-focused > .Select-control {
+  background-color: #2c3034 !important;
+  border-color: #444 !important;
+  color: #e0e0e0 !important;
+}
+
+.Select-menu-outer {
+  background-color: #2c3034 !important;
+  border-color: #444 !important;
+  color: #e0e0e0 !important;
+}
+
+.Select-option {
+  background-color: #2c3034 !important;
+  color: #e0e0e0 !important;
+}
+
+.Select-option:hover,
+.Select-option.is-focused {
+  background-color: #3a3f4a !important;
+}
+
+/* ── Dash loading spinner ─────────────────────────────────── */
+
+._dash-loading {
+  min-height: 60px;
+}
+
+/* ── Range slider ────────────────────────────────────────── */
+
+.rc-slider-rail {
+  background-color: #3a3f4a;
+}
+
+.rc-slider-track {
+  background-color: #4c8eff;
+}
+
+.rc-slider-handle {
+  border-color: #4c8eff;
+  background-color: #4c8eff;
+}
+
+.rc-slider-mark-text {
+  color: #aaa;
+  font-size: 0.78rem;
+}
+
+/* ── Controls row background ─────────────────────────────── */
+
+.bg-dark.rounded.p-3 {
+  background-color: #1e2228 !important;
+}
+
+/* ── Badge overrides ─────────────────────────────────────── */
+
+.badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.3em 0.65em;
+}
+
+/* ── Tables ──────────────────────────────────────────────── */
+
+.table-dark th {
+  color: #888;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid #3a3f4a;
+}
+
+.table-dark td {
+  border-color: #2e3340;
+}
+
+.table-dark tbody tr:hover {
+  background-color: rgba(76, 142, 255, 0.08);
+}
+
+/* ── Alert messages ──────────────────────────────────────── */
+
+.alert {
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+/* ── Checklist switches (overlays) ───────────────────────── */
+
+.form-check-label {
+  font-size: 0.875rem;
+  color: #ccc;
+  margin-right: 0.8rem;
+}
+
+/* ── Radio buttons (forecast horizon) ───────────────────── */
+
+.form-check-input:checked {
+  background-color: #4c8eff;
+  border-color: #4c8eff;
+}
+
+/* ── Plotly chart container ──────────────────────────────── */
+
+.js-plotly-plot .plotly {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* ── Responsive adjustments (tablet) ─────────────────────── */
+
+@media (max-width: 768px) {
+  .container-fluid.px-4 {
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+  }
+
+  .stock-card {
+    border-radius: 6px;
+  }
+
+  .navbar-brand {
+    font-size: 0.95rem;
+  }
+}
+
+/* ── Page heading ────────────────────────────────────────── */
+
+h2.fw-bold {
+  background: linear-gradient(90deg, #4c8eff 0%, #a78bfa 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}

@@ -2,6 +2,48 @@
 
 ---
 
+# Session: Feb 23, 2026 (continued) — Plotly Dash Dashboard
+
+## What We Built — Phase 8 Dashboard
+
+Completed and committed the Plotly Dash web dashboard (`dashboard/`), which was written but not yet committed.
+
+### Files Added / Changed
+
+| File | Description |
+|------|-------------|
+| `dashboard/__init__.py` | Package init with module docstring |
+| `dashboard/app.py` | Entry point — Dash app, DARKLY theme, routing callback, `server` for gunicorn |
+| `dashboard/layouts.py` | Four page-layout factories (`home_layout`, `analysis_layout`, `forecast_layout`, `compare_layout`) + `NAVBAR` |
+| `dashboard/callbacks.py` | All callbacks — stock cards, analysis chart, forecast chart, compare; Run New Analysis pipeline |
+| `dashboard/assets/custom.css` | Dark theme overrides on top of DARKLY |
+| `run_dashboard.sh` | Convenience launcher (activates demoenv, runs `dashboard/app.py`) |
+| `CLAUDE.md` | Added Dashboard Details section, How to Run entry, updated project tree |
+
+### Code Fix
+
+- Removed redundant `import_dbc_row()` wrapper in `callbacks.py`; inlined `dbc.Row(cols)` directly in `_build_stats_cards`.
+
+### Architecture Decisions
+
+- **Direct parquet reads** — dashboard reads `data/raw/*.parquet` and `data/forecasts/*.parquet` directly; no HTTP call to the FastAPI backend.
+- **"Run New Analysis" imports backend tools directly** — `callbacks.py` imports `backend.tools.forecasting_tool` private helpers via `sys.path` insertion done in `app.py`; this avoids duplicating the Prophet pipeline.
+- **`dcc.Store` for cross-page ticker** — `nav-ticker-store` carries the selected ticker from the Home page search/dropdown to the Analysis and Forecast dropdowns.
+- **`suppress_callback_exceptions=True`** — required because dropdowns and charts only exist in the DOM once their page is rendered.
+- **DARKLY theme + custom.css** — `dbc.themes.DARKLY` provides the base dark theme; `assets/custom.css` overrides card backgrounds, slider colours, and table styles.
+
+### Verified
+
+| Check | Result |
+|-------|--------|
+| Import check (`python -c "import dashboard.app"`) | ✅ No errors |
+| HTTP 200 on `/` | ✅ |
+| Dashboard layout JSON valid | ✅ |
+| No bare `print()` calls | ✅ |
+| Module docstrings present | ✅ |
+
+---
+
 # Session: Feb 23, 2026
 
 ## What We Built Today — Stock Analysis Agent

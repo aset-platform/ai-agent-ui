@@ -42,8 +42,14 @@ ai-agent-ui/
 │   ├── analysis/          # {TICKER}_analysis.html — candlestick + volume + RSI
 │   └── forecasts/         # {TICKER}_forecast.html — price + confidence band
 │
-├── dashboard/             # Plotly Dash web dashboard (Phase 8 — not yet built)
+├── dashboard/             # Plotly Dash web dashboard (Phase 8 — complete)
+│   ├── __init__.py        # Package init
+│   ├── app.py             # Entry point — Dash app, DARKLY theme, page routing
+│   ├── callbacks.py       # All interactive callbacks (analysis, forecast, compare)
+│   ├── layouts.py         # Four page-layout factories + global NAVBAR
 │   └── assets/
+│       └── custom.css     # Dark theme overrides on top of DARKLY
+├── run_dashboard.sh       # Convenience launcher (activates demoenv, runs app.py)
 │
 ├── frontend/              # Next.js app
 │   ├── .gitignore         # Next.js-specific ignores (.next/, node_modules/, etc.)
@@ -109,6 +115,18 @@ npm run dev
 ```
 
 The frontend hardcodes the backend URL as `http://127.0.0.1:8181` (move to `.env.local` before deploying).
+
+### Dashboard (Plotly Dash)
+```bash
+cd ai-agent-ui
+./run_dashboard.sh            # activates demoenv, starts on http://127.0.0.1:8050
+
+# Or manually:
+source backend/demoenv/bin/activate
+python dashboard/app.py
+```
+
+No extra env vars or API keys needed — reads parquet files from `data/`.
 
 ### MkDocs (documentation)
 ```bash
@@ -366,6 +384,50 @@ from langchain_anthropic import ChatAnthropic
 return ChatAnthropic(model=self.config.model, temperature=self.config.temperature)
 ```
 Also update the `model` field in `create_general_agent()` to `"claude-sonnet-4-6"` and set `ANTHROPIC_API_KEY` instead of `GROQ_API_KEY`.
+
+---
+
+## Dashboard Details
+
+### How to Run the Dashboard
+```bash
+# From project root with demoenv active:
+./run_dashboard.sh          # → http://127.0.0.1:8050
+
+# Or manually:
+source backend/demoenv/bin/activate
+python dashboard/app.py
+```
+
+No backend API or API keys required — the dashboard reads local parquet files directly.
+
+### Four Pages
+
+| Page | Route | What it does |
+|------|-------|-------------|
+| Home | `/` | Stock cards (price, 10Y return, AI sentiment), search/dropdown to navigate |
+| Analysis | `/analysis` | 3-panel interactive chart (candlestick + RSI + MACD), date-range slider, overlay toggles (SMA 50/200, BB, Volume), 6 stat cards |
+| Forecast | `/forecast` | Prophet forecast chart, price-target cards (3m/6m/9m), accuracy metrics, "Run New Analysis" button |
+| Compare | `/compare` | Normalised performance chart, metrics table (Sharpe, drawdown, RSI, MACD, 6M upside), returns correlation heatmap |
+
+### Architecture
+
+- **`dashboard/app.py`** — Creates the `dash.Dash` instance with `dbc.themes.DARKLY`, a `dcc.Location` for routing, a `dcc.Store` (`nav-ticker-store`) to pass selected tickers between pages, a 5-minute `dcc.Interval` to auto-refresh stock cards, and the `display_page` page-routing callback. Exposes `server` for gunicorn deployment.
+- **`dashboard/layouts.py`** — Stateless layout factories; reads the stock registry once at call time to populate dropdowns. No callbacks live here.
+- **`dashboard/callbacks.py`** — All interactive logic via `register_callbacks(app)`. Reads OHLCV parquet with `_load_raw()` and forecast parquet with `_load_forecast()`. The "Run New Analysis" button imports backend tool functions directly (no HTTP) to run a full fetch → Prophet pipeline.
+- **`dashboard/assets/custom.css`** — Dark theme overrides (stock cards, stat cards, sliders, dropdowns, tables).
+
+### Key Callback Interactions
+
+| Callback | Inputs | Outputs |
+|----------|--------|---------|
+| `refresh_stock_cards` | `registry-refresh.n_intervals`, `url.pathname` | `stock-cards-container.children`, `home-registry-dropdown.options` |
+| `navigate_to_analysis` | `search-btn.n_clicks`, `home-registry-dropdown.value` | `url.pathname`, `nav-ticker-store.data` |
+| `sync_analysis_ticker` | `url.search`, `url.pathname` | `analysis-ticker-dropdown.value` |
+| `update_analysis_chart` | ticker, date-range slider, overlay toggles | `analysis-chart.figure`, `analysis-stats-row.children` |
+| `update_forecast_chart` | ticker, horizon radio, refresh store | forecast chart, target cards, accuracy row |
+| `run_new_analysis` | `run-analysis-btn.n_clicks` | status alert, refresh store, accuracy row |
+| `update_compare` | `compare-ticker-dropdown.value` | perf chart, metrics table, heatmap |
 
 ---
 
