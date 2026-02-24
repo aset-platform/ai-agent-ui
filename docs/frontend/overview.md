@@ -58,9 +58,12 @@ interface Message {
 |-------|------|---------|
 | `view` | `View` | Which surface is rendered |
 | `iframeUrl` | `string \| null` | Specific URL for the iframe (e.g. `/analysis?ticker=AAPL`); `null` = base URL |
+| `iframeLoading` | `boolean` | `true` while the iframe is loading; shows spinner overlay |
+| `iframeError` | `boolean` | `true` if the iframe `onError` fires; shows error banner |
 | `histories` | `Record<string, Message[]>` | Per-agent chat history, keyed by `agentId` |
 | `input` | `string` | Current textarea value |
 | `loading` | `boolean` | `true` while a backend request is in flight |
+| `statusLine` | `string` | Human-readable status text shown in `StatusBadge` during streaming |
 | `agentId` | `string` | Active agent (`"general"` or `"stock"`) |
 | `menuOpen` | `boolean` | Navigation menu open/closed |
 
@@ -120,8 +123,12 @@ Switching views **does not unmount the component**, so `histories`, `input`, and
 ```typescript
 const switchView = (v: View) => {
   setView(v);
-  setIframeUrl(null);   // reset to base URL; menu always opens homepage
+  setIframeUrl(null);        // reset to base URL; menu always opens homepage
   setMenuOpen(false);
+  if (v !== "chat") {
+    setIframeLoading(true);  // show spinner until onLoad fires
+    setIframeError(false);
+  }
 };
 ```
 
@@ -133,15 +140,28 @@ When the LLM produces a link pointing to the dashboard or docs (see [Path Replac
 const handleInternalLink = (href: string) => {
   if (href.startsWith(dashboardBase)) {
     setView("dashboard");
-    setIframeUrl(href);   // e.g. http://127.0.0.1:8050/analysis?ticker=AAPL
+    setIframeUrl(href);        // e.g. http://127.0.0.1:8050/analysis?ticker=AAPL
+    setIframeLoading(true);
+    setIframeError(false);
   } else if (href.startsWith(docsBase)) {
     setView("docs");
     setIframeUrl(href);
+    setIframeLoading(true);
+    setIframeError(false);
   }
 };
 ```
 
 The iframe then loads that exact URL inside the app window.
+
+### Iframe loading and error states
+
+The `<iframe>` element has `onLoad` and `onError` handlers:
+
+- `onLoad` — sets `iframeLoading = false`, removing the spinner overlay.
+- `onError` — sets `iframeLoading = false` and `iframeError = true`, showing an error banner with an "Open in new tab ↗" link.
+
+The `<iframe>` also carries a `sandbox` attribute permitting scripts, same-origin access, forms, and popups, and `referrerPolicy="no-referrer"`. An "Open in new tab ↗" button is always visible in the header when `view !== "chat"` — not just on error.
 
 ---
 
@@ -170,13 +190,23 @@ sendMessage()
   2. Create userMessage: Message (timestamp = new Date())
   3. setMessages([...messages, userMessage])   ← optimistic update
   4. setInput("") + reset textarea height
-  5. setLoading(true)
-  6. POST ${NEXT_PUBLIC_BACKEND_URL}/chat
+  5. setLoading(true), setStatusLine("Thinking...")
+  6. fetch POST ${NEXT_PUBLIC_BACKEND_URL}/chat/stream
        { message, history: messages (role+content only), agent_id }
-  7a. Success → append assistantMessage from res.data.response
-  7b. Error   → append "Error connecting to server..." message
-  8. setLoading(false) + focus textarea
+  7. Read response body line-by-line (ReadableStream):
+       "thinking"   → setStatusLine("Thinking..." / "Thinking... (step N)")
+       "tool_start" → setStatusLine("Fetching stock data..." / "Searching the web..." / ...)
+       "tool_done"  → setStatusLine("Got result from <tool>...")
+       "warning"    → setStatusLine("Max iterations reached, finalising...")
+       "final"      → append assistantMessage from event.response; setStatusLine("")
+       "error"      → append "Error: <message>"; setStatusLine("")
+       "timeout"    → append "Error: Agent timed out..."; setStatusLine("")
+  8a. Non-2xx HTTP  → append error message (504 → "Request timed out")
+  8b. Network error → append "Error connecting to server..."
+  9. finally: setLoading(false), setStatusLine(""), focus textarea
 ```
+
+While `loading === true` the chat renders a `StatusBadge` (pulsing indigo dot + `statusLine` text) instead of the previous static `TypingDots`.
 
 ---
 
@@ -244,16 +274,16 @@ Chat history survives page refreshes via `localStorage`:
 |---------|---------|---------|
 | `next` | 16.x | Framework |
 | `react` | 19.x | UI library |
-| `axios` | latest | HTTP client |
 | `react-markdown` | 10.x | Markdown rendering for assistant replies |
 | `remark-gfm` | 4.x | Tables, strikethrough, task lists |
 | `typescript` | 5.x | Type checking |
 | `tailwindcss` | 4.x | Utility CSS |
 
+!!! note
+    `axios` was removed from the chat send path; HTTP requests now use the native `fetch` API with `ReadableStream` for NDJSON streaming.
+
 ---
 
 ## Known Limitations
 
-- **No request timeout** — axios has no timeout set; a hung backend blocks the UI until the browser times out.
-- **No streaming** — the full response appears at once after the agentic loop completes.
 - **iframe cross-origin limits** — `localStorage`, cookie sharing, and deep linking into MkDocs/Dash pages work; JavaScript calls across iframe boundaries do not (and are not needed).

@@ -194,9 +194,35 @@ The backend is stateless. The frontend sends the complete conversation history w
 
 The tradeoff is that very long conversations send proportionally larger payloads. For a development/demo app this is fine. A production system would likely need server-side session storage.
 
-### axios over fetch
+### Native fetch over axios
 
-`axios` is used for HTTP requests rather than the native `fetch` API. `axios` throws on non-2xx status codes by default (which is the desired behavior for error handling), has a cleaner API for JSON payloads, and is already a common dependency in the React ecosystem.
+The original send path used `axios`. The streaming implementation requires consuming a `ReadableStream` from the response body, which the native `fetch` API provides directly. `axios` does not expose the response body as a `ReadableStream` in the browser without extra wrappers. Since `fetch` covers all requirements (JSON payloads, error handling via `res.ok`, streaming), `axios` was removed from the send path.
+
+### NDJSON over SSE for streaming
+
+Server-Sent Events (SSE) and WebSockets were considered for live streaming. NDJSON over plain HTTP was chosen because:
+
+- No special client library needed — `fetch()` + `ReadableStream` is standard browser API.
+- FastAPI's `StreamingResponse` serves it natively.
+- The format is trivially debuggable with `curl -N`.
+- Token-by-token LLM streaming is out of scope; only tool-loop status events are streamed, so the lower overhead of SSE is not needed.
+
+The tradeoff is that NDJSON is not automatically reconnected if the connection drops. For a local development tool this is acceptable.
+
+### Request timeout: asyncio.wait_for for sync, queue.Empty for stream
+
+Two different timeout mechanisms are used:
+
+- **`POST /chat`** (sync) — `asyncio.wait_for(loop.run_in_executor(...), timeout=N)` wraps the blocking `agent.run()` call. On timeout, `asyncio.TimeoutError` is caught and HTTP 504 is returned.
+- **`POST /chat/stream`** — the generator runs in a daemon thread. Events pass through `queue.Queue.get(timeout=1.0)`. The loop checks elapsed time each iteration; when `time.time() - start >= timeout` it emits a `timeout` event and breaks. No asyncio primitives are needed since the response is already a `StreamingResponse`.
+
+### Dashboard light theme (FLATLY) matching the chat interface
+
+The original DARKLY theme created a sharp visual contrast when embedding the dashboard in the SPA iframe next to the chat's white UI. Switching to FLATLY with a custom CSS variable palette (`--bg: #f9fafb`, `--card-bg: #ffffff`, `--accent: #4f46e5`) eliminates this contrast and reuses the same indigo accent color from the chat's Tailwind config. FLATLY was chosen (over LITERA, YETI, etc.) because its flat, minimal card style matches the Tailwind aesthetic most closely.
+
+### X-Frame-Options: ALLOWALL on Flask after_request
+
+By default Flask/Werkzeug may send `X-Frame-Options: SAMEORIGIN`, and some browsers will block iframes from different origins regardless. Adding `ALLOWALL` and the `Content-Security-Policy: frame-ancestors *` header as a Flask `@server.after_request` hook ensures the Dash app can be embedded in any origin without browser security errors. Both headers are needed for full browser compatibility (older browsers respect `X-Frame-Options`; modern browsers prefer the CSP directive).
 
 ---
 

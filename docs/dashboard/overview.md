@@ -141,11 +141,11 @@ Side-by-side comparison of 2–5 stocks.
 ```
 dashboard/
 ├── __init__.py       # Package init
-├── app.py            # Dash app, theme, routing callback, gunicorn server attr
+├── app.py            # Dash app, FLATLY light theme, routing callback, gunicorn server attr
 ├── layouts.py        # Stateless page-layout factories + global NAVBAR
 ├── callbacks.py      # All interactive callbacks (register_callbacks factory)
 └── assets/
-    └── custom.css    # Dark theme overrides on top of DARKLY
+    └── custom.css    # Light theme styles (gray-50 bg, white cards, indigo accent)
 ```
 
 ### Data flow
@@ -158,6 +158,10 @@ data/metadata/{TICKER}_info.json      ──► Company name on Home cards
 ```
 
 ### Key design decisions
+
+**Light theme (FLATLY)** — the dashboard uses `dbc.themes.FLATLY` (Bootstrap 5, light). `custom.css` defines a CSS-variable palette (`--bg: #f9fafb`, `--card-bg: #ffffff`, `--accent: #4f46e5`) that matches the chat interface. All Plotly charts use `template="plotly_white"` with explicit `paper_bgcolor`/`plot_bgcolor`/`gridcolor` values for consistency.
+
+**Iframe embedding headers** — `app.py` registers a Flask `@server.after_request` hook that adds `X-Frame-Options: ALLOWALL` and `Content-Security-Policy: frame-ancestors *` to every response, allowing the dashboard to be embedded inside the Next.js SPA iframe from any origin.
 
 **Direct parquet reads** — no HTTP call to the FastAPI backend. The dashboard can run standalone as long as parquet files exist. Fetching new data from Yahoo Finance requires the "Run New Analysis" button (or running the stock agent pipeline manually).
 

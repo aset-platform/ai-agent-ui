@@ -77,9 +77,9 @@ NAVBAR = dbc.NavbarSimple(
     ],
     brand="📊 AI Stock Analysis",
     brand_href="/",
-    color="dark",
-    dark=True,
-    className="border-bottom border-secondary mb-0",
+    color="light",
+    dark=False,
+    className="mb-0",
     fluid=True,
 )
 
@@ -104,7 +104,7 @@ def home_layout() -> html.Div:
     return html.Div([
         # ── Header ───────────────────────────────────────────────────────
         dbc.Row(dbc.Col([
-            html.H2("AI Stock Analysis Dashboard", className="mb-1 text-white fw-bold"),
+            html.H2("AI Stock Analysis Dashboard", className="mb-1 fw-bold"),
             html.P(
                 "Fetch, analyse, forecast, and compare stocks with AI-powered insights.",
                 className="text-muted mb-4",
@@ -120,7 +120,6 @@ def home_layout() -> html.Div:
                         placeholder="Enter ticker symbol (e.g. AAPL, TSLA, RELIANCE.NS)…",
                         type="text",
                         debounce=False,
-                        className="bg-dark text-white border-secondary",
                     ),
                     dbc.Button(
                         "Analyse",
@@ -208,13 +207,13 @@ def analysis_layout() -> html.Div:
                     className="mt-1",
                 ),
             ], xs=12, md=5, className="mb-3"),
-        ], className="bg-dark rounded p-3 mb-4 align-items-center"),
+        ], className="bg-light rounded p-3 mb-4 align-items-center border"),
 
         # ── Chart ─────────────────────────────────────────────────────────
         dcc.Loading(
             id="loading-analysis",
             type="circle",
-            color="#4c8eff",
+            color="#4f46e5",
             children=dcc.Graph(
                 id="analysis-chart",
                 config={"displayModeBar": True, "scrollZoom": True},
@@ -285,7 +284,7 @@ def forecast_layout() -> html.Div:
                     className="w-100",
                 ),
             ], xs=12, md=4, className="mb-3"),
-        ], className="bg-dark rounded p-3 mb-4 align-items-end"),
+        ], className="bg-light rounded p-3 mb-4 align-items-end border"),
 
         # ── Status message ────────────────────────────────────────────────
         html.Div(id="run-analysis-status", className="mb-3"),
@@ -294,7 +293,7 @@ def forecast_layout() -> html.Div:
         dcc.Loading(
             id="loading-forecast",
             type="circle",
-            color="#4caf50",
+            color="#4f46e5",
             children=dcc.Graph(
                 id="forecast-chart",
                 config={"displayModeBar": True},
@@ -349,7 +348,7 @@ def compare_layout() -> html.Div:
                     className="dropdown-dark",
                 ),
             ]),
-        ], className="bg-dark rounded p-3 mb-4"),
+        ], className="bg-light rounded p-3 mb-4 border"),
 
         # ── Normalised performance chart ───────────────────────────────────
         html.H6("Normalised Performance (Base = 100)", className="text-muted mb-2"),

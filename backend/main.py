@@ -19,7 +19,15 @@ HTTP API
     Accepts a :class:`ChatRequest` (``message``, optional ``history``, optional
     ``agent_id``).  Dispatches to the named agent's
     :meth:`~agents.base.BaseAgent.run` method and returns a
-    :class:`ChatResponse`.
+    :class:`ChatResponse`.  Bounded by
+    :attr:`~config.Settings.agent_timeout_seconds` (HTTP 504 on timeout).
+
+``POST /chat/stream``
+    Same request body as ``POST /chat``.  Returns an
+    ``application/x-ndjson`` :class:`~fastapi.responses.StreamingResponse`
+    that emits one JSON event per line as the agentic loop progresses.
+    Event types: ``thinking``, ``tool_start``, ``tool_done``, ``warning``,
+    ``final``, ``error``, ``timeout``.
 
 ``GET /agents``
     Returns a JSON list of all registered agents (id, name, description).
@@ -27,16 +35,23 @@ HTTP API
 Error handling
 --------------
 - ``404`` — the requested ``agent_id`` is not registered.
+- ``504`` — the agent did not respond within the configured timeout.
 - ``500`` — an unhandled exception occurred inside the agent loop.
 
-Both cases return proper :class:`~fastapi.HTTPException` responses rather
+All cases return proper :class:`~fastapi.HTTPException` responses rather
 than embedding error strings in a ``200`` body.
 """
 
+import asyncio
+import json
 import logging
+import queue
+import threading
+import time
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from config import Settings, get_settings
@@ -193,6 +208,7 @@ class ChatServer:
         )
         # Register handlers by passing bound methods to the route decorators.
         app.post("/chat", response_model=ChatResponse)(self._chat_handler)
+        app.post("/chat/stream")(self._chat_stream_handler)
         app.get("/agents")(self._list_agents_handler)
         return app
 
@@ -201,6 +217,8 @@ class ChatServer:
 
         Looks up the requested agent, delegates to its
         :meth:`~agents.base.BaseAgent.run` method, and returns the result.
+        The call is bounded by :attr:`~config.Settings.agent_timeout_seconds`;
+        if the loop does not complete in time a ``504`` is returned.
 
         Args:
             req: Validated :class:`ChatRequest` from the HTTP body.
@@ -211,6 +229,8 @@ class ChatServer:
 
         Raises:
             HTTPException: ``404`` if ``req.agent_id`` is not registered.
+            HTTPException: ``504`` if the agent does not respond within the
+                configured timeout.
             HTTPException: ``500`` if the agent raises an unhandled exception.
         """
         agent = self.agent_registry.get(req.agent_id)
@@ -219,11 +239,103 @@ class ChatServer:
                 status_code=404, detail=f"Agent '{req.agent_id}' not found"
             )
         try:
-            result = agent.run(req.message, req.history)
+            loop = asyncio.get_event_loop()
+            future = loop.run_in_executor(None, agent.run, req.message, req.history)
+            result = await asyncio.wait_for(
+                future, timeout=self.settings.agent_timeout_seconds
+            )
+        except asyncio.TimeoutError:
+            self.logger.warning(
+                "Agent '%s' timed out after %ds",
+                req.agent_id,
+                self.settings.agent_timeout_seconds,
+            )
+            raise HTTPException(status_code=504, detail="Agent timed out")
         except Exception as e:
             self.logger.error("Chat handler error: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail="Agent execution failed")
         return ChatResponse(response=result, agent_id=req.agent_id)
+
+    async def _chat_stream_handler(self, req: ChatRequest) -> StreamingResponse:
+        """Handle ``POST /chat/stream`` requests via NDJSON streaming.
+
+        Streams one JSON event per line as the agentic loop progresses.
+        The generator runs in a daemon thread; events are passed via a
+        :class:`queue.Queue`.  If no event arrives within
+        :attr:`~config.Settings.agent_timeout_seconds` seconds a
+        ``timeout`` event is emitted and the stream is closed.
+
+        Event types emitted:
+
+        - ``thinking`` — LLM invocation starting.
+        - ``tool_start`` — A tool call is about to execute.
+        - ``tool_done`` — A tool call completed.
+        - ``warning`` — ``MAX_ITERATIONS`` was reached.
+        - ``final`` — Loop complete with full response.
+        - ``error`` — An exception occurred inside the agent.
+        - ``timeout`` — The overall deadline was exceeded.
+
+        Args:
+            req: Validated :class:`ChatRequest` from the HTTP body.
+
+        Returns:
+            A :class:`~fastapi.responses.StreamingResponse` with
+            ``application/x-ndjson`` content type.
+
+        Raises:
+            HTTPException: ``404`` if ``req.agent_id`` is not registered.
+        """
+        agent = self.agent_registry.get(req.agent_id)
+        if agent is None:
+            raise HTTPException(
+                status_code=404, detail=f"Agent '{req.agent_id}' not found"
+            )
+
+        timeout = self.settings.agent_timeout_seconds
+
+        def generate():
+            """Run the agent stream generator in a thread and yield events."""
+            event_queue: queue.Queue = queue.Queue()
+
+            def run() -> None:
+                """Execute ``agent.stream()`` and push events to the queue."""
+                try:
+                    for event in agent.stream(req.message, req.history):
+                        event_queue.put(event)
+                except Exception:
+                    pass  # error event already yielded by stream()
+                finally:
+                    event_queue.put(None)  # sentinel — signals end of stream
+
+            worker = threading.Thread(target=run, daemon=True)
+            worker.start()
+
+            start = time.time()
+            while True:
+                elapsed = time.time() - start
+                if elapsed >= timeout:
+                    yield json.dumps({
+                        "type": "timeout",
+                        "message": f"Agent timed out after {timeout}s",
+                    }) + "\n"
+                    break
+                remaining = timeout - elapsed
+                try:
+                    item = event_queue.get(timeout=min(remaining, 1.0))
+                    if item is None:
+                        break
+                    yield item
+                except queue.Empty:
+                    if time.time() - start >= timeout:
+                        yield json.dumps({
+                            "type": "timeout",
+                            "message": f"Agent timed out after {timeout}s",
+                        }) + "\n"
+                        break
+
+            worker.join(timeout=2)
+
+        return StreamingResponse(generate(), media_type="application/x-ndjson")
 
     async def _list_agents_handler(self) -> dict:
         """Handle ``GET /agents`` requests.

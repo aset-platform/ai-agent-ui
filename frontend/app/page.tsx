@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import axios from "axios";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -17,18 +16,30 @@ function formatTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function TypingDots() {
+function StatusBadge({ text }: { text: string }) {
   return (
-    <div className="flex items-center gap-1 px-4 py-3">
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-          style={{ animationDelay: `${i * 0.15}s` }}
-        />
-      ))}
+    <div className="flex items-center gap-2 px-4 py-3">
+      <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse shrink-0" />
+      <span className="text-sm text-gray-500 italic">{text}</span>
     </div>
   );
+}
+
+function toolLabel(name: string): string {
+  const labels: Record<string, string> = {
+    fetch_stock_data:     "Fetching stock data",
+    get_stock_info:       "Getting stock info",
+    load_stock_data:      "Loading stock data",
+    fetch_multiple_stocks:"Fetching multiple stocks",
+    get_dividend_history: "Getting dividend history",
+    list_available_stocks:"Listing available stocks",
+    analyse_stock_price:  "Analysing price",
+    forecast_stock:       "Generating forecast",
+    search_market_news:   "Searching market news",
+    search_web:           "Searching the web",
+    get_current_time:     "Checking time",
+  };
+  return labels[name] ?? `Calling ${name}`;
 }
 
 function preprocessContent(content: string): string {
@@ -161,12 +172,15 @@ const NAV_ITEMS: { view: View; label: string; icon: React.ReactNode }[] = [
 export default function ChatPage() {
   const [view, setView] = useState<View>("chat");
   const [iframeUrl, setIframeUrl] = useState<string | null>(null);
+  const [iframeLoading, setIframeLoading] = useState(false);
+  const [iframeError, setIframeError] = useState(false);
   const [histories, setHistories] = useState<Record<string, Message[]>>({
     general: [],
     stock: [],
   });
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [statusLine, setStatusLine] = useState<string>("");
   // === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
   const [agentId, setAgentId] = useState("general");
   // === END STOCK AGENT ROUTING ===
@@ -227,8 +241,12 @@ export default function ChatPage() {
 
   const switchView = (v: View) => {
     setView(v);
-    setIframeUrl(null); // reset to base URL when navigating via menu
+    setIframeUrl(null);
     setMenuOpen(false);
+    if (v !== "chat") {
+      setIframeLoading(true);
+      setIframeError(false);
+    }
   };
 
   const handleInternalLink = (href: string) => {
@@ -237,9 +255,13 @@ export default function ChatPage() {
     if (href.startsWith(dashboardBase)) {
       setView("dashboard");
       setIframeUrl(href);
+      setIframeLoading(true);
+      setIframeError(false);
     } else if (href.startsWith(docsBase)) {
       setView("docs");
       setIframeUrl(href);
+      setIframeLoading(true);
+      setIframeError(false);
     }
   };
 
@@ -256,6 +278,7 @@ export default function ChatPage() {
     setMessages(updatedMessages);
     setInput("");
     setLoading(true);
+    setStatusLine("Thinking...");
 
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
@@ -263,20 +286,78 @@ export default function ChatPage() {
 
     try {
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8181";
-      const res = await axios.post(`${backendUrl}/chat`, {
-        message: userMessage.content,
-        history: messages.map((m) => ({ role: m.role, content: m.content })),
-        agent_id: agentId, // === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
+      const res = await fetch(`${backendUrl}/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: userMessage.content,
+          history: messages.map((m) => ({ role: m.role, content: m.content })),
+          agent_id: agentId,
+        }),
       });
 
-      setMessages([
-        ...updatedMessages,
-        {
-          role: "assistant",
-          content: res.data.response,
-          timestamp: new Date(),
-        },
-      ]);
+      if (!res.ok) {
+        const errorContent =
+          res.status === 504
+            ? "Request timed out, please try again."
+            : "Error connecting to server. Is the backend running?";
+        setMessages([
+          ...updatedMessages,
+          { role: "assistant", content: errorContent, timestamp: new Date() },
+        ]);
+        return;
+      }
+
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const event = JSON.parse(trimmed) as Record<string, unknown>;
+            if (event.type === "thinking") {
+              const iter = event.iteration as number;
+              setStatusLine(iter > 1 ? `Thinking... (step ${iter})` : "Thinking...");
+            } else if (event.type === "tool_start") {
+              setStatusLine(`${toolLabel(event.tool as string)}...`);
+            } else if (event.type === "tool_done") {
+              setStatusLine(`Got result from ${event.tool as string}...`);
+            } else if (event.type === "warning") {
+              setStatusLine("Max iterations reached, finalising...");
+            } else if (event.type === "final") {
+              setMessages([
+                ...updatedMessages,
+                {
+                  role: "assistant",
+                  content: event.response as string,
+                  timestamp: new Date(),
+                },
+              ]);
+              setStatusLine("");
+            } else if (event.type === "error" || event.type === "timeout") {
+              setMessages([
+                ...updatedMessages,
+                {
+                  role: "assistant",
+                  content: `Error: ${event.message as string}`,
+                  timestamp: new Date(),
+                },
+              ]);
+              setStatusLine("");
+            }
+          } catch { /* skip invalid JSON lines */ }
+        }
+      }
     } catch {
       setMessages([
         ...updatedMessages,
@@ -286,10 +367,12 @@ export default function ChatPage() {
           timestamp: new Date(),
         },
       ]);
+      setStatusLine("");
+    } finally {
+      setLoading(false);
+      setStatusLine("");
+      textareaRef.current?.focus();
     }
-
-    setLoading(false);
-    textareaRef.current?.focus();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -351,21 +434,43 @@ export default function ChatPage() {
           )}
         </div>
 
-        {view === "chat" && messages.length > 0 && (
-          <button
-            onClick={() => setMessages([])}
-            title="Clear chat"
-            className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-red-500 transition-colors px-3 py-1.5 rounded-lg hover:bg-red-50"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="3 6 5 6 21 6" />
-              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-              <path d="M10 11v6M14 11v6" />
-              <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-            </svg>
-            Clear
-          </button>
-        )}
+        {/* Right side of header */}
+        <div className="flex items-center gap-2">
+          {/* Open in new tab — shown when viewing docs or dashboard */}
+          {view !== "chat" && (
+            <a
+              href={iframeSrc}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open in new tab"
+              className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-indigo-600 transition-colors px-3 py-1.5 rounded-lg hover:bg-indigo-50"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                <polyline points="15 3 21 3 21 9" />
+                <line x1="10" y1="14" x2="21" y2="3" />
+              </svg>
+              Open in new tab
+            </a>
+          )}
+
+          {/* Clear chat — shown on chat view when there are messages */}
+          {view === "chat" && messages.length > 0 && (
+            <button
+              onClick={() => setMessages([])}
+              title="Clear chat"
+              className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-red-500 transition-colors px-3 py-1.5 rounded-lg hover:bg-red-50"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                <path d="M10 11v6M14 11v6" />
+                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+              </svg>
+              Clear
+            </button>
+          )}
+        </div>
       </header>
 
       {/* Main content — chat UI or embedded iframe */}
@@ -427,7 +532,7 @@ export default function ChatPage() {
                   ✦
                 </div>
                 <div className="bg-white border border-gray-100 rounded-2xl rounded-bl-sm shadow-sm">
-                  <TypingDots />
+                  <StatusBadge text={statusLine || "Thinking..."} />
                 </div>
               </div>
             )}
@@ -466,11 +571,42 @@ export default function ChatPage() {
           </footer>
         </>
       ) : (
-        <iframe
-          src={iframeSrc}
-          className="flex-1 w-full border-0"
-          title={view === "docs" ? "Documentation" : "Dashboard"}
-        />
+        /* Iframe wrapper with loading spinner and error fallback */
+        <div className="flex-1 relative overflow-hidden">
+          {iframeLoading && !iframeError && (
+            <div className="absolute inset-0 flex items-center justify-center bg-gray-50 z-10">
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm text-gray-500">Loading...</span>
+              </div>
+            </div>
+          )}
+          {iframeError && (
+            <div className="absolute inset-0 flex items-center justify-center bg-gray-50 z-10">
+              <div className="flex flex-col items-center gap-3 text-center px-6">
+                <p className="text-gray-600 font-medium">Could not load content.</p>
+                <p className="text-sm text-gray-400">Make sure the service is running.</p>
+                <a
+                  href={iframeSrc}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-indigo-600 underline text-sm hover:text-indigo-800"
+                >
+                  Open in new tab ↗
+                </a>
+              </div>
+            </div>
+          )}
+          <iframe
+            src={iframeSrc}
+            className="w-full h-full border-0"
+            title={view === "docs" ? "Documentation" : "Dashboard"}
+            onLoad={() => setIframeLoading(false)}
+            onError={() => { setIframeLoading(false); setIframeError(true); }}
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"
+            referrerPolicy="no-referrer"
+          />
+        </div>
       )}
 
       {/* Bottom-right navigation menu */}

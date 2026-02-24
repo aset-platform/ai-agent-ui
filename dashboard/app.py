@@ -1,6 +1,6 @@
 """Plotly Dash entry point for the AI Stock Analysis Dashboard.
 
-Bootstraps the application with the DARKLY dark theme, registers all four
+Bootstraps the application with the FLATLY light theme, registers all four
 page routes (Home, Analysis, Forecast, Compare), wires interactive callbacks,
 and launches the development server on port 8050.
 
@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 
 app = dash.Dash(
     __name__,
-    external_stylesheets=[dbc.themes.DARKLY],
+    external_stylesheets=[dbc.themes.FLATLY],
     suppress_callback_exceptions=True,
     title="AI Stock Analysis Dashboard",
     meta_tags=[
@@ -69,6 +69,26 @@ app = dash.Dash(
 
 # Flask server — usable by gunicorn
 server = app.server
+
+
+@server.after_request
+def allow_iframe(response):
+    """Allow this Dash app to be embedded in an iframe from any origin.
+
+    Sets ``X-Frame-Options: ALLOWALL`` and a permissive
+    ``Content-Security-Policy: frame-ancestors *`` header on every
+    response so the frontend SPA can embed the dashboard in an
+    ``<iframe>`` without browser security errors.
+
+    Args:
+        response: The Flask response object for the current request.
+
+    Returns:
+        The response with iframe-embedding headers added.
+    """
+    response.headers["X-Frame-Options"] = "ALLOWALL"
+    response.headers["Content-Security-Policy"] = "frame-ancestors *"
+    return response
 
 app.layout = html.Div(
     [

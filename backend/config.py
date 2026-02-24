@@ -40,6 +40,10 @@ class Settings(BaseSettings):
         log_to_file: When ``True``, :func:`~logging_config.setup_logging`
             creates a rotating log file under ``logs/``.  Defaults to
             ``True``.
+        agent_timeout_seconds: Maximum wall-clock seconds the agentic loop
+            may run before the request is abandoned.  Applied to both the
+            synchronous ``POST /chat`` endpoint and the streaming
+            ``POST /chat/stream`` endpoint.  Defaults to ``120``.
     """
 
     groq_api_key: str = ""
@@ -47,6 +51,7 @@ class Settings(BaseSettings):
     serpapi_api_key: str = ""
     log_level: str = "DEBUG"
     log_to_file: bool = True
+    agent_timeout_seconds: int = 120
 
     # Read from .env in the working directory; silently skip if absent.
     # Real environment variables always take precedence over .env values.

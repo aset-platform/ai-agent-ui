@@ -1,6 +1,6 @@
 # API Reference
 
-The backend exposes two HTTP endpoints. Both are defined in `backend/main.py` and registered as bound methods of `ChatServer`.
+The backend exposes three HTTP endpoints. All are defined in `backend/main.py` and registered as bound methods of `ChatServer`.
 
 Base URL (development): `http://127.0.0.1:8181`
 
@@ -8,7 +8,7 @@ Base URL (development): `http://127.0.0.1:8181`
 
 ## POST /chat
 
-Send a message to an agent and receive a response.
+Send a message to an agent and receive a complete response.
 
 ### Request
 
@@ -67,6 +67,16 @@ Returned when the requested `agent_id` is not registered.
 }
 ```
 
+### Response — 504 Gateway Timeout
+
+Returned when the agentic loop does not complete within `agent_timeout_seconds` (default 120 s).
+
+```json
+{
+  "detail": "Agent timed out"
+}
+```
+
 ### Response — 500 Internal Server Error
 
 Returned when an unhandled exception occurs inside the agentic loop.
@@ -79,6 +89,82 @@ Returned when an unhandled exception occurs inside the agentic loop.
 
 !!! note
     In all error cases the backend returns a proper `HTTPException`. Error details are never embedded in a `200` response body.
+
+---
+
+## POST /chat/stream
+
+Send a message to an agent and receive a live NDJSON stream of status events as the agentic loop progresses.  The frontend uses this endpoint so users see progress in real time rather than waiting in silence.
+
+### Request
+
+```http
+POST /chat/stream
+Content-Type: application/json
+```
+
+The request body is identical to `POST /chat`.
+
+### Response — 200 OK (NDJSON stream)
+
+```
+Content-Type: application/x-ndjson
+```
+
+The response body is a stream of newline-delimited JSON objects, one per line:
+
+```json
+{"type": "thinking",   "iteration": 1}
+{"type": "tool_start", "tool": "fetch_stock_data", "args": {"ticker": "AAPL"}}
+{"type": "tool_done",  "tool": "fetch_stock_data", "preview": "Fetched 2516 rows..."}
+{"type": "thinking",   "iteration": 2}
+{"type": "tool_start", "tool": "analyse_stock_price", "args": {"ticker": "AAPL"}}
+{"type": "tool_done",  "tool": "analyse_stock_price", "preview": "## AAPL Price Analysis..."}
+{"type": "final",      "response": "Here is the full analysis...", "iterations": 2}
+```
+
+**Event types:**
+
+| Type | Fields | When emitted |
+|------|--------|-------------|
+| `thinking` | `iteration` | Before each LLM invocation |
+| `tool_start` | `tool`, `args` | Before each tool is called |
+| `tool_done` | `tool`, `preview` (≤ 300 chars) | After each tool result |
+| `warning` | `message` | When `MAX_ITERATIONS` is hit |
+| `final` | `response`, `iterations` | Loop complete — full text response |
+| `error` | `message` | An exception occurred inside the agent |
+| `timeout` | `message` | The overall deadline was exceeded |
+
+The stream always ends with either a `final`, `error`, or `timeout` event, then the connection closes.
+
+### Response — 404 Not Found
+
+Same as `POST /chat`.
+
+!!! tip "Consuming the stream (JavaScript)"
+    ```javascript
+    const res = await fetch(`${backendUrl}/chat/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, history, agent_id }),
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (line.trim()) {
+          const event = JSON.parse(line);
+          // handle event.type === "thinking" | "tool_start" | etc.
+        }
+      }
+    }
+    ```
 
 ---
 
@@ -153,10 +239,15 @@ The backend converts each history entry to a LangChain `HumanMessage` or `AIMess
 Using curl:
 
 ```bash
-# POST /chat
+# POST /chat (synchronous)
 curl -s -X POST http://127.0.0.1:8181/chat \
   -H "Content-Type: application/json" \
   -d '{"message": "What time is it?", "history": []}' | python3 -m json.tool
+
+# POST /chat/stream (NDJSON — prints events as they arrive)
+curl -N -s -X POST http://127.0.0.1:8181/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What time is it?", "history": []}'
 
 # GET /agents
 curl -s http://127.0.0.1:8181/agents | python3 -m json.tool

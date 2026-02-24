@@ -522,8 +522,29 @@ NEXT_PUBLIC_DOCS_URL=http://127.0.0.1:8000
 
 ---
 
+## Streaming (NDJSON)
+
+`POST /chat/stream` streams one JSON event per line (`application/x-ndjson`) as the agentic loop progresses. The frontend uses native `fetch()` + `ReadableStream` to consume events and show a live `StatusBadge`.
+
+Event types: `thinking`, `tool_start`, `tool_done`, `warning`, `final`, `error`, `timeout`.
+
+The generator runs in a daemon thread inside `_chat_stream_handler`; events pass through a `queue.Queue`. Timeout cuts the stream after `agent_timeout_seconds` seconds and emits a `timeout` event.
+
+The old `POST /chat` endpoint is unchanged (sync, returns `ChatResponse`), also has the timeout applied (HTTP 504 on timeout).
+
+## Request Timeout
+
+Configured via `agent_timeout_seconds` in `Settings` (default 120 seconds). Set `AGENT_TIMEOUT_SECONDS=3` in `backend/.env` to test. Applied to both `/chat` (asyncio) and `/chat/stream` (queue timeout).
+
+## Dashboard Theme
+
+Dashboard uses FLATLY (light Bootstrap theme) — `#f9fafb` background, white cards, `#4f46e5` indigo accent — matching the chat frontend. Plotly charts use `template="plotly_white"` with explicit `paper_bgcolor`/`plot_bgcolor`/`gridcolor`.
+
+## Iframe Embedding
+
+Dashboard Flask server sends `X-Frame-Options: ALLOWALL` and `Content-Security-Policy: frame-ancestors *` on every response (added via `@server.after_request`). Frontend `<iframe>` has a loading spinner overlay (disappears on `onLoad`) and an error banner (appears on `onError`) with an "Open in new tab ↗" link.
+
 ## Known Limitations / TODOs
 
 - **Anthropic API not working** — currently on Groq as a workaround; switch back when resolved (see 2-line change in `agents/general_agent.py` and `agents/stock_agent.py` → `_build_llm()` above)
 - **`SERPAPI_API_KEY` must be set** — `search_web` will return an error string without it; get key at serpapi.com (100 free searches/month)
-- **No streaming** — backend waits for full agentic loop before responding; SSE or WebSockets would improve perceived speed

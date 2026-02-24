@@ -161,7 +161,7 @@ def _add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _empty_fig(message: str, height: int = 400) -> go.Figure:
-    """Return a dark-themed empty figure with a centred annotation.
+    """Return a light-themed empty figure with a centred annotation.
 
     Args:
         message: Text to display in the empty chart area.
@@ -174,10 +174,11 @@ def _empty_fig(message: str, height: int = 400) -> go.Figure:
     fig.add_annotation(
         text=message, xref="paper", yref="paper",
         x=0.5, y=0.5, showarrow=False,
-        font=dict(size=15, color="rgba(255,255,255,0.4)"),
+        font=dict(size=15, color="rgba(0,0,0,0.4)"),
     )
     fig.update_layout(
-        template="plotly_dark", height=height,
+        template="plotly_white", height=height,
+        paper_bgcolor="#ffffff", plot_bgcolor="#f9fafb",
         xaxis={"visible": False}, yaxis={"visible": False},
         margin=dict(l=20, r=20, t=40, b=20),
     )
@@ -304,16 +305,20 @@ def _build_analysis_fig(
             ), row=3, col=1)
 
     fig.update_layout(
-        template="plotly_dark",
+        template="plotly_white",
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#f9fafb",
+        font=dict(color="#111827"),
         height=800,
         showlegend=True,
         xaxis_rangeslider_visible=False,
         margin=dict(l=60, r=30, t=60, b=30),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    fig.update_yaxes(title_text="Price", row=1, col=1, secondary_y=False)
-    fig.update_yaxes(title_text="RSI",  row=2, col=1, range=[0, 100])
-    fig.update_yaxes(title_text="MACD", row=3, col=1)
+    fig.update_xaxes(gridcolor="#e5e7eb")
+    fig.update_yaxes(gridcolor="#e5e7eb", title_text="Price", row=1, col=1, secondary_y=False)
+    fig.update_yaxes(gridcolor="#e5e7eb", title_text="RSI",  row=2, col=1, range=[0, 100])
+    fig.update_yaxes(gridcolor="#e5e7eb", title_text="MACD", row=3, col=1)
     return fig
 
 
@@ -375,12 +380,12 @@ def _build_forecast_fig(
         type="line",
         x0=today_ts, x1=today_ts, y0=0, y1=1,
         xref="x", yref="paper",
-        line=dict(color="rgba(255,255,255,0.5)", width=1.5, dash="dot"),
+        line=dict(color="rgba(0,0,0,0.35)", width=1.5, dash="dot"),
     )
     fig.add_annotation(
         x=today_ts, y=1.02, yref="paper",
         text="Today", showarrow=False,
-        font=dict(color="rgba(255,255,255,0.7)", size=10), xanchor="left",
+        font=dict(color="rgba(0,0,0,0.6)", size=10), xanchor="left",
     )
 
     # Current-price horizontal line
@@ -389,33 +394,36 @@ def _build_forecast_fig(
         x0=prophet_df["ds"].min(), x1=forecast_df["ds"].max(),
         y0=current_price, y1=current_price,
         xref="x", yref="y",
-        line=dict(color="rgba(255,255,255,0.35)", width=1, dash="dot"),
+        line=dict(color="rgba(0,0,0,0.2)", width=1, dash="dot"),
     )
     fig.add_annotation(
         x=forecast_df["ds"].max(), y=current_price,
         text=f"Current: ${current_price:.2f}",
         showarrow=False,
-        font=dict(color="rgba(255,255,255,0.6)", size=10),
+        font=dict(color="rgba(0,0,0,0.5)", size=10),
         xanchor="right", yanchor="bottom",
     )
 
     # Price-target annotations
-    colors = {"3m": "#ffeb3b", "6m": "#ff9800", "9m": "#f44336"}
+    colors = {"3m": "#d97706", "6m": "#ea580c", "9m": "#dc2626"}
     for key, target in summary.get("targets", {}).items():
         sign = "+" if target["pct_change"] >= 0 else ""
         fig.add_annotation(
             x=target["date"], y=target["price"],
             text=f"{key}: ${target['price']}<br>{sign}{target['pct_change']:.1f}%",
             showarrow=True, arrowhead=2,
-            arrowcolor=colors.get(key, "white"),
-            font=dict(color=colors.get(key, "white"), size=11),
-            bgcolor="rgba(0,0,0,0.5)",
-            bordercolor=colors.get(key, "white"),
+            arrowcolor=colors.get(key, "#111827"),
+            font=dict(color=colors.get(key, "#111827"), size=11),
+            bgcolor="rgba(255,255,255,0.9)",
+            bordercolor=colors.get(key, "#e5e7eb"),
             borderwidth=1,
         )
 
     fig.update_layout(
-        template="plotly_dark",
+        template="plotly_white",
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#f9fafb",
+        font=dict(color="#111827"),
         title=dict(
             text=f"{ticker} — Price Forecast  {sentiment_emoji} {summary.get('sentiment','')}",
             font=dict(size=16),
@@ -425,6 +433,8 @@ def _build_forecast_fig(
         margin=dict(l=60, r=30, t=80, b=50),
         hovermode="x unified",
     )
+    fig.update_xaxes(gridcolor="#e5e7eb")
+    fig.update_yaxes(gridcolor="#e5e7eb")
     return fig
 
 
@@ -740,7 +750,7 @@ def register_callbacks(app) -> None:
                         html.Div([
                             html.Div([
                                 html.Small("Price", className="text-muted d-block"),
-                                html.Strong(current_price_str, className="text-white"),
+                                html.Strong(current_price_str, className="text-dark"),
                             ], className="me-3"),
                             html.Div([
                                 html.Small("10Y Return", className="text-muted d-block"),
@@ -1116,13 +1126,17 @@ def register_callbacks(app) -> None:
 
         best_ticker = max(final_values, key=final_values.get)
         perf_fig.update_layout(
-            template="plotly_dark", height=450,
+            template="plotly_white", height=450,
+            paper_bgcolor="#ffffff", plot_bgcolor="#f9fafb",
+            font=dict(color="#111827"),
             title=dict(text="Normalised Performance (Base = 100)", font=dict(size=15)),
             yaxis_title="Value (Base 100)",
             margin=dict(l=60, r=30, t=60, b=40),
             hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=1, xanchor="right"),
         )
+        perf_fig.update_xaxes(gridcolor="#e5e7eb")
+        perf_fig.update_yaxes(gridcolor="#e5e7eb")
 
         # ── Metrics table ─────────────────────────────────────────────────
         rows = []
@@ -1182,7 +1196,7 @@ def register_callbacks(app) -> None:
         table = dbc.Table(
             [html.Thead(html.Tr(header_cells)), html.Tbody(body_rows)],
             bordered=True, hover=True, responsive=True,
-            className="table-dark table-sm mt-2",
+            className="table table-sm mt-2",
         )
 
         # ── Correlation heatmap ────────────────────────────────────────────
@@ -1201,7 +1215,9 @@ def register_callbacks(app) -> None:
             showscale=True,
         ))
         heat_fig.update_layout(
-            template="plotly_dark", height=380,
+            template="plotly_white", height=380,
+            paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
+            font=dict(color="#111827"),
             margin=dict(l=60, r=10, t=40, b=40),
             title=dict(text="Daily Returns Correlation", font=dict(size=13)),
         )

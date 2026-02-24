@@ -2,6 +2,63 @@
 
 ---
 
+# Session: Feb 24, 2026 — Streaming, timeout, iframe cross-origin, dashboard theme
+
+## What We Built
+
+Four independent improvements to UX, reliability, and visual consistency.
+
+### Task 1 — Dashboard theme: dark → light
+
+- Changed `dbc.themes.DARKLY` → `dbc.themes.FLATLY` in `dashboard/app.py`.
+- Rewrote `dashboard/assets/custom.css` with a light palette (`--bg: #f9fafb`, `--card-bg: #ffffff`, `--accent: #4f46e5`). All dark card/navbar/slider colors replaced with light-theme equivalents.
+- Updated all Plotly chart templates from `"plotly_dark"` → `"plotly_white"` in `dashboard/callbacks.py`. Added explicit `paper_bgcolor="#ffffff"`, `plot_bgcolor="#f9fafb"`, `font=dict(color="#111827")`, `gridcolor="#e5e7eb"` on all figures.
+- Replaced white annotation colors (`rgba(255,255,255,...)`) with dark (`rgba(0,0,0,...)`) equivalents in forecast figure. Updated price-target annotation colors from neon to amber/orange/red for light background contrast.
+- Changed NAVBAR to `color="light"`, `dark=False`. Removed `text-white` from H2, removed `bg-dark text-white` from search input, changed controls rows from `bg-dark` → `bg-light border`. Updated loading spinner color to `#4f46e5`.
+- Changed metrics table from `table-dark` → plain Bootstrap table class.
+- Changed stock card current-price text from `text-white` → `text-dark`.
+
+### Task 2 — Iframe cross-origin headers
+
+- Added `@server.after_request` hook in `dashboard/app.py` that sets `X-Frame-Options: ALLOWALL` and `Content-Security-Policy: frame-ancestors *` on every response.
+
+### Task 3 — Request timeout
+
+- Added `agent_timeout_seconds: int = 120` field to `backend/config.py` `Settings`.
+- Updated `POST /chat` handler in `main.py` to run `agent.run()` via `asyncio.run_in_executor` wrapped in `asyncio.wait_for(timeout=...)`. Returns HTTP 504 on timeout.
+
+### Task 4 — Streaming via NDJSON
+
+- Added `stream()` method to `BaseAgent` in `backend/agents/base.py`. Yields one JSON event per line: `thinking`, `tool_start`, `tool_done`, `warning`, `final`, `error`.
+- Added `POST /chat/stream` endpoint in `main.py`. Runs `agent.stream()` in a daemon thread, passes events through a `queue.Queue`, applies timeout via queue `.get(timeout=...)`. Returns `StreamingResponse(media_type="application/x-ndjson")`.
+- Updated `frontend/app/page.tsx`:
+  - Replaced `axios.post` with native `fetch()` + `ReadableStream` line-by-line parsing.
+  - Added `statusLine` state. `StatusBadge` component (pulsing dot + status text) replaces `TypingDots`.
+  - Status text updates with each stream event: "Thinking..." → "Fetching stock data..." → "Got result..." → (final message appears).
+  - Added `iframeLoading` and `iframeError` state on `<iframe>`. Shows spinner overlay on load, error banner with "Open in new tab ↗" on failure.
+  - `switchView()` resets `iframeLoading=true` and `iframeError=false`.
+  - Added "Open in new tab ↗" button in header whenever `view !== "chat"`.
+  - Removed `axios` import (no longer used in chat path).
+
+## Files Changed
+
+| File | What changed |
+|------|-------------|
+| `backend/config.py` | Added `agent_timeout_seconds` field |
+| `backend/agents/base.py` | Added `stream()` method + `json`, `Iterator` imports |
+| `backend/main.py` | Added `asyncio`/`queue`/`threading`/`StreamingResponse` imports; timeout on `/chat`; new `/chat/stream` endpoint |
+| `dashboard/app.py` | FLATLY theme, `allow_iframe` after_request hook |
+| `dashboard/assets/custom.css` | Complete rewrite for light palette |
+| `dashboard/callbacks.py` | All chart templates → `plotly_white`; explicit light colors; table class; stock card text class |
+| `dashboard/layouts.py` | NAVBAR light; H2 no text-white; input no bg-dark; controls rows bg-light |
+| `frontend/app/page.tsx` | Streaming fetch; StatusBadge; iframe loading/error states; "Open in new tab" button |
+
+## Commit
+
+Pending.
+
+---
+
 # Session: Feb 24, 2026 — SPA navigation and internal link routing
 
 ## What We Built

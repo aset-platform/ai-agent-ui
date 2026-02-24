@@ -105,9 +105,30 @@ for tc in response.tool_calls:
 
 After all tool results are appended, the loop invokes the LLM again with the expanded message list. It keeps iterating until `response.tool_calls` is empty, then returns `response.content`.
 
-### Known Limitation: No Iteration Cap
+### Iteration Cap — MAX_ITERATIONS
 
-The loop has no maximum iteration limit. A misbehaving LLM that keeps emitting tool calls would loop indefinitely. A `max_iterations` guard should be added for production use.
+The loop is bounded by `MAX_ITERATIONS = 15` (module-level constant in `base.py`). If the counter exceeds this value the loop logs a `WARNING`, breaks, and returns the last available response. 15 is well above any legitimate tool chain observed in practice.
+
+### Streaming Loop — `stream()`
+
+```python
+def stream(self, user_input: str, history: list[dict] = []) -> Iterator[str]:
+```
+
+A parallel method to `run()` that yields NDJSON status events instead of returning a single string. Each yielded value is a JSON-encoded object followed by `\n`.
+
+**Event types yielded:**
+
+| Event | Fields | When |
+|-------|--------|------|
+| `thinking` | `iteration` | Before each LLM invocation |
+| `tool_start` | `tool`, `args` | Before each tool call |
+| `tool_done` | `tool`, `preview` (≤ 300 chars) | After each tool result |
+| `warning` | `message` | On `MAX_ITERATIONS` hit |
+| `final` | `response`, `iterations` | Loop complete |
+| `error` | `message` | On exception (also re-raised) |
+
+The generator is consumed by `_chat_stream_handler` in `main.py`, which runs it in a daemon thread and passes events through a `queue.Queue` to the `StreamingResponse`.
 
 ### Abstract Method — `_build_llm()`
 

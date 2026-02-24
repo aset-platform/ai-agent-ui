@@ -38,9 +38,11 @@ Typical usage::
     response = agent.run("What time is it?", history=[])
 """
 
+import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Iterator
 
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, BaseMessage, SystemMessage
 
@@ -269,3 +271,97 @@ class BaseAgent(ABC):
             iteration,
         )
         return response.content or "No response"
+
+    def stream(self, user_input: str, history: list = []) -> Iterator[str]:
+        """Execute the agentic loop, yielding NDJSON status events.
+
+        Each yielded value is a JSON-encoded object followed by a newline
+        character (``\\n``), suitable for ``application/x-ndjson`` streaming
+        responses.
+
+        Event types emitted:
+
+        - ``thinking`` — LLM invocation is starting; includes ``iteration``.
+        - ``tool_start`` — A tool call is about to execute; includes
+          ``tool`` name and ``args``.
+        - ``tool_done`` — A tool call completed; includes ``tool`` name
+          and up to 300 characters of the ``preview`` result.
+        - ``warning`` — ``MAX_ITERATIONS`` was reached before a final answer.
+        - ``final`` — Loop complete; includes ``response`` text and
+          ``iterations`` count.
+        - ``error`` — An exception occurred; includes ``message`` string.
+
+        Args:
+            user_input: The user's latest message.
+            history: Prior conversation turns as raw dicts
+                (``[{"role": "user"|"assistant", "content": "..."}]``).
+                Defaults to an empty list.
+
+        Yields:
+            JSON-encoded event strings, each terminated with ``\\n``.
+
+        Raises:
+            Exception: Any exception raised by the LLM provider or tool
+                execution is logged, yielded as an ``error`` event, and
+                then re-raised so the streaming endpoint can close cleanly.
+
+        Example:
+            >>> for chunk in agent.stream("What time is it?"):
+            ...     print(chunk, end="")  # doctest: +SKIP
+        """
+        self.logger.info(
+            "Stream start | agent=%s | input_len=%d",
+            self.config.agent_id,
+            len(user_input),
+        )
+        messages = self._build_messages(user_input, history)
+        iteration = 0
+        response = None
+
+        try:
+            while True:
+                iteration += 1
+                if iteration > MAX_ITERATIONS:
+                    warning_msg = f"Agent hit MAX_ITERATIONS ({MAX_ITERATIONS}); returning last response."
+                    self.logger.warning(
+                        "Agent '%s' hit MAX_ITERATIONS (%d).",
+                        self.config.agent_id,
+                        MAX_ITERATIONS,
+                    )
+                    yield json.dumps({"type": "warning", "message": warning_msg}) + "\n"
+                    break
+
+                yield json.dumps({"type": "thinking", "iteration": iteration}) + "\n"
+
+                response = self.llm_with_tools.invoke(messages)
+                messages.append(response)
+
+                if not response.tool_calls:
+                    break
+
+                for tc in response.tool_calls:
+                    tool_name = tc["name"]
+                    tool_args = tc.get("args", {})
+
+                    yield json.dumps({"type": "tool_start", "tool": tool_name, "args": tool_args}) + "\n"
+
+                    result = self.tool_registry.invoke(tool_name, tool_args)
+
+                    yield json.dumps({"type": "tool_done", "tool": tool_name, "preview": result[:300]}) + "\n"
+
+                    messages.append(
+                        ToolMessage(content=result, tool_call_id=tc["id"])
+                    )
+
+        except Exception as exc:
+            self.logger.error("Agent stream failed", exc_info=True)
+            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
+            raise
+
+        final_response = (response.content or "No response") if response is not None else "No response"
+        self.logger.info(
+            "Stream end | agent=%s | iterations=%d",
+            self.config.agent_id,
+            iteration,
+        )
+        yield json.dumps({"type": "final", "response": final_response, "iterations": iteration}) + "\n"

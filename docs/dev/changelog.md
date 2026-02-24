@@ -4,6 +4,39 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Feb 24, 2026 (continued)
+
+### Streaming, request timeout, iframe cross-origin, and dashboard light theme
+
+Four independent improvements committed as a single session.
+
+**Backend:**
+
+| File | Change |
+|------|--------|
+| `backend/config.py` | Added `agent_timeout_seconds: int = 120` to `Settings` |
+| `backend/agents/base.py` | Added `stream()` method — yields NDJSON events; added `json`, `Iterator` imports |
+| `backend/main.py` | Added `asyncio`/`queue`/`threading`/`StreamingResponse` imports; `/chat` now uses `asyncio.wait_for` (HTTP 504 on timeout); new `POST /chat/stream` endpoint |
+
+**Dashboard:**
+
+| File | Change |
+|------|--------|
+| `dashboard/app.py` | `dbc.themes.DARKLY` → `dbc.themes.FLATLY`; added `@server.after_request` `allow_iframe` hook |
+| `dashboard/assets/custom.css` | Full rewrite — light palette with CSS variables; indigo accent matching chat UI |
+| `dashboard/callbacks.py` | All `template="plotly_dark"` → `"plotly_white"`; explicit `paper_bgcolor`/`plot_bgcolor`/`font`/`gridcolor`; annotation colors updated for light bg; stock card `text-white` → `text-dark`; table class updated |
+| `dashboard/layouts.py` | NAVBAR `color="light"`, `dark=False`; H2 `text-white` removed; input `bg-dark text-white` removed; controls rows `bg-dark` → `bg-light border`; loading spinners `#4c8eff`/`#4caf50` → `#4f46e5` |
+
+**Frontend:**
+
+| File | Change |
+|------|--------|
+| `frontend/app/page.tsx` | `axios.post` → `fetch()` + `ReadableStream`; `TypingDots` → `StatusBadge`; `statusLine` state; `iframeLoading`/`iframeError` state; spinner + error banner on iframe; "Open in new tab ↗" in header; `switchView` resets iframe states; `handleInternalLink` resets iframe states |
+
+**Commit:** *(this session)*
+
+---
+
 ## Feb 24, 2026
 
 ### SPA navigation, session persistence, and UI hardening
@@ -207,5 +240,3 @@ Built the complete application from scratch in a single session.
 | Issue | Priority | Notes |
 |-------|----------|-------|
 | Anthropic API not working | High | Switch back once access is fixed — see [How to Run](how-to-run.md) |
-| No request timeout on frontend | Medium | Long agent loops block the UI indefinitely |
-| No streaming | Low | Full response appears at once; SSE/WebSockets would improve UX |

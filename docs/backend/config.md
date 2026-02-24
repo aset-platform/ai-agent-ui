@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     serpapi_api_key: str = ""
     log_level: str = "DEBUG"
     log_to_file: bool = True
+    agent_timeout_seconds: int = 120
 ```
 
 | Field | Env Var | Default | Description |
@@ -22,6 +23,7 @@ class Settings(BaseSettings):
 | `serpapi_api_key` | `SERPAPI_API_KEY` | `""` | API key for SerpAPI web search |
 | `log_level` | `LOG_LEVEL` | `"DEBUG"` | Minimum log severity (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`) |
 | `log_to_file` | `LOG_TO_FILE` | `True` | Write logs to a rotating file under `backend/logs/` |
+| `agent_timeout_seconds` | `AGENT_TIMEOUT_SECONDS` | `120` | Maximum seconds the agentic loop may run; HTTP 504 / stream timeout event on expiry |
 
 All fields have defaults, so the server starts without any environment configuration. API-dependent features (LLM inference, web search) will fail at runtime if the corresponding keys are missing.
 
@@ -48,6 +50,7 @@ GROQ_API_KEY=gsk_...
 SERPAPI_API_KEY=abc123...
 LOG_LEVEL=INFO
 LOG_TO_FILE=true
+AGENT_TIMEOUT_SECONDS=120
 ```
 
 The `.env` file is read automatically by Pydantic Settings when the server starts. It uses `extra="ignore"` so unknown keys in the file are silently skipped rather than raising a validation error.
