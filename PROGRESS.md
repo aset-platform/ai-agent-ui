@@ -28,6 +28,18 @@ if "REFRESH_TOKEN_EXPIRE_DAYS" not in os.environ:
     os.environ["REFRESH_TOKEN_EXPIRE_DAYS"] = str(settings.refresh_token_expire_days)
 ```
 
+### Bug 3 — Backend failed to start after `./run.sh restart` (GROQ_API_KEY not in os.environ)
+
+**Root cause:** Same pattern as Bug 1, but for LangChain's `ChatGroq`.  `ChatGroq` reads
+`GROQ_API_KEY` from `os.environ` directly.  The initial Bug 1 fix only exported the three JWT
+variables, so `GROQ_API_KEY` (and `SERPAPI_API_KEY`, `ANTHROPIC_API_KEY`) remained invisible to
+third-party libraries when running via `./run.sh` without explicit shell exports.
+
+**Fix:** Replaced the three individual `if` statements with a single `_env_exports` dict that covers
+all six settings fields (`GROQ_API_KEY`, `ANTHROPIC_API_KEY`, `SERPAPI_API_KEY`, `JWT_SECRET_KEY`,
+`ACCESS_TOKEN_EXPIRE_MINUTES`, `REFRESH_TOKEN_EXPIRE_DAYS`).  One loop handles all of them.  This
+is now reflected in the PROGRESS.md and committed as a follow-up fix.
+
 ### Bug 2 — Dashboard iframe showed "Authentication required" even with a valid token
 
 **Root cause:** The Dash dashboard is a **separate process** from the backend.  `dashboard/callbacks.py`
@@ -44,9 +56,9 @@ overwritten, so explicit shell exports still take precedence.
 
 | File | Change |
 |---|---|
-| `backend/main.py` | Added JWT env export block in module-level startup |
+| `backend/main.py` | Expanded env export block to cover all six settings fields (all API keys + JWT + token TTLs) |
 | `dashboard/app.py` | Added `_load_dotenv()` helper + calls for `.env` and `backend/.env` |
-| `backend/.env` | Created — contains `JWT_SECRET_KEY`, `ACCESS_TOKEN_EXPIRE_MINUTES`, `REFRESH_TOKEN_EXPIRE_DAYS` (gitignored) |
+| `backend/.env` | Created — contains all secrets and API keys (gitignored) |
 
 ### Superuser bootstrapped
 

@@ -380,15 +380,20 @@ class ChatServer:
 settings = get_settings()
 setup_logging(level=settings.log_level, log_to_file=settings.log_to_file)
 
-# Export JWT settings loaded by Pydantic into os.environ so that
-# auth/dependencies.py (which reads os.environ directly) can find them
-# even when JWT_SECRET_KEY is only defined in backend/.env.
-if settings.jwt_secret_key and "JWT_SECRET_KEY" not in os.environ:
-    os.environ["JWT_SECRET_KEY"] = settings.jwt_secret_key
-if "ACCESS_TOKEN_EXPIRE_MINUTES" not in os.environ:
-    os.environ["ACCESS_TOKEN_EXPIRE_MINUTES"] = str(settings.access_token_expire_minutes)
-if "REFRESH_TOKEN_EXPIRE_DAYS" not in os.environ:
-    os.environ["REFRESH_TOKEN_EXPIRE_DAYS"] = str(settings.refresh_token_expire_days)
+# Export all settings loaded by Pydantic into os.environ so that third-party
+# libraries (LangChain/Groq/SerpAPI) and auth/dependencies.py, which read
+# os.environ directly, can find them even when values are only in backend/.env.
+_env_exports = {
+    "GROQ_API_KEY":                  settings.groq_api_key,
+    "ANTHROPIC_API_KEY":             settings.anthropic_api_key,
+    "SERPAPI_API_KEY":               settings.serpapi_api_key,
+    "JWT_SECRET_KEY":                settings.jwt_secret_key,
+    "ACCESS_TOKEN_EXPIRE_MINUTES":   str(settings.access_token_expire_minutes),
+    "REFRESH_TOKEN_EXPIRE_DAYS":     str(settings.refresh_token_expire_days),
+}
+for _key, _val in _env_exports.items():
+    if _val and _key not in os.environ:
+        os.environ[_key] = _val
 
 server = ChatServer(settings)
 app = server.app  # uvicorn entry point: uvicorn main:app --port 8181 --reload
