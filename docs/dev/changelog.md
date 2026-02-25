@@ -4,6 +4,91 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Feb 26, 2026 — Dashboard pagination, market filter, pre-commit hook
+
+### Dashboard — Home page market filter + pagination
+
+Added market segmentation and pagination to the Home stock cards.
+
+**Market filter:**
+
+| Button | Tickers shown |
+|--------|--------------|
+| 🇮🇳 India | `.NS` (NSE) and `.BO` (BSE) tickers |
+| 🇺🇸 US | All other tickers |
+
+Defaults to India. Switching market resets to page 1.
+
+**Home card pagination:**
+
+- 12 cards per page (default); page-size dropdown: 10 / 25 / 50 / 100
+- Count label: "Showing 1–12 of 47"
+- `paddingBottom: "5rem"` on `#page-content` prevents the pagination row overlapping the fixed Next.js navigation FAB and the Plotly watermark
+
+**Architecture — data/render split:**
+
+`refresh_stock_cards` now stores raw serialisable dicts in `dcc.Store(id="stock-raw-data-store")` instead of building Dash components. A new `render_home_cards` callback reads the store, filters by market, paginates, and builds components — fully client-side without re-fetching data.
+
+| File | Change |
+|------|--------|
+| `dashboard/layouts.py` | India/US `dbc.ButtonGroup`, pagination row with count text + `dbc.Select`, `dcc.Store` additions |
+| `dashboard/callbacks.py` | `_get_market()` helper, rewritten `refresh_stock_cards`, 4 new callbacks (`update_market_filter`, `render_home_cards`, `reset_home_page_on_size_change`, plus 3 for admin) |
+
+---
+
+### Dashboard — Admin Users + Audit Log pagination and search
+
+**Users tab:**
+
+- Debounced search input filters by name, email, or role
+- Table paginated (10 / page default); page-size dropdown: 10 / 25 / 50 / 100
+- Filter or size change resets to page 1
+
+**Audit Log tab:**
+
+- Debounced search input filters by event type, actor, target, or metadata
+- Table paginated (10 / page default); configurable page size
+
+| File | Change |
+|------|--------|
+| `dashboard/layouts.py` | Search inputs + pagination rows with page-size selects; `dcc.Store(id="audit-data-store")` |
+| `dashboard/callbacks.py` | `load_users_table` → `users-store.data`; `load_audit_log` → `audit-data-store.data`; new `render_users_page`, `render_audit_page`, `reset_users_page_on_filter`, `reset_audit_page_on_filter` |
+
+---
+
+### Pre-commit quality gate (`hooks/pre-commit` + `hooks/pre_commit_checks.py`)
+
+New hook runs on every `git commit`, operating only on staged modified/created files (`git diff --cached --diff-filter=ACM`).
+
+**Four checks:**
+
+| # | Check | Auto-fix |
+|---|-------|---------|
+| 1 | Bare `print()`, missing Google docstrings, naming, OOP, XSS/SQL injection | Yes — Claude rewrites the file and re-stages |
+| 2 | `CLAUDE.md`, `PROGRESS.md`, `README.md` freshness | Yes — Claude patches stale sections and re-stages |
+| 3 | Docs pages freshness (via `_DOCS_MAP`) | Yes — Claude patches and re-stages |
+| 4 | `docs/dev/changelog.md` descending date order | Yes — deterministic sort, no API needed |
+
+Checks 1–3 require `ANTHROPIC_API_KEY`. The hook loads `backend/.env` automatically so the key doesn't need to be exported in the shell.
+
+**Environment variables:**
+
+| Variable | Effect |
+|----------|--------|
+| `SKIP_PRE_COMMIT=1` | Bypass the entire hook |
+| `SKIP_CLAUDE_CHECKS=1` | Run static checks only; skip API-based auto-fix and doc updates |
+| `ANTHROPIC_API_KEY` | Enables checks 1–3; set in `backend/.env` |
+
+**Install:**
+```bash
+cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+```
+
+**Commits:** `c68c2fc` — *feat: dashboard pagination, market filter, and pre-commit quality gate*
+`16a9441` — *docs: update README and dashboard docs; fix hook dotenv loading*
+
+---
+
 ## Feb 25, 2026 (continued — deployment fixes)
 
 ### Auth deployment fixes: JWT env propagation + dashboard dotenv loader
@@ -181,32 +266,6 @@ Eight improvements across frontend and backend committed as a single session.
 | Internal link routing in `MarkdownContent` | `onInternalLink` prop; `a` renderer renders `<button>` for internal links, `<a target="_blank">` for external |
 
 **Commit:** `c570a98` — *feat: SPA navigation, session persistence, iteration cap, and env config*
-
----
-
-## Feb 24, 2026 (continued — currency fix)
-
-### Dynamic currency symbols for multi-market stocks
-
-Replaced all hard-coded `$` (USD) price symbols with dynamic currency symbols
-loaded from `data/metadata/{TICKER}_info.json`. Indian stocks now show `₹`,
-UK stocks `£`, EU stocks `€`, etc.
-
-**Backend:**
-
-| File | Change |
-|------|--------|
-| `backend/tools/price_analysis_tool.py` | Added `import json`, `_DATA_METADATA` path, `_currency_symbol()` and `_load_currency()` helpers; 5 report-string `$` → `{sym}` |
-| `backend/tools/forecasting_tool.py` | Same helpers added; 2 chart annotation `$` → `{sym}`; 5 report-string `$` → `{sym}`; `yaxis_title` → dynamic currency code |
-| `backend/tools/stock_data_tool.py` | Same helpers added; dividend report `$` → dynamic symbol |
-
-**Dashboard:**
-
-| File | Change |
-|------|--------|
-| `dashboard/callbacks.py` | Added `_currency_symbol()` and `_get_currency()` helpers; `_build_stats_cards` / `_build_target_cards` / `_build_accuracy_row` / `_build_forecast_fig` / `refresh_stock_cards` all use dynamic symbol; `_build_target_cards` and `_build_accuracy_row` gained `ticker` parameter |
-
-**Commit:** `5c017f2` — *fix: dynamic currency symbols for multi-market stocks*
 
 ---
 
