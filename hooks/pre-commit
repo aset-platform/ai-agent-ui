@@ -9,7 +9,7 @@
 # Checks (in order):
 #   1. Code quality  — bare print(), Google docstrings, naming conventions,
 #                      OOP patterns, XSS + SQL-injection risks.
-#                      Issues are auto-fixed via Claude when ANTHROPIC_API_KEY
+#                      Issues are auto-fixed via Groq LLM when GROQ_API_KEY
 #                      is set; fixed files are re-staged transparently.
 #   2. Meta-files    — CLAUDE.md, PROGRESS.md, and README.md are reviewed
 #                      against the staged diff and updated if stale.
@@ -22,7 +22,7 @@
 # Environment variables:
 #   SKIP_PRE_COMMIT=1       bypass the entire hook
 #   SKIP_CLAUDE_CHECKS=1    run only static checks (no API calls)
-#   ANTHROPIC_API_KEY=<k>   enables Claude-powered auto-fix and doc updates
+#   GROQ_API_KEY=<k>   enables LLM-powered auto-fix and doc updates (already in backend/.env)
 #
 # Install (one-time):
 #   cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit

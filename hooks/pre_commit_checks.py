@@ -16,19 +16,19 @@ Checks performed (in order):
    * XSS risks — f-strings with HTML tags in Dash components or TS files.
    * SQL-injection risks — f-strings / concatenation inside ``execute()`` calls.
 
-   When ``ANTHROPIC_API_KEY`` is set, all violations are sent to Claude
-   (``claude-sonnet-4-6``) for automatic repair.  Fixed files are re-staged
+   When ``GROQ_API_KEY`` is set, all violations are sent to the Groq LLM
+   (``openai/gpt-oss-120b``) for automatic repair.  Fixed files are re-staged
    so the fixes are included in the current commit.
 
-2. **Meta-file freshness** (requires ``ANTHROPIC_API_KEY``):
+2. **Meta-file freshness** (requires ``GROQ_API_KEY``):
 
-   Claude reviews the staged diff and updates ``CLAUDE.md``, ``PROGRESS.md``,
+   The LLM reviews the staged diff and updates ``CLAUDE.md``, ``PROGRESS.md``,
    and the project-root ``README.md`` if they are stale.  All three are
    checked in a single API call.  Updated files are re-staged automatically.
 
-3. **Documentation freshness** (requires ``ANTHROPIC_API_KEY``):
+3. **Documentation freshness** (requires ``GROQ_API_KEY``):
 
-   Staged source files are mapped to their ``docs/`` counterparts.  Claude
+   Staged source files are mapped to their ``docs/`` counterparts.  The LLM
    patches any stale sections.  Updated pages are re-staged.
 
 4. **Changelog date ordering** (always runs, no API required):
@@ -70,8 +70,8 @@ def _load_dotenv_into_environ() -> None:
     """Load key=value pairs from .env files into os.environ (without overwriting).
 
     Reads the project-root ``.env`` and ``backend/.env`` files at startup so
-    that variables like ``ANTHROPIC_API_KEY`` are available even when not
-    explicitly exported in the shell.  Existing env vars always take precedence.
+    that variables like ``GROQ_API_KEY`` and ``JWT_SECRET_KEY`` are available
+    even when not explicitly exported in the shell.  Existing env vars always take precedence.
     """
     for env_file in (_PROJECT_ROOT / ".env", _PROJECT_ROOT / "backend" / ".env"):
         if not env_file.exists():
@@ -212,7 +212,7 @@ class PreCommitChecker:
         staged_files: Relative paths of modified / created staged files.
         staged_py: Subset of ``staged_files`` that end in ``.py``.
         staged_ts: Subset of ``staged_files`` that end in ``.ts`` / ``.tsx``.
-        has_claude: True when ``ANTHROPIC_API_KEY`` is present.
+        has_llm: True when ``GROQ_API_KEY`` is present in the environment.
         skip_claude: True when ``SKIP_CLAUDE_CHECKS=1`` is set.
         fixes_applied: List of relative paths that were auto-fixed and re-staged.
     """
@@ -232,7 +232,7 @@ class PreCommitChecker:
             if f.endswith((".ts", ".tsx"))
             and not any(seg in f for seg in _SKIP_SEGMENTS)
         ]
-        self.has_claude: bool  = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        self.has_llm: bool  = bool(os.environ.get("GROQ_API_KEY"))
         self.skip_claude: bool = os.environ.get("SKIP_CLAUDE_CHECKS", "0") == "1"
         self.fixes_applied: List[str] = []
 
@@ -255,11 +255,11 @@ class PreCommitChecker:
 
         if issues:
             _info(f"{len(issues)} issue(s) found in staged files.")
-            if self.has_claude and not self.skip_claude:
+            if self.has_llm and not self.skip_claude:
                 self._fix_with_claude(issues)
             else:
-                if not self.has_claude:
-                    _warn("ANTHROPIC_API_KEY not set — cannot auto-fix; showing violations only.")
+                if not self.has_llm:
+                    _warn("GROQ_API_KEY not set — static violations shown; no auto-fix.")
                 for iss in issues:
                     fn = _err if iss.severity == "error" else _warn
                     fn(f"{iss.filepath}:{iss.line}  [{iss.category}] {iss.description}")
@@ -270,17 +270,17 @@ class PreCommitChecker:
 
         # ── 2. Meta-file freshness ────────────────────────────────────────
         print(f"\n{_BOLD}── [2/4] CLAUDE.md / PROGRESS.md / README.md freshness{_RESET}")
-        if self.has_claude and not self.skip_claude:
+        if self.has_llm and not self.skip_claude:
             self._update_meta_files()
         else:
-            _warn("Skipping (ANTHROPIC_API_KEY not set or SKIP_CLAUDE_CHECKS=1).")
+            _warn("Skipping (GROQ_API_KEY not set or SKIP_CLAUDE_CHECKS=1 — add key to backend/.env to enable).")
 
         # ── 3. Docs freshness ─────────────────────────────────────────────
         print(f"\n{_BOLD}── [3/4] Documentation freshness{_RESET}")
-        if self.has_claude and not self.skip_claude:
+        if self.has_llm and not self.skip_claude:
             self._update_docs()
         else:
-            _warn("Skipping (ANTHROPIC_API_KEY not set or SKIP_CLAUDE_CHECKS=1).")
+            _warn("Skipping (GROQ_API_KEY not set or SKIP_CLAUDE_CHECKS=1 — add key to backend/.env to enable).")
 
         # ── 4. Changelog ordering ─────────────────────────────────────────
         print(f"\n{_BOLD}── [4/4] Changelog date ordering{_RESET}")
@@ -856,29 +856,33 @@ class PreCommitChecker:
         return top in _PYTHON_DIRS
 
     def _call_claude(self, prompt: str, max_tokens: int = 8_192) -> Optional[str]:
-        """Make a single :mod:`anthropic` API call and return the text response.
+        """Make a single Groq API call and return the text response.
+
+        Uses the ``groq`` SDK with the project's standard model
+        (``openai/gpt-oss-120b``).  The API key is read from
+        ``os.environ["GROQ_API_KEY"]``.
 
         Args:
-            prompt: The user-turn prompt to send to Claude.
+            prompt: The user-turn prompt to send to the LLM.
             max_tokens: Upper bound on response tokens.
 
         Returns:
             Response text string, or ``None`` if the call failed.
         """
         try:
-            import anthropic  # type: ignore[import]
-            client = anthropic.Anthropic()
-            message = client.messages.create(
-                model="claude-sonnet-4-6",
+            from groq import Groq  # type: ignore[import]
+            client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+            completion = client.chat.completions.create(
+                model="openai/gpt-oss-120b",
                 max_tokens=max_tokens,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return message.content[0].text
+            return completion.choices[0].message.content
         except ImportError:
-            _warn("anthropic SDK not installed — run: pip install anthropic")
+            _warn("groq SDK not installed — run: pip install groq")
             return None
         except Exception as exc:
-            _warn(f"Claude API call failed: {exc}")
+            _warn(f"Groq API call failed: {exc}")
             return None
 
     @staticmethod
