@@ -69,7 +69,7 @@ Returned when the requested `agent_id` is not registered.
 
 ### Response — 504 Gateway Timeout
 
-Returned when the agentic loop does not complete within `agent_timeout_seconds` (default 120 s).
+Returned when the agentic loop does not complete within `agent_timeout_seconds` (default 900 s).
 
 ```json
 {

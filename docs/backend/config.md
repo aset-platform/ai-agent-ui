@@ -13,13 +13,13 @@ class Settings(BaseSettings):
     serpapi_api_key: str = ""
     log_level: str = "DEBUG"
     log_to_file: bool = True
-    agent_timeout_seconds: int = 120
+    agent_timeout_seconds: int = 900
     # OAuth / SSO settings
     google_client_id: str = ""
     google_client_secret: str = ""
     facebook_app_id: str = ""
     facebook_app_secret: str = ""
-    oauth_redirect_uri: str = ""
+    oauth_redirect_uri: str = "http://localhost:3000/auth/oauth/callback"
 ```
 
 | Field | Env Var | Default | Description |
@@ -29,12 +29,12 @@ class Settings(BaseSettings):
 | `serpapi_api_key` | `SERPAPI_API_KEY` | `""` | API key for SerpAPI web search |
 | `log_level` | `LOG_LEVEL` | `"DEBUG"` | Minimum log severity (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`) |
 | `log_to_file` | `LOG_TO_FILE` | `True` | Write logs to a rotating file under `backend/logs/` |
-| `agent_timeout_seconds` | `AGENT_TIMEOUT_SECONDS` | `120` | Maximum seconds the agentic loop may run; HTTP 504 / stream timeout event on expiry |
+| `agent_timeout_seconds` | `AGENT_TIMEOUT_SECONDS` | `900` | Maximum seconds the agentic loop may run; HTTP 504 / stream timeout event on expiry |
 | `google_client_id` | `GOOGLE_CLIENT_ID` | `""` | Google OAuth client identifier |
 | `google_client_secret` | `GOOGLE_CLIENT_SECRET` | `""` | Google OAuth client secret |
 | `facebook_app_id` | `FACEBOOK_APP_ID` | `""` | Facebook App ID for OAuth |
 | `facebook_app_secret` | `FACEBOOK_APP_SECRET` | `""` | Facebook App secret for OAuth |
-| `oauth_redirect_uri` | `OAUTH_REDIRECT_URI` | `""` | Redirect URI that providers will call after user consent (e.g., `http://localhost:3000/auth/oauth/callback`) |
+| `oauth_redirect_uri` | `OAUTH_REDIRECT_URI` | `"http://localhost:3000/auth/oauth/callback"` | Redirect URI registered with each OAuth provider |
 
 All fields have defaults, so the server starts without any environment configuration. API‑dependent features (LLM inference, web search, SSO) will fail at runtime if the corresponding keys are missing.
 
