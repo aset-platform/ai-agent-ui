@@ -16,17 +16,17 @@ Checks performed (in order):
    * XSS risks — f-strings with HTML tags in Dash components or TS files.
    * SQL-injection risks — f-strings / concatenation inside ``execute()`` calls.
 
-   When ``GROQ_API_KEY`` is set, all violations are sent to the Groq LLM
-   (``openai/gpt-oss-120b``) for automatic repair.  Fixed files are re-staged
+   When ``ANTHROPIC_API_KEY`` is set, all violations are sent to Claude
+   (``claude-sonnet-4-6``) for automatic repair.  Fixed files are re-staged
    so the fixes are included in the current commit.
 
-2. **Meta-file freshness** (requires ``GROQ_API_KEY``):
+2. **Meta-file freshness** (requires ``ANTHROPIC_API_KEY``):
 
-   The LLM reviews the staged diff and updates ``CLAUDE.md``, ``PROGRESS.md``,
+   Claude reviews the staged diff and updates ``CLAUDE.md``, ``PROGRESS.md``,
    and the project-root ``README.md`` if they are stale.  All three are
    checked in a single API call.  Updated files are re-staged automatically.
 
-3. **Documentation freshness** (requires ``GROQ_API_KEY``):
+3. **Documentation freshness** (requires ``ANTHROPIC_API_KEY``):
 
    Staged source files are mapped to their ``docs/`` counterparts.  The LLM
    patches any stale sections.  Updated pages are re-staged.
@@ -52,6 +52,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -70,7 +71,7 @@ def _load_dotenv_into_environ() -> None:
     """Load key=value pairs from .env files into os.environ (without overwriting).
 
     Reads the project-root ``.env`` and ``backend/.env`` files at startup so
-    that variables like ``GROQ_API_KEY`` and ``JWT_SECRET_KEY`` are available
+    that variables like ``ANTHROPIC_API_KEY`` and ``JWT_SECRET_KEY`` are available
     even when not explicitly exported in the shell.  Existing env vars always take precedence.
     """
     for env_file in (_PROJECT_ROOT / ".env", _PROJECT_ROOT / "backend" / ".env"):
@@ -212,8 +213,9 @@ class PreCommitChecker:
         staged_files: Relative paths of modified / created staged files.
         staged_py: Subset of ``staged_files`` that end in ``.py``.
         staged_ts: Subset of ``staged_files`` that end in ``.ts`` / ``.tsx``.
-        has_llm: True when ``GROQ_API_KEY`` is present in the environment.
+        has_claude: True when ``ANTHROPIC_API_KEY`` is present in the environment.
         skip_claude: True when ``SKIP_CLAUDE_CHECKS=1`` is set.
+        current_branch: Name of the current git branch (from ``GIT_CURRENT_BRANCH`` env var).
         fixes_applied: List of relative paths that were auto-fixed and re-staged.
     """
 
@@ -232,8 +234,9 @@ class PreCommitChecker:
             if f.endswith((".ts", ".tsx"))
             and not any(seg in f for seg in _SKIP_SEGMENTS)
         ]
-        self.has_llm: bool  = bool(os.environ.get("GROQ_API_KEY"))
+        self.has_claude: bool = bool(os.environ.get("ANTHROPIC_API_KEY"))
         self.skip_claude: bool = os.environ.get("SKIP_CLAUDE_CHECKS", "0") == "1"
+        self.current_branch: str = os.environ.get("GIT_CURRENT_BRANCH", "unknown")
         self.fixes_applied: List[str] = []
 
     # ── Entry point ───────────────────────────────────────────────────────────
@@ -250,16 +253,16 @@ class PreCommitChecker:
         blocking = False
 
         # ── 1. Static code analysis ───────────────────────────────────────
-        print(f"\n{_BOLD}── [1/4] Code quality analysis{_RESET}")
+        print(f"\n{_BOLD}── [1/4] Code quality analysis  (branch: {self.current_branch}){_RESET}")
         issues = self._collect_static_issues()
 
         if issues:
             _info(f"{len(issues)} issue(s) found in staged files.")
-            if self.has_llm and not self.skip_claude:
+            if self.has_claude and not self.skip_claude:
                 self._fix_with_claude(issues)
             else:
-                if not self.has_llm:
-                    _warn("GROQ_API_KEY not set — static violations shown; no auto-fix.")
+                if not self.has_claude:
+                    _warn("ANTHROPIC_API_KEY not set — static violations shown; no auto-fix.")
                 for iss in issues:
                     fn = _err if iss.severity == "error" else _warn
                     fn(f"{iss.filepath}:{iss.line}  [{iss.category}] {iss.description}")
@@ -270,17 +273,17 @@ class PreCommitChecker:
 
         # ── 2. Meta-file freshness ────────────────────────────────────────
         print(f"\n{_BOLD}── [2/4] CLAUDE.md / PROGRESS.md / README.md freshness{_RESET}")
-        if self.has_llm and not self.skip_claude:
+        if self.has_claude and not self.skip_claude:
             self._update_meta_files()
         else:
-            _warn("Skipping (GROQ_API_KEY not set or SKIP_CLAUDE_CHECKS=1 — add key to backend/.env to enable).")
+            _warn("Skipping (ANTHROPIC_API_KEY not set or SKIP_CLAUDE_CHECKS=1 — add key to backend/.env to enable).")
 
         # ── 3. Docs freshness ─────────────────────────────────────────────
         print(f"\n{_BOLD}── [3/4] Documentation freshness{_RESET}")
-        if self.has_llm and not self.skip_claude:
+        if self.has_claude and not self.skip_claude:
             self._update_docs()
         else:
-            _warn("Skipping (GROQ_API_KEY not set or SKIP_CLAUDE_CHECKS=1 — add key to backend/.env to enable).")
+            _warn("Skipping (ANTHROPIC_API_KEY not set or SKIP_CLAUDE_CHECKS=1 — add key to backend/.env to enable).")
 
         # ── 4. Changelog ordering ─────────────────────────────────────────
         print(f"\n{_BOLD}── [4/4] Changelog date ordering{_RESET}")
@@ -691,6 +694,11 @@ class PreCommitChecker:
         Each staged file is matched against :data:`_DOCS_MAP`.  For each
         affected docs page, Claude is asked whether it needs patching and, if
         so, returns the updated Markdown.  Changed pages are re-staged.
+
+        After all pages are processed, :meth:`_run_mkdocs_build` is called to
+        verify that the documentation site still builds correctly.  A build
+        failure is reported as a warning but never blocks the commit (that is
+        the pre-push hook's responsibility).
         """
         affected: Dict[str, bool] = {}
         for staged in self.staged_files:
@@ -703,6 +711,9 @@ class PreCommitChecker:
 
         if not affected:
             _ok("No docs pages mapped to the staged changes.")
+            # Still validate mkdocs build as a final sanity check (non-blocking)
+            if self._run_mkdocs_build():
+                _ok("mkdocs build passed.")
             return
 
         diff = self._git("diff", "--cached")
@@ -745,6 +756,53 @@ class PreCommitChecker:
                 _fix(f"Updated {doc_rel}")
             else:
                 _ok(f"{doc_rel} is up to date.")
+
+        # Validate mkdocs build after any LLM-driven doc updates (non-blocking)
+        if self._run_mkdocs_build():
+            _ok("mkdocs build passed after doc updates.")
+        else:
+            _warn("mkdocs build failed — fix before pushing (pre-push hook will block).")
+
+    # ── Check 3b: mkdocs build validation ────────────────────────────────────
+
+    def _run_mkdocs_build(self) -> bool:
+        """Run ``mkdocs build`` in a temp directory and return True if it passes.
+
+        Uses the project's demoenv mkdocs binary so that all MkDocs plugins
+        and extensions are available.  The generated site is written to a
+        temporary directory and cleaned up immediately after.
+
+        Returns:
+            ``True`` if ``mkdocs build`` exits with code 0, ``False`` otherwise.
+        """
+        import tempfile
+        mkdocs_bin = _PROJECT_ROOT / "backend" / "demoenv" / "bin" / "mkdocs"
+        if not mkdocs_bin.exists():
+            _warn("mkdocs not found in demoenv — skipping build validation.")
+            return True  # non-blocking: assume OK if mkdocs isn't installed
+        tmpdir = tempfile.mkdtemp(prefix="pre_commit_mkdocs_")
+        try:
+            result = subprocess.run(
+                [
+                    str(mkdocs_bin),
+                    "build",
+                    "--config-file", str(_PROJECT_ROOT / "mkdocs.yml"),
+                    "--site-dir", tmpdir,
+                    "--quiet",
+                ],
+                cwd=_PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                _warn("mkdocs build failed after doc updates:")
+                for line in (result.stdout + result.stderr).splitlines():
+                    if line.strip():
+                        _warn(f"  {line}")
+                return False
+            return True
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     # ── Check 4: Changelog ordering ───────────────────────────────────────────
 
@@ -856,33 +914,37 @@ class PreCommitChecker:
         return top in _PYTHON_DIRS
 
     def _call_claude(self, prompt: str, max_tokens: int = 8_192) -> Optional[str]:
-        """Make a single Groq API call and return the text response.
+        """Make a single Anthropic API call and return the text response.
 
-        Uses the ``groq`` SDK with the project's standard model
-        (``openai/gpt-oss-120b``).  The API key is read from
-        ``os.environ["GROQ_API_KEY"]``.
+        Uses the ``anthropic`` SDK with ``claude-sonnet-4-6``.  The API key
+        is read from ``os.environ["ANTHROPIC_API_KEY"]``.  Returns ``None``
+        gracefully when the key is absent or the call fails, so callers can
+        skip LLM-powered features without blocking the commit.
 
         Args:
-            prompt: The user-turn prompt to send to the LLM.
+            prompt: The user-turn prompt to send to Claude.
             max_tokens: Upper bound on response tokens.
 
         Returns:
-            Response text string, or ``None`` if the call failed.
+            Response text string, or ``None`` if the key is absent or the call failed.
         """
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            return None
         try:
-            from groq import Groq  # type: ignore[import]
-            client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-            completion = client.chat.completions.create(
-                model="openai/gpt-oss-120b",
+            import anthropic  # type: ignore[import]
+            client = anthropic.Anthropic(api_key=api_key)
+            msg = client.messages.create(
+                model="claude-sonnet-4-6",
                 max_tokens=max_tokens,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return completion.choices[0].message.content
+            return msg.content[0].text
         except ImportError:
-            _warn("groq SDK not installed — run: pip install groq")
+            _warn("anthropic SDK not installed — run: pip install anthropic")
             return None
         except Exception as exc:
-            _warn(f"Groq API call failed: {exc}")
+            _warn(f"Anthropic API call failed: {exc}")
             return None
 
     @staticmethod

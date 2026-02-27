@@ -1,0 +1,18 @@
+# CODEOWNERS — ai-agent-ui
+#
+# Maps merge paths to required reviewer groups.
+# GitHub enforces these when branch protection rules require CODEOWNER review.
+#
+# Branching strategy:
+#   feature/* → dev → qa → release → main
+#
+# Syntax: <path-pattern> <@owner-or-team> [<@owner-or-team> ...]
+
+# QA branch: QA team must approve all PRs into qa
+/qa/     @qa-team
+
+# Release branch: Tech lead + QA lead must both approve
+/release/  @tech-lead @qa-lead
+
+# Main: Senior engineers sign-off (minimum 2 approvals enforced via branch protection)
+*        @senior-engineers

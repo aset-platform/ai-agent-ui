@@ -2,6 +2,73 @@
 
 ---
 
+# Session: Feb 27, 2026 — Branching strategy + Pre-commit hook improvements
+
+## What We Built
+
+Four improvements to developer workflow and CI/CD infrastructure.
+
+### 1. Branching strategy
+
+Created `dev`, `qa`, and `release` branches from `main` and pushed to remote.
+Full `feature/* → dev → qa → release → main` workflow with CI/CD and branch protection rules.
+
+**Files created:**
+
+| File | Purpose |
+|---|---|
+| `.github/workflows/ci.yml` | GitHub Actions CI — per-branch jobs (dev/qa/release/main); Python + Next.js lint + mkdocs build; QA+ adds backend smoke test |
+| `.github/CODEOWNERS` | Maps merge paths to reviewer groups (qa-team, tech-lead+qa-lead, senior-engineers) |
+| `.github/pull_request_template.md` | Standard PR checklist (type tag, tests, docs, no secrets) |
+
+**Branch protection rules** (to be applied manually in GitHub → Settings → Branches):
+- `main`: no direct push, 2 approvals, CI must pass
+- `release`: PR from `qa` only, 1 approval + QA lead, CI must pass
+- `qa`: PR from `dev` only, 1 approval, integration tests must pass
+- `dev`: PR from `feature/*`, 1 approval, unit tests + lint must pass
+
+### 2. Pre-commit hook: Groq → Claude
+
+`hooks/pre_commit_checks.py` now uses the Anthropic SDK (`claude-sonnet-4-6`) instead of Groq
+for all LLM-powered auto-fix and documentation updates.
+
+- `_call_claude()` now calls `anthropic.Anthropic(api_key=...).messages.create(model="claude-sonnet-4-6", ...)`
+- `has_llm` renamed to `has_claude`; checks `ANTHROPIC_API_KEY` instead of `GROQ_API_KEY`
+- All skip messages updated to reference `ANTHROPIC_API_KEY`
+- Module + class docstrings updated to remove Groq references
+- Graceful skip when `ANTHROPIC_API_KEY` is absent (no blocking)
+
+### 3. Docs check: mkdocs build validation
+
+`_update_docs()` now calls `_run_mkdocs_build()` after all LLM doc patches are applied.
+
+- `_run_mkdocs_build()` — new helper: runs demoenv mkdocs in a temp dir, cleans up with `shutil.rmtree`
+- Build failure is **warned but never blocking** — the developer is informed and can fix before pushing (pre-push hook will block)
+- If no docs pages were mapped to staged changes, `mkdocs build` still runs as a final sanity check
+- `import shutil` added to top-level imports
+
+### 4. Branch-aware pre-commit
+
+`hooks/pre-commit` detects the current branch and warns on direct commits to protected branches.
+
+- Detects branch via `git symbolic-ref --short HEAD`
+- Warns (does not block) when committing directly to `main`, `qa`, or `release`
+- Exports `GIT_CURRENT_BRANCH` env var for the Python script
+- `PreCommitChecker.__init__` reads `GIT_CURRENT_BRANCH` into `self.current_branch`
+- Banner for check [1/4] now shows `(branch: <name>)` suffix
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `.github/workflows/ci.yml` | New — CI pipeline for all 4 branches |
+| `.github/CODEOWNERS` | New — reviewer group mappings |
+| `.github/pull_request_template.md` | New — standard PR checklist |
+| `hooks/pre-commit` | Branch detection + warning + GIT_CURRENT_BRANCH export; Groq → Claude comment |
+| `hooks/pre_commit_checks.py` | Groq → Anthropic SDK; has_llm → has_claude; GROQ_API_KEY → ANTHROPIC_API_KEY; _run_mkdocs_build(); import shutil; current_branch |
+
+---
+
 # Session: Feb 26, 2026 — Google + Facebook SSO (OAuth2 PKCE)
 
 ## What We Built

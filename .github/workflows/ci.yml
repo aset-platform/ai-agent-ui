@@ -1,0 +1,228 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, qa, release, main]
+  pull_request:
+    branches: [dev, qa, release, main]
+
+jobs:
+  # ── dev: Python quality + Next.js lint ──────────────────────────────────────
+  dev:
+    name: Dev — Python + Next.js lint
+    if: |
+      github.ref == 'refs/heads/dev' ||
+      (github.event_name == 'pull_request' && github.base_ref == 'dev')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv backend/demoenv
+          source backend/demoenv/bin/activate
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: MkDocs build
+        run: |
+          source backend/demoenv/bin/activate
+          mkdocs build --config-file mkdocs.yml --site-dir /tmp/site --quiet
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Node dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Next.js lint
+        run: |
+          cd frontend
+          npm run lint
+
+  # ── qa: All dev steps + backend smoke test ──────────────────────────────────
+  qa:
+    name: QA — Integration smoke test
+    if: |
+      github.ref == 'refs/heads/qa' ||
+      (github.event_name == 'pull_request' && github.base_ref == 'qa')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv backend/demoenv
+          source backend/demoenv/bin/activate
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: MkDocs build
+        run: |
+          source backend/demoenv/bin/activate
+          mkdocs build --config-file mkdocs.yml --site-dir /tmp/site --quiet
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Node dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Next.js lint
+        run: |
+          cd frontend
+          npm run lint
+
+      - name: Start backend and smoke test
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+        run: |
+          source backend/demoenv/bin/activate
+          cd backend
+          uvicorn main:app --port 8181 &
+          sleep 5
+          curl --fail http://127.0.0.1:8181/agents || (echo "Backend health check failed" && exit 1)
+          echo "Backend smoke test passed."
+
+  # ── release: QA steps + staging deploy marker ───────────────────────────────
+  release:
+    name: Release — Staging gate
+    if: |
+      github.ref == 'refs/heads/release' ||
+      (github.event_name == 'pull_request' && github.base_ref == 'release')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv backend/demoenv
+          source backend/demoenv/bin/activate
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: MkDocs build
+        run: |
+          source backend/demoenv/bin/activate
+          mkdocs build --config-file mkdocs.yml --site-dir /tmp/site --quiet
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Node dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Next.js lint
+        run: |
+          cd frontend
+          npm run lint
+
+      - name: Start backend and smoke test
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+        run: |
+          source backend/demoenv/bin/activate
+          cd backend
+          uvicorn main:app --port 8181 &
+          sleep 5
+          curl --fail http://127.0.0.1:8181/agents || (echo "Backend health check failed" && exit 1)
+          echo "Smoke test passed."
+
+      - name: Staging deploy marker
+        run: |
+          echo "✅ Release candidate validated. Deploy to staging (extend this step with real deploy config)."
+          echo "  Ref: ${{ github.ref }}"
+          echo "  SHA: ${{ github.sha }}"
+
+  # ── main: Production deploy gate ────────────────────────────────────────────
+  main:
+    name: Main — Production gate
+    if: |
+      github.ref == 'refs/heads/main' ||
+      (github.event_name == 'pull_request' && github.base_ref == 'main')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv backend/demoenv
+          source backend/demoenv/bin/activate
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: MkDocs build
+        run: |
+          source backend/demoenv/bin/activate
+          mkdocs build --config-file mkdocs.yml --site-dir /tmp/site --quiet
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Node dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Next.js lint
+        run: |
+          cd frontend
+          npm run lint
+
+      - name: Production deploy gate
+        run: |
+          echo "✅ Production gate passed. Deploy to production (extend this step with real deploy config)."
+          echo "  Ref: ${{ github.ref }}"
+          echo "  SHA: ${{ github.sha }}"

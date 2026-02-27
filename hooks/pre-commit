@@ -9,7 +9,7 @@
 # Checks (in order):
 #   1. Code quality  — bare print(), Google docstrings, naming conventions,
 #                      OOP patterns, XSS + SQL-injection risks.
-#                      Issues are auto-fixed via Groq LLM when GROQ_API_KEY
+#                      Issues are auto-fixed via Claude when ANTHROPIC_API_KEY
 #                      is set; fixed files are re-staged transparently.
 #   2. Meta-files    — CLAUDE.md, PROGRESS.md, and README.md are reviewed
 #                      against the staged diff and updated if stale.
@@ -22,7 +22,7 @@
 # Environment variables:
 #   SKIP_PRE_COMMIT=1       bypass the entire hook
 #   SKIP_CLAUDE_CHECKS=1    run only static checks (no API calls)
-#   GROQ_API_KEY=<k>   enables LLM-powered auto-fix and doc updates (already in backend/.env)
+#   ANTHROPIC_API_KEY=<k>   enables LLM-powered auto-fix and doc updates (already in backend/.env)
 #
 # Install (one-time):
 #   cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
@@ -58,6 +58,19 @@ fi
 STAGED_COUNT="$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null | wc -l | tr -d ' ')"
 if [[ "$STAGED_COUNT" -eq 0 ]]; then
     exit 0
+fi
+
+# ── Branch detection ──────────────────────────────────────────────────────────
+CURRENT_BRANCH="$(git symbolic-ref --short HEAD 2>/dev/null || echo 'detached')"
+export GIT_CURRENT_BRANCH="$CURRENT_BRANCH"
+
+# Warn (but don't block) on direct commits to protected branches
+if [[ "$CURRENT_BRANCH" =~ ^(main|qa|release)$ ]]; then
+    echo ""
+    echo "  ⚠️  WARNING: You are committing directly to '$CURRENT_BRANCH'."
+    echo "  According to the branching strategy, changes should come via PR."
+    echo "  Proceeding anyway — but consider using a feature branch next time."
+    echo ""
 fi
 
 # ── Banner ─────────────────────────────────────────────────────────────────────

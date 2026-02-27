@@ -18,10 +18,15 @@ The UI is a chat interface. The backend runs an agentic loop — the LLM can cal
 
 ```
 ai-agent-ui/
+├── .github/
+│   ├── workflows/ci.yml           # GitHub Actions CI (dev/qa/release/main jobs)
+│   ├── CODEOWNERS                 # Reviewer groups per merge path
+│   └── pull_request_template.md   # Standard PR checklist
 ├── .gitignore             # Root gitignore (covers both frontend + backend)
 ├── CLAUDE.md              # This file — project context for Claude Code
 ├── PROGRESS.md            # Session log: what was done, what's pending
 ├── STOCK_AGENT_PLAN.md    # Build plan for the stock analysis agent
+├── details.txt            # Branching strategy spec
 ├── mkdocs.yml             # MkDocs config (material theme)
 ├── docs/                  # MkDocs source pages
 │   ├── index.md
@@ -160,12 +165,14 @@ cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 ```
 
 Runs on every commit. Operates only on staged modified/created files (`git diff --cached --diff-filter=ACM`). Four checks:
-1. **Code quality** — bare `print()` (blocks), missing Google docstrings (warning), naming, OOP, XSS/SQL injection; auto-fixed via Claude when `ANTHROPIC_API_KEY` is set
+1. **Code quality** — bare `print()` (blocks), missing Google docstrings (warning), naming, OOP, XSS/SQL injection; auto-fixed via Claude (`claude-sonnet-4-6`) when `ANTHROPIC_API_KEY` is set; shows `(branch: <name>)` in the banner
 2. **Meta-files** — CLAUDE.md, PROGRESS.md, README.md updated if stale; single Claude call
-3. **Docs** — affected `docs/` pages patched when their source files are staged
+3. **Docs** — affected `docs/` pages patched when their source files are staged; `mkdocs build` runs after (warn-only, non-blocking)
 4. **Changelog** — `docs/dev/changelog.md` H2 date headings verified descending; auto-reordered (no API)
 
-Environment variables: `SKIP_PRE_COMMIT=1` (bypass all), `SKIP_CLAUDE_CHECKS=1` (static-only, no API).
+**Branch awareness** — warns (does not block) when committing directly to `main`, `qa`, or `release`.
+
+Environment variables: `SKIP_PRE_COMMIT=1` (bypass all), `SKIP_CLAUDE_CHECKS=1` (static-only, no API), `ANTHROPIC_API_KEY` (enables LLM auto-fix + doc updates).
 
 To test without committing:
 ```bash
@@ -515,10 +522,66 @@ NEXT_PUBLIC_DOCS_URL=http://127.0.0.1:8000
 
 ---
 
+## Branching Strategy (added Feb 27, 2026)
+
+Full `feature/* → dev → qa → release → main` workflow. See `details.txt` for the complete spec.
+
+### Branch hierarchy
+
+| Branch | Purpose | Environment |
+|--------|---------|-------------|
+| `feature/*` | Individual features, branched off `dev` | Local |
+| `dev` | Active development / integration | Dev |
+| `qa` | QA / testing | QA |
+| `release` | Release candidates, tagged versions | Staging / pre-prod |
+| `main` | Production-ready | Production |
+
+`hotfix/*` branches off `main` for urgent production fixes, then backported to `dev`.
+
+### Flow
+
+```
+feature/* → dev → qa → release → main
+hotfix/*  → release + main (emergency, then backport to dev)
+```
+
+### CI/CD (`.github/workflows/ci.yml`)
+
+| Branch | CI steps |
+|--------|----------|
+| `dev` | Python deps + mkdocs build + Next.js lint |
+| `qa` | All dev steps + backend smoke test (curl `/agents`) |
+| `release` | All qa steps + staging deploy marker |
+| `main` | All checks + production deploy gate |
+
+### GitHub files
+
+| File | Purpose |
+|------|---------|
+| `.github/workflows/ci.yml` | Per-branch CI jobs |
+| `.github/CODEOWNERS` | Reviewer groups per merge path |
+| `.github/pull_request_template.md` | Standard PR checklist |
+
+### Branch protection rules (apply manually in GitHub → Settings → Branches)
+
+- `main`: no direct push, 2 approvals, CI must pass
+- `release`: PR from `qa` only, 1 approval + QA lead, CI must pass
+- `qa`: PR from `dev` only, 1 approval, integration tests must pass
+- `dev`: PR from `feature/*`, 1 approval, unit tests + lint must pass
+
+### Claude Code rules
+
+- Always branch off `dev` for new features (never off `main` or `qa`)
+- Pre-commit hook **warns** when committing directly to `main`, `qa`, or `release`
+- PR title format: `[TYPE] Short description` — Types: `feat | fix | chore | refactor | hotfix | docs`
+- Tag releases: `git tag -a v1.0.0 -m "Release v1.0.0"`
+
+---
+
 ## Git & GitHub
 
 - **Remote**: `git@github.com:asequitytrading-design/ai-agent-ui.git`
-- **Branch**: `main`
+- **Branches**: `main`, `dev`, `qa`, `release`
 
 | Commit | Message |
 |--------|---------|

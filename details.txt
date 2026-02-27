@@ -1,0 +1,174 @@
+# Branching Strategy: Dev → QA → Release
+# Purpose: Claude Code reference document for enforcing branching strategy
+
+## BRANCH STRUCTURE
+
+main          ← production-ready, protected (no direct push)
+release       ← release candidates, tagged versions
+qa            ← QA/testing environment
+dev           ← active development, integration branch
+feature/*     ← individual feature branches
+hotfix/*      ← urgent production fixes
+
+---
+
+## FLOW
+
+feature/* → dev → qa → release → main
+hotfix/* → release + main (emergency only, then backport to dev)
+
+### Step-by-step:
+1. Developer branches off `dev` → creates `feature/my-feature`
+2. PR raised → merges into `dev` after code review
+3. `dev` deployed to Dev environment, smoke tested
+4. PR raised from `dev` → `qa` (gated — requires approval)
+5. QA team tests on QA environment
+6. PR raised from `qa` → `release` after QA sign-off
+7. `release` branch tagged (e.g., v1.2.0), deployed to staging/pre-prod
+8. Final approval → `release` merged to `main` → deployed to production
+
+---
+
+## BRANCH PROTECTION RULES
+
+### main
+- No direct push
+- Require PR with minimum 2 approvals
+- Must be up to date before merging
+- All CI checks must pass
+
+### release
+- No direct push
+- Require PR from `qa` only
+- Require 1 approval + QA lead sign-off
+- All CI checks must pass
+
+### qa
+- No direct push
+- Require PR from `dev` only
+- Require 1 approval
+- Integration tests must pass
+
+### dev
+- Require PR from `feature/*` branches
+- Require 1 approval
+- Unit tests and lint must pass
+
+---
+
+## CI/CD PIPELINE (GitHub Actions)
+
+File: .github/workflows/ci.yml
+
+```yaml
+on:
+  push:
+    branches: [dev, qa, release, main]
+  pull_request:
+    branches: [dev, qa, release, main]
+
+jobs:
+  dev:
+    if: github.ref == 'refs/heads/dev'
+    steps:
+      - run: npm test
+      - run: npm run lint
+
+  qa:
+    if: github.ref == 'refs/heads/qa'
+    steps:
+      - run: npm test
+      - run: npm run integration-tests
+      - run: npm run deploy:qa
+
+  release:
+    if: github.ref == 'refs/heads/release'
+    steps:
+      - run: npm test
+      - run: npm run deploy:staging
+      - run: npm run smoke-test:staging
+
+  main:
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - run: npm run deploy:production
+```
+
+---
+
+## CODEOWNERS
+
+File: .github/CODEOWNERS
+
+```
+# QA branch: QA team must approve
+qa/      @qa-team
+
+# Release branch: Tech lead + QA lead must approve
+release/ @tech-lead @qa-lead
+
+# Main: Senior engineers sign-off
+main/    @senior-engineers
+```
+
+---
+
+## TAGGING CONVENTION
+
+Use semantic versioning: vMAJOR.MINOR.PATCH
+
+Commands:
+  git tag -a v1.2.0 -m "Release v1.2.0 - Description of release"
+  git push origin v1.2.0
+
+---
+
+## HOTFIX FLOW
+
+Use when a critical bug needs immediate production fix:
+
+  git checkout -b hotfix/critical-bug main
+  # apply fix
+  git checkout release && git merge hotfix/critical-bug
+  git checkout dev && git merge hotfix/critical-bug   # keep dev in sync
+  git tag -a v1.2.1 -m "Hotfix v1.2.1 - Critical bug fix"
+
+---
+
+## SETUP CHECKLIST
+
+- [ ] Create branches: dev, qa, release from main
+- [ ] Configure branch protection rules on all 4 branches
+- [ ] Add CI/CD pipeline (.github/workflows/ci.yml)
+- [ ] Add CODEOWNERS file (.github/CODEOWNERS)
+- [ ] Create PR templates with checklist
+- [ ] Enforce squash or linear merge for clean history
+- [ ] Define and document environment mappings:
+        dev     → Dev environment
+        qa      → QA environment
+        release → Staging/Pre-prod environment
+        main    → Production environment
+
+---
+
+## MERGE RULES SUMMARY
+
+| From       | To      | Who Can Approve        | CI Required          |
+|------------|---------|------------------------|----------------------|
+| feature/*  | dev     | Any developer (1)      | Unit tests + lint    |
+| dev        | qa      | Dev lead (1)           | Integration tests    |
+| qa         | release | QA lead + Tech lead    | Smoke tests          |
+| release    | main    | Senior engineer (2)    | Full suite           |
+| hotfix/*   | release | Tech lead              | Full suite           |
+
+---
+
+## NOTES FOR CLAUDE CODE
+
+- Always branch off `dev` for new features, never off `main` or `qa`
+- PRs should be small and focused — one feature or fix per PR
+- Never commit directly to `main`, `release`, or `qa`
+- Ensure local branch is rebased/up-to-date with target before raising PR
+- PR title format: [TYPE] Short description
+    Types: feat | fix | chore | refactor | hotfix | docs
+- Link PRs to issue/ticket numbers in description
