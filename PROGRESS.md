@@ -2,6 +2,61 @@
 
 ---
 
+# Session: Feb 28, 2026 — Post-merge branch cleanup + CI auto-delete workflow
+
+## What We Did
+
+Housekeeping session after PR #3 (`feature/test-branch` → `dev`) was merged.
+
+### 1. Deleted merged local branches
+
+Removed three local branches that were no longer needed:
+
+| Branch | Reason |
+|--------|--------|
+| `feature/test-branch` | Merged via PR #3 → dev |
+| `chore/remove-details-txt` | Merged via PR #2 → main |
+| `claude/beautiful-clarke` | Local-only Claude worktree (no PR) |
+| `claude/wonderful-driscoll` | Local-only Claude worktree (no PR) |
+
+The two `claude/*` branches were checked out in worktrees under `.claude/worktrees/`.
+Removed worktrees first with `git worktree remove --force`, then force-deleted the branches.
+
+### 2. Deleted merged remote branches
+
+| Remote branch | Merged via |
+|---------------|-----------|
+| `origin/feature/test-branch` | PR #3 |
+| `origin/chore/remove-details-txt` | PR #2 |
+| `origin/claude/wonderful-driscoll` | PR #1 |
+
+All three deleted via `git push origin --delete`.
+
+### 3. Updated CLAUDE.md project tree
+
+Removed two stale file entries that no longer exist on disk:
+- `STOCK_AGENT_PLAN.md` — deleted in the Feb 27 session (PR #3)
+- `details.txt` — deleted and committed in PR #2
+
+### 4. Created `.github/workflows/cleanup.yml`
+
+New GitHub Actions workflow that automatically deletes the source branch when a PR is
+merged. Triggers on `pull_request` closed + merged events. Safety guard skips
+`main`, `dev`, `qa`, `release`, and `gh-pages`.
+
+Note: GitHub also has a built-in one-click option at
+**Settings → General → "Automatically delete head branches"** — same behaviour, zero code.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `PROGRESS.md` | This entry |
+| `CLAUDE.md` | Removed `STOCK_AGENT_PLAN.md` + `details.txt` from project tree |
+| `.github/workflows/cleanup.yml` | New — auto-delete branch on PR merge |
+
+---
+
 # Session: Feb 27, 2026 — Branching strategy + Pre-commit hook improvements
 
 ## What We Built

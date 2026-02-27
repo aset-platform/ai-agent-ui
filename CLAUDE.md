@@ -59,8 +59,6 @@ ai-agent-ui/
 ├── .gitignore             # Root gitignore (covers both frontend + backend)
 ├── CLAUDE.md              # This file — project context for Claude Code
 ├── PROGRESS.md            # Session log: what was done, what's pending
-├── STOCK_AGENT_PLAN.md    # Build plan for the stock analysis agent
-├── details.txt            # Branching strategy spec
 ├── mkdocs.yml             # MkDocs config (material theme)
 ├── docs/                  # MkDocs source pages
 │   ├── index.md
