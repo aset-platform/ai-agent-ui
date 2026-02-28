@@ -2913,21 +2913,21 @@ def register_callbacks(app) -> None:
     @app.callback(
         Output("sectors-bar-chart", "figure"),
         Output("sectors-table-container", "children"),
-        Input("url", "pathname"),
+        Input("insights-tabs", "active_tab"),
     )
-    def update_sectors(pathname: str) -> tuple:
+    def update_sectors(active_tab: str) -> tuple:
         """Populate the sector analysis chart and summary table.
 
         Joins ``stocks.company_info`` (for sector names) with
         ``stocks.analysis_summary`` (for performance).
 
         Args:
-            pathname: Current URL pathname (triggers on /sectors navigation).
+            active_tab: Currently active Insights tab ID.
 
         Returns:
             Tuple of (Plotly figure, table component).
         """
-        if pathname != "/sectors":
+        if active_tab != "sectors-tab":
             return go.Figure(), html.Div()
 
         repo = _get_iceberg_repo()

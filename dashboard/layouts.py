@@ -74,20 +74,7 @@ NAVBAR = dbc.NavbarSimple(
         dbc.NavItem(dbc.NavLink("Analysis", href="/analysis", className="nav-link-custom")),
         dbc.NavItem(dbc.NavLink("Forecast", href="/forecast", className="nav-link-custom")),
         dbc.NavItem(dbc.NavLink("Compare", href="/compare", className="nav-link-custom")),
-        dbc.DropdownMenu(
-            label="Insights",
-            nav=True,
-            in_navbar=True,
-            className="nav-link-custom",
-            children=[
-                dbc.DropdownMenuItem("Screener", href="/screener"),
-                dbc.DropdownMenuItem("Price Targets", href="/targets"),
-                dbc.DropdownMenuItem("Dividends", href="/dividends"),
-                dbc.DropdownMenuItem("Risk Metrics", href="/risk"),
-                dbc.DropdownMenuItem("Sectors", href="/sectors"),
-                dbc.DropdownMenuItem("Correlation", href="/correlation"),
-            ],
-        ),
+        dbc.NavItem(dbc.NavLink("Insights", href="/insights", className="nav-link-custom")),
         dbc.NavItem(dbc.NavLink("Admin", href="/admin/users", className="nav-link-custom")),
         dbc.NavItem(
             dbc.Button(
@@ -715,82 +702,16 @@ def admin_users_layout() -> html.Div:
 # ---------------------------------------------------------------------------
 
 
-def screener_layout() -> html.Div:
-    """Build the Stock Screener page layout.
+def insights_layout() -> html.Div:
+    """Build the unified Insights page with six analysis tabs.
 
-    Shows a filterable table of all tracked stocks with key technical
-    signals (RSI, MACD, SMA signals, Sharpe ratio).  Data is sourced from
-    the Iceberg ``stocks.analysis_summary`` table.
-
-    Returns:
-        :class:`~dash.html.Div` representing the full screener page.
-    """
-    return html.Div([
-        dbc.Row(dbc.Col([
-            html.H2("Stock Screener", className="mb-1 fw-bold"),
-            html.P(
-                "Screen all tracked stocks by technical signals and performance metrics.",
-                className="text-muted mb-4",
-            ),
-        ])),
-
-        # ── Filters ───────────────────────────────────────────────────────
-        dbc.Row([
-            dbc.Col([
-                html.Label("RSI Signal", className="text-muted small fw-semibold"),
-                dbc.RadioItems(
-                    id="screener-rsi-filter",
-                    options=[
-                        {"label": "All",               "value": "all"},
-                        {"label": "Oversold (< 30)",   "value": "oversold"},
-                        {"label": "Neutral (30–70)",   "value": "neutral"},
-                        {"label": "Overbought (> 70)", "value": "overbought"},
-                    ],
-                    value="all",
-                    inline=True,
-                    className="mt-1",
-                ),
-            ], xs=12, md=6, className="mb-3"),
-
-            dbc.Col([
-                html.Label("Market", className="text-muted small fw-semibold"),
-                dbc.RadioItems(
-                    id="screener-market-filter",
-                    options=[
-                        {"label": "All",       "value": "all"},
-                        {"label": "🇮🇳 India", "value": "india"},
-                        {"label": "🇺🇸 US",    "value": "us"},
-                    ],
-                    value="all",
-                    inline=True,
-                    className="mt-1",
-                ),
-            ], xs=12, md=6, className="mb-3"),
-        ], className="bg-light rounded p-3 mb-4 border"),
-
-        # ── Table ─────────────────────────────────────────────────────────
-        dcc.Loading(
-            id="loading-screener",
-            type="circle",
-            color="#4f46e5",
-            children=html.Div(id="screener-table-container"),
-        ),
-    ])
-
-
-# ---------------------------------------------------------------------------
-# Page 7: Price Targets (Iceberg-backed)
-# ---------------------------------------------------------------------------
-
-
-def targets_layout() -> html.Div:
-    """Build the Price Targets page layout.
-
-    Shows the latest Prophet price targets (3m / 6m / 9m) from the
-    ``stocks.forecast_runs`` Iceberg table.
+    Combines Screener, Price Targets, Dividends, Risk Metrics, Sector
+    Analysis, and Returns Correlation into a single tabbed page, matching
+    the visual style of the Admin page.  All data is sourced from the
+    Iceberg ``stocks.*`` tables.
 
     Returns:
-        :class:`~dash.html.Div` representing the full targets page.
+        :class:`~dash.html.Div` representing the full Insights page.
     """
     tickers = _get_available_tickers()
     ticker_options = (
@@ -799,235 +720,217 @@ def targets_layout() -> html.Div:
     )
 
     return html.Div([
+        # ── Header ───────────────────────────────────────────────────────
         dbc.Row(dbc.Col([
-            html.H2("Price Targets", className="mb-1 fw-bold"),
+            html.H2("Insights", className="mb-1 fw-bold"),
             html.P(
-                "Latest AI-generated price targets from Prophet forecasts.",
+                "Deep-dive analytics powered by the Iceberg data warehouse.",
                 className="text-muted mb-4",
             ),
         ])),
 
-        # ── Ticker filter ─────────────────────────────────────────────────
-        dbc.Row([
-            dbc.Col([
-                html.Label("Ticker", className="text-muted small fw-semibold"),
-                dcc.Dropdown(
-                    id="targets-ticker-dropdown",
-                    options=ticker_options,
-                    value="all",
-                    clearable=False,
-                    className="dropdown-dark",
-                ),
-            ], xs=12, md=4, className="mb-3"),
-        ], className="bg-light rounded p-3 mb-4 border"),
+        # ── Tabs ─────────────────────────────────────────────────────────
+        dbc.Tabs(
+            id="insights-tabs",
+            active_tab="screener-tab",
+            children=[
 
-        # ── Targets table ─────────────────────────────────────────────────
-        dcc.Loading(
-            type="circle",
-            color="#4f46e5",
-            children=html.Div(id="targets-table-container"),
-        ),
-    ])
+                # ── Tab 1: Screener ───────────────────────────────────────
+                dbc.Tab(label="Screener", tab_id="screener-tab", children=[
+                    html.Div(className="mt-3", children=[
+                        html.P(
+                            "Screen all tracked stocks by technical signals and performance metrics.",
+                            className="text-muted mb-3",
+                        ),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Label("RSI Signal", className="text-muted small fw-semibold"),
+                                dbc.RadioItems(
+                                    id="screener-rsi-filter",
+                                    options=[
+                                        {"label": "All",               "value": "all"},
+                                        {"label": "Oversold (< 30)",   "value": "oversold"},
+                                        {"label": "Neutral (30–70)",   "value": "neutral"},
+                                        {"label": "Overbought (> 70)", "value": "overbought"},
+                                    ],
+                                    value="all",
+                                    inline=True,
+                                    className="mt-1",
+                                ),
+                            ], xs=12, md=6, className="mb-3"),
+                            dbc.Col([
+                                html.Label("Market", className="text-muted small fw-semibold"),
+                                dbc.RadioItems(
+                                    id="screener-market-filter",
+                                    options=[
+                                        {"label": "All",       "value": "all"},
+                                        {"label": "🇮🇳 India", "value": "india"},
+                                        {"label": "🇺🇸 US",    "value": "us"},
+                                    ],
+                                    value="all",
+                                    inline=True,
+                                    className="mt-1",
+                                ),
+                            ], xs=12, md=6, className="mb-3"),
+                        ], className="bg-light rounded p-3 mb-4 border"),
+                        dcc.Loading(
+                            id="loading-screener",
+                            type="circle",
+                            color="#4f46e5",
+                            children=html.Div(id="screener-table-container"),
+                        ),
+                    ]),
+                ]),
 
+                # ── Tab 2: Price Targets ──────────────────────────────────
+                dbc.Tab(label="Price Targets", tab_id="targets-tab", children=[
+                    html.Div(className="mt-3", children=[
+                        html.P(
+                            "Latest AI-generated price targets from Prophet forecasts.",
+                            className="text-muted mb-3",
+                        ),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Label("Ticker", className="text-muted small fw-semibold"),
+                                dcc.Dropdown(
+                                    id="targets-ticker-dropdown",
+                                    options=ticker_options,
+                                    value="all",
+                                    clearable=False,
+                                ),
+                            ], xs=12, md=4, className="mb-3"),
+                        ], className="bg-light rounded p-3 mb-4 border"),
+                        dcc.Loading(
+                            type="circle",
+                            color="#4f46e5",
+                            children=html.Div(id="targets-table-container"),
+                        ),
+                    ]),
+                ]),
 
-# ---------------------------------------------------------------------------
-# Page 8: Dividends (Iceberg-backed)
-# ---------------------------------------------------------------------------
+                # ── Tab 3: Dividends ──────────────────────────────────────
+                dbc.Tab(label="Dividends", tab_id="dividends-tab", children=[
+                    html.Div(className="mt-3", children=[
+                        html.P(
+                            "Full dividend payment history for all tracked stocks.",
+                            className="text-muted mb-3",
+                        ),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Label("Ticker", className="text-muted small fw-semibold"),
+                                dcc.Dropdown(
+                                    id="dividends-ticker-dropdown",
+                                    options=ticker_options,
+                                    value="all",
+                                    clearable=False,
+                                ),
+                            ], xs=12, md=4, className="mb-3"),
+                        ], className="bg-light rounded p-3 mb-4 border"),
+                        dcc.Loading(
+                            type="circle",
+                            color="#4f46e5",
+                            children=html.Div(id="dividends-table-container"),
+                        ),
+                    ]),
+                ]),
 
+                # ── Tab 4: Risk Metrics ───────────────────────────────────
+                dbc.Tab(label="Risk Metrics", tab_id="risk-tab", children=[
+                    html.Div(className="mt-3", children=[
+                        html.P(
+                            "Volatility, drawdown, and risk-adjusted return metrics for all tracked stocks.",
+                            className="text-muted mb-3",
+                        ),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Label("Sort By", className="text-muted small fw-semibold"),
+                                dbc.RadioItems(
+                                    id="risk-sort-by",
+                                    options=[
+                                        {"label": "Sharpe Ratio",       "value": "sharpe_ratio"},
+                                        {"label": "Max Drawdown",        "value": "max_drawdown_pct"},
+                                        {"label": "Volatility",          "value": "annualized_volatility_pct"},
+                                        {"label": "Annualised Return",   "value": "annualized_return_pct"},
+                                    ],
+                                    value="sharpe_ratio",
+                                    inline=True,
+                                    className="mt-1",
+                                ),
+                            ], xs=12, className="mb-3"),
+                        ], className="bg-light rounded p-3 mb-4 border"),
+                        dcc.Loading(
+                            type="circle",
+                            color="#4f46e5",
+                            children=html.Div(id="risk-table-container"),
+                        ),
+                    ]),
+                ]),
 
-def dividends_layout() -> html.Div:
-    """Build the Dividends page layout.
+                # ── Tab 5: Sectors ────────────────────────────────────────
+                dbc.Tab(label="Sectors", tab_id="sectors-tab", children=[
+                    html.Div(className="mt-3", children=[
+                        html.P(
+                            "Average technical signals and returns grouped by sector.",
+                            className="text-muted mb-3",
+                        ),
+                        dbc.Row([
+                            dbc.Col([
+                                dcc.Loading(
+                                    type="circle",
+                                    color="#4f46e5",
+                                    children=dcc.Graph(
+                                        id="sectors-bar-chart",
+                                        config={"displayModeBar": False},
+                                        style={"height": "420px"},
+                                    ),
+                                ),
+                            ], xs=12, lg=8),
+                            dbc.Col([
+                                dcc.Loading(
+                                    type="circle",
+                                    color="#4f46e5",
+                                    children=html.Div(id="sectors-table-container"),
+                                ),
+                            ], xs=12, lg=4),
+                        ]),
+                    ]),
+                ]),
 
-    Shows the full dividend payment history from the ``stocks.dividends``
-    Iceberg table, sorted most-recent first.
+                # ── Tab 6: Correlation ────────────────────────────────────
+                dbc.Tab(label="Correlation", tab_id="correlation-tab", children=[
+                    html.Div(className="mt-3", children=[
+                        html.P(
+                            "Pairwise daily-returns correlation across all tracked stocks.",
+                            className="text-muted mb-3",
+                        ),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Label("Lookback Period", className="text-muted small fw-semibold"),
+                                dbc.RadioItems(
+                                    id="corr-period-filter",
+                                    options=[
+                                        {"label": "1 Year",  "value": "1y"},
+                                        {"label": "3 Years", "value": "3y"},
+                                        {"label": "All",     "value": "all"},
+                                    ],
+                                    value="1y",
+                                    inline=True,
+                                    className="mt-1",
+                                ),
+                            ], xs=12, className="mb-3"),
+                        ], className="bg-light rounded p-3 mb-4 border"),
+                        dcc.Loading(
+                            type="circle",
+                            color="#4f46e5",
+                            children=dcc.Graph(
+                                id="correlation-heatmap",
+                                config={"displayModeBar": False},
+                                style={"height": "600px"},
+                            ),
+                        ),
+                    ]),
+                ]),
 
-    Returns:
-        :class:`~dash.html.Div` representing the full dividends page.
-    """
-    tickers = _get_available_tickers()
-    ticker_options = (
-        [{"label": "All tickers", "value": "all"}]
-        + [{"label": t, "value": t} for t in tickers]
-    )
-
-    return html.Div([
-        dbc.Row(dbc.Col([
-            html.H2("Dividend History", className="mb-1 fw-bold"),
-            html.P(
-                "Full dividend payment history for all tracked stocks.",
-                className="text-muted mb-4",
-            ),
-        ])),
-
-        # ── Controls ──────────────────────────────────────────────────────
-        dbc.Row([
-            dbc.Col([
-                html.Label("Ticker", className="text-muted small fw-semibold"),
-                dcc.Dropdown(
-                    id="dividends-ticker-dropdown",
-                    options=ticker_options,
-                    value="all",
-                    clearable=False,
-                    className="dropdown-dark",
-                ),
-            ], xs=12, md=4, className="mb-3"),
-        ], className="bg-light rounded p-3 mb-4 border"),
-
-        # ── Table ─────────────────────────────────────────────────────────
-        dcc.Loading(
-            type="circle",
-            color="#4f46e5",
-            children=html.Div(id="dividends-table-container"),
-        ),
-    ])
-
-
-# ---------------------------------------------------------------------------
-# Page 9: Risk Metrics (Iceberg-backed)
-# ---------------------------------------------------------------------------
-
-
-def risk_layout() -> html.Div:
-    """Build the Risk Metrics page layout.
-
-    Displays volatility, max drawdown, Sharpe ratio, and bull/bear phase
-    percentages for all tracked stocks from ``stocks.analysis_summary``.
-
-    Returns:
-        :class:`~dash.html.Div` representing the full risk page.
-    """
-    return html.Div([
-        dbc.Row(dbc.Col([
-            html.H2("Risk Metrics", className="mb-1 fw-bold"),
-            html.P(
-                "Volatility, drawdown, and risk-adjusted return metrics for all tracked stocks.",
-                className="text-muted mb-4",
-            ),
-        ])),
-
-        # ── Sort controls ─────────────────────────────────────────────────
-        dbc.Row([
-            dbc.Col([
-                html.Label("Sort By", className="text-muted small fw-semibold"),
-                dbc.RadioItems(
-                    id="risk-sort-by",
-                    options=[
-                        {"label": "Sharpe Ratio",       "value": "sharpe_ratio"},
-                        {"label": "Max Drawdown",        "value": "max_drawdown_pct"},
-                        {"label": "Volatility",          "value": "annualized_volatility_pct"},
-                        {"label": "Annualised Return",   "value": "annualized_return_pct"},
-                    ],
-                    value="sharpe_ratio",
-                    inline=True,
-                    className="mt-1",
-                ),
-            ], xs=12, className="mb-3"),
-        ], className="bg-light rounded p-3 mb-4 border"),
-
-        # ── Table ─────────────────────────────────────────────────────────
-        dcc.Loading(
-            type="circle",
-            color="#4f46e5",
-            children=html.Div(id="risk-table-container"),
-        ),
-    ])
-
-
-# ---------------------------------------------------------------------------
-# Page 10: Sector Analysis (Iceberg-backed)
-# ---------------------------------------------------------------------------
-
-
-def sectors_layout() -> html.Div:
-    """Build the Sector Analysis page layout.
-
-    Groups tracked stocks by sector using ``stocks.company_info`` and
-    shows average performance metrics from ``stocks.analysis_summary``.
-
-    Returns:
-        :class:`~dash.html.Div` representing the full sectors page.
-    """
-    return html.Div([
-        dbc.Row(dbc.Col([
-            html.H2("Sector Analysis", className="mb-1 fw-bold"),
-            html.P(
-                "Average technical signals and returns grouped by sector.",
-                className="text-muted mb-4",
-            ),
-        ])),
-
-        dbc.Row([
-            dbc.Col([
-                dcc.Loading(
-                    type="circle",
-                    color="#4f46e5",
-                    children=dcc.Graph(
-                        id="sectors-bar-chart",
-                        config={"displayModeBar": False},
-                        style={"height": "420px"},
-                    ),
-                ),
-            ], xs=12, lg=8),
-            dbc.Col([
-                dcc.Loading(
-                    type="circle",
-                    color="#4f46e5",
-                    children=html.Div(id="sectors-table-container"),
-                ),
-            ], xs=12, lg=4),
-        ]),
-    ])
-
-
-# ---------------------------------------------------------------------------
-# Page 11: Returns Correlation (Iceberg-backed)
-# ---------------------------------------------------------------------------
-
-
-def correlation_layout() -> html.Div:
-    """Build the Returns Correlation page layout.
-
-    Computes pairwise daily-returns correlation for all tracked stocks
-    from the ``stocks.ohlcv`` Iceberg table and renders a heatmap.
-
-    Returns:
-        :class:`~dash.html.Div` representing the full correlation page.
-    """
-    return html.Div([
-        dbc.Row(dbc.Col([
-            html.H2("Returns Correlation", className="mb-1 fw-bold"),
-            html.P(
-                "Pairwise daily-returns correlation across all tracked stocks.",
-                className="text-muted mb-4",
-            ),
-        ])),
-
-        # ── Period filter ─────────────────────────────────────────────────
-        dbc.Row([
-            dbc.Col([
-                html.Label("Lookback Period", className="text-muted small fw-semibold"),
-                dbc.RadioItems(
-                    id="corr-period-filter",
-                    options=[
-                        {"label": "1 Year",  "value": "1y"},
-                        {"label": "3 Years", "value": "3y"},
-                        {"label": "All",     "value": "all"},
-                    ],
-                    value="1y",
-                    inline=True,
-                    className="mt-1",
-                ),
-            ], xs=12, className="mb-3"),
-        ], className="bg-light rounded p-3 mb-4 border"),
-
-        # ── Heatmap ───────────────────────────────────────────────────────
-        dcc.Loading(
-            type="circle",
-            color="#4f46e5",
-            children=dcc.Graph(
-                id="correlation-heatmap",
-                config={"displayModeBar": False},
-                style={"height": "600px"},
-            ),
+            ],
         ),
     ])
