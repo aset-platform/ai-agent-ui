@@ -2567,8 +2567,7 @@ def register_callbacks(app) -> None:
 
         if df.empty:
             return dbc.Alert(
-                "No analysis data available. Run backfill (python stocks/backfill.py) "
-                "or analyse stocks via the chat agent first.",
+                "No analysis data available. Analyse stocks via the chat agent first.",
                 color="warning",
                 className="mt-3",
             )
@@ -2578,15 +2577,26 @@ def register_callbacks(app) -> None:
             def _mkt(t: str) -> str:
                 return "india" if str(t).upper().endswith((".NS", ".BO")) else "us"
             df = df[df["ticker"].apply(_mkt) == market_filter]
+            df = df.reset_index(drop=True)
 
-        # RSI filter
-        if rsi_filter == "oversold":
-            df = df[pd.to_numeric(df.get("rsi_14", df.get("rsi_14")), errors="coerce") < 30]
-        elif rsi_filter == "overbought":
-            df = df[pd.to_numeric(df.get("rsi_14", df.get("rsi_14")), errors="coerce") > 70]
-        elif rsi_filter == "neutral":
-            rsi_col = pd.to_numeric(df.get("rsi_14", pd.Series()), errors="coerce")
-            df = df[(rsi_col >= 30) & (rsi_col <= 70)]
+        # RSI filter — prefer numeric rsi_14 (fallback path) else text rsi_signal (Iceberg path)
+        if rsi_filter != "all":
+            if "rsi_14" in df.columns:
+                rsi_num = pd.to_numeric(df["rsi_14"], errors="coerce")
+                if rsi_filter == "oversold":
+                    df = df[rsi_num.lt(30).values]
+                elif rsi_filter == "overbought":
+                    df = df[rsi_num.gt(70).values]
+                elif rsi_filter == "neutral":
+                    df = df[(rsi_num.ge(30) & rsi_num.le(70)).values]
+            elif "rsi_signal" in df.columns:
+                sig = df["rsi_signal"].str.lower().fillna("")
+                if rsi_filter == "oversold":
+                    df = df[sig.str.contains("oversold").values]
+                elif rsi_filter == "overbought":
+                    df = df[sig.str.contains("overbought").values]
+                elif rsi_filter == "neutral":
+                    df = df[sig.eq("neutral").values]
 
         if df.empty:
             return dbc.Alert("No stocks match the selected filters.", color="info", className="mt-3")
