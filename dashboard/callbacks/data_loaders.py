@@ -45,16 +45,59 @@ _REGISTRY_PATH = _DATA_METADATA / "stock_registry.json"
 def _load_reg_cb() -> dict:
     """Load the stock registry for use inside callbacks.
 
+    Tries the Iceberg ``stocks.registry`` table first so the dashboard
+    always reflects every ticker the backend has ever fetched.  Falls
+    back to the flat JSON file when Iceberg is unavailable or empty.
+
     Returns:
-        Registry dict; empty dict if missing or unreadable.
+        Registry dict keyed by ticker symbol; empty dict if all sources fail.
     """
+    # ── 1. Iceberg primary source ────────────────────────────────────────
+    try:
+        from pyiceberg.catalog import load_catalog
+
+        cat = load_catalog("local")
+        tbl = cat.load_table("stocks.registry")
+        df = tbl.scan().to_pandas()
+        if not df.empty:
+            registry: dict = {}
+            for _, row in df.iterrows():
+                ticker = row.get("ticker", "")
+                if not ticker:
+                    continue
+                entry: dict = {"ticker": ticker}
+                if "last_fetch_date" in df.columns and row.get("last_fetch_date"):
+                    entry["last_fetch_date"] = str(row["last_fetch_date"])[:10]
+                if "total_rows" in df.columns and row.get("total_rows") is not None:
+                    entry["total_rows"] = int(row["total_rows"])
+                start = row.get("date_range_start")
+                end   = row.get("date_range_end")
+                if start and end:
+                    entry["date_range"] = {
+                        "start": str(start)[:10],
+                        "end":   str(end)[:10],
+                    }
+                raw_path = _DATA_RAW / f"{ticker}_raw.parquet"
+                entry["file_path"] = str(raw_path)
+                registry[ticker] = entry
+            if registry:
+                _logger.debug(
+                    "Registry loaded from Iceberg: %d tickers.", len(registry)
+                )
+                return registry
+    except Exception as exc:
+        _logger.debug("Iceberg registry unavailable (%s); falling back to JSON.", exc)
+
+    # ── 2. JSON fallback ─────────────────────────────────────────────────
     if not _REGISTRY_PATH.exists():
         return {}
     try:
         with open(_REGISTRY_PATH) as fh:
-            return json.load(fh)
+            data = json.load(fh)
+        _logger.debug("Registry loaded from JSON: %d tickers.", len(data))
+        return data
     except Exception as exc:
-        _logger.warning("registry load failed: %s", exc)
+        _logger.warning("registry JSON load failed: %s", exc)
         return {}
 
 

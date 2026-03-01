@@ -38,6 +38,7 @@ export function ChatHeader({
 }: ChatHeaderProps) {
   const router = useRouter();
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [avatarErr, setAvatarErr] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown on outside click
@@ -68,11 +69,15 @@ export function ChatHeader({
       : profile.avatar_url
     : null;
 
-  const AvatarEl = avatarSrc ? (
+  // Reset error flag whenever the src changes (e.g. after re-upload).
+  useEffect(() => { setAvatarErr(false); }, [avatarSrc]);
+
+  const AvatarEl = avatarSrc && !avatarErr ? (
     <img
       src={avatarSrc}
-      alt="Profile"
-      className="w-8 h-8 rounded-full object-cover border border-gray-200"
+      alt=""
+      onError={() => setAvatarErr(true)}
+      className="w-8 h-8 rounded-full object-cover object-top border border-gray-200"
     />
   ) : (
     <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-sm font-semibold select-none">

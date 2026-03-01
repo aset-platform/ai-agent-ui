@@ -119,6 +119,14 @@ def register(router: APIRouter) -> None:
             resolved_id = current_user.user_id
         if not file.content_type or not file.content_type.startswith("image/"):
             raise HTTPException(status_code=400, detail="Only image files are accepted.")
+        _unsupported = {"image/heic", "image/heif", "image/tiff", "image/bmp"}
+        ct_lower = (file.content_type or "").lower()
+        fn_lower = (file.filename or "").lower()
+        if ct_lower in _unsupported or any(fn_lower.endswith(s) for s in (".heic", ".heif", ".tiff", ".tif", ".bmp")):
+            raise HTTPException(
+                status_code=415,
+                detail="Unsupported image format. Please upload JPEG, PNG, GIF, or WebP.",
+            )
         data = await file.read()
         if len(data) > _MAX_AVATAR_BYTES:
             raise HTTPException(status_code=413, detail="Avatar file exceeds 10 MB limit.")
