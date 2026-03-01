@@ -92,7 +92,7 @@ export function ChatHeader({
         <img
           src="/images/aset-logo-final.svg"
           alt="ASET"
-          className="h-9 w-auto"
+          className="h-12 w-auto drop-shadow-sm"
         />
 
         {view === "chat" ? (
