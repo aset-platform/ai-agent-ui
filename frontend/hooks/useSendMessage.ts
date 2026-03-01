@@ -6,7 +6,7 @@
  * status-line updates, and error states.
  */
 
-import { useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { apiFetch } from "@/lib/apiFetch";
 import type { Message } from "@/lib/constants";
 import { toolLabel } from "@/lib/constants";
@@ -32,8 +32,23 @@ export function useSendMessage({
   setInput,
   textareaRef,
 }: UseSendMessageOptions) {
-  const sendMessage = async () => {
+  // Fix #1: track in-flight stream so it can be aborted on unmount or new send
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Abort any in-flight request when the component unmounts
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
+
+  const sendMessage = useCallback(async () => {
     if (!input.trim()) return;
+
+    // Cancel any previous in-flight stream before starting a new one
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     const userMessage: Message = {
       role: "user",
@@ -61,6 +76,7 @@ export function useSendMessage({
           history: messages.map((m) => ({ role: m.role, content: m.content })),
           agent_id: agentId,
         }),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -117,7 +133,9 @@ export function useSendMessage({
           } catch { /* skip invalid JSON lines */ }
         }
       }
-    } catch {
+    } catch (err) {
+      // Ignore AbortError — the request was cancelled intentionally
+      if (err instanceof Error && err.name === "AbortError") return;
       setMessages([
         ...updatedMessages,
         { role: "assistant", content: "Error connecting to server. Is the backend running?", timestamp: new Date() },
@@ -128,20 +146,21 @@ export function useSendMessage({
       setStatusLine("");
       textareaRef.current?.focus();
     }
-  };
+  }, [agentId, input, messages, setInput, setLoading, setMessages, setStatusLine, textareaRef]);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  // Fix #15: stable references — prevent unnecessary re-renders of ChatInput
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
-  };
+  }, [sendMessage]);
 
-  const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+  const handleInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
     e.target.style.height = "auto";
     e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
-  };
+  }, [setInput]);
 
   return { sendMessage, handleKeyDown, handleInput };
 }

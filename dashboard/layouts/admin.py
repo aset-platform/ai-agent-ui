@@ -222,7 +222,7 @@ def admin_users_layout() -> html.Div:
                             dcc.Upload(
                                 id="admin-user-avatar-upload",
                                 children=html.Div(["Drag & drop or ", html.A("select image")]),
-                                accept="image/*",
+                                accept="image/jpeg,image/png,image/gif,image/webp",
                                 multiple=False,
                                 style={
                                     "width": "100%",

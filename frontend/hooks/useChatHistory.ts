@@ -4,10 +4,11 @@
  *
  * Returns the message list for the active agent, a scoped setter, and the
  * full histories map.  Histories are loaded from localStorage on mount and
- * saved back whenever they change.
+ * saved back whenever they change (debounced to avoid blocking the main
+ * thread during streaming).
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { Message } from "@/lib/constants";
 
 export function useChatHistory(agentId: string) {
@@ -34,11 +35,19 @@ export function useChatHistory(agentId: string) {
     } catch { /* ignore corrupt data */ }
   }, []);
 
-  // Save histories to localStorage whenever they change
+  // Fix #3: debounce localStorage writes — streaming triggers many rapid updates;
+  // writing synchronously on every chunk blocks the main thread on large histories.
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    try {
-      localStorage.setItem("chat_histories", JSON.stringify(histories));
-    } catch { /* ignore quota errors */ }
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      try {
+        localStorage.setItem("chat_histories", JSON.stringify(histories));
+      } catch { /* ignore quota errors */ }
+    }, 1000);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
   }, [histories]);
 
   const messages = histories[agentId] ?? [];

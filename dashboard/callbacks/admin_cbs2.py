@@ -15,7 +15,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import dash_bootstrap_components as dbc
-from dash import ALL, Input, Output, State, ctx, no_update
+from dash import ALL, Input, Output, State, ctx, html, no_update
 
 from dashboard.callbacks.auth_utils import _api_call, _resolve_token, _validate_token
 from dashboard.callbacks.utils import _check_input_safety, _is_valid_email
@@ -88,6 +88,8 @@ def register(app) -> None:
         Output("modal-error", "children"),
         Output("user-permissions-section", "style"),
         Output("user-permissions-checklist", "value"),
+        Output("admin-user-avatar-upload", "contents"),
+        Output("admin-user-avatar-preview", "children"),
         Input("add-user-btn", "n_clicks"),
         Input({"type": "edit-user-btn", "index": ALL}, "n_clicks"),
         Input("modal-cancel-btn", "n_clicks"),
@@ -127,6 +129,7 @@ def register(app) -> None:
                 no_update, no_update, no_update, no_update,
                 no_update, "",
                 no_update, no_update,
+                None, [],                  # clear upload; clear preview
             )
 
         # ── Add user ──────────────────────────────────────────────────────
@@ -139,6 +142,7 @@ def register(app) -> None:
                 {"mode": "add", "user": None},
                 "",
                 {"display": "none"}, [],   # hide permissions; empty checklist
+                None, [],                  # clear upload; no preview for new users
             )
 
         # ── Edit user ─────────────────────────────────────────────────────
@@ -152,6 +156,7 @@ def register(app) -> None:
                     no_update, no_update, no_update, no_update,
                     no_update, no_update,
                     no_update, no_update,
+                    no_update, no_update,  # upload / preview: leave as-is
                 )
             user_id = triggered["index"]
             user = next(
@@ -164,6 +169,7 @@ def register(app) -> None:
                     no_update, no_update, no_update, no_update,
                     no_update, "User data not found — try refreshing.",
                     no_update, no_update,
+                    None, [],              # clear stale upload; clear preview
                 )
             # Show permissions section only for non-superuser roles.
             perms: Dict[str, bool] = user.get("page_permissions") or {}
@@ -173,6 +179,27 @@ def register(app) -> None:
             else:
                 perms_style = {}
                 perms_value = [k for k, v in perms.items() if v]
+            # Build current avatar preview.
+            avatar_url = user.get("avatar_url") or user.get("profile_picture_url")
+            if avatar_url:
+                full_url = (
+                    _BACKEND_URL + avatar_url
+                    if avatar_url.startswith("/")
+                    else avatar_url
+                )
+                avatar_preview = html.Img(
+                    src=full_url,
+                    style={
+                        "width": "56px",
+                        "height": "56px",
+                        "borderRadius": "50%",
+                        "objectFit": "cover",
+                        "objectPosition": "top",
+                        "border": "1px solid #dee2e6",
+                    },
+                )
+            else:
+                avatar_preview = []
             return (
                 True, "Edit User — " + user.get("email", ""),
                 user.get("full_name", ""),
@@ -184,11 +211,13 @@ def register(app) -> None:
                 {"mode": "edit", "user": user},
                 "",
                 perms_style, perms_value,
+                None, avatar_preview,      # clear stale upload; show current avatar
             )
 
         return (
             no_update, no_update, no_update, no_update,
             no_update, no_update, no_update, no_update,
+            no_update, no_update,
             no_update, no_update,
             no_update, no_update,
         )

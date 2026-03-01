@@ -1,4 +1,3 @@
-dashboard/callbacks/analysis_cbs.py
 """Analysis-page Dash callbacks for the AI Stock Analysis Dashboard.
 
 Registers callbacks that sync the ticker dropdown from the URL, update
@@ -27,6 +26,7 @@ from dashboard.callbacks.chart_builders import _build_analysis_fig, _empty_fig
 from dashboard.callbacks.card_builders import _build_stats_cards
 from dashboard.callbacks.data_loaders import (
     _add_indicators,
+    _add_indicators_cached,
     _load_forecast,
     _load_raw,
     _load_reg_cb,
@@ -106,8 +106,8 @@ def register(app) -> None:
                 [],
             )
 
-        # Calculate indicators on full df (needs 200+ rows for SMA 200)
-        df_full = _add_indicators(df)
+        # Fix #1/#2/#14: use cached indicator computation (5-min TTL)
+        df_full = _add_indicators_cached(ticker, df)
 
         # Apply date-range filter
         n_map = {0: 21, 1: 63, 2: 126, 3: 252, 4: 756, 5: len(df_full)}
@@ -199,7 +199,8 @@ def register(app) -> None:
         rows = []
         for t in sorted(dfs.keys()):
             df = dfs[t]
-            df_ind = _add_indicators(df)
+            # Fix #1/#2/#14: use cached indicator computation
+            df_ind = _add_indicators_cached(t, df)
             close = df["Close"]
             daily = close.pct_change().dropna()
             ann_vol   = daily.std() * math.sqrt(252)

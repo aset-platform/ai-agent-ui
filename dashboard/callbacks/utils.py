@@ -11,9 +11,16 @@ Example::
 
 import logging
 import re
+import time as _time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Currency cache — avoids opening JSON on every callback invocation
+# ---------------------------------------------------------------------------
+_CURRENCY_CACHE_DASH: dict = {}   # {ticker: (symbol_str, expiry_monotonic)}
+_CURRENCY_TTL = 300                # seconds
 
 # ---------------------------------------------------------------------------
 # Input validation constants
@@ -103,8 +110,8 @@ def _currency_symbol(code: str) -> str:
     }.get((code or "USD").upper(), code or "$")
 
 
-def _get_currency(ticker: str) -> str:
-    """Return the currency symbol for *ticker* by reading its metadata JSON.
+def _load_currency_from_file(ticker: str) -> str:
+    """Read currency symbol from the ticker's metadata JSON file.
 
     Args:
         ticker: Stock ticker symbol.
@@ -125,3 +132,25 @@ def _get_currency(ticker: str) -> str:
     except Exception:
         logger.debug("Metadata file not found for ticker %r; defaulting to '$'.", ticker)
         return "$"
+
+
+def _get_currency(ticker: str) -> str:
+    """Return the currency symbol for *ticker*, cached for ``_CURRENCY_TTL`` seconds.
+
+    Reads ``data/metadata/{TICKER}_info.json`` on first call (or after TTL
+    expiry); subsequent calls within the TTL window return the cached symbol.
+
+    Args:
+        ticker: Stock ticker symbol.
+
+    Returns:
+        Currency symbol string such as ``"$"`` or ``"₹"``.
+    """
+    # Fix #11: TTL cache to avoid reopening JSON on every callback invocation
+    now = _time.monotonic()
+    entry = _CURRENCY_CACHE_DASH.get(ticker)
+    if entry and entry[1] > now:
+        return entry[0]
+    result = _load_currency_from_file(ticker)
+    _CURRENCY_CACHE_DASH[ticker] = (result, now + _CURRENCY_TTL)
+    return result

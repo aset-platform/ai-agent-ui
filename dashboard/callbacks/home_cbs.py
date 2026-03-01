@@ -1,4 +1,3 @@
-dashboard/callbacks/home_cbs.py
 """Home-page Dash callbacks for the AI Stock Analysis Dashboard.
 
 Registers callbacks that refresh stock cards, manage the market filter,
@@ -73,15 +72,17 @@ def register(app) -> None:
         for ticker, entry in sorted(registry.items()):
             last_updated = entry.get("last_fetch_date", "Unknown")
 
+            # Fix #4: hoist _load_raw() once per ticker — reused in both blocks below
+            raw_df = _load_raw(ticker)
+
             # Current price + 10Y return from parquet
             current_price_str = "N/A"
             total_return_str  = "N/A"
             return_color_cls  = "text-muted"
             try:
-                df = _load_raw(ticker)
-                if df is not None and len(df) > 1:
-                    cp = float(df["Close"].iloc[-1])
-                    fp = float(df["Close"].iloc[0])
+                if raw_df is not None and len(raw_df) > 1:
+                    cp = float(raw_df["Close"].iloc[-1])
+                    fp = float(raw_df["Close"].iloc[0])
                     tr = (cp / fp - 1) * 100
                     current_price_str = f"{_get_currency(ticker)}{cp:,.2f}"
                     total_return_str  = f"{tr:+.1f}%"
@@ -94,13 +95,16 @@ def register(app) -> None:
             sent_color = "secondary"
             sent_emoji = "⚪"
             try:
-                forecast_files = list(_DATA_FORECASTS.glob(f"{ticker}_*m_forecast.parquet"))
-                if forecast_files:
-                    latest = max(forecast_files, key=lambda p: p.stat().st_mtime)
-                    fc_df  = pd.read_parquet(latest, engine="pyarrow")
-                    df_raw = _load_raw(ticker)
-                    if df_raw is not None and len(fc_df) > 0:
-                        cp  = float(df_raw["Close"].iloc[-1])
+                # Fix #8: use pathlib sort by mtime (avoid glob.glob + os.stat)
+                forecast_paths = sorted(
+                    _DATA_FORECASTS.glob(f"{ticker}_*m_forecast.parquet"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                if forecast_paths:
+                    fc_df = pd.read_parquet(forecast_paths[0], engine="pyarrow")
+                    if raw_df is not None and len(fc_df) > 0:
+                        cp  = float(raw_df["Close"].iloc[-1])
                         fp  = float(fc_df["yhat"].iloc[-1])
                         pct = (fp - cp) / cp * 100
                         if pct > 10:
@@ -198,7 +202,7 @@ def register(app) -> None:
         Returns:
             Tuple of (list of card columns, pagination max_value, count text).
         """
-        page_size_int = int(page_size or 10)
+        page_size_int = int(page_size or 12)
         if not raw_data:
             return (
                 [dbc.Col(html.P(
@@ -236,32 +240,32 @@ def register(app) -> None:
                 children=dbc.Card([
                     dbc.CardBody([
                         html.Div([
-                            html.H5(d["ticker"], className="card-title text-info mb-0"),
+                            html.H6(d["ticker"], className="card-title text-info mb-0 fw-bold"),
                             dbc.Badge(
                                 f"{d['sent_emoji']} {d['sentiment']}",
                                 color=d["sent_color"],
                                 className="ms-auto",
                             ),
                         ], className="d-flex justify-content-between align-items-center mb-1"),
-                        html.P(d["company"], className="card-subtitle text-muted small mb-3"),
+                        html.P(d["company"], className="card-subtitle text-muted small mb-2 text-truncate"),
                         html.Div([
                             html.Div([
                                 html.Small("Price", className="text-muted d-block"),
-                                html.Strong(d["current_price_str"], className="text-dark"),
+                                html.Strong(d["current_price_str"], className="text-dark small"),
                             ], className="me-3"),
                             html.Div([
-                                html.Small("10Y Return", className="text-muted d-block"),
-                                html.Strong(d["total_return_str"], className=d["return_color_cls"]),
+                                html.Small("10Y Ret", className="text-muted d-block"),
+                                html.Strong(d["total_return_str"], className=f"{d['return_color_cls']} small"),
                             ], className="me-3"),
                             html.Div([
                                 html.Small("Updated", className="text-muted d-block"),
                                 html.Small(d["last_updated"], className="text-muted"),
                             ]),
                         ], className="d-flex align-items-start"),
-                    ]),
+                    ], className="p-3"),
                 ], className="stock-card h-100"),
             )
-            cols.append(dbc.Col(card, xs=12, sm=6, md=4, lg=3, className="mb-4"))
+            cols.append(dbc.Col(card, xs=12, sm=6, md=4, lg=3))
 
         return cols, max_pages, count_txt
 

@@ -125,11 +125,16 @@ export async function refreshAccessToken(): Promise<string | null> {
   const refresh = getRefreshToken();
   if (!refresh) return null;
 
+  // Fix #14: 10-second timeout prevents a hung refresh from blocking all API calls
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+
   try {
     const res = await fetch(`${BACKEND_URL}/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refresh_token: refresh }),
+      signal: controller.signal,
     });
 
     if (!res.ok) {
@@ -146,5 +151,7 @@ export async function refreshAccessToken(): Promise<string | null> {
   } catch {
     clearTokens();
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }

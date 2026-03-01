@@ -1,4 +1,3 @@
-dashboard/callbacks/chart_builders.py
 """Analysis chart builders for the AI Stock Analysis Dashboard callbacks.
 
 Contains helpers for building the empty placeholder figure and the 3-panel
@@ -12,6 +11,7 @@ Example::
 import logging
 from typing import List
 
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -111,10 +111,8 @@ def _build_analysis_fig(
         ), row=1, col=1, secondary_y=False)
 
     if "volume" in overlays and "Volume" in df.columns:
-        vol_colors = [
-            "#26a69a" if df["Close"].iloc[i] >= df["Open"].iloc[i] else "#ef5350"
-            for i in range(len(df))
-        ]
+        # Fix #22: vectorised colour array — avoids Python loop over rows
+        vol_colors = np.where(df["Close"] >= df["Open"], "#26a69a", "#ef5350").tolist()
         fig.add_trace(go.Bar(
             x=df.index, y=df["Volume"], name="Volume",
             marker_color=vol_colors, opacity=0.35, showlegend=True,
@@ -153,13 +151,11 @@ def _build_analysis_fig(
             line=dict(color="#e53935", width=1.5),
         ), row=3, col=1)
         if "MACD_Hist" in df.columns:
-            hist_colors = [
-                "#26a69a" if v >= 0 else "#ef5350"
-                for v in df["MACD_Hist"].fillna(0)
-            ]
+            # Fix #22: vectorised colour array
+            macd_colors = np.where(df["MACD_Hist"].fillna(0) >= 0, "#26a69a", "#ef5350").tolist()
             fig.add_trace(go.Bar(
                 x=df.index, y=df["MACD_Hist"], name="Histogram",
-                marker_color=hist_colors, showlegend=False,
+                marker_color=macd_colors, showlegend=False,
             ), row=3, col=1)
 
     fig.update_layout(
