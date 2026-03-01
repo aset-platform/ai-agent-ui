@@ -7,7 +7,7 @@
  * docs/dashboard/admin.
  */
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { getAccessToken } from "@/lib/auth";
 import { apiFetch } from "@/lib/apiFetch";
 import { AGENTS, type View } from "@/lib/constants";
@@ -62,12 +62,16 @@ export default function ChatPage() {
   const editProfile = useEditProfile();
   const changePassword = useChangePassword();
 
-  // Fetch user profile on mount
+  // Fetch user profile on mount — Fix #17: AbortController cancels if unmounted
   useEffect(() => {
-    apiFetch(`${BACKEND_URL}/auth/me`)
+    const controller = new AbortController();
+    apiFetch(`${BACKEND_URL}/auth/me`, { signal: controller.signal })
       .then((res) => res.ok ? res.json() : null)
       .then((data: UserProfile | null) => { if (data) setProfile(data); })
-      .catch(() => {});
+      .catch((err: unknown) => {
+        if (err instanceof Error && err.name === "AbortError") return;
+      });
+    return () => controller.abort();
   }, []);
 
   // Scroll to bottom when messages or loading state changes
@@ -75,17 +79,20 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
+  // Fix #10: stable handler reference — useCallback so identity is preserved
+  // across effect re-runs when menuOpen changes.
+  const handleMenuOutsideClick = useCallback((e: MouseEvent) => {
+    if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      setMenuOpen(false);
+    }
+  }, []);
+
   // Close menu when clicking outside
   useEffect(() => {
     if (!menuOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [menuOpen]);
+    document.addEventListener("mousedown", handleMenuOutsideClick);
+    return () => document.removeEventListener("mousedown", handleMenuOutsideClick);
+  }, [menuOpen, handleMenuOutsideClick]);
 
   const switchView = (v: View) => {
     setView(v);
@@ -117,7 +124,8 @@ export default function ChatPage() {
     }
   };
 
-  const iframeSrc = (() => {
+  // Fix #7: memoize iframeSrc — avoids calling getAccessToken() on every render
+  const iframeSrc = useMemo(() => {
     const docsBase = process.env.NEXT_PUBLIC_DOCS_URL ?? "http://127.0.0.1:8000";
     const dashBase = process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050";
     if (view === "docs") return iframeUrl ?? docsBase;
@@ -130,7 +138,13 @@ export default function ChatPage() {
     if (!token) return base;
     const sep = base.includes("?") ? "&" : "?";
     return `${base}${sep}token=${encodeURIComponent(token)}`;
-  })();
+  }, [view, iframeUrl]);
+
+  // Fix #8: memoize — avoids O(n) AGENTS.find() scan on every keystroke
+  const agentHint = useMemo(
+    () => AGENTS.find((a) => a.id === agentId)?.hint,
+    [agentId]
+  );
 
   const iframeTitle =
     view === "docs" ? "Documentation" :
@@ -171,14 +185,19 @@ export default function ChatPage() {
                 <div>
                   <p className="text-gray-700 font-medium text-lg">How can I help you today?</p>
                   <p className="text-gray-400 text-sm mt-1">
-                    {AGENTS.find((a) => a.id === agentId)?.hint}
+                    {agentHint}
                   </p>
                 </div>
               </div>
             )}
 
+            {/* Fix #2: stable key — timestamp+role composite avoids full list re-render */}
             {messages.map((msg, i) => (
-              <MessageBubble key={i} message={msg} onInternalLink={handleInternalLink} />
+              <MessageBubble
+                key={`${msg.timestamp.getTime()}-${msg.role}-${i}`}
+                message={msg}
+                onInternalLink={handleInternalLink}
+              />
             ))}
 
             {loading && (

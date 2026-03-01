@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, FormEvent } from "react";
+import { useState, useEffect, useRef, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { getAccessToken, isTokenExpired, setTokens } from "@/lib/auth";
 import {
@@ -20,6 +20,8 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [oauthProviders, setOauthProviders] = useState<string[]>([]);
   const [oauthLoading, setOauthLoading] = useState<string | null>(null);
+  // Fix #16: abort ref to cancel login request if component unmounts mid-flight
+  const loginAbortRef = useRef<AbortController | null>(null);
 
   // If already authenticated, skip straight to the app.
   useEffect(() => {
@@ -28,18 +30,21 @@ export default function LoginPage() {
       router.replace("/");
       return;
     }
-    // Fetch available OAuth providers from the backend.
-    fetch(`${BACKEND_URL}/auth/oauth/providers`)
+    // Fix #15: AbortController so the fetch is cancelled if the component unmounts
+    const controller = new AbortController();
+    fetch(`${BACKEND_URL}/auth/oauth/providers`, { signal: controller.signal })
       .then((r) => r.json())
       .then((data: { providers?: string[] }) => {
         setOauthProviders(
           (data.providers ?? []).filter((p) => p !== "facebook")
         );
       })
-      .catch(() => {
+      .catch((err: unknown) => {
+        if (err instanceof Error && err.name === "AbortError") return;
         // Backend unreachable — hide SSO buttons gracefully.
         setOauthProviders([]);
       });
+    return () => controller.abort();
   }, [router]);
 
   const handleOAuthLogin = async (provider: string) => {
@@ -88,11 +93,17 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
 
+    // Fix #16: cancel any previous in-flight login request
+    loginAbortRef.current?.abort();
+    const controller = new AbortController();
+    loginAbortRef.current = controller;
+
     try {
       const res = await fetch(`${BACKEND_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -107,7 +118,8 @@ export default function LoginPage() {
       };
       setTokens(data.access_token, data.refresh_token);
       router.replace("/");
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return;
       setError("Could not reach the server. Is the backend running?");
     } finally {
       setLoading(false);

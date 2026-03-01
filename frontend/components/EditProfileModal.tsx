@@ -6,7 +6,7 @@
  * The form pre-populates from the current profile whenever the modal opens.
  */
 
-import { useState, useRef, useEffect, type ChangeEvent } from "react";
+import { useState, useRef, useEffect, useCallback, type ChangeEvent } from "react";
 import type { UserProfile } from "@/hooks/useEditProfile";
 
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -49,9 +49,18 @@ export function EditProfileModal({
     }
   }, [isOpen, profile?.full_name]);
 
+  // Fix #6: revoke object URL when it changes to free memory
+  useEffect(() => {
+    return () => {
+      if (previewSrc && previewSrc.startsWith("blob:")) {
+        URL.revokeObjectURL(previewSrc);
+      }
+    };
+  }, [previewSrc]);
+
   const UNSUPPORTED_TYPES = ["image/heic", "image/heif", "image/tiff", "image/bmp"];
 
-  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] ?? null;
     if (!file) { setAvatarFile(null); setPreviewSrc(null); return; }
     if (UNSUPPORTED_TYPES.includes(file.type.toLowerCase()) || /\.(heic|heif|tiff?|bmp)$/i.test(file.name)) {
@@ -68,11 +77,10 @@ export function EditProfileModal({
     }
     setFileError("");
     setAvatarFile(file);
-    // Show a local preview of the selected file.
-    const reader = new FileReader();
-    reader.onload = (ev) => setPreviewSrc((ev.target?.result as string) ?? null);
-    reader.readAsDataURL(file);
-  };
+    // Fix #6: createObjectURL is non-blocking and avoids loading the full file
+    // into memory as base64; the blob URL is revoked by the useEffect above.
+    setPreviewSrc(URL.createObjectURL(file));
+  }, []);
 
   const handleSave = async () => {
     await onSave(name, avatarFile);
