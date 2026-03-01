@@ -2,30 +2,6 @@
 
 ---
 
-# Session: Mar 1, 2026 — Registry sync fix, correlation TypeError, home layout on feature/fix-registry-correlation
-
-## Summary
-Two bug fixes and one UX improvement. All 100 backend/dashboard tests passing. Merged through full pipeline: `feature/*` → `dev` → `qa` → `release` → `main`.
-
-### Bug fix — Dashboard home page missing new tickers (`dashboard/callbacks/data_loaders.py`)
-- `_load_reg_cb()` previously returned only Iceberg data the moment the `stocks.registry` table had any rows, silently ignoring tickers whose Iceberg dual-write had failed
-- Fixed: JSON (`stock_registry.json`) is now always loaded first as the authoritative ticker list; Iceberg is read to merge in any tickers absent from JSON (not to replace it)
-- New tickers appear on the home page immediately regardless of Iceberg write success
-
-### Bug fix — Insights correlation heatmap crash (`dashboard/callbacks/insights_cbs.py`)
-- Iceberg `stocks.ohlcv` `date32` column becomes Python `datetime.date` objects in pandas; comparing these with an ISO string raises `TypeError: '>=' not supported between 'datetime.date' and 'str'`
-- Fixed: column converted to `datetime64` via `pd.to_datetime()` before the cutoff filter; cutoff changed from string to `pd.Timestamp`
-
-### UX — Market filter inline with heading (`dashboard/layouts/home.py`)
-- Combined "Saved Stocks" H5 heading and India/US `ButtonGroup` into a single row (heading left, buttons right)
-- Reduced top gap from `mb-4` to `mb-2` giving the card grid more vertical space
-
-### Data
-- Committed `data/metadata/GSFC.NS_info.json` and `data/metadata/JKPAPER.NS_info.json` from recent analysis sessions
-- Updated `data/metadata/stock_registry.json` with new tickers
-
----
-
 # Session: Mar 1, 2026 — 23 Dashboard + 17 Frontend Performance Fixes on feature/gitignore-avatars
 
 ## Summary
