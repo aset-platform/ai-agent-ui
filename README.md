@@ -9,7 +9,7 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 | Service | Stack | Port | Purpose |
 |---------|-------|------|---------|
 | **Frontend** | Next.js 16 + React 19 + Tailwind 4 | `3000` | Chat UI + SPA shell (login, chat, docs, dashboard, admin) |
-| **Backend** | FastAPI + LangChain + Groq | `8181` | Agentic loop + REST API + Auth endpoints |
+| **Backend** | FastAPI + LangChain + Claude Sonnet 4.6 | `8181` | Agentic loop + REST API + Auth endpoints |
 | **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard (Home / Analysis / Forecast / Compare) + Admin UI (Users + Audit Log) |
 | **Docs** | MkDocs Material | `8000` | Project documentation |
 
@@ -20,7 +20,7 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 ```bash
 # 1. Create backend/.env with your keys and JWT secret
 cat > backend/.env <<EOF
-GROQ_API_KEY=gsk_...
+ANTHROPIC_API_KEY=sk-ant-...
 JWT_SECRET_KEY=$(python -c "import secrets; print(secrets.token_hex(32))")
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=Admin1234
@@ -63,8 +63,8 @@ graph TD
     end
 
     subgraph Agents["Agents"]
-        GA["GeneralAgent<br/><i>Groq LLM</i>"]
-        SA["StockAgent<br/><i>Groq LLM</i>"]
+        GA["GeneralAgent<br/><i>Claude Sonnet 4.6</i>"]
+        SA["StockAgent<br/><i>Claude Sonnet 4.6</i>"]
     end
 
     subgraph Tools["Tools"]
@@ -109,7 +109,7 @@ sequenceDiagram
     participant U as User
     participant FE as Frontend
     participant BE as FastAPI
-    participant LLM as Groq LLM
+    participant LLM as Claude Sonnet 4.6
     participant T as Tool(s)
 
     U->>FE: sends message
@@ -227,11 +227,13 @@ ai-agent-ui/
 ├── auth/                     # Auth package (project root — importable by backend + scripts)
 │   ├── __init__.py
 │   ├── create_tables.py      # One-time Iceberg table init (idempotent)
-│   ├── repository.py         # IcebergUserRepository — CRUD + audit log
+│   ├── migrate_users_table.py # Iceberg schema evolution (add columns)
 │   ├── service.py            # AuthService — bcrypt + JWT lifecycle + deny-list
-│   ├── models.py             # Pydantic request/response models
 │   ├── dependencies.py       # FastAPI dependency functions
-│   └── api.py                # create_auth_router() — 12 endpoints
+│   ├── oauth_service.py      # Google + Facebook PKCE OAuth2
+│   ├── models/               # Pydantic request/response models (package)
+│   ├── repo/                 # IcebergUserRepository, user writes, OAuth repo (package)
+│   └── endpoints/            # create_auth_router() — 12+ endpoints (package)
 │
 ├── hooks/
 │   ├── pre-commit            # Bash entry — quality gate on every commit
@@ -243,14 +245,32 @@ ai-agent-ui/
 │
 ├── frontend/                 # Next.js 16
 │   ├── app/
-│   │   ├── page.tsx          # Entire SPA (chat + docs + dashboard + admin views)
+│   │   ├── page.tsx          # SPA shell (chat + docs + dashboard + admin views)
 │   │   ├── login/
-│   │   │   └── page.tsx      # Login page
+│   │   │   └── page.tsx      # Login page (email/password + Google SSO)
+│   │   ├── auth/oauth/callback/
+│   │   │   └── page.tsx      # OAuth2 PKCE callback
 │   │   ├── layout.tsx
 │   │   └── globals.css
+│   ├── components/           # Extracted UI components
+│   │   ├── ChatHeader.tsx    # Header bar + profile dropdown
+│   │   ├── ChatInput.tsx     # Textarea + send button
+│   │   ├── MessageBubble.tsx # Individual message (markdown)
+│   │   ├── NavigationMenu.tsx # FAB + popup nav (RBAC-filtered)
+│   │   ├── IFrameView.tsx    # Dashboard/Docs iframe wrapper
+│   │   ├── EditProfileModal.tsx
+│   │   └── ChangePasswordModal.tsx
+│   ├── hooks/                # Custom React hooks
+│   │   ├── useAuthGuard.ts   # Redirect to /login if no valid token
+│   │   ├── useChatHistory.ts # Per-agent history + debounced localStorage
+│   │   ├── useSendMessage.ts # Streaming fetch + AbortController
+│   │   ├── useEditProfile.ts # PATCH /auth/me + avatar upload
+│   │   └── useChangePassword.ts
 │   ├── lib/
 │   │   ├── auth.ts           # JWT token helpers
-│   │   └── apiFetch.ts       # Authenticated fetch wrapper (auto-refresh)
+│   │   ├── apiFetch.ts       # Authenticated fetch wrapper (auto-refresh)
+│   │   ├── constants.ts      # AGENTS list, NAV_ITEMS, View type
+│   │   └── oauth.ts          # PKCE helpers + sessionStorage helpers
 │   ├── .env.local            # Gitignored — copy from .env.local.example
 │   └── .env.local.example    # Committed reference
 │
@@ -258,11 +278,15 @@ ai-agent-ui/
 │   ├── main.py               # ChatServer, routes, auth router mount
 │   ├── config.py             # Pydantic Settings (.env support)
 │   ├── logging_config.py     # Rotating file + console logging
+│   ├── llm_fallback.py       # FallbackLLM — Groq primary, Anthropic fallback
 │   ├── agents/
-│   │   ├── base.py           # BaseAgent ABC + agentic loop + stream()
+│   │   ├── base.py           # BaseAgent ABC
+│   │   ├── config.py         # AgentConfig dataclass
+│   │   ├── loop.py           # Agentic loop logic
+│   │   ├── stream.py         # NDJSON streaming support
 │   │   ├── registry.py       # AgentRegistry
-│   │   ├── general_agent.py  # GeneralAgent (Groq)
-│   │   └── stock_agent.py    # StockAgent (Groq)
+│   │   ├── general_agent.py  # GeneralAgent (Claude Sonnet 4.6)
+│   │   └── stock_agent.py    # StockAgent (Claude Sonnet 4.6)
 │   └── tools/
 │       ├── registry.py       # ToolRegistry
 │       ├── time_tool.py      # get_current_time
@@ -272,13 +296,31 @@ ai-agent-ui/
 │       ├── price_analysis_tool.py  # analyse_stock_price
 │       └── forecasting_tool.py     # forecast_stock (Prophet)
 │
+├── stocks/                   # Iceberg persistence for all stock data
+│   ├── create_tables.py      # Idempotent init of 8 tables (called by run.sh)
+│   ├── repository.py         # StockRepository — CRUD for all 8 tables
+│   └── backfill.py           # One-time flat-file → Iceberg migration
+│
 ├── dashboard/                # Plotly Dash (FLATLY light theme)
 │   ├── app.py                # Entry point, routing, auth store, dotenv loader
-│   ├── layouts.py            # Page layout factories + NAVBAR
-│   ├── callbacks.py          # All interactive callbacks + auth guards + admin UI
+│   ├── app_layout.py         # Root layout + display_page routing callback
+│   ├── layouts/              # Stateless page-layout factories (package)
+│   │   ├── home.py           # Home cards + market filter + pagination
+│   │   ├── analysis.py       # Technical analysis chart layout
+│   │   ├── insights_tabs.py  # Screener/Targets/Dividends/Risk/Sectors/Correlation
+│   │   ├── admin.py          # User management + audit log layout
+│   │   └── navbar.py         # Global navbar
+│   ├── callbacks/            # Interactive callbacks (package)
+│   │   ├── data_loaders.py   # Parquet + Iceberg reads, indicator caching
+│   │   ├── chart_builders.py # Plotly figure construction
+│   │   ├── home_cbs.py       # Home page callbacks
+│   │   ├── analysis_cbs.py   # Analysis + Compare callbacks
+│   │   ├── insights_cbs.py   # All Insights tab callbacks
+│   │   ├── admin_cbs.py      # User table callbacks
+│   │   ├── admin_cbs2.py     # Add/Edit/Deactivate user modals
+│   │   ├── iceberg.py        # Iceberg repo singleton + cached helpers
+│   │   └── utils.py          # Shared utilities (currency, market label)
 │   └── assets/custom.css     # Light theme styles
-│                             # Home: India/US market filter, 12/page card pagination
-│                             # Admin: paginated users + audit tables with search
 │
 ├── data/
 │   ├── raw/                  # OHLCV parquet (gitignored)
@@ -310,7 +352,7 @@ ai-agent-ui/
 |---------|------|
 | FastAPI + uvicorn | HTTP server |
 | LangChain | Agentic loop + tool binding |
-| langchain-groq | Groq LLM provider |
+| langchain-anthropic | Anthropic Claude LLM provider |
 | Pydantic v2 + pydantic-settings | Request/response models + settings |
 | yfinance | Yahoo Finance OHLCV data |
 | Prophet | Time-series forecasting |
@@ -343,7 +385,7 @@ All backend variables live in `backend/.env` (gitignored).
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GROQ_API_KEY` | Yes | — | Groq LLM API key |
+| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key (Claude Sonnet 4.6) |
 | `JWT_SECRET_KEY` | Yes | — | JWT signing secret — min 32 random chars |
 | `ADMIN_EMAIL` | First run | — | Superuser email for seed script |
 | `ADMIN_PASSWORD` | First run | — | Superuser password (min 8 chars, 1 digit) |
@@ -370,7 +412,7 @@ All backend variables live in `backend/.env` (gitignored).
 
 1. Subclass `BaseAgent` in `backend/agents/my_agent.py` — only implement `_build_llm()`.
 2. Register it in `ChatServer._register_agents()`.
-3. Add the agent ID to the `AGENTS` array in `frontend/app/page.tsx`.
+3. Add the agent ID to the `AGENTS` array in `frontend/lib/constants.ts`.
 
 ### Install the pre-commit hook (one-time)
 
@@ -388,20 +430,6 @@ Runs on every `git commit` against **staged files only**. Four checks:
 | 4 | `docs/dev/changelog.md` descending date order — **auto-reordered** | No |
 
 Set `ANTHROPIC_API_KEY` in `backend/.env` to enable checks 1–3. Skip entirely with `SKIP_PRE_COMMIT=1`.
-
-### Switch to Claude Sonnet 4.6
-
-Two-line change in `agents/general_agent.py` and `agents/stock_agent.py`:
-
-```python
-# Change import
-from langchain_anthropic import ChatAnthropic
-
-# Change return in _build_llm()
-return ChatAnthropic(model="claude-sonnet-4-6", temperature=self.config.temperature)
-```
-
-Also set `ANTHROPIC_API_KEY` in `backend/.env` instead of `GROQ_API_KEY`.
 
 ---
 
@@ -439,7 +467,6 @@ Register `http://localhost:3000/auth/oauth/callback` as an authorised redirect U
 
 | Issue | Notes |
 |-------|-------|
-| **Groq LLM** | Claude Sonnet 4.6 is the intended model; Groq is a temporary workaround |
 | **`SERPAPI_API_KEY` required for web search** | Free tier (100/month) at serpapi.com |
 | **Refresh token deny-list is in-memory** | Cleared on backend restart — revoked tokens become valid again until natural expiry (7 days) |
 | **Facebook SSO** | Code complete; credentials are placeholders — button hidden until real credentials added |

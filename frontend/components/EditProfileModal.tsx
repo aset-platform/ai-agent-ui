@@ -6,7 +6,7 @@
  * The form pre-populates from the current profile whenever the modal opens.
  */
 
-import { useState, useRef, useEffect, type ChangeEvent } from "react";
+import { useState, useRef, useEffect, useCallback, type ChangeEvent } from "react";
 import type { UserProfile } from "@/hooks/useEditProfile";
 
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -33,6 +33,8 @@ export function EditProfileModal({
   const [name, setName] = useState(profile?.full_name ?? "");
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState("");
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [previewErr, setPreviewErr] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Re-populate the form whenever the modal opens.
@@ -40,21 +42,45 @@ export function EditProfileModal({
     if (isOpen) {
       setName(profile?.full_name ?? "");
       setAvatarFile(null);
+      setPreviewSrc(null);
+      setPreviewErr(false);
       setFileError("");
       if (fileRef.current) fileRef.current.value = "";
     }
   }, [isOpen, profile?.full_name]);
 
-  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+  // Fix #6: revoke object URL when it changes to free memory
+  useEffect(() => {
+    return () => {
+      if (previewSrc && previewSrc.startsWith("blob:")) {
+        URL.revokeObjectURL(previewSrc);
+      }
+    };
+  }, [previewSrc]);
+
+  const UNSUPPORTED_TYPES = ["image/heic", "image/heif", "image/tiff", "image/bmp"];
+
+  const handleFileChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] ?? null;
-    if (file && file.size > MAX_BYTES) {
+    if (!file) { setAvatarFile(null); setPreviewSrc(null); return; }
+    if (UNSUPPORTED_TYPES.includes(file.type.toLowerCase()) || /\.(heic|heif|tiff?|bmp)$/i.test(file.name)) {
+      setFileError("Unsupported format. Please use JPEG, PNG, GIF, or WebP.");
+      setAvatarFile(null);
+      setPreviewSrc(null);
+      return;
+    }
+    if (file.size > MAX_BYTES) {
       setFileError("Avatar must be under 10 MB.");
       setAvatarFile(null);
+      setPreviewSrc(null);
       return;
     }
     setFileError("");
     setAvatarFile(file);
-  };
+    // Fix #6: createObjectURL is non-blocking and avoids loading the full file
+    // into memory as base64; the blob URL is revoked by the useEffect above.
+    setPreviewSrc(URL.createObjectURL(file));
+  }, []);
 
   const handleSave = async () => {
     await onSave(name, avatarFile);
@@ -62,12 +88,15 @@ export function EditProfileModal({
 
   if (!isOpen) return null;
 
-  // Resolve the avatar URL — relative paths are served by the backend.
-  const avatarSrc = profile?.avatar_url
+  // Resolve the saved avatar URL — relative paths are served by the backend.
+  const savedAvatarSrc = profile?.avatar_url
     ? profile.avatar_url.startsWith("/")
       ? `${BACKEND_URL}${profile.avatar_url}`
       : profile.avatar_url
     : null;
+
+  // Show newly selected file preview, else current saved avatar (with onError fallback).
+  const displaySrc = previewSrc ?? savedAvatarSrc;
 
   const initials = profile?.full_name
     ? profile.full_name
@@ -88,11 +117,12 @@ export function EditProfileModal({
 
         {/* Current avatar preview */}
         <div className="flex justify-center mb-4">
-          {avatarSrc ? (
+          {displaySrc && !previewErr ? (
             <img
-              src={avatarSrc}
-              alt="Profile"
-              className="w-16 h-16 rounded-full object-cover border border-gray-200 shadow-sm"
+              src={displaySrc}
+              alt=""
+              onError={() => setPreviewErr(true)}
+              className="w-16 h-16 rounded-full object-cover object-top border border-gray-200 shadow-sm"
             />
           ) : (
             <div className="w-16 h-16 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-lg font-semibold shadow-sm">
@@ -123,7 +153,7 @@ export function EditProfileModal({
           <input
             ref={fileRef}
             type="file"
-            accept="image/*"
+            accept="image/jpeg,image/png,image/gif,image/webp"
             onChange={handleFileChange}
             className="block w-full text-sm text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
           />

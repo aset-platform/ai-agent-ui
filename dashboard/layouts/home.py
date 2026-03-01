@@ -67,7 +67,7 @@ def home_layout() -> html.Div:
             )
         ),
 
-        dbc.Row(id="stock-cards-container"),
+        dbc.Row(id="stock-cards-container", className="g-3"),
 
         # Pagination row
         dbc.Row([
@@ -81,12 +81,12 @@ def home_layout() -> html.Div:
                 dbc.Select(
                     id="home-page-size",
                     options=[
-                        {"label": "10 / page",  "value": "10"},
-                        {"label": "25 / page",  "value": "25"},
-                        {"label": "50 / page",  "value": "50"},
-                        {"label": "100 / page", "value": "100"},
+                        {"label": "12 / page", "value": "12"},
+                        {"label": "24 / page", "value": "24"},
+                        {"label": "48 / page", "value": "48"},
+                        {"label": "96 / page", "value": "96"},
                     ],
-                    value="10",
+                    value="12",
                     size="sm",
                     style={"width": "120px"},
                 ),

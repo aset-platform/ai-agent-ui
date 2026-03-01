@@ -5,6 +5,7 @@
  * as buttons that switch the in-app view rather than opening a new tab.
  */
 
+import { useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -32,6 +33,9 @@ interface MarkdownContentProps {
 export function MarkdownContent({ content, onInternalLink }: MarkdownContentProps) {
   const dashboardBase = process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050";
   const docsBase = process.env.NEXT_PUBLIC_DOCS_URL ?? "http://127.0.0.1:8000";
+
+  // Fix #4: memoize preprocessing — avoids re-running regex on every streaming chunk
+  const processedContent = useMemo(() => preprocessContent(content), [content]);
 
   return (
     <ReactMarkdown
@@ -96,7 +100,7 @@ export function MarkdownContent({ content, onInternalLink }: MarkdownContentProp
         tr: ({ children }) => <tr className="even:bg-gray-50">{children}</tr>,
       }}
     >
-      {preprocessContent(content)}
+      {processedContent}
     </ReactMarkdown>
   );
 }

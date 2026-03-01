@@ -138,5 +138,25 @@
       "end": "2026-02-27"
     },
     "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/ICICIBANK.NS_raw.parquet"
+  },
+  "AXISBANK.NS": {
+    "ticker": "AXISBANK.NS",
+    "last_fetch_date": "2026-02-27",
+    "total_rows": 2471,
+    "date_range": {
+      "start": "2016-02-29",
+      "end": "2026-02-27"
+    },
+    "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/AXISBANK.NS_raw.parquet"
+  },
+  "CHAMBLFERT.NS": {
+    "ticker": "CHAMBLFERT.NS",
+    "last_fetch_date": "2026-02-27",
+    "total_rows": 2471,
+    "date_range": {
+      "start": "2016-02-29",
+      "end": "2026-02-27"
+    },
+    "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/CHAMBLFERT.NS_raw.parquet"
   }
 }

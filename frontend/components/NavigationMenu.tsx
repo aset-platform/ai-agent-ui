@@ -6,7 +6,7 @@
  * permission granted by a superuser.
  */
 
-import { type RefObject } from "react";
+import { useMemo, type RefObject } from "react";
 import { NAV_ITEMS, type View } from "@/lib/constants";
 import type { UserProfile } from "@/hooks/useEditProfile";
 
@@ -41,6 +41,12 @@ export function NavigationMenu({
   onSwitchView,
   profile,
 }: NavigationMenuProps) {
+  // Fix #16: memoised — only recomputes when profile changes, not on every render
+  const visibleItems = useMemo(
+    () => NAV_ITEMS.filter((item) => canSeeItem(item, profile)),
+    [profile]
+  );
+
   return (
     <div className="fixed bottom-6 right-6 z-50" ref={menuRef}>
       <button
@@ -58,7 +64,8 @@ export function NavigationMenu({
 
       {menuOpen && (
         <div className="absolute bottom-14 right-0 bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden min-w-[160px]">
-          {NAV_ITEMS.filter((item) => canSeeItem(item, profile)).map((item, idx) => (
+          {/* Fix #16: useMemo — filter only recomputes when profile changes */}
+          {visibleItems.map((item, idx) => (
             <div key={item.view}>
               {idx > 0 && <div className="border-t border-gray-100" />}
               <button

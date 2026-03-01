@@ -1,4 +1,3 @@
-dashboard/app_layout.py
 """Root layout and page-routing callback for the Dash dashboard.
 
 Functions
@@ -54,7 +53,7 @@ def build_layout(app: dash.Dash) -> None:
             ),
             dcc.Interval(
                 id="registry-refresh",
-                interval=5 * 60 * 1000,
+                interval=30 * 60 * 1000,  # Fix #20: 30 min (was 5 min)
                 n_intervals=0,
             ),
             # Change Password modal — triggered by the NAVBAR change-password

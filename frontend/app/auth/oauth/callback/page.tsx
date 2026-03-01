@@ -36,6 +36,11 @@ export default function OAuthCallbackPage() {
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
+    // Fix #5: cancelled flag prevents state updates after unmount (avoids
+    // React "can't perform state update on unmounted component" warnings and
+    // duplicate state mutations on fast remount during strict-mode double-invoke).
+    let cancelled = false;
+
     const code = searchParams.get("code");
     const state = searchParams.get("state");
 
@@ -44,7 +49,7 @@ export default function OAuthCallbackPage() {
         "Missing authorization code or state parameter. Please try signing in again."
       );
       setStatus("error");
-      return;
+      return () => { cancelled = true; };
     }
 
     const provider = getStoredProvider();
@@ -55,7 +60,7 @@ export default function OAuthCallbackPage() {
         "OAuth session data not found. Please try signing in again."
       );
       setStatus("error");
-      return;
+      return () => { cancelled = true; };
     }
 
     // Exchange the code for our own JWT pair.
@@ -72,14 +77,16 @@ export default function OAuthCallbackPage() {
           }),
         });
 
+        if (cancelled) return;
+
         if (!res.ok) {
           const body = (await res.json().catch(() => ({}))) as {
             detail?: string;
           };
-          setErrorMsg(
-            body.detail ?? "Sign-in failed. Please try again."
-          );
-          setStatus("error");
+          if (!cancelled) {
+            setErrorMsg(body.detail ?? "Sign-in failed. Please try again.");
+            setStatus("error");
+          }
           return;
         }
 
@@ -88,6 +95,8 @@ export default function OAuthCallbackPage() {
           refresh_token: string;
         };
 
+        if (cancelled) return;
+
         // Persist tokens and clean up session storage.
         setTokens(data.access_token, data.refresh_token);
         clearOAuthSession();
@@ -95,14 +104,15 @@ export default function OAuthCallbackPage() {
         // Redirect to the main app.
         router.replace("/");
       } catch {
-        setErrorMsg(
-          "Could not reach the server. Is the backend running?"
-        );
-        setStatus("error");
+        if (!cancelled) {
+          setErrorMsg("Could not reach the server. Is the backend running?");
+          setStatus("error");
+        }
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+
+    return () => { cancelled = true; };
+  }, [searchParams, router]);
 
   if (status === "loading") {
     return (

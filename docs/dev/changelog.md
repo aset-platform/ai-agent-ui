@@ -4,6 +4,159 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 1, 2026 — Documentation refresh (README, architecture diagrams, all docs pages)
+
+Brought all documentation in sync with the modular refactor and Claude Sonnet 4.6 switch.
+
+### README.md
+
+| Section | Change |
+|---------|--------|
+| Services table | Backend stack updated from "FastAPI + LangChain + Groq" to "Claude Sonnet 4.6" |
+| Quick Start | `GROQ_API_KEY` → `ANTHROPIC_API_KEY` |
+| Architecture diagram | Agent nodes: "Groq LLM" → "Claude Sonnet 4.6" |
+| Agentic loop diagram | Participant: "Groq LLM" → "Claude Sonnet 4.6" |
+| Project structure | `auth/` subpackages (`models/`, `repo/`, `endpoints/`); `stocks/` package; `frontend/hooks/` + `frontend/components/` (9 components); `dashboard/layouts/` + `dashboard/callbacks/` packages; `backend/agents/` split files + `llm_fallback.py` |
+| Tech stack | `langchain-groq` → `langchain-anthropic` |
+| Env vars | `GROQ_API_KEY` → `ANTHROPIC_API_KEY` |
+| "Switch to Claude" section | Removed — switch is complete |
+| "Add a new agent" | References `frontend/lib/constants.ts` instead of `page.tsx` |
+| Known Limitations | Removed "Groq is temporary" row |
+
+### docs/dashboard/overview.md
+
+- Home card refresh interval: **5 minutes → 30 minutes**
+- Architecture section: monolithic `layouts.py` + `callbacks.py` → full package layout listing all sub-modules
+
+### docs/frontend/overview.md
+
+- File structure: added `hooks/` and `components/` with all files
+- Component architecture: updated from "single file" to hooks-table + composition-shell description
+- State table: `profile` added; OAuth state (now on login page) removed
+- Effects: updated to reflect AbortController + debounced localStorage patterns
+- Token propagation: IIFE → `useMemo` pattern
+- Navigation menu: RBAC filtering description added
+
+### docs/dev/decisions.md
+
+- "Switching back to Claude (not yet done)" → "Claude Sonnet 4.6 is the active LLM" with FallbackLLM note
+- "Single-file component" → "Modular components + hooks" with accurate description
+- Session persistence: updated to mention 1-second debounce
+
+### docs/backend/overview.md
+
+- Module map: `langchain_groq` → `langchain_anthropic`; `ChatGroq` → `ChatAnthropic`; model `openai/gpt-oss-120b` → `claude-sonnet-4-6`; agents/ split files added
+- Startup sequence: `AgentConfig` model field updated
+
+**Commits:** `efc75c7` — *docs: update README and docs to reflect modular refactor and Claude Sonnet 4.6*
+`52e67d4` — *docs: fix broken #path-replacement anchor in frontend/overview.md*
+
+---
+
+## Mar 1, 2026 — 23 dashboard + 17 frontend performance fixes
+
+### Dashboard — 23 performance fixes across 9 files
+
+#### `dashboard/callbacks/data_loaders.py` (Fix #1, #2, #5, #14, #19)
+
+- **Column projection**: `tbl.scan(selected_fields=(...))` on registry Iceberg read — avoids loading all columns
+- **Vectorised `iterrows()`**: replaced with `.values` array iteration + pre-computed column-index dict `_ci`
+- **`_add_indicators_cached(ticker, df)`**: module-level TTL dict (5 min) wraps `_add_indicators()` — avoids recomputing RSI/MACD/BB on repeated chart loads for the same ticker
+
+#### `dashboard/callbacks/chart_builders.py` (Fix #22)
+
+- Volume and MACD histogram colour arrays: list comprehension → `np.where()` (vectorised, ~5× faster on 1000+ rows)
+
+#### `dashboard/callbacks/utils.py` (Fix #11)
+
+- `_get_currency()` now wraps `_load_currency_from_file()` with a 5-minute TTL dict cache — avoids opening the JSON metadata file on every callback render
+
+#### `dashboard/callbacks/iceberg.py` (Fix #6, #10)
+
+- `_get_iceberg_repo()`: init-once flag → TTL expiry (1-hour refresh) — survives Iceberg catalog restarts
+- `_get_analysis_summary_cached(repo)` and `_get_company_info_cached(repo)`: 5-min TTL shared by screener, risk, and sectors callbacks — single Iceberg read per 5 minutes
+
+#### `dashboard/callbacks/home_cbs.py` (Fix #4, #8)
+
+- Hoisted `_load_raw(ticker)` — was called twice per iteration; now called once and reused
+- `glob.glob() + os.stat()` → `pathlib.Path.glob()` with `.stat().st_mtime` sort
+
+#### `dashboard/app_layout.py` (Fix #20)
+
+- `dcc.Interval`: `5 * 60 * 1000` → `30 * 60 * 1000` ms — reduces unnecessary full-page refreshes
+
+#### `dashboard/callbacks/insights_cbs.py` (Fix #5, #6, #7, #12, #13, #16)
+
+- All 4× `iterrows()` loops → `.to_dict("records")`
+- Direct `repo.get_all_latest_analysis_summary()` → `_get_analysis_summary_cached(repo)` in screener, risk, sectors
+- Date push-down in correlation callback: filter `df_all` by 1-year cutoff before per-ticker loop
+- `pd.to_numeric(df["rsi"])` computed once, reused for mask
+- `load_catalog("local") + tbl.scan()` → `_get_iceberg_repo()` in `update_targets`
+- Market filter: `apply(lambda)` → vectorised `.str.endswith((".NS", ".BO"))` mask
+
+#### `dashboard/callbacks/analysis_cbs.py` (Fix #1, #2, #14)
+
+- `update_analysis_chart` and `update_compare` loop: `_add_indicators(df)` → `_add_indicators_cached(ticker, df)`
+
+#### `dashboard/layouts/analysis.py` (Fix #17)
+
+- `_get_available_tickers_cached()`: 5-min TTL module-level dict wraps `_get_available_tickers()` — avoids repeated filesystem scans on layout rebuilds
+
+**Commit:** `b683ce4` — *perf: implement 12 backend performance fixes* (superseded by full list above)
+
+---
+
+### Frontend — 17 performance fixes across 9 files
+
+#### `frontend/hooks/useSendMessage.ts` (Fix #1, #2)
+
+- `AbortController` ref; cleanup `useEffect` aborts in-flight stream on unmount
+- `sendMessage`, `handleKeyDown`, `handleInput` wrapped in `useCallback`
+
+#### `frontend/hooks/useChatHistory.ts` (Fix #3)
+
+- localStorage save debounced 1 second with `useRef` timer — avoids blocking the main thread on every streaming token
+
+#### `frontend/components/MarkdownContent.tsx` (Fix #4)
+
+- `preprocessContent(content)` → `useMemo(() => preprocessContent(content), [content])` — avoids reprocessing on every parent render
+
+#### `frontend/components/EditProfileModal.tsx` (Fix #5, #6)
+
+- `reader.readAsDataURL` → `URL.createObjectURL` — non-blocking, no base64 encoding overhead
+- `useEffect` cleanup revokes the blob URL when modal closes — prevents memory leak
+- `handleFileChange` wrapped in `useCallback`
+
+#### `frontend/app/auth/oauth/callback/page.tsx` (Fix #7)
+
+- `cancelled` flag pattern replaces the eslint-disable comment; all state updates guarded by `if (!cancelled)`; deps corrected to `[searchParams, router]`
+
+#### `frontend/app/login/page.tsx` (Fix #8, #9)
+
+- `AbortController` on OAuth providers fetch with cleanup
+- `loginAbortRef` cancels any previous in-flight login on re-submit
+
+#### `frontend/components/NavigationMenu.tsx` (Fix #10)
+
+- `visibleItems = useMemo(() => NAV_ITEMS.filter(...), [profile])` — filter only recomputes when profile changes
+
+#### `frontend/lib/auth.ts` (Fix #11)
+
+- `refreshAccessToken`: 10-second `AbortController` timeout prevents a hung refresh from blocking all API calls
+
+#### `frontend/app/page.tsx` (Fix #12–#17)
+
+- Profile fetch: `AbortController` + cleanup on unmount
+- `handleMenuOutsideClick`: extracted to `useCallback` — stable reference across effect re-runs
+- `iframeSrc`: IIFE → `useMemo([view, iframeUrl])` — avoids calling `getAccessToken()` on every render
+- `agentHint`: inline `AGENTS.find()` → `useMemo([agentId])` — avoids O(n) scan on every keystroke
+- Message keys: `key={i}` → `key={\`${timestamp}-${role}-${i}\`}` — stable composite key
+
+**Commit:** `b683ce4` — *perf: implement 23 dashboard performance fixes*
+`1203e4d` — *perf: fix 17 frontend performance bottlenecks*
+
+---
+
 ## Feb 26, 2026 — Dashboard pagination, market filter, pre-commit hook
 
 ### Dashboard — Home page market filter + pagination
@@ -436,5 +589,6 @@ Built the complete application from scratch in a single session.
 
 | Issue | Priority | Notes |
 |-------|----------|-------|
-| Anthropic API not working | High | Switch back once access is fixed — see [How to Run](how-to-run.md) |
 | SerpAPI key required for web search | Medium | Free tier (100/month) at serpapi.com |
+| Refresh token deny-list is in-memory | Low | Cleared on backend restart — revoked tokens valid until natural expiry (7 days) |
+| Facebook SSO | Low | Code complete; credentials are placeholders — button hidden until real credentials added |

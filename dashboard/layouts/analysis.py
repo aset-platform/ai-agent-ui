@@ -5,10 +5,32 @@ build the analysis page containing ticker dropdown, date-range slider,
 overlay-toggle switches, the 3-panel Plotly chart, and summary-stats row.
 """
 
+import time as _time
+
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
 from dashboard.layouts.helpers import _get_available_tickers
+
+# Fix #17: module-level cache for ticker list (5-min TTL)
+_TICKER_OPTIONS_CACHE: dict = {"options": None, "expiry": 0.0}
+_TICKER_OPTIONS_TTL = 300  # seconds
+
+
+def _get_available_tickers_cached() -> list:
+    """Return sorted ticker list from registry, cached for ``_TICKER_OPTIONS_TTL`` seconds.
+
+    Avoids re-reading the registry JSON on every analysis page render.
+
+    Returns:
+        Sorted list of ticker symbol strings.
+    """
+    now = _time.monotonic()
+    if _TICKER_OPTIONS_CACHE["options"] is not None and now < _TICKER_OPTIONS_CACHE["expiry"]:
+        return _TICKER_OPTIONS_CACHE["options"]
+    options = _get_available_tickers()
+    _TICKER_OPTIONS_CACHE.update({"options": options, "expiry": now + _TICKER_OPTIONS_TTL})
+    return options
 
 
 def analysis_layout() -> html.Div:
@@ -21,7 +43,7 @@ def analysis_layout() -> html.Div:
     Returns:
         :class:`~dash.html.Div` representing the full analysis page.
     """
-    tickers = _get_available_tickers()
+    tickers = _get_available_tickers_cached()
     ticker_options = [{"label": t, "value": t} for t in tickers]
     default_ticker = tickers[0] if tickers else None
 
