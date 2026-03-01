@@ -52,14 +52,27 @@ _REGISTRY_PATH = _DATA_METADATA / "stock_registry.json"
 def _load_reg_cb() -> dict:
     """Load the stock registry for use inside callbacks.
 
-    Tries the Iceberg ``stocks.registry`` table first so the dashboard
-    always reflects every ticker the backend has ever fetched.  Falls
-    back to the flat JSON file when Iceberg is unavailable or empty.
+    Always reads the flat ``stock_registry.json`` as the authoritative list
+    of tickers (it is updated on every stock analysis).  The Iceberg
+    ``stocks.registry`` table is read in addition and any tickers present
+    there but absent from the JSON are merged in.  This means new tickers
+    appear on the dashboard home page immediately even when the Iceberg
+    dual-write failed silently.
 
     Returns:
         Registry dict keyed by ticker symbol; empty dict if all sources fail.
     """
-    # ── 1. Iceberg primary source ────────────────────────────────────────
+    # ── 1. JSON — always the complete, authoritative ticker list ─────────
+    json_registry: dict = {}
+    if _REGISTRY_PATH.exists():
+        try:
+            with open(_REGISTRY_PATH) as fh:
+                json_registry = json.load(fh)
+            _logger.debug("Registry loaded from JSON: %d tickers.", len(json_registry))
+        except Exception as exc:
+            _logger.warning("registry JSON load failed: %s", exc)
+
+    # ── 2. Iceberg — supplement JSON with any tickers only in Iceberg ────
     try:
         from pyiceberg.catalog import load_catalog
 
@@ -71,7 +84,6 @@ def _load_reg_cb() -> dict:
             "date_range_start", "date_range_end",
         )).to_pandas()
         if not df.empty:
-            registry: dict = {}
             # Fix #5: replace iterrows() with faster .values array iteration
             _proj = [c for c in (
                 "ticker", "last_fetch_date", "total_rows",
@@ -81,10 +93,11 @@ def _load_reg_cb() -> dict:
             _has_lfd   = "last_fetch_date"   in _ci
             _has_tr    = "total_rows"         in _ci
             _has_range = ("date_range_start" in _ci and "date_range_end" in _ci)
+            iceberg_extra = 0
             for row in df[_proj].values:
                 ticker = str(row[0]) if row[0] else ""
-                if not ticker:
-                    continue
+                if not ticker or ticker in json_registry:
+                    continue  # JSON already has this ticker
                 entry: dict = {"ticker": ticker}
                 if _has_lfd and row[_ci["last_fetch_date"]]:
                     entry["last_fetch_date"] = str(row[_ci["last_fetch_date"]])[:10]
@@ -99,26 +112,14 @@ def _load_reg_cb() -> dict:
                             "end":   str(end)[:10],
                         }
                 entry["file_path"] = str(_DATA_RAW / f"{ticker}_raw.parquet")
-                registry[ticker] = entry
-            if registry:
-                _logger.debug(
-                    "Registry loaded from Iceberg: %d tickers.", len(registry)
-                )
-                return registry
+                json_registry[ticker] = entry
+                iceberg_extra += 1
+            if iceberg_extra:
+                _logger.debug("Merged %d extra tickers from Iceberg.", iceberg_extra)
     except Exception as exc:
-        _logger.debug("Iceberg registry unavailable (%s); falling back to JSON.", exc)
+        _logger.debug("Iceberg registry unavailable (%s); using JSON only.", exc)
 
-    # ── 2. JSON fallback ─────────────────────────────────────────────────
-    if not _REGISTRY_PATH.exists():
-        return {}
-    try:
-        with open(_REGISTRY_PATH) as fh:
-            data = json.load(fh)
-        _logger.debug("Registry loaded from JSON: %d tickers.", len(data))
-        return data
-    except Exception as exc:
-        _logger.warning("registry JSON load failed: %s", exc)
-        return {}
+    return json_registry
 
 
 def _load_raw(ticker: str) -> Optional[pd.DataFrame]:
