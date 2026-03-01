@@ -89,13 +89,11 @@ export function ChatHeader({
     <header className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-200 shadow-sm shrink-0">
       {/* ── Left: logo + agent switcher ─────────────────────────────────── */}
       <div className="flex items-center gap-3">
-        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-sm font-bold select-none">
-          ✦
-        </div>
-        <div>
-          <h1 className="font-semibold text-gray-900 leading-tight">AI Agent</h1>
-          <span className="text-xs text-indigo-600 font-medium">Claude Sonnet 4.6</span>
-        </div>
+        <img
+          src="/images/aset-logo-final.svg"
+          alt="ASET"
+          className="h-9 w-auto"
+        />
 
         {view === "chat" ? (
           <div className="flex items-center gap-1 ml-4 bg-gray-100 rounded-lg p-0.5">
