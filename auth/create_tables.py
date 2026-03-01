@@ -38,7 +38,8 @@ from pyiceberg.types import (
     TimestampType,
 )
 
-_logger = logging.getLogger(__name__)  # module-level mutable global (logger)
+# Module-level logger; mutable but required at module scope for use outside any class.
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Namespace and table names
@@ -107,6 +108,12 @@ def _users_schema() -> Schema:
             field_type=StringType(),
             required=False,
         ),
+        NestedField(
+            field_id=15,
+            name="page_permissions",
+            field_type=StringType(),
+            required=False,
+        ),
     )
 
 
@@ -154,25 +161,25 @@ def create_tables() -> None:
     # Create namespace
     try:
         catalog.create_namespace(_NAMESPACE)
-        _logger.info("Created Iceberg namespace '%s'.", _NAMESPACE)
+        logger.info("Created Iceberg namespace '%s'.", _NAMESPACE)
     except Exception:
-        _logger.info("Namespace '%s' already exists — skipping.", _NAMESPACE)
+        logger.info("Namespace '%s' already exists — skipping.", _NAMESPACE)
 
     # Create users table
     try:
         catalog.create_table(identifier=_USERS_TABLE, schema=_users_schema())
-        _logger.info("Created Iceberg table '%s'.", _USERS_TABLE)
+        logger.info("Created Iceberg table '%s'.", _USERS_TABLE)
     except Exception:
-        _logger.info("Table '%s' already exists — skipping.", _USERS_TABLE)
+        logger.info("Table '%s' already exists — skipping.", _USERS_TABLE)
 
     # Create audit_log table
     try:
         catalog.create_table(identifier=_AUDIT_LOG_TABLE, schema=_audit_log_schema())
-        _logger.info("Created Iceberg table '%s'.", _AUDIT_LOG_TABLE)
+        logger.info("Created Iceberg table '%s'.", _AUDIT_LOG_TABLE)
     except Exception:
-        _logger.info("Table '%s' already exists — skipping.", _AUDIT_LOG_TABLE)
+        logger.info("Table '%s' already exists — skipping.", _AUDIT_LOG_TABLE)
 
-    _logger.info("Iceberg table initialisation complete.")
+    logger.info("Iceberg table initialisation complete.")
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ import os
 
 from pyiceberg.types import NestedField, StringType
 
-# Module-level logger (non‑mutable). Prefixed with '_' to indicate internal use.
+# Module-level logger (non-mutable). Prefixed with '_' to indicate internal use.
 _logger = logging.getLogger(__name__)
 
 _USERS_TABLE = "auth.users"
@@ -34,6 +34,7 @@ _NEW_COLUMNS = (
     ("oauth_provider", StringType()),
     ("oauth_sub", StringType()),
     ("profile_picture_url", StringType()),
+    ("page_permissions", StringType()),
 )
 
 
@@ -41,7 +42,7 @@ def migrate() -> None:
     """Add the three OAuth columns to ``auth.users`` if they are absent.
 
     Uses Iceberg schema evolution (``update_schema()``) so existing data
-    rows are unaffected — new columns read as ``None`` for pre‑migration
+    rows are unaffected — new columns read as ``None`` for pre-migration
     rows.
 
     Args:

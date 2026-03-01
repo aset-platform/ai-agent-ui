@@ -2,6 +2,115 @@
 
 ---
 
+# Session: Mar 1, 2026 — Post-UX polish: 4 bug fixes on feature/refactor-module-split
+
+## Summary
+4 user-reported bug fixes after 7-item UX/RBAC session. Tests: 118 total (100 backend+dashboard + 18 frontend); all passing.
+
+### Fix 1 — Avatar static files
+- `backend/main.py`: Added `StaticFiles` mount at `/avatars` pointing to `data/avatars/`; `os.makedirs` on startup ensures directory exists
+
+### Fix 2 — Navbar dynamic page name (remove breadcrumb rows)
+- `dashboard/callbacks/routing_cbs.py`: Added `update_navbar_page_name` callback — maps pathname to " → PageName" suffix, written into `navbar-page-name` span
+- `dashboard/layouts/home.py`, `insights.py`, `admin.py`, `analysis.py`: Removed `html.Nav` breadcrumb blocks entirely
+- `dashboard/app_layout.py`: Removed breadcrumb wrapper Divs for `/forecast` and `/compare` routes
+
+### Fix 3 — EditProfileModal pre-population + avatar preview
+- `frontend/components/EditProfileModal.tsx`: Replaced unreliable `onAnimationStart` with `useEffect` on `isOpen` for form sync; added avatar preview (img or initials circle) above the name field
+
+### Fix 4 — Insights nav RBAC filtering
+- `frontend/lib/constants.tsx`: Added `requiresInsights?: boolean` to `NavItem` interface; added `"insights"` to `View` type; added Insights nav item with `requiresInsights: true`
+- `frontend/components/NavigationMenu.tsx`: Updated `canSeeItem` to filter `requiresInsights` items (superuser OR `page_permissions.insights === true`)
+- `frontend/app/page.tsx`: `iframeSrc` handles `view === "insights"` → opens dashboard at `/insights`; `iframeTitle` updated
+
+---
+
+# Session: Mar 1, 2026 — 7-item UX + RBAC fix on feature/refactor-module-split
+
+## Summary
+Full UX + RBAC fixes on `feature/refactor-module-split`. Tests: 100 backend+dashboard + 18 frontend = 118 total (all passing). Branch: `feature/refactor-module-split` — raise PR → dev.
+
+### Item 1 — Frontend profile dropdown + Dashboard profile chip removal
+- `auth/models/response.py`: Added `avatar_url` + `page_permissions` to `UserResponse`
+- `auth/endpoints/helpers.py`: `_user_to_response()` now populates both new fields
+- `dashboard/layouts/navbar.py`: Stripped to brand + 4 nav links only (no profile chip)
+- `dashboard/callbacks/profile_cbs.py`: Stripped to `load_user_profile()` only
+- `dashboard/app_layout.py`: Removed sign-out redirect + edit-profile modal; kept change-password modal + user-profile-store
+- Frontend: `useEditProfile.ts` + `useChangePassword.ts` hooks (new)
+- Frontend: `EditProfileModal.tsx` + `ChangePasswordModal.tsx` (new)
+- Frontend: `ChatHeader.tsx` — replaced bare sign-out with profile chip + click-outside dropdown (Edit Profile, Change Password, Sign Out)
+- Frontend: `page.tsx` — fetches `GET /auth/me` on mount; passes profile to ChatHeader + NavigationMenu; renders modals
+
+### Item 2 — SSO avatar override fix
+- `auth/repo/oauth.py`: SSO login no longer overwrites `profile_picture_url` if user already has a custom avatar
+
+### Item 3 — Avatar upload in Admin Add/Edit modal
+- `dashboard/layouts/admin.py`: Added `dcc.Upload` + preview div to user modal
+- `auth/endpoints/profile_routes.py`: `upload_avatar` now accepts optional `?user_id=` for superuser override
+- `dashboard/callbacks/admin_cbs2.py`: `save_user()` calls `_upload_avatar_for_user()` after create/edit if avatar provided
+
+### Item 4 — Breadcrumb headers
+- `dashboard/layouts/home.py`, `insights.py`, `admin.py`, `analysis.py`: replaced H2+description with breadcrumb nav
+
+### Item 5 — Analysis tabbed layout
+- `dashboard/layouts/analysis.py` `analysis_tabs_layout()`: Three real tabs — Price Analysis / Forecast / Compare Stocks
+
+### Item 6 — Insights market filters on Targets, Dividends, Risk
+- `dashboard/layouts/insights_tabs.py`: Added `targets-market-filter`, `dividends-market-filter`, `risk-market-filter` RadioItems
+- `dashboard/callbacks/insights_cbs.py`: Wired new inputs + applied market filter logic in all three callbacks
+
+### Item 7 — RBAC: page_permissions, max 2 superusers, dashboard routing, frontend nav
+- `auth/repo/schemas.py` + `auth/create_tables.py` + `auth/migrate_users_table.py`: `page_permissions` StringType column
+- `auth/models/request.py`: `page_permissions` on `UserUpdateRequest`
+- `auth/endpoints/user_routes.py`: Max 2 superusers guard; JSON serialization of `page_permissions`
+- `auth/repo/user_writes.py`: JSON serialization of `page_permissions` in create/update
+- `dashboard/app_layout.py` `display_page()`: RBAC enforcement for `/insights` and `/admin/users` using `user-profile-store`
+- `dashboard/layouts/admin.py`: User-permissions checklist section (visible/hidden based on role)
+- `dashboard/callbacks/admin_cbs2.py`: `toggle_user_modal` wires permissions section; `save_user` includes permissions in PATCH
+- `frontend/components/NavigationMenu.tsx`: `profile` prop; admin item visible for superuser OR `page_permissions.admin`
+
+---
+
+# Session: Mar 1, 2026 — Modular refactor + LLM fallback + regression expansion
+
+## Summary
+
+Full modular refactor of all large files (>150 non-comment lines), Groq-first/Anthropic-fallback LLM wrapper, and expanded regression test suite. Branch: `feature/refactor-module-split`.
+
+## Test count: 100 backend+dashboard (up from 74) + 18 frontend = 118 total
+
+### Phase 1 — LLM Fallback (`backend/llm_fallback.py`)
+- `FallbackLLM` class: Groq primary → Anthropic on `RateLimitError`/`APIConnectionError`
+- `bind_tools()` stores bound LLMs; `invoke()` dispatches with fallback
+- 6 new tests: `tests/backend/test_llm_fallback.py`
+
+### Phase 2 — Backend Python Refactoring
+- `auth/models/` package: `request.py`, `response.py`, `__init__.py`
+- `auth/password.py` + `auth/tokens.py` extracted from `auth/service.py`
+- `auth/repo/` package: `schemas.py`, `catalog.py`, `user_reads.py`, `user_writes.py`, `oauth.py`, `audit.py`, `repository.py`, `__init__.py`
+- `auth/endpoints/` package: `helpers.py`, `auth_routes.py`, `user_routes.py`, `profile_routes.py`, `oauth_routes.py`, `admin_routes.py`, `__init__.py`
+- `backend/models.py`: Pydantic request/response models
+- `backend/agents/config.py`, `loop.py`, `stream.py` extracted from `base.py`
+- `backend/tools/_stock_shared.py`, `_stock_registry.py`, `_stock_fetch.py`
+- `backend/tools/_analysis_shared.py`, `_analysis_indicators.py`, `_analysis_movement.py`, `_analysis_summary.py`, `_analysis_chart.py`
+- `backend/tools/_forecast_shared.py`, `_forecast_model.py`, `_forecast_accuracy.py`, `_forecast_persist.py`, `_forecast_chart.py`
+- 17 new tests: `test_auth_password.py` + `test_auth_tokens.py`
+
+### Phase 3 — Dashboard Refactoring
+- `dashboard/layouts/` package (11 files): `helpers.py`, `navbar.py`, `home.py`, `analysis.py`, `forecast.py`, `compare.py`, `admin_modals.py`, `admin.py`, `insights_tabs.py`, `insights.py`, `__init__.py`
+- `dashboard/callbacks/` package (17 files): `utils.py`, `auth_utils.py`, `data_loaders.py`, `chart_builders.py`, `chart_builders2.py`, `card_builders.py`, `table_builders.py`, `iceberg.py`, `home_cbs.py`, `analysis_cbs.py`, `forecast_cbs.py`, `admin_cbs.py`, `admin_cbs2.py`, `insights_cbs.py`, `routing_cbs.py`, `registration.py`, `__init__.py`
+- `dashboard/app_env.py`, `app_init.py`, `app_layout.py` extracted from `app.py`
+- 15 new tests: `tests/dashboard/test_utils.py`
+
+### Phase 4 — Frontend Refactoring
+- `frontend/lib/constants.tsx`: `View`, `Message`, `AGENTS`, `NAV_ITEMS`, `formatTime`, `toolLabel`
+- `frontend/hooks/useChatHistory.ts`, `useAuthGuard.ts`, `useSendMessage.ts`
+- `frontend/components/StatusBadge.tsx`, `MarkdownContent.tsx`, `MessageBubble.tsx`, `ChatInput.tsx`, `ChatHeader.tsx`, `IFrameView.tsx`, `NavigationMenu.tsx`
+- `frontend/vitest.config.ts`: jsdom environment + `@` path alias (fixed 18 tests)
+- `frontend/app/page.tsx` slimmed from 709 → ~160 lines
+
+---
+
 # Session: Feb 28, 2026 — Iceberg stock storage + Insights dashboard pages
 
 ## What We Built

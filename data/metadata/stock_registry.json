@@ -1,8 +1,8 @@
 {
   "AAPL": {
     "ticker": "AAPL",
-    "last_fetch_date": "2026-02-23",
-    "total_rows": 2515,
+    "last_fetch_date": "2026-03-01",
+    "total_rows": 2527,
     "date_range": {
       "start": "2016-02-22",
       "end": "2026-02-20"

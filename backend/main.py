@@ -53,6 +53,8 @@ import time
 
 # Make the project root importable so that the auth/ package (which lives
 # alongside backend/ rather than inside it) can be found by Python.
+# _project_root is module-level because sys.path manipulation must happen
+# before any project imports are resolved.
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
@@ -60,10 +62,11 @@ if _project_root not in sys.path:
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
 
 from config import Settings, get_settings
 from logging_config import setup_logging
+from models import ChatRequest, ChatResponse
 from tools.registry import ToolRegistry
 from tools.time_tool import get_current_time
 from tools.search_tool import search_web
@@ -72,8 +75,6 @@ from agents.general_agent import create_general_agent
 from tools.agent_tool import create_search_market_news_tool
 
 # === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
-# Does not modify existing chat agent functionality.
-# Stock agent is dispatched via agent_id="stock" on POST /chat.
 from tools.stock_data_tool import (
     fetch_stock_data,
     get_stock_info,
@@ -89,36 +90,7 @@ from agents.stock_agent import create_stock_agent
 
 from auth.api import create_auth_router
 
-
-class ChatRequest(BaseModel):
-    """Request body for the ``POST /chat`` endpoint.
-
-    Attributes:
-        message: The user's latest message text.
-        history: Previous conversation turns, oldest first.  Each element
-            must be a dict with ``"role"`` (``"user"`` or ``"assistant"``)
-            and ``"content"`` keys.  Defaults to an empty list.
-        agent_id: ID of the agent that should handle the request.
-            Must match an ID registered in :class:`~agents.registry.AgentRegistry`.
-            Defaults to ``"general"``.
-    """
-
-    message: str
-    history: list[dict] = []
-    agent_id: str = "general"
-
-
-class ChatResponse(BaseModel):
-    """Response body for the ``POST /chat`` endpoint.
-
-    Attributes:
-        response: The agent's natural-language reply.
-        agent_id: The ID of the agent that produced the response, echoed
-            from the request.
-    """
-
-    response: str
-    agent_id: str
+logger = logging.getLogger(__name__)
 
 
 class ChatServer:
@@ -223,6 +195,14 @@ class ChatServer:
 
         # Auth + user management router (mounts /auth/*, /users/*, /admin/*)
         app.include_router(create_auth_router())
+
+        # Serve uploaded avatars as static files at /avatars/{filename}
+        _avatars_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..", "data", "avatars",
+        )
+        os.makedirs(_avatars_dir, exist_ok=True)
+        app.mount("/avatars", StaticFiles(directory=_avatars_dir), name="avatars")
 
         return app
 
@@ -377,23 +357,29 @@ class ChatServer:
 # Module-level startup — executed once when uvicorn imports this module.
 # ---------------------------------------------------------------------------
 
-settings = get_settings()
-setup_logging(level=settings.log_level, log_to_file=settings.log_to_file)
+# _settings is module-level because it must be initialised before the
+# ChatServer instance is created and before logging is configured.
+_settings = get_settings()
+setup_logging(level=_settings.log_level, log_to_file=_settings.log_to_file)
 
 # Export all settings loaded by Pydantic into os.environ so that third-party
 # libraries (LangChain/Groq/SerpAPI) and auth/dependencies.py, which read
 # os.environ directly, can find them even when values are only in backend/.env.
+# _env_exports is module-level because it drives one-time environment
+# initialisation that must complete before any imports consume os.environ.
 _env_exports = {
-    "GROQ_API_KEY":                  settings.groq_api_key,
-    "ANTHROPIC_API_KEY":             settings.anthropic_api_key,
-    "SERPAPI_API_KEY":               settings.serpapi_api_key,
-    "JWT_SECRET_KEY":                settings.jwt_secret_key,
-    "ACCESS_TOKEN_EXPIRE_MINUTES":   str(settings.access_token_expire_minutes),
-    "REFRESH_TOKEN_EXPIRE_DAYS":     str(settings.refresh_token_expire_days),
+    "GROQ_API_KEY":                  _settings.groq_api_key,
+    "ANTHROPIC_API_KEY":             _settings.anthropic_api_key,
+    "SERPAPI_API_KEY":               _settings.serpapi_api_key,
+    "JWT_SECRET_KEY":                _settings.jwt_secret_key,
+    "ACCESS_TOKEN_EXPIRE_MINUTES":   str(_settings.access_token_expire_minutes),
+    "REFRESH_TOKEN_EXPIRE_DAYS":     str(_settings.refresh_token_expire_days),
 }
 for _key, _val in _env_exports.items():
     if _val and _key not in os.environ:
         os.environ[_key] = _val
 
-server = ChatServer(settings)
-app = server.app  # uvicorn entry point: uvicorn main:app --port 8181 --reload
+# _server is module-level because uvicorn requires ``app`` to be a
+# module-level name; _server owns the app instance.
+_server = ChatServer(_settings)
+app = _server.app  # uvicorn entry point: uvicorn main:app --port 8181 --reload

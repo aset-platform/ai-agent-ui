@@ -1,0 +1,102 @@
+/**
+ * Renders assistant markdown responses with custom Tailwind-styled components.
+ *
+ * Internal links (pointing to the Dash dashboard or MkDocs site) are rendered
+ * as buttons that switch the in-app view rather than opening a new tab.
+ */
+
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+function preprocessContent(content: string): string {
+  const dashboardUrl = process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050";
+
+  content = content.replace(
+    /\S+\/charts\/analysis\/([A-Z0-9._-]+)_analysis\.html/g,
+    (_, ticker) => `[View ${ticker} Analysis →](${dashboardUrl}/analysis?ticker=${ticker})`
+  );
+  content = content.replace(
+    /\S+\/charts\/forecasts\/([A-Z0-9._-]+)_forecast\.html/g,
+    (_, ticker) => `[View ${ticker} Forecast →](${dashboardUrl}/forecast?ticker=${ticker})`
+  );
+  content = content.replace(/\S+\/data\/(raw|processed|forecasts|cache|metadata)\/\S+/g, "");
+
+  return content;
+}
+
+interface MarkdownContentProps {
+  content: string;
+  onInternalLink: (href: string) => void;
+}
+
+export function MarkdownContent({ content, onInternalLink }: MarkdownContentProps) {
+  const dashboardBase = process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050";
+  const docsBase = process.env.NEXT_PUBLIC_DOCS_URL ?? "http://127.0.0.1:8000";
+
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        h1: ({ children }) => <h1 className="text-lg font-bold mt-3 mb-1 first:mt-0">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-base font-semibold mt-3 mb-1 first:mt-0">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-sm font-semibold mt-2 mb-1 first:mt-0">{children}</h3>,
+        p:  ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+        ul: ({ children }) => <ul className="list-disc pl-5 mb-2 space-y-0.5">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal pl-5 mb-2 space-y-0.5">{children}</ol>,
+        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+        em:     ({ children }) => <em className="italic">{children}</em>,
+        hr: () => <hr className="border-gray-200 my-3" />,
+        blockquote: ({ children }) => (
+          <blockquote className="border-l-4 border-indigo-300 pl-3 italic text-gray-500 my-2">{children}</blockquote>
+        ),
+        a: ({ href, children }) => {
+          const isInternal = href && (href.startsWith(dashboardBase) || href.startsWith(docsBase));
+          if (isInternal) {
+            return (
+              <button
+                onClick={() => onInternalLink(href!)}
+                className="text-indigo-600 underline hover:text-indigo-800 cursor-pointer text-left"
+              >
+                {children}
+              </button>
+            );
+          }
+          return (
+            <a href={href} target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline hover:text-indigo-800">
+              {children}
+            </a>
+          );
+        },
+        pre: ({ children }) => (
+          <pre className="bg-gray-900 text-gray-100 rounded-lg px-4 py-3 overflow-x-auto text-xs font-mono my-2">
+            {children}
+          </pre>
+        ),
+        code: ({ className, children }) =>
+          className ? (
+            <code className="font-mono">{children}</code>
+          ) : (
+            <code className="bg-gray-100 text-indigo-700 rounded px-1 py-0.5 text-[0.83em] font-mono">
+              {children}
+            </code>
+          ),
+        table: ({ children }) => (
+          <div className="overflow-x-auto my-2">
+            <table className="min-w-full text-xs border-collapse">{children}</table>
+          </div>
+        ),
+        thead: ({ children }) => <thead className="bg-gray-50">{children}</thead>,
+        th: ({ children }) => (
+          <th className="border border-gray-200 px-3 py-1.5 font-semibold text-left text-gray-700">{children}</th>
+        ),
+        td: ({ children }) => (
+          <td className="border border-gray-200 px-3 py-1.5 text-gray-700">{children}</td>
+        ),
+        tr: ({ children }) => <tr className="even:bg-gray-50">{children}</tr>,
+      }}
+    >
+      {preprocessContent(content)}
+    </ReactMarkdown>
+  );
+}

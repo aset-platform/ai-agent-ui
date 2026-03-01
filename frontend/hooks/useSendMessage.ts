@@ -1,0 +1,147 @@
+"use client";
+/**
+ * Hook encapsulating the streaming chat message send flow.
+ *
+ * Handles the full lifecycle: optimistic update, NDJSON stream parsing,
+ * status-line updates, and error states.
+ */
+
+import { useRef } from "react";
+import { apiFetch } from "@/lib/apiFetch";
+import type { Message } from "@/lib/constants";
+import { toolLabel } from "@/lib/constants";
+
+interface UseSendMessageOptions {
+  agentId: string;
+  messages: Message[];
+  setMessages: (updater: Message[] | ((prev: Message[]) => Message[])) => void;
+  setLoading: (v: boolean) => void;
+  setStatusLine: (v: string) => void;
+  input: string;
+  setInput: (v: string) => void;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+}
+
+export function useSendMessage({
+  agentId,
+  messages,
+  setMessages,
+  setLoading,
+  setStatusLine,
+  input,
+  setInput,
+  textareaRef,
+}: UseSendMessageOptions) {
+  const sendMessage = async () => {
+    if (!input.trim()) return;
+
+    const userMessage: Message = {
+      role: "user",
+      content: input.trim(),
+      timestamp: new Date(),
+    };
+
+    const updatedMessages = [...messages, userMessage];
+    setMessages(updatedMessages);
+    setInput("");
+    setLoading(true);
+    setStatusLine("Thinking...");
+
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
+
+    try {
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8181";
+      const res = await apiFetch(`${backendUrl}/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: userMessage.content,
+          history: messages.map((m) => ({ role: m.role, content: m.content })),
+          agent_id: agentId,
+        }),
+      });
+
+      if (!res.ok) {
+        const errorContent =
+          res.status === 504
+            ? "Request timed out, please try again."
+            : "Error connecting to server. Is the backend running?";
+        setMessages([
+          ...updatedMessages,
+          { role: "assistant", content: errorContent, timestamp: new Date() },
+        ]);
+        return;
+      }
+
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const event = JSON.parse(trimmed) as Record<string, unknown>;
+            if (event.type === "thinking") {
+              const iter = event.iteration as number;
+              setStatusLine(iter > 1 ? `Thinking... (step ${iter})` : "Thinking...");
+            } else if (event.type === "tool_start") {
+              setStatusLine(`${toolLabel(event.tool as string)}...`);
+            } else if (event.type === "tool_done") {
+              setStatusLine(`Got result from ${event.tool as string}...`);
+            } else if (event.type === "warning") {
+              setStatusLine("Max iterations reached, finalising...");
+            } else if (event.type === "final") {
+              setMessages([
+                ...updatedMessages,
+                { role: "assistant", content: event.response as string, timestamp: new Date() },
+              ]);
+              setStatusLine("");
+            } else if (event.type === "error" || event.type === "timeout") {
+              setMessages([
+                ...updatedMessages,
+                { role: "assistant", content: `Error: ${event.message as string}`, timestamp: new Date() },
+              ]);
+              setStatusLine("");
+            }
+          } catch { /* skip invalid JSON lines */ }
+        }
+      }
+    } catch {
+      setMessages([
+        ...updatedMessages,
+        { role: "assistant", content: "Error connecting to server. Is the backend running?", timestamp: new Date() },
+      ]);
+      setStatusLine("");
+    } finally {
+      setLoading(false);
+      setStatusLine("");
+      textareaRef.current?.focus();
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
+  const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value);
+    e.target.style.height = "auto";
+    e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
+  };
+
+  return { sendMessage, handleKeyDown, handleInput };
+}

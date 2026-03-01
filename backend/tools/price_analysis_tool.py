@@ -1,23 +1,16 @@
-"""Price movement analysis tools for the Stock Analysis Agent.
+"""Price movement analysis tool for the Stock Analysis Agent.
 
-This module provides private helper functions for computing technical
-indicators, price movement statistics, and summary metrics, plus one
-public LangChain ``@tool`` function that orchestrates the full analysis
-pipeline for a given ticker.
+This module exposes the public :func:`analyse_stock_price` LangChain ``@tool``
+function.  All heavy lifting is delegated to private sub-modules:
 
-All analysis reads from locally stored parquet files (written by
-:mod:`tools.stock_data_tool`). Results are returned as formatted strings
-suitable for LLM consumption.  An interactive Plotly HTML chart is saved
-to ``charts/analysis/{TICKER}_analysis.html``.
+- :mod:`tools._analysis_shared` — constants, lazy Iceberg repo, cache helpers
+- :mod:`tools._analysis_indicators` — technical indicator computation
+- :mod:`tools._analysis_movement` — bull/bear phases, drawdown, Sharpe
+- :mod:`tools._analysis_summary` — summary statistics for report
+- :mod:`tools._analysis_chart` — Plotly chart builder
 
-Technical indicators calculated:
-
-- SMA 50-day and SMA 200-day
-- EMA 20-day
-- RSI 14-day
-- MACD line, signal line, histogram
-- Bollinger Bands (upper, middle, lower)
-- Average True Range (ATR) 14-day
+Technical indicators calculated: SMA 50/200, EMA 20, RSI 14, MACD,
+Bollinger Bands, ATR 14.
 
 Typical usage (via LangChain tool call)::
 
@@ -26,527 +19,23 @@ Typical usage (via LangChain tool call)::
     result = analyse_stock_price.invoke({"ticker": "AAPL"})
 """
 
-import json
 import logging
-import math
-import sys
-from datetime import date
-from pathlib import Path
-from typing import Optional
 
-import numpy as np
-import pandas as pd
-import plotly.graph_objects as go
-import ta
-from plotly.subplots import make_subplots
 from langchain_core.tools import tool
 
-# ---------------------------------------------------------------------------
-# Module-level constants
-# ---------------------------------------------------------------------------
-
-logger = logging.getLogger(__name__)
-
-_PROJECT_ROOT = Path(__file__).parent.parent.parent
-_DATA_RAW = _PROJECT_ROOT / "data" / "raw"
-_DATA_METADATA = _PROJECT_ROOT / "data" / "metadata"
-_CHARTS_ANALYSIS = _PROJECT_ROOT / "charts" / "analysis"
-_CACHE_DIR = _PROJECT_ROOT / "data" / "cache"
-
-# ---------------------------------------------------------------------------
-# Iceberg repository — lazy singleton (non-blocking; disabled if unavailable)
-# ---------------------------------------------------------------------------
-
-_STOCK_REPO = None
-_STOCK_REPO_INIT_ATTEMPTED = False
-
-
-def _get_repo():
-    """Return the module-level :class:`~stocks.repository.StockRepository` singleton.
-
-    Returns ``None`` silently when PyIceberg is unavailable.
-
-    Returns:
-        :class:`~stocks.repository.StockRepository` instance or ``None``.
-    """
-    global _STOCK_REPO, _STOCK_REPO_INIT_ATTEMPTED
-    if _STOCK_REPO_INIT_ATTEMPTED:
-        return _STOCK_REPO
-    _STOCK_REPO_INIT_ATTEMPTED = True
-    try:
-        _root = str(_PROJECT_ROOT)
-        if _root not in sys.path:
-            sys.path.insert(0, _root)
-        from stocks.repository import StockRepository  # noqa: PLC0415
-        _STOCK_REPO = StockRepository()
-        logger.debug("StockRepository initialised for dual-write (price_analysis_tool)")
-    except Exception as _e:
-        logger.warning("StockRepository unavailable (Iceberg write disabled): %s", _e)
-    return _STOCK_REPO
-
-
-# ---------------------------------------------------------------------------
-# Private helper functions
-# ---------------------------------------------------------------------------
-
-
-def _load_cache(ticker: str, key: str) -> Optional[str]:
-    """Return cached result text for today if it exists, otherwise None.
-
-    Args:
-        ticker: Stock ticker symbol (uppercased).
-        key: Cache key string, e.g. ``"analysis"``.
-
-    Returns:
-        The cached result string, or ``None`` if no cache file exists for today.
-    """
-    path = _CACHE_DIR / f"{ticker}_{key}_{date.today()}.txt"
-    if path.exists():
-        return path.read_text(encoding="utf-8")
-    return None
-
-
-def _save_cache(ticker: str, key: str, result: str) -> None:
-    """Write result text to a dated cache file.
-
-    Args:
-        ticker: Stock ticker symbol (uppercased).
-        key: Cache key string, e.g. ``"analysis"``.
-        result: The string result to cache.
-    """
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path = _CACHE_DIR / f"{ticker}_{key}_{date.today()}.txt"
-    path.write_text(result, encoding="utf-8")
-    logger.debug("Cache saved: %s", path)
-
-
-def _currency_symbol(code: str) -> str:
-    """Return the display symbol for a 3-letter ISO currency code.
-
-    Args:
-        code: ISO 4217 currency code, e.g. ``"USD"`` or ``"INR"``.
-
-    Returns:
-        The currency symbol string, e.g. ``"$"`` or ``"₹"``.
-        Falls back to the code itself for unmapped currencies.
-    """
-    return {
-        "USD": "$", "INR": "₹", "GBP": "£", "EUR": "€",
-        "JPY": "¥", "CNY": "¥", "AUD": "A$", "CAD": "CA$",
-        "HKD": "HK$", "SGD": "S$",
-    }.get((code or "USD").upper(), code or "$")
-
-
-def _load_currency(ticker: str) -> str:
-    """Read the ISO currency code for *ticker* from its metadata JSON.
-
-    Args:
-        ticker: Stock ticker symbol (already uppercased).
-
-    Returns:
-        ISO currency code string, e.g. ``"USD"`` or ``"INR"``.
-        Falls back to ``"USD"`` if the metadata file is missing.
-    """
-    meta_path = _DATA_METADATA / f"{ticker}_info.json"
-    try:
-        with open(meta_path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data.get("currency", "USD") or "USD"
-    except Exception:
-        return "USD"
-
-
-def _load_parquet(ticker: str) -> Optional[pd.DataFrame]:
-    """Load the raw OHLCV parquet file for a ticker.
-
-    Args:
-        ticker: Stock ticker symbol (already uppercased).
-
-    Returns:
-        A :class:`pandas.DataFrame` with a DatetimeIndex, or ``None`` if the
-        parquet file does not exist.
-    """
-    file_path = _DATA_RAW / f"{ticker}_raw.parquet"
-    if not file_path.exists():
-        logger.warning("Parquet file not found for %s: %s", ticker, file_path)
-        return None
-    df = pd.read_parquet(file_path, engine="pyarrow")
-    df.index = pd.to_datetime(df.index)
-    return df
-
-
-def _calculate_returns(df: pd.DataFrame) -> dict:
-    """Calculate daily, monthly, annual, and cumulative returns.
-
-    Args:
-        df: OHLCV DataFrame with a DatetimeIndex and a ``Close`` column.
-
-    Returns:
-        Dictionary with keys ``"daily"``, ``"monthly"``, ``"annual"``,
-        and ``"cumulative"``, each containing a :class:`pandas.Series`.
-    """
-    close = df["Close"]
-    daily = close.pct_change().dropna()
-    monthly = close.resample("ME").last().pct_change().dropna()
-    annual = close.resample("YE").last().pct_change().dropna()
-    cumulative = (1 + daily).cumprod() - 1
-    return {
-        "daily": daily,
-        "monthly": monthly,
-        "annual": annual,
-        "cumulative": cumulative,
-    }
-
-
-def _calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Add technical indicator columns to the OHLCV DataFrame.
-
-    Adds the following columns in-place on a copy of ``df``:
-    ``SMA_50``, ``SMA_200``, ``EMA_20``, ``RSI_14``, ``MACD``,
-    ``MACD_Signal``, ``MACD_Hist``, ``BB_Upper``, ``BB_Middle``,
-    ``BB_Lower``, ``ATR_14``.
-
-    Args:
-        df: OHLCV DataFrame with ``Open``, ``High``, ``Low``, ``Close``
-            columns and a DatetimeIndex.
-
-    Returns:
-        A new DataFrame with all indicator columns appended.
-    """
-    df = df.copy()
-    close = df["Close"]
-    high = df["High"]
-    low = df["Low"]
-
-    df["SMA_50"] = ta.trend.SMAIndicator(close=close, window=50).sma_indicator()
-    df["SMA_200"] = ta.trend.SMAIndicator(close=close, window=200).sma_indicator()
-    df["EMA_20"] = ta.trend.EMAIndicator(close=close, window=20).ema_indicator()
-
-    df["RSI_14"] = ta.momentum.RSIIndicator(close=close, window=14).rsi()
-
-    macd_obj = ta.trend.MACD(close=close)
-    df["MACD"] = macd_obj.macd()
-    df["MACD_Signal"] = macd_obj.macd_signal()
-    df["MACD_Hist"] = macd_obj.macd_diff()
-
-    bb = ta.volatility.BollingerBands(close=close, window=20, window_dev=2)
-    df["BB_Upper"] = bb.bollinger_hband()
-    df["BB_Middle"] = bb.bollinger_mavg()
-    df["BB_Lower"] = bb.bollinger_lband()
-
-    df["ATR_14"] = ta.volatility.AverageTrueRange(
-        high=high, low=low, close=close, window=14
-    ).average_true_range()
-
-    logger.debug("Technical indicators calculated for DataFrame with %d rows", len(df))
-    return df
-
-
-def _analyse_price_movement(df: pd.DataFrame) -> dict:
-    """Analyse bull/bear phases, drawdown, support/resistance, volatility, Sharpe.
-
-    Args:
-        df: DataFrame with indicators already added by
-            :func:`_calculate_technical_indicators`.
-
-    Returns:
-        Dictionary with keys: ``bull_phase_pct``, ``bear_phase_pct``,
-        ``max_drawdown_pct``, ``max_drawdown_duration_days``,
-        ``support_levels``, ``resistance_levels``,
-        ``annualized_volatility_pct``, ``annualized_return_pct``,
-        ``sharpe_ratio``.
-    """
-    close = df["Close"]
-    daily_returns = close.pct_change().dropna()
-
-    # Bull / bear phases — price vs SMA 200
-    mask = df["SMA_200"].notna()
-    above = (close[mask] > df["SMA_200"][mask])
-    bull_pct = float(above.mean() * 100)
-    bear_pct = 100.0 - bull_pct
-
-    # Max drawdown
-    rolling_max = close.cummax()
-    drawdown = (close - rolling_max) / rolling_max
-    max_drawdown = float(drawdown.min() * 100)
-
-    # Longest drawdown duration (consecutive trading days below previous peak)
-    in_drawdown = (drawdown < 0).astype(int)
-    groups = in_drawdown * (in_drawdown.groupby(
-        (in_drawdown != in_drawdown.shift()).cumsum()
-    ).cumcount() + 1)
-    max_dd_duration = int(groups.max())
-
-    # Support / resistance from the most recent 252 trading days
-    recent = df.tail(252)
-    support_levels = sorted(recent["Low"].nsmallest(3).round(2).tolist())
-    resistance_levels = sorted(
-        recent["High"].nlargest(3).round(2).tolist(), reverse=True
-    )
-
-    # Annualised volatility
-    ann_vol_pct = float(daily_returns.std() * math.sqrt(252) * 100)
-
-    # Annualised return
-    ann_return = float(daily_returns.mean() * 252)
-
-    # Sharpe ratio (risk-free rate = 4 %)
-    ann_vol_dec = daily_returns.std() * math.sqrt(252)
-    sharpe = (ann_return - 0.04) / ann_vol_dec if ann_vol_dec > 0 else 0.0
-
-    return {
-        "bull_phase_pct": round(bull_pct, 1),
-        "bear_phase_pct": round(bear_pct, 1),
-        "max_drawdown_pct": round(max_drawdown, 2),
-        "max_drawdown_duration_days": max_dd_duration,
-        "support_levels": support_levels,
-        "resistance_levels": resistance_levels,
-        "annualized_volatility_pct": round(ann_vol_pct, 2),
-        "annualized_return_pct": round(ann_return * 100, 2),
-        "sharpe_ratio": round(sharpe, 2),
-    }
-
-
-def _generate_summary_stats(df: pd.DataFrame, ticker: str) -> dict:
-    """Generate high-level summary statistics for a ticker.
-
-    Computes all-time high/low, best/worst calendar month and year,
-    average annual return, current price vs moving averages, and RSI signal.
-
-    Args:
-        df: DataFrame with indicator columns added.
-        ticker: Stock ticker symbol (used in the returned dict).
-
-    Returns:
-        Dictionary with summary statistics ready for report formatting.
-    """
-    close = df["Close"]
-
-    ath_idx = close.idxmax()
-    atl_idx = close.idxmin()
-
-    monthly_close = close.resample("ME").last()
-    monthly_ret = monthly_close.pct_change().dropna()
-    best_month_idx = monthly_ret.idxmax()
-    worst_month_idx = monthly_ret.idxmin()
-
-    annual_close = close.resample("YE").last()
-    annual_ret = annual_close.pct_change().dropna()
-    best_year_idx = annual_ret.idxmax()
-    worst_year_idx = annual_ret.idxmin()
-
-    avg_annual_pct = float(annual_ret.mean() * 100)
-    total_return_pct = float((close.iloc[-1] / close.iloc[0] - 1) * 100)
-    current_price = float(close.iloc[-1])
-
-    sma50 = float(df["SMA_50"].iloc[-1]) if "SMA_50" in df.columns else None
-    sma200 = float(df["SMA_200"].iloc[-1]) if "SMA_200" in df.columns else None
-    rsi = float(df["RSI_14"].iloc[-1]) if "RSI_14" in df.columns else None
-
-    if rsi is not None:
-        rsi_signal = "Overbought" if rsi >= 70 else ("Oversold" if rsi <= 30 else "Neutral")
-    else:
-        rsi_signal = "N/A"
-
-    macd_val = float(df["MACD"].iloc[-1]) if "MACD" in df.columns else None
-    macd_sig = float(df["MACD_Signal"].iloc[-1]) if "MACD_Signal" in df.columns else None
-    if macd_val is not None and macd_sig is not None:
-        macd_signal_str = "Bullish" if macd_val > macd_sig else "Bearish"
-    else:
-        macd_signal_str = "N/A"
-
-    return {
-        "ticker": ticker,
-        "current_price": round(current_price, 2),
-        "all_time_high": round(float(close.max()), 2),
-        "all_time_high_date": str(ath_idx.date()),
-        "all_time_low": round(float(close.min()), 2),
-        "all_time_low_date": str(atl_idx.date()),
-        "total_return_pct": round(total_return_pct, 2),
-        "avg_annual_return_pct": round(avg_annual_pct, 2),
-        "best_month": best_month_idx.strftime("%b %Y"),
-        "best_month_return_pct": round(float(monthly_ret.max() * 100), 2),
-        "worst_month": worst_month_idx.strftime("%b %Y"),
-        "worst_month_return_pct": round(float(monthly_ret.min() * 100), 2),
-        "best_year": str(best_year_idx.year),
-        "best_year_return_pct": round(float(annual_ret.max() * 100), 2),
-        "worst_year": str(worst_year_idx.year),
-        "worst_year_return_pct": round(float(annual_ret.min() * 100), 2),
-        "sma_50": round(sma50, 2) if sma50 is not None else "N/A",
-        "sma_50_signal": (
-            "Above" if sma50 and current_price > sma50 else "Below"
-        ) if sma50 else "N/A",
-        "sma_200": round(sma200, 2) if sma200 is not None else "N/A",
-        "sma_200_signal": (
-            "Above" if sma200 and current_price > sma200 else "Below"
-        ) if sma200 else "N/A",
-        "rsi_14": round(rsi, 1) if rsi is not None else "N/A",
-        "rsi_signal": rsi_signal,
-        "macd_signal": macd_signal_str,
-    }
-
-
-def _create_analysis_chart(df: pd.DataFrame, ticker: str) -> str:
-    """Build and save a 3-panel interactive Plotly analysis chart.
-
-    Panel 1 (60 %): Candlestick with SMA 50, SMA 200, Bollinger Bands.
-    Panel 2 (20 %): Volume bars coloured green/red by price direction.
-    Panel 3 (20 %): RSI with overbought/oversold zones.
-
-    All panels use a dark Plotly theme.
-
-    Args:
-        df: DataFrame with indicator columns added.
-        ticker: Stock ticker symbol (used in chart title and filename).
-
-    Returns:
-        Absolute path to the saved HTML chart file as a string.
-    """
-    _CHARTS_ANALYSIS.mkdir(parents=True, exist_ok=True)
-
-    fig = make_subplots(
-        rows=3,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.03,
-        row_heights=[0.6, 0.2, 0.2],
-        subplot_titles=(
-            f"{ticker} — Price & Indicators",
-            "Volume",
-            "RSI (14)",
-        ),
-    )
-
-    # ── Panel 1: Candlestick ──────────────────────────────────────────────
-    fig.add_trace(
-        go.Candlestick(
-            x=df.index,
-            open=df["Open"],
-            high=df["High"],
-            low=df["Low"],
-            close=df["Close"],
-            name="OHLC",
-            increasing_line_color="#26a69a",
-            decreasing_line_color="#ef5350",
-        ),
-        row=1,
-        col=1,
-    )
-
-    if "SMA_50" in df.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=df.index,
-                y=df["SMA_50"],
-                name="SMA 50",
-                line=dict(color="orange", width=1.5),
-            ),
-            row=1,
-            col=1,
-        )
-
-    if "SMA_200" in df.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=df.index,
-                y=df["SMA_200"],
-                name="SMA 200",
-                line=dict(color="tomato", width=1.5),
-            ),
-            row=1,
-            col=1,
-        )
-
-    if "BB_Upper" in df.columns and "BB_Lower" in df.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=df.index,
-                y=df["BB_Upper"],
-                name="BB Upper",
-                line=dict(color="rgba(100,149,237,0.7)", width=1, dash="dot"),
-                showlegend=True,
-            ),
-            row=1,
-            col=1,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=df.index,
-                y=df["BB_Lower"],
-                name="BB Lower",
-                line=dict(color="rgba(100,149,237,0.7)", width=1, dash="dot"),
-                fill="tonexty",
-                fillcolor="rgba(100,149,237,0.07)",
-            ),
-            row=1,
-            col=1,
-        )
-
-    # ── Panel 2: Volume ───────────────────────────────────────────────────
-    vol_colors = [
-        "#26a69a" if df["Close"].iloc[i] >= df["Open"].iloc[i] else "#ef5350"
-        for i in range(len(df))
-    ]
-    fig.add_trace(
-        go.Bar(
-            x=df.index,
-            y=df["Volume"],
-            name="Volume",
-            marker_color=vol_colors,
-            showlegend=False,
-        ),
-        row=2,
-        col=1,
-    )
-
-    # ── Panel 3: RSI ──────────────────────────────────────────────────────
-    if "RSI_14" in df.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=df.index,
-                y=df["RSI_14"],
-                name="RSI (14)",
-                line=dict(color="#ab47bc", width=1.5),
-            ),
-            row=3,
-            col=1,
-        )
-        fig.add_hline(
-            y=70, line_dash="dash", line_color="tomato", line_width=1, row=3, col=1
-        )
-        fig.add_hline(
-            y=30, line_dash="dash", line_color="#26a69a", line_width=1, row=3, col=1
-        )
-        fig.add_hrect(
-            y0=70, y1=100, fillcolor="tomato", opacity=0.07, line_width=0,
-            row=3, col=1,
-        )
-        fig.add_hrect(
-            y0=0, y1=30, fillcolor="#26a69a", opacity=0.07, line_width=0,
-            row=3, col=1,
-        )
-
-    fig.update_layout(
-        template="plotly_dark",
-        title=dict(text=f"{ticker} — Technical Analysis", font=dict(size=16)),
-        height=900,
-        showlegend=True,
-        xaxis_rangeslider_visible=False,
-        margin=dict(l=60, r=30, t=80, b=30),
-    )
-    fig.update_yaxes(title_text="Price", row=1, col=1)
-    fig.update_yaxes(title_text="Volume", row=2, col=1)
-    fig.update_yaxes(title_text="RSI", row=3, col=1, range=[0, 100])
-
-    out_path = _CHARTS_ANALYSIS / f"{ticker}_analysis.html"
-    fig.write_html(str(out_path))
-    logger.info("Analysis chart saved: %s", out_path)
-    return str(out_path)
-
-
-# ---------------------------------------------------------------------------
-# Public @tool function
-# ---------------------------------------------------------------------------
+import tools._analysis_shared as _sh
+from tools._analysis_indicators import _calculate_technical_indicators
+from tools._analysis_movement import _analyse_price_movement
+from tools._analysis_summary import _generate_summary_stats
+from tools._analysis_chart import _create_analysis_chart
+
+# Module-level logger — kept at module scope as a private constant
+_logger = logging.getLogger(__name__)
+
+# Re-export helpers so tests can still monkeypatch via price_analysis_tool._get_repo
+_get_repo = _sh._get_repo
+_calculate_technical_indicators = _calculate_technical_indicators  # noqa: F811 — re-export
+_analyse_price_movement = _analyse_price_movement  # noqa: F811 — re-export
 
 
 @tool
@@ -569,22 +58,26 @@ def analyse_stock_price(ticker: str) -> str:
         A formatted multi-section string report with all key metrics and
         the chart file path, or an error string if data is unavailable.
 
+    Raises:
+        Exception: Caught internally; returns an error string rather than
+            propagating so the LangChain agent can handle it gracefully.
+
     Example:
         >>> result = analyse_stock_price.invoke({"ticker": "AAPL"})
         >>> "AAPL" in result
         True
     """
     ticker = ticker.upper().strip()
-    logger.info("analyse_stock_price | ticker=%s", ticker)
-    sym = _currency_symbol(_load_currency(ticker))
+    _logger.info("analyse_stock_price | ticker=%s", ticker)
+    sym = _sh._currency_symbol(_sh._load_currency(ticker))
 
-    cached = _load_cache(ticker, "analysis")
+    cached = _sh._load_cache(ticker, "analysis")
     if cached:
-        logger.info("Returning cached analysis for %s", ticker)
+        _logger.info("Returning cached analysis for %s", ticker)
         return cached
 
     try:
-        df = _load_parquet(ticker)
+        df = _sh._load_parquet(ticker)
         if df is None:
             return (
                 f"No local data found for '{ticker}'. "
@@ -596,23 +89,20 @@ def analyse_stock_price(ticker: str) -> str:
         stats = _generate_summary_stats(df, ticker)
         chart_path = _create_analysis_chart(df, ticker)
 
-        # Iceberg dual-write: technical indicators + analysis summary
         try:
-            repo = _get_repo()
+            repo = _sh._get_repo()
             if repo is not None:
                 repo.upsert_technical_indicators(ticker, df)
                 _iceberg_summary = {
                     **movement,
                     **stats,
-                    # Rename macd_signal → macd_signal_text (schema key)
                     "macd_signal_text": stats.get("macd_signal"),
-                    # Convert list fields to strings for StringType column
                     "support_levels": str(movement.get("support_levels", [])),
                     "resistance_levels": str(movement.get("resistance_levels", [])),
                 }
                 repo.insert_analysis_summary(ticker, _iceberg_summary)
         except Exception as _e:
-            logger.warning("Iceberg write failed for %s analysis: %s", ticker, _e)
+            _logger.warning("Iceberg write failed for %s analysis: %s", ticker, _e)
 
         report = (
             f"=== PRICE ANALYSIS: {ticker} ===\n\n"
@@ -647,12 +137,10 @@ def analyse_stock_price(ticker: str) -> str:
             f"  Saved to: {chart_path}\n"
         )
 
-        _save_cache(ticker, "analysis", report)
-        logger.info("analyse_stock_price complete for %s", ticker)
+        _sh._save_cache(ticker, "analysis", report)
+        _logger.info("analyse_stock_price complete for %s", ticker)
         return report
 
     except Exception as e:
-        logger.error(
-            "analyse_stock_price failed for %s: %s", ticker, e, exc_info=True
-        )
+        _logger.error("analyse_stock_price failed for %s: %s", ticker, e, exc_info=True)
         return f"Error analysing '{ticker}': {e}"
