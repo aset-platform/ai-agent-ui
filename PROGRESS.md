@@ -2,6 +2,85 @@
 
 ---
 
+# Session: Mar 1, 2026 — 23 Dashboard + 17 Frontend Performance Fixes on feature/gitignore-avatars
+
+## Summary
+Implemented all dashboard and frontend performance fixes identified in code review. Branch: `feature/gitignore-avatars`. Tests: 100 backend+dashboard passing; `tsc --noEmit` clean.
+
+### Dashboard fixes (9 files)
+
+**`dashboard/callbacks/data_loaders.py`**
+- Fix #19: Column projection (`selected_fields`) on Iceberg registry scan — avoids reading unused columns
+- Fix #5: Replace `iterrows()` in `_load_reg_cb()` with `.values` array iteration + pre-computed column index dict
+- Fix #1/#2/#14: Added `_add_indicators_cached(ticker, df)` with 5-min TTL — shared by analysis and compare callbacks
+
+**`dashboard/callbacks/chart_builders.py`**
+- Fix #22: `np.where()` for volume bar colours and MACD histogram colours — replaces Python list comprehensions
+
+**`dashboard/callbacks/utils.py`**
+- Fix #11: TTL cache (`_CURRENCY_CACHE_DASH`, 5-min) for `_get_currency()` — was opening JSON on every callback invocation
+
+**`dashboard/callbacks/iceberg.py`**
+- Fix #10: TTL-based repo singleton (1 h) — re-initialises after Iceberg catalog restart without process restart
+- Fix #6: `_get_analysis_summary_cached()` and `_get_company_info_cached()` with 5-min TTL — shared across screener, risk, sectors callbacks
+
+**`dashboard/callbacks/home_cbs.py`**
+- Fix #4: Hoist `_load_raw(ticker)` once per ticker loop — eliminates duplicate parquet read in sentiment block
+- Fix #8: `pathlib.Path.glob()` + `sorted()` by `st_mtime` for forecast file discovery
+
+**`dashboard/app_layout.py`**
+- Fix #20: `dcc.Interval` raised from 5 min → 30 min
+
+**`dashboard/callbacks/insights_cbs.py`**
+- Fix #6: `update_screener`, `update_risk`, `update_sectors` now use `_get_analysis_summary_cached` / `_get_company_info_cached`
+- Fix #5: All 4× `iterrows()` loops (screener, targets, dividends, risk) replaced with `.to_dict("records")`
+- Fix #7: Date cutoff applied to `df_all` before per-ticker loop in correlation (Iceberg path)
+- Fix #13: `update_targets` replaced raw `load_catalog("local")` with `repo._table_to_df()`
+- Fix #16: All market filters vectorised with `.str.endswith((".NS", ".BO"))` mask
+
+**`dashboard/callbacks/analysis_cbs.py`**
+- Fix #1/#2/#14: `update_analysis_chart` and `update_compare` use `_add_indicators_cached()`
+
+**`dashboard/layouts/analysis.py`**
+- Fix #17: `_get_available_tickers_cached()` with 5-min TTL wraps `_get_available_tickers()`
+
+### Frontend fixes (9 files)
+
+**`frontend/hooks/useSendMessage.ts`** (High)
+- AbortController on `/chat/stream` fetch — cancels on unmount + before each new send; ignores `AbortError`
+- `useCallback` on `handleKeyDown` and `handleInput` — stable refs to prevent `ChatInput` re-renders
+
+**`frontend/hooks/useChatHistory.ts`** (Medium)
+- 1-second debounce on `localStorage.setItem` — was firing synchronously on every streaming chunk
+
+**`frontend/components/MarkdownContent.tsx`** (Medium)
+- `useMemo` wraps `preprocessContent(content)` — was re-running regex over full markdown on every stream event
+
+**`frontend/app/auth/oauth/callback/page.tsx`** (Medium)
+- `cancelled` flag + cleanup return replaces `eslint-disable`; proper `[searchParams, router]` deps
+
+**`frontend/components/EditProfileModal.tsx`** (Medium)
+- `URL.createObjectURL` replaces `FileReader.readAsDataURL` — non-blocking, no base64 memory overhead
+- Blob URL revoked in `useEffect` cleanup
+
+**`frontend/lib/auth.ts`** (Low)
+- 10-second `AbortController` timeout on `refreshAccessToken` — prevents hung refresh blocking all API calls
+
+**`frontend/app/login/page.tsx`** (Low)
+- `AbortController` on OAuth providers fetch (with cleanup return) and login submit
+
+**`frontend/components/NavigationMenu.tsx`** (Low)
+- `useMemo` for `NAV_ITEMS.filter(canSeeItem)` — recomputes only when `profile` changes
+
+**`frontend/app/page.tsx`** (Low)
+- Stable message keys: `timestamp+role+index` composite instead of bare array index
+- `useMemo` for `iframeSrc` (avoids `getAccessToken()` on every render)
+- `useMemo` for `AGENTS.find()` agent hint lookup
+- `useCallback` for menu outside-click handler
+- `AbortController` on profile fetch on mount
+
+---
+
 # Session: Mar 1, 2026 — 12 Backend Performance Fixes on feature/gitignore-avatars
 
 ## Summary
