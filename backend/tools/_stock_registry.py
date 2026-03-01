@@ -107,4 +107,4 @@ def _update_registry(ticker: str, df: pd.DataFrame, file_path: Path) -> None:
                 market=market,
             )
     except Exception as _e:
-        _logger.warning("Iceberg registry upsert failed for %s: %s", ticker, _e)
+        _logger.error("Iceberg registry upsert failed for %s: %s", ticker, _e)

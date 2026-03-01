@@ -64,38 +64,6 @@ def _get_repo():
     return _ss._STOCK_REPO
 
 
-def _currency_symbol(code: str) -> str:
-    """Return the display symbol for a 3-letter ISO currency code.
-
-    Args:
-        code: ISO 4217 currency code, e.g. ``"USD"`` or ``"INR"``.
-
-    Returns:
-        The currency symbol string, e.g. ``"$"`` or ``"₹"``.
-    """
-    return {
-        "USD": "$", "INR": "₹", "GBP": "£", "EUR": "€",
-        "JPY": "¥", "CNY": "¥", "AUD": "A$", "CAD": "CA$",
-        "HKD": "HK$", "SGD": "S$",
-    }.get((code or "USD").upper(), code or "$")
-
-
-def _load_currency(ticker: str) -> str:
-    """Read the ISO currency code for *ticker* from its metadata JSON.
-
-    Args:
-        ticker: Stock ticker symbol (already uppercased).
-
-    Returns:
-        ISO currency code string.  Falls back to ``"USD"``.
-    """
-    import json
-    import tools._stock_shared as _ss
-
-    meta_path = _ss._DATA_METADATA / f"{ticker}_info.json"
-    try:
-        with open(meta_path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data.get("currency", "USD") or "USD"
-    except Exception:
-        return "USD"
+# Fix #6: delegate to shared helpers module to eliminate duplication.
+# Fix #5: TTL cache is implemented in _helpers._load_currency.
+from tools._helpers import _currency_symbol, _load_currency  # noqa: F401
