@@ -172,7 +172,7 @@ const switchView = (v: View) => {
 
 ### handleInternalLink
 
-When the LLM produces a link pointing to the dashboard or docs (see [Path Replacement](#path-replacement)), clicking it calls:
+When the LLM produces a link pointing to the dashboard or docs (see [Internal link routing](../dev/decisions.md#internal-link-routing-through-oninternallink-callback)), clicking it calls:
 
 ```typescript
 const handleInternalLink = (href: string) => {
