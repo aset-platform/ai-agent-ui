@@ -158,5 +158,25 @@
       "end": "2026-02-27"
     },
     "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/CHAMBLFERT.NS_raw.parquet"
+  },
+  "GSFC.NS": {
+    "ticker": "GSFC.NS",
+    "last_fetch_date": "2026-03-01",
+    "total_rows": 2471,
+    "date_range": {
+      "start": "2016-02-29",
+      "end": "2026-02-27"
+    },
+    "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/GSFC.NS_raw.parquet"
+  },
+  "JKPAPER.NS": {
+    "ticker": "JKPAPER.NS",
+    "last_fetch_date": "2026-03-01",
+    "total_rows": 2471,
+    "date_range": {
+      "start": "2016-02-29",
+      "end": "2026-02-27"
+    },
+    "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/JKPAPER.NS_raw.parquet"
   }
 }

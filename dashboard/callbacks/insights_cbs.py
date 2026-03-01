@@ -725,12 +725,16 @@ def register(app) -> None:
         if repo is not None:
             df_all = repo._table_to_df("stocks.ohlcv")
             if not df_all.empty:
-                # Fix #7: push date cutoff before per-ticker Python iteration
+                # Fix #7: push date cutoff before per-ticker Python iteration.
+                # Convert "date" column to datetime64 first — the Iceberg
+                # date32 type becomes Python datetime.date objects in pandas,
+                # which cannot be compared directly with strings (TypeError).
                 if period != "all":
                     from datetime import datetime, timedelta  # noqa: PLC0415
                     _days = 365 if period == "1y" else 3 * 365
-                    _cutoff_str = (datetime.today() - timedelta(days=_days)).date().isoformat()
-                    df_all = df_all[df_all["date"] >= _cutoff_str]
+                    _cutoff_ts = pd.Timestamp(datetime.today() - timedelta(days=_days))
+                    df_all["date"] = pd.to_datetime(df_all["date"])
+                    df_all = df_all[df_all["date"] >= _cutoff_ts]
                 for ticker in df_all["ticker"].unique():
                     sub = df_all[df_all["ticker"] == ticker].copy()
                     sub["date"] = pd.to_datetime(sub["date"])
