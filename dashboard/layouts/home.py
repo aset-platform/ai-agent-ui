@@ -52,20 +52,23 @@ def home_layout() -> html.Div:
                     className="dropdown-dark",
                 ),
             ], md=6),
-        ], className="mb-4"),
+        ], className="mb-2"),
 
-        # ── Stock cards ───────────────────────────────────────────────────
-        html.H5("Saved Stocks", className="text-muted mb-3"),
-
-        # Market filter buttons
-        dbc.Row(
+        # ── Saved Stocks heading + market filter on same row ─────────────
+        dbc.Row([
+            dbc.Col(
+                html.H5("Saved Stocks", className="text-muted mb-0"),
+                className="my-auto",
+            ),
             dbc.Col(
                 dbc.ButtonGroup([
                     dbc.Button("🇮🇳 India", id="filter-india-btn", color="primary",          size="sm"),
                     dbc.Button("🇺🇸 US",    id="filter-us-btn",    color="outline-secondary", size="sm"),
-                ], className="mb-3"),
-            )
-        ),
+                ]),
+                width="auto",
+                className="my-auto",
+            ),
+        ], className="mb-2 align-items-center"),
 
         dbc.Row(id="stock-cards-container", className="g-3"),
 
