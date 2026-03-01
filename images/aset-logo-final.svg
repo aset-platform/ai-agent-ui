@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 80" width="520" height="160">
+  <defs>
+    <linearGradient id="vioGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c026d3"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Recursive:wght@800&amp;family=DM+Sans:wght@500&amp;display=swap');
+    </style>
+  </defs>
+
+  <!-- White background -->
+  <rect width="260" height="80" fill="#ffffff" rx="12"/>
+
+  <!-- Gradient ring (outer circle) -->
+  <circle cx="40" cy="40" r="24" fill="url(#vioGrad)"/>
+
+  <!-- White inner circle -->
+  <circle cx="40" cy="40" r="21" fill="#ffffff"/>
+
+  <!-- Star / sparkle icon -->
+  <path d="M40 28 L41.8 38.2 L52 40 L41.8 41.8 L40 52 L38.2 41.8 L28 40 L38.2 38.2 Z"
+        fill="url(#vioGrad)"/>
+
+  <!-- ASET text -->
+  <text
+    x="76"
+    y="48"
+    font-family="'Recursive', monospace"
+    font-size="28"
+    font-weight="800"
+    fill="#12122a"
+    letter-spacing="-1">ASET</text>
+
+  <!-- Subtitle -->
+  <text
+    x="77"
+    y="63"
+    font-family="'DM Sans', sans-serif"
+    font-size="10"
+    font-weight="500"
+    fill="#7c3aed"
+    letter-spacing="0.3">Equity Trading Platform</text>
+</svg>

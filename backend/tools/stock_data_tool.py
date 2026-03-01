@@ -96,7 +96,7 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
                 if repo is not None:
                     repo.insert_ohlcv(ticker, df)
             except Exception as _e:
-                _logger.warning("Iceberg OHLCV insert failed for %s: %s", ticker, _e)
+                _logger.error("Iceberg OHLCV insert failed for %s: %s", ticker, _e)
             msg = (
                 f"Full fetch completed for {ticker}: {len(df)} rows saved. "
                 f"Date range: {df.index.min().date()} to {df.index.max().date()}."
@@ -135,7 +135,7 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
             if repo is not None:
                 repo.insert_ohlcv(ticker, new_df)
         except Exception as _e:
-            _logger.warning("Iceberg OHLCV delta-write failed for %s: %s", ticker, _e)
+            _logger.error("Iceberg OHLCV delta-write failed for %s: %s", ticker, _e)
 
         msg = (
             f"Delta fetch for {ticker}: {len(new_df)} new rows added "
@@ -202,7 +202,7 @@ def get_stock_info(ticker: str) -> str:
             if repo is not None:
                 repo.insert_company_info(ticker, info)
         except Exception as _e:
-            _logger.warning("Iceberg company_info insert failed for %s: %s", ticker, _e)
+            _logger.error("Iceberg company_info insert failed for %s: %s", ticker, _e)
         return json.dumps(result, indent=2)
 
     except Exception as e:
@@ -321,7 +321,7 @@ def get_dividend_history(ticker: str) -> str:
             if repo is not None:
                 repo.insert_dividends(ticker, df, currency=_load_currency(ticker))
         except Exception as _e:
-            _logger.warning("Iceberg dividends insert failed for %s: %s", ticker, _e)
+            _logger.error("Iceberg dividends insert failed for %s: %s", ticker, _e)
         curr_sym = _currency_symbol(_load_currency(ticker))
         msg = (
             f"Dividend history for {ticker}: {len(df)} payments. "

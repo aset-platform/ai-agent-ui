@@ -1,4 +1,3 @@
-dashboard/callbacks/registration.py
 """Callback registration entry point for the AI Stock Analysis Dashboard.
 
 Defines :func:`register_callbacks` which imports and calls each feature-area

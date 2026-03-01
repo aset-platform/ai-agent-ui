@@ -27,8 +27,8 @@ NAVBAR = dbc.Navbar(
                 [
                     dbc.NavItem(dbc.NavLink("Home",     href="/",            className="nav-link-custom")),
                     dbc.NavItem(dbc.NavLink("Analysis", href="/analysis",    className="nav-link-custom")),
-                    dbc.NavItem(dbc.NavLink("Insights", href="/insights",    className="nav-link-custom")),
-                    dbc.NavItem(dbc.NavLink("Admin",    href="/admin/users", className="nav-link-custom")),
+                    dbc.NavItem(dbc.NavLink("Insights", href="/insights",    className="nav-link-custom"), id="nav-item-insights"),
+                    dbc.NavItem(dbc.NavLink("Admin",    href="/admin/users", className="nav-link-custom"), id="nav-item-admin"),
                 ],
                 navbar=True,
                 className="ms-auto",

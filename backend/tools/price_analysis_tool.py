@@ -102,7 +102,7 @@ def analyse_stock_price(ticker: str) -> str:
                 }
                 repo.insert_analysis_summary(ticker, _iceberg_summary)
         except Exception as _e:
-            _logger.warning("Iceberg write failed for %s analysis: %s", ticker, _e)
+            _logger.error("Iceberg write failed for %s analysis: %s", ticker, _e)
 
         report = (
             f"=== PRICE ANALYSIS: {ticker} ===\n\n"

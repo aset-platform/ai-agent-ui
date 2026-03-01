@@ -9,7 +9,7 @@ The frontend is a Next.js 16 application with a single `page.tsx` component that
 ```
 frontend/
 ├── app/
-│   ├── page.tsx                               # Entire SPA — chat, docs, dashboard, admin views
+│   ├── page.tsx                               # SPA shell — composes hooks + components
 │   ├── login/
 │   │   └── page.tsx                           # Login page — email + password **and** SSO buttons
 │   ├── auth/
@@ -18,10 +18,27 @@ frontend/
 │   │           └── page.tsx                 # OAuth callback – exchanges code for JWTs
 │   ├── layout.tsx                             # Root layout (html + body tags, font setup)
 │   └── globals.css                            # Tailwind CSS imports + base styles
+├── components/                                # Extracted UI components
+│   ├── ChatHeader.tsx                         # Header bar + agent selector + profile dropdown
+│   ├── ChatInput.tsx                          # Textarea + send button
+│   ├── MessageBubble.tsx                      # Individual message bubble (with MarkdownContent)
+│   ├── MarkdownContent.tsx                    # Memoised markdown renderer
+│   ├── NavigationMenu.tsx                     # FAB + popup nav (RBAC-filtered by profile)
+│   ├── IFrameView.tsx                         # Dashboard/Docs iframe wrapper
+│   ├── StatusBadge.tsx                        # Animated thinking/streaming badge
+│   ├── EditProfileModal.tsx                   # Avatar upload + full_name edit modal
+│   └── ChangePasswordModal.tsx               # Password reset modal
+├── hooks/                                     # Custom React hooks
+│   ├── useAuthGuard.ts                        # Redirect to /login if no valid token
+│   ├── useChatHistory.ts                      # Per-agent history + debounced localStorage save
+│   ├── useSendMessage.ts                      # Streaming fetch with AbortController
+│   ├── useEditProfile.ts                      # PATCH /auth/me + avatar upload
+│   └── useChangePassword.ts                   # Password-reset two-step flow
 ├── lib/
 │   ├── auth.ts                                # JWT token helpers (getAccessToken, setTokens, …)
 │   ├── oauth.ts                               # PKCE helpers + sessionStorage helpers for SSO
-│   └── apiFetch.ts                            # Authenticated fetch wrapper (auto‑refresh + 401 redirect)
+│   ├── apiFetch.ts                            # Authenticated fetch wrapper (auto‑refresh + 401 redirect)
+│   └── constants.ts                           # AGENTS list, NAV_ITEMS, View type
 ├── public/                                    # Static SVG assets (Next.js defaults)
 ├── .env.local                                 # Runtime env vars (gitignored)
 ├── .env.local.example                         # Committed reference copy
@@ -48,12 +65,12 @@ All three are used at runtime in the browser (they're embedded in the client bun
 
 ## Component Architecture
 
-`page.tsx` exports a single `"use client"` component: `ChatPage`. All state, handlers, and rendering live in this one file.
+`page.tsx` exports a single `"use client"` component: `ChatPage`. State and logic are split across custom hooks in `hooks/`; rendering is delegated to components in `components/`. `page.tsx` acts as a slim composition shell.
 
-### Types
+### Types (`lib/constants.ts`)
 
 ```typescript
-type View = "chat" | "docs" | "dashboard" | "admin";
+type View = "chat" | "docs" | "dashboard" | "admin" | "insights";
 
 interface Message {
   role: "user" | "assistant";
@@ -62,7 +79,7 @@ interface Message {
 }
 ```
 
-### State
+### State (in `page.tsx`)
 
 | State | Type | Purpose |
 |-------|------|---------|
@@ -70,15 +87,22 @@ interface Message {
 | `iframeUrl` | `string \| null` | Specific URL for the iframe (e.g. `/analysis?ticker=AAPL`); `null` = base URL |
 | `iframeLoading` | `boolean` | `true` while the iframe is loading; shows spinner overlay |
 | `iframeError` | `boolean` | `true` if the iframe `onError` fires; shows error banner |
-| `histories` | `Record<string, Message[]>` | Per‑agent chat history, keyed by `agentId` |
+| `agentId` | `string` | Active agent (`"general"` or `"stock"`) |
 | `input` | `string` | Current textarea value |
 | `loading` | `boolean` | `true` while a backend request is in flight |
 | `statusLine` | `string` | Human‑readable status text shown in `StatusBadge` during streaming |
-| `agentId` | `string` | Active agent (`"general"` or `"stock"`) |
 | `menuOpen` | `boolean` | Navigation menu open/closed |
-| **OAuth** |
-| `oauthProvider` | `string \| null` | Provider selected for the current SSO flow (`"google"` or `"facebook"`) |
-| `codeVerifier` | `string \| null` | PKCE verifier stored temporarily in `sessionStorage` |
+| `profile` | `UserProfile \| null` | Fetched from `GET /auth/me`; drives profile dropdown + RBAC |
+
+### Hook responsibilities
+
+| Hook | State owned |
+|------|-------------|
+| `useAuthGuard` | Redirect to `/login` if no valid token |
+| `useChatHistory(agentId)` | Per-agent `messages` array; debounced localStorage save |
+| `useSendMessage(...)` | `sendMessage`, `handleKeyDown`, `handleInput`; AbortController cleanup |
+| `useEditProfile()` | `isOpen`, `saving`, `error`; `PATCH /auth/me` + avatar upload |
+| `useChangePassword()` | `isOpen`, `saving`, `error`; password-reset two-step flow |
 
 ### Refs
 
@@ -88,13 +112,17 @@ const textareaRef    = useRef<HTMLTextAreaElement>(null); // height + focus
 const menuRef        = useRef<HTMLDivElement>(null);   // click‑outside detection
 ```
 
-### Effects
+### Effects (in `page.tsx`)
 
 ```typescript
-// Auth guard — redirect to /login if no valid token
+// Profile fetch on mount — AbortController cancels if unmounted
 useEffect(() => {
-  const token = getAccessToken();
-  if (!token || isTokenExpired(token)) router.replace("/login");
+  const controller = new AbortController();
+  apiFetch(`${BACKEND_URL}/auth/me`, { signal: controller.signal })
+    .then(res => res.ok ? res.json() : null)
+    .then(data => { if (data) setProfile(data); })
+    .catch(err => { if (err?.name !== "AbortError") { /* ignore */ } });
+  return () => controller.abort();
 }, []);
 
 // Auto‑scroll to latest message
@@ -102,24 +130,15 @@ useEffect(() => {
   messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 }, [messages, loading]);
 
-// Load histories from localStorage on mount (revives Date objects)
-useEffect(() => {
-  const saved = localStorage.getItem("chat_histories");
-  if (saved) { /* JSON.parse + new Date(m.timestamp) revival */ }
-}, []);
-
-// Save histories whenever they change
-useEffect(() => {
-  localStorage.setItem("chat_histories", JSON.stringify(histories));
-}, [histories]);
-
-// Click‑outside handler to close navigation menu
+// Stable click‑outside handler (useCallback) to close navigation menu
 useEffect(() => {
   if (!menuOpen) return;
-  document.addEventListener("mousedown", handleClick);
-  return () => document.removeEventListener("mousedown", handleClick);
-}, [menuOpen]);
+  document.addEventListener("mousedown", handleMenuOutsideClick);
+  return () => document.removeEventListener("mousedown", handleMenuOutsideClick);
+}, [menuOpen, handleMenuOutsideClick]);
 ```
+
+**localStorage save** is debounced 1 second inside `useChatHistory` to avoid blocking the main thread on every streaming token.
 
 ---
 
@@ -153,7 +172,7 @@ const switchView = (v: View) => {
 
 ### handleInternalLink
 
-When the LLM produces a link pointing to the dashboard or docs (see [Path Replacement](#path-replacement)), clicking it calls:
+When the LLM produces a link pointing to the dashboard or docs (see [Internal link routing](../dev/decisions.md#internal-link-routing-through-oninternallink-callback)), clicking it calls:
 
 ```typescript
 const handleInternalLink = (href: string) => {
@@ -219,16 +238,16 @@ Clicking Admin sets `view = "admin"` and loads `DASHBOARD_URL/admin/users?token=
 
 ### Token propagation to iframes
 
-When rendering a dashboard or admin iframe, the current access token is appended as a query parameter:
+When rendering a dashboard or admin iframe, the current access token is appended as a query parameter. The value is memoised (only recomputed when `view` or `iframeUrl` change) to avoid calling `getAccessToken()` on every render:
 
 ```typescript
-const iframeSrc = (() => {
+const iframeSrc = useMemo(() => {
   const base = iframeUrl ?? defaultUrl;
   const token = getAccessToken();
   if (!token) return base;
   const sep = base.includes("?") ? "&" : "?";
   return `${base}${sep}token=${encodeURIComponent(token)}`;
-})();
+}, [view, iframeUrl]);
 ```
 
 The Dash app receives the token via `?token=`, stores it in `dcc.Store`, and validates it on every page render. Docs iframes do not require a token.
@@ -237,7 +256,7 @@ The Dash app receives the token via `?token=`, stores it in `dcc.Store`, and val
 
 ## Navigation Menu
 
-A fixed‑position FAB button sits at `bottom-6 right-6`. Clicking it toggles a popup with four items (Admin is hidden for non‑superusers):
+A fixed‑position FAB button sits at `bottom-6 right-6` (rendered by `NavigationMenu`). Items are filtered by RBAC: Admin is only shown for superusers or users with the `admin` page permission; Insights requires superuser or `insights` page permission. Clicking it toggles a popup with visible items:
 
 | Item | Icon | Action |
 |------|------|--------|

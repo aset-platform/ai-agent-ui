@@ -120,6 +120,12 @@ def update(cat, user_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
 
     df.loc[mask, "updated_at"] = _to_ts(_now_utc())
 
+    # Ensure every column in the PA schema is present in the DataFrame
+    # (guards against tables created before a schema migration was applied).
+    for pa_field in _USERS_PA_SCHEMA:
+        if pa_field.name not in df.columns:
+            df[pa_field.name] = None
+
     new_arrow = pa.Table.from_pandas(df, schema=_USERS_PA_SCHEMA, preserve_index=False)
     tbl.overwrite(new_arrow)
     _logger.info("Updated user user_id=%s fields=%s", user_id, list(updates.keys()))

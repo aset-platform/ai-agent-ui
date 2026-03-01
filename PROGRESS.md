@@ -2,6 +2,136 @@
 
 ---
 
+# Session: Mar 1, 2026 — 23 Dashboard + 17 Frontend Performance Fixes on feature/gitignore-avatars
+
+## Summary
+Implemented all dashboard and frontend performance fixes identified in code review. Branch: `feature/gitignore-avatars`. Tests: 100 backend+dashboard passing; `tsc --noEmit` clean.
+
+### Dashboard fixes (9 files)
+
+**`dashboard/callbacks/data_loaders.py`**
+- Fix #19: Column projection (`selected_fields`) on Iceberg registry scan — avoids reading unused columns
+- Fix #5: Replace `iterrows()` in `_load_reg_cb()` with `.values` array iteration + pre-computed column index dict
+- Fix #1/#2/#14: Added `_add_indicators_cached(ticker, df)` with 5-min TTL — shared by analysis and compare callbacks
+
+**`dashboard/callbacks/chart_builders.py`**
+- Fix #22: `np.where()` for volume bar colours and MACD histogram colours — replaces Python list comprehensions
+
+**`dashboard/callbacks/utils.py`**
+- Fix #11: TTL cache (`_CURRENCY_CACHE_DASH`, 5-min) for `_get_currency()` — was opening JSON on every callback invocation
+
+**`dashboard/callbacks/iceberg.py`**
+- Fix #10: TTL-based repo singleton (1 h) — re-initialises after Iceberg catalog restart without process restart
+- Fix #6: `_get_analysis_summary_cached()` and `_get_company_info_cached()` with 5-min TTL — shared across screener, risk, sectors callbacks
+
+**`dashboard/callbacks/home_cbs.py`**
+- Fix #4: Hoist `_load_raw(ticker)` once per ticker loop — eliminates duplicate parquet read in sentiment block
+- Fix #8: `pathlib.Path.glob()` + `sorted()` by `st_mtime` for forecast file discovery
+
+**`dashboard/app_layout.py`**
+- Fix #20: `dcc.Interval` raised from 5 min → 30 min
+
+**`dashboard/callbacks/insights_cbs.py`**
+- Fix #6: `update_screener`, `update_risk`, `update_sectors` now use `_get_analysis_summary_cached` / `_get_company_info_cached`
+- Fix #5: All 4× `iterrows()` loops (screener, targets, dividends, risk) replaced with `.to_dict("records")`
+- Fix #7: Date cutoff applied to `df_all` before per-ticker loop in correlation (Iceberg path)
+- Fix #13: `update_targets` replaced raw `load_catalog("local")` with `repo._table_to_df()`
+- Fix #16: All market filters vectorised with `.str.endswith((".NS", ".BO"))` mask
+
+**`dashboard/callbacks/analysis_cbs.py`**
+- Fix #1/#2/#14: `update_analysis_chart` and `update_compare` use `_add_indicators_cached()`
+
+**`dashboard/layouts/analysis.py`**
+- Fix #17: `_get_available_tickers_cached()` with 5-min TTL wraps `_get_available_tickers()`
+
+### Frontend fixes (9 files)
+
+**`frontend/hooks/useSendMessage.ts`** (High)
+- AbortController on `/chat/stream` fetch — cancels on unmount + before each new send; ignores `AbortError`
+- `useCallback` on `handleKeyDown` and `handleInput` — stable refs to prevent `ChatInput` re-renders
+
+**`frontend/hooks/useChatHistory.ts`** (Medium)
+- 1-second debounce on `localStorage.setItem` — was firing synchronously on every streaming chunk
+
+**`frontend/components/MarkdownContent.tsx`** (Medium)
+- `useMemo` wraps `preprocessContent(content)` — was re-running regex over full markdown on every stream event
+
+**`frontend/app/auth/oauth/callback/page.tsx`** (Medium)
+- `cancelled` flag + cleanup return replaces `eslint-disable`; proper `[searchParams, router]` deps
+
+**`frontend/components/EditProfileModal.tsx`** (Medium)
+- `URL.createObjectURL` replaces `FileReader.readAsDataURL` — non-blocking, no base64 memory overhead
+- Blob URL revoked in `useEffect` cleanup
+
+**`frontend/lib/auth.ts`** (Low)
+- 10-second `AbortController` timeout on `refreshAccessToken` — prevents hung refresh blocking all API calls
+
+**`frontend/app/login/page.tsx`** (Low)
+- `AbortController` on OAuth providers fetch (with cleanup return) and login submit
+
+**`frontend/components/NavigationMenu.tsx`** (Low)
+- `useMemo` for `NAV_ITEMS.filter(canSeeItem)` — recomputes only when `profile` changes
+
+**`frontend/app/page.tsx`** (Low)
+- Stable message keys: `timestamp+role+index` composite instead of bare array index
+- `useMemo` for `iframeSrc` (avoids `getAccessToken()` on every render)
+- `useMemo` for `AGENTS.find()` agent hint lookup
+- `useCallback` for menu outside-click handler
+- `AbortController` on profile fetch on mount
+
+---
+
+# Session: Mar 1, 2026 — 12 Backend Performance Fixes on feature/gitignore-avatars
+
+## Summary
+Implemented all 12 performance improvements identified in backend review. Tests: 118 total (100 backend+dashboard + 18 frontend); all passing. Committed + pushed to `feature/gitignore-avatars`.
+
+### Fix #1 — Predicate push-down for single-ticker reads (`stocks/repository.py`)
+- Added `_scan_ticker(identifier, ticker)` helper: `EqualTo("ticker", ticker)` predicate scan + full-scan fallback
+- Added `_scan_two_filters(identifier, col1, val1, col2, val2)` for compound filters (`And(EqualTo, EqualTo)`)
+- All single-ticker read methods now use predicate push-down: `get_registry`, `get_latest_company_info`, `get_ohlcv`, `get_latest_ohlcv_date`, `get_dividends`, `get_technical_indicators`, `get_latest_analysis_summary`, `get_analysis_history`, `get_latest_forecast_run`, `get_latest_forecast_series`
+
+### Fix #2 — Single table load per upsert
+- Added `_load_table_and_scan(identifier)` helper returning `(table, dataframe)` tuple
+- `upsert_registry`, `upsert_technical_indicators`, `insert_forecast_series` each load table once then reuse the object — eliminates double catalog round-trip
+- `insert_ohlcv` and `insert_dividends` fetch only the `date`/`ex_date` column via predicate before appending
+
+### Fix #3 — Vectorised insertion loops
+- `insert_ohlcv`: replaced `itertuples()` loop with boolean-mask selection + direct column-wise Arrow array construction (no intermediate DataFrame materialisation)
+- `insert_dividends`: replaced `iterrows()` loop with list-append over sparse input + direct Arrow table
+
+### Fix #4 — Pagination on bulk methods
+- `get_all_latest_company_info(limit, offset)` and `get_all_latest_analysis_summary(limit, offset)` — new optional params
+
+### Fix #5 — TTL currency cache (`backend/tools/_helpers.py`)
+- `_load_currency` now has a module-level 5-minute TTL cache (`_CURRENCY_CACHE` dict) — repeated calls for the same ticker within a request return instantly
+
+### Fix #6 — Deduplicate `_currency_symbol` / `_load_currency`
+- Created `backend/tools/_helpers.py` with single canonical definitions
+- Removed duplicate definitions from `_stock_shared.py`, `_analysis_shared.py`, `_forecast_shared.py`; all three now re-export from `_helpers`
+
+### Fix #7 — ERROR log on auth predicate fallback (`auth/repo/user_reads.py`)
+- `get_by_email` and `get_by_id`: changed `_logger.warning` → `_logger.error` on predicate scan fallback — now visible in alerts vs routine warnings
+
+### Fix #8 — ERROR log on Iceberg write failures
+- Changed from `WARNING` to `ERROR` in all actual write-failure handlers: `stock_data_tool.py` (×4), `price_analysis_tool.py`, `forecasting_tool.py`, `_stock_registry.py`
+- Left `StockRepository unavailable` (init failure) as WARNING — expected in dev without Iceberg
+
+### Fix #9 — Remove unused `_col` function; pre-compute `col_set`
+- `upsert_technical_indicators`: removed dead `_col` inner function; pre-compute `col_set = set(df.columns)` once; column extraction now uses a `_get(canonical, alt)` helper that checks the set once per column
+
+### Fix #10 — Date objects for dedup (not strings)
+- `insert_ohlcv` and `insert_dividends`: existing-date sets now store `date` objects (via `_to_date()`) — eliminates `str()` → parse round-trip and is semantically correct
+
+### Fix #11 — Streaming batch scan in `scan_all_users` (`auth/repo/catalog.py`)
+- Replaced `tbl.scan().to_arrow().to_pylist()` (materialises full table) with iteration over `to_arrow().to_batches()` — peak memory proportional to one batch
+
+### Fix #12 — Catalog singleton; eliminate `os.chdir` side effect (`auth/repo/catalog.py`)
+- `get_catalog` caches the catalog object at module level after first load
+- Primary load uses absolute SQLite URI (no `os.chdir`); fallback restores `cwd` in `finally` block
+
+---
+
 # Session: Mar 1, 2026 — Post-UX polish: 4 bug fixes on feature/refactor-module-split
 
 ## Summary
