@@ -2,6 +2,57 @@
 
 ---
 
+# Session: Mar 1, 2026 — 12 Backend Performance Fixes on feature/gitignore-avatars
+
+## Summary
+Implemented all 12 performance improvements identified in backend review. Tests: 118 total (100 backend+dashboard + 18 frontend); all passing. Committed + pushed to `feature/gitignore-avatars`.
+
+### Fix #1 — Predicate push-down for single-ticker reads (`stocks/repository.py`)
+- Added `_scan_ticker(identifier, ticker)` helper: `EqualTo("ticker", ticker)` predicate scan + full-scan fallback
+- Added `_scan_two_filters(identifier, col1, val1, col2, val2)` for compound filters (`And(EqualTo, EqualTo)`)
+- All single-ticker read methods now use predicate push-down: `get_registry`, `get_latest_company_info`, `get_ohlcv`, `get_latest_ohlcv_date`, `get_dividends`, `get_technical_indicators`, `get_latest_analysis_summary`, `get_analysis_history`, `get_latest_forecast_run`, `get_latest_forecast_series`
+
+### Fix #2 — Single table load per upsert
+- Added `_load_table_and_scan(identifier)` helper returning `(table, dataframe)` tuple
+- `upsert_registry`, `upsert_technical_indicators`, `insert_forecast_series` each load table once then reuse the object — eliminates double catalog round-trip
+- `insert_ohlcv` and `insert_dividends` fetch only the `date`/`ex_date` column via predicate before appending
+
+### Fix #3 — Vectorised insertion loops
+- `insert_ohlcv`: replaced `itertuples()` loop with boolean-mask selection + direct column-wise Arrow array construction (no intermediate DataFrame materialisation)
+- `insert_dividends`: replaced `iterrows()` loop with list-append over sparse input + direct Arrow table
+
+### Fix #4 — Pagination on bulk methods
+- `get_all_latest_company_info(limit, offset)` and `get_all_latest_analysis_summary(limit, offset)` — new optional params
+
+### Fix #5 — TTL currency cache (`backend/tools/_helpers.py`)
+- `_load_currency` now has a module-level 5-minute TTL cache (`_CURRENCY_CACHE` dict) — repeated calls for the same ticker within a request return instantly
+
+### Fix #6 — Deduplicate `_currency_symbol` / `_load_currency`
+- Created `backend/tools/_helpers.py` with single canonical definitions
+- Removed duplicate definitions from `_stock_shared.py`, `_analysis_shared.py`, `_forecast_shared.py`; all three now re-export from `_helpers`
+
+### Fix #7 — ERROR log on auth predicate fallback (`auth/repo/user_reads.py`)
+- `get_by_email` and `get_by_id`: changed `_logger.warning` → `_logger.error` on predicate scan fallback — now visible in alerts vs routine warnings
+
+### Fix #8 — ERROR log on Iceberg write failures
+- Changed from `WARNING` to `ERROR` in all actual write-failure handlers: `stock_data_tool.py` (×4), `price_analysis_tool.py`, `forecasting_tool.py`, `_stock_registry.py`
+- Left `StockRepository unavailable` (init failure) as WARNING — expected in dev without Iceberg
+
+### Fix #9 — Remove unused `_col` function; pre-compute `col_set`
+- `upsert_technical_indicators`: removed dead `_col` inner function; pre-compute `col_set = set(df.columns)` once; column extraction now uses a `_get(canonical, alt)` helper that checks the set once per column
+
+### Fix #10 — Date objects for dedup (not strings)
+- `insert_ohlcv` and `insert_dividends`: existing-date sets now store `date` objects (via `_to_date()`) — eliminates `str()` → parse round-trip and is semantically correct
+
+### Fix #11 — Streaming batch scan in `scan_all_users` (`auth/repo/catalog.py`)
+- Replaced `tbl.scan().to_arrow().to_pylist()` (materialises full table) with iteration over `to_arrow().to_batches()` — peak memory proportional to one batch
+
+### Fix #12 — Catalog singleton; eliminate `os.chdir` side effect (`auth/repo/catalog.py`)
+- `get_catalog` caches the catalog object at module level after first load
+- Primary load uses absolute SQLite URI (no `os.chdir`); fallback restores `cwd` in `finally` block
+
+---
+
 # Session: Mar 1, 2026 — Post-UX polish: 4 bug fixes on feature/refactor-module-split
 
 ## Summary
