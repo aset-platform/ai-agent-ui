@@ -113,6 +113,20 @@ Branch protection (apply manually in GitHub → Settings → Branches):
 - `qa`: PR from `dev` only, 1 approval
 - `dev`: PR from `feature/*`, 1 approval, unit tests + lint must pass
 
+### Before raising any PR (ALWAYS — NO EXCEPTIONS)
+
+Sync the source branch with the target before opening the PR to prevent conflicts:
+
+```bash
+git fetch origin
+git merge origin/<target-branch>   # e.g. origin/dev for feature→dev, origin/qa for dev→qa
+git push origin HEAD
+```
+
+- **Never raise a PR on a branch that is behind the target branch.**
+- Resolve all conflicts locally before creating the PR.
+- This applies to every promotion: `feature→dev`, `dev→qa`, `qa→release`, `release→main`.
+
 ---
 
 ## Architectural Decisions
