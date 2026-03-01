@@ -38,9 +38,10 @@ Usage::
 """
 
 import logging
+import math
 import uuid
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import pyarrow as pa
@@ -89,7 +90,7 @@ def _to_date(value: Any) -> Optional[date]:
 
 
 def _safe_float(value: Any) -> Optional[float]:
-    """Convert *value* to float, returning ``None`` on failure or NaN.
+    """Convert *value* to float, returning ``None`` on failure or NaN/inf.
 
     Args:
         value: Any numeric-like value.
@@ -99,7 +100,6 @@ def _safe_float(value: Any) -> Optional[float]:
     """
     try:
         f = float(value)
-        import math
         return None if math.isnan(f) or math.isinf(f) else f
     except Exception:
         return None
@@ -176,6 +176,90 @@ class StockRepository:
             _logger.warning("Could not read table %s: %s", identifier, exc)
             return pd.DataFrame()
 
+    def _scan_ticker(self, identifier: str, ticker: str) -> pd.DataFrame:
+        """Scan a table filtered to a single ticker using predicate push-down.
+
+        Attempts a server-side ``EqualTo("ticker", ticker)`` predicate first;
+        falls back to a full table scan with Python-level filtering on failure.
+
+        Args:
+            identifier: Fully-qualified table name (e.g. ``"stocks.ohlcv"``).
+            ticker: Stock ticker symbol (already uppercased).
+
+        Returns:
+            DataFrame containing only rows for *ticker*, or an empty DataFrame.
+        """
+        try:
+            from pyiceberg.expressions import EqualTo
+            tbl = self._load_table(identifier)
+            return tbl.scan(row_filter=EqualTo("ticker", ticker)).to_pandas()
+        except Exception as exc:
+            _logger.warning(
+                "Predicate push-down failed for %s ticker=%s (%s); falling back to full scan.",
+                identifier, ticker, exc,
+            )
+            df = self._table_to_df(identifier)
+            if df.empty:
+                return df
+            return df[df["ticker"] == ticker].copy()
+
+    def _scan_two_filters(
+        self,
+        identifier: str,
+        col1: str,
+        val1: Any,
+        col2: str,
+        val2: Any,
+    ) -> pd.DataFrame:
+        """Scan a table with two ``EqualTo`` predicates combined via ``And``.
+
+        Falls back to full scan with Python filter on any predicate failure.
+
+        Args:
+            identifier: Fully-qualified table name.
+            col1: First filter column name.
+            val1: Value for first filter.
+            col2: Second filter column name.
+            val2: Value for second filter.
+
+        Returns:
+            Filtered DataFrame or an empty DataFrame.
+        """
+        try:
+            from pyiceberg.expressions import And, EqualTo
+            tbl = self._load_table(identifier)
+            return tbl.scan(row_filter=And(EqualTo(col1, val1), EqualTo(col2, val2))).to_pandas()
+        except Exception as exc:
+            _logger.warning(
+                "Compound predicate failed for %s (%s); falling back to full scan.",
+                identifier, exc,
+            )
+            df = self._table_to_df(identifier)
+            if df.empty:
+                return df
+            return df[(df[col1] == val1) & (df[col2] == val2)].copy()
+
+    def _load_table_and_scan(self, identifier: str) -> Tuple[Any, pd.DataFrame]:
+        """Load a table and materialise its contents, returning both.
+
+        Avoids the double load that occurs when code calls ``_table_to_df()``
+        followed by ``_load_table()`` on the same identifier.
+
+        Args:
+            identifier: Fully-qualified table name.
+
+        Returns:
+            Tuple of ``(table_object, dataframe)``.  The DataFrame is empty
+            on read failure; the table object is always returned.
+        """
+        tbl = self._load_table(identifier)
+        try:
+            df = tbl.scan().to_pandas()
+        except Exception as exc:
+            _logger.warning("Could not read table %s: %s", identifier, exc)
+            df = pd.DataFrame()
+        return tbl, df
+
     def _append_rows(self, identifier: str, arrow_table: pa.Table) -> None:
         """Append a PyArrow table to an Iceberg table.
 
@@ -202,7 +286,8 @@ class StockRepository:
         """Insert or update the registry row for *ticker*.
 
         Uses copy-on-write: reads full table, updates or appends the row,
-        then overwrites.
+        then overwrites.  Loads the table object only once to avoid a
+        second catalog round-trip.
 
         Args:
             ticker: Stock ticker symbol (already uppercased).
@@ -213,7 +298,8 @@ class StockRepository:
             market: ``"india"`` for .NS/.BO tickers, ``"us"`` otherwise.
         """
         now = _now_utc()
-        df = self._table_to_df(_REGISTRY)
+        # Fix #2: load table once; scan from the same object
+        tbl, df = self._load_table_and_scan(_REGISTRY)
 
         new_row = {
             "ticker": ticker,
@@ -244,7 +330,6 @@ class StockRepository:
             pa.field("updated_at", pa.timestamp("us")),
         ]), preserve_index=False)
 
-        tbl = self._load_table(_REGISTRY)
         tbl.overwrite(arrow_tbl)
         _logger.debug("Registry upserted for %s", ticker)
 
@@ -252,16 +337,15 @@ class StockRepository:
         """Return registry rows, optionally filtered to a single ticker.
 
         Args:
-            ticker: If provided, return only the row for this ticker.
-                    If ``None``, return all rows.
+            ticker: If provided, return only the row for this ticker using
+                    predicate push-down.  If ``None``, return all rows.
 
         Returns:
             pandas DataFrame with registry rows.
         """
-        df = self._table_to_df(_REGISTRY)
-        if ticker and not df.empty:
-            df = df[df["ticker"] == ticker.upper()]
-        return df
+        if ticker:
+            return self._scan_ticker(_REGISTRY, ticker.upper())
+        return self._table_to_df(_REGISTRY)
 
     # ------------------------------------------------------------------
     # Company info
@@ -315,17 +399,23 @@ class StockRepository:
         Returns:
             Dict of company info fields, or ``None`` if no record exists.
         """
-        df = self._table_to_df(_COMPANY_INFO)
-        if df.empty:
-            return None
-        df = df[df["ticker"] == ticker.upper()]
+        df = self._scan_ticker(_COMPANY_INFO, ticker.upper())
         if df.empty:
             return None
         latest = df.sort_values("fetched_at", ascending=False).iloc[0]
         return latest.to_dict()
 
-    def get_all_latest_company_info(self) -> pd.DataFrame:
+    def get_all_latest_company_info(
+        self,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> pd.DataFrame:
         """Return the most recent snapshot for every ticker.
+
+        Args:
+            limit: Maximum number of rows to return after grouping.
+                   ``None`` returns all rows.
+            offset: Number of rows to skip (for pagination).
 
         Returns:
             DataFrame with one row per ticker (latest ``fetched_at``).
@@ -333,11 +423,16 @@ class StockRepository:
         df = self._table_to_df(_COMPANY_INFO)
         if df.empty:
             return df
-        return (
+        result = (
             df.sort_values("fetched_at", ascending=False)
             .groupby("ticker", as_index=False)
             .first()
         )
+        if offset:
+            result = result.iloc[offset:]
+        if limit is not None:
+            result = result.iloc[:limit]
+        return result
 
     # ------------------------------------------------------------------
     # OHLCV
@@ -345,6 +440,10 @@ class StockRepository:
 
     def insert_ohlcv(self, ticker: str, df: pd.DataFrame) -> int:
         """Append new OHLCV rows for *ticker*, skipping existing (ticker, date) pairs.
+
+        Uses predicate push-down to fetch only existing dates for this ticker,
+        avoiding a full table scan.  Deduplication uses :class:`datetime.date`
+        objects (not string conversion) for correctness and speed.
 
         Args:
             ticker: Stock ticker symbol (already uppercased).
@@ -357,54 +456,67 @@ class StockRepository:
         if df.empty:
             return 0
 
-        # Normalise index to date
-        dates = pd.to_datetime(df.index).date
+        # Normalise index to date objects (Fix #10: use date objects not strings)
+        all_dates = pd.to_datetime(df.index).date  # numpy array of date objects
 
-        # Find already-stored dates to skip duplicates
-        existing_df = self._table_to_df(_OHLCV)
-        if not existing_df.empty:
-            existing_dates = set(
-                existing_df[existing_df["ticker"] == ticker]["date"].astype(str)
+        # Fix #1 + #2: load table once; predicate push-down for existing dates
+        try:
+            from pyiceberg.expressions import EqualTo
+            tbl = self._load_table(_OHLCV)
+            existing_arrow = tbl.scan(
+                row_filter=EqualTo("ticker", ticker),
+                selected_fields=("date",),
+            ).to_arrow()
+            if len(existing_arrow) > 0:
+                existing_dates: set = {
+                    _to_date(d) for d in existing_arrow["date"].to_pylist()
+                }
+            else:
+                existing_dates = set()
+        except Exception as exc:
+            _logger.warning(
+                "OHLCV predicate scan failed for %s (%s); falling back.", ticker, exc
             )
-        else:
-            existing_dates = set()
+            tbl = self._load_table(_OHLCV)
+            full_df = tbl.scan().to_pandas()
+            if not full_df.empty:
+                mask = full_df["ticker"] == ticker
+                existing_dates = {
+                    _to_date(d) for d in full_df.loc[mask, "date"]
+                }
+            else:
+                existing_dates = set()
 
-        rows = []
-        now = _now_utc()
-        for i, (dt, row) in enumerate(zip(dates, df.itertuples())):
-            if str(dt) in existing_dates:
-                continue
-            rows.append({
-                "ticker": ticker,
-                "date": dt,
-                "open": _safe_float(row.Open),
-                "high": _safe_float(row.High),
-                "low": _safe_float(row.Low),
-                "close": _safe_float(row.Close),
-                "adj_close": _safe_float(getattr(row, "Adj_Close", None) or getattr(row, "Adj Close", None)),
-                "volume": _safe_int(row.Volume),
-                "fetched_at": now,
-            })
-
-        if not rows:
+        # Fix #3: vectorised new-row selection using boolean mask
+        keep = [d not in existing_dates for d in all_dates]
+        if not any(keep):
             _logger.debug("No new OHLCV rows to insert for %s", ticker)
             return 0
 
-        new_df = pd.DataFrame(rows)
+        keep_indices = [i for i, k in enumerate(keep) if k]
+        new_dates = [all_dates[i] for i in keep_indices]
+        filtered = df.iloc[keep_indices]
+        now = _now_utc()
+
+        adj_col = "Adj Close" if "Adj Close" in filtered.columns else None
+
         arrow_tbl = pa.table({
-            "ticker": pa.array(new_df["ticker"].tolist(), pa.string()),
-            "date": pa.array(new_df["date"].tolist(), pa.date32()),
-            "open": pa.array(new_df["open"].tolist(), pa.float64()),
-            "high": pa.array(new_df["high"].tolist(), pa.float64()),
-            "low": pa.array(new_df["low"].tolist(), pa.float64()),
-            "close": pa.array(new_df["close"].tolist(), pa.float64()),
-            "adj_close": pa.array(new_df["adj_close"].tolist(), pa.float64()),
-            "volume": pa.array(new_df["volume"].tolist(), pa.int64()),
-            "fetched_at": pa.array(new_df["fetched_at"].tolist(), pa.timestamp("us")),
+            "ticker": pa.array([ticker] * len(new_dates), pa.string()),
+            "date": pa.array(new_dates, pa.date32()),
+            "open": pa.array([_safe_float(v) for v in filtered["Open"]], pa.float64()),
+            "high": pa.array([_safe_float(v) for v in filtered["High"]], pa.float64()),
+            "low": pa.array([_safe_float(v) for v in filtered["Low"]], pa.float64()),
+            "close": pa.array([_safe_float(v) for v in filtered["Close"]], pa.float64()),
+            "adj_close": pa.array(
+                [_safe_float(v) for v in (filtered[adj_col] if adj_col else [None] * len(filtered))],
+                pa.float64(),
+            ),
+            "volume": pa.array([_safe_int(v) for v in filtered["Volume"]], pa.int64()),
+            "fetched_at": pa.array([now] * len(new_dates), pa.timestamp("us")),
         })
-        self._append_rows(_OHLCV, arrow_tbl)
-        _logger.debug("Inserted %d new OHLCV rows for %s", len(rows), ticker)
-        return len(rows)
+        tbl.append(arrow_tbl)
+        _logger.debug("Inserted %d new OHLCV rows for %s", len(new_dates), ticker)
+        return len(new_dates)
 
     def get_ohlcv(
         self,
@@ -423,10 +535,9 @@ class StockRepository:
             DataFrame sorted by date ascending with columns:
             ticker, date, open, high, low, close, adj_close, volume.
         """
-        df = self._table_to_df(_OHLCV)
+        df = self._scan_ticker(_OHLCV, ticker.upper())
         if df.empty:
             return df
-        df = df[df["ticker"] == ticker.upper()].copy()
         if start:
             df = df[pd.to_datetime(df["date"]).dt.date >= start]
         if end:
@@ -444,10 +555,7 @@ class StockRepository:
         Returns:
             :class:`datetime.date` or ``None`` if no data exists.
         """
-        df = self._table_to_df(_OHLCV)
-        if df.empty:
-            return None
-        df = df[df["ticker"] == ticker.upper()]
+        df = self._scan_ticker(_OHLCV, ticker.upper())
         if df.empty:
             return None
         latest = pd.to_datetime(df["date"]).max()
@@ -462,6 +570,9 @@ class StockRepository:
     ) -> int:
         """Append dividend rows for *ticker*, skipping existing (ticker, ex_date) pairs.
 
+        Uses predicate push-down for the existing-date check.  Deduplication
+        uses :class:`datetime.date` objects (not string conversion).
+
         Args:
             ticker: Stock ticker symbol.
             df: DataFrame with columns ``date`` and ``dividend`` (from yfinance).
@@ -474,41 +585,63 @@ class StockRepository:
         if df.empty:
             return 0
 
-        existing_df = self._table_to_df(_DIVIDENDS)
-        if not existing_df.empty:
-            existing_dates = set(
-                existing_df[existing_df["ticker"] == ticker]["ex_date"].astype(str)
+        # Fix #1 + #2: load table once; predicate push-down for existing ex_dates
+        try:
+            from pyiceberg.expressions import EqualTo
+            tbl = self._load_table(_DIVIDENDS)
+            existing_arrow = tbl.scan(
+                row_filter=EqualTo("ticker", ticker),
+                selected_fields=("ex_date",),
+            ).to_arrow()
+            if len(existing_arrow) > 0:
+                existing_dates: set = {
+                    _to_date(d) for d in existing_arrow["ex_date"].to_pylist()
+                }
+            else:
+                existing_dates = set()
+        except Exception as exc:
+            _logger.warning(
+                "Dividends predicate scan failed for %s (%s); falling back.", ticker, exc
             )
-        else:
-            existing_dates = set()
-        now = _now_utc()
-        rows = []
-        for _, row in df.iterrows():
-            ex_dt = _to_date(row.get("date", row.name))
-            if ex_dt is None or str(ex_dt) in existing_dates:
-                continue
-            rows.append({
-                "ticker": ticker,
-                "ex_date": ex_dt,
-                "dividend_amount": _safe_float(row.get("dividend", row.iloc[0])),
-                "currency": currency,
-                "fetched_at": now,
-            })
+            tbl = self._load_table(_DIVIDENDS)
+            full_df = tbl.scan().to_pandas()
+            if not full_df.empty:
+                mask = full_df["ticker"] == ticker
+                existing_dates = {_to_date(d) for d in full_df.loc[mask, "ex_date"]}
+            else:
+                existing_dates = set()
 
-        if not rows:
+        now = _now_utc()
+        # Fix #3: build lists directly without iterrows materialising full rows
+        tickers_out: List[str] = []
+        ex_dates_out: List[date] = []
+        amounts_out: List[Optional[float]] = []
+        currencies_out: List[str] = []
+        fetched_at_out: List[datetime] = []
+
+        for idx, row in df.iterrows():
+            ex_dt = _to_date(row.get("date", idx))
+            if ex_dt is None or ex_dt in existing_dates:
+                continue
+            tickers_out.append(ticker)
+            ex_dates_out.append(ex_dt)
+            amounts_out.append(_safe_float(row.get("dividend", row.iloc[0])))
+            currencies_out.append(currency)
+            fetched_at_out.append(now)
+
+        if not tickers_out:
             return 0
 
-        new_df = pd.DataFrame(rows)
         arrow_tbl = pa.table({
-            "ticker": pa.array(new_df["ticker"].tolist(), pa.string()),
-            "ex_date": pa.array(new_df["ex_date"].tolist(), pa.date32()),
-            "dividend_amount": pa.array(new_df["dividend_amount"].tolist(), pa.float64()),
-            "currency": pa.array(new_df["currency"].tolist(), pa.string()),
-            "fetched_at": pa.array(new_df["fetched_at"].tolist(), pa.timestamp("us")),
+            "ticker": pa.array(tickers_out, pa.string()),
+            "ex_date": pa.array(ex_dates_out, pa.date32()),
+            "dividend_amount": pa.array(amounts_out, pa.float64()),
+            "currency": pa.array(currencies_out, pa.string()),
+            "fetched_at": pa.array(fetched_at_out, pa.timestamp("us")),
         })
-        self._append_rows(_DIVIDENDS, arrow_tbl)
-        _logger.debug("Inserted %d new dividend rows for %s", len(rows), ticker)
-        return len(rows)
+        tbl.append(arrow_tbl)
+        _logger.debug("Inserted %d new dividend rows for %s", len(tickers_out), ticker)
+        return len(tickers_out)
 
     def get_dividends(self, ticker: str) -> pd.DataFrame:
         """Return dividend history for *ticker* sorted by ex_date ascending.
@@ -519,14 +652,10 @@ class StockRepository:
         Returns:
             DataFrame with columns: ticker, ex_date, dividend_amount, currency.
         """
-        df = self._table_to_df(_DIVIDENDS)
+        df = self._scan_ticker(_DIVIDENDS, ticker.upper())
         if df.empty:
             return df
-        return (
-            df[df["ticker"] == ticker.upper()]
-            .sort_values("ex_date")
-            .reset_index(drop=True)
-        )
+        return df.sort_values("ex_date").reset_index(drop=True)
 
     # ------------------------------------------------------------------
     # Technical indicators
@@ -550,80 +679,50 @@ class StockRepository:
         now = _now_utc()
         dates = pd.to_datetime(df.index).date
 
-        rows = {
-            "ticker": [],
-            "date": [],
-            "sma_50": [],
-            "sma_200": [],
-            "ema_20": [],
-            "rsi_14": [],
-            "macd": [],
-            "macd_signal": [],
-            "macd_hist": [],
-            "bb_upper": [],
-            "bb_middle": [],
-            "bb_lower": [],
-            "atr_14": [],
-            "daily_return": [],
-            "computed_at": [],
-        }
+        # Fix #9: pre-compute column set once (avoid repeated O(cols) lookup)
+        col_set = set(df.columns)
 
-        def _col(name: str) -> Optional[float]:
-            """Extract column value by name, tolerating missing columns."""
-            if name in df.columns:
-                return _safe_float(row_vals.get(name))
-            return None
+        def _get(canonical: str, alt: str) -> List[Optional[float]]:
+            """Extract a column by canonical or alternate name."""
+            col = canonical if canonical in col_set else (alt if alt in col_set else None)
+            if col is None:
+                return [None] * len(df)
+            return [_safe_float(v) for v in df[col]]
 
-        for dt, (_, row_series) in zip(dates, df.iterrows()):
-            row_vals = row_series.to_dict()
-            rows["ticker"].append(ticker)
-            rows["date"].append(dt)
-            rows["sma_50"].append(_safe_float(row_vals.get("SMA_50") or row_vals.get("sma_50")))
-            rows["sma_200"].append(_safe_float(row_vals.get("SMA_200") or row_vals.get("sma_200")))
-            rows["ema_20"].append(_safe_float(row_vals.get("EMA_20") or row_vals.get("ema_20")))
-            rows["rsi_14"].append(_safe_float(row_vals.get("RSI_14") or row_vals.get("rsi_14")))
-            rows["macd"].append(_safe_float(row_vals.get("MACD") or row_vals.get("macd")))
-            rows["macd_signal"].append(_safe_float(row_vals.get("MACD_Signal") or row_vals.get("macd_signal")))
-            rows["macd_hist"].append(_safe_float(row_vals.get("MACD_Hist") or row_vals.get("macd_hist")))
-            rows["bb_upper"].append(_safe_float(row_vals.get("BB_Upper") or row_vals.get("bb_upper")))
-            rows["bb_middle"].append(_safe_float(row_vals.get("BB_Middle") or row_vals.get("bb_middle")))
-            rows["bb_lower"].append(_safe_float(row_vals.get("BB_Lower") or row_vals.get("bb_lower")))
-            rows["atr_14"].append(_safe_float(row_vals.get("ATR_14") or row_vals.get("atr_14")))
-            rows["daily_return"].append(_safe_float(row_vals.get("daily_return")))
-            rows["computed_at"].append(now)
-
+        # Fix #9: remove unused inner _col function; build arrays column-wise
         arrow_tbl = pa.table({
-            "ticker": pa.array(rows["ticker"], pa.string()),
-            "date": pa.array(rows["date"], pa.date32()),
-            "sma_50": pa.array(rows["sma_50"], pa.float64()),
-            "sma_200": pa.array(rows["sma_200"], pa.float64()),
-            "ema_20": pa.array(rows["ema_20"], pa.float64()),
-            "rsi_14": pa.array(rows["rsi_14"], pa.float64()),
-            "macd": pa.array(rows["macd"], pa.float64()),
-            "macd_signal": pa.array(rows["macd_signal"], pa.float64()),
-            "macd_hist": pa.array(rows["macd_hist"], pa.float64()),
-            "bb_upper": pa.array(rows["bb_upper"], pa.float64()),
-            "bb_middle": pa.array(rows["bb_middle"], pa.float64()),
-            "bb_lower": pa.array(rows["bb_lower"], pa.float64()),
-            "atr_14": pa.array(rows["atr_14"], pa.float64()),
-            "daily_return": pa.array(rows["daily_return"], pa.float64()),
-            "computed_at": pa.array(rows["computed_at"], pa.timestamp("us")),
+            "ticker": pa.array([ticker] * len(dates), pa.string()),
+            "date": pa.array(list(dates), pa.date32()),
+            "sma_50": pa.array(_get("SMA_50", "sma_50"), pa.float64()),
+            "sma_200": pa.array(_get("SMA_200", "sma_200"), pa.float64()),
+            "ema_20": pa.array(_get("EMA_20", "ema_20"), pa.float64()),
+            "rsi_14": pa.array(_get("RSI_14", "rsi_14"), pa.float64()),
+            "macd": pa.array(_get("MACD", "macd"), pa.float64()),
+            "macd_signal": pa.array(_get("MACD_Signal", "macd_signal"), pa.float64()),
+            "macd_hist": pa.array(_get("MACD_Hist", "macd_hist"), pa.float64()),
+            "bb_upper": pa.array(_get("BB_Upper", "bb_upper"), pa.float64()),
+            "bb_middle": pa.array(_get("BB_Middle", "bb_middle"), pa.float64()),
+            "bb_lower": pa.array(_get("BB_Lower", "bb_lower"), pa.float64()),
+            "atr_14": pa.array(_get("ATR_14", "atr_14"), pa.float64()),
+            "daily_return": pa.array(
+                [_safe_float(v) for v in df["daily_return"]] if "daily_return" in col_set else [None] * len(df),
+                pa.float64(),
+            ),
+            "computed_at": pa.array([now] * len(dates), pa.timestamp("us")),
         })
 
-        # Remove existing rows for this ticker then append fresh data
-        existing = self._table_to_df(_TECHNICAL_INDICATORS)
+        # Fix #2: load table once; remove existing ticker rows then overwrite
+        tbl, existing = self._load_table_and_scan(_TECHNICAL_INDICATORS)
         if not existing.empty:
             existing = existing[existing["ticker"] != ticker]
-            # Rebuild full table without this ticker, then append new rows
             rebuilt = pa.Table.from_pandas(existing, schema=arrow_tbl.schema,
                                            preserve_index=False)
             combined = pa.concat_tables([rebuilt, arrow_tbl])
-            tbl = self._load_table(_TECHNICAL_INDICATORS)
             tbl.overwrite(combined)
         else:
-            self._append_rows(_TECHNICAL_INDICATORS, arrow_tbl)
+            tbl.append(arrow_tbl)
 
-        _logger.debug("Technical indicators upserted for %s (%d rows)", ticker, len(rows["ticker"]))
+        _logger.debug("Technical indicators upserted for %s (%d rows)", ticker, len(dates))
 
     def get_technical_indicators(
         self,
@@ -641,10 +740,9 @@ class StockRepository:
         Returns:
             DataFrame sorted by date ascending.
         """
-        df = self._table_to_df(_TECHNICAL_INDICATORS)
+        df = self._scan_ticker(_TECHNICAL_INDICATORS, ticker.upper())
         if df.empty:
             return df
-        df = df[df["ticker"] == ticker.upper()].copy()
         if start:
             df = df[pd.to_datetime(df["date"]).dt.date >= start]
         if end:
@@ -703,16 +801,22 @@ class StockRepository:
         Returns:
             Dict of analysis fields, or ``None`` if no record exists.
         """
-        df = self._table_to_df(_ANALYSIS_SUMMARY)
-        if df.empty:
-            return None
-        df = df[df["ticker"] == ticker.upper()]
+        df = self._scan_ticker(_ANALYSIS_SUMMARY, ticker.upper())
         if df.empty:
             return None
         return df.sort_values("analysis_date", ascending=False).iloc[0].to_dict()
 
-    def get_all_latest_analysis_summary(self) -> pd.DataFrame:
+    def get_all_latest_analysis_summary(
+        self,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> pd.DataFrame:
         """Return the most recent analysis summary snapshot for every ticker.
+
+        Args:
+            limit: Maximum number of rows to return after grouping.
+                   ``None`` returns all rows.
+            offset: Number of rows to skip (for pagination).
 
         Returns:
             DataFrame with one row per ticker (latest ``analysis_date``),
@@ -721,11 +825,16 @@ class StockRepository:
         df = self._table_to_df(_ANALYSIS_SUMMARY)
         if df.empty:
             return df
-        return (
+        result = (
             df.sort_values("analysis_date", ascending=False)
             .groupby("ticker", as_index=False)
             .first()
         )
+        if offset:
+            result = result.iloc[offset:]
+        if limit is not None:
+            result = result.iloc[:limit]
+        return result
 
     def get_analysis_history(self, ticker: str) -> pd.DataFrame:
         """Return all analysis summary rows for *ticker* sorted by date ascending.
@@ -736,14 +845,10 @@ class StockRepository:
         Returns:
             DataFrame sorted by analysis_date.
         """
-        df = self._table_to_df(_ANALYSIS_SUMMARY)
+        df = self._scan_ticker(_ANALYSIS_SUMMARY, ticker.upper())
         if df.empty:
             return df
-        return (
-            df[df["ticker"] == ticker.upper()]
-            .sort_values("analysis_date")
-            .reset_index(drop=True)
-        )
+        return df.sort_values("analysis_date").reset_index(drop=True)
 
     # ------------------------------------------------------------------
     # Forecast runs
@@ -805,13 +910,9 @@ class StockRepository:
         Returns:
             Dict of forecast run fields, or ``None`` if no record exists.
         """
-        df = self._table_to_df(_FORECAST_RUNS)
-        if df.empty:
-            return None
-        df = df[
-            (df["ticker"] == ticker.upper()) &
-            (df["horizon_months"] == int(horizon_months))
-        ]
+        df = self._scan_two_filters(
+            _FORECAST_RUNS, "ticker", ticker.upper(), "horizon_months", int(horizon_months)
+        )
         if df.empty:
             return None
         return df.sort_values("run_date", ascending=False).iloc[0].to_dict()
@@ -830,7 +931,8 @@ class StockRepository:
         """Append the full Prophet output series for a forecast run.
 
         Drops any existing rows for the same ``(ticker, horizon_months, run_date)``
-        before inserting to keep the table clean on re-runs.
+        before inserting to keep the table clean on re-runs.  Loads the table
+        object only once to avoid a second catalog round-trip.
 
         Args:
             ticker: Stock ticker symbol.
@@ -844,15 +946,17 @@ class StockRepository:
 
         run_date = _to_date(run_date)
 
-        # Remove existing rows for this exact run
-        existing = self._table_to_df(_FORECASTS)
+        # Fix #2: load table once; filter existing in-memory
+        tbl, existing = self._load_table_and_scan(_FORECASTS)
+
         if not existing.empty:
-            mask = (
-                (existing["ticker"] == ticker) &
-                (existing["horizon_months"] == int(horizon_months)) &
-                (existing["run_date"].astype(str) == str(run_date))
-            )
-            existing = existing[~mask]
+            # Fix #10: compare date objects directly
+            run_date_vals = [_to_date(d) for d in existing["run_date"]]
+            mask = [
+                t == ticker and h == int(horizon_months) and d == run_date
+                for t, h, d in zip(existing["ticker"], existing["horizon_months"], run_date_vals)
+            ]
+            existing = existing[[not m for m in mask]]
 
         new_rows = {
             "ticker": [ticker] * len(forecast_df),
@@ -878,10 +982,9 @@ class StockRepository:
             arrow_existing = pa.Table.from_pandas(existing, schema=arrow_new.schema,
                                                   preserve_index=False)
             combined = pa.concat_tables([arrow_existing, arrow_new])
-            tbl = self._load_table(_FORECASTS)
             tbl.overwrite(combined)
         else:
-            self._append_rows(_FORECASTS, arrow_new)
+            tbl.append(arrow_new)
 
         _logger.debug(
             "forecast_series inserted for %s %dm run %s (%d rows)",
@@ -901,13 +1004,9 @@ class StockRepository:
             DataFrame with columns: forecast_date, predicted_price,
             lower_bound, upper_bound — sorted by forecast_date.
         """
-        df = self._table_to_df(_FORECASTS)
-        if df.empty:
-            return df
-        df = df[
-            (df["ticker"] == ticker.upper()) &
-            (df["horizon_months"] == int(horizon_months))
-        ]
+        df = self._scan_two_filters(
+            _FORECASTS, "ticker", ticker.upper(), "horizon_months", int(horizon_months)
+        )
         if df.empty:
             return df
         latest_run = df["run_date"].max()

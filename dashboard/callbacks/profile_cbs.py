@@ -1,4 +1,3 @@
-dashboard/callbacks/profile_cbs.py
 """Profile store callback for the dashboard.
 
 Handles:

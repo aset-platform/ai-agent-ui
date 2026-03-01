@@ -10,14 +10,19 @@ The backend is a Python FastAPI server that runs an agentic loop powered by Lang
 main.py              Entry point. ChatServer class owns all state.
  ├── config.py       Pydantic Settings — env vars + .env file
  ├── logging_config.py setup_logging() — console + rotating file
+ ├── llm_fallback.py  FallbackLLM — Groq primary, Anthropic fallback
  ├── tools/
  │    ├── registry.py   ToolRegistry — maps names → BaseTool instances
  │    ├── time_tool.py  get_current_time @tool
  │    └── search_tool.py search_web @tool
  └── agents/
       ├── registry.py      AgentRegistry — maps agent_id → BaseAgent instances
-      ├── base.py          AgentConfig dataclass + BaseAgent ABC (agentic loop)
-      └── general_agent.py GeneralAgent(BaseAgent) + create_general_agent factory
+      ├── base.py          BaseAgent ABC
+      ├── config.py        AgentConfig dataclass
+      ├── loop.py          Agentic loop logic (MAX_ITERATIONS=15)
+      ├── stream.py        NDJSON streaming support
+      ├── general_agent.py GeneralAgent(BaseAgent) + create_general_agent factory
+      └── stock_agent.py   StockAgent(BaseAgent) + create_stock_agent factory
 ```
 
 ### Dependency Rules
@@ -25,7 +30,7 @@ main.py              Entry point. ChatServer class owns all state.
 - `config.py` and `logging_config.py` have **no internal imports** — they only use the stdlib and third-party libraries.
 - `tools/*` modules do not import from `agents/*`.
 - `agents/base.py` imports `tools.registry.ToolRegistry` (for tool lookup during the loop).
-- `agents/general_agent.py` imports from `agents/base.py` and the LLM provider (`langchain_groq`).
+- `agents/general_agent.py` imports from `agents/base.py` and the LLM provider (`langchain_anthropic`).
 - `main.py` is the only module that imports from all layers and wires them together.
 
 ---
@@ -55,11 +60,11 @@ ChatServer.__init__(settings)
  ├── AgentRegistry()                   ← empty registry created
  ├── _register_agents()
  │    └── create_general_agent(tool_registry)
- │         ├── AgentConfig(agent_id="general", model="openai/gpt-oss-120b",
+ │         ├── AgentConfig(agent_id="general", model="claude-sonnet-4-6",
  │         │               tool_names=["get_current_time", "search_web"], ...)
  │         └── GeneralAgent(config, tool_registry)
  │              └── _setup()
- │                   ├── _build_llm() → ChatGroq(model=..., temperature=...)
+ │                   ├── _build_llm() → ChatAnthropic(model=..., temperature=...)
  │                   ├── tool_registry.get_tools(["get_current_time", "search_web"])
  │                   └── llm.bind_tools(tools)  ← bakes tool schemas into LLM
  │

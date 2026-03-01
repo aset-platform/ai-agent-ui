@@ -9,20 +9,14 @@
 # Checks (in order):
 #   1. Code quality  — bare print(), Google docstrings, naming conventions,
 #                      OOP patterns, XSS + SQL-injection risks.
-#                      Issues are auto-fixed via Claude when ANTHROPIC_API_KEY
-#                      is set; fixed files are re-staged transparently.
-#   2. Meta-files    — CLAUDE.md, PROGRESS.md, and README.md are reviewed
-#                      against the staged diff and updated if stale.
-#   3. Docs          — Relevant docs/ pages are patched when their source
-#                      files are staged.
-#   4. Changelog     — docs/dev/changelog.md H2 date headings are verified
+#                      Errors block the commit; warnings are reported only.
+#   2. MkDocs build  — verifies that the documentation site builds cleanly.
+#   3. Changelog     — docs/dev/changelog.md H2 date headings are verified
 #                      to be in descending order (newest first); reordered
-#                      automatically if needed.  Always runs; no API required.
+#                      automatically if needed.
 #
 # Environment variables:
-#   SKIP_PRE_COMMIT=1       bypass the entire hook
-#   SKIP_CLAUDE_CHECKS=1    run only static checks (no API calls)
-#   ANTHROPIC_API_KEY=<k>   enables LLM-powered auto-fix and doc updates (already in backend/.env)
+#   SKIP_PRE_COMMIT=1   bypass the entire hook
 #
 # Install (one-time):
 #   cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit

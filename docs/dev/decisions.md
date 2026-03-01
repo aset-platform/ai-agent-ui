@@ -34,9 +34,9 @@ Putting the loop in `BaseAgent` and making `_build_llm()` abstract means:
 - Switching from Groq to Claude requires changing two lines in one file (`general_agent.py`), not rewriting the loop.
 - Adding a new agent with a different LLM takes ~10 lines of code.
 
-### Switching back to Claude (not yet done)
+### Claude Sonnet 4.6 is the active LLM
 
-The intended LLM is Claude Sonnet 4.6. Groq (`openai/gpt-oss-120b`) is a temporary substitute while Anthropic API access is being resolved. The two-line switch is documented in [How to Run](how-to-run.md) and in the `general_agent.py` source file.
+Both `GeneralAgent` and `StockAgent` now use `langchain_anthropic.ChatAnthropic` with `model="claude-sonnet-4-6"`. Set `ANTHROPIC_API_KEY` in `backend/.env`. The `FallbackLLM` wrapper in `backend/llm_fallback.py` attempts Groq first (if `GROQ_API_KEY` is set) and falls back to Anthropic on `RateLimitError` or `APIConnectionError`.
 
 ---
 
@@ -169,16 +169,22 @@ Without a guard, a misbehaving LLM could call tools indefinitely. `MAX_ITERATION
 
 ### Session persistence via localStorage
 
-Chat history previously lived only in React state and was lost on page refresh. Two `useEffect` hooks now persist it:
+Chat history previously lived only in React state and was lost on page refresh. `useChatHistory` now persists it:
 
 1. **Load on mount** — reads `"chat_histories"` from `localStorage`, revives `Date` objects with `new Date(m.timestamp)` (needed because `JSON.stringify` serialises `Date` as ISO strings).
-2. **Save on change** — writes `histories` on every state update.
+2. **Save on change (debounced 1 s)** — a `setTimeout` ref debounces writes so streaming tokens don't hammer `localStorage` on every character. The timer is cleared on unmount.
 
-The clear button calls `setMessages([])`, which triggers the save effect automatically — no explicit `localStorage.removeItem()` needed. Other agents' histories are preserved when clearing one agent.
+The clear button calls `setMessages([])`, which triggers the debounced save automatically. Other agents' histories are preserved when clearing one agent.
 
-### Single-file component (page.tsx)
+### Modular components + hooks (page.tsx as composition shell)
 
-The entire chat UI — state, handlers, and rendering — lives in one file. For a single-page app with one feature, this is appropriate. The overhead of splitting into multiple components and files would add complexity without benefit at this scale.
+The chat UI was initially a single `page.tsx` file. It has since been refactored into:
+
+- `frontend/hooks/` — five custom hooks own state and side-effects (`useAuthGuard`, `useChatHistory`, `useSendMessage`, `useEditProfile`, `useChangePassword`).
+- `frontend/components/` — nine presentational components (`ChatHeader`, `ChatInput`, `MessageBubble`, `MarkdownContent`, `NavigationMenu`, `IFrameView`, `StatusBadge`, `EditProfileModal`, `ChangePasswordModal`).
+- `page.tsx` — a slim composition shell that wires hooks and components together.
+
+This separation makes each unit individually testable and keeps the root file readable as the app grows.
 
 ### Per-agent chat history (histories record instead of single messages array)
 

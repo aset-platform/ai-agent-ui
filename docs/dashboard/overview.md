@@ -35,7 +35,7 @@ Each card shows:
 - **10Y Return** — total return since the first available row
 - **AI Sentiment** badge — Bullish / Neutral / Bearish derived from the latest Prophet forecast
 
-A search box and dropdown let you jump directly to the Analysis page for any ticker. Cards refresh automatically every 5 minutes via a `dcc.Interval`.
+A search box and dropdown let you jump directly to the Analysis page for any ticker. Cards refresh automatically every 30 minutes via a `dcc.Interval`.
 
 #### Market filter
 
@@ -155,12 +155,27 @@ Side-by-side comparison of 2–5 stocks.
 
 ```
 dashboard/
-├── __init__.py       # Package init
-├── app.py            # Dash app, FLATLY light theme, routing callback, gunicorn server attr
-├── layouts.py        # Stateless page-layout factories + global NAVBAR
-├── callbacks.py      # All interactive callbacks (register_callbacks factory)
+├── __init__.py          # Package init
+├── app.py               # Dash app, FLATLY light theme, gunicorn server attr
+├── app_layout.py        # Root layout + display_page routing callback
+├── layouts/             # Stateless page-layout factories (package)
+│   ├── home.py          # Home cards + market filter + pagination
+│   ├── analysis.py      # Technical analysis chart layout + ticker cache
+│   ├── insights_tabs.py # Screener/Targets/Dividends/Risk/Sectors/Correlation tabs
+│   ├── admin.py         # User management + audit log layout
+│   └── navbar.py        # Global navbar
+├── callbacks/           # Interactive callbacks (package)
+│   ├── data_loaders.py  # Parquet + Iceberg reads, TTL indicator cache
+│   ├── chart_builders.py # Plotly figure construction
+│   ├── home_cbs.py      # Home page callbacks
+│   ├── analysis_cbs.py  # Analysis + Compare callbacks
+│   ├── insights_cbs.py  # All Insights tab callbacks
+│   ├── admin_cbs.py     # User table callbacks
+│   ├── admin_cbs2.py    # Add/Edit/Deactivate user modals
+│   ├── iceberg.py       # Iceberg repo singleton + TTL cached helpers
+│   └── utils.py         # Shared utilities (currency TTL cache, market label)
 └── assets/
-    └── custom.css    # Light theme styles (gray-50 bg, white cards, indigo accent)
+    └── custom.css       # Light theme styles (gray-50 bg, white cards, indigo accent)
 ```
 
 ### Data flow

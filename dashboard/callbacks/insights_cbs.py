@@ -1,4 +1,3 @@
-dashboard/callbacks/insights_cbs.py
 """Insights-page Dash callbacks for the AI Stock Analysis Dashboard.
 
 Registers callbacks for the Screener, Price Targets, Dividends, Risk Metrics,
@@ -22,7 +21,11 @@ import plotly.graph_objects as go
 from dash import Input, Output, html, no_update
 
 from dashboard.callbacks.data_loaders import _DATA_RAW, _REGISTRY_PATH
-from dashboard.callbacks.iceberg import _get_iceberg_repo
+from dashboard.callbacks.iceberg import (
+    _get_analysis_summary_cached,
+    _get_company_info_cached,
+    _get_iceberg_repo,
+)
 
 # Module-level logger; kept at module scope as a private-style name per convention.
 _logger = logging.getLogger(__name__)
@@ -69,8 +72,9 @@ def register(app) -> None:
         repo = _get_iceberg_repo()
         df = pd.DataFrame()
 
+        # Fix #6: use TTL-cached read to avoid repeated Iceberg scans
         if repo is not None:
-            df = repo.get_all_latest_analysis_summary()
+            df = _get_analysis_summary_cached(repo)
 
         # Fallback: compute from flat parquet files if Iceberg table is empty
         if df.empty:
@@ -123,12 +127,13 @@ def register(app) -> None:
                 "", 1,
             )
 
-        # Market filter using registry
+        # Fix #16: vectorised market filter with .str.endswith()
         if market_filter != "all":
-            def _mkt(t: str) -> str:
-                return "india" if str(t).upper().endswith((".NS", ".BO")) else "us"
-            df = df[df["ticker"].apply(_mkt) == market_filter]
-            df = df.reset_index(drop=True)
+            if market_filter == "india":
+                mask = df["ticker"].str.endswith((".NS", ".BO"))
+            else:
+                mask = ~df["ticker"].str.endswith((".NS", ".BO"))
+            df = df[mask].reset_index(drop=True)
 
         # RSI filter
         if rsi_filter != "all":
@@ -186,10 +191,11 @@ def register(app) -> None:
                     display_df[num_col], errors="coerce"
                 ).round(2)
 
+        # Fix #5: replace iterrows() with to_dict("records") for faster iteration
         rows_html = []
-        for _, row in display_df.iterrows():
+        for record in display_df.to_dict("records"):
             cells = []
-            for col, val in row.items():
+            for col, val in record.items():
                 badge_class = ""
                 if col == "RSI Signal":
                     badge_class = (
@@ -259,6 +265,7 @@ def register(app) -> None:
         if active_tab != "targets-tab":
             return no_update, no_update, no_update
 
+        # Fix #13: use _get_iceberg_repo() instead of raw load_catalog() call
         repo = _get_iceberg_repo()
         if repo is None:
             return dbc.Alert(
@@ -266,10 +273,7 @@ def register(app) -> None:
             ), "", 1
 
         try:
-            from pyiceberg.catalog import load_catalog  # noqa: PLC0415
-            catalog = load_catalog("local")
-            tbl = catalog.load_table("stocks.forecast_runs")
-            df = tbl.scan().to_pandas()
+            df = repo._table_to_df("stocks.forecast_runs")
         except Exception as exc:
             return dbc.Alert(
                 "Could not load forecast_runs: " + str(exc), color="danger"
@@ -294,11 +298,13 @@ def register(app) -> None:
         if ticker_filter and ticker_filter != "all":
             df = df[df["ticker"] == ticker_filter.upper()]
 
-        # Market filter
+        # Fix #16: vectorised market filter
         if market_filter and market_filter != "all":
-            def _mkt(t: str) -> str:
-                return "india" if str(t).upper().endswith((".NS", ".BO")) else "us"
-            df = df[df["ticker"].apply(_mkt) == market_filter].reset_index(drop=True)
+            if market_filter == "india":
+                mask = df["ticker"].str.endswith((".NS", ".BO"))
+            else:
+                mask = ~df["ticker"].str.endswith((".NS", ".BO"))
+            df = df[mask].reset_index(drop=True)
 
         if df.empty:
             return dbc.Alert(
@@ -314,26 +320,27 @@ def register(app) -> None:
         df = df.iloc[(page - 1) * page_size: page * page_size].reset_index(drop=True)
         count_text = f"{total} forecast{'s' if total != 1 else ''}"
 
+        def _target_cell(price, pct, _m_label):
+            """Build a table cell for a price target with percentage change."""
+            if price is None or (hasattr(price, "__float__") and math.isnan(float(price))):
+                return html.Td("—")
+            sign = "+" if float(pct or 0) >= 0 else ""
+            color = "text-success" if float(pct or 0) >= 0 else "text-danger"
+            return html.Td([
+                html.Span(f"{float(price):.2f}", className="fw-semibold"),
+                html.Br(),
+                html.Small(f"{sign}{float(pct or 0):.1f}%", className=color),
+            ])
+
+        # Fix #5: replace iterrows() with to_dict("records") for faster iteration
         rows_html = []
-        for _, row in df.iterrows():
+        for row in df.to_dict("records"):
             sentiment = row.get("sentiment", "—") or "—"
             sentiment_badge = (
                 "badge bg-success" if sentiment == "Bullish" else
                 "badge bg-danger" if sentiment == "Bearish" else
                 "badge bg-secondary"
             )
-
-            def _target_cell(price, pct, m_label):
-                if price is None or (hasattr(price, "__float__") and math.isnan(float(price))):
-                    return html.Td("—")
-                sign = "+" if float(pct or 0) >= 0 else ""
-                color = "text-success" if float(pct or 0) >= 0 else "text-danger"
-                return html.Td([
-                    html.Span(f"{float(price):.2f}", className="fw-semibold"),
-                    html.Br(),
-                    html.Small(f"{sign}{float(pct or 0):.1f}%", className=color),
-                ])
-
             rows_html.append(html.Tr([
                 html.Td(html.Strong(row.get("ticker", ""))),
                 html.Td(str(row.get("horizon_months", "")) + "m"),
@@ -406,11 +413,13 @@ def register(app) -> None:
         else:
             df = repo._table_to_df("stocks.dividends")
 
-        # Market filter
+        # Fix #16: vectorised market filter
         if not df.empty and market_filter and market_filter != "all":
-            def _mkt(t: str) -> str:
-                return "india" if str(t).upper().endswith((".NS", ".BO")) else "us"
-            df = df[df["ticker"].apply(_mkt) == market_filter].reset_index(drop=True)
+            if market_filter == "india":
+                mask = df["ticker"].str.endswith((".NS", ".BO"))
+            else:
+                mask = ~df["ticker"].str.endswith((".NS", ".BO"))
+            df = df[mask].reset_index(drop=True)
 
         if df.empty:
             return (
@@ -438,8 +447,9 @@ def register(app) -> None:
             "JPY": "¥", "CNY": "¥", "AUD": "A$", "CAD": "CA$",
         }
 
+        # Fix #5: replace iterrows() with to_dict("records") for faster iteration
         rows_html = []
-        for _, row in page_df.iterrows():
+        for row in page_df.to_dict("records"):
             currency = str(row.get("currency", "USD") or "USD")
             sym = sym_map.get(currency.upper(), currency)
             amount = row.get("dividend_amount")
@@ -501,14 +511,17 @@ def register(app) -> None:
 
         repo = _get_iceberg_repo()
         df = pd.DataFrame()
+        # Fix #6: use TTL-cached read
         if repo is not None:
-            df = repo.get_all_latest_analysis_summary()
+            df = _get_analysis_summary_cached(repo)
 
-        # Market filter
+        # Fix #16: vectorised market filter
         if not df.empty and market_filter and market_filter != "all":
-            def _mkt(t: str) -> str:
-                return "india" if str(t).upper().endswith((".NS", ".BO")) else "us"
-            df = df[df["ticker"].apply(_mkt) == market_filter].reset_index(drop=True)
+            if market_filter == "india":
+                mask = df["ticker"].str.endswith((".NS", ".BO"))
+            else:
+                mask = ~df["ticker"].str.endswith((".NS", ".BO"))
+            df = df[mask].reset_index(drop=True)
 
         if df.empty:
             return (
@@ -564,9 +577,10 @@ def register(app) -> None:
                     display_df[num_col], errors="coerce"
                 ).round(2)
 
+        # Fix #5: replace iterrows() with to_dict("records") for faster iteration
         rows_html = [
-            html.Tr([html.Td(str(v) if v is not None else "—") for v in row])
-            for _, row in display_df.iterrows()
+            html.Tr([html.Td(str(v) if v is not None else "—") for v in row.values()])
+            for row in display_df.to_dict("records")
         ]
 
         return (
@@ -611,8 +625,9 @@ def register(app) -> None:
         if repo is None:
             return empty_fig, dbc.Alert("Iceberg unavailable.", color="warning")
 
-        company_df = repo.get_all_latest_company_info()
-        analysis_df = repo.get_all_latest_analysis_summary()
+        # Fix #6: use TTL-cached reads
+        company_df = _get_company_info_cached(repo)
+        analysis_df = _get_analysis_summary_cached(repo)
 
         if company_df.empty or analysis_df.empty:
             return empty_fig, dbc.Alert(
@@ -710,6 +725,12 @@ def register(app) -> None:
         if repo is not None:
             df_all = repo._table_to_df("stocks.ohlcv")
             if not df_all.empty:
+                # Fix #7: push date cutoff before per-ticker Python iteration
+                if period != "all":
+                    from datetime import datetime, timedelta  # noqa: PLC0415
+                    _days = 365 if period == "1y" else 3 * 365
+                    _cutoff_str = (datetime.today() - timedelta(days=_days)).date().isoformat()
+                    df_all = df_all[df_all["date"] >= _cutoff_str]
                 for ticker in df_all["ticker"].unique():
                     sub = df_all[df_all["ticker"] == ticker].copy()
                     sub["date"] = pd.to_datetime(sub["date"])

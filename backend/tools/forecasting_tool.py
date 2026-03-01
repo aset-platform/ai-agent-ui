@@ -120,7 +120,7 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
                 repo.insert_forecast_run(ticker, months, _run_dict)
                 repo.insert_forecast_series(ticker, months, _run_date, forecast_df)
         except Exception as _e:
-            _logger.warning("Iceberg forecast write failed for %s: %s", ticker, _e)
+            _logger.error("Iceberg forecast write failed for %s: %s", ticker, _e)
 
         sentiment_emoji = {
             "Bullish": "🟢 BULLISH",

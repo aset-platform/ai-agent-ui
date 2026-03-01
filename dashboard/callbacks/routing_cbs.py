@@ -1,4 +1,3 @@
-dashboard/callbacks/routing_cbs.py
 """Routing and auth-token Dash callbacks for the AI Stock Analysis Dashboard.
 
 Registers the ``store_token_from_url`` callback (extracts JWT from
@@ -13,10 +12,10 @@ Example::
 """
 
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 from urllib.parse import parse_qs
 
-from dash import Input, Output, no_update
+from dash import Input, Output, State, no_update
 
 # Module-level logger; kept at module scope as a conventional singleton.
 logger = logging.getLogger(__name__)
@@ -97,3 +96,35 @@ def register(app) -> None:
         page_name = _PAGE_NAMES.get(resolved, "")
         logger.debug("Navbar page name updated to %r for pathname %r.", page_name, resolved)
         return page_name
+
+    @app.callback(
+        Output("nav-item-insights", "style"),
+        Output("nav-item-admin", "style"),
+        Input("user-profile-store", "data"),
+    )
+    def update_nav_visibility(profile: Optional[Dict[str, Any]]):
+        """Show or hide Insights and Admin nav links based on user role/permissions.
+
+        Superusers always see both links.  General users see a link only when
+        the corresponding ``page_permissions`` key is ``True``.  While the
+        profile is loading (``None``) both links are hidden.
+
+        Args:
+            profile: User profile dict from ``user-profile-store``, or ``None``.
+
+        Returns:
+            Tuple of (insights style dict, admin style dict).
+        """
+        _hide: Dict[str, str] = {"display": "none"}
+        _show: Dict[str, str] = {}
+
+        if not profile:
+            return _hide, _hide
+
+        role = profile.get("role", "general")
+        perms: Dict[str, Any] = profile.get("page_permissions") or {}
+
+        insights_ok = role == "superuser" or bool(perms.get("insights"))
+        admin_ok = role == "superuser" or bool(perms.get("admin"))
+
+        return (_show if insights_ok else _hide), (_show if admin_ok else _hide)

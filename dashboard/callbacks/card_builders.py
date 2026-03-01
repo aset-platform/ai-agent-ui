@@ -1,4 +1,3 @@
-dashboard/callbacks/card_builders.py
 """Stat card and accuracy row builders for the AI Stock Analysis Dashboard.
 
 Provides helpers that build Bootstrap card components for displaying
