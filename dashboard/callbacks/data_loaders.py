@@ -1,4 +1,3 @@
-dashboard/callbacks/data_loaders.py
 """Data-loading helpers for the AI Stock Analysis Dashboard callbacks.
 
 Provides path constants and functions that read raw OHLCV parquet files,

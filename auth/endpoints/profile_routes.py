@@ -1,5 +1,3 @@
-auth/endpoints/profile_routes.py
-```python
 """Profile self-service endpoint registrations (any authenticated user).
 
 Functions
@@ -134,4 +132,3 @@ def register(router: APIRouter) -> None:
         repo.update(resolved_id, {"profile_picture_url": avatar_url})
         logger.info("Avatar uploaded for user_id=%s url=%s", resolved_id, avatar_url)
         return {"avatar_url": avatar_url}
-```

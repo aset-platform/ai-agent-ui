@@ -1,4 +1,3 @@
-dashboard/callbacks/insights_cbs.py
 """Insights-page Dash callbacks for the AI Stock Analysis Dashboard.
 
 Registers callbacks for the Screener, Price Targets, Dividends, Risk Metrics,

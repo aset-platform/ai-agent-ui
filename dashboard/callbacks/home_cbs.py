@@ -1,4 +1,3 @@
-dashboard/callbacks/home_cbs.py
 """Home-page Dash callbacks for the AI Stock Analysis Dashboard.
 
 Registers callbacks that refresh stock cards, manage the market filter,

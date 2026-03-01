@@ -1,4 +1,3 @@
-dashboard/callbacks/forecast_cbs.py
 """Forecast-page Dash callbacks for the AI Stock Analysis Dashboard.
 
 Registers callbacks that sync the forecast ticker dropdown, update the

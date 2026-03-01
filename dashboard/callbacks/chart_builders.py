@@ -1,4 +1,3 @@
-dashboard/callbacks/chart_builders.py
 """Analysis chart builders for the AI Stock Analysis Dashboard callbacks.
 
 Contains helpers for building the empty placeholder figure and the 3-panel

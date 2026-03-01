@@ -1,4 +1,3 @@
-dashboard/callbacks/iceberg.py
 """Iceberg repository singleton for the AI Stock Analysis Dashboard.
 
 Provides a lazy-initialised singleton accessor for the

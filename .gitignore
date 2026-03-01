@@ -57,6 +57,9 @@ site/
 # Auth module — Iceberg catalog + warehouse (runtime-generated)
 data/iceberg/
 
+# Uploaded user avatars (runtime-generated)
+data/avatars/
+
 # Iceberg catalog config (contains absolute local paths)
 .pyiceberg.yaml
 

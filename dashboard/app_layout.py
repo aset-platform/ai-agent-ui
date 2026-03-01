@@ -1,4 +1,3 @@
-dashboard/app_layout.py
 """Root layout and page-routing callback for the Dash dashboard.
 
 Functions

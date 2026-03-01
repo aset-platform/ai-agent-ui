@@ -1,4 +1,3 @@
-dashboard/callbacks/chart_builders2.py
 """Forecast chart builder for the AI Stock Analysis Dashboard callbacks.
 
 Contains the :func:`_build_forecast_fig` helper that renders the Prophet

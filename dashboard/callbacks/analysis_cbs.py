@@ -1,4 +1,3 @@
-dashboard/callbacks/analysis_cbs.py
 """Analysis-page Dash callbacks for the AI Stock Analysis Dashboard.
 
 Registers callbacks that sync the ticker dropdown from the URL, update

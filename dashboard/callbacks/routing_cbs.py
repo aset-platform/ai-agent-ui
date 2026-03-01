@@ -1,4 +1,3 @@
-dashboard/callbacks/routing_cbs.py
 """Routing and auth-token Dash callbacks for the AI Stock Analysis Dashboard.
 
 Registers the ``store_token_from_url`` callback (extracts JWT from
