@@ -119,18 +119,33 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
             return msg
 
         new_df.index = pd.to_datetime(new_df.index).tz_localize(None)
-        existing_df = pd.read_parquet(file_path, engine="pyarrow")
-        combined = pd.concat([existing_df, new_df])
-        combined = combined[~combined.index.duplicated(keep="last")]
-        combined.sort_index(inplace=True)
-        combined.to_parquet(file_path, engine="pyarrow", index=True)
-        _update_registry(ticker, combined, file_path)
         repo = _require_repo()
-        repo.insert_ohlcv(ticker, new_df)
+        inserted = repo.insert_ohlcv(ticker, new_df)
+
+        # Read full OHLCV from Iceberg to rebuild local backup parquet
+        ice_df = repo.get_ohlcv(ticker)
+        if not ice_df.empty:
+            ice_df["date"] = pd.to_datetime(ice_df["date"])
+            ice_df = ice_df.sort_values("date").set_index("date")
+            backup = pd.DataFrame({
+                "Open": ice_df["open"],
+                "High": ice_df["high"],
+                "Low": ice_df["low"],
+                "Close": ice_df["close"],
+                "Adj Close": ice_df.get("adj_close", ice_df["close"]),
+                "Volume": ice_df["volume"],
+            })
+            backup.index.name = "Date"
+            backup.to_parquet(file_path, engine="pyarrow", index=True)
+            total_rows = len(backup)
+            _update_registry(ticker, backup, file_path)
+        else:
+            total_rows = int(existing.get("total_rows", 0)) + len(new_df)
+            _update_registry(ticker, new_df, file_path)
 
         msg = (
             f"Delta fetch for {ticker}: {len(new_df)} new rows added "
-            f"({last_fetch} to {today}). Total: {len(combined)} rows."
+            f"({last_fetch} to {today}). Total: {total_rows} rows."
         )
         _logger.info(msg)
         return msg
@@ -203,13 +218,13 @@ def get_stock_info(ticker: str) -> str:
 
 @tool
 def load_stock_data(ticker: str) -> str:
-    """Return a summary of locally stored OHLCV data for a ticker.
+    """Return a summary of OHLCV data stored in Iceberg for a ticker.
 
     Args:
         ticker: Stock ticker symbol, e.g. ``"AAPL"``.
 
     Returns:
-        A formatted summary string, or an error string if no local data exists.
+        A formatted summary string, or an error string if no data exists.
 
     Example:
         >>> result = load_stock_data.invoke({"ticker": "AAPL"})
@@ -217,23 +232,23 @@ def load_stock_data(ticker: str) -> str:
         True
     """
     ticker = ticker.upper().strip()
-    file_path = _parquet_path(ticker)
     _logger.info("load_stock_data | ticker=%s", ticker)
 
-    if not file_path.exists():
-        return (
-            f"No local data found for '{ticker}'. "
-            "Run fetch_stock_data first to download and store the data."
-        )
     try:
-        df = pd.read_parquet(file_path, engine="pyarrow")
+        repo = _require_repo()
+        df = repo.get_ohlcv(ticker)
+        if df.empty:
+            return (
+                f"No data found for '{ticker}'. "
+                "Run fetch_stock_data first to download and store the data."
+            )
+        df["date"] = pd.to_datetime(df["date"])
         missing = int(df.isnull().sum().sum())
-        size_kb = file_path.stat().st_size / 1024
+        cols = [c for c in df.columns if c not in ("ticker", "fetched_at")]
         return (
-            f"Loaded {ticker}: {len(df)} rows x {len(df.columns)} columns. "
-            f"Date range: {df.index.min().date()} to {df.index.max().date()}. "
-            f"Columns: {list(df.columns)}. Missing values: {missing}. "
-            f"File size: {size_kb:.1f} KB."
+            f"Loaded {ticker}: {len(df)} rows x {len(cols)} columns. "
+            f"Date range: {df['date'].min().date()} to {df['date'].max().date()}. "
+            f"Columns: {cols}. Missing values: {missing}."
         )
     except Exception as e:
         _logger.error("load_stock_data failed for %s: %s", ticker, e, exc_info=True)

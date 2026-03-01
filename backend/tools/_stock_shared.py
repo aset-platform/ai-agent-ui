@@ -15,6 +15,7 @@ Constants
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -25,6 +26,20 @@ _logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _DATA_RAW = _PROJECT_ROOT / "data" / "raw"
 _DATA_PROCESSED = _PROJECT_ROOT / "data" / "processed"
+
+# Ensure PyIceberg can find the catalog regardless of CWD.
+# The backend process runs from backend/ but .pyiceberg.yaml lives at
+# the project root with a relative SQLite URI.  PyIceberg's _ENV_CONFIG
+# singleton reads env vars once at import time, so these must be set
+# BEFORE any pyiceberg import.
+os.environ.setdefault(
+    "PYICEBERG_CATALOG__LOCAL__URI",
+    f"sqlite:///{_PROJECT_ROOT.resolve()}/data/iceberg/catalog.db",
+)
+os.environ.setdefault(
+    "PYICEBERG_CATALOG__LOCAL__WAREHOUSE",
+    f"file:///{_PROJECT_ROOT.resolve()}/data/iceberg/warehouse",
+)
 
 _STOCK_REPO = None
 _STOCK_REPO_INIT_ATTEMPTED = False

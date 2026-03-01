@@ -14,6 +14,7 @@ Example::
 """
 
 import logging
+import os
 import sys
 import time as _time
 from pathlib import Path
@@ -28,6 +29,18 @@ _logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+# Ensure PyIceberg can find the catalog regardless of CWD.
+# PyIceberg's _ENV_CONFIG singleton reads env vars once at import time,
+# so these must be set BEFORE any pyiceberg import.
+os.environ.setdefault(
+    "PYICEBERG_CATALOG__LOCAL__URI",
+    f"sqlite:///{_PROJECT_ROOT.resolve()}/data/iceberg/catalog.db",
+)
+os.environ.setdefault(
+    "PYICEBERG_CATALOG__LOCAL__WAREHOUSE",
+    f"file:///{_PROJECT_ROOT.resolve()}/data/iceberg/warehouse",
+)
 
 # Fix #10: TTL-based singleton — re-initialises after 1 h to survive Iceberg restarts
 _DASH_REPO = None
@@ -230,7 +243,12 @@ def _get_analysis_with_gaps_filled(repo: object) -> pd.DataFrame:
     if missing:
         extra_rows = []
         try:
-            from price_analysis_tool import (  # noqa: PLC0415
+            # backend tools use `import tools.*` internally, so
+            # backend/ must be on sys.path for those imports to resolve.
+            _backend_dir = str(_PROJECT_ROOT / "backend")
+            if _backend_dir not in sys.path:
+                sys.path.insert(0, _backend_dir)
+            from tools.price_analysis_tool import (  # noqa: PLC0415
                 _calculate_technical_indicators,
                 _analyse_price_movement,
                 _generate_summary_stats,

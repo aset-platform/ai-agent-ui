@@ -197,13 +197,20 @@ def register(app) -> None:
         ticker = ticker.upper().strip()
 
         try:
+            # backend tools use `import tools.*` internally, so
+            # backend/ must be on sys.path for those imports to resolve.
+            import sys as _sys
+            _backend_dir = str(Path(__file__).parent.parent.parent / "backend")
+            if _backend_dir not in _sys.path:
+                _sys.path.insert(0, _backend_dir)
+
             # ── Step 1: Fetch / delta-update price data ────────────────────
-            from backend.tools.stock_data_tool import fetch_stock_data
+            from tools.stock_data_tool import fetch_stock_data
             fetch_result = fetch_stock_data.invoke({"ticker": ticker})
             _logger.info("fetch_stock_data result: %s", fetch_result[:80])
 
             # ── Step 2: Run Prophet forecast pipeline ──────────────────────
-            from backend.tools.forecasting_tool import (
+            from tools.forecasting_tool import (
                 _load_parquet as _ft_load,
                 _prepare_data_for_prophet,
                 _train_prophet_model,
