@@ -18,8 +18,14 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_ohlcv(rows: int = 300) -> pd.DataFrame:
-    """Return a minimal OHLCV DataFrame with a DatetimeIndex."""
+def _make_ohlcv(rows: int = 300, adj_close_nan: bool = False) -> pd.DataFrame:
+    """Return a minimal OHLCV DataFrame with a DatetimeIndex.
+
+    Args:
+        rows: Number of rows to generate.
+        adj_close_nan: If True, ``Adj Close`` column is all NaN
+            (simulates yfinance >= 1.2 or Iceberg with missing adj_close).
+    """
     idx = pd.date_range("2020-01-01", periods=rows, freq="B")
     rng = np.random.default_rng(0)
     close = 100 + rng.standard_normal(rows).cumsum()
@@ -29,7 +35,7 @@ def _make_ohlcv(rows: int = 300) -> pd.DataFrame:
             "High": close * 1.01,
             "Low": close * 0.98,
             "Close": close,
-            "Adj Close": close,
+            "Adj Close": [float("nan")] * rows if adj_close_nan else close,
             "Volume": rng.integers(1_000_000, 5_000_000, rows),
         },
         index=idx,
@@ -244,6 +250,43 @@ class TestGetRepoRetry:
         with patch("stocks.repository.StockRepository", return_value=fake_instance):
             result_second = _ss._get_repo()
         assert result_second is fake_instance
+
+
+# ---------------------------------------------------------------------------
+# _prepare_data_for_prophet — Adj Close fallback
+# ---------------------------------------------------------------------------
+
+
+class TestPrepareDataForProphet:
+    """Tests for :func:`tools._forecast_model._prepare_data_for_prophet`."""
+
+    def test_uses_adj_close_when_present(self):
+        """When Adj Close has valid data, it should be used."""
+        from tools._forecast_model import _prepare_data_for_prophet
+
+        df = _make_ohlcv(50)
+        result = _prepare_data_for_prophet(df)
+        assert len(result) == 50
+        # y values should match Adj Close (which equals Close in _make_ohlcv)
+        assert result["y"].iloc[-1] == pytest.approx(df["Adj Close"].iloc[-1])
+
+    def test_falls_back_to_close_when_adj_close_all_nan(self):
+        """When Adj Close is all NaN, Close must be used instead."""
+        from tools._forecast_model import _prepare_data_for_prophet
+
+        df = _make_ohlcv(50, adj_close_nan=True)
+        result = _prepare_data_for_prophet(df)
+        assert len(result) == 50
+        assert result["y"].iloc[-1] == pytest.approx(df["Close"].iloc[-1])
+
+    def test_falls_back_when_adj_close_missing(self):
+        """When Adj Close column is absent entirely, Close is used."""
+        from tools._forecast_model import _prepare_data_for_prophet
+
+        df = _make_ohlcv(50).drop(columns=["Adj Close"])
+        result = _prepare_data_for_prophet(df)
+        assert len(result) == 50
+        assert result["y"].iloc[-1] == pytest.approx(df["Close"].iloc[-1])
 
 
 # ---------------------------------------------------------------------------

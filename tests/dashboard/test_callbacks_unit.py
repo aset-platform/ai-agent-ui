@@ -230,6 +230,79 @@ class TestPaginationMath:
 # ---------------------------------------------------------------------------
 
 
+class TestOhlcvAdjCloseNanFallback:
+    """Tests for _get_ohlcv_cached falling back to close when adj_close is all NaN."""
+
+    def test_adj_close_uses_close_when_all_nan(self):
+        """When adj_close is all NaN, Adj Close column should use close values."""
+        import numpy as np
+        import pandas as pd
+        from unittest.mock import MagicMock, patch
+
+        dates = pd.date_range("2020-01-01", periods=50, freq="B")
+        rng = np.random.default_rng(42)
+        close = 100 + rng.standard_normal(50).cumsum()
+        iceberg_df = pd.DataFrame({
+            "ticker": ["AAPL"] * 50,
+            "date": dates.date,
+            "open": close * 0.99,
+            "high": close * 1.01,
+            "low": close * 0.98,
+            "close": close,
+            "adj_close": [float("nan")] * 50,
+            "volume": rng.integers(1_000_000, 5_000_000, 50),
+        })
+
+        mock_repo = MagicMock()
+        mock_repo.get_ohlcv.return_value = iceberg_df
+
+        with patch("dashboard.callbacks.iceberg._get_iceberg_repo", return_value=mock_repo):
+            import dashboard.callbacks.iceberg as _ice
+            _ice._OHLCV_CACHE.clear()
+
+            from dashboard.callbacks.data_loaders import _load_raw
+            result = _load_raw("AAPL")
+
+        assert result is not None
+        # Adj Close should contain close values, not NaN
+        assert result["Adj Close"].notna().all()
+        assert result["Adj Close"].iloc[-1] == pytest.approx(close[-1])
+
+    def test_adj_close_used_when_valid(self):
+        """When adj_close has real data, Adj Close should use those values."""
+        import numpy as np
+        import pandas as pd
+        from unittest.mock import MagicMock, patch
+
+        dates = pd.date_range("2020-01-01", periods=50, freq="B")
+        rng = np.random.default_rng(42)
+        close = 100 + rng.standard_normal(50).cumsum()
+        adj_close = close * 0.95  # Different from close
+        iceberg_df = pd.DataFrame({
+            "ticker": ["AAPL"] * 50,
+            "date": dates.date,
+            "open": close * 0.99,
+            "high": close * 1.01,
+            "low": close * 0.98,
+            "close": close,
+            "adj_close": adj_close,
+            "volume": rng.integers(1_000_000, 5_000_000, 50),
+        })
+
+        mock_repo = MagicMock()
+        mock_repo.get_ohlcv.return_value = iceberg_df
+
+        with patch("dashboard.callbacks.iceberg._get_iceberg_repo", return_value=mock_repo):
+            import dashboard.callbacks.iceberg as _ice
+            _ice._OHLCV_CACHE.clear()
+
+            from dashboard.callbacks.data_loaders import _load_raw
+            result = _load_raw("AAPL")
+
+        assert result is not None
+        assert result["Adj Close"].iloc[-1] == pytest.approx(adj_close[-1])
+
+
 class TestLoadRawFromIceberg:
     """Tests for :func:`dashboard.callbacks.data_loaders._load_raw` (Iceberg)."""
 

@@ -111,11 +111,18 @@ def register(app) -> None:
             return _empty_fig(f"No price data for '{ticker}'."), [], []
 
         # Build prophet-format historical series
-        price_col = "Adj Close" if "Adj Close" in df_raw.columns else "Close"
+        # yfinance >=1.2 dropped "Adj Close"; also Iceberg may store it as
+        # all-NaN.  Fall back to "Close" when the column is absent or empty.
+        if "Adj Close" in df_raw.columns and df_raw["Adj Close"].notna().any():
+            price_col = "Adj Close"
+        else:
+            price_col = "Close"
         prophet_df = pd.DataFrame({
             "ds": pd.to_datetime(df_raw.index).tz_localize(None),
             "y": df_raw[price_col].values,
         }).dropna(subset=["y"]).sort_values("ds")
+        if prophet_df.empty:
+            return _empty_fig(f"No valid price data for '{ticker}'."), [], []
         current_price = float(prophet_df["y"].iloc[-1])
 
         forecast_df = _load_forecast(ticker, horizon_months)

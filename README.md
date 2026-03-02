@@ -470,3 +470,4 @@ Register `http://localhost:3000/auth/oauth/callback` as an authorised redirect U
 | **`SERPAPI_API_KEY` required for web search** | Free tier (100/month) at serpapi.com |
 | **Refresh token deny-list is in-memory** | Cleared on backend restart — revoked tokens become valid again until natural expiry (7 days) |
 | **Facebook SSO** | Code complete; credentials are placeholders — button hidden until real credentials added |
+| **yfinance >= 1.2 dropped `Adj Close`** | Iceberg `stocks.ohlcv` stores `adj_close` as NaN; all consumers fall back to `Close` automatically |
