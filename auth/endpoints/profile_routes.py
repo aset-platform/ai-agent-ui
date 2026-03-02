@@ -9,11 +9,11 @@ import logging
 import os
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
+import auth.endpoints.helpers as _helpers
 from auth.dependencies import get_current_user
 from auth.models import ProfileUpdateRequest, UserContext, UserResponse
-import auth.endpoints.helpers as _helpers
 
 # Module-level logger — kept at module scope intentionally; not mutable state.
 logger = logging.getLogger(__name__)
@@ -118,18 +118,24 @@ def register(router: APIRouter) -> None:
         else:
             resolved_id = current_user.user_id
         if not file.content_type or not file.content_type.startswith("image/"):
-            raise HTTPException(status_code=400, detail="Only image files are accepted.")
+            raise HTTPException(
+                status_code=400, detail="Only image files are accepted."
+            )
         _unsupported = {"image/heic", "image/heif", "image/tiff", "image/bmp"}
         ct_lower = (file.content_type or "").lower()
         fn_lower = (file.filename or "").lower()
-        if ct_lower in _unsupported or any(fn_lower.endswith(s) for s in (".heic", ".heif", ".tiff", ".tif", ".bmp")):
+        if ct_lower in _unsupported or any(
+            fn_lower.endswith(s) for s in (".heic", ".heif", ".tiff", ".tif", ".bmp")
+        ):
             raise HTTPException(
                 status_code=415,
                 detail="Unsupported image format. Please upload JPEG, PNG, GIF, or WebP.",
             )
         data = await file.read()
         if len(data) > _MAX_AVATAR_BYTES:
-            raise HTTPException(status_code=413, detail="Avatar file exceeds 10 MB limit.")
+            raise HTTPException(
+                status_code=413, detail="Avatar file exceeds 10 MB limit."
+            )
         ext = (file.filename or "jpg").rsplit(".", 1)[-1].lower()
         os.makedirs(_AVATARS_DIR, exist_ok=True)
         dest = os.path.join(_AVATARS_DIR, "{}.{}".format(resolved_id, ext))

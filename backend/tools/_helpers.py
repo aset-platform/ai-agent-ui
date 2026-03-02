@@ -35,9 +35,16 @@ def _currency_symbol(code: str) -> str:
         The currency symbol string, e.g. ``"$"`` or ``"₹"``.
     """
     return {
-        "USD": "$", "INR": "₹", "GBP": "£", "EUR": "€",
-        "JPY": "¥", "CNY": "¥", "AUD": "A$", "CAD": "CA$",
-        "HKD": "HK$", "SGD": "S$",
+        "USD": "$",
+        "INR": "₹",
+        "GBP": "£",
+        "EUR": "€",
+        "JPY": "¥",
+        "CNY": "¥",
+        "AUD": "A$",
+        "CAD": "CA$",
+        "HKD": "HK$",
+        "SGD": "S$",
     }.get((code or "USD").upper(), code or "$")
 
 
@@ -68,6 +75,7 @@ def _load_currency(ticker: str, metadata_dir=None) -> str:
     code = "USD"
     try:
         from tools._stock_shared import _get_repo
+
         repo = _get_repo()
         if repo is not None:
             code = repo.get_currency(ticker)

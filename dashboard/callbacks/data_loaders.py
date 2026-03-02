@@ -36,8 +36,8 @@ if str(_PROJECT_ROOT) not in sys.path:
 # ---------------------------------------------------------------------------
 # Indicator cache — 5-min TTL to avoid recomputing on every overlay/range change
 # ---------------------------------------------------------------------------
-_INDICATOR_CACHE: dict = {}   # {ticker: (df_with_indicators, expiry_monotonic)}
-_INDICATOR_TTL = 300           # seconds
+_INDICATOR_CACHE: dict = {}  # {ticker: (df_with_indicators, expiry_monotonic)}
+_INDICATOR_TTL = 300  # seconds
 
 
 def _load_reg_cb() -> dict:
@@ -100,7 +100,7 @@ def _load_forecast(ticker: str, horizon_months: int) -> Optional[pd.DataFrame]:
         columns, or ``None`` if no forecast exists.
     """
     try:
-        from dashboard.callbacks.iceberg import _get_iceberg_repo, _get_forecast_cached
+        from dashboard.callbacks.iceberg import _get_forecast_cached, _get_iceberg_repo
 
         repo = _get_iceberg_repo()
         if repo is None:
@@ -131,19 +131,19 @@ def _add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     close = df["Close"]
-    df["SMA_50"]      = ta.trend.SMAIndicator(close=close, window=50).sma_indicator()
-    df["SMA_200"]     = ta.trend.SMAIndicator(close=close, window=200).sma_indicator()
-    df["EMA_20"]      = ta.trend.EMAIndicator(close=close, window=20).ema_indicator()
-    df["RSI_14"]      = ta.momentum.RSIIndicator(close=close, window=14).rsi()
-    macd              = ta.trend.MACD(close=close)
-    df["MACD"]        = macd.macd()
+    df["SMA_50"] = ta.trend.SMAIndicator(close=close, window=50).sma_indicator()
+    df["SMA_200"] = ta.trend.SMAIndicator(close=close, window=200).sma_indicator()
+    df["EMA_20"] = ta.trend.EMAIndicator(close=close, window=20).ema_indicator()
+    df["RSI_14"] = ta.momentum.RSIIndicator(close=close, window=14).rsi()
+    macd = ta.trend.MACD(close=close)
+    df["MACD"] = macd.macd()
     df["MACD_Signal"] = macd.macd_signal()
-    df["MACD_Hist"]   = macd.macd_diff()
-    bb                = ta.volatility.BollingerBands(close=close, window=20, window_dev=2)
-    df["BB_Upper"]    = bb.bollinger_hband()
-    df["BB_Middle"]   = bb.bollinger_mavg()
-    df["BB_Lower"]    = bb.bollinger_lband()
-    df["ATR_14"]      = ta.volatility.AverageTrueRange(
+    df["MACD_Hist"] = macd.macd_diff()
+    bb = ta.volatility.BollingerBands(close=close, window=20, window_dev=2)
+    df["BB_Upper"] = bb.bollinger_hband()
+    df["BB_Middle"] = bb.bollinger_mavg()
+    df["BB_Lower"] = bb.bollinger_lband()
+    df["ATR_14"] = ta.volatility.AverageTrueRange(
         high=df["High"], low=df["Low"], close=close, window=14
     ).average_true_range()
     return df

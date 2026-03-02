@@ -104,11 +104,15 @@ def main() -> None:
     refresh_days: int = int(os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
     # ── Validate required env vars ─────────────────────────────────────────
-    missing = [k for k, v in [
-        ("ADMIN_EMAIL",    admin_email),
-        ("ADMIN_PASSWORD", admin_password),
-        ("JWT_SECRET_KEY", jwt_secret),
-    ] if not v]
+    missing = [
+        k
+        for k, v in [
+            ("ADMIN_EMAIL", admin_email),
+            ("ADMIN_PASSWORD", admin_password),
+            ("JWT_SECRET_KEY", jwt_secret),
+        ]
+        if not v
+    ]
 
     if missing:
         logger.error("Missing required environment variables: %s", ", ".join(missing))
@@ -130,7 +134,7 @@ def main() -> None:
     if len(jwt_secret) < 32:
         logger.error(
             "JWT_SECRET_KEY must be at least 32 characters. "
-            "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
         )
         sys.exit(1)
 
@@ -140,11 +144,12 @@ def main() -> None:
     # ── Import auth modules ────────────────────────────────────────────────
     try:
         from auth.repository import IcebergUserRepository  # type: ignore[import]
-        from auth.service import AuthService                # type: ignore[import]
+        from auth.service import AuthService  # type: ignore[import]
     except ImportError as exc:
         logger.error(
             "Could not import auth modules: %s  "
-            "Have you run 'python auth/create_tables.py' first?", exc
+            "Have you run 'python auth/create_tables.py' first?",
+            exc,
         )
         sys.exit(1)
 
@@ -154,7 +159,8 @@ def main() -> None:
     except Exception as exc:
         logger.error(
             "Could not open Iceberg catalog: %s  "
-            "Run 'python auth/create_tables.py' to initialise it.", exc
+            "Run 'python auth/create_tables.py' to initialise it.",
+            exc,
         )
         sys.exit(1)
 
@@ -185,12 +191,14 @@ def main() -> None:
     hashed = service.hash_password(admin_password)
 
     try:
-        user = repo.create({
-            "email": admin_email,
-            "hashed_password": hashed,
-            "full_name": admin_full_name,
-            "role": "superuser",
-        })
+        user = repo.create(
+            {
+                "email": admin_email,
+                "hashed_password": hashed,
+                "full_name": admin_full_name,
+                "role": "superuser",
+            }
+        )
         repo.append_audit_event(
             "USER_CREATED",
             actor_user_id=user["user_id"],

@@ -20,21 +20,16 @@ from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
+import tools._stock_shared as _ss
 import yfinance as yf
 from langchain_core.tools import tool
-
-import tools._stock_shared as _ss
+from tools._stock_registry import _check_existing_data, _load_registry, _update_registry
 from tools._stock_shared import (
     _currency_symbol,
     _get_repo,
     _load_currency,
     _parquet_path,
     _require_repo,
-)
-from tools._stock_registry import (
-    _check_existing_data,
-    _load_registry,
-    _update_registry,
 )
 
 # Module-level logger — kept at module scope intentionally (not inside a class).
@@ -108,7 +103,9 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
             _logger.info(msg)
             return msg
 
-        new_df = yf.Ticker(ticker).history(start=str(last_fetch), end=str(today), auto_adjust=False)
+        new_df = yf.Ticker(ticker).history(
+            start=str(last_fetch), end=str(today), auto_adjust=False
+        )
 
         if new_df.empty:
             msg = (
@@ -127,14 +124,16 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
         if not ice_df.empty:
             ice_df["date"] = pd.to_datetime(ice_df["date"])
             ice_df = ice_df.sort_values("date").set_index("date")
-            backup = pd.DataFrame({
-                "Open": ice_df["open"],
-                "High": ice_df["high"],
-                "Low": ice_df["low"],
-                "Close": ice_df["close"],
-                "Adj Close": ice_df.get("adj_close", ice_df["close"]),
-                "Volume": ice_df["volume"],
-            })
+            backup = pd.DataFrame(
+                {
+                    "Open": ice_df["open"],
+                    "High": ice_df["high"],
+                    "Low": ice_df["low"],
+                    "Close": ice_df["close"],
+                    "Adj Close": ice_df.get("adj_close", ice_df["close"]),
+                    "Volume": ice_df["volume"],
+                }
+            )
             backup.index.name = "Date"
             backup.to_parquet(file_path, engine="pyarrow", index=True)
             total_rows = len(backup)
@@ -205,7 +204,9 @@ def get_stock_info(ticker: str) -> str:
             "pe_ratio": info.get("trailingPE", "N/A"),
             "52w_high": info.get("fiftyTwoWeekHigh", "N/A"),
             "52w_low": info.get("fiftyTwoWeekLow", "N/A"),
-            "current_price": info.get("currentPrice", info.get("regularMarketPrice", "N/A")),
+            "current_price": info.get(
+                "currentPrice", info.get("regularMarketPrice", "N/A")
+            ),
             "currency": info.get("currency", "USD"),
         }
         repo.insert_company_info(ticker, info)
@@ -335,7 +336,9 @@ def get_dividend_history(ticker: str) -> str:
         return msg
 
     except Exception as e:
-        _logger.error("get_dividend_history failed for %s: %s", ticker, e, exc_info=True)
+        _logger.error(
+            "get_dividend_history failed for %s: %s", ticker, e, exc_info=True
+        )
         return f"Error fetching dividend history for '{ticker}': {e}"
 
 

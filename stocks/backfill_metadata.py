@@ -60,9 +60,13 @@ def _backfill_registry() -> int:
             end_str = dr.get("end")
             repo.upsert_registry(
                 ticker=ticker,
-                last_fetch_date=date.fromisoformat(entry.get("last_fetch_date", str(date.today()))),
+                last_fetch_date=date.fromisoformat(
+                    entry.get("last_fetch_date", str(date.today()))
+                ),
                 total_rows=int(entry.get("total_rows", 0)),
-                date_range_start=date.fromisoformat(start_str) if start_str else date.today(),
+                date_range_start=date.fromisoformat(start_str)
+                if start_str
+                else date.today(),
                 date_range_end=date.fromisoformat(end_str) if end_str else date.today(),
                 market="india" if ticker.upper().endswith((".NS", ".BO")) else "us",
             )
@@ -144,7 +148,9 @@ def _backfill_ohlcv() -> int:
         ticker = parquet_path.stem.replace("_raw", "").upper()
         existing = repo.get_ohlcv(ticker)
         if not existing.empty:
-            _logger.debug("OHLCV: %s already has %d rows — skipping.", ticker, len(existing))
+            _logger.debug(
+                "OHLCV: %s already has %d rows — skipping.", ticker, len(existing)
+            )
             continue
         try:
             df = pd.read_parquet(parquet_path, engine="pyarrow")
@@ -168,7 +174,9 @@ def main() -> None:
 
     _logger.info(
         "Backfill complete: %d registry, %d company info, %d OHLCV tickers inserted.",
-        reg_count, info_count, ohlcv_count,
+        reg_count,
+        info_count,
+        ohlcv_count,
     )
 
 

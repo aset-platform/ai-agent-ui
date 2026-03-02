@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Currency cache — avoids opening JSON on every callback invocation
 # ---------------------------------------------------------------------------
-_CURRENCY_CACHE_DASH: dict = {}   # {ticker: (symbol_str, expiry_monotonic)}
-_CURRENCY_TTL = 300                # seconds
+_CURRENCY_CACHE_DASH: dict = {}  # {ticker: (symbol_str, expiry_monotonic)}
+_CURRENCY_TTL = 300  # seconds
 
 # ---------------------------------------------------------------------------
 # Input validation constants
@@ -104,9 +104,16 @@ def _currency_symbol(code: str) -> str:
         Falls back to the code itself for unmapped currencies.
     """
     return {
-        "USD": "$", "INR": "₹", "GBP": "£", "EUR": "€",
-        "JPY": "¥", "CNY": "¥", "AUD": "A$", "CAD": "CA$",
-        "HKD": "HK$", "SGD": "S$",
+        "USD": "$",
+        "INR": "₹",
+        "GBP": "£",
+        "EUR": "€",
+        "JPY": "¥",
+        "CNY": "¥",
+        "AUD": "A$",
+        "CAD": "CA$",
+        "HKD": "HK$",
+        "SGD": "S$",
     }.get((code or "USD").upper(), code or "$")
 
 
@@ -129,7 +136,9 @@ def _load_currency_from_iceberg(ticker: str) -> str:
             if info is not None:
                 return _currency_symbol(info.get("currency", "USD") or "USD")
     except Exception:
-        logger.debug("Iceberg company_info unavailable for %r; defaulting to '$'.", ticker)
+        logger.debug(
+            "Iceberg company_info unavailable for %r; defaulting to '$'.", ticker
+        )
     return "$"
 
 

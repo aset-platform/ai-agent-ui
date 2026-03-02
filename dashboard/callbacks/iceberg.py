@@ -45,15 +45,15 @@ os.environ.setdefault(
 # Fix #10: TTL-based singleton — re-initialises after 1 h to survive Iceberg restarts
 _DASH_REPO = None
 _DASH_REPO_EXPIRY: float = 0.0
-_DASH_REPO_TTL = 3600   # 1 hour
+_DASH_REPO_TTL = 3600  # 1 hour
 
 # Fix #6: TTL caches for expensive shared Iceberg reads (5-min TTL)
 _SHARED_TTL = 300
 _SUMMARY_CACHE: dict = {"data": None, "expiry": 0.0}
 _COMPANY_CACHE: dict = {"data": None, "expiry": 0.0}
 _FILLED_SUMMARY_CACHE: dict = {"data": None, "expiry": 0.0}
-_OHLCV_CACHE: dict = {}       # {ticker: (df, expiry_monotonic)}
-_FORECAST_CACHE: dict = {}    # {(ticker, horizon): (df, expiry_monotonic)}
+_OHLCV_CACHE: dict = {}  # {ticker: (df, expiry_monotonic)}
+_FORECAST_CACHE: dict = {}  # {(ticker, horizon): (df, expiry_monotonic)}
 
 
 def _get_iceberg_repo() -> Optional[object]:
@@ -72,6 +72,7 @@ def _get_iceberg_repo() -> Optional[object]:
         return _DASH_REPO
     try:
         from stocks.repository import StockRepository  # noqa: PLC0415
+
         _DASH_REPO = StockRepository()
         _DASH_REPO_EXPIRY = now + _DASH_REPO_TTL
         _logger.debug("StockRepository initialised for dashboard")
@@ -84,6 +85,7 @@ def _get_iceberg_repo() -> Optional[object]:
 # ------------------------------------------------------------------
 # OHLCV cached helper
 # ------------------------------------------------------------------
+
 
 def _get_ohlcv_cached(repo: object, ticker: str) -> Optional[pd.DataFrame]:
     """Return OHLCV data for *ticker* from Iceberg, cached for ``_SHARED_TTL`` seconds.
@@ -113,14 +115,18 @@ def _get_ohlcv_cached(repo: object, ticker: str) -> Optional[pd.DataFrame]:
     # Reshape Iceberg columns to match parquet format
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date").set_index("date")
-    result = pd.DataFrame({
-        "Open": df["open"],
-        "High": df["high"],
-        "Low": df["low"],
-        "Close": df["close"],
-        "Adj Close": df["adj_close"] if ("adj_close" in df.columns and df["adj_close"].notna().any()) else df["close"],
-        "Volume": df["volume"],
-    })
+    result = pd.DataFrame(
+        {
+            "Open": df["open"],
+            "High": df["high"],
+            "Low": df["low"],
+            "Close": df["close"],
+            "Adj Close": df["adj_close"]
+            if ("adj_close" in df.columns and df["adj_close"].notna().any())
+            else df["close"],
+            "Volume": df["volume"],
+        }
+    )
     result.index.name = "Date"
 
     _OHLCV_CACHE[ticker] = (result, now + _SHARED_TTL)
@@ -130,6 +136,7 @@ def _get_ohlcv_cached(repo: object, ticker: str) -> Optional[pd.DataFrame]:
 # ------------------------------------------------------------------
 # Forecast cached helper
 # ------------------------------------------------------------------
+
 
 def _get_forecast_cached(
     repo: object,
@@ -162,12 +169,14 @@ def _get_forecast_cached(
         return None
 
     # Reshape Iceberg columns to match expected format
-    result = pd.DataFrame({
-        "ds": pd.to_datetime(df["forecast_date"]),
-        "yhat": df["predicted_price"],
-        "yhat_lower": df["lower_bound"],
-        "yhat_upper": df["upper_bound"],
-    })
+    result = pd.DataFrame(
+        {
+            "ds": pd.to_datetime(df["forecast_date"]),
+            "yhat": df["predicted_price"],
+            "yhat_lower": df["lower_bound"],
+            "yhat_upper": df["upper_bound"],
+        }
+    )
 
     _FORECAST_CACHE[cache_key] = (result, now + _SHARED_TTL)
     return result
@@ -176,6 +185,7 @@ def _get_forecast_cached(
 # ------------------------------------------------------------------
 # Analysis summary cached helpers
 # ------------------------------------------------------------------
+
 
 def _get_analysis_summary_cached(repo: object):
     """Return all latest analysis summaries, cached for ``_SHARED_TTL`` seconds.
@@ -232,7 +242,10 @@ def _get_analysis_with_gaps_filled(repo: object) -> pd.DataFrame:
         registered tickers (Iceberg + on-the-fly computed).
     """
     now = _time.monotonic()
-    if _FILLED_SUMMARY_CACHE["data"] is not None and now < _FILLED_SUMMARY_CACHE["expiry"]:
+    if (
+        _FILLED_SUMMARY_CACHE["data"] is not None
+        and now < _FILLED_SUMMARY_CACHE["expiry"]
+    ):
         return _FILLED_SUMMARY_CACHE["data"]
 
     df = _get_analysis_summary_cached(repo)
@@ -249,10 +262,11 @@ def _get_analysis_with_gaps_filled(repo: object) -> pd.DataFrame:
             if _backend_dir not in sys.path:
                 sys.path.insert(0, _backend_dir)
             from tools.price_analysis_tool import (  # noqa: PLC0415
-                _calculate_technical_indicators,
                 _analyse_price_movement,
+                _calculate_technical_indicators,
                 _generate_summary_stats,
             )
+
             for ticker in missing:
                 try:
                     ohlcv = _get_ohlcv_cached(repo, ticker)
@@ -263,28 +277,40 @@ def _get_analysis_with_gaps_filled(repo: object) -> pd.DataFrame:
                     _df = _calculate_technical_indicators(_df)
                     movement = _analyse_price_movement(_df)
                     stats = _generate_summary_stats(_df, ticker)
-                    extra_rows.append({
-                        "ticker": ticker,
-                        "current_price": stats.get("current_price"),
-                        "rsi_14": stats.get("rsi_14"),
-                        "rsi_signal": stats.get("rsi_signal"),
-                        "macd_signal_text": stats.get("macd_signal"),
-                        "sma_200_signal": stats.get("sma_200_signal"),
-                        "sharpe_ratio": movement.get("sharpe_ratio"),
-                        "annualized_return_pct": movement.get("annualized_return_pct"),
-                        "annualized_volatility_pct": movement.get("annualized_volatility_pct"),
-                        "max_drawdown_pct": movement.get("max_drawdown_pct"),
-                        "max_drawdown_duration_days": movement.get("max_drawdown_duration_days"),
-                        "bull_phase_pct": movement.get("bull_phase_pct"),
-                        "bear_phase_pct": movement.get("bear_phase_pct"),
-                    })
+                    extra_rows.append(
+                        {
+                            "ticker": ticker,
+                            "current_price": stats.get("current_price"),
+                            "rsi_14": stats.get("rsi_14"),
+                            "rsi_signal": stats.get("rsi_signal"),
+                            "macd_signal_text": stats.get("macd_signal"),
+                            "sma_200_signal": stats.get("sma_200_signal"),
+                            "sharpe_ratio": movement.get("sharpe_ratio"),
+                            "annualized_return_pct": movement.get(
+                                "annualized_return_pct"
+                            ),
+                            "annualized_volatility_pct": movement.get(
+                                "annualized_volatility_pct"
+                            ),
+                            "max_drawdown_pct": movement.get("max_drawdown_pct"),
+                            "max_drawdown_duration_days": movement.get(
+                                "max_drawdown_duration_days"
+                            ),
+                            "bull_phase_pct": movement.get("bull_phase_pct"),
+                            "bear_phase_pct": movement.get("bear_phase_pct"),
+                        }
+                    )
                 except Exception as _e:
                     _logger.debug("On-the-fly analysis failed for %s: %s", ticker, _e)
         except Exception as _e:
             _logger.warning("On-the-fly analysis import failed: %s", _e)
         if extra_rows:
             extra_df = pd.DataFrame(extra_rows)
-            df = pd.concat([df, extra_df], ignore_index=True) if not df.empty else extra_df
+            df = (
+                pd.concat([df, extra_df], ignore_index=True)
+                if not df.empty
+                else extra_df
+            )
 
     _FILLED_SUMMARY_CACHE.update({"data": df, "expiry": now + _SHARED_TTL})
     return df

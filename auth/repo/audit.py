@@ -14,8 +14,8 @@ from typing import Any, Dict, List, Optional
 
 import pyarrow as pa
 
-from auth.repo.schemas import _AUDIT_PA_SCHEMA, _to_ts, _now_utc, _from_ts
 from auth.repo.catalog import audit_table
+from auth.repo.schemas import _AUDIT_PA_SCHEMA, _from_ts, _now_utc, _to_ts
 
 # Module-level logger; kept at module scope intentionally (not a mutable data global).
 logger = logging.getLogger(__name__)
@@ -74,7 +74,8 @@ def list_audit_events(cat) -> List[Dict[str, Any]]:
         d["event_timestamp"] = _from_ts(d.get("event_timestamp"))
         result.append(d)
     result.sort(
-        key=lambda r: r.get("event_timestamp") or datetime(1970, 1, 1, tzinfo=timezone.utc),
+        key=lambda r: r.get("event_timestamp")
+        or datetime(1970, 1, 1, tzinfo=timezone.utc),
         reverse=True,
     )
     return result

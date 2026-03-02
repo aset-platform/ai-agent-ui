@@ -67,6 +67,7 @@ def _get_repo():
         if _root not in sys.path:
             sys.path.insert(0, _root)
         from stocks.repository import StockRepository  # noqa: PLC0415
+
         _ss._STOCK_REPO = StockRepository()
         _logger.debug("StockRepository initialised")
     except Exception as _e:
@@ -107,6 +108,7 @@ def _parquet_path(ticker: str) -> Path:
         Path object like ``data/raw/{TICKER}_raw.parquet``.
     """
     import tools._stock_shared as _ss
+
     return _ss._DATA_RAW / f"{ticker}_raw.parquet"
 
 

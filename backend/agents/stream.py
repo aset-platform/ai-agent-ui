@@ -12,9 +12,8 @@ import json
 import logging
 from typing import TYPE_CHECKING, Dict, Iterator, List
 
-from langchain_core.messages import ToolMessage
-
 from agents.config import MAX_ITERATIONS
+from langchain_core.messages import ToolMessage
 
 if TYPE_CHECKING:
     from agents.base import BaseAgent
@@ -62,9 +61,7 @@ def stream(agent: "BaseAgent", user_input: str, history: List[Dict]) -> Iterator
         while True:
             iteration += 1
             if iteration > MAX_ITERATIONS:
-                warning_msg = (
-                    f"Agent hit MAX_ITERATIONS ({MAX_ITERATIONS}); returning last response."
-                )
+                warning_msg = f"Agent hit MAX_ITERATIONS ({MAX_ITERATIONS}); returning last response."
                 agent.logger.warning(
                     "Agent '%s' hit MAX_ITERATIONS (%d).",
                     agent.config.agent_id,
@@ -93,7 +90,11 @@ def stream(agent: "BaseAgent", user_input: str, history: List[Dict]) -> Iterator
                 result = agent.tool_registry.invoke(tool_name, tool_args)
                 yield (
                     json.dumps(
-                        {"type": "tool_done", "tool": tool_name, "preview": result[:300]}
+                        {
+                            "type": "tool_done",
+                            "tool": tool_name,
+                            "preview": result[:300],
+                        }
                     )
                     + "\n"
                 )
