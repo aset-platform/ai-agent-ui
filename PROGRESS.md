@@ -2,6 +2,35 @@
 
 ---
 
+# Session: Mar 2, 2026 — External env symlinks + setup.sh + optional Groq fallback
+
+## Summary
+Three changes in this session:
+
+### 1. `setup.sh` first-time installer (feature/setup-script, PR #33 → dev)
+- Created `setup.sh` — 11-step idempotent installer (OS detection, pyenv, virtualenv, pip, npm, directories, API key prompts, config generation, Iceberg init, admin seed, git hooks)
+- Supports `--non-interactive` mode for CI/Docker
+- Updated CLAUDE.md and README.md
+
+### 2. Optional Groq in FallbackLLM (fix/optional-groq-fallback, PR #35 → dev)
+- `backend/llm_fallback.py`: Groq import is now optional (`try/except ImportError`)
+- Checks `GROQ_API_KEY` env var before creating `ChatGroq` — when missing, uses Anthropic only
+- Prevents crash on machines without Groq credentials
+
+### 3. External env symlink strategy (feature/external-env-symlink)
+- `setup.sh` Step 10 now writes master env files to `~/.ai-agent-ui/`:
+  - `~/.ai-agent-ui/backend.env` and `~/.ai-agent-ui/frontend.env.local`
+  - `backend/.env` and `frontend/.env.local` are symlinks to those master files
+- Auto-migrates existing real files to external location
+- Secrets survive branch checkouts and merges
+- Updated CLAUDE.md and README.md with symlink documentation
+
+### dev → qa promotion (PR #34)
+- Resolved 32 merge conflicts (dev wins) + formatting fixes
+- Corrupted virtualenv after merge — rebuilt via `./setup.sh --non-interactive`
+
+---
+
 # Session: Mar 2, 2026 — Fix Adj Close NaN IndexError on forecast page (feature/fix-adj-close-nan)
 
 ## Summary
