@@ -7,8 +7,8 @@ Re-exports the public API for convenience::
 
 import logging
 
-from agents.config import AgentConfig, MAX_ITERATIONS
 from agents.base import BaseAgent
+from agents.config import MAX_ITERATIONS, AgentConfig
 
 logger = logging.getLogger(__name__)
 

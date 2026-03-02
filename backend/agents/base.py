@@ -16,15 +16,13 @@ Typical usage::
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Iterator, List, Dict
-
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
-
-from agents.config import AgentConfig, MAX_ITERATIONS
-from tools.registry import ToolRegistry
+from typing import Dict, Iterator, List
 
 import agents.loop as _loop
 import agents.stream as _stream
+from agents.config import MAX_ITERATIONS, AgentConfig
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from tools.registry import ToolRegistry
 
 
 class BaseAgent(ABC):
@@ -79,7 +77,9 @@ class BaseAgent(ABC):
         """
         ...
 
-    def _build_messages(self, user_input: str, history: List[Dict]) -> List[BaseMessage]:
+    def _build_messages(
+        self, user_input: str, history: List[Dict]
+    ) -> List[BaseMessage]:
         """Convert raw conversation history and user input into LangChain messages.
 
         Args:

@@ -19,7 +19,6 @@ from typing import Optional
 
 import holidays as holidays_lib
 import pandas as pd
-
 from tools._stock_shared import _get_repo, _require_repo  # noqa: F401 — re-exported
 
 # Module-level logger; mutable but required at module scope for use before any class is instantiated.
@@ -88,14 +87,18 @@ def _load_parquet(ticker: str) -> Optional[pd.DataFrame]:
             return None
         df["date"] = pd.to_datetime(df["date"])
         df = df.sort_values("date").set_index("date")
-        result = pd.DataFrame({
-            "Open": df["open"],
-            "High": df["high"],
-            "Low": df["low"],
-            "Close": df["close"],
-            "Adj Close": df["adj_close"] if "adj_close" in df.columns else df["close"],
-            "Volume": df["volume"],
-        })
+        result = pd.DataFrame(
+            {
+                "Open": df["open"],
+                "High": df["high"],
+                "Low": df["low"],
+                "Close": df["close"],
+                "Adj Close": df["adj_close"]
+                if "adj_close" in df.columns
+                else df["close"],
+                "Volume": df["volume"],
+            }
+        )
         result.index.name = "Date"
         result.index = pd.to_datetime(result.index)
         return result
@@ -115,8 +118,5 @@ def _build_holidays_df(years: range) -> pd.DataFrame:
         (:class:`pandas.Timestamp`), ready to pass to :class:`Prophet`.
     """
     us_hols = holidays_lib.country_holidays("US", years=list(years))
-    rows = [
-        {"holiday": name, "ds": pd.Timestamp(dt)}
-        for dt, name in us_hols.items()
-    ]
+    rows = [{"holiday": name, "ds": pd.Timestamp(dt)} for dt, name in us_hols.items()]
     return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["holiday", "ds"])

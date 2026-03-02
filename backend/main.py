@@ -59,36 +59,37 @@ _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
+from agents.general_agent import create_general_agent
+from agents.registry import AgentRegistry
+from agents.stock_agent import create_stock_agent
+from config import Settings, get_settings
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-
-from config import Settings, get_settings
 from logging_config import setup_logging
 from models import ChatRequest, ChatResponse
-from tools.registry import ToolRegistry
-from tools.time_tool import get_current_time
-from tools.search_tool import search_web
-from agents.registry import AgentRegistry
-from agents.general_agent import create_general_agent
 from tools.agent_tool import create_search_market_news_tool
+from tools.forecasting_tool import forecast_stock
+from tools.price_analysis_tool import analyse_stock_price
+from tools.registry import ToolRegistry
+from tools.search_tool import search_web
 
 # === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
 from tools.stock_data_tool import (
-    fetch_stock_data,
-    get_stock_info,
-    load_stock_data,
     fetch_multiple_stocks,
+    fetch_stock_data,
     get_dividend_history,
+    get_stock_info,
     list_available_stocks,
+    load_stock_data,
 )
-from tools.price_analysis_tool import analyse_stock_price
-from tools.forecasting_tool import forecast_stock
-from agents.stock_agent import create_stock_agent
-# === END STOCK AGENT ROUTING ===
+from tools.time_tool import get_current_time
 
 from auth.api import create_auth_router
+
+# === END STOCK AGENT ROUTING ===
+
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +200,9 @@ class ChatServer:
         # Serve uploaded avatars as static files at /avatars/{filename}
         _avatars_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "..", "data", "avatars",
+            "..",
+            "data",
+            "avatars",
         )
         os.makedirs(_avatars_dir, exist_ok=True)
         app.mount("/avatars", StaticFiles(directory=_avatars_dir), name="avatars")
@@ -308,10 +311,12 @@ class ChatServer:
             while True:
                 elapsed = time.time() - start
                 if elapsed >= timeout:
-                    yield json.dumps({
-                        "type": "timeout",
-                        "message": f"Agent timed out after {timeout}s",
-                    }) + "\n"
+                    yield json.dumps(
+                        {
+                            "type": "timeout",
+                            "message": f"Agent timed out after {timeout}s",
+                        }
+                    ) + "\n"
                     break
                 remaining = timeout - elapsed
                 try:
@@ -321,10 +326,12 @@ class ChatServer:
                     yield item
                 except queue.Empty:
                     if time.time() - start >= timeout:
-                        yield json.dumps({
-                            "type": "timeout",
-                            "message": f"Agent timed out after {timeout}s",
-                        }) + "\n"
+                        yield json.dumps(
+                            {
+                                "type": "timeout",
+                                "message": f"Agent timed out after {timeout}s",
+                            }
+                        ) + "\n"
                         break
 
             worker.join(timeout=2)
@@ -368,12 +375,12 @@ setup_logging(level=_settings.log_level, log_to_file=_settings.log_to_file)
 # _env_exports is module-level because it drives one-time environment
 # initialisation that must complete before any imports consume os.environ.
 _env_exports = {
-    "GROQ_API_KEY":                  _settings.groq_api_key,
-    "ANTHROPIC_API_KEY":             _settings.anthropic_api_key,
-    "SERPAPI_API_KEY":               _settings.serpapi_api_key,
-    "JWT_SECRET_KEY":                _settings.jwt_secret_key,
-    "ACCESS_TOKEN_EXPIRE_MINUTES":   str(_settings.access_token_expire_minutes),
-    "REFRESH_TOKEN_EXPIRE_DAYS":     str(_settings.refresh_token_expire_days),
+    "GROQ_API_KEY": _settings.groq_api_key,
+    "ANTHROPIC_API_KEY": _settings.anthropic_api_key,
+    "SERPAPI_API_KEY": _settings.serpapi_api_key,
+    "JWT_SECRET_KEY": _settings.jwt_secret_key,
+    "ACCESS_TOKEN_EXPIRE_MINUTES": str(_settings.access_token_expire_minutes),
+    "REFRESH_TOKEN_EXPIRE_DAYS": str(_settings.refresh_token_expire_days),
 }
 for _key, _val in _env_exports.items():
     if _val and _key not in os.environ:

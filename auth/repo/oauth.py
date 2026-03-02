@@ -10,8 +10,8 @@ import logging
 import secrets as _secrets
 from typing import Any, Dict, Optional
 
-from auth.repo.schemas import _now_utc
 from auth.repo.catalog import scan_all_users
+from auth.repo.schemas import _now_utc
 from auth.repo.user_reads import get_by_email, get_by_id
 from auth.repo.user_writes import create, update
 

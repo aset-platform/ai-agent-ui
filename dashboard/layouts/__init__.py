@@ -6,14 +6,14 @@ Re-exports all public layout constants and factory functions so that
 
 import logging
 
-from dashboard.layouts.helpers import _get_available_tickers, _load_registry
-from dashboard.layouts.navbar import NAVBAR
-from dashboard.layouts.home import home_layout
-from dashboard.layouts.analysis import analysis_layout, analysis_tabs_layout
-from dashboard.layouts.forecast import forecast_layout
-from dashboard.layouts.compare import compare_layout
 from dashboard.layouts.admin import admin_users_layout
+from dashboard.layouts.analysis import analysis_layout, analysis_tabs_layout
+from dashboard.layouts.compare import compare_layout
+from dashboard.layouts.forecast import forecast_layout
+from dashboard.layouts.helpers import _get_available_tickers, _load_registry
+from dashboard.layouts.home import home_layout
 from dashboard.layouts.insights import insights_layout
+from dashboard.layouts.navbar import NAVBAR
 
 logger = logging.getLogger(__name__)
 

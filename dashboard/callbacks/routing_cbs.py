@@ -23,11 +23,11 @@ logger = logging.getLogger(__name__)
 # Module-level mapping of routes to display suffixes.  Prefixed with '_' to
 # signal that it is an internal implementation detail of this module.
 _PAGE_NAMES = {
-    "/":            "",
-    "/analysis":    " → Analysis",
-    "/forecast":    " → Forecast",
-    "/compare":     " → Compare Stocks",
-    "/insights":    " → Insights",
+    "/": "",
+    "/analysis": " → Analysis",
+    "/forecast": " → Forecast",
+    "/compare": " → Compare Stocks",
+    "/insights": " → Insights",
     "/admin/users": " → Admin",
 }
 
@@ -94,7 +94,9 @@ def register(app) -> None:
         """
         resolved = pathname or "/"
         page_name = _PAGE_NAMES.get(resolved, "")
-        logger.debug("Navbar page name updated to %r for pathname %r.", page_name, resolved)
+        logger.debug(
+            "Navbar page name updated to %r for pathname %r.", page_name, resolved
+        )
         return page_name
 
     @app.callback(

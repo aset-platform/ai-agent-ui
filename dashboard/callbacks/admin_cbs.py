@@ -32,7 +32,7 @@ def register(app) -> None:
 
     @app.callback(
         Output("users-pagination", "active_page"),
-        Input("users-search",    "value"),
+        Input("users-search", "value"),
         Input("users-page-size", "value"),
         prevent_initial_call=True,
     )
@@ -50,7 +50,7 @@ def register(app) -> None:
 
     @app.callback(
         Output("audit-pagination", "active_page"),
-        Input("audit-search",    "value"),
+        Input("audit-search", "value"),
         Input("audit-page-size", "value"),
         prevent_initial_call=True,
     )
@@ -99,7 +99,7 @@ def register(app) -> None:
             return no_update
 
         token = _resolve_token(stored_token, url_search)
-        resp  = _api_call("get", "/users", token)
+        resp = _api_call("get", "/users", token)
         if resp is None or not resp.ok:
             return []
 
@@ -107,12 +107,12 @@ def register(app) -> None:
 
     @app.callback(
         Output("users-table-container", "children"),
-        Output("users-pagination",      "max_value"),
-        Output("users-count-text",      "children"),
-        Input("users-store",      "data"),
+        Output("users-pagination", "max_value"),
+        Output("users-count-text", "children"),
+        Input("users-store", "data"),
         Input("users-pagination", "active_page"),
-        Input("users-search",     "value"),
-        Input("users-page-size",  "value"),
+        Input("users-search", "value"),
+        Input("users-page-size", "value"),
     )
     def render_users_page(users_data, active_page, search_term, page_size):
         """Filter, slice, and render one page of the users table.
@@ -127,13 +127,14 @@ def register(app) -> None:
             Tuple of (table component, pagination max_value, count text).
         """
         page_size_int = int(page_size or 10)
-        users         = users_data or []
+        users = users_data or []
 
         # Apply search filter
         q = (search_term or "").strip().lower()
         if q:
             users = [
-                u for u in users
+                u
+                for u in users
                 if q in (u.get("full_name") or "").lower()
                 or q in (u.get("email") or "").lower()
                 or q in (u.get("role") or "").lower()
@@ -144,12 +145,14 @@ def register(app) -> None:
             msg = "No matching users found." if q else "No user accounts found."
             return html.P(msg, className="text-muted"), 1, ""
         max_pages = max(1, math.ceil(total / page_size_int))
-        page      = min(active_page or 1, max_pages)
-        start     = (page - 1) * page_size_int
-        count_txt = (
-            f"Showing {start + 1}\u2013{min(start + page_size_int, total)} of {total} users"
+        page = min(active_page or 1, max_pages)
+        start = (page - 1) * page_size_int
+        count_txt = f"Showing {start + 1}\u2013{min(start + page_size_int, total)} of {total} users"
+        return (
+            _build_users_table(users[start : start + page_size_int]),
+            max_pages,
+            count_txt,
         )
-        return _build_users_table(users[start: start + page_size_int]), max_pages, count_txt
 
     @app.callback(
         Output("audit-data-store", "data"),
@@ -183,7 +186,7 @@ def register(app) -> None:
             return no_update
 
         token = _resolve_token(stored_token, url_search)
-        resp  = _api_call("get", "/admin/audit-log", token)
+        resp = _api_call("get", "/admin/audit-log", token)
         if resp is None or not resp.ok:
             return []
 
@@ -191,12 +194,12 @@ def register(app) -> None:
 
     @app.callback(
         Output("audit-log-container", "children"),
-        Output("audit-pagination",    "max_value"),
-        Output("audit-count-text",    "children"),
-        Input("audit-data-store",  "data"),
-        Input("audit-pagination",  "active_page"),
-        Input("audit-search",      "value"),
-        Input("audit-page-size",   "value"),
+        Output("audit-pagination", "max_value"),
+        Output("audit-count-text", "children"),
+        Input("audit-data-store", "data"),
+        Input("audit-pagination", "active_page"),
+        Input("audit-search", "value"),
+        Input("audit-page-size", "value"),
     )
     def render_audit_page(audit_data, active_page, search_term, page_size):
         """Filter, slice, and render one page of the audit log table.
@@ -211,13 +214,14 @@ def register(app) -> None:
             Tuple of (table component, pagination max_value, count text).
         """
         page_size_int = int(page_size or 10)
-        events        = audit_data or []
+        events = audit_data or []
 
         # Apply search filter
         q = (search_term or "").strip().lower()
         if q:
             events = [
-                e for e in events
+                e
+                for e in events
                 if q in (e.get("event_type") or "").lower()
                 or q in (e.get("actor_user_id") or "").lower()
                 or q in (e.get("target_user_id") or "").lower()
@@ -229,9 +233,11 @@ def register(app) -> None:
             msg = "No matching events found." if q else "No audit events found."
             return html.P(msg, className="text-muted"), 1, ""
         max_pages = max(1, math.ceil(total / page_size_int))
-        page      = min(active_page or 1, max_pages)
-        start     = (page - 1) * page_size_int
-        count_txt = (
-            f"Showing {start + 1}\u2013{min(start + page_size_int, total)} of {total} events"
+        page = min(active_page or 1, max_pages)
+        start = (page - 1) * page_size_int
+        count_txt = f"Showing {start + 1}\u2013{min(start + page_size_int, total)} of {total} events"
+        return (
+            _build_audit_table(events[start : start + page_size_int]),
+            max_pages,
+            count_txt,
         )
-        return _build_audit_table(events[start: start + page_size_int]), max_pages, count_txt

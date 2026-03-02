@@ -28,9 +28,8 @@ Typical usage::
     reply = agent.run("Analyse AAPL")
 """
 
-from llm_fallback import FallbackLLM
-
 from agents.base import AgentConfig, BaseAgent
+from llm_fallback import FallbackLLM
 from tools.registry import ToolRegistry
 
 # ---------------------------------------------------------------------------
