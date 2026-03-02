@@ -97,6 +97,9 @@ Run all: `./run.sh start`  ·  Status: `./run.sh status`  ·  Virtualenv: `sourc
 ## Key File Locations
 
 ```
+setup.sh                     # First-time installer — run once on fresh clone
+                             #   Usage: ./setup.sh (interactive) or ./setup.sh --non-interactive
+
 backend/
   main.py                  # ChatServer (owns ToolRegistry + AgentRegistry + FastAPI app)
   config.py                # Pydantic Settings — reads backend/.env
@@ -171,6 +174,7 @@ Branch protection (apply manually in GitHub → Settings → Branches):
 - `release`: PR from `qa` only, 1 approval + QA lead
 - `qa`: PR from `dev` only, 1 approval
 - `dev`: PR from `feature/*`, 1 approval, unit tests + lint must pass
+- All the PR's should be created after resolved all the conflicts with higher branches, conflicts hould not go to gihub
 
 ### Avoiding Merge Conflicts (ALWAYS — NO EXCEPTIONS)
 
