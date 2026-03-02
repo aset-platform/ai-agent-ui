@@ -276,7 +276,6 @@ In `agents/general_agent.py` and `agents/stock_agent.py` (2-line change each):
 from langchain_anthropic import ChatAnthropic                                          # replace langchain_groq import
 return ChatAnthropic(model="claude-sonnet-4-6", temperature=self.config.temperature)   # in _build_llm()
 ```
-
 Update `model` field in factory to `"claude-sonnet-4-6"`. Set `ANTHROPIC_API_KEY` in `backend/.env`.
 
 ---
