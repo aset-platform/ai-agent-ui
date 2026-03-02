@@ -12,11 +12,11 @@ import logging
 from fastapi import APIRouter
 
 from auth.endpoints import (
-    auth_routes,
-    user_routes,
-    profile_routes,
-    oauth_routes,
     admin_routes,
+    auth_routes,
+    oauth_routes,
+    profile_routes,
+    user_routes,
 )
 
 logger = logging.getLogger(__name__)

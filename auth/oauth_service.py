@@ -154,7 +154,9 @@ class OAuthService:
         else:
             raise ValueError(f"Unknown OAuth provider: '{provider}'")
 
-        self._logger.debug("Generated authorize URL for provider=%s state=%s", provider, state)
+        self._logger.debug(
+            "Generated authorize URL for provider=%s state=%s", provider, state
+        )
         return state, url
 
     def validate_state(self, state: str, provider: str) -> bool:
@@ -195,9 +197,7 @@ class OAuthService:
     # Google token exchange
     # ------------------------------------------------------------------
 
-    def exchange_google_code(
-        self, code: str, code_verifier: str
-    ) -> Dict[str, Any]:
+    def exchange_google_code(self, code: str, code_verifier: str) -> Dict[str, Any]:
         """Exchange a Google authorization code for user identity information.
 
         Sends the code + PKCE verifier to Google's token endpoint.

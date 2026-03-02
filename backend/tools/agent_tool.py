@@ -19,9 +19,8 @@ Typical usage (in ``main.py``)::
 
 import logging
 
-from langchain_core.tools import BaseTool, tool
-
 from agents.base import BaseAgent
+from langchain_core.tools import BaseTool, tool
 
 logger = logging.getLogger(__name__)
 

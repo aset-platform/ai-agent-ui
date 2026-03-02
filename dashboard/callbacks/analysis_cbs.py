@@ -21,9 +21,9 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import Input, Output, State, ctx, html, no_update
 
-from dashboard.callbacks.auth_utils import _validate_token, _unauth_notice
-from dashboard.callbacks.chart_builders import _build_analysis_fig, _empty_fig
+from dashboard.callbacks.auth_utils import _unauth_notice, _validate_token
 from dashboard.callbacks.card_builders import _build_stats_cards
+from dashboard.callbacks.chart_builders import _build_analysis_fig, _empty_fig
 from dashboard.callbacks.data_loaders import (
     _add_indicators,
     _add_indicators_cached,
@@ -102,7 +102,9 @@ def register(app) -> None:
         df = _load_raw(ticker)
         if df is None:
             return (
-                _empty_fig(f"No data found for '{ticker}'. Fetch data via the chat interface."),
+                _empty_fig(
+                    f"No data found for '{ticker}'. Fetch data via the chat interface."
+                ),
                 [],
             )
 
@@ -111,7 +113,9 @@ def register(app) -> None:
 
         # Apply date-range filter
         n_map = {0: 21, 1: 63, 2: 126, 3: 252, 4: 756, 5: len(df_full)}
-        n_days = n_map.get(date_range_idx if date_range_idx is not None else 5, len(df_full))
+        n_days = n_map.get(
+            date_range_idx if date_range_idx is not None else 5, len(df_full)
+        )
         df_plot = df_full.tail(n_days).copy()
 
         overlays = overlays or []
@@ -121,9 +125,9 @@ def register(app) -> None:
 
     @app.callback(
         [
-            Output("compare-perf-chart",       "figure"),
+            Output("compare-perf-chart", "figure"),
             Output("compare-metrics-container", "children"),
-            Output("compare-heatmap",           "figure"),
+            Output("compare-heatmap", "figure"),
         ],
         Input("compare-ticker-dropdown", "value"),
         State("auth-token-store", "data"),
@@ -176,21 +180,31 @@ def register(app) -> None:
         final_values = {}
         for t, series in aligned.items():
             norm = (series / series.iloc[0]) * 100
-            perf_fig.add_trace(go.Scatter(
-                x=norm.index, y=norm, name=t, mode="lines", line=dict(width=2),
-            ))
+            perf_fig.add_trace(
+                go.Scatter(
+                    x=norm.index,
+                    y=norm,
+                    name=t,
+                    mode="lines",
+                    line=dict(width=2),
+                )
+            )
             final_values[t] = float(norm.iloc[-1])
 
         best_ticker = max(final_values, key=final_values.get)
         perf_fig.update_layout(
-            template="plotly_white", height=450,
-            paper_bgcolor="#ffffff", plot_bgcolor="#f9fafb",
+            template="plotly_white",
+            height=450,
+            paper_bgcolor="#ffffff",
+            plot_bgcolor="#f9fafb",
             font=dict(color="#111827"),
             title=dict(text="Normalised Performance (Base = 100)", font=dict(size=15)),
             yaxis_title="Value (Base 100)",
             margin=dict(l=60, r=30, t=60, b=40),
             hovermode="x unified",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=1, xanchor="right"),
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, x=1, xanchor="right"
+            ),
         )
         perf_fig.update_xaxes(gridcolor="#e5e7eb")
         perf_fig.update_yaxes(gridcolor="#e5e7eb")
@@ -203,61 +217,77 @@ def register(app) -> None:
             df_ind = _add_indicators_cached(t, df)
             close = df["Close"]
             daily = close.pct_change().dropna()
-            ann_vol   = daily.std() * math.sqrt(252)
-            ann_ret   = daily.mean() * 252
-            sharpe    = round((ann_ret - 0.04) / ann_vol if ann_vol > 0 else 0.0, 2)
-            rm        = close.cummax()
-            dd        = (close - rm) / rm
-            max_dd    = round(float(dd.min() * 100), 2)
-            rsi_val   = (
+            ann_vol = daily.std() * math.sqrt(252)
+            ann_ret = daily.mean() * 252
+            sharpe = round((ann_ret - 0.04) / ann_vol if ann_vol > 0 else 0.0, 2)
+            rm = close.cummax()
+            dd = (close - rm) / rm
+            max_dd = round(float(dd.min() * 100), 2)
+            rsi_val = (
                 round(float(df_ind["RSI_14"].iloc[-1]), 1)
-                if "RSI_14" in df_ind.columns else "N/A"
+                if "RSI_14" in df_ind.columns
+                else "N/A"
             )
             macd_val = df_ind["MACD"].iloc[-1] if "MACD" in df_ind.columns else None
-            msig_val = df_ind["MACD_Signal"].iloc[-1] if "MACD_Signal" in df_ind.columns else None
+            msig_val = (
+                df_ind["MACD_Signal"].iloc[-1]
+                if "MACD_Signal" in df_ind.columns
+                else None
+            )
             macd_sig = (
                 "Bullish"
-                if (macd_val is not None and msig_val is not None and macd_val > msig_val)
+                if (
+                    macd_val is not None
+                    and msig_val is not None
+                    and macd_val > msig_val
+                )
                 else "Bearish"
             )
 
             # 6-month forecast upside
             fc_df = _load_forecast(t, 6)
             if fc_df is not None and len(fc_df) > 0:
-                cp        = float(close.iloc[-1])
-                fp        = float(fc_df["yhat"].iloc[-1])
+                cp = float(close.iloc[-1])
+                fp = float(fc_df["yhat"].iloc[-1])
                 fc_upside = f"{(fp - cp)/cp*100:+.1f}%"
-                fc_sent   = (
-                    "Bullish" if (fp - cp)/cp*100 > 10
-                    else ("Bearish" if (fp - cp)/cp*100 < -10 else "Neutral")
+                fc_sent = (
+                    "Bullish"
+                    if (fp - cp) / cp * 100 > 10
+                    else ("Bearish" if (fp - cp) / cp * 100 < -10 else "Neutral")
                 )
             else:
                 fc_upside = "N/A"
-                fc_sent   = "N/A"
+                fc_sent = "N/A"
 
             badge = "🏆 " if t == best_ticker else ""
-            rows.append({
-                "Ticker":       f"{badge}{t}",
-                "Annual Ret":   f"{ann_ret*100:+.1f}%",
-                "Volatility":   f"{ann_vol*100:.1f}%",
-                "Sharpe":       str(sharpe),
-                "Max Drawdown": f"{max_dd:.1f}%",
-                "RSI":          str(rsi_val),
-                "MACD":         macd_sig,
-                "6M Upside":    fc_upside,
-                "Sentiment":    fc_sent,
-            })
+            rows.append(
+                {
+                    "Ticker": f"{badge}{t}",
+                    "Annual Ret": f"{ann_ret*100:+.1f}%",
+                    "Volatility": f"{ann_vol*100:.1f}%",
+                    "Sharpe": str(sharpe),
+                    "Max Drawdown": f"{max_dd:.1f}%",
+                    "RSI": str(rsi_val),
+                    "MACD": macd_sig,
+                    "6M Upside": fc_upside,
+                    "Sentiment": fc_sent,
+                }
+            )
 
-        metrics_df   = pd.DataFrame(rows)
-        header_cells = [html.Th(col, className="text-muted small") for col in metrics_df.columns]
-        body_rows    = []
+        metrics_df = pd.DataFrame(rows)
+        header_cells = [
+            html.Th(col, className="text-muted small") for col in metrics_df.columns
+        ]
+        body_rows = []
         for _, row in metrics_df.iterrows():
             cells = [html.Td(str(v), className="small") for v in row]
             body_rows.append(html.Tr(cells))
 
         table = dbc.Table(
             [html.Thead(html.Tr(header_cells)), html.Tbody(body_rows)],
-            bordered=True, hover=True, responsive=True,
+            bordered=True,
+            hover=True,
+            responsive=True,
             className="table table-sm mt-2",
         )
 
@@ -265,20 +295,25 @@ def register(app) -> None:
         returns_dict = {t: aligned[t].pct_change().dropna() for t in aligned}
         corr = pd.DataFrame(returns_dict).corr()
 
-        heat_fig = go.Figure(go.Heatmap(
-            z=corr.values,
-            x=list(corr.columns),
-            y=list(corr.index),
-            colorscale="RdBu",
-            zmid=0,
-            zmin=-1, zmax=1,
-            text=[[f"{v:.2f}" for v in row] for row in corr.values],
-            texttemplate="%{text}",
-            showscale=True,
-        ))
+        heat_fig = go.Figure(
+            go.Heatmap(
+                z=corr.values,
+                x=list(corr.columns),
+                y=list(corr.index),
+                colorscale="RdBu",
+                zmid=0,
+                zmin=-1,
+                zmax=1,
+                text=[[f"{v:.2f}" for v in row] for row in corr.values],
+                texttemplate="%{text}",
+                showscale=True,
+            )
+        )
         heat_fig.update_layout(
-            template="plotly_white", height=380,
-            paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
+            template="plotly_white",
+            height=380,
+            paper_bgcolor="#ffffff",
+            plot_bgcolor="#ffffff",
             font=dict(color="#111827"),
             margin=dict(l=60, r=10, t=40, b=40),
             title=dict(text="Daily Returns Correlation", font=dict(size=13)),

@@ -20,6 +20,65 @@ git branch --show-current   # confirm before touching files
 
 ---
 
+## Pre-Commit / Pre-Push Lint Checklist (ALWAYS — NO EXCEPTIONS)
+
+**Every commit and PR must be lint-clean.** Run these locally before pushing — CI will reject lint failures.
+
+### Frontend (from `frontend/`)
+
+```bash
+cd frontend
+npx eslint . --fix          # auto-fix what it can
+npx eslint .                # verify zero errors remain
+```
+
+- ESLint flat config: `frontend/eslint.config.mjs`
+- Key rules enforced by CI: `@next/next/no-img-element` (use `<Image />` from `next/image`), `react-hooks/*`, no unused imports
+- If a rule must be suppressed, use **block-level** `/* eslint-disable rule-name */` with a comment explaining why — never blanket-disable
+
+### Backend (from project root, inside virtualenv)
+
+```bash
+source backend/demoenv/bin/activate
+black backend/ auth/ stocks/ scripts/ dashboard/ --check   # formatting
+isort backend/ auth/ stocks/ scripts/ dashboard/ --check    # import order
+flake8 backend/ auth/ stocks/ scripts/ dashboard/           # style + errors
+```
+
+To auto-fix:
+
+```bash
+black backend/ auth/ stocks/ scripts/ dashboard/
+isort backend/ auth/ stocks/ scripts/ dashboard/
+# Then fix any remaining flake8 issues manually
+```
+
+### Workflow
+
+```
+Write code
+    ↓
+Run lint locally (eslint / flake8+black+isort)
+    ↓
+Auto-fix (--fix / black / isort)
+    ↓
+Fix remaining issues manually
+    ↓
+git add → git commit → pre-commit hook re-checks
+    ↓
+git fetch origin && git merge origin/<target-branch>   ← resolve conflicts locally
+    ↓
+git push → CI passes
+    ↓
+PR is clean → ready for review
+```
+
+> **Never push code with linting errors.** Pre-commit hooks catch most issues, but always verify with a manual lint pass before creating a PR.
+>
+> **Never push without syncing.** Always `git fetch origin && git merge origin/<target>` before pushing to avoid merge conflicts on the PR.
+
+---
+
 ## Project Overview
 
 Fullstack agentic chat app. See `README.md` for full architecture, quick start, and tech stack.
@@ -38,6 +97,9 @@ Run all: `./run.sh start`  ·  Status: `./run.sh status`  ·  Virtualenv: `sourc
 ## Key File Locations
 
 ```
+setup.sh                     # First-time installer — run once on fresh clone
+                             #   Usage: ./setup.sh (interactive) or ./setup.sh --non-interactive
+
 backend/
   main.py                  # ChatServer (owns ToolRegistry + AgentRegistry + FastAPI app)
   config.py                # Pydantic Settings — reads backend/.env
@@ -51,10 +113,10 @@ auth/                      # JWT auth + RBAC; Iceberg/SQLite storage
   migrate_users_table.py   # Iceberg schema migration — run once per deployment
   oauth_service.py         # Google/Facebook SSO (PKCE)
 
-stocks/                    # Iceberg persistence layer for all stock data
+stocks/                    # Iceberg persistence layer for all stock data (single source of truth)
   create_tables.py         # Idempotent init of 8 stocks.* tables — called by run.sh on every start
-  repository.py            # StockRepository — CRUD for all 8 tables
-  backfill.py              # One-time migration of flat files → Iceberg (run once after create_tables)
+  repository.py            # StockRepository — CRUD for all 8 tables + registry/company_info queries
+  backfill_metadata.py     # One-time JSON→Iceberg migration for registry + company_info (idempotent)
 
 scripts/seed_admin.py      # Bootstrap superuser from env vars
 
@@ -69,11 +131,11 @@ hooks/pre-push             # Blocks push to main on print() or mkdocs build fail
 ```
 
 Data paths:
-- Raw OHLCV: `data/raw/{TICKER}_raw.parquet`
-- Forecasts: `data/forecasts/{TICKER}_{N}m_forecast.parquet`
+- Raw OHLCV: `data/raw/{TICKER}_raw.parquet` (local backup only; Iceberg is primary)
+- Forecasts: `data/forecasts/{TICKER}_{N}m_forecast.parquet` (local backup only; Iceberg is primary)
 - Cache (same-day, gitignored): `data/cache/`
-- Metadata (tracked): `data/metadata/{TICKER}_info.json`, `stock_registry.json`
 - Iceberg catalog: `data/iceberg/catalog.db` (SQLite); warehouse: `data/iceberg/warehouse/`
+- Metadata JSON files (legacy, gitignored): `data/metadata/*.json` — replaced by Iceberg tables
 
 ---
 
@@ -112,6 +174,33 @@ Branch protection (apply manually in GitHub → Settings → Branches):
 - `release`: PR from `qa` only, 1 approval + QA lead
 - `qa`: PR from `dev` only, 1 approval
 - `dev`: PR from `feature/*`, 1 approval, unit tests + lint must pass
+- All the PR's should be created after resolved all the conflicts with higher branches, conflicts hould not go to gihub
+
+### Avoiding Merge Conflicts (ALWAYS — NO EXCEPTIONS)
+
+**Before every push** — sync your branch with the target to catch conflicts early:
+
+```bash
+git fetch origin
+git merge origin/<target-branch>   # e.g. origin/dev for feature→dev
+# If conflicts → resolve locally, then: git add <files> && git commit
+git push origin HEAD
+```
+
+**Before raising any PR** — do a final sync + verify:
+
+```bash
+git fetch origin
+git merge origin/<target-branch>   # e.g. origin/dev for feature→dev, origin/qa for dev→qa
+git push origin HEAD
+```
+
+Rules:
+- **Never raise a PR on a branch that is behind the target branch.**
+- **Resolve all conflicts locally** — never rely on GitHub's auto-merge.
+- If your feature branch is long-lived (> 1 day), merge the target into it daily.
+- After resolving conflicts, **re-run lint** — merges can introduce new violations.
+- This applies to every promotion: `feature→dev`, `dev→qa`, `qa→release`, `release→main`.
 
 ---
 
@@ -129,9 +218,11 @@ Branch protection (apply manually in GitHub → Settings → Branches):
 - **OAuth PKCE** — `code_verifier` in sessionStorage; `code_challenge = base64url(SHA-256(verifier))`; Facebook button hidden until real credentials provided
 - **SerpAPI over Google CSE** — simpler (one key, no Google Cloud project); 100 free/month sufficient
 - **pyarrow pinned to <18** — no pre-built wheel for Python 3.9 macOS x86_64 in 18+
-- **Iceberg dual-write** — backend tools write flat files (source of truth for agents) AND Iceberg (powers Insights dashboard); `_get_repo()` lazy singleton in each tool module; all writes in `try/except` (never break tool behaviour)
+- **Iceberg single source of truth** — ALL stock data (OHLCV, metadata, analysis, forecasts) lives exclusively in Iceberg; `_require_repo()` raises `RuntimeError` if unavailable; `_load_parquet()` reads from Iceberg (not flat files); `data/raw/` and `data/forecasts/` are local backup only
+- **Iceberg writes must not be silenced** — `price_analysis_tool` and `forecasting_tool` call `_require_repo()` directly (no `try/except`); write failures propagate to the tool's main exception handler, returning an error string to the LLM
+- **Single repo singleton** — `_analysis_shared` and `_forecast_shared` import `_get_repo`/`_require_repo` from `_stock_shared` (no duplicate singletons)
 - **Iceberg upserts via copy-on-write** — no native UPDATE; pattern: read full table → mutate pandas DataFrame → `table.overwrite()`; used for `stocks.registry` and `stocks.technical_indicators`
-- **Insights dashboard pages read from Iceberg** — `/screener`, `/targets`, `/dividends`, `/risk`, `/sectors`, `/correlation`; fallback to flat parquet when Iceberg tables are empty
+- **Dashboard reads Iceberg only** — `_load_raw()` and `_load_forecast()` in `data_loaders.py` use cached Iceberg helpers (`_get_ohlcv_cached`, `_get_forecast_cached`); no flat parquet file reads; `/screener`, `/targets`, `/dividends`, `/risk`, `/sectors`, `/correlation` pages all via `StockRepository`
 
 ---
 
@@ -170,4 +261,4 @@ cp hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
 - **Facebook SSO** — code complete, credentials are placeholders; button hidden on login page
 - **`SERPAPI_API_KEY` required** for `search_web` tool (100 free/month at serpapi.com)
 - **Refresh token deny-list is in-memory** — cleared on backend restart; tokens remain valid until natural expiry
-- **Run once per new deployment**: `python auth/create_tables.py` + `python auth/migrate_users_table.py` + `python stocks/create_tables.py` + `python stocks/backfill.py`
+- **Run once per new deployment**: `python auth/create_tables.py` + `python auth/migrate_users_table.py` + `python stocks/create_tables.py` + `python stocks/backfill_metadata.py`

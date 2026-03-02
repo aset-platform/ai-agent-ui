@@ -21,20 +21,22 @@ Typical usage (via LangChain tool call)::
 
 import logging
 
-from langchain_core.tools import tool
-
 import tools._analysis_shared as _sh
+from langchain_core.tools import tool
+from tools._analysis_chart import _create_analysis_chart
 from tools._analysis_indicators import _calculate_technical_indicators
 from tools._analysis_movement import _analyse_price_movement
 from tools._analysis_summary import _generate_summary_stats
-from tools._analysis_chart import _create_analysis_chart
 
 # Module-level logger — kept at module scope as a private constant
 _logger = logging.getLogger(__name__)
 
-# Re-export helpers so tests can still monkeypatch via price_analysis_tool._get_repo
+# Re-export helpers so tests can still monkeypatch via price_analysis_tool.*
 _get_repo = _sh._get_repo
-_calculate_technical_indicators = _calculate_technical_indicators  # noqa: F811 — re-export
+_require_repo = _sh._require_repo
+_calculate_technical_indicators = (
+    _calculate_technical_indicators  # noqa: F811 — re-export
+)
 _analyse_price_movement = _analyse_price_movement  # noqa: F811 — re-export
 
 
@@ -89,20 +91,16 @@ def analyse_stock_price(ticker: str) -> str:
         stats = _generate_summary_stats(df, ticker)
         chart_path = _create_analysis_chart(df, ticker)
 
-        try:
-            repo = _sh._get_repo()
-            if repo is not None:
-                repo.upsert_technical_indicators(ticker, df)
-                _iceberg_summary = {
-                    **movement,
-                    **stats,
-                    "macd_signal_text": stats.get("macd_signal"),
-                    "support_levels": str(movement.get("support_levels", [])),
-                    "resistance_levels": str(movement.get("resistance_levels", [])),
-                }
-                repo.insert_analysis_summary(ticker, _iceberg_summary)
-        except Exception as _e:
-            _logger.error("Iceberg write failed for %s analysis: %s", ticker, _e)
+        repo = _sh._require_repo()
+        repo.upsert_technical_indicators(ticker, df)
+        _iceberg_summary = {
+            **movement,
+            **stats,
+            "macd_signal_text": stats.get("macd_signal"),
+            "support_levels": str(movement.get("support_levels", [])),
+            "resistance_levels": str(movement.get("resistance_levels", [])),
+        }
+        repo.insert_analysis_summary(ticker, _iceberg_summary)
 
         report = (
             f"=== PRICE ANALYSIS: {ticker} ===\n\n"

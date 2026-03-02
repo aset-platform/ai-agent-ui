@@ -18,9 +18,8 @@ Typical usage::
     reply = agent.run("What is the current time?")
 """
 
-from llm_fallback import FallbackLLM
-
 from agents.base import AgentConfig, BaseAgent
+from llm_fallback import FallbackLLM
 from tools.registry import ToolRegistry
 
 

@@ -51,57 +51,80 @@ def _build_forecast_fig(
 
     fig = go.Figure()
 
-    fig.add_trace(go.Scatter(
-        x=prophet_df["ds"], y=prophet_df["y"],
-        name="Historical Price",
-        line=dict(color="#1e88e5", width=2),
-        mode="lines",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=prophet_df["ds"],
+            y=prophet_df["y"],
+            name="Historical Price",
+            line=dict(color="#1e88e5", width=2),
+            mode="lines",
+        )
+    )
 
-    fig.add_trace(go.Scatter(
-        x=pd.concat([forecast_df["ds"], forecast_df["ds"].iloc[::-1]]),
-        y=pd.concat([forecast_df["yhat_upper"], forecast_df["yhat_lower"].iloc[::-1]]),
-        fill="toself",
-        fillcolor="rgba(76,175,80,0.15)",
-        line=dict(color="rgba(0,0,0,0)"),
-        name="80% Confidence Interval",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=pd.concat([forecast_df["ds"], forecast_df["ds"].iloc[::-1]]),
+            y=pd.concat(
+                [forecast_df["yhat_upper"], forecast_df["yhat_lower"].iloc[::-1]]
+            ),
+            fill="toself",
+            fillcolor="rgba(76,175,80,0.15)",
+            line=dict(color="rgba(0,0,0,0)"),
+            name="80% Confidence Interval",
+        )
+    )
 
-    fig.add_trace(go.Scatter(
-        x=forecast_df["ds"], y=forecast_df["yhat"],
-        name="Forecast",
-        line=dict(color="#4caf50", width=2, dash="dash"),
-        mode="lines",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=forecast_df["ds"],
+            y=forecast_df["yhat"],
+            name="Forecast",
+            line=dict(color="#4caf50", width=2, dash="dash"),
+            mode="lines",
+        )
+    )
 
     # Today vertical line (use add_shape — Plotly 6.x datetime workaround)
     today_ts = pd.Timestamp(date.today())
     fig.add_shape(
         type="line",
-        x0=today_ts, x1=today_ts, y0=0, y1=1,
-        xref="x", yref="paper",
+        x0=today_ts,
+        x1=today_ts,
+        y0=0,
+        y1=1,
+        xref="x",
+        yref="paper",
         line=dict(color="rgba(0,0,0,0.35)", width=1.5, dash="dot"),
     )
     fig.add_annotation(
-        x=today_ts, y=1.02, yref="paper",
-        text="Today", showarrow=False,
-        font=dict(color="rgba(0,0,0,0.6)", size=10), xanchor="left",
+        x=today_ts,
+        y=1.02,
+        yref="paper",
+        text="Today",
+        showarrow=False,
+        font=dict(color="rgba(0,0,0,0.6)", size=10),
+        xanchor="left",
     )
 
     # Current-price horizontal line
     fig.add_shape(
         type="line",
-        x0=prophet_df["ds"].min(), x1=forecast_df["ds"].max(),
-        y0=current_price, y1=current_price,
-        xref="x", yref="y",
+        x0=prophet_df["ds"].min(),
+        x1=forecast_df["ds"].max(),
+        y0=current_price,
+        y1=current_price,
+        xref="x",
+        yref="y",
         line=dict(color="rgba(0,0,0,0.2)", width=1, dash="dot"),
     )
     fig.add_annotation(
-        x=forecast_df["ds"].max(), y=current_price,
+        x=forecast_df["ds"].max(),
+        y=current_price,
         text=f"Current: {sym}{current_price:.2f}",
         showarrow=False,
         font=dict(color="rgba(0,0,0,0.5)", size=10),
-        xanchor="right", yanchor="bottom",
+        xanchor="right",
+        yanchor="bottom",
     )
 
     # Price-target annotations
@@ -109,9 +132,11 @@ def _build_forecast_fig(
     for key, target in summary.get("targets", {}).items():
         sign = "+" if target["pct_change"] >= 0 else ""
         fig.add_annotation(
-            x=target["date"], y=target["price"],
+            x=target["date"],
+            y=target["price"],
             text=f"{key}: {sym}{target['price']}<br>{sign}{target['pct_change']:.1f}%",
-            showarrow=True, arrowhead=2,
+            showarrow=True,
+            arrowhead=2,
             arrowcolor=colors.get(key, "#111827"),
             font=dict(color=colors.get(key, "#111827"), size=11),
             bgcolor="rgba(255,255,255,0.9)",

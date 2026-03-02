@@ -41,11 +41,12 @@ logs/
 *.tsbuildinfo
 next-env.d.ts
 
-# Stock agent — generated data (gitignored; only metadata is tracked)
+# Stock agent — generated data
 data/raw/
 data/processed/
 data/forecasts/
 data/cache/
+data/metadata/*.json
 
 # Stock agent — generated chart HTML files
 charts/analysis/

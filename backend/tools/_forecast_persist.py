@@ -8,7 +8,6 @@ Functions
 import logging
 
 import pandas as pd
-
 import tools._forecast_shared as _sh
 
 # Module-level logger; cannot be moved into a class as this module exposes
@@ -16,9 +15,7 @@ import tools._forecast_shared as _sh
 _logger = logging.getLogger(__name__)
 
 
-def _save_forecast(
-    forecast_df: pd.DataFrame, ticker: str, months: int
-) -> str:
+def _save_forecast(forecast_df: pd.DataFrame, ticker: str, months: int) -> str:
     """Save forecast results to a parquet file.
 
     Args:

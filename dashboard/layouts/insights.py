@@ -32,23 +32,48 @@ def insights_layout() -> html.Div:
         :class:`~dash.html.Div` representing the full Insights page.
     """
     tickers = _get_available_tickers()
-    ticker_options = (
-        [{"label": "All tickers", "value": "all"}]
-        + [{"label": t, "value": t} for t in tickers]
-    )
+    ticker_options = [{"label": "All tickers", "value": "all"}] + [
+        {"label": t, "value": t} for t in tickers
+    ]
 
-    return html.Div([
-        # ── Tabs ─────────────────────────────────────────────────────────
-        dbc.Tabs(
-            id="insights-tabs",
-            active_tab="screener-tab",
-            children=[
-                dbc.Tab(label="Screener",      tab_id="screener-tab",     children=_screener_tab(ticker_options)),
-                dbc.Tab(label="Price Targets", tab_id="targets-tab",      children=_targets_tab(ticker_options)),
-                dbc.Tab(label="Dividends",     tab_id="dividends-tab",    children=_dividends_tab(ticker_options)),
-                dbc.Tab(label="Risk Metrics",  tab_id="risk-tab",         children=_risk_tab(ticker_options)),
-                dbc.Tab(label="Sectors",       tab_id="sectors-tab",      children=_sectors_tab(ticker_options)),
-                dbc.Tab(label="Correlation",   tab_id="correlation-tab",  children=_correlation_tab(ticker_options)),
-            ],
-        ),
-    ])
+    return html.Div(
+        [
+            # ── Tabs ─────────────────────────────────────────────────────────
+            dbc.Tabs(
+                id="insights-tabs",
+                active_tab="screener-tab",
+                children=[
+                    dbc.Tab(
+                        label="Screener",
+                        tab_id="screener-tab",
+                        children=_screener_tab(ticker_options),
+                    ),
+                    dbc.Tab(
+                        label="Price Targets",
+                        tab_id="targets-tab",
+                        children=_targets_tab(ticker_options),
+                    ),
+                    dbc.Tab(
+                        label="Dividends",
+                        tab_id="dividends-tab",
+                        children=_dividends_tab(ticker_options),
+                    ),
+                    dbc.Tab(
+                        label="Risk Metrics",
+                        tab_id="risk-tab",
+                        children=_risk_tab(ticker_options),
+                    ),
+                    dbc.Tab(
+                        label="Sectors",
+                        tab_id="sectors-tab",
+                        children=_sectors_tab(ticker_options),
+                    ),
+                    dbc.Tab(
+                        label="Correlation",
+                        tab_id="correlation-tab",
+                        children=_correlation_tab(ticker_options),
+                    ),
+                ],
+            ),
+        ]
+    )

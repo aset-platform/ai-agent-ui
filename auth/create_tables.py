@@ -31,12 +31,7 @@ import sys
 import pyarrow as pa
 from pyiceberg.catalog.sql import SqlCatalog
 from pyiceberg.schema import Schema
-from pyiceberg.types import (
-    BooleanType,
-    NestedField,
-    StringType,
-    TimestampType,
-)
+from pyiceberg.types import BooleanType, NestedField, StringType, TimestampType
 
 # Module-level logger; mutable but required at module scope for use outside any class.
 logger = logging.getLogger(__name__)
@@ -80,13 +75,25 @@ def _users_schema() -> Schema:
     return Schema(
         NestedField(field_id=1, name="user_id", field_type=StringType(), required=True),
         NestedField(field_id=2, name="email", field_type=StringType(), required=True),
-        NestedField(field_id=3, name="hashed_password", field_type=StringType(), required=True),
-        NestedField(field_id=4, name="full_name", field_type=StringType(), required=True),
+        NestedField(
+            field_id=3, name="hashed_password", field_type=StringType(), required=True
+        ),
+        NestedField(
+            field_id=4, name="full_name", field_type=StringType(), required=True
+        ),
         NestedField(field_id=5, name="role", field_type=StringType(), required=True),
-        NestedField(field_id=6, name="is_active", field_type=BooleanType(), required=True),
-        NestedField(field_id=7, name="created_at", field_type=TimestampType(), required=True),
-        NestedField(field_id=8, name="updated_at", field_type=TimestampType(), required=True),
-        NestedField(field_id=9, name="last_login_at", field_type=TimestampType(), required=False),
+        NestedField(
+            field_id=6, name="is_active", field_type=BooleanType(), required=True
+        ),
+        NestedField(
+            field_id=7, name="created_at", field_type=TimestampType(), required=True
+        ),
+        NestedField(
+            field_id=8, name="updated_at", field_type=TimestampType(), required=True
+        ),
+        NestedField(
+            field_id=9, name="last_login_at", field_type=TimestampType(), required=False
+        ),
         NestedField(
             field_id=10,
             name="password_reset_token",
@@ -100,8 +107,12 @@ def _users_schema() -> Schema:
             required=False,
         ),
         # SSO columns — nullable; None for email-only accounts.
-        NestedField(field_id=12, name="oauth_provider", field_type=StringType(), required=False),
-        NestedField(field_id=13, name="oauth_sub", field_type=StringType(), required=False),
+        NestedField(
+            field_id=12, name="oauth_provider", field_type=StringType(), required=False
+        ),
+        NestedField(
+            field_id=13, name="oauth_sub", field_type=StringType(), required=False
+        ),
         NestedField(
             field_id=14,
             name="profile_picture_url",
@@ -124,17 +135,27 @@ def _audit_log_schema() -> Schema:
         Schema: An Iceberg :class:`~pyiceberg.schema.Schema` for audit log events.
     """
     return Schema(
-        NestedField(field_id=1, name="event_id", field_type=StringType(), required=True),
-        NestedField(field_id=2, name="event_type", field_type=StringType(), required=True),
-        NestedField(field_id=3, name="actor_user_id", field_type=StringType(), required=True),
-        NestedField(field_id=4, name="target_user_id", field_type=StringType(), required=True),
+        NestedField(
+            field_id=1, name="event_id", field_type=StringType(), required=True
+        ),
+        NestedField(
+            field_id=2, name="event_type", field_type=StringType(), required=True
+        ),
+        NestedField(
+            field_id=3, name="actor_user_id", field_type=StringType(), required=True
+        ),
+        NestedField(
+            field_id=4, name="target_user_id", field_type=StringType(), required=True
+        ),
         NestedField(
             field_id=5,
             name="event_timestamp",
             field_type=TimestampType(),
             required=True,
         ),
-        NestedField(field_id=6, name="metadata", field_type=StringType(), required=False),
+        NestedField(
+            field_id=6, name="metadata", field_type=StringType(), required=False
+        ),
     )
 
 

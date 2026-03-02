@@ -24,81 +24,119 @@ def home_layout() -> html.Div:
     registry = _load_registry()
     ticker_options = [{"label": t, "value": t} for t in sorted(registry.keys())]
 
-    return html.Div([
-        # ── Search / quick-select row ─────────────────────────────────────
-        dbc.Row([
-            dbc.Col([
-                dbc.InputGroup([
-                    dbc.Input(
-                        id="ticker-search-input",
-                        placeholder="Enter ticker symbol (e.g. AAPL, TSLA, RELIANCE.NS)…",
-                        type="text",
-                        debounce=False,
+    return html.Div(
+        [
+            # ── Search / quick-select row ─────────────────────────────────────
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            dbc.InputGroup(
+                                [
+                                    dbc.Input(
+                                        id="ticker-search-input",
+                                        placeholder="Enter ticker symbol (e.g. AAPL, TSLA, RELIANCE.NS)…",
+                                        type="text",
+                                        debounce=False,
+                                    ),
+                                    dbc.Button(
+                                        "Analyse",
+                                        id="search-btn",
+                                        color="primary",
+                                        className="px-4",
+                                    ),
+                                ],
+                                className="mb-3",
+                            ),
+                        ],
+                        md=6,
                     ),
-                    dbc.Button(
-                        "Analyse",
-                        id="search-btn",
-                        color="primary",
-                        className="px-4",
+                    dbc.Col(
+                        [
+                            dcc.Dropdown(
+                                id="home-registry-dropdown",
+                                options=ticker_options,
+                                placeholder="Or select an existing stock…",
+                                clearable=True,
+                                className="dropdown-dark",
+                            ),
+                        ],
+                        md=6,
                     ),
-                ], className="mb-3"),
-            ], md=6),
-            dbc.Col([
-                dcc.Dropdown(
-                    id="home-registry-dropdown",
-                    options=ticker_options,
-                    placeholder="Or select an existing stock…",
-                    clearable=True,
-                    className="dropdown-dark",
-                ),
-            ], md=6),
-        ], className="mb-2"),
-
-        # ── Saved Stocks heading + market filter on same row ─────────────
-        dbc.Row([
-            dbc.Col(
-                html.H5("Saved Stocks", className="text-muted mb-0"),
-                className="my-auto",
+                ],
+                className="mb-2",
             ),
-            dbc.Col(
-                dbc.ButtonGroup([
-                    dbc.Button("🇮🇳 India", id="filter-india-btn", color="primary",          size="sm"),
-                    dbc.Button("🇺🇸 US",    id="filter-us-btn",    color="outline-secondary", size="sm"),
-                ]),
-                width="auto",
-                className="my-auto",
+            # ── Saved Stocks heading + market filter on same row ─────────────
+            dbc.Row(
+                [
+                    dbc.Col(
+                        html.H5("Saved Stocks", className="text-muted mb-0"),
+                        className="my-auto",
+                    ),
+                    dbc.Col(
+                        dbc.ButtonGroup(
+                            [
+                                dbc.Button(
+                                    "🇮🇳 India",
+                                    id="filter-india-btn",
+                                    color="primary",
+                                    size="sm",
+                                ),
+                                dbc.Button(
+                                    "🇺🇸 US",
+                                    id="filter-us-btn",
+                                    color="outline-secondary",
+                                    size="sm",
+                                ),
+                            ]
+                        ),
+                        width="auto",
+                        className="my-auto",
+                    ),
+                ],
+                className="mb-2 align-items-center",
             ),
-        ], className="mb-2 align-items-center"),
-
-        dbc.Row(id="stock-cards-container", className="g-3"),
-
-        # Pagination row
-        dbc.Row([
-            dbc.Col(html.Small(id="home-count-text", className="text-muted"), width="auto", className="my-auto"),
-            dbc.Col(
-                dbc.Pagination(id="home-pagination", max_value=1, active_page=1,
-                               fully_expanded=False, size="sm", className="justify-content-end mb-0"),
-                className="d-flex justify-content-end my-auto",
+            dbc.Row(id="stock-cards-container", className="g-3"),
+            # Pagination row
+            dbc.Row(
+                [
+                    dbc.Col(
+                        html.Small(id="home-count-text", className="text-muted"),
+                        width="auto",
+                        className="my-auto",
+                    ),
+                    dbc.Col(
+                        dbc.Pagination(
+                            id="home-pagination",
+                            max_value=1,
+                            active_page=1,
+                            fully_expanded=False,
+                            size="sm",
+                            className="justify-content-end mb-0",
+                        ),
+                        className="d-flex justify-content-end my-auto",
+                    ),
+                    dbc.Col(
+                        dbc.Select(
+                            id="home-page-size",
+                            options=[
+                                {"label": "12 / page", "value": "12"},
+                                {"label": "24 / page", "value": "24"},
+                                {"label": "48 / page", "value": "48"},
+                                {"label": "96 / page", "value": "96"},
+                            ],
+                            value="12",
+                            size="sm",
+                            style={"width": "120px"},
+                        ),
+                        width="auto",
+                        className="my-auto",
+                    ),
+                ],
+                className="mt-3 align-items-center",
             ),
-            dbc.Col(
-                dbc.Select(
-                    id="home-page-size",
-                    options=[
-                        {"label": "12 / page", "value": "12"},
-                        {"label": "24 / page", "value": "24"},
-                        {"label": "48 / page", "value": "48"},
-                        {"label": "96 / page", "value": "96"},
-                    ],
-                    value="12",
-                    size="sm",
-                    style={"width": "120px"},
-                ),
-                width="auto",
-                className="my-auto",
-            ),
-        ], className="mt-3 align-items-center"),
-
-        # Stores
-        dcc.Store(id="stock-raw-data-store"),
-        dcc.Store(id="market-filter-store", data="india"),
-    ])
+            # Stores
+            dcc.Store(id="stock-raw-data-store"),
+            dcc.Store(id="market-filter-store", data="india"),
+        ]
+    )

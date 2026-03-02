@@ -122,6 +122,16 @@ The stock agent needs access to live web search, but `search_web` requires SerpA
 
 The key constraint this solves: the factory must run **after** the general agent is created but **before** the stock agent is instantiated (so the tool is in the registry when `BaseAgent._setup()` fetches tool names). This ordering is enforced in `ChatServer._register_agents()`.
 
+### Adj Close fallback to Close
+
+yfinance >= 1.2 dropped the `Adj Close` column from `yf.download()`. The Iceberg `stocks.ohlcv` table schema retains the `adj_close` field, but all values are `None` for data written with yfinance 1.2+. Three consumers check `notna().any()` before using `Adj Close` and fall back to `Close`:
+
+- `backend/tools/_forecast_model.py` — `_prepare_data_for_prophet()`
+- `dashboard/callbacks/forecast_cbs.py` — `update_forecast_chart()`
+- `dashboard/callbacks/iceberg.py` — `_get_ohlcv_cached()`
+
+For stocks without corporate actions (splits, dividends), `Close` and `Adj Close` are identical, so the fallback has no impact on analysis quality. For stocks with historical splits, the difference matters only for pre-split dates (which are already stored correctly in the flat parquet files from earlier yfinance versions).
+
 ### Same-day text cache for analyse_stock_price and forecast_stock
 
 Running the full analysis pipeline (technical indicators + Prophet training) takes 30–90 seconds. A user who asks about AAPL twice in the same day should not wait twice. Both tools now check for a dated text file in `data/cache/` before running. If a file matching `{TICKER}_{key}_{date.today()}.txt` exists, it is returned immediately. On the first run, the result is saved to that file. The cache is keyed by date so it automatically expires at midnight with no cron job required. `data/cache/` is gitignored.

@@ -25,69 +25,87 @@ def forecast_layout() -> html.Div:
     ticker_options = [{"label": t, "value": t} for t in tickers]
     default_ticker = tickers[0] if tickers else None
 
-    return html.Div([
-        # ── Controls ──────────────────────────────────────────────────────
-        dbc.Row([
-            dbc.Col([
-                html.Label("Ticker", className="text-muted small fw-semibold"),
-                dcc.Dropdown(
-                    id="forecast-ticker-dropdown",
-                    options=ticker_options,
-                    value=default_ticker,
-                    clearable=False,
-                    className="dropdown-dark",
-                ),
-            ], xs=12, md=4, className="mb-3"),
-
-            dbc.Col([
-                html.Label("Forecast Horizon", className="text-muted small fw-semibold"),
-                dbc.RadioItems(
-                    id="forecast-horizon-radio",
-                    options=[
-                        {"label": "3 Months", "value": "3"},
-                        {"label": "6 Months", "value": "6"},
-                        {"label": "9 Months", "value": "9"},
-                    ],
-                    value="9",
-                    inline=True,
-                    className="mt-1",
-                ),
-            ], xs=12, md=4, className="mb-3"),
-
-            dbc.Col([
-                html.Label("\u00a0", className="d-block small"),
-                dbc.Button(
-                    "Run New Analysis",
-                    id="run-analysis-btn",
-                    color="success",
-                    size="sm",
-                    className="w-100",
-                ),
-            ], xs=12, md=4, className="mb-3"),
-        ], className="bg-light rounded p-3 mb-4 align-items-end border"),
-
-        # ── Status message ────────────────────────────────────────────────
-        html.Div(id="run-analysis-status", className="mb-3"),
-
-        # ── Forecast chart ────────────────────────────────────────────────
-        dcc.Loading(
-            id="loading-forecast",
-            type="circle",
-            color="#4f46e5",
-            children=dcc.Graph(
-                id="forecast-chart",
-                config={"displayModeBar": True},
-                style={"height": "550px"},
+    return html.Div(
+        [
+            # ── Controls ──────────────────────────────────────────────────────
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [
+                            html.Label(
+                                "Ticker", className="text-muted small fw-semibold"
+                            ),
+                            dcc.Dropdown(
+                                id="forecast-ticker-dropdown",
+                                options=ticker_options,
+                                value=default_ticker,
+                                clearable=False,
+                                className="dropdown-dark",
+                            ),
+                        ],
+                        xs=12,
+                        md=4,
+                        className="mb-3",
+                    ),
+                    dbc.Col(
+                        [
+                            html.Label(
+                                "Forecast Horizon",
+                                className="text-muted small fw-semibold",
+                            ),
+                            dbc.RadioItems(
+                                id="forecast-horizon-radio",
+                                options=[
+                                    {"label": "3 Months", "value": "3"},
+                                    {"label": "6 Months", "value": "6"},
+                                    {"label": "9 Months", "value": "9"},
+                                ],
+                                value="9",
+                                inline=True,
+                                className="mt-1",
+                            ),
+                        ],
+                        xs=12,
+                        md=4,
+                        className="mb-3",
+                    ),
+                    dbc.Col(
+                        [
+                            html.Label("\u00a0", className="d-block small"),
+                            dbc.Button(
+                                "Run New Analysis",
+                                id="run-analysis-btn",
+                                color="success",
+                                size="sm",
+                                className="w-100",
+                            ),
+                        ],
+                        xs=12,
+                        md=4,
+                        className="mb-3",
+                    ),
+                ],
+                className="bg-light rounded p-3 mb-4 align-items-end border",
             ),
-        ),
-
-        # ── Price target cards ────────────────────────────────────────────
-        html.Div(id="forecast-target-cards", className="mt-4"),
-
-        # ── Accuracy row ──────────────────────────────────────────────────
-        html.Div(id="forecast-accuracy-row", className="mt-3"),
-
-        # ── Hidden stores ─────────────────────────────────────────────────
-        dcc.Store(id="forecast-refresh-store", data=0),
-        dcc.Store(id="accuracy-store", data=None),
-    ])
+            # ── Status message ────────────────────────────────────────────────
+            html.Div(id="run-analysis-status", className="mb-3"),
+            # ── Forecast chart ────────────────────────────────────────────────
+            dcc.Loading(
+                id="loading-forecast",
+                type="circle",
+                color="#4f46e5",
+                children=dcc.Graph(
+                    id="forecast-chart",
+                    config={"displayModeBar": True},
+                    style={"height": "550px"},
+                ),
+            ),
+            # ── Price target cards ────────────────────────────────────────────
+            html.Div(id="forecast-target-cards", className="mt-4"),
+            # ── Accuracy row ──────────────────────────────────────────────────
+            html.Div(id="forecast-accuracy-row", className="mt-3"),
+            # ── Hidden stores ─────────────────────────────────────────────────
+            dcc.Store(id="forecast-refresh-store", data=0),
+            dcc.Store(id="accuracy-store", data=None),
+        ]
+    )

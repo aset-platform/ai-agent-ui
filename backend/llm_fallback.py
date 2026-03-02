@@ -1,7 +1,7 @@
 import logging
 from typing import Any, List
 
-from groq import RateLimitError, APIConnectionError
+from groq import APIConnectionError, RateLimitError
 from langchain_anthropic import ChatAnthropic
 from langchain_groq import ChatGroq
 
@@ -40,7 +40,9 @@ class FallbackLLM:
             agent_id: Agent identifier used in warning log messages.
         """
         self._groq_llm = ChatGroq(model=groq_model, temperature=temperature)
-        self._anthropic_llm = ChatAnthropic(model=anthropic_model, temperature=temperature)
+        self._anthropic_llm = ChatAnthropic(
+            model=anthropic_model, temperature=temperature
+        )
         self._groq_bound: Any = self._groq_llm
         self._anthropic_bound: Any = self._anthropic_llm
         self._agent_id = agent_id

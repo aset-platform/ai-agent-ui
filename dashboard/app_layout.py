@@ -67,40 +67,61 @@ def build_layout(app: dash.Dash) -> None:
                         dbc.ModalTitle("Change Password"),
                         close_button=False,
                     ),
-                    dbc.ModalBody([
-                        html.Div(id="change-pw-error", className="text-danger small mb-2"),
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Label("New Password"),
-                                dbc.Input(
-                                    id="change-pw-new",
-                                    type="password",
-                                    placeholder="Min 8 chars, at least one digit",
-                                ),
-                            ]),
-                        ], className="mb-3"),
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Label("Confirm New Password"),
-                                dbc.Input(
-                                    id="change-pw-confirm",
-                                    type="password",
-                                    placeholder="Repeat new password",
-                                ),
-                            ]),
-                        ], className="mb-3"),
-                    ]),
-                    dbc.ModalFooter([
-                        dbc.Button(
-                            "Cancel",
-                            id="change-pw-cancel-btn",
-                            color="secondary",
-                            outline=True,
-                            size="sm",
-                            className="me-2",
-                        ),
-                        dbc.Button("Save", id="change-pw-save-btn", color="primary", size="sm"),
-                    ]),
+                    dbc.ModalBody(
+                        [
+                            html.Div(
+                                id="change-pw-error", className="text-danger small mb-2"
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("New Password"),
+                                            dbc.Input(
+                                                id="change-pw-new",
+                                                type="password",
+                                                placeholder="Min 8 chars, at least one digit",
+                                            ),
+                                        ]
+                                    ),
+                                ],
+                                className="mb-3",
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("Confirm New Password"),
+                                            dbc.Input(
+                                                id="change-pw-confirm",
+                                                type="password",
+                                                placeholder="Repeat new password",
+                                            ),
+                                        ]
+                                    ),
+                                ],
+                                className="mb-3",
+                            ),
+                        ]
+                    ),
+                    dbc.ModalFooter(
+                        [
+                            dbc.Button(
+                                "Cancel",
+                                id="change-pw-cancel-btn",
+                                color="secondary",
+                                outline=True,
+                                size="sm",
+                                className="me-2",
+                            ),
+                            dbc.Button(
+                                "Save",
+                                id="change-pw-save-btn",
+                                color="primary",
+                                size="sm",
+                            ),
+                        ]
+                    ),
                 ],
             ),
         ]
@@ -146,7 +167,9 @@ def build_layout(app: dash.Dash) -> None:
 
         payload = _validate_token(token)
         if payload is None:
-            _logger.debug("display_page: invalid or missing token for pathname=%s", pathname)
+            _logger.debug(
+                "display_page: invalid or missing token for pathname=%s", pathname
+            )
             return _unauth_notice()
 
         role = payload.get("role", "general")

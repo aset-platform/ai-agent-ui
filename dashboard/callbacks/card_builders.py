@@ -48,30 +48,42 @@ def _build_stats_cards(df: pd.DataFrame, ticker: str) -> Any:
 
     ann_vol_dec = daily_returns.std() * math.sqrt(252)
     sharpe = round(
-        (daily_returns.mean() * 252 - 0.04) / ann_vol_dec
-        if ann_vol_dec > 0 else 0.0,
+        (daily_returns.mean() * 252 - 0.04) / ann_vol_dec if ann_vol_dec > 0 else 0.0,
         2,
     )
 
     stats = [
-        ("All-Time High",  f"{sym}{ath:,}",     "text-success"),
-        ("All-Time Low",   f"{sym}{atl:,}",     "text-danger"),
-        ("Annual Return",  f"{annual_ret:+.1f}%",
-         "text-success" if annual_ret >= 0 else "text-danger"),
-        ("Max Drawdown",   f"{max_dd:.1f}%",  "text-danger"),
-        ("Volatility",     f"{ann_vol:.1f}%", "text-warning"),
-        ("Sharpe Ratio",   str(sharpe),       "text-info"),
+        ("All-Time High", f"{sym}{ath:,}", "text-success"),
+        ("All-Time Low", f"{sym}{atl:,}", "text-danger"),
+        (
+            "Annual Return",
+            f"{annual_ret:+.1f}%",
+            "text-success" if annual_ret >= 0 else "text-danger",
+        ),
+        ("Max Drawdown", f"{max_dd:.1f}%", "text-danger"),
+        ("Volatility", f"{ann_vol:.1f}%", "text-warning"),
+        ("Sharpe Ratio", str(sharpe), "text-info"),
     ]
 
     cols = []
     for label, value, color_cls in stats:
-        cols.append(dbc.Col(
-            dbc.Card(dbc.CardBody([
-                html.Small(label, className="text-muted d-block"),
-                html.Span(value, className=f"fs-5 fw-bold {color_cls}"),
-            ]), className="stat-card h-100"),
-            xs=6, md=4, lg=2, className="mb-3",
-        ))
+        cols.append(
+            dbc.Col(
+                dbc.Card(
+                    dbc.CardBody(
+                        [
+                            html.Small(label, className="text-muted d-block"),
+                            html.Span(value, className=f"fs-5 fw-bold {color_cls}"),
+                        ]
+                    ),
+                    className="stat-card h-100",
+                ),
+                xs=6,
+                md=4,
+                lg=2,
+                className="mb-3",
+            )
+        )
     return dbc.Row(cols)
 
 
@@ -102,26 +114,37 @@ def _build_target_cards(summary: dict, current_price: float, ticker: str = "") -
             continue
         sign = "+" if t["pct_change"] >= 0 else ""
         text_color = "text-success" if t["pct_change"] >= 0 else "text-danger"
-        cols.append(dbc.Col(
-            dbc.Card([
-                dbc.CardHeader(
-                    label_map[key],
-                    className=f"text-center bg-transparent border-{color_map[key]}",
+        cols.append(
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardHeader(
+                            label_map[key],
+                            className=f"text-center bg-transparent border-{color_map[key]}",
+                        ),
+                        dbc.CardBody(
+                            [
+                                html.H5(
+                                    f"{sym}{t['price']:,}", className="text-center mb-1"
+                                ),
+                                html.P(
+                                    f"{sign}{t['pct_change']:.1f}%",
+                                    className=f"text-center fw-bold mb-1 {text_color}",
+                                ),
+                                html.Small(
+                                    f"{sym}{t['lower']:,} – {sym}{t['upper']:,}",
+                                    className="text-muted d-block text-center",
+                                ),
+                            ]
+                        ),
+                    ],
+                    className=f"target-card border border-{color_map[key]}",
                 ),
-                dbc.CardBody([
-                    html.H5(f"{sym}{t['price']:,}", className="text-center mb-1"),
-                    html.P(
-                        f"{sign}{t['pct_change']:.1f}%",
-                        className=f"text-center fw-bold mb-1 {text_color}",
-                    ),
-                    html.Small(
-                        f"{sym}{t['lower']:,} – {sym}{t['upper']:,}",
-                        className="text-muted d-block text-center",
-                    ),
-                ]),
-            ], className=f"target-card border border-{color_map[key]}"),
-            xs=12, sm=4, className="mb-3",
-        ))
+                xs=12,
+                sm=4,
+                className="mb-3",
+            )
+        )
 
     return dbc.Row(cols)
 
@@ -142,18 +165,25 @@ def _build_accuracy_row(accuracy: dict, ticker: str = "") -> Any:
 
     sym = _get_currency(ticker) if ticker else "$"
     metrics = [
-        ("MAE",  f"{sym}{accuracy['MAE']:,.2f}", "Mean Absolute Error"),
+        ("MAE", f"{sym}{accuracy['MAE']:,.2f}", "Mean Absolute Error"),
         ("RMSE", f"{sym}{accuracy['RMSE']:,.2f}", "Root Mean Square Error"),
         ("MAPE", f"{accuracy['MAPE_pct']:.1f}%", "Mean Abs % Error (lower = better)"),
     ]
     cols = [
         dbc.Col(
-            dbc.Card(dbc.CardBody([
-                html.Small(title, className="text-muted d-block"),
-                html.Span(value, className="fs-5 fw-bold text-info"),
-                html.Small(f" ({label})", className="text-muted"),
-            ]), className="stat-card"),
-            xs=12, sm=4, className="mb-3",
+            dbc.Card(
+                dbc.CardBody(
+                    [
+                        html.Small(title, className="text-muted d-block"),
+                        html.Span(value, className="fs-5 fw-bold text-info"),
+                        html.Small(f" ({label})", className="text-muted"),
+                    ]
+                ),
+                className="stat-card",
+            ),
+            xs=12,
+            sm=4,
+            className="mb-3",
         )
         for label, value, title in metrics
     ]
@@ -197,11 +227,14 @@ def _generate_forecast_summary_cb(
         }
 
     last_key = (
-        f"{min(months, 9)}m" if f"{min(months, 9)}m" in targets
+        f"{min(months, 9)}m"
+        if f"{min(months, 9)}m" in targets
         else ("6m" if "6m" in targets else "3m")
     )
     final_pct = targets.get(last_key, {}).get("pct_change", 0.0)
-    sentiment = "Bullish" if final_pct > 10 else ("Bearish" if final_pct < -10 else "Neutral")
+    sentiment = (
+        "Bullish" if final_pct > 10 else ("Bearish" if final_pct < -10 else "Neutral")
+    )
 
     return {
         "ticker": ticker,

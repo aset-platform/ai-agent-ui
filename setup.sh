@@ -1,0 +1,672 @@
+#!/usr/bin/env bash
+# setup.sh — First-time installer for ai-agent-ui.
+#
+# Automates the entire first-run setup: Python virtualenv, Node.js
+# dependencies, config files, Iceberg database initialisation, admin
+# seeding, and git hook installation.
+#
+# Usage:
+#   ./setup.sh                  # interactive — prompts for API keys
+#   ./setup.sh --non-interactive # reads all secrets from env vars (CI/Docker)
+#
+# Safe to re-run — every step is idempotent.
+
+set -euo pipefail
+
+# ── Resolve script directory (works for symlinks too) ─────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# ── ANSI colours (disabled when stdout is not a terminal) ─────────────────────
+if [[ -t 1 ]]; then
+    R='\033[0;31m' G='\033[0;32m' Y='\033[1;33m' C='\033[0;36m' B='\033[1m' N='\033[0m'
+else
+    R='' G='' Y='' C='' B='' N=''
+fi
+
+# ── Parse flags ───────────────────────────────────────────────────────────────
+NON_INTERACTIVE=0
+for arg in "$@"; do
+    case "$arg" in
+        --non-interactive) NON_INTERACTIVE=1 ;;
+        -h|--help)
+            echo "Usage: ./setup.sh [--non-interactive]"
+            echo ""
+            echo "  --non-interactive   Read all secrets from environment variables (for CI/Docker)"
+            echo "  -h, --help          Show this help message"
+            exit 0
+            ;;
+        *)
+            echo -e "${R}Unknown option: $arg${N}"
+            echo "Usage: ./setup.sh [--non-interactive]"
+            exit 1
+            ;;
+    esac
+done
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+step() {
+    echo ""
+    echo -e "${B}[$1]${N} $2"
+    echo "────────────────────────────────────────────────────────────────"
+}
+
+ok()   { echo -e "  ${G}[OK]${N} $1"; }
+warn() { echo -e "  ${Y}[WARN]${N} $1"; }
+fail() { echo -e "  ${R}[FAIL]${N} $1"; exit 1; }
+info() { echo -e "  ${C}[INFO]${N} $1"; }
+
+prompt_required() {
+    local var_name="$1" prompt_text="$2" value=""
+    if [[ $NON_INTERACTIVE -eq 1 ]]; then
+        value="${!var_name:-}"
+        if [[ -z "$value" ]]; then
+            fail "$var_name is required in --non-interactive mode. Export it before running."
+        fi
+        echo "$value"
+        return
+    fi
+    while [[ -z "$value" ]]; do
+        printf "  %s: " "$prompt_text"
+        read -r value
+        if [[ -z "$value" ]]; then
+            echo -e "  ${R}This field is required. Please enter a value.${N}"
+        fi
+    done
+    echo "$value"
+}
+
+prompt_optional() {
+    local var_name="$1" prompt_text="$2" value=""
+    if [[ $NON_INTERACTIVE -eq 1 ]]; then
+        echo "${!var_name:-}"
+        return
+    fi
+    printf "  %s (Enter to skip): " "$prompt_text"
+    read -r value
+    echo "$value"
+}
+
+prompt_secret() {
+    local var_name="$1" prompt_text="$2" value=""
+    if [[ $NON_INTERACTIVE -eq 1 ]]; then
+        value="${!var_name:-}"
+        if [[ -z "$value" ]]; then
+            fail "$var_name is required in --non-interactive mode. Export it before running."
+        fi
+        echo "$value"
+        return
+    fi
+    while [[ -z "$value" ]]; do
+        printf "  %s: " "$prompt_text"
+        read -rs value
+        echo ""
+        if [[ -z "$value" ]]; then
+            echo -e "  ${R}This field is required. Please enter a value.${N}"
+        fi
+    done
+    echo "$value"
+}
+
+prompt_optional_secret() {
+    local var_name="$1" prompt_text="$2" value=""
+    if [[ $NON_INTERACTIVE -eq 1 ]]; then
+        echo "${!var_name:-}"
+        return
+    fi
+    printf "  %s (Enter to skip): " "$prompt_text"
+    read -rs value
+    echo ""
+    echo "$value"
+}
+
+# ── Banner ────────────────────────────────────────────────────────────────────
+echo ""
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo "║               AI Agent UI — First-Time Setup                    ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"
+echo ""
+if [[ $NON_INTERACTIVE -eq 1 ]]; then
+    info "Running in non-interactive mode (reading secrets from env vars)"
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 1: Detect OS
+# ══════════════════════════════════════════════════════════════════════════════
+step "1/11" "Detecting operating system"
+
+OS="unknown"
+IS_WSL=0
+
+case "$(uname -s)" in
+    Darwin) OS="macos" ;;
+    Linux)
+        OS="linux"
+        if grep -qi microsoft /proc/version 2>/dev/null; then
+            IS_WSL=1
+        fi
+        ;;
+esac
+
+if [[ "$OS" == "macos" ]]; then
+    ok "macOS detected ($(uname -m))"
+elif [[ $IS_WSL -eq 1 ]]; then
+    ok "Linux (WSL) detected"
+elif [[ "$OS" == "linux" ]]; then
+    ok "Linux detected"
+else
+    fail "Unsupported OS: $(uname -s). This script supports macOS, Linux, and WSL."
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 2: Check prerequisites
+# ══════════════════════════════════════════════════════════════════════════════
+step "2/11" "Checking prerequisites"
+
+# git
+if command -v git &>/dev/null; then
+    ok "git $(git --version | cut -d' ' -f3)"
+else
+    fail "git is not installed. Please install git first."
+fi
+
+# curl
+if command -v curl &>/dev/null; then
+    ok "curl found"
+else
+    fail "curl is not installed. Please install curl first."
+fi
+
+# macOS: Xcode Command Line Tools
+if [[ "$OS" == "macos" ]]; then
+    if xcode-select -p &>/dev/null; then
+        ok "Xcode Command Line Tools installed"
+    else
+        warn "Xcode Command Line Tools not found. Installing..."
+        xcode-select --install 2>/dev/null || true
+        echo "  Please complete the Xcode CLT installation dialog, then re-run this script."
+        exit 1
+    fi
+fi
+
+# Linux: build-essential (for compiling Python)
+if [[ "$OS" == "linux" ]]; then
+    if dpkg -l build-essential &>/dev/null 2>&1; then
+        ok "build-essential installed"
+    else
+        warn "build-essential not found — Python compilation may fail."
+        echo "  Install with: sudo apt-get install -y build-essential"
+    fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 3: Ensure Python 3.9
+# ══════════════════════════════════════════════════════════════════════════════
+step "3/11" "Ensuring Python 3.9 is available"
+
+PYTHON39=""
+
+# Check if python3.9 already exists
+if command -v python3.9 &>/dev/null; then
+    PYTHON39="$(command -v python3.9)"
+    ok "Python 3.9 found at $PYTHON39 ($(python3.9 --version 2>&1))"
+elif [[ -f "$HOME/.pyenv/versions/3.9.13/bin/python3.9" ]]; then
+    PYTHON39="$HOME/.pyenv/versions/3.9.13/bin/python3.9"
+    ok "Python 3.9.13 found via pyenv"
+else
+    info "Python 3.9 not found — installing via pyenv"
+
+    # Install pyenv if not present
+    if ! command -v pyenv &>/dev/null; then
+        info "Installing pyenv..."
+        if [[ "$OS" == "macos" ]]; then
+            if command -v brew &>/dev/null; then
+                brew install pyenv
+            else
+                fail "Homebrew not found. Install Homebrew first: https://brew.sh"
+            fi
+        else
+            # Linux / WSL
+            curl -fsSL https://pyenv.run | bash
+        fi
+
+        # Set up pyenv in current shell
+        export PYENV_ROOT="${PYENV_ROOT:-$HOME/.pyenv}"
+        export PATH="$PYENV_ROOT/bin:$PATH"
+        eval "$(pyenv init -)" 2>/dev/null || true
+    fi
+
+    # Ensure pyenv is available
+    if ! command -v pyenv &>/dev/null; then
+        export PYENV_ROOT="${PYENV_ROOT:-$HOME/.pyenv}"
+        export PATH="$PYENV_ROOT/bin:$PATH"
+        eval "$(pyenv init -)" 2>/dev/null || true
+    fi
+
+    if ! command -v pyenv &>/dev/null; then
+        fail "pyenv installation failed. Install Python 3.9 manually and re-run."
+    fi
+
+    # Install Python build dependencies
+    if [[ "$OS" == "macos" ]]; then
+        info "Installing Python build dependencies via Homebrew..."
+        brew install openssl readline sqlite3 xz zlib 2>/dev/null || true
+    else
+        info "Installing Python build dependencies via apt..."
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+            build-essential libssl-dev zlib1g-dev libbz2-dev \
+            libreadline-dev libsqlite3-dev wget llvm libncurses5-dev \
+            libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev 2>/dev/null || true
+    fi
+
+    # Install Python 3.9.13
+    info "Installing Python 3.9.13 via pyenv (this may take a few minutes)..."
+    pyenv install 3.9.13 --skip-existing
+
+    PYTHON39="$HOME/.pyenv/versions/3.9.13/bin/python3.9"
+    if [[ -f "$PYTHON39" ]]; then
+        ok "Python 3.9.13 installed via pyenv"
+    else
+        fail "Python 3.9 installation failed. Check pyenv output above."
+    fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 4: Create virtualenv
+# ══════════════════════════════════════════════════════════════════════════════
+step "4/11" "Creating Python virtualenv (backend/demoenv)"
+
+VENV_DIR="$SCRIPT_DIR/backend/demoenv"
+VENV_PYTHON="$VENV_DIR/bin/python"
+
+if [[ -f "$VENV_PYTHON" ]]; then
+    # Verify it's actually Python 3.9.x
+    VENV_VERSION="$("$VENV_PYTHON" --version 2>&1)"
+    if [[ "$VENV_VERSION" == *"3.9"* ]]; then
+        ok "Virtualenv already exists ($VENV_VERSION)"
+    else
+        warn "Virtualenv exists but is $VENV_VERSION (expected 3.9.x) — recreating"
+        rm -rf "$VENV_DIR"
+        "$PYTHON39" -m venv "$VENV_DIR"
+        ok "Virtualenv recreated with $("$VENV_PYTHON" --version 2>&1)"
+    fi
+else
+    "$PYTHON39" -m venv "$VENV_DIR"
+    ok "Virtualenv created ($("$VENV_PYTHON" --version 2>&1))"
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 5: Install Python dependencies
+# ══════════════════════════════════════════════════════════════════════════════
+step "5/11" "Installing Python dependencies"
+
+REQUIREMENTS="$SCRIPT_DIR/backend/requirements.txt"
+if [[ ! -f "$REQUIREMENTS" ]]; then
+    fail "backend/requirements.txt not found"
+fi
+
+info "Upgrading pip..."
+"$VENV_PYTHON" -m pip install --upgrade pip --quiet
+
+info "Installing packages from requirements.txt (this may take a few minutes)..."
+"$VENV_PYTHON" -m pip install -r "$REQUIREMENTS" --quiet
+
+ok "Python dependencies installed"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 6: Check Node.js
+# ══════════════════════════════════════════════════════════════════════════════
+step "6/11" "Checking Node.js"
+
+if command -v node &>/dev/null; then
+    NODE_VERSION="$(node --version)"
+    # Extract major version number (v18.17.0 -> 18)
+    NODE_MAJOR="${NODE_VERSION#v}"
+    NODE_MAJOR="${NODE_MAJOR%%.*}"
+    if [[ "$NODE_MAJOR" -ge 18 ]]; then
+        ok "Node.js $NODE_VERSION"
+    else
+        fail "Node.js $NODE_VERSION is too old. Version 18.17+ required."
+    fi
+else
+    fail "Node.js is not installed. Install Node.js 18.17+ from https://nodejs.org or via nvm/fnm."
+fi
+
+if command -v npm &>/dev/null; then
+    ok "npm $(npm --version)"
+else
+    fail "npm not found. It should come with Node.js."
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 7: Install frontend dependencies
+# ══════════════════════════════════════════════════════════════════════════════
+step "7/11" "Installing frontend dependencies"
+
+FRONTEND_DIR="$SCRIPT_DIR/frontend"
+
+if [[ -d "$FRONTEND_DIR/node_modules" ]]; then
+    ok "node_modules already exists — skipping (delete frontend/node_modules to force reinstall)"
+else
+    info "Running npm ci in frontend/..."
+    (cd "$FRONTEND_DIR" && npm ci --loglevel=warn)
+    ok "Frontend dependencies installed"
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 8: Create project directories
+# ══════════════════════════════════════════════════════════════════════════════
+step "8/11" "Creating project directories"
+
+DIRS=(
+    "data/iceberg"
+    "data/iceberg/warehouse"
+    "data/raw"
+    "data/forecasts"
+    "data/cache"
+    "data/avatars"
+    "data/metadata"
+    "data/processed"
+    "logs"
+    "backend/logs"
+    "charts/analysis"
+    "charts/forecasts"
+)
+
+for d in "${DIRS[@]}"; do
+    mkdir -p "$SCRIPT_DIR/$d"
+done
+
+ok "All directories created"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 9: Prompt for API keys and secrets
+# ══════════════════════════════════════════════════════════════════════════════
+step "9/11" "Configuring API keys and secrets"
+
+# Auto-generate JWT_SECRET_KEY
+JWT_SECRET_KEY="$("$VENV_PYTHON" -c "import secrets; print(secrets.token_hex(32))")"
+ok "JWT_SECRET_KEY auto-generated (64 hex chars)"
+
+# Required
+echo ""
+echo -e "  ${B}Required:${N}"
+ANTHROPIC_API_KEY="$(prompt_secret "ANTHROPIC_API_KEY" "Anthropic API key (sk-ant-...)")"
+ok "ANTHROPIC_API_KEY set"
+
+# Optional LLM / tools
+echo ""
+echo -e "  ${B}Optional (press Enter to skip):${N}"
+GROQ_API_KEY="$(prompt_optional_secret "GROQ_API_KEY" "Groq API key (LLM fallback)")"
+SERPAPI_API_KEY="$(prompt_optional_secret "SERPAPI_API_KEY" "SerpAPI key (web search tool)")"
+
+# Optional SSO
+echo ""
+echo -e "  ${B}Optional — Google SSO:${N}"
+GOOGLE_CLIENT_ID="$(prompt_optional "GOOGLE_CLIENT_ID" "Google Client ID")"
+GOOGLE_CLIENT_SECRET="$(prompt_optional_secret "GOOGLE_CLIENT_SECRET" "Google Client Secret")"
+
+echo ""
+echo -e "  ${B}Optional — Facebook SSO:${N}"
+FACEBOOK_APP_ID="$(prompt_optional "FACEBOOK_APP_ID" "Facebook App ID")"
+FACEBOOK_APP_SECRET="$(prompt_optional_secret "FACEBOOK_APP_SECRET" "Facebook App Secret")"
+
+# Optional admin seed
+echo ""
+echo -e "  ${B}Optional — Superuser account:${N}"
+ADMIN_EMAIL="$(prompt_optional "ADMIN_EMAIL" "Admin email")"
+ADMIN_PASSWORD=""
+ADMIN_FULL_NAME=""
+
+if [[ -n "$ADMIN_EMAIL" ]]; then
+    # Validate admin password
+    while true; do
+        ADMIN_PASSWORD="$(prompt_optional_secret "ADMIN_PASSWORD" "Admin password (min 8 chars, 1 digit)")"
+        if [[ -z "$ADMIN_PASSWORD" ]]; then
+            warn "No password provided — skipping admin account creation"
+            ADMIN_EMAIL=""
+            break
+        fi
+        if [[ ${#ADMIN_PASSWORD} -lt 8 ]]; then
+            echo -e "  ${R}Password must be at least 8 characters.${N}"
+            continue
+        fi
+        if ! [[ "$ADMIN_PASSWORD" =~ [0-9] ]]; then
+            echo -e "  ${R}Password must contain at least one digit.${N}"
+            continue
+        fi
+        break
+    done
+    if [[ -n "$ADMIN_EMAIL" ]]; then
+        ADMIN_FULL_NAME="$(prompt_optional "ADMIN_FULL_NAME" "Admin full name")"
+        [[ -z "$ADMIN_FULL_NAME" ]] && ADMIN_FULL_NAME="Admin User"
+    fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 10: Generate config files
+# ══════════════════════════════════════════════════════════════════════════════
+step "10/11" "Generating config files"
+
+# ── backend/.env ──────────────────────────────────────────────────────────────
+BACKEND_ENV="$SCRIPT_DIR/backend/.env"
+
+_write_backend_env() {
+    cat > "$BACKEND_ENV" <<ENVEOF
+# Generated by setup.sh — $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+# Edit this file to change backend configuration.
+
+# ── LLM Keys ──────────────────────────────────────────────────────────
+ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
+GROQ_API_KEY=${GROQ_API_KEY:-}
+SERPAPI_API_KEY=${SERPAPI_API_KEY:-}
+
+# ── Auth / JWT ────────────────────────────────────────────────────────
+JWT_SECRET_KEY=$JWT_SECRET_KEY
+ACCESS_TOKEN_EXPIRE_MINUTES=60
+REFRESH_TOKEN_EXPIRE_DAYS=7
+
+# ── Admin seed (used by scripts/seed_admin.py) ───────────────────────
+ADMIN_EMAIL=${ADMIN_EMAIL:-}
+ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+ADMIN_FULL_NAME=${ADMIN_FULL_NAME:-Admin User}
+
+# ── Google SSO ────────────────────────────────────────────────────────
+GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+
+# ── Facebook SSO ──────────────────────────────────────────────────────
+FACEBOOK_APP_ID=${FACEBOOK_APP_ID:-}
+FACEBOOK_APP_SECRET=${FACEBOOK_APP_SECRET:-}
+
+# ── OAuth ─────────────────────────────────────────────────────────────
+OAUTH_REDIRECT_URI=http://localhost:3000/auth/oauth/callback
+
+# ── Logging / Runtime ─────────────────────────────────────────────────
+LOG_LEVEL=INFO
+LOG_TO_FILE=True
+AGENT_TIMEOUT_SECONDS=900
+ENVEOF
+    ok "backend/.env created"
+}
+
+if [[ -f "$BACKEND_ENV" ]]; then
+    if [[ $NON_INTERACTIVE -eq 1 ]]; then
+        info "backend/.env exists — overwriting (non-interactive mode)"
+        _write_backend_env
+    else
+        printf "  backend/.env already exists. Overwrite? [y/N]: "
+        read -r OVERWRITE
+        if [[ "$OVERWRITE" =~ ^[Yy] ]]; then
+            _write_backend_env
+        else
+            ok "backend/.env kept unchanged"
+        fi
+    fi
+else
+    _write_backend_env
+fi
+
+# ── frontend/.env.local ──────────────────────────────────────────────────────
+FRONTEND_ENV="$SCRIPT_DIR/frontend/.env.local"
+FRONTEND_ENV_EXAMPLE="$SCRIPT_DIR/frontend/.env.local.example"
+
+if [[ -f "$FRONTEND_ENV" ]]; then
+    ok "frontend/.env.local already exists — skipping"
+elif [[ -f "$FRONTEND_ENV_EXAMPLE" ]]; then
+    cp "$FRONTEND_ENV_EXAMPLE" "$FRONTEND_ENV"
+    ok "frontend/.env.local created from .env.local.example"
+else
+    cat > "$FRONTEND_ENV" <<FEEOF
+NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:8181
+NEXT_PUBLIC_DASHBOARD_URL=http://127.0.0.1:8050
+NEXT_PUBLIC_DOCS_URL=http://127.0.0.1:8000
+FEEOF
+    ok "frontend/.env.local created with defaults"
+fi
+
+# ── .pyiceberg.yaml ──────────────────────────────────────────────────────────
+PYICEBERG_YAML="$SCRIPT_DIR/.pyiceberg.yaml"
+
+if [[ -f "$PYICEBERG_YAML" ]]; then
+    ok ".pyiceberg.yaml already exists — skipping"
+else
+    cat > "$PYICEBERG_YAML" <<ICEEOF
+catalog:
+  local:
+    type: sql
+    uri: sqlite:///data/iceberg/catalog.db
+    warehouse: file://${SCRIPT_DIR}/data/iceberg/warehouse
+ICEEOF
+    ok ".pyiceberg.yaml created (warehouse: ${SCRIPT_DIR}/data/iceberg/warehouse)"
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 11: Initialise Iceberg + seed admin + install hooks
+# ══════════════════════════════════════════════════════════════════════════════
+step "11/11" "Initialising database, git hooks, and running verification"
+
+# Export env vars so init scripts can find them
+export JWT_SECRET_KEY
+export ADMIN_EMAIL="${ADMIN_EMAIL:-}"
+export ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
+export ADMIN_FULL_NAME="${ADMIN_FULL_NAME:-Admin User}"
+export ANTHROPIC_API_KEY
+
+# ── Iceberg tables ────────────────────────────────────────────────────────────
+info "Creating auth Iceberg tables..."
+if (cd "$SCRIPT_DIR" && "$VENV_PYTHON" auth/create_tables.py 2>&1); then
+    ok "auth tables created"
+else
+    warn "auth/create_tables.py had issues (may already exist)"
+fi
+
+info "Running auth schema migration..."
+if (cd "$SCRIPT_DIR" && "$VENV_PYTHON" auth/migrate_users_table.py 2>&1); then
+    ok "auth migration complete"
+else
+    warn "auth/migrate_users_table.py had issues (may already be migrated)"
+fi
+
+info "Creating stocks Iceberg tables..."
+if (cd "$SCRIPT_DIR" && "$VENV_PYTHON" stocks/create_tables.py 2>&1); then
+    ok "stocks tables created"
+else
+    warn "stocks/create_tables.py had issues (may already exist)"
+fi
+
+info "Running stocks metadata backfill..."
+if (cd "$SCRIPT_DIR" && "$VENV_PYTHON" stocks/backfill_metadata.py 2>&1); then
+    ok "stocks metadata backfill complete"
+else
+    warn "stocks/backfill_metadata.py had issues (may already be backfilled)"
+fi
+
+# ── Seed admin ────────────────────────────────────────────────────────────────
+if [[ -n "$ADMIN_EMAIL" ]] && [[ -n "$ADMIN_PASSWORD" ]]; then
+    info "Seeding admin account ($ADMIN_EMAIL)..."
+    if (cd "$SCRIPT_DIR" && "$VENV_PYTHON" scripts/seed_admin.py 2>&1); then
+        ok "Admin account seeded"
+    else
+        warn "scripts/seed_admin.py had issues (admin may already exist)"
+    fi
+else
+    info "No admin credentials provided — skipping admin seed"
+fi
+
+# ── Git hooks ─────────────────────────────────────────────────────────────────
+info "Installing git hooks..."
+HOOKS_DIR="$SCRIPT_DIR/.git/hooks"
+if [[ -d "$HOOKS_DIR" ]]; then
+    cp "$SCRIPT_DIR/hooks/pre-commit" "$HOOKS_DIR/pre-commit"
+    chmod +x "$HOOKS_DIR/pre-commit"
+    cp "$SCRIPT_DIR/hooks/pre-push" "$HOOKS_DIR/pre-push"
+    chmod +x "$HOOKS_DIR/pre-push"
+    ok "Git hooks installed (pre-commit + pre-push)"
+else
+    warn ".git/hooks directory not found — are you in a git repository?"
+fi
+
+# ── Verification ──────────────────────────────────────────────────────────────
+echo ""
+echo -e "${B}Verification:${N}"
+echo "────────────────────────────────────────────────────────────────"
+
+PASS=0
+TOTAL=0
+
+_check() {
+    local label="$1"
+    local condition="$2"
+    TOTAL=$((TOTAL + 1))
+    if eval "$condition" &>/dev/null; then
+        echo -e "  ${G}[PASS]${N} $label"
+        PASS=$((PASS + 1))
+    else
+        echo -e "  ${R}[FAIL]${N} $label"
+    fi
+}
+
+_check "Python virtualenv" "[[ -f '$VENV_PYTHON' ]]"
+_check "Key packages (fastapi)" "'$VENV_PYTHON' -c 'import fastapi'"
+_check "Key packages (langchain)" "'$VENV_PYTHON' -c 'import langchain'"
+_check "Key packages (pyiceberg)" "'$VENV_PYTHON' -c 'import pyiceberg'"
+_check "Key packages (dash)" "'$VENV_PYTHON' -c 'import dash'"
+_check "Frontend node_modules" "[[ -d '$FRONTEND_DIR/node_modules' ]]"
+_check "backend/.env" "[[ -f '$BACKEND_ENV' ]]"
+_check ".pyiceberg.yaml" "[[ -f '$PYICEBERG_YAML' ]]"
+_check "Iceberg catalog" "[[ -f '$SCRIPT_DIR/data/iceberg/catalog.db' ]]"
+_check "Git pre-commit hook" "[[ -x '$HOOKS_DIR/pre-commit' ]]"
+_check "Git pre-push hook" "[[ -x '$HOOKS_DIR/pre-push' ]]"
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+echo ""
+echo "════════════════════════════════════════════════════════════════════"
+if [[ $PASS -eq $TOTAL ]]; then
+    echo -e "${G}  All $TOTAL checks passed. Setup complete!${N}"
+else
+    echo -e "${Y}  $PASS/$TOTAL checks passed. Review any failures above.${N}"
+fi
+echo "════════════════════════════════════════════════════════════════════"
+echo ""
+echo -e "  ${B}Next steps:${N}"
+echo ""
+echo "    1. Start all services:"
+echo -e "       ${C}./run.sh start${N}"
+echo ""
+echo "    2. Open the app:"
+echo -e "       ${C}http://localhost:3000${N}"
+echo ""
+echo -e "  ${B}Service URLs:${N}"
+echo "    Frontend:   http://localhost:3000"
+echo "    Backend:    http://127.0.0.1:8181"
+echo "    Dashboard:  http://127.0.0.1:8050"
+echo "    Docs:       http://127.0.0.1:8000"
+echo ""
+echo -e "  ${B}Useful commands:${N}"
+echo "    ./run.sh start     Start all services"
+echo "    ./run.sh stop      Stop all services"
+echo "    ./run.sh status    Check service status"
+echo ""

@@ -15,7 +15,18 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 
 ---
 
-## Quick Start
+## First-Time Setup (Recommended)
+
+```bash
+git clone git@github.com:asequitytrading-design/ai-agent-ui.git
+cd ai-agent-ui
+./setup.sh          # interactive — prompts for API keys
+./run.sh start      # start all services
+```
+
+`setup.sh` handles everything: Python 3.9 virtualenv, pip install, npm ci, directory creation, config files (`backend/.env`, `frontend/.env.local`, `.pyiceberg.yaml`), Iceberg database init, admin seeding, and git hooks. Safe to re-run. For CI/Docker: `ANTHROPIC_API_KEY=sk-ant-... ./setup.sh --non-interactive`
+
+## Quick Start (Manual)
 
 ```bash
 # 1. Create backend/.env with your keys and JWT secret
@@ -219,6 +230,7 @@ The entire UI is one mounted React component. The `view` state switches between 
 
 ```
 ai-agent-ui/
+├── setup.sh                  # First-time installer (interactive or --non-interactive)
 ├── run.sh                    # Unified launcher (start/stop/status/restart)
 ├── README.md
 ├── CLAUDE.md                 # Claude Code project context
@@ -470,3 +482,4 @@ Register `http://localhost:3000/auth/oauth/callback` as an authorised redirect U
 | **`SERPAPI_API_KEY` required for web search** | Free tier (100/month) at serpapi.com |
 | **Refresh token deny-list is in-memory** | Cleared on backend restart — revoked tokens become valid again until natural expiry (7 days) |
 | **Facebook SSO** | Code complete; credentials are placeholders — button hidden until real credentials added |
+| **yfinance >= 1.2 dropped `Adj Close`** | Iceberg `stocks.ohlcv` stores `adj_close` as NaN; all consumers fall back to `Close` automatically |

@@ -1,46 +1,17 @@
 import logging
-import sys
 from datetime import date
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+from tools._stock_shared import _get_repo, _require_repo  # noqa: F401 — re-exported
 
 # Module-level logger; mutable but required at module scope for pre-class logging.
 _logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
-_DATA_RAW = _PROJECT_ROOT / "data" / "raw"
-_DATA_METADATA = _PROJECT_ROOT / "data" / "metadata"
 _CHARTS_ANALYSIS = _PROJECT_ROOT / "charts" / "analysis"
 _CACHE_DIR = _PROJECT_ROOT / "data" / "cache"
-
-_STOCK_REPO = None
-_STOCK_REPO_INIT_ATTEMPTED = False
-
-
-def _get_repo():
-    """Return the :class:`~stocks.repository.StockRepository` singleton.
-
-    Returns ``None`` silently when PyIceberg is unavailable.
-
-    Returns:
-        :class:`~stocks.repository.StockRepository` instance or ``None``.
-    """
-    import tools._analysis_shared as _self  # noqa: PLC0415 — module-attr access for monkeypatching
-    if _self._STOCK_REPO_INIT_ATTEMPTED:
-        return _self._STOCK_REPO
-    _self._STOCK_REPO_INIT_ATTEMPTED = True
-    try:
-        _root = str(_PROJECT_ROOT)
-        if _root not in sys.path:
-            sys.path.insert(0, _root)
-        from stocks.repository import StockRepository  # noqa: PLC0415
-        _self._STOCK_REPO = StockRepository()
-        _logger.debug("StockRepository initialised (price_analysis_tool)")
-    except Exception as _e:
-        _logger.warning("StockRepository unavailable (Iceberg write disabled): %s", _e)
-    return _self._STOCK_REPO
 
 
 def _load_cache(ticker: str, key: str) -> Optional[str]:
@@ -79,19 +50,42 @@ from tools._helpers import _currency_symbol, _load_currency  # noqa: F401
 
 
 def _load_parquet(ticker: str) -> Optional[pd.DataFrame]:
-    """Load the raw OHLCV parquet file for a ticker.
+    """Load OHLCV data for a ticker from Iceberg.
+
+    Returns a DataFrame with a DatetimeIndex and columns ``Open``, ``High``,
+    ``Low``, ``Close``, ``Adj Close``, ``Volume`` — the same shape as the
+    legacy ``pd.read_parquet(data/raw/{TICKER}_raw.parquet)`` output.
 
     Args:
         ticker: Stock ticker symbol (already uppercased).
 
     Returns:
-        A :class:`pandas.DataFrame` with a DatetimeIndex, or ``None`` if the
-        parquet file does not exist.
+        A :class:`pandas.DataFrame` with a DatetimeIndex, or ``None`` if no
+        OHLCV data exists in Iceberg for this ticker.
     """
-    file_path = _DATA_RAW / f"{ticker}_raw.parquet"
-    if not file_path.exists():
-        _logger.warning("Parquet file not found for %s: %s", ticker, file_path)
+    try:
+        repo = _require_repo()
+        df = repo.get_ohlcv(ticker)
+        if df.empty:
+            _logger.warning("No OHLCV data in Iceberg for %s", ticker)
+            return None
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date").set_index("date")
+        result = pd.DataFrame(
+            {
+                "Open": df["open"],
+                "High": df["high"],
+                "Low": df["low"],
+                "Close": df["close"],
+                "Adj Close": df["adj_close"]
+                if "adj_close" in df.columns
+                else df["close"],
+                "Volume": df["volume"],
+            }
+        )
+        result.index.name = "Date"
+        result.index = pd.to_datetime(result.index)
+        return result
+    except Exception as exc:
+        _logger.warning("Iceberg OHLCV read failed for %s: %s", ticker, exc)
         return None
-    df = pd.read_parquet(file_path, engine="pyarrow")
-    df.index = pd.to_datetime(df.index)
-    return df
