@@ -137,6 +137,13 @@ Data paths:
 - Iceberg catalog: `data/iceberg/catalog.db` (SQLite); warehouse: `data/iceberg/warehouse/`
 - Metadata JSON files (legacy, gitignored): `data/metadata/*.json` — replaced by Iceberg tables
 
+Env files (external — safe from git):
+- `~/.ai-agent-ui/backend.env` — master backend secrets + config
+- `~/.ai-agent-ui/frontend.env.local` — master frontend service URLs
+- `backend/.env` → symlink to `~/.ai-agent-ui/backend.env`
+- `frontend/.env.local` → symlink to `~/.ai-agent-ui/frontend.env.local`
+- `setup.sh` auto-migrates existing real files and creates symlinks
+
 ---
 
 ## Code Standards

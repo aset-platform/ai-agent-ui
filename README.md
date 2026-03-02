@@ -24,7 +24,9 @@ cd ai-agent-ui
 ./run.sh start      # start all services
 ```
 
-`setup.sh` handles everything: Python 3.9 virtualenv, pip install, npm ci, directory creation, config files (`backend/.env`, `frontend/.env.local`, `.pyiceberg.yaml`), Iceberg database init, admin seeding, and git hooks. Safe to re-run. For CI/Docker: `ANTHROPIC_API_KEY=sk-ant-... ./setup.sh --non-interactive`
+`setup.sh` handles everything: Python 3.9 virtualenv, pip install, npm ci, directory creation, config files, `.pyiceberg.yaml`, Iceberg database init, admin seeding, and git hooks. Safe to re-run. For CI/Docker: `ANTHROPIC_API_KEY=sk-ant-... ./setup.sh --non-interactive`
+
+**Env files are stored externally** at `~/.ai-agent-ui/` so branch checkouts and merges never overwrite your secrets. `backend/.env` and `frontend/.env.local` are symlinks to the master copies. Edit the files at `~/.ai-agent-ui/` directly.
 
 ## Quick Start (Manual)
 
