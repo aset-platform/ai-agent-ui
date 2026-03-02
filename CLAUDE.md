@@ -40,42 +40,28 @@ npx eslint .                # verify zero errors remain
 
 ```bash
 source backend/demoenv/bin/activate
-black backend/ auth/ stocks/ scripts/ dashboard/ --check   # formatting
-isort backend/ auth/ stocks/ scripts/ dashboard/ --check    # import order
-flake8 backend/ auth/ stocks/ scripts/ dashboard/           # style + errors
+black backend/ auth/ stocks/ scripts/ dashboard/ --check           # formatting
+isort backend/ auth/ stocks/ scripts/ dashboard/ --profile black --check  # import order
+flake8 backend/ auth/ stocks/ scripts/ dashboard/                  # style + errors
 ```
 
 To auto-fix:
 
 ```bash
 black backend/ auth/ stocks/ scripts/ dashboard/
-isort backend/ auth/ stocks/ scripts/ dashboard/
+isort backend/ auth/ stocks/ scripts/ dashboard/ --profile black
 # Then fix any remaining flake8 issues manually
 ```
+
+> **Always use `--profile black` with isort** — without it, isort and black fight over import formatting in an infinite loop.
 
 ### Workflow
 
 ```
-Write code
-    ↓
-Run lint locally (eslint / flake8+black+isort)
-    ↓
-Auto-fix (--fix / black / isort)
-    ↓
-Fix remaining issues manually
-    ↓
-git add → git commit → pre-commit hook re-checks
-    ↓
-git fetch origin && git merge origin/<target-branch>   ← resolve conflicts locally
-    ↓
-git push → CI passes
-    ↓
-PR is clean → ready for review
+Write code → lint & auto-fix → git add → git commit (pre-commit hook runs) → push
 ```
 
 > **Never push code with linting errors.** Pre-commit hooks catch most issues, but always verify with a manual lint pass before creating a PR.
->
-> **Never push without syncing.** Always `git fetch origin && git merge origin/<target>` before pushing to avoid merge conflicts on the PR.
 
 ---
 
@@ -166,48 +152,97 @@ Env files (external — safe from git):
 
 ---
 
-## Branching & Commits
+## Branching & Promotion Strategy
+
+### Golden Rule
+
+> **Changes flow UP, sync flows DOWN. After every merge UP, immediately merge DOWN.**
+
+```
+feature/* → dev → qa → release → main      (changes flow UP via PR)
+                ↑         ↑          ↑
+          merge back  merge back  merge back  (sync flows DOWN immediately)
+            to dev      to qa       to release
+```
+
+This keeps all branches in sync and prevents the 80+ conflict nightmare on the next promotion.
+
+### Branch flow
 
 | | |
 |---|---|
-| **Branch flow** | `feature/* → dev → qa → release → main` |
-| **Hotfix** | Branch off `main`, backport to `dev` |
+| **Promotion** | `feature/* → dev → qa → release → main` (one direction only) |
+| **Hotfix** | Branch off `main`, PR to `main`, then sync DOWN to `dev` |
 | **PR title** | `[TYPE] Short description` — feat / fix / chore / refactor / hotfix / docs |
 | **Commit format** | `type: description` — feat / fix / refactor / docs / chore |
 | **Tag releases** | `git tag -a v1.0.0 -m "Release v1.0.0"` |
 
-Branch protection (apply manually in GitHub → Settings → Branches):
+### Promoting UP (e.g. dev → qa)
+
+```bash
+# 1. Create a promotion branch from the TARGET
+git fetch origin
+git checkout -b chore/promote-dev-to-qa origin/qa
+
+# 2. Merge the SOURCE into it — resolve all conflicts locally (source wins)
+git merge origin/dev
+# If conflicts → resolve (accept dev's version), then: git add <files> && git commit
+
+# 3. Lint after merge — merges can introduce formatting drift
+black backend/ auth/ stocks/ scripts/ dashboard/
+isort backend/ auth/ stocks/ scripts/ dashboard/ --profile black
+
+# 4. Push and PR
+git push -u origin chore/promote-dev-to-qa
+gh pr create --base qa
+```
+
+### Syncing DOWN after merge (CRITICAL — do this immediately)
+
+After `chore/promote-dev-to-qa` is merged to `qa`:
+
+```bash
+# Sync qa back DOWN to dev so dev has everything qa has
+git fetch origin
+git checkout dev && git pull origin dev
+git merge origin/qa        # should be fast-forward or trivial
+git push origin dev        # if protected, do via PR
+```
+
+Repeat for every tier: after qa→release merge, sync release→qa→dev. After release→main, sync main→release→qa→dev.
+
+**Why this works:** The 80+ conflict problem happens because qa accumulates merge commits that dev never sees. Syncing DOWN after every promotion keeps the branches identical except for in-flight features.
+
+### Feature branch workflow
+
+```bash
+# Before pushing a feature branch
+git fetch origin
+git merge origin/dev          # catch conflicts early
+# resolve if needed, re-run lint
+git push origin HEAD
+
+# Before raising PR
+git fetch origin
+git merge origin/dev          # final sync
+git push origin HEAD
+gh pr create --base dev
+```
+
+### Rules (NO EXCEPTIONS)
+
+- **No conflicts on GitHub** — all conflicts resolved locally before pushing
+- **No direct pushes** to `dev`, `qa`, `release`, or `main` — always PR
+- **Sync DOWN immediately** after every upward promotion merge
+- **Re-run lint after every merge** — formatting drift is the #1 conflict source
+- **Long-lived feature branches** (> 1 day) — merge dev into them daily
+
+### Branch protection (GitHub → Settings → Branches)
+
 - `main`: no direct push, 2 approvals, CI must pass
 - `release`: PR from `qa` only, 1 approval + QA lead
 - `qa`: PR from `dev` only, 1 approval
 - `dev`: PR from `feature/*`, 1 approval, unit tests + lint must pass
-- All the PR's should be created after resolved all the conflicts with higher branches, conflicts hould not go to gihub
-
-### Avoiding Merge Conflicts (ALWAYS — NO EXCEPTIONS)
-
-**Before every push** — sync your branch with the target to catch conflicts early:
-
-```bash
-git fetch origin
-git merge origin/<target-branch>   # e.g. origin/dev for feature→dev
-# If conflicts → resolve locally, then: git add <files> && git commit
-git push origin HEAD
-```
-
-**Before raising any PR** — do a final sync + verify:
-
-```bash
-git fetch origin
-git merge origin/<target-branch>   # e.g. origin/dev for feature→dev, origin/qa for dev→qa
-git push origin HEAD
-```
-
-Rules:
-- **Never raise a PR on a branch that is behind the target branch.**
-- **Resolve all conflicts locally** — never rely on GitHub's auto-merge.
-- If your feature branch is long-lived (> 1 day), merge the target into it daily.
-- After resolving conflicts, **re-run lint** — merges can introduce new violations.
-- This applies to every promotion: `feature→dev`, `dev→qa`, `qa→release`, `release→main`.
 
 ---
 
@@ -241,7 +276,6 @@ In `agents/general_agent.py` and `agents/stock_agent.py` (2-line change each):
 from langchain_anthropic import ChatAnthropic                                          # replace langchain_groq import
 return ChatAnthropic(model="claude-sonnet-4-6", temperature=self.config.temperature)   # in _build_llm()
 ```
-
 Update `model` field in factory to `"claude-sonnet-4-6"`. Set `ANTHROPIC_API_KEY` in `backend/.env`.
 
 ---
