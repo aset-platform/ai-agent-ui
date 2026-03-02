@@ -20,6 +20,65 @@ git branch --show-current   # confirm before touching files
 
 ---
 
+## Pre-Commit / Pre-Push Lint Checklist (ALWAYS — NO EXCEPTIONS)
+
+**Every commit and PR must be lint-clean.** Run these locally before pushing — CI will reject lint failures.
+
+### Frontend (from `frontend/`)
+
+```bash
+cd frontend
+npx eslint . --fix          # auto-fix what it can
+npx eslint .                # verify zero errors remain
+```
+
+- ESLint flat config: `frontend/eslint.config.mjs`
+- Key rules enforced by CI: `@next/next/no-img-element` (use `<Image />` from `next/image`), `react-hooks/*`, no unused imports
+- If a rule must be suppressed, use **block-level** `/* eslint-disable rule-name */` with a comment explaining why — never blanket-disable
+
+### Backend (from project root, inside virtualenv)
+
+```bash
+source backend/demoenv/bin/activate
+black backend/ auth/ stocks/ scripts/ dashboard/ --check   # formatting
+isort backend/ auth/ stocks/ scripts/ dashboard/ --check    # import order
+flake8 backend/ auth/ stocks/ scripts/ dashboard/           # style + errors
+```
+
+To auto-fix:
+
+```bash
+black backend/ auth/ stocks/ scripts/ dashboard/
+isort backend/ auth/ stocks/ scripts/ dashboard/
+# Then fix any remaining flake8 issues manually
+```
+
+### Workflow
+
+```
+Write code
+    ↓
+Run lint locally (eslint / flake8+black+isort)
+    ↓
+Auto-fix (--fix / black / isort)
+    ↓
+Fix remaining issues manually
+    ↓
+git add → git commit → pre-commit hook re-checks
+    ↓
+git fetch origin && git merge origin/<target-branch>   ← resolve conflicts locally
+    ↓
+git push → CI passes
+    ↓
+PR is clean → ready for review
+```
+
+> **Never push code with linting errors.** Pre-commit hooks catch most issues, but always verify with a manual lint pass before creating a PR.
+>
+> **Never push without syncing.** Always `git fetch origin && git merge origin/<target>` before pushing to avoid merge conflicts on the PR.
+
+---
+
 ## Project Overview
 
 Fullstack agentic chat app. See `README.md` for full architecture, quick start, and tech stack.
@@ -113,9 +172,18 @@ Branch protection (apply manually in GitHub → Settings → Branches):
 - `qa`: PR from `dev` only, 1 approval
 - `dev`: PR from `feature/*`, 1 approval, unit tests + lint must pass
 
-### Before raising any PR (ALWAYS — NO EXCEPTIONS)
+### Avoiding Merge Conflicts (ALWAYS — NO EXCEPTIONS)
 
-Sync the source branch with the target before opening the PR to prevent conflicts:
+**Before every push** — sync your branch with the target to catch conflicts early:
+
+```bash
+git fetch origin
+git merge origin/<target-branch>   # e.g. origin/dev for feature→dev
+# If conflicts → resolve locally, then: git add <files> && git commit
+git push origin HEAD
+```
+
+**Before raising any PR** — do a final sync + verify:
 
 ```bash
 git fetch origin
@@ -123,8 +191,11 @@ git merge origin/<target-branch>   # e.g. origin/dev for feature→dev, origin/q
 git push origin HEAD
 ```
 
+Rules:
 - **Never raise a PR on a branch that is behind the target branch.**
-- Resolve all conflicts locally before creating the PR.
+- **Resolve all conflicts locally** — never rely on GitHub's auto-merge.
+- If your feature branch is long-lived (> 1 day), merge the target into it daily.
+- After resolving conflicts, **re-run lint** — merges can introduce new violations.
 - This applies to every promotion: `feature→dev`, `dev→qa`, `qa→release`, `release→main`.
 
 ---
