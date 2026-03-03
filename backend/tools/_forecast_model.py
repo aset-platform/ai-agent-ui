@@ -10,9 +10,8 @@ Functions
 import logging
 
 import pandas as pd
-from prophet import Prophet
-
 import tools._forecast_shared as _sh
+from prophet import Prophet
 
 # Module-level logger for this module; kept at module scope intentionally.
 _logger = logging.getLogger(__name__)
@@ -21,8 +20,9 @@ _logger = logging.getLogger(__name__)
 def _prepare_data_for_prophet(df: pd.DataFrame) -> pd.DataFrame:
     """Convert an OHLCV DataFrame to Prophet's ``ds`` / ``y`` format.
 
-    Uses the ``Adj Close`` column when available, falling back to ``Close``.
-    Any rows with NaN prices are dropped.
+    Uses the ``Adj Close`` column when available and non-empty, falling
+    back to ``Close``.  yfinance >= 1.2 no longer provides ``Adj Close``,
+    and Iceberg may store it as all-NaN.  Any rows with NaN prices are dropped.
 
     Args:
         df: OHLCV DataFrame with a DatetimeIndex.
@@ -31,11 +31,16 @@ def _prepare_data_for_prophet(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame with exactly two columns: ``ds`` (datetime) and ``y``
         (adjusted close price), sorted ascending, with no NaN values.
     """
-    price_col = "Adj Close" if "Adj Close" in df.columns else "Close"
-    prophet_df = pd.DataFrame({
-        "ds": df.index.normalize(),
-        "y": df[price_col].values,
-    })
+    if "Adj Close" in df.columns and df["Adj Close"].notna().any():
+        price_col = "Adj Close"
+    else:
+        price_col = "Close"
+    prophet_df = pd.DataFrame(
+        {
+            "ds": df.index.normalize(),
+            "y": df[price_col].values,
+        }
+    )
     prophet_df = prophet_df.dropna(subset=["y"])
     prophet_df = prophet_df.sort_values("ds").reset_index(drop=True)
     prophet_df["ds"] = pd.to_datetime(prophet_df["ds"]).dt.tz_localize(None)
@@ -92,7 +97,9 @@ def _generate_forecast(
 
     last_date = prophet_df["ds"].max()
     future_mask = forecast["ds"] > last_date
-    result = forecast.loc[future_mask, ["ds", "yhat", "yhat_lower", "yhat_upper"]].copy()
+    result = forecast.loc[
+        future_mask, ["ds", "yhat", "yhat_lower", "yhat_upper"]
+    ].copy()
     result = result.reset_index(drop=True)
     _logger.debug("Forecast generated: %d future rows", len(result))
     return result

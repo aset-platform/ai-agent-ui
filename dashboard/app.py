@@ -28,7 +28,7 @@ _ROOT = Path(__file__).parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from dashboard.app_env import _load_dotenv, setup_sys_path, _PROJECT_ROOT  # noqa: E402
+from dashboard.app_env import _PROJECT_ROOT, _load_dotenv, setup_sys_path  # noqa: E402
 
 # Ensure project root is registered via the canonical helper too
 setup_sys_path()

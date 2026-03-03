@@ -22,19 +22,26 @@ Typical usage (via LangChain tool call)::
 import logging
 from datetime import date
 
-from langchain_core.tools import tool
-
 import tools._forecast_shared as _sh
-from tools._forecast_model import _prepare_data_for_prophet, _train_prophet_model, _generate_forecast
-from tools._forecast_accuracy import _calculate_forecast_accuracy, _generate_forecast_summary
-from tools._forecast_persist import _save_forecast
+from langchain_core.tools import tool
+from tools._forecast_accuracy import (
+    _calculate_forecast_accuracy,
+    _generate_forecast_summary,
+)
 from tools._forecast_chart import _create_forecast_chart
+from tools._forecast_model import (
+    _generate_forecast,
+    _prepare_data_for_prophet,
+    _train_prophet_model,
+)
+from tools._forecast_persist import _save_forecast
 
 # Module-level logger — must remain module-level for LangChain @tool compatibility
 _logger = logging.getLogger(__name__)
 
-# Re-export so tests can still monkeypatch via forecasting_tool._get_repo
+# Re-export so tests can still monkeypatch via forecasting_tool.*
 _get_repo = _sh._get_repo
+_require_repo = _sh._require_repo
 
 
 @tool
@@ -96,31 +103,27 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             model, forecast_df, prophet_df, ticker, current_price, summary
         )
 
-        try:
-            repo = _sh._get_repo()
-            if repo is not None:
-                _run_date = date.today()
-                _run_dict = {
-                    "run_date": _run_date,
-                    "sentiment": summary.get("sentiment"),
-                    "current_price_at_run": current_price,
-                }
-                for _m_key in ["3m", "6m", "9m"]:
-                    _t = summary.get("targets", {}).get(_m_key)
-                    if _t:
-                        _run_dict[f"target_{_m_key}_date"] = _t.get("date")
-                        _run_dict[f"target_{_m_key}_price"] = _t.get("price")
-                        _run_dict[f"target_{_m_key}_pct_change"] = _t.get("pct_change")
-                        _run_dict[f"target_{_m_key}_lower"] = _t.get("lower")
-                        _run_dict[f"target_{_m_key}_upper"] = _t.get("upper")
-                if "error" not in accuracy:
-                    _run_dict["mae"] = accuracy.get("MAE")
-                    _run_dict["rmse"] = accuracy.get("RMSE")
-                    _run_dict["mape"] = accuracy.get("MAPE_pct")
-                repo.insert_forecast_run(ticker, months, _run_dict)
-                repo.insert_forecast_series(ticker, months, _run_date, forecast_df)
-        except Exception as _e:
-            _logger.error("Iceberg forecast write failed for %s: %s", ticker, _e)
+        repo = _sh._require_repo()
+        _run_date = date.today()
+        _run_dict = {
+            "run_date": _run_date,
+            "sentiment": summary.get("sentiment"),
+            "current_price_at_run": current_price,
+        }
+        for _m_key in ["3m", "6m", "9m"]:
+            _t = summary.get("targets", {}).get(_m_key)
+            if _t:
+                _run_dict[f"target_{_m_key}_date"] = _t.get("date")
+                _run_dict[f"target_{_m_key}_price"] = _t.get("price")
+                _run_dict[f"target_{_m_key}_pct_change"] = _t.get("pct_change")
+                _run_dict[f"target_{_m_key}_lower"] = _t.get("lower")
+                _run_dict[f"target_{_m_key}_upper"] = _t.get("upper")
+        if "error" not in accuracy:
+            _run_dict["mae"] = accuracy.get("MAE")
+            _run_dict["rmse"] = accuracy.get("RMSE")
+            _run_dict["mape"] = accuracy.get("MAPE_pct")
+        repo.insert_forecast_run(ticker, months, _run_dict)
+        repo.insert_forecast_series(ticker, months, _run_date, forecast_df)
 
         sentiment_emoji = {
             "Bullish": "🟢 BULLISH",

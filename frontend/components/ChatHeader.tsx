@@ -6,7 +6,8 @@
  * opens a dropdown with Edit Profile, Change Password, and Sign Out.
  */
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { clearTokens } from "@/lib/auth";
 import { AGENTS, type View } from "@/lib/constants";
@@ -38,7 +39,7 @@ export function ChatHeader({
 }: ChatHeaderProps) {
   const router = useRouter();
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [avatarErr, setAvatarErr] = useState(false);
+  const [avatarErrSrc, setAvatarErrSrc] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown on outside click
@@ -63,21 +64,25 @@ export function ChatHeader({
     ? profile.full_name.trim()[0].toUpperCase()
     : profile?.email?.[0]?.toUpperCase() ?? "?";
 
-  const avatarSrc = profile?.avatar_url
-    ? profile.avatar_url.startsWith("/")
+  const avatarSrc = useMemo(() => {
+    if (!profile?.avatar_url) return null;
+    return profile.avatar_url.startsWith("/")
       ? `${BACKEND_URL}${profile.avatar_url}`
-      : profile.avatar_url
-    : null;
+      : profile.avatar_url;
+  }, [profile?.avatar_url]);
 
-  // Reset error flag whenever the src changes (e.g. after re-upload).
-  useEffect(() => { setAvatarErr(false); }, [avatarSrc]);
+  // Derive error state: only true if the errored src matches the current src.
+  const avatarErr = avatarErrSrc !== null && avatarErrSrc === avatarSrc;
 
   const AvatarEl = avatarSrc && !avatarErr ? (
-    <img
+    <Image
       src={avatarSrc}
       alt=""
-      onError={() => setAvatarErr(true)}
+      width={32}
+      height={32}
+      onError={() => setAvatarErrSrc(avatarSrc)}
       className="w-8 h-8 rounded-full object-cover object-top border border-gray-200"
+      unoptimized
     />
   ) : (
     <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-sm font-semibold select-none">
@@ -89,10 +94,13 @@ export function ChatHeader({
     <header className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-200 shadow-sm shrink-0">
       {/* ── Left: logo + agent switcher ─────────────────────────────────── */}
       <div className="flex items-center gap-3">
-        <img
+        <Image
           src="/images/aset-logo-final.svg"
           alt="ASET"
+          width={48}
+          height={48}
           className="h-12 w-auto drop-shadow-sm"
+          priority
         />
 
         {view === "chat" ? (

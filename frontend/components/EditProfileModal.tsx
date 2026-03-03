@@ -7,9 +7,11 @@
  */
 
 import { useState, useRef, useEffect, useCallback, type ChangeEvent } from "react";
+import Image from "next/image";
 import type { UserProfile } from "@/hooks/useEditProfile";
 
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+const UNSUPPORTED_TYPES = ["image/heic", "image/heif", "image/tiff", "image/bmp"];
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8181";
 
@@ -40,11 +42,13 @@ export function EditProfileModal({
   // Re-populate the form whenever the modal opens.
   useEffect(() => {
     if (isOpen) {
+      /* eslint-disable react-hooks/set-state-in-effect -- resetting form state on open is intentional */
       setName(profile?.full_name ?? "");
       setAvatarFile(null);
       setPreviewSrc(null);
       setPreviewErr(false);
       setFileError("");
+      /* eslint-enable react-hooks/set-state-in-effect */
       if (fileRef.current) fileRef.current.value = "";
     }
   }, [isOpen, profile?.full_name]);
@@ -57,8 +61,6 @@ export function EditProfileModal({
       }
     };
   }, [previewSrc]);
-
-  const UNSUPPORTED_TYPES = ["image/heic", "image/heif", "image/tiff", "image/bmp"];
 
   const handleFileChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] ?? null;
@@ -118,11 +120,14 @@ export function EditProfileModal({
         {/* Current avatar preview */}
         <div className="flex justify-center mb-4">
           {displaySrc && !previewErr ? (
-            <img
+            <Image
               src={displaySrc}
               alt=""
+              width={64}
+              height={64}
               onError={() => setPreviewErr(true)}
               className="w-16 h-16 rounded-full object-cover object-top border border-gray-200 shadow-sm"
+              unoptimized
             />
           ) : (
             <div className="w-16 h-16 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-lg font-semibold shadow-sm">

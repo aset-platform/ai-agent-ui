@@ -17,9 +17,7 @@ from prophet import Prophet
 _logger = logging.getLogger(__name__)
 
 
-def _calculate_forecast_accuracy(
-    model: Prophet, prophet_df: pd.DataFrame
-) -> dict:
+def _calculate_forecast_accuracy(model: Prophet, prophet_df: pd.DataFrame) -> dict:
     """Evaluate model accuracy via in-sample backtesting on the last 12 months.
 
     Generates in-sample predictions for the entire training period, then
@@ -94,8 +92,10 @@ def _generate_forecast_summary(
             "upper": round(float(row["yhat_upper"]), 2),
         }
 
-    last_key = f"{min(months, 9)}m" if f"{min(months, 9)}m" in targets else (
-        "6m" if "6m" in targets else "3m"
+    last_key = (
+        f"{min(months, 9)}m"
+        if f"{min(months, 9)}m" in targets
+        else ("6m" if "6m" in targets else "3m")
     )
     final_pct = targets.get(last_key, {}).get("pct_change", 0.0)
     if final_pct > 10:

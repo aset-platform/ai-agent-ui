@@ -223,3 +223,191 @@ class TestPaginationMath:
     def test_page_beyond_data_returns_empty(self):
         data = list(range(5))
         assert self._paginate(data, page=1, page_size=10) == []
+
+
+# ---------------------------------------------------------------------------
+# Iceberg-backed data loader tests
+# ---------------------------------------------------------------------------
+
+
+class TestOhlcvAdjCloseNanFallback:
+    """Tests for _get_ohlcv_cached falling back to close when adj_close is all NaN."""
+
+    def test_adj_close_uses_close_when_all_nan(self):
+        """When adj_close is all NaN, Adj Close column should use close values."""
+        import numpy as np
+        import pandas as pd
+        from unittest.mock import MagicMock, patch
+
+        dates = pd.date_range("2020-01-01", periods=50, freq="B")
+        rng = np.random.default_rng(42)
+        close = 100 + rng.standard_normal(50).cumsum()
+        iceberg_df = pd.DataFrame({
+            "ticker": ["AAPL"] * 50,
+            "date": dates.date,
+            "open": close * 0.99,
+            "high": close * 1.01,
+            "low": close * 0.98,
+            "close": close,
+            "adj_close": [float("nan")] * 50,
+            "volume": rng.integers(1_000_000, 5_000_000, 50),
+        })
+
+        mock_repo = MagicMock()
+        mock_repo.get_ohlcv.return_value = iceberg_df
+
+        with patch("dashboard.callbacks.iceberg._get_iceberg_repo", return_value=mock_repo):
+            import dashboard.callbacks.iceberg as _ice
+            _ice._OHLCV_CACHE.clear()
+
+            from dashboard.callbacks.data_loaders import _load_raw
+            result = _load_raw("AAPL")
+
+        assert result is not None
+        # Adj Close should contain close values, not NaN
+        assert result["Adj Close"].notna().all()
+        assert result["Adj Close"].iloc[-1] == pytest.approx(close[-1])
+
+    def test_adj_close_used_when_valid(self):
+        """When adj_close has real data, Adj Close should use those values."""
+        import numpy as np
+        import pandas as pd
+        from unittest.mock import MagicMock, patch
+
+        dates = pd.date_range("2020-01-01", periods=50, freq="B")
+        rng = np.random.default_rng(42)
+        close = 100 + rng.standard_normal(50).cumsum()
+        adj_close = close * 0.95  # Different from close
+        iceberg_df = pd.DataFrame({
+            "ticker": ["AAPL"] * 50,
+            "date": dates.date,
+            "open": close * 0.99,
+            "high": close * 1.01,
+            "low": close * 0.98,
+            "close": close,
+            "adj_close": adj_close,
+            "volume": rng.integers(1_000_000, 5_000_000, 50),
+        })
+
+        mock_repo = MagicMock()
+        mock_repo.get_ohlcv.return_value = iceberg_df
+
+        with patch("dashboard.callbacks.iceberg._get_iceberg_repo", return_value=mock_repo):
+            import dashboard.callbacks.iceberg as _ice
+            _ice._OHLCV_CACHE.clear()
+
+            from dashboard.callbacks.data_loaders import _load_raw
+            result = _load_raw("AAPL")
+
+        assert result is not None
+        assert result["Adj Close"].iloc[-1] == pytest.approx(adj_close[-1])
+
+
+class TestLoadRawFromIceberg:
+    """Tests for :func:`dashboard.callbacks.data_loaders._load_raw` (Iceberg)."""
+
+    def test_returns_dataframe_from_iceberg(self):
+        """_load_raw must return a DataFrame with OHLCV columns from Iceberg."""
+        import numpy as np
+        import pandas as pd
+        from unittest.mock import MagicMock, patch
+
+        # Build Iceberg-shaped OHLCV data
+        dates = pd.date_range("2020-01-01", periods=50, freq="B")
+        rng = np.random.default_rng(42)
+        close = 100 + rng.standard_normal(50).cumsum()
+        iceberg_df = pd.DataFrame({
+            "ticker": ["AAPL"] * 50,
+            "date": dates.date,
+            "open": close * 0.99,
+            "high": close * 1.01,
+            "low": close * 0.98,
+            "close": close,
+            "adj_close": close,
+            "volume": rng.integers(1_000_000, 5_000_000, 50),
+        })
+
+        mock_repo = MagicMock()
+        mock_repo.get_ohlcv.return_value = iceberg_df
+
+        with patch("dashboard.callbacks.iceberg._get_iceberg_repo", return_value=mock_repo):
+            # Clear cache for test isolation
+            import dashboard.callbacks.iceberg as _ice
+            _ice._OHLCV_CACHE.clear()
+
+            from dashboard.callbacks.data_loaders import _load_raw
+            result = _load_raw("AAPL")
+
+        assert result is not None
+        assert "Open" in result.columns
+        assert "Close" in result.columns
+        assert len(result) == 50
+
+    def test_returns_none_when_no_data(self):
+        """_load_raw must return None when Iceberg has no OHLCV data."""
+        import pandas as pd
+        from unittest.mock import MagicMock, patch
+
+        mock_repo = MagicMock()
+        mock_repo.get_ohlcv.return_value = pd.DataFrame()
+
+        with patch("dashboard.callbacks.iceberg._get_iceberg_repo", return_value=mock_repo):
+            import dashboard.callbacks.iceberg as _ice
+            _ice._OHLCV_CACHE.clear()
+
+            from dashboard.callbacks.data_loaders import _load_raw
+            result = _load_raw("NOSUCH")
+
+        assert result is None
+
+
+class TestLoadForecastFromIceberg:
+    """Tests for :func:`dashboard.callbacks.data_loaders._load_forecast` (Iceberg)."""
+
+    def test_returns_forecast_from_iceberg(self):
+        """_load_forecast must return a DataFrame with ds/yhat columns."""
+        import pandas as pd
+        from unittest.mock import MagicMock, patch
+
+        dates = pd.date_range("2026-01-01", periods=60, freq="B")
+        iceberg_df = pd.DataFrame({
+            "ticker": ["AAPL"] * 60,
+            "horizon_months": [9] * 60,
+            "run_date": [pd.Timestamp("2025-12-31").date()] * 60,
+            "forecast_date": dates.date,
+            "predicted_price": [150.0 + i * 0.5 for i in range(60)],
+            "lower_bound": [145.0 + i * 0.5 for i in range(60)],
+            "upper_bound": [155.0 + i * 0.5 for i in range(60)],
+        })
+
+        mock_repo = MagicMock()
+        mock_repo.get_latest_forecast_series.return_value = iceberg_df
+
+        with patch("dashboard.callbacks.iceberg._get_iceberg_repo", return_value=mock_repo):
+            import dashboard.callbacks.iceberg as _ice
+            _ice._FORECAST_CACHE.clear()
+
+            from dashboard.callbacks.data_loaders import _load_forecast
+            result = _load_forecast("AAPL", 9)
+
+        assert result is not None
+        assert "ds" in result.columns
+        assert "yhat" in result.columns
+        assert len(result) == 60
+
+    def test_returns_none_when_no_forecast(self):
+        """_load_forecast must return None when Iceberg has no forecast."""
+        import pandas as pd
+        from unittest.mock import MagicMock, patch
+
+        mock_repo = MagicMock()
+        mock_repo.get_latest_forecast_series.return_value = pd.DataFrame()
+
+        with patch("dashboard.callbacks.iceberg._get_iceberg_repo", return_value=mock_repo):
+            import dashboard.callbacks.iceberg as _ice
+            _ice._FORECAST_CACHE.clear()
+
+            from dashboard.callbacks.data_loaders import _load_forecast
+            result = _load_forecast("NOSUCH", 9)
+
+        assert result is None

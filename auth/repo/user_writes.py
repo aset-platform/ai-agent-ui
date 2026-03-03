@@ -18,14 +18,14 @@ from typing import Any, Dict
 
 import pyarrow as pa
 
+from auth.repo.catalog import users_table
 from auth.repo.schemas import (
-    _USERS_PA_SCHEMA,
     _USER_TS_COLS,
+    _USERS_PA_SCHEMA,
+    _from_ts,
     _now_utc,
     _to_ts,
-    _from_ts,
 )
-from auth.repo.catalog import users_table
 from auth.repo.user_reads import get_by_email
 
 # Module-level logger; kept here as a module-level constant (immutable binding).
@@ -132,6 +132,7 @@ def update(cat, user_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
 
     updated_row = df[mask].iloc[0].to_dict()
     from auth.repo.schemas import _row_to_dict
+
     return _row_to_dict(updated_row)
 
 
