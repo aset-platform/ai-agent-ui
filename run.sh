@@ -176,8 +176,17 @@ do_start() {
 
     if [[ ! -f "$PYTHON" ]]; then
         echo -e "${R}ERROR: demoenv not found at ${PYTHON}${N}"
-        echo "  Run: cd backend && python3.9 -m venv demoenv && pip install -r requirements.txt"
+        echo "  Run: cd backend && python3.12 -m venv demoenv && pip install -r requirements.txt"
         exit 1
+    fi
+
+    # Source backend/.env so shell-level checks can see the keys.
+    # The file may be a symlink to ~/.ai-agent-ui/backend.env.
+    if [[ -f "${SCRIPT_DIR}/backend/.env" ]]; then
+        set -a
+        # shellcheck disable=SC1091
+        source "${SCRIPT_DIR}/backend/.env"
+        set +a
     fi
 
     if [[ -z "${GROQ_API_KEY:-}" ]]; then

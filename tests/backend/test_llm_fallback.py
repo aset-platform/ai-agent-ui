@@ -12,10 +12,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_fallback(groq_mock, anthropic_mock):
     """Construct a FallbackLLM with both inner LLMs already patched.
@@ -25,11 +25,16 @@ def _make_fallback(groq_mock, anthropic_mock):
     ``from X import Y`` statements in llm_fallback.py) rather than the
     original source modules, ensuring each call gets the correct mock even
     when the llm_fallback module is already cached in sys.modules.
+
+    Also sets ``GROQ_API_KEY`` in the environment so that the Groq
+    code-path is exercised.
     """
     import llm_fallback  # noqa: PLC0415 — imported here to get the module object
+
     with (
         patch.object(llm_fallback, "ChatGroq", return_value=groq_mock),
         patch.object(llm_fallback, "ChatAnthropic", return_value=anthropic_mock),
+        patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}),
     ):
         llm = llm_fallback.FallbackLLM(
             groq_model="openai/gpt-oss-120b",

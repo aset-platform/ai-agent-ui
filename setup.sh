@@ -203,19 +203,19 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 3: Ensure Python 3.9
 # ══════════════════════════════════════════════════════════════════════════════
-step "3/11" "Ensuring Python 3.9 is available"
+step "3/11" "Ensuring Python 3.12 is available"
 
-PYTHON39=""
+PYTHON312=""
 
-# Check if python3.9 already exists
-if command -v python3.9 &>/dev/null; then
-    PYTHON39="$(command -v python3.9)"
-    ok "Python 3.9 found at $PYTHON39 ($(python3.9 --version 2>&1))"
-elif [[ -f "$HOME/.pyenv/versions/3.9.13/bin/python3.9" ]]; then
-    PYTHON39="$HOME/.pyenv/versions/3.9.13/bin/python3.9"
-    ok "Python 3.9.13 found via pyenv"
+# Check if python3.12 already exists
+if command -v python3.12 &>/dev/null; then
+    PYTHON312="$(command -v python3.12)"
+    ok "Python 3.12 found at $PYTHON312 ($(python3.12 --version 2>&1))"
+elif [[ -f "$HOME/.pyenv/versions/3.12.9/bin/python3.12" ]]; then
+    PYTHON312="$HOME/.pyenv/versions/3.12.9/bin/python3.12"
+    ok "Python 3.12.9 found via pyenv"
 else
-    info "Python 3.9 not found — installing via pyenv"
+    info "Python 3.12 not found — installing via pyenv"
 
     # Install pyenv if not present
     if ! command -v pyenv &>/dev/null; then
@@ -261,15 +261,15 @@ else
             libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev 2>/dev/null || true
     fi
 
-    # Install Python 3.9.13
-    info "Installing Python 3.9.13 via pyenv (this may take a few minutes)..."
-    pyenv install 3.9.13 --skip-existing
+    # Install Python 3.12.9
+    info "Installing Python 3.12.9 via pyenv (this may take a few minutes)..."
+    pyenv install 3.12.9 --skip-existing
 
-    PYTHON39="$HOME/.pyenv/versions/3.9.13/bin/python3.9"
-    if [[ -f "$PYTHON39" ]]; then
-        ok "Python 3.9.13 installed via pyenv"
+    PYTHON312="$HOME/.pyenv/versions/3.12.9/bin/python3.12"
+    if [[ -f "$PYTHON312" ]]; then
+        ok "Python 3.12.9 installed via pyenv"
     else
-        fail "Python 3.9 installation failed. Check pyenv output above."
+        fail "Python 3.12 installation failed. Check pyenv output above."
     fi
 fi
 
@@ -282,18 +282,18 @@ VENV_DIR="$SCRIPT_DIR/backend/demoenv"
 VENV_PYTHON="$VENV_DIR/bin/python"
 
 if [[ -f "$VENV_PYTHON" ]]; then
-    # Verify it's actually Python 3.9.x
+    # Verify it's actually Python 3.12.x
     VENV_VERSION="$("$VENV_PYTHON" --version 2>&1)"
-    if [[ "$VENV_VERSION" == *"3.9"* ]]; then
+    if [[ "$VENV_VERSION" == *"3.12"* ]]; then
         ok "Virtualenv already exists ($VENV_VERSION)"
     else
-        warn "Virtualenv exists but is $VENV_VERSION (expected 3.9.x) — recreating"
+        warn "Virtualenv exists but is $VENV_VERSION (expected 3.12.x) — recreating"
         rm -rf "$VENV_DIR"
-        "$PYTHON39" -m venv "$VENV_DIR"
+        "$PYTHON312" -m venv "$VENV_DIR"
         ok "Virtualenv recreated with $("$VENV_PYTHON" --version 2>&1)"
     fi
 else
-    "$PYTHON39" -m venv "$VENV_DIR"
+    "$PYTHON312" -m venv "$VENV_DIR"
     ok "Virtualenv created ($("$VENV_PYTHON" --version 2>&1))"
 fi
 
