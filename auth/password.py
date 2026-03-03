@@ -12,14 +12,13 @@ Functions
 
 import logging
 
+import bcrypt
 from fastapi import HTTPException
-from passlib.context import CryptContext
 
 logger = logging.getLogger(__name__)
 
 # bcrypt cost factor 12 — good balance of security and speed (~250ms per hash)
-# Module-level constant: shared across all callers; intentionally not per-instance.
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
+_BCRYPT_ROUNDS = 12
 
 
 def hash_password(plain: str) -> str:
@@ -36,7 +35,8 @@ def hash_password(plain: str) -> str:
         >>> h.startswith("$2b$")
         True
     """
-    return _pwd_context.hash(plain)
+    salt = bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)
+    return bcrypt.hashpw(plain.encode("utf-8"), salt).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
@@ -56,7 +56,7 @@ def verify_password(plain: str, hashed: str) -> bool:
         >>> verify_password("wrongpassword", h)
         False
     """
-    return _pwd_context.verify(plain, hashed)
+    return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 
 def validate_password_strength(password: str) -> None:

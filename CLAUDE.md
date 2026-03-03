@@ -135,7 +135,7 @@ Env files (external — safe from git):
 ## Code Standards
 
 ### Python (backend/)
-- **Python 3.9** — use `Optional[X]` not `X | Y` (PEP 604 is 3.10+)
+- **Python 3.12** — prefer `X | None` over `Optional[X]` (PEP 604 supported)
 - **No bare `print()`** — use `logging.getLogger(__name__)` per module
 - **Docstrings** — Google-style Sphinx on every module, class, and public method/`@tool`
 - **Error handling** — `HTTPException` with correct status codes; tool failures return error strings (not exceptions) so the LLM receives a `ToolMessage`
@@ -255,11 +255,10 @@ gh pr create --base dev
 - **Streaming** — `POST /chat/stream` returns NDJSON events: `thinking`, `tool_start`, `tool_done`, `warning`, `final`, `error`; daemon thread + `queue.Queue` + timeout
 - **JWT env propagation** — `backend/main.py` copies Pydantic settings into `os.environ` at startup so `auth/dependencies.py` (which reads env directly) can find `JWT_SECRET_KEY`
 - **Dashboard dotenv** — `dashboard/app.py` calls `_load_dotenv()` at import time; Dash is a separate process that never inherits `backend/.env` otherwise
-- **PyIceberg 0.10 quirks** — `table.append()` requires `pa.Table`; `TimestampType` → `pa.timestamp("us")` (naive UTC datetimes only)
-- **bcrypt pinned to 4.0.1** — passlib 1.7.4 is incompatible with bcrypt 5.x
+- **PyIceberg 0.11** — `table.append()` requires `pa.Table`; `TimestampType` → `pa.timestamp("us")` (naive UTC datetimes only)
+- **bcrypt 5.x (direct)** — passlib removed; `auth/password.py` uses `bcrypt.hashpw()`/`bcrypt.checkpw()` directly
 - **OAuth PKCE** — `code_verifier` in sessionStorage; `code_challenge = base64url(SHA-256(verifier))`; Facebook button hidden until real credentials provided
 - **SerpAPI over Google CSE** — simpler (one key, no Google Cloud project); 100 free/month sufficient
-- **pyarrow pinned to <18** — no pre-built wheel for Python 3.9 macOS x86_64 in 18+
 - **Iceberg single source of truth** — ALL stock data (OHLCV, metadata, analysis, forecasts) lives exclusively in Iceberg; `_require_repo()` raises `RuntimeError` if unavailable; `_load_parquet()` reads from Iceberg (not flat files); `data/raw/` and `data/forecasts/` are local backup only
 - **Iceberg writes must not be silenced** — `price_analysis_tool` and `forecasting_tool` call `_require_repo()` directly (no `try/except`); write failures propagate to the tool's main exception handler, returning an error string to the LLM
 - **Single repo singleton** — `_analysis_shared` and `_forecast_shared` import `_get_repo`/`_require_repo` from `_stock_shared` (no duplicate singletons)
@@ -298,8 +297,8 @@ cp hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
 
 ## Known Limitations / TODOs
 
-- **Groq is temporary** — intended model is Claude Sonnet 4.6; switch with the 2-line change above
 - **Facebook SSO** — code complete, credentials are placeholders; button hidden on login page
 - **`SERPAPI_API_KEY` required** for `search_web` tool (100 free/month at serpapi.com)
 - **Refresh token deny-list is in-memory** — cleared on backend restart; tokens remain valid until natural expiry
 - **Run once per new deployment**: `python auth/create_tables.py` + `python auth/migrate_users_table.py` + `python stocks/create_tables.py` + `python stocks/backfill_metadata.py`
+- **LangChain 0.3.x** — held at 0.3.x pending separate upgrade to 1.x
