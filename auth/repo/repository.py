@@ -15,10 +15,10 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+import auth.repo.audit as _audit
+import auth.repo.oauth as _oauth
 import auth.repo.user_reads as _reads
 import auth.repo.user_writes as _writes
-import auth.repo.oauth as _oauth
-import auth.repo.audit as _audit
 from auth.repo.catalog import get_catalog
 
 
@@ -34,7 +34,9 @@ class IcebergUserRepository:
     def __init__(self) -> None:
         """Initialise the repository and resolve the project root."""
         self._catalog = None
-        self._project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self._project_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
         self._logger = logging.getLogger(__name__)
 
     def _get_catalog(self):
@@ -120,7 +122,9 @@ class IcebergUserRepository:
     # OAuth helpers
     # ------------------------------------------------------------------
 
-    def get_by_oauth_sub(self, provider: str, oauth_sub: str) -> Optional[Dict[str, Any]]:
+    def get_by_oauth_sub(
+        self, provider: str, oauth_sub: str
+    ) -> Optional[Dict[str, Any]]:
         """Fetch a user by OAuth provider + subject ID.
 
         Args:

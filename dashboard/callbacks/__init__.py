@@ -31,7 +31,11 @@ Example::
 
 import logging
 
-from dashboard.callbacks.auth_utils import _admin_forbidden, _unauth_notice, _validate_token
+from dashboard.callbacks.auth_utils import (
+    _admin_forbidden,
+    _unauth_notice,
+    _validate_token,
+)
 from dashboard.callbacks.registration import register_callbacks
 
 logger = logging.getLogger(__name__)

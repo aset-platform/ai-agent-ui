@@ -6,7 +6,7 @@
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Python | 3.9+ | `demoenv` was created with Python 3.9.13 |
+| Python | 3.12+ | `demoenv` was created with Python 3.12.9 |
 | Node.js | 18+ | Required by Next.js 16 |
 | npm | 9+ | Comes with Node.js |
 | GROQ_API_KEY | — | Get at [console.groq.com](https://console.groq.com) |
@@ -205,7 +205,7 @@ If `demoenv/` is missing or corrupted:
 
 ```bash
 cd backend
-python3.9 -m venv demoenv
+python3.12 -m venv demoenv
 source demoenv/bin/activate
 pip install -r requirements.txt
 ```

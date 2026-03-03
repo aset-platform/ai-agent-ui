@@ -62,7 +62,7 @@ class AuthService:
         if not secret_key or len(secret_key) < 32:
             raise ValueError(
                 "JWT_SECRET_KEY must be at least 32 characters. "
-                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+                'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
             )
         self._secret_key = secret_key
         self._access_expire_minutes = access_expire_minutes
@@ -134,9 +134,13 @@ class AuthService:
         Returns:
             A signed JWT string.
         """
-        return _tk.create_refresh_token(user_id, self._secret_key, self._refresh_expire_days)
+        return _tk.create_refresh_token(
+            user_id, self._secret_key, self._refresh_expire_days
+        )
 
-    def decode_token(self, token: str, expected_type: Optional[str] = None) -> Dict[str, Any]:
+    def decode_token(
+        self, token: str, expected_type: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Delegate to :func:`auth.tokens.decode_token`.
 
         Args:

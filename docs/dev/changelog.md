@@ -4,6 +4,19 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 2, 2026 — Fix Adj Close NaN IndexError on forecast page
+
+### Bug fix
+- **Root cause**: yfinance 1.2 dropped `Adj Close`; Iceberg `stocks.ohlcv` stores `adj_close` as all NaN. Forecast page crashed with `IndexError` when building prophet DataFrame because all price values were NaN after `dropna`.
+- `forecast_cbs.py`, `_forecast_model.py`, `iceberg.py`: Check `notna().any()` before using `Adj Close`; fall back to `Close`.
+- `forecast_cbs.py`: Guard against empty `prophet_df` — returns error figure instead of crash.
+
+### Tests (+5 new → 131 total)
+- `TestPrepareDataForProphet` (3 tests): valid Adj Close, all-NaN Adj Close, missing column
+- `TestOhlcvAdjCloseNanFallback` (2 tests): all-NaN fallback, valid adj_close passthrough
+
+---
+
 ## Mar 1, 2026 — Documentation refresh (README, architecture diagrams, all docs pages)
 
 Brought all documentation in sync with the modular refactor and Claude Sonnet 4.6 switch.

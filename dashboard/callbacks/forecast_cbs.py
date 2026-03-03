@@ -18,7 +18,7 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import Input, Output, State, html, no_update
 
-from dashboard.callbacks.auth_utils import _validate_token, _unauth_notice
+from dashboard.callbacks.auth_utils import _unauth_notice, _validate_token
 from dashboard.callbacks.card_builders import (
     _build_accuracy_row,
     _build_target_cards,
@@ -44,7 +44,9 @@ def register(app) -> None:
         [Input("url", "search"), Input("url", "pathname")],
         State("nav-ticker-store", "data"),
     )
-    def sync_forecast_ticker(search: Optional[str], pathname: Optional[str], stored_ticker: Optional[str]):
+    def sync_forecast_ticker(
+        search: Optional[str], pathname: Optional[str], stored_ticker: Optional[str]
+    ):
         """Pre-select the forecast dropdown when navigating from a stock card.
 
         Args:
@@ -111,11 +113,24 @@ def register(app) -> None:
             return _empty_fig(f"No price data for '{ticker}'."), [], []
 
         # Build prophet-format historical series
-        price_col = "Adj Close" if "Adj Close" in df_raw.columns else "Close"
-        prophet_df = pd.DataFrame({
-            "ds": pd.to_datetime(df_raw.index).tz_localize(None),
-            "y": df_raw[price_col].values,
-        }).dropna(subset=["y"]).sort_values("ds")
+        # yfinance >=1.2 dropped "Adj Close"; also Iceberg may store it as
+        # all-NaN.  Fall back to "Close" when the column is absent or empty.
+        if "Adj Close" in df_raw.columns and df_raw["Adj Close"].notna().any():
+            price_col = "Adj Close"
+        else:
+            price_col = "Close"
+        prophet_df = (
+            pd.DataFrame(
+                {
+                    "ds": pd.to_datetime(df_raw.index).tz_localize(None),
+                    "y": df_raw[price_col].values,
+                }
+            )
+            .dropna(subset=["y"])
+            .sort_values("ds")
+        )
+        if prophet_df.empty:
+            return _empty_fig(f"No valid price data for '{ticker}'."), [], []
         current_price = float(prophet_df["y"].iloc[-1])
 
         forecast_df = _load_forecast(ticker, horizon_months)
@@ -124,9 +139,11 @@ def register(app) -> None:
                 f"No forecast found for '{ticker}'. "
                 "Click 'Run New Analysis' to generate one."
             )
-            return _empty_fig(msg, height=550), [], [
-                html.P(msg, className="text-muted small")
-            ]
+            return (
+                _empty_fig(msg, height=550),
+                [],
+                [html.P(msg, className="text-muted small")],
+            )
 
         # Trim to requested horizon
         cutoff = pd.Timestamp.now() + pd.DateOffset(months=horizon_months)
@@ -135,13 +152,17 @@ def register(app) -> None:
         summary = _generate_forecast_summary_cb(
             forecast_df, current_price, ticker, horizon_months
         )
-        fig = _build_forecast_fig(prophet_df, forecast_df, ticker, current_price, summary)
+        fig = _build_forecast_fig(
+            prophet_df, forecast_df, ticker, current_price, summary
+        )
 
         target_cards = _build_target_cards(summary, current_price, ticker)
-        accuracy_note = [html.P(
-            "Model accuracy metrics are computed when you click 'Run New Analysis'.",
-            className="text-muted small",
-        )]
+        accuracy_note = [
+            html.P(
+                "Model accuracy metrics are computed when you click 'Run New Analysis'.",
+                className="text-muted small",
+            )
+        ]
         return fig, target_cards, accuracy_note
 
     @app.callback(
@@ -197,19 +218,30 @@ def register(app) -> None:
         ticker = ticker.upper().strip()
 
         try:
+            # backend tools use `import tools.*` internally, so
+            # backend/ must be on sys.path for those imports to resolve.
+            import sys as _sys
+
+            _backend_dir = str(Path(__file__).parent.parent.parent / "backend")
+            if _backend_dir not in _sys.path:
+                _sys.path.insert(0, _backend_dir)
+
             # ── Step 1: Fetch / delta-update price data ────────────────────
-            from backend.tools.stock_data_tool import fetch_stock_data
+            from tools.stock_data_tool import fetch_stock_data
+
             fetch_result = fetch_stock_data.invoke({"ticker": ticker})
             _logger.info("fetch_stock_data result: %s", fetch_result[:80])
 
             # ── Step 2: Run Prophet forecast pipeline ──────────────────────
-            from backend.tools.forecasting_tool import (
-                _load_parquet as _ft_load,
-                _prepare_data_for_prophet,
-                _train_prophet_model,
-                _generate_forecast,
+            from tools.forecasting_tool import (
                 _calculate_forecast_accuracy,
+                _generate_forecast,
+            )
+            from tools.forecasting_tool import _load_parquet as _ft_load
+            from tools.forecasting_tool import (
+                _prepare_data_for_prophet,
                 _save_forecast,
+                _train_prophet_model,
             )
 
             df = _ft_load(ticker)
@@ -219,9 +251,7 @@ def register(app) -> None:
             prophet_df = _prepare_data_for_prophet(df)
             current_price = float(prophet_df["y"].iloc[-1])
 
-            _logger.info(
-                "Training Prophet model for %s (%dm)…", ticker, horizon_months
-            )
+            _logger.info("Training Prophet model for %s (%dm)…", ticker, horizon_months)
             model = _train_prophet_model(prophet_df)
             forecast_df = _generate_forecast(model, prophet_df, horizon_months)
             accuracy = _calculate_forecast_accuracy(model, prophet_df)

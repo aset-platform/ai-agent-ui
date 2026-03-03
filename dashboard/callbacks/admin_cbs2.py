@@ -125,24 +125,39 @@ def register(app) -> None:
         # ── Cancel ────────────────────────────────────────────────────────
         if triggered == "modal-cancel-btn":
             return (
-                False, no_update, no_update, no_update,
-                no_update, no_update, no_update, no_update,
-                no_update, "",
-                no_update, no_update,
-                None, [],                  # clear upload; clear preview
+                False,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                "",
+                no_update,
+                no_update,
+                None,
+                [],  # clear upload; clear preview
             )
 
         # ── Add user ──────────────────────────────────────────────────────
         if triggered == "add-user-btn":
             return (
-                True, "Add User",
-                "", "", "general", ["active"],
-                {},                        # show password row
-                {"display": "none"},       # hide is-active toggle
+                True,
+                "Add User",
+                "",
+                "",
+                "general",
+                ["active"],
+                {},  # show password row
+                {"display": "none"},  # hide is-active toggle
                 {"mode": "add", "user": None},
                 "",
-                {"display": "none"}, [],   # hide permissions; empty checklist
-                None, [],                  # clear upload; no preview for new users
+                {"display": "none"},
+                [],  # hide permissions; empty checklist
+                None,
+                [],  # clear upload; no preview for new users
             )
 
         # ── Edit user ─────────────────────────────────────────────────────
@@ -152,11 +167,20 @@ def register(app) -> None:
             # rather than an actual user click.  Skip in that case.
             if not triggered_value:
                 return (
-                    no_update, no_update, no_update, no_update,
-                    no_update, no_update, no_update, no_update,
-                    no_update, no_update,
-                    no_update, no_update,
-                    no_update, no_update,  # upload / preview: leave as-is
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,  # upload / preview: leave as-is
                 )
             user_id = triggered["index"]
             user = next(
@@ -165,11 +189,20 @@ def register(app) -> None:
             )
             if user is None:
                 return (
-                    no_update, no_update, no_update, no_update,
-                    no_update, no_update, no_update, no_update,
-                    no_update, "User data not found — try refreshing.",
-                    no_update, no_update,
-                    None, [],              # clear stale upload; clear preview
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    "User data not found — try refreshing.",
+                    no_update,
+                    no_update,
+                    None,
+                    [],  # clear stale upload; clear preview
                 )
             # Show permissions section only for non-superuser roles.
             perms: Dict[str, bool] = user.get("page_permissions") or {}
@@ -201,25 +234,37 @@ def register(app) -> None:
             else:
                 avatar_preview = []
             return (
-                True, "Edit User — " + user.get("email", ""),
+                True,
+                "Edit User — " + user.get("email", ""),
                 user.get("full_name", ""),
                 user.get("email", ""),
                 user.get("role", "general"),
                 ["active"] if user.get("is_active", True) else [],
-                {"display": "none"},       # hide password row for edits
-                {},                        # show is-active toggle
+                {"display": "none"},  # hide password row for edits
+                {},  # show is-active toggle
                 {"mode": "edit", "user": user},
                 "",
-                perms_style, perms_value,
-                None, avatar_preview,      # clear stale upload; show current avatar
+                perms_style,
+                perms_value,
+                None,
+                avatar_preview,  # clear stale upload; show current avatar
             )
 
         return (
-            no_update, no_update, no_update, no_update,
-            no_update, no_update, no_update, no_update,
-            no_update, no_update,
-            no_update, no_update,
-            no_update, no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
         )
 
     @app.callback(
@@ -354,7 +399,9 @@ def register(app) -> None:
 
         # Upload avatar if one was provided.
         if avatar_contents and saved_user_id and token:
-            _upload_avatar_for_user(avatar_contents, avatar_filename, saved_user_id, token)
+            _upload_avatar_for_user(
+                avatar_contents, avatar_filename, saved_user_id, token
+            )
 
         verb = "created" if mode == "add" else "updated"
         alert = dbc.Alert(
@@ -401,7 +448,10 @@ def register(app) -> None:
             Tuple of (new refresh count, status alert).
         """
         triggered = ctx.triggered_id
-        if not isinstance(triggered, dict) or triggered.get("type") != "toggle-user-btn":
+        if (
+            not isinstance(triggered, dict)
+            or triggered.get("type") != "toggle-user-btn"
+        ):
             return no_update, no_update
 
         # Ignore if all clicks are None (initial render)
@@ -415,8 +465,11 @@ def register(app) -> None:
         )
         if user is None:
             return no_update, dbc.Alert(
-                "User not found — refresh the page.", color="warning",
-                dismissable=True, duration=4000, className="py-2",
+                "User not found — refresh the page.",
+                color="warning",
+                dismissable=True,
+                duration=4000,
+                className="py-2",
             )
 
         token = _resolve_token(stored_token, url_search)
@@ -426,14 +479,19 @@ def register(app) -> None:
             resp = _api_call("delete", "/users/" + user_id, token)
             action = "deactivated"
         else:
-            resp = _api_call("patch", "/users/" + user_id, token, json_body={"is_active": True})
+            resp = _api_call(
+                "patch", "/users/" + user_id, token, json_body={"is_active": True}
+            )
             action = "reactivated"
 
         if resp is None or not resp.ok:
             err = "" if resp is None else " (" + str(resp.status_code) + ")"
             return no_update, dbc.Alert(
-                "Action failed" + err + ".", color="danger",
-                dismissable=True, duration=4000, className="py-2",
+                "Action failed" + err + ".",
+                color="danger",
+                dismissable=True,
+                duration=4000,
+                className="py-2",
             )
 
         alert = dbc.Alert(
@@ -499,7 +557,9 @@ def register(app) -> None:
 
         # Step 1: request reset token
         resp1 = _api_call(
-            "post", "/auth/password-reset/request", token,
+            "post",
+            "/auth/password-reset/request",
+            token,
             json_body={"email": email},
         )
         if resp1 is None or not resp1.ok:
@@ -512,7 +572,9 @@ def register(app) -> None:
 
         # Step 2: confirm with new password
         resp2 = _api_call(
-            "post", "/auth/password-reset/confirm", token,
+            "post",
+            "/auth/password-reset/confirm",
+            token,
             json_body={"reset_token": reset_token, "new_password": new_pw},
         )
         if resp2 is None or not resp2.ok:

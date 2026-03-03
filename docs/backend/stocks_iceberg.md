@@ -145,6 +145,14 @@ The 6 new Insights pages in the dashboard read exclusively from Iceberg:
 
 ---
 
+## Known data quirks
+
+### `adj_close` is all NaN in `stocks.ohlcv`
+
+yfinance >= 1.2 dropped the `Adj Close` column from `yf.download()`. When `insert_ohlcv()` writes to Iceberg, the schema includes `adj_close` but the values are `None` (NaN) for all rows. All consumers (`_get_ohlcv_cached`, `_prepare_data_for_prophet`, `forecast_cbs.py`) check `notna().any()` before using `Adj Close` and fall back to `Close` when the column is empty.
+
+---
+
 ## PyIceberg quirks
 
 - `table.append()` requires a `pa.Table` — not a `RecordBatch`

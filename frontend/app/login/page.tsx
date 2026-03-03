@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, FormEvent } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { getAccessToken, isTokenExpired, setTokens } from "@/lib/auth";
 import {
@@ -131,10 +132,13 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         {/* Logo / brand */}
         <div className="flex flex-col items-center mb-8 gap-4">
-          <img
+          <Image
             src="/images/aset-logo-final.svg"
             alt="ASET"
+            width={64}
+            height={64}
             className="h-16 w-auto drop-shadow-sm"
+            priority
           />
           <p className="text-sm text-gray-500">Sign in to continue</p>
         </div>

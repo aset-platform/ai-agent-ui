@@ -4,7 +4,7 @@
  * fetch() is mocked via vi.stubGlobal so no real network requests occur.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Helpers

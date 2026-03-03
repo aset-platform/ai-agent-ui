@@ -20,11 +20,12 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import Input, Output, html, no_update
 
-from dashboard.callbacks.data_loaders import _DATA_RAW, _REGISTRY_PATH
 from dashboard.callbacks.iceberg import (
     _get_analysis_summary_cached,
+    _get_analysis_with_gaps_filled,
     _get_company_info_cached,
     _get_iceberg_repo,
+    _get_ohlcv_cached,
 )
 
 # Module-level logger; kept at module scope as a private-style name per convention.
@@ -72,59 +73,18 @@ def register(app) -> None:
         repo = _get_iceberg_repo()
         df = pd.DataFrame()
 
-        # Fix #6: use TTL-cached read to avoid repeated Iceberg scans
         if repo is not None:
-            df = _get_analysis_summary_cached(repo)
-
-        # Fallback: compute from flat parquet files if Iceberg table is empty
-        if df.empty:
-            rows = []
-            try:
-                import json as _json
-                registry = {}
-                if _REGISTRY_PATH.exists():
-                    with open(_REGISTRY_PATH) as _f:
-                        registry = _json.load(_f)
-                from price_analysis_tool import (  # noqa: PLC0415
-                    _calculate_technical_indicators,
-                    _analyse_price_movement,
-                    _generate_summary_stats,
-                )
-                for ticker in sorted(registry.keys()):
-                    parquet_path = _DATA_RAW / f"{ticker}_raw.parquet"
-                    if not parquet_path.exists():
-                        continue
-                    try:
-                        _df = pd.read_parquet(parquet_path, engine="pyarrow")
-                        _df.index = pd.to_datetime(_df.index).tz_localize(None)
-                        _df = _calculate_technical_indicators(_df)
-                        movement = _analyse_price_movement(_df)
-                        stats = _generate_summary_stats(_df, ticker)
-                        rows.append({
-                            "ticker": ticker,
-                            "current_price": stats.get("current_price"),
-                            "rsi_14": stats.get("rsi_14"),
-                            "rsi_signal": stats.get("rsi_signal"),
-                            "macd_signal_text": stats.get("macd_signal"),
-                            "sma_200_signal": stats.get("sma_200_signal"),
-                            "sharpe_ratio": movement.get("sharpe_ratio"),
-                            "annualized_return_pct": movement.get("annualized_return_pct"),
-                            "annualized_volatility_pct": movement.get("annualized_volatility_pct"),
-                        })
-                    except Exception as _e:
-                        _logger.debug("Screener fallback failed for %s: %s", ticker, _e)
-            except Exception as _e:
-                _logger.warning("Screener fallback import failed: %s", _e)
-            if rows:
-                df = pd.DataFrame(rows)
+            df = _get_analysis_with_gaps_filled(repo)
 
         if df.empty:
             return (
                 dbc.Alert(
                     "No analysis data available. Analyse stocks via the chat agent first.",
-                    color="warning", className="mt-3",
+                    color="warning",
+                    className="mt-3",
                 ),
-                "", 1,
+                "",
+                1,
             )
 
         # Fix #16: vectorised market filter with .str.endswith()
@@ -156,8 +116,13 @@ def register(app) -> None:
 
         if df.empty:
             return (
-                dbc.Alert("No stocks match the selected filters.", color="info", className="mt-3"),
-                "", 1,
+                dbc.Alert(
+                    "No stocks match the selected filters.",
+                    color="info",
+                    className="mt-3",
+                ),
+                "",
+                1,
             )
 
         # Pagination
@@ -166,7 +131,7 @@ def register(app) -> None:
         total = len(df)
         max_pages = max(1, -(-total // page_size))
         page = min(page, max_pages)
-        df = df.iloc[(page - 1) * page_size: page * page_size].reset_index(drop=True)
+        df = df.iloc[(page - 1) * page_size : page * page_size].reset_index(drop=True)
         count_text = f"{total} stock{'s' if total != 1 else ''}"
 
         # Build display table
@@ -199,21 +164,33 @@ def register(app) -> None:
                 badge_class = ""
                 if col == "RSI Signal":
                     badge_class = (
-                        "badge bg-danger" if val == "Overbought" else
-                        "badge bg-success" if val == "Oversold" else
-                        "badge bg-secondary"
+                        "badge bg-danger"
+                        if val == "Overbought"
+                        else (
+                            "badge bg-success"
+                            if val == "Oversold"
+                            else "badge bg-secondary"
+                        )
                     )
                 if col == "MACD":
                     badge_class = (
-                        "badge bg-success" if val == "Bullish" else
-                        "badge bg-danger" if val == "Bearish" else
-                        "badge bg-secondary"
+                        "badge bg-success"
+                        if val == "Bullish"
+                        else (
+                            "badge bg-danger"
+                            if val == "Bearish"
+                            else "badge bg-secondary"
+                        )
                     )
                 if col == "vs SMA 200":
                     badge_class = (
-                        "badge bg-success" if val == "Above" else
-                        "badge bg-danger" if val == "Below" else
-                        "badge bg-secondary"
+                        "badge bg-success"
+                        if val == "Above"
+                        else (
+                            "badge bg-danger"
+                            if val == "Below"
+                            else "badge bg-secondary"
+                        )
                     )
                 if badge_class:
                     cells.append(html.Td(html.Span(val, className=badge_class)))
@@ -227,7 +204,11 @@ def register(app) -> None:
                     html.Thead(html.Tr([html.Th(c) for c in display_df.columns])),
                     html.Tbody(rows_html),
                 ],
-                bordered=True, hover=True, responsive=True, size="sm", className="mt-2",
+                bordered=True,
+                hover=True,
+                responsive=True,
+                size="sm",
+                className="mt-2",
             ),
             count_text,
             max_pages,
@@ -268,24 +249,32 @@ def register(app) -> None:
         # Fix #13: use _get_iceberg_repo() instead of raw load_catalog() call
         repo = _get_iceberg_repo()
         if repo is None:
-            return dbc.Alert(
-                "Iceberg unavailable — cannot load price targets.", color="warning"
-            ), "", 1
+            return (
+                dbc.Alert(
+                    "Iceberg unavailable — cannot load price targets.", color="warning"
+                ),
+                "",
+                1,
+            )
 
         try:
             df = repo._table_to_df("stocks.forecast_runs")
         except Exception as exc:
-            return dbc.Alert(
-                "Could not load forecast_runs: " + str(exc), color="danger"
-            ), "", 1
+            return (
+                dbc.Alert("Could not load forecast_runs: " + str(exc), color="danger"),
+                "",
+                1,
+            )
 
         if df.empty:
             return (
                 dbc.Alert(
                     "No forecast data available. Use the forecast tool first.",
-                    color="warning", className="mt-3",
+                    color="warning",
+                    className="mt-3",
                 ),
-                "", 1,
+                "",
+                1,
             )
 
         # Keep latest run per (ticker, horizon_months)
@@ -307,9 +296,13 @@ def register(app) -> None:
             df = df[mask].reset_index(drop=True)
 
         if df.empty:
-            return dbc.Alert(
-                "No forecast data for " + str(ticker_filter) + ".", color="info"
-            ), "", 1
+            return (
+                dbc.Alert(
+                    "No forecast data for " + str(ticker_filter) + ".", color="info"
+                ),
+                "",
+                1,
+            )
 
         # Pagination
         page_size = int(page_size_str or 10)
@@ -317,56 +310,93 @@ def register(app) -> None:
         total = len(df)
         max_pages = max(1, -(-total // page_size))
         page = min(page, max_pages)
-        df = df.iloc[(page - 1) * page_size: page * page_size].reset_index(drop=True)
+        df = df.iloc[(page - 1) * page_size : page * page_size].reset_index(drop=True)
         count_text = f"{total} forecast{'s' if total != 1 else ''}"
 
         def _target_cell(price, pct, _m_label):
             """Build a table cell for a price target with percentage change."""
-            if price is None or (hasattr(price, "__float__") and math.isnan(float(price))):
+            if price is None or (
+                hasattr(price, "__float__") and math.isnan(float(price))
+            ):
                 return html.Td("—")
             sign = "+" if float(pct or 0) >= 0 else ""
             color = "text-success" if float(pct or 0) >= 0 else "text-danger"
-            return html.Td([
-                html.Span(f"{float(price):.2f}", className="fw-semibold"),
-                html.Br(),
-                html.Small(f"{sign}{float(pct or 0):.1f}%", className=color),
-            ])
+            return html.Td(
+                [
+                    html.Span(f"{float(price):.2f}", className="fw-semibold"),
+                    html.Br(),
+                    html.Small(f"{sign}{float(pct or 0):.1f}%", className=color),
+                ]
+            )
 
         # Fix #5: replace iterrows() with to_dict("records") for faster iteration
         rows_html = []
         for row in df.to_dict("records"):
             sentiment = row.get("sentiment", "—") or "—"
             sentiment_badge = (
-                "badge bg-success" if sentiment == "Bullish" else
-                "badge bg-danger" if sentiment == "Bearish" else
-                "badge bg-secondary"
+                "badge bg-success"
+                if sentiment == "Bullish"
+                else (
+                    "badge bg-danger"
+                    if sentiment == "Bearish"
+                    else "badge bg-secondary"
+                )
             )
-            rows_html.append(html.Tr([
-                html.Td(html.Strong(row.get("ticker", ""))),
-                html.Td(str(row.get("horizon_months", "")) + "m"),
-                html.Td(str(row.get("run_date", "—"))),
-                html.Td(
-                    f"{float(row['current_price_at_run']):.2f}"
-                    if row.get("current_price_at_run") else "—"
-                ),
-                _target_cell(row.get("target_3m_price"), row.get("target_3m_pct_change"), "3m"),
-                _target_cell(row.get("target_6m_price"), row.get("target_6m_pct_change"), "6m"),
-                _target_cell(row.get("target_9m_price"), row.get("target_9m_pct_change"), "9m"),
-                html.Td(html.Span(sentiment, className=sentiment_badge)),
-            ]))
+            rows_html.append(
+                html.Tr(
+                    [
+                        html.Td(html.Strong(row.get("ticker", ""))),
+                        html.Td(str(row.get("horizon_months", "")) + "m"),
+                        html.Td(str(row.get("run_date", "—"))),
+                        html.Td(
+                            f"{float(row['current_price_at_run']):.2f}"
+                            if row.get("current_price_at_run")
+                            else "—"
+                        ),
+                        _target_cell(
+                            row.get("target_3m_price"),
+                            row.get("target_3m_pct_change"),
+                            "3m",
+                        ),
+                        _target_cell(
+                            row.get("target_6m_price"),
+                            row.get("target_6m_pct_change"),
+                            "6m",
+                        ),
+                        _target_cell(
+                            row.get("target_9m_price"),
+                            row.get("target_9m_pct_change"),
+                            "9m",
+                        ),
+                        html.Td(html.Span(sentiment, className=sentiment_badge)),
+                    ]
+                )
+            )
 
         return (
             dbc.Table(
                 [
-                    html.Thead(html.Tr([
-                        html.Th("Ticker"), html.Th("Horizon"), html.Th("Run Date"),
-                        html.Th("Price at Run"),
-                        html.Th("3m Target"), html.Th("6m Target"), html.Th("9m Target"),
-                        html.Th("Sentiment"),
-                    ])),
+                    html.Thead(
+                        html.Tr(
+                            [
+                                html.Th("Ticker"),
+                                html.Th("Horizon"),
+                                html.Th("Run Date"),
+                                html.Th("Price at Run"),
+                                html.Th("3m Target"),
+                                html.Th("6m Target"),
+                                html.Th("9m Target"),
+                                html.Th("Sentiment"),
+                            ]
+                        )
+                    ),
                     html.Tbody(rows_html),
                 ],
-                bordered=True, hover=True, responsive=True, size="sm", className="mt-2",
+                bordered=True,
+                hover=True,
+                responsive=True,
+                size="sm",
+                className="mt-2",
             ),
             count_text,
             max_pages,
@@ -425,9 +455,11 @@ def register(app) -> None:
             return (
                 dbc.Alert(
                     "No dividend data available. Use the dividend tool first.",
-                    color="warning", className="mt-3",
+                    color="warning",
+                    className="mt-3",
                 ),
-                "", 1,
+                "",
+                1,
             )
 
         # Sort most-recent first
@@ -439,12 +471,18 @@ def register(app) -> None:
         total = len(df)
         max_pages = max(1, -(-total // page_size))
         page = min(page, max_pages)
-        page_df = df.iloc[(page - 1) * page_size: page * page_size]
+        page_df = df.iloc[(page - 1) * page_size : page * page_size]
         count_text = f"{total} payment{'s' if total != 1 else ''}"
 
         sym_map = {
-            "USD": "$", "INR": "₹", "GBP": "£", "EUR": "€",
-            "JPY": "¥", "CNY": "¥", "AUD": "A$", "CAD": "CA$",
+            "USD": "$",
+            "INR": "₹",
+            "GBP": "£",
+            "EUR": "€",
+            "JPY": "¥",
+            "CNY": "¥",
+            "AUD": "A$",
+            "CAD": "CA$",
         }
 
         # Fix #5: replace iterrows() with to_dict("records") for faster iteration
@@ -454,23 +492,37 @@ def register(app) -> None:
             sym = sym_map.get(currency.upper(), currency)
             amount = row.get("dividend_amount")
             amount_str = f"{sym}{float(amount):.4f}" if amount else "—"
-            rows_html.append(html.Tr([
-                html.Td(html.Strong(str(row.get("ticker", "")))),
-                html.Td(str(row.get("ex_date", "—"))),
-                html.Td(amount_str),
-                html.Td(currency),
-            ]))
+            rows_html.append(
+                html.Tr(
+                    [
+                        html.Td(html.Strong(str(row.get("ticker", "")))),
+                        html.Td(str(row.get("ex_date", "—"))),
+                        html.Td(amount_str),
+                        html.Td(currency),
+                    ]
+                )
+            )
 
         return (
             dbc.Table(
                 [
-                    html.Thead(html.Tr([
-                        html.Th("Ticker"), html.Th("Ex-Date"),
-                        html.Th("Amount"), html.Th("Currency"),
-                    ])),
+                    html.Thead(
+                        html.Tr(
+                            [
+                                html.Th("Ticker"),
+                                html.Th("Ex-Date"),
+                                html.Th("Amount"),
+                                html.Th("Currency"),
+                            ]
+                        )
+                    ),
                     html.Tbody(rows_html),
                 ],
-                bordered=True, hover=True, responsive=True, size="sm", className="mt-2",
+                bordered=True,
+                hover=True,
+                responsive=True,
+                size="sm",
+                className="mt-2",
             ),
             count_text,
             max_pages,
@@ -511,9 +563,8 @@ def register(app) -> None:
 
         repo = _get_iceberg_repo()
         df = pd.DataFrame()
-        # Fix #6: use TTL-cached read
         if repo is not None:
-            df = _get_analysis_summary_cached(repo)
+            df = _get_analysis_with_gaps_filled(repo)
 
         # Fix #16: vectorised market filter
         if not df.empty and market_filter and market_filter != "all":
@@ -527,22 +578,31 @@ def register(app) -> None:
             return (
                 dbc.Alert(
                     "No risk data available. Analyse stocks first.",
-                    color="warning", className="mt-3",
+                    color="warning",
+                    className="mt-3",
                 ),
-                "", 1,
+                "",
+                1,
             )
 
         display_cols = [
-            "ticker", "annualized_return_pct", "annualized_volatility_pct",
-            "sharpe_ratio", "max_drawdown_pct", "max_drawdown_duration_days",
-            "bull_phase_pct", "bear_phase_pct",
+            "ticker",
+            "annualized_return_pct",
+            "annualized_volatility_pct",
+            "sharpe_ratio",
+            "max_drawdown_pct",
+            "max_drawdown_duration_days",
+            "bull_phase_pct",
+            "bear_phase_pct",
         ]
         display_cols = [c for c in display_cols if c in df.columns]
         display_df = df[display_cols].copy()
 
         # Sort ascending for drawdown/volatility, descending for return/Sharpe
         ascending = sort_col in (
-            "max_drawdown_pct", "annualized_volatility_pct", "max_drawdown_duration_days"
+            "max_drawdown_pct",
+            "annualized_volatility_pct",
+            "max_drawdown_duration_days",
         )
         if sort_col in display_df.columns:
             display_df = display_df.sort_values(
@@ -566,12 +626,19 @@ def register(app) -> None:
         total = len(display_df)
         max_pages = max(1, -(-total // page_size))
         page = min(page, max_pages)
-        display_df = display_df.iloc[(page - 1) * page_size: page * page_size]
+        display_df = display_df.iloc[(page - 1) * page_size : page * page_size]
         count_text = f"{total} stock{'s' if total != 1 else ''}"
 
         display_df.columns = [col_labels.get(c, c) for c in display_df.columns]
 
-        for num_col in ["Ann. Return %", "Volatility %", "Sharpe", "Max DD %", "Bull %", "Bear %"]:
+        for num_col in [
+            "Ann. Return %",
+            "Volatility %",
+            "Sharpe",
+            "Max DD %",
+            "Bull %",
+            "Bear %",
+        ]:
             if num_col in display_df.columns:
                 display_df[num_col] = pd.to_numeric(
                     display_df[num_col], errors="coerce"
@@ -589,7 +656,11 @@ def register(app) -> None:
                     html.Thead(html.Tr([html.Th(c) for c in display_df.columns])),
                     html.Tbody(rows_html),
                 ],
-                bordered=True, hover=True, responsive=True, size="sm", className="mt-2",
+                bordered=True,
+                hover=True,
+                responsive=True,
+                size="sm",
+                className="mt-2",
             ),
             count_text,
             max_pages,
@@ -625,20 +696,26 @@ def register(app) -> None:
         if repo is None:
             return empty_fig, dbc.Alert("Iceberg unavailable.", color="warning")
 
-        # Fix #6: use TTL-cached reads
         company_df = _get_company_info_cached(repo)
-        analysis_df = _get_analysis_summary_cached(repo)
+        analysis_df = _get_analysis_with_gaps_filled(repo)
 
         if company_df.empty or analysis_df.empty:
             return empty_fig, dbc.Alert(
                 "No sector data available. Run backfill first.",
-                color="warning", className="mt-3",
+                color="warning",
+                className="mt-3",
             )
 
         # Join on ticker
         merged = company_df[["ticker", "sector"]].merge(
-            analysis_df[["ticker", "annualized_return_pct", "sharpe_ratio",
-                          "annualized_volatility_pct"]],
+            analysis_df[
+                [
+                    "ticker",
+                    "annualized_return_pct",
+                    "sharpe_ratio",
+                    "annualized_volatility_pct",
+                ]
+            ],
             on="ticker",
             how="inner",
         )
@@ -660,17 +737,16 @@ def register(app) -> None:
         )
 
         # Bar chart — average annualised return by sector
-        colors = [
-            "#4caf50" if r >= 0 else "#ef5350"
-            for r in sector_agg["avg_return"]
-        ]
-        fig = go.Figure(go.Bar(
-            x=sector_agg["sector"],
-            y=sector_agg["avg_return"].round(2),
-            marker_color=colors,
-            text=sector_agg["avg_return"].round(1).astype(str) + "%",
-            textposition="outside",
-        ))
+        colors = ["#4caf50" if r >= 0 else "#ef5350" for r in sector_agg["avg_return"]]
+        fig = go.Figure(
+            go.Bar(
+                x=sector_agg["sector"],
+                y=sector_agg["avg_return"].round(2),
+                marker_color=colors,
+                text=sector_agg["avg_return"].round(1).astype(str) + "%",
+                textposition="outside",
+            )
+        )
         fig.update_layout(
             template="plotly_white",
             title="Average Annualised Return by Sector",
@@ -685,13 +761,23 @@ def register(app) -> None:
 
         # Summary table
         sector_agg_disp = sector_agg.copy()
-        sector_agg_disp.columns = ["Sector", "Stocks", "Avg Return %", "Avg Sharpe", "Avg Vol %"]
+        sector_agg_disp.columns = [
+            "Sector",
+            "Stocks",
+            "Avg Return %",
+            "Avg Sharpe",
+            "Avg Vol %",
+        ]
         for col in ["Avg Return %", "Avg Sharpe", "Avg Vol %"]:
             sector_agg_disp[col] = sector_agg_disp[col].round(2)
 
         table = dbc.Table.from_dataframe(
             sector_agg_disp,
-            bordered=True, hover=True, responsive=True, size="sm", className="mt-2",
+            bordered=True,
+            hover=True,
+            responsive=True,
+            size="sm",
+            className="mt-2",
         )
 
         return fig, table
@@ -731,6 +817,7 @@ def register(app) -> None:
                 # which cannot be compared directly with strings (TypeError).
                 if period != "all":
                     from datetime import datetime, timedelta  # noqa: PLC0415
+
                     _days = 365 if period == "1y" else 3 * 365
                     _cutoff_ts = pd.Timestamp(datetime.today() - timedelta(days=_days))
                     df_all["date"] = pd.to_datetime(df_all["date"])
@@ -741,19 +828,16 @@ def register(app) -> None:
                     sub = sub.sort_values("date").set_index("date")
                     close_data[ticker] = sub["close"].dropna()
 
-        # Fallback to flat parquet files
+        # Fallback: read OHLCV from Iceberg per-ticker using cached helper
         if not close_data:
             try:
-                import json as _json
-                if _REGISTRY_PATH.exists():
-                    with open(_REGISTRY_PATH) as _f:
-                        registry = _json.load(_f)
+                fallback_repo = _get_iceberg_repo()
+                if fallback_repo is not None:
+                    registry = fallback_repo.get_all_registry()
                     for ticker in sorted(registry.keys()):
-                        parquet_path = _DATA_RAW / f"{ticker}_raw.parquet"
-                        if parquet_path.exists():
-                            _df = pd.read_parquet(parquet_path, engine="pyarrow")
-                            _df.index = pd.to_datetime(_df.index).tz_localize(None)
-                            close_data[ticker] = _df["Close"].dropna()
+                        ohlcv = _get_ohlcv_cached(fallback_repo, ticker)
+                        if ohlcv is not None and not ohlcv.empty:
+                            close_data[ticker] = ohlcv["Close"].dropna()
             except Exception as _e:
                 _logger.warning("Correlation fallback failed: %s", _e)
 
@@ -785,18 +869,20 @@ def register(app) -> None:
         z = corr.values.tolist()
         text = [[f"{v:.2f}" for v in row] for row in z]
 
-        fig = go.Figure(go.Heatmap(
-            z=z,
-            x=tickers_sorted,
-            y=tickers_sorted,
-            text=text,
-            texttemplate="%{text}",
-            colorscale="RdBu",
-            zmid=0,
-            zmin=-1,
-            zmax=1,
-            colorbar=dict(title="Correlation"),
-        ))
+        fig = go.Figure(
+            go.Heatmap(
+                z=z,
+                x=tickers_sorted,
+                y=tickers_sorted,
+                text=text,
+                texttemplate="%{text}",
+                colorscale="RdBu",
+                zmid=0,
+                zmin=-1,
+                zmax=1,
+                colorbar=dict(title="Correlation"),
+            )
+        )
         fig.update_layout(
             template="plotly_white",
             title=f"Daily Returns Correlation ({period.upper()} lookback)",

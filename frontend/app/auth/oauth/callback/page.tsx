@@ -36,6 +36,7 @@ export default function OAuthCallbackPage() {
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- OAuth callback must set error/status state from validation + async fetch */
     // Fix #5: cancelled flag prevents state updates after unmount (avoids
     // React "can't perform state update on unmounted component" warnings and
     // duplicate state mutations on fast remount during strict-mode double-invoke).

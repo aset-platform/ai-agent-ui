@@ -12,13 +12,9 @@ import { useState, useEffect, useRef } from "react";
 import type { Message } from "@/lib/constants";
 
 export function useChatHistory(agentId: string) {
-  const [histories, setHistories] = useState<Record<string, Message[]>>({
-    general: [],
-    stock: [],
-  });
-
-  // Load persisted histories from localStorage on mount
-  useEffect(() => {
+  // Hydrate from localStorage via lazy initializer (avoids setState-in-effect).
+  const [histories, setHistories] = useState<Record<string, Message[]>>(() => {
+    if (typeof window === "undefined") return { general: [], stock: [] };
     try {
       const saved = localStorage.getItem("chat_histories");
       if (saved) {
@@ -30,10 +26,11 @@ export function useChatHistory(agentId: string) {
         for (const [id, msgs] of Object.entries(parsed)) {
           revived[id] = msgs.map((m) => ({ ...m, timestamp: new Date(m.timestamp) }));
         }
-        setHistories(revived);
+        return revived;
       }
     } catch { /* ignore corrupt data */ }
-  }, []);
+    return { general: [], stock: [] };
+  });
 
   // Fix #3: debounce localStorage writes — streaming triggers many rapid updates;
   // writing synchronously on every chunk blocks the main thread on large histories.

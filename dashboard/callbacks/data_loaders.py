@@ -1,15 +1,15 @@
 """Data-loading helpers for the AI Stock Analysis Dashboard callbacks.
 
-Provides path constants and functions that read raw OHLCV parquet files,
-forecast parquet files, the stock registry JSON, and calculate technical
-indicators using the ``ta`` library.
+Provides functions that read raw OHLCV data and forecasts from Iceberg,
+the stock registry from Iceberg, and calculate technical indicators
+using the ``ta`` library.  All data reads go through Iceberg — flat
+parquet files are no longer used as a data source.
 
 Example::
 
     from dashboard.callbacks.data_loaders import _load_raw, _add_indicators
 """
 
-import json
 import logging
 import sys
 import time as _time
@@ -34,117 +34,58 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 # ---------------------------------------------------------------------------
-# Path constants (mirror backend tool constants)
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # Indicator cache — 5-min TTL to avoid recomputing on every overlay/range change
 # ---------------------------------------------------------------------------
-_INDICATOR_CACHE: dict = {}   # {ticker: (df_with_indicators, expiry_monotonic)}
-_INDICATOR_TTL = 300           # seconds
-
-_DATA_RAW = _PROJECT_ROOT / "data" / "raw"
-_DATA_FORECASTS = _PROJECT_ROOT / "data" / "forecasts"
-_DATA_METADATA = _PROJECT_ROOT / "data" / "metadata"
-_REGISTRY_PATH = _DATA_METADATA / "stock_registry.json"
+_INDICATOR_CACHE: dict = {}  # {ticker: (df_with_indicators, expiry_monotonic)}
+_INDICATOR_TTL = 300  # seconds
 
 
 def _load_reg_cb() -> dict:
-    """Load the stock registry for use inside callbacks.
+    """Load the stock registry from Iceberg for use inside callbacks.
 
-    Always reads the flat ``stock_registry.json`` as the authoritative list
-    of tickers (it is updated on every stock analysis).  The Iceberg
-    ``stocks.registry`` table is read in addition and any tickers present
-    there but absent from the JSON are merged in.  This means new tickers
-    appear on the dashboard home page immediately even when the Iceberg
-    dual-write failed silently.
+    Reads the ``stocks.registry`` Iceberg table as the single source of truth
+    for ticker metadata.
 
     Returns:
-        Registry dict keyed by ticker symbol; empty dict if all sources fail.
+        Registry dict keyed by ticker symbol; empty dict on failure.
     """
-    # ── 1. JSON — always the complete, authoritative ticker list ─────────
-    json_registry: dict = {}
-    if _REGISTRY_PATH.exists():
-        try:
-            with open(_REGISTRY_PATH) as fh:
-                json_registry = json.load(fh)
-            _logger.debug("Registry loaded from JSON: %d tickers.", len(json_registry))
-        except Exception as exc:
-            _logger.warning("registry JSON load failed: %s", exc)
-
-    # ── 2. Iceberg — supplement JSON with any tickers only in Iceberg ────
     try:
-        from pyiceberg.catalog import load_catalog
+        from dashboard.callbacks.iceberg import _get_iceberg_repo
 
-        cat = load_catalog("local")
-        tbl = cat.load_table("stocks.registry")
-        # Fix #19: project only the columns we need to reduce I/O
-        df = tbl.scan(selected_fields=(
-            "ticker", "last_fetch_date", "total_rows",
-            "date_range_start", "date_range_end",
-        )).to_pandas()
-        if not df.empty:
-            # Fix #5: replace iterrows() with faster .values array iteration
-            _proj = [c for c in (
-                "ticker", "last_fetch_date", "total_rows",
-                "date_range_start", "date_range_end",
-            ) if c in df.columns]
-            _ci = {c: i for i, c in enumerate(_proj)}
-            _has_lfd   = "last_fetch_date"   in _ci
-            _has_tr    = "total_rows"         in _ci
-            _has_range = ("date_range_start" in _ci and "date_range_end" in _ci)
-            iceberg_extra = 0
-            for row in df[_proj].values:
-                ticker = str(row[0]) if row[0] else ""
-                if not ticker or ticker in json_registry:
-                    continue  # JSON already has this ticker
-                entry: dict = {"ticker": ticker}
-                if _has_lfd and row[_ci["last_fetch_date"]]:
-                    entry["last_fetch_date"] = str(row[_ci["last_fetch_date"]])[:10]
-                if _has_tr and row[_ci["total_rows"]] is not None:
-                    entry["total_rows"] = int(row[_ci["total_rows"]])
-                if _has_range:
-                    start = row[_ci["date_range_start"]]
-                    end   = row[_ci["date_range_end"]]
-                    if start and end:
-                        entry["date_range"] = {
-                            "start": str(start)[:10],
-                            "end":   str(end)[:10],
-                        }
-                entry["file_path"] = str(_DATA_RAW / f"{ticker}_raw.parquet")
-                json_registry[ticker] = entry
-                iceberg_extra += 1
-            if iceberg_extra:
-                _logger.debug("Merged %d extra tickers from Iceberg.", iceberg_extra)
+        repo = _get_iceberg_repo()
+        if repo is not None:
+            registry = repo.get_all_registry()
+            _logger.debug("Registry loaded from Iceberg: %d tickers.", len(registry))
+            return registry
     except Exception as exc:
-        _logger.debug("Iceberg registry unavailable (%s); using JSON only.", exc)
+        _logger.warning("Iceberg registry load failed: %s", exc)
 
-    return json_registry
+    return {}
 
 
 def _load_raw(ticker: str) -> Optional[pd.DataFrame]:
-    """Load the raw OHLCV parquet file for a ticker.
+    """Load OHLCV data for a ticker from Iceberg.
 
     Args:
         ticker: Uppercase ticker symbol (e.g. ``"AAPL"``).
 
     Returns:
-        DataFrame with DatetimeIndex, or ``None`` if the file is absent.
+        DataFrame with DatetimeIndex and columns ``Open``, ``High``, ``Low``,
+        ``Close``, ``Adj Close``, ``Volume``, or ``None`` if no data exists.
     """
-    path = _DATA_RAW / f"{ticker}_raw.parquet"
-    if not path.exists():
-        return None
     try:
-        df = pd.read_parquet(path, engine="pyarrow")
-        df.index = pd.to_datetime(df.index)
-        return df
+        from dashboard.callbacks.iceberg import _get_iceberg_repo, _get_ohlcv_cached
+
+        repo = _get_iceberg_repo()
+        if repo is not None:
+            return _get_ohlcv_cached(repo, ticker)
     except Exception as exc:
-        _logger.error("Error loading %s: %s", path, exc)
-        return None
+        _logger.error("Error loading OHLCV from Iceberg for %s: %s", ticker, exc)
+    return None
 
 
 def _load_forecast(ticker: str, horizon_months: int) -> Optional[pd.DataFrame]:
-    """Find and load the best-matching forecast parquet for a ticker.
+    """Load the latest forecast series for a ticker from Iceberg.
 
     Prefers an exact match for *horizon_months*; falls back to longer
     horizons (9m → 6m → 3m) so that a 9-month forecast can satisfy a
@@ -156,19 +97,22 @@ def _load_forecast(ticker: str, horizon_months: int) -> Optional[pd.DataFrame]:
 
     Returns:
         DataFrame with ``ds``, ``yhat``, ``yhat_lower``, ``yhat_upper``
-        columns, or ``None`` if no forecast file is found.
+        columns, or ``None`` if no forecast exists.
     """
-    for h in [horizon_months, 9, 6, 3]:
-        if h < horizon_months:
-            continue
-        path = _DATA_FORECASTS / f"{ticker}_{h}m_forecast.parquet"
-        if path.exists():
-            try:
-                df = pd.read_parquet(path, engine="pyarrow")
-                df["ds"] = pd.to_datetime(df["ds"])
-                return df
-            except Exception as exc:
-                _logger.error("Error loading forecast %s: %s", path, exc)
+    try:
+        from dashboard.callbacks.iceberg import _get_forecast_cached, _get_iceberg_repo
+
+        repo = _get_iceberg_repo()
+        if repo is None:
+            return None
+        for h in [horizon_months, 9, 6, 3]:
+            if h < horizon_months:
+                continue
+            result = _get_forecast_cached(repo, ticker, h)
+            if result is not None:
+                return result
+    except Exception as exc:
+        _logger.error("Error loading forecast from Iceberg for %s: %s", ticker, exc)
     return None
 
 
@@ -187,19 +131,19 @@ def _add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     close = df["Close"]
-    df["SMA_50"]      = ta.trend.SMAIndicator(close=close, window=50).sma_indicator()
-    df["SMA_200"]     = ta.trend.SMAIndicator(close=close, window=200).sma_indicator()
-    df["EMA_20"]      = ta.trend.EMAIndicator(close=close, window=20).ema_indicator()
-    df["RSI_14"]      = ta.momentum.RSIIndicator(close=close, window=14).rsi()
-    macd              = ta.trend.MACD(close=close)
-    df["MACD"]        = macd.macd()
+    df["SMA_50"] = ta.trend.SMAIndicator(close=close, window=50).sma_indicator()
+    df["SMA_200"] = ta.trend.SMAIndicator(close=close, window=200).sma_indicator()
+    df["EMA_20"] = ta.trend.EMAIndicator(close=close, window=20).ema_indicator()
+    df["RSI_14"] = ta.momentum.RSIIndicator(close=close, window=14).rsi()
+    macd = ta.trend.MACD(close=close)
+    df["MACD"] = macd.macd()
     df["MACD_Signal"] = macd.macd_signal()
-    df["MACD_Hist"]   = macd.macd_diff()
-    bb                = ta.volatility.BollingerBands(close=close, window=20, window_dev=2)
-    df["BB_Upper"]    = bb.bollinger_hband()
-    df["BB_Middle"]   = bb.bollinger_mavg()
-    df["BB_Lower"]    = bb.bollinger_lband()
-    df["ATR_14"]      = ta.volatility.AverageTrueRange(
+    df["MACD_Hist"] = macd.macd_diff()
+    bb = ta.volatility.BollingerBands(close=close, window=20, window_dev=2)
+    df["BB_Upper"] = bb.bollinger_hband()
+    df["BB_Middle"] = bb.bollinger_mavg()
+    df["BB_Lower"] = bb.bollinger_lband()
+    df["ATR_14"] = ta.volatility.AverageTrueRange(
         high=df["High"], low=df["Low"], close=close, window=14
     ).average_true_range()
     return df

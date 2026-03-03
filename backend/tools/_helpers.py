@@ -10,17 +10,12 @@ Usage::
     from tools._helpers import _currency_symbol, _load_currency
 """
 
-import json
 import logging
 import time
-from pathlib import Path
 from typing import Optional
 
 # Module-level logger; kept at module scope as a conventional singleton.
 _logger = logging.getLogger(__name__)
-
-_PROJECT_ROOT = Path(__file__).parent.parent.parent
-_DATA_METADATA = _PROJECT_ROOT / "data" / "metadata"
 
 # ---------------------------------------------------------------------------
 # Module-level TTL cache for _load_currency (Fix #5)
@@ -40,23 +35,30 @@ def _currency_symbol(code: str) -> str:
         The currency symbol string, e.g. ``"$"`` or ``"₹"``.
     """
     return {
-        "USD": "$", "INR": "₹", "GBP": "£", "EUR": "€",
-        "JPY": "¥", "CNY": "¥", "AUD": "A$", "CAD": "CA$",
-        "HKD": "HK$", "SGD": "S$",
+        "USD": "$",
+        "INR": "₹",
+        "GBP": "£",
+        "EUR": "€",
+        "JPY": "¥",
+        "CNY": "¥",
+        "AUD": "A$",
+        "CAD": "CA$",
+        "HKD": "HK$",
+        "SGD": "S$",
     }.get((code or "USD").upper(), code or "$")
 
 
-def _load_currency(ticker: str, metadata_dir: Optional[Path] = None) -> str:
-    """Read the ISO currency code for *ticker* from its metadata JSON.
+def _load_currency(ticker: str, metadata_dir=None) -> str:
+    """Read the ISO currency code for *ticker* from Iceberg company_info.
 
     Results are cached for :data:`_CACHE_TTL_SECONDS` seconds at module level
-    to avoid repeated file reads when the same ticker is queried multiple times
-    within a single request or agent turn.
+    to avoid repeated Iceberg scans when the same ticker is queried multiple
+    times within a single request or agent turn.
 
     Args:
         ticker: Stock ticker symbol (already uppercased).
-        metadata_dir: Override the metadata directory (for testing).
-            Defaults to the project-level ``data/metadata/`` directory.
+        metadata_dir: Unused; kept for backward compatibility with existing
+            call sites. Ignored.
 
     Returns:
         ISO currency code string.  Falls back to ``"USD"``.
@@ -70,14 +72,15 @@ def _load_currency(ticker: str, metadata_dir: Optional[Path] = None) -> str:
         # expired — remove stale entry
         del _CURRENCY_CACHE[ticker]
 
-    base = metadata_dir if metadata_dir is not None else _DATA_METADATA
-    meta_path = base / f"{ticker}_info.json"
+    code = "USD"
     try:
-        with open(meta_path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        code = data.get("currency", "USD") or "USD"
+        from tools._stock_shared import _get_repo
+
+        repo = _get_repo()
+        if repo is not None:
+            code = repo.get_currency(ticker)
     except Exception:
-        code = "USD"
+        pass
 
     _CURRENCY_CACHE[ticker] = (code, now + _CACHE_TTL_SECONDS)
     return code

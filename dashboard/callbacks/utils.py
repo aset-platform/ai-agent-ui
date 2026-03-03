@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Currency cache — avoids opening JSON on every callback invocation
 # ---------------------------------------------------------------------------
-_CURRENCY_CACHE_DASH: dict = {}   # {ticker: (symbol_str, expiry_monotonic)}
-_CURRENCY_TTL = 300                # seconds
+_CURRENCY_CACHE_DASH: dict = {}  # {ticker: (symbol_str, expiry_monotonic)}
+_CURRENCY_TTL = 300  # seconds
 
 # ---------------------------------------------------------------------------
 # Input validation constants
@@ -104,41 +104,49 @@ def _currency_symbol(code: str) -> str:
         Falls back to the code itself for unmapped currencies.
     """
     return {
-        "USD": "$", "INR": "₹", "GBP": "£", "EUR": "€",
-        "JPY": "¥", "CNY": "¥", "AUD": "A$", "CAD": "CA$",
-        "HKD": "HK$", "SGD": "S$",
+        "USD": "$",
+        "INR": "₹",
+        "GBP": "£",
+        "EUR": "€",
+        "JPY": "¥",
+        "CNY": "¥",
+        "AUD": "A$",
+        "CAD": "CA$",
+        "HKD": "HK$",
+        "SGD": "S$",
     }.get((code or "USD").upper(), code or "$")
 
 
-def _load_currency_from_file(ticker: str) -> str:
-    """Read currency symbol from the ticker's metadata JSON file.
+def _load_currency_from_iceberg(ticker: str) -> str:
+    """Read currency symbol from Iceberg company_info for *ticker*.
 
     Args:
         ticker: Stock ticker symbol.
 
     Returns:
         Currency symbol string such as ``"$"`` or ``"₹"``.
-        Falls back to ``"$"`` if the metadata file is missing.
+        Falls back to ``"$"`` if no company info is available.
     """
-    import json
-    from pathlib import Path
-
-    _data_metadata = Path(__file__).parent.parent.parent / "data" / "metadata"
-    meta_path = _data_metadata / f"{ticker.upper()}_info.json"
     try:
-        with open(meta_path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return _currency_symbol(data.get("currency", "USD") or "USD")
+        from dashboard.callbacks.iceberg import _get_iceberg_repo
+
+        repo = _get_iceberg_repo()
+        if repo is not None:
+            info = repo.get_latest_company_info(ticker.upper())
+            if info is not None:
+                return _currency_symbol(info.get("currency", "USD") or "USD")
     except Exception:
-        logger.debug("Metadata file not found for ticker %r; defaulting to '$'.", ticker)
-        return "$"
+        logger.debug(
+            "Iceberg company_info unavailable for %r; defaulting to '$'.", ticker
+        )
+    return "$"
 
 
 def _get_currency(ticker: str) -> str:
     """Return the currency symbol for *ticker*, cached for ``_CURRENCY_TTL`` seconds.
 
-    Reads ``data/metadata/{TICKER}_info.json`` on first call (or after TTL
-    expiry); subsequent calls within the TTL window return the cached symbol.
+    Reads from Iceberg company_info on first call (or after TTL expiry);
+    subsequent calls within the TTL window return the cached symbol.
 
     Args:
         ticker: Stock ticker symbol.
@@ -146,11 +154,10 @@ def _get_currency(ticker: str) -> str:
     Returns:
         Currency symbol string such as ``"$"`` or ``"₹"``.
     """
-    # Fix #11: TTL cache to avoid reopening JSON on every callback invocation
     now = _time.monotonic()
     entry = _CURRENCY_CACHE_DASH.get(ticker)
     if entry and entry[1] > now:
         return entry[0]
-    result = _load_currency_from_file(ticker)
+    result = _load_currency_from_iceberg(ticker)
     _CURRENCY_CACHE_DASH[ticker] = (result, now + _CURRENCY_TTL)
     return result

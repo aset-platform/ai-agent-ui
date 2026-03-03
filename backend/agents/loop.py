@@ -9,11 +9,10 @@ Functions
 """
 
 import logging
-from typing import TYPE_CHECKING, List, Dict
-
-from langchain_core.messages import ToolMessage
+from typing import TYPE_CHECKING, Dict, List
 
 from agents.config import MAX_ITERATIONS
+from langchain_core.messages import ToolMessage
 
 if TYPE_CHECKING:
     from agents.base import BaseAgent
@@ -65,7 +64,9 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
                     MAX_ITERATIONS,
                 )
                 break
-            agent.logger.debug("Iteration %d | message_count=%d", iteration, len(messages))
+            agent.logger.debug(
+                "Iteration %d | message_count=%d", iteration, len(messages)
+            )
             response = agent.llm_with_tools.invoke(messages)
             messages.append(response)
 
@@ -90,4 +91,6 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
     agent.logger.info(
         "Request end | agent=%s | iterations=%d", agent.config.agent_id, iteration
     )
-    return (response.content or "No response") if response is not None else "No response"
+    return (
+        (response.content or "No response") if response is not None else "No response"
+    )

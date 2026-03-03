@@ -18,12 +18,8 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import Input, Output, State, ctx, html, no_update
 
-from dashboard.callbacks.data_loaders import (
-    _DATA_FORECASTS,
-    _DATA_METADATA,
-    _load_raw,
-    _load_reg_cb,
-)
+from dashboard.callbacks.data_loaders import _load_raw, _load_reg_cb
+from dashboard.callbacks.iceberg import _get_iceberg_repo
 from dashboard.callbacks.utils import _get_currency, _get_market
 
 # Module-level logger — kept at module scope for callback functions defined outside a class.
@@ -60,8 +56,6 @@ def register(app) -> None:
         Returns:
             Tuple of (list of raw card data dicts, dropdown options list).
         """
-        import json
-
         registry = _load_reg_cb()
         if not registry:
             return [], []
@@ -77,78 +71,85 @@ def register(app) -> None:
 
             # Current price + 10Y return from parquet
             current_price_str = "N/A"
-            total_return_str  = "N/A"
-            return_color_cls  = "text-muted"
+            total_return_str = "N/A"
+            return_color_cls = "text-muted"
             try:
                 if raw_df is not None and len(raw_df) > 1:
                     cp = float(raw_df["Close"].iloc[-1])
                     fp = float(raw_df["Close"].iloc[0])
                     tr = (cp / fp - 1) * 100
                     current_price_str = f"{_get_currency(ticker)}{cp:,.2f}"
-                    total_return_str  = f"{tr:+.1f}%"
-                    return_color_cls  = "text-success" if tr >= 0 else "text-danger"
+                    total_return_str = f"{tr:+.1f}%"
+                    return_color_cls = "text-success" if tr >= 0 else "text-danger"
             except Exception as exc:
                 _logger.warning("Card data error for %s: %s", ticker, exc)
 
-            # Sentiment from forecast parquet
-            sentiment  = "Unknown"
+            # Sentiment from Iceberg forecast run
+            sentiment = "Unknown"
             sent_color = "secondary"
             sent_emoji = "⚪"
             try:
-                # Fix #8: use pathlib sort by mtime (avoid glob.glob + os.stat)
-                forecast_paths = sorted(
-                    _DATA_FORECASTS.glob(f"{ticker}_*m_forecast.parquet"),
-                    key=lambda p: p.stat().st_mtime,
-                    reverse=True,
-                )
-                if forecast_paths:
-                    fc_df = pd.read_parquet(forecast_paths[0], engine="pyarrow")
-                    if raw_df is not None and len(fc_df) > 0:
-                        cp  = float(raw_df["Close"].iloc[-1])
-                        fp  = float(fc_df["yhat"].iloc[-1])
-                        pct = (fp - cp) / cp * 100
-                        if pct > 10:
-                            sentiment, sent_color, sent_emoji = "Bullish", "success", "🟢"
-                        elif pct < -10:
-                            sentiment, sent_color, sent_emoji = "Bearish", "danger",  "🔴"
+                repo = _get_iceberg_repo()
+                if repo is not None:
+                    run = repo.get_latest_forecast_run(ticker, 9)
+                    if run is not None and run.get("sentiment"):
+                        _sent = run["sentiment"]
+                        if _sent == "Bullish":
+                            sentiment, sent_color, sent_emoji = (
+                                "Bullish",
+                                "success",
+                                "🟢",
+                            )
+                        elif _sent == "Bearish":
+                            sentiment, sent_color, sent_emoji = (
+                                "Bearish",
+                                "danger",
+                                "🔴",
+                            )
                         else:
-                            sentiment, sent_color, sent_emoji = "Neutral", "warning", "🟡"
+                            sentiment, sent_color, sent_emoji = (
+                                "Neutral",
+                                "warning",
+                                "🟡",
+                            )
             except Exception as exc:
                 _logger.warning("Sentiment error for %s: %s", ticker, exc)
 
-            # Company name from metadata JSON if available
-            company   = ticker
-            info_path = _DATA_METADATA / f"{ticker}_info.json"
-            if info_path.exists():
-                try:
-                    with open(info_path) as fh:
-                        info    = json.load(fh)
-                        company = info.get("name", ticker) or ticker
-                except Exception:
-                    pass
+            # Company name from Iceberg company_info if available
+            company = ticker
+            try:
+                repo = _get_iceberg_repo()
+                if repo is not None:
+                    info = repo.get_latest_company_info(ticker)
+                    if info is not None:
+                        company = info.get("company_name", ticker) or ticker
+            except Exception:
+                pass
 
-            card_data.append({
-                "ticker":            ticker,
-                "company":           company,
-                "current_price_str": current_price_str,
-                "total_return_str":  total_return_str,
-                "return_color_cls":  return_color_cls,
-                "last_updated":      last_updated,
-                "sentiment":         sentiment,
-                "sent_color":        sent_color,
-                "sent_emoji":        sent_emoji,
-                "market":            _get_market(ticker),
-            })
+            card_data.append(
+                {
+                    "ticker": ticker,
+                    "company": company,
+                    "current_price_str": current_price_str,
+                    "total_return_str": total_return_str,
+                    "return_color_cls": return_color_cls,
+                    "last_updated": last_updated,
+                    "sentiment": sentiment,
+                    "sent_color": sent_color,
+                    "sent_emoji": sent_emoji,
+                    "market": _get_market(ticker),
+                }
+            )
 
         return card_data, dropdown_options
 
     @app.callback(
         Output("market-filter-store", "data"),
-        Output("filter-india-btn",    "color"),
-        Output("filter-us-btn",       "color"),
-        Output("home-pagination",     "active_page"),
+        Output("filter-india-btn", "color"),
+        Output("filter-us-btn", "color"),
+        Output("home-pagination", "active_page"),
         Input("filter-india-btn", "n_clicks"),
-        Input("filter-us-btn",    "n_clicks"),
+        Input("filter-us-btn", "n_clicks"),
         prevent_initial_call=True,
     )
     def update_market_filter(india_clicks, us_clicks):
@@ -183,12 +184,12 @@ def register(app) -> None:
 
     @app.callback(
         Output("stock-cards-container", "children"),
-        Output("home-pagination",       "max_value"),
-        Output("home-count-text",       "children"),
+        Output("home-pagination", "max_value"),
+        Output("home-count-text", "children"),
         Input("stock-raw-data-store", "data"),
-        Input("market-filter-store",  "data"),
-        Input("home-pagination",      "active_page"),
-        Input("home-page-size",       "value"),
+        Input("market-filter-store", "data"),
+        Input("home-pagination", "active_page"),
+        Input("home-page-size", "value"),
     )
     def render_home_cards(raw_data, market_filter, active_page, page_size):
         """Filter, paginate, and render stock cards from stored raw data.
@@ -205,65 +206,119 @@ def register(app) -> None:
         page_size_int = int(page_size or 12)
         if not raw_data:
             return (
-                [dbc.Col(html.P(
-                    "No stocks saved yet. Analyse a stock via the chat interface first.",
-                    className="text-muted",
-                ))],
+                [
+                    dbc.Col(
+                        html.P(
+                            "No stocks saved yet. Analyse a stock via the chat interface first.",
+                            className="text-muted",
+                        )
+                    )
+                ],
                 1,
                 "",
             )
 
-        market   = market_filter or "india"
-        page     = active_page or 1
+        market = market_filter or "india"
+        page = active_page or 1
         filtered = [d for d in raw_data if d.get("market") == market]
 
         if not filtered:
             label = "India (.NS / .BO)" if market == "india" else "US"
             return (
-                [dbc.Col(html.P(f"No {label} stocks saved yet.", className="text-muted"))],
+                [
+                    dbc.Col(
+                        html.P(f"No {label} stocks saved yet.", className="text-muted")
+                    )
+                ],
                 1,
                 "",
             )
 
-        total     = len(filtered)
+        total = len(filtered)
         max_pages = max(1, math.ceil(total / page_size_int))
-        page      = min(page, max_pages)
-        start     = (page - 1) * page_size_int
-        page_data = filtered[start: start + page_size_int]
-        count_txt = f"Showing {start + 1}–{min(start + page_size_int, total)} of {total}"
+        page = min(page, max_pages)
+        start = (page - 1) * page_size_int
+        page_data = filtered[start : start + page_size_int]
+        count_txt = (
+            f"Showing {start + 1}–{min(start + page_size_int, total)} of {total}"
+        )
 
         cols = []
         for d in page_data:
             card = html.A(
                 href=f"/analysis?ticker={d['ticker']}",
                 className="text-decoration-none",
-                children=dbc.Card([
-                    dbc.CardBody([
-                        html.Div([
-                            html.H6(d["ticker"], className="card-title text-info mb-0 fw-bold"),
-                            dbc.Badge(
-                                f"{d['sent_emoji']} {d['sentiment']}",
-                                color=d["sent_color"],
-                                className="ms-auto",
-                            ),
-                        ], className="d-flex justify-content-between align-items-center mb-1"),
-                        html.P(d["company"], className="card-subtitle text-muted small mb-2 text-truncate"),
-                        html.Div([
-                            html.Div([
-                                html.Small("Price", className="text-muted d-block"),
-                                html.Strong(d["current_price_str"], className="text-dark small"),
-                            ], className="me-3"),
-                            html.Div([
-                                html.Small("10Y Ret", className="text-muted d-block"),
-                                html.Strong(d["total_return_str"], className=f"{d['return_color_cls']} small"),
-                            ], className="me-3"),
-                            html.Div([
-                                html.Small("Updated", className="text-muted d-block"),
-                                html.Small(d["last_updated"], className="text-muted"),
-                            ]),
-                        ], className="d-flex align-items-start"),
-                    ], className="p-3"),
-                ], className="stock-card h-100"),
+                children=dbc.Card(
+                    [
+                        dbc.CardBody(
+                            [
+                                html.Div(
+                                    [
+                                        html.H6(
+                                            d["ticker"],
+                                            className="card-title text-info mb-0 fw-bold",
+                                        ),
+                                        dbc.Badge(
+                                            f"{d['sent_emoji']} {d['sentiment']}",
+                                            color=d["sent_color"],
+                                            className="ms-auto",
+                                        ),
+                                    ],
+                                    className="d-flex justify-content-between align-items-center mb-1",
+                                ),
+                                html.P(
+                                    d["company"],
+                                    className="card-subtitle text-muted small mb-2 text-truncate",
+                                ),
+                                html.Div(
+                                    [
+                                        html.Div(
+                                            [
+                                                html.Small(
+                                                    "Price",
+                                                    className="text-muted d-block",
+                                                ),
+                                                html.Strong(
+                                                    d["current_price_str"],
+                                                    className="text-dark small",
+                                                ),
+                                            ],
+                                            className="me-3",
+                                        ),
+                                        html.Div(
+                                            [
+                                                html.Small(
+                                                    "10Y Ret",
+                                                    className="text-muted d-block",
+                                                ),
+                                                html.Strong(
+                                                    d["total_return_str"],
+                                                    className=f"{d['return_color_cls']} small",
+                                                ),
+                                            ],
+                                            className="me-3",
+                                        ),
+                                        html.Div(
+                                            [
+                                                html.Small(
+                                                    "Updated",
+                                                    className="text-muted d-block",
+                                                ),
+                                                html.Small(
+                                                    d["last_updated"],
+                                                    className="text-muted",
+                                                ),
+                                            ]
+                                        ),
+                                    ],
+                                    className="d-flex align-items-start",
+                                ),
+                            ],
+                            className="p-3",
+                        ),
+                    ],
+                    className="stock-card h-100",
+                ),
             )
             cols.append(dbc.Col(card, xs=12, sm=6, md=4, lg=3))
 
