@@ -105,14 +105,13 @@ This is safe because `setup_logging()` always re-adds the correct handlers immed
 
 ---
 
-## Python 3.9 Compatibility
+## Python 3.12
 
-The `demoenv` virtualenv runs Python 3.9.13. Two 3.10+ features are avoided:
+The `demoenv` virtualenv runs Python 3.12.9. All modern Python features are available:
 
-- **Union type syntax** (`X | Y`, PEP 604) — replaced with `Optional[X]` from `typing`.
-- No use of `match` statements (PEP 634).
-
-The codebase does use `list[dict]` and `dict[str, T]` as type hints directly on class attributes. These are valid in Python 3.9 for annotations used at runtime in some contexts, but can cause `TypeError` at runtime if evaluated eagerly. Adding `from __future__ import annotations` to files that use these annotations would make them string-based (deferred evaluation) and fully compatible with 3.9.
+- **Union type syntax** (`X | None`) via PEP 604 is preferred over `Optional[X]`.
+- `match` statements (PEP 634) may be used where appropriate.
+- Built-in generics (`list[dict]`, `dict[str, T]`) work natively without `from __future__ import annotations`.
 
 ---
 
@@ -299,11 +298,11 @@ HS256 (HMAC-SHA256 with a shared secret) was chosen over RS256 (RSA with a publi
 
 The minimum key length is enforced at 32 characters (256 bits) by `AuthService.__init__`.
 
-### bcrypt via passlib, pinned to bcrypt==4.0.1
+### bcrypt 5.x (direct, no passlib)
 
-`passlib[bcrypt]` was chosen for password hashing because it is the standard Python bcrypt wrapper with a well-understood API. The passlib 1.7.4 + bcrypt 5.x combination is incompatible (bcrypt 5.0 changed its internal API in a way that breaks passlib's version-detection routine for passwords > 72 bytes). `bcrypt==4.0.1` is pinned in `requirements.txt`.
+Password hashing uses `bcrypt` directly (`bcrypt.hashpw()` / `bcrypt.checkpw()`) in `auth/password.py`. The previous `passlib` wrapper was removed because passlib 1.7.4 is incompatible with bcrypt 5.x and is no longer maintained. Direct bcrypt produces the same `$2b$` hash format — existing database hashes work without migration.
 
-Cost factor is the default (12), which gives ~250 ms per hash on a modern CPU — long enough to make brute force impractical, short enough not to noticeably affect login latency.
+Cost factor is 12, which gives ~250 ms per hash on a modern CPU — long enough to make brute force impractical, short enough not to noticeably affect login latency.
 
 ### In-memory refresh-token deny-list
 

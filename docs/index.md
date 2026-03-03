@@ -9,7 +9,7 @@ A fullstack agentic chat application built with Next.js and FastAPI. The LLM run
 | Layer | Technology |
 |-------|------------|
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS 4 |
-| Backend | Python 3.9, FastAPI, LangChain |
+| Backend | Python 3.12, FastAPI, LangChain |
 | LLM | Groq `openai/gpt-oss-120b` *(temporary — Claude Sonnet 4.6 intended)* |
 | Web search tool | SerpAPI via `langchain-community` |
 | Package management | npm (frontend), pip + virtualenv (backend) |

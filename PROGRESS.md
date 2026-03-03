@@ -2,6 +2,25 @@
 
 ---
 
+# Session: Mar 3, 2026 — Python 3.9 → 3.12 upgrade + dependency refresh
+
+## Summary
+Upgraded Python runtime from 3.9 (EOL Oct 2025) to 3.12.9 and all non-LangChain dependencies to latest versions. LangChain held at 0.3.x for a separate follow-up PR.
+
+### Changes
+- **Infrastructure**: Updated `setup.sh` (5 locations), `.github/workflows/ci.yml` (4 jobs), `run.sh` — all Python 3.9 → 3.12
+- **Dependencies**: Recreated `backend/demoenv` with Python 3.12.9; upgraded numpy 1.26→2.4, pandas 2.0→3.0, yfinance 0.2→1.2, pyarrow 17→23, anthropic 0.79→0.84, bcrypt 4→5, pyiceberg 0.10→0.11, scikit-learn 1.6→1.8, scipy 1.13→1.17, matplotlib 3.9→3.10, fastapi 0.128→0.135
+- **passlib removed**: `auth/password.py` rewritten to use `bcrypt` directly (`bcrypt.hashpw()`/`bcrypt.checkpw()`); same `$2b$` format — no data migration needed
+- **Docs updated**: CLAUDE.md, README.md, docs/index.md, docs/dev/decisions.md, docs/dev/how-to-run.md
+
+### Branch
+`feature/upgrade-python-312` → PR to `dev`
+
+### Follow-up
+- PR 2: `feature/upgrade-langchain-1x` — LangChain 0.3 → 1.x (separate PR after this merges)
+
+---
+
 # Session: Mar 2, 2026 — External env symlinks + setup.sh + optional Groq fallback
 
 ## Summary
