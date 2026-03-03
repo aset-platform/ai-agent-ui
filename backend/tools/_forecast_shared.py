@@ -93,9 +93,9 @@ def _load_parquet(ticker: str) -> Optional[pd.DataFrame]:
                 "High": df["high"],
                 "Low": df["low"],
                 "Close": df["close"],
-                "Adj Close": df["adj_close"]
-                if "adj_close" in df.columns
-                else df["close"],
+                "Adj Close": (
+                    df["adj_close"] if "adj_close" in df.columns else df["close"]
+                ),
                 "Volume": df["volume"],
             }
         )

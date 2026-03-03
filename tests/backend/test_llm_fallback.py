@@ -12,10 +12,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_fallback(groq_mock, anthropic_mock):
     """Construct a FallbackLLM with both inner LLMs already patched.
@@ -30,6 +30,7 @@ def _make_fallback(groq_mock, anthropic_mock):
     code-path is exercised.
     """
     import llm_fallback  # noqa: PLC0415 — imported here to get the module object
+
     with (
         patch.object(llm_fallback, "ChatGroq", return_value=groq_mock),
         patch.object(llm_fallback, "ChatAnthropic", return_value=anthropic_mock),

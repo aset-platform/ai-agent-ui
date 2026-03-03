@@ -101,7 +101,11 @@ def register(app) -> None:
                                 "🟢",
                             )
                         elif _sent == "Bearish":
-                            sentiment, sent_color, sent_emoji = "Bearish", "danger", "🔴"
+                            sentiment, sent_color, sent_emoji = (
+                                "Bearish",
+                                "danger",
+                                "🔴",
+                            )
                         else:
                             sentiment, sent_color, sent_emoji = (
                                 "Neutral",

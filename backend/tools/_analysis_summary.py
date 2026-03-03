@@ -92,13 +92,17 @@ def _generate_summary_stats(df: pd.DataFrame, ticker: str) -> dict:
         "worst_year": str(worst_year_idx.year),
         "worst_year_return_pct": round(float(annual_ret.min() * 100), 2),
         "sma_50": round(sma50, 2) if sma50 is not None else "N/A",
-        "sma_50_signal": ("Above" if sma50 and current_price > sma50 else "Below")
-        if sma50
-        else "N/A",
+        "sma_50_signal": (
+            ("Above" if sma50 and current_price > sma50 else "Below")
+            if sma50
+            else "N/A"
+        ),
         "sma_200": round(sma200, 2) if sma200 is not None else "N/A",
-        "sma_200_signal": ("Above" if sma200 and current_price > sma200 else "Below")
-        if sma200
-        else "N/A",
+        "sma_200_signal": (
+            ("Above" if sma200 and current_price > sma200 else "Below")
+            if sma200
+            else "N/A"
+        ),
         "rsi_14": round(rsi, 1) if rsi is not None else "N/A",
         "rsi_signal": rsi_signal,
         "macd_signal": macd_signal_str,
