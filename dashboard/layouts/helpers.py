@@ -1,12 +1,12 @@
 """Helper utilities for the AI Stock Analysis Dashboard layouts.
 
 Provides path constants and private helper functions used by all layout
-sub-modules: loading the stock registry from disk and returning a sorted
+sub-modules: loading the stock registry from Iceberg and returning a sorted
 list of tracked ticker symbols.
 """
 
-import json
 import logging
+import sys
 from pathlib import Path
 from typing import List
 
@@ -15,25 +15,26 @@ from typing import List
 _logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
-_DATA_METADATA = _PROJECT_ROOT / "data" / "metadata"
-_REGISTRY_PATH = _DATA_METADATA / "stock_registry.json"
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 
 def _load_registry() -> dict:
-    """Load the stock registry from disk.
+    """Load the stock registry from Iceberg.
 
     Returns:
         Dictionary mapping ticker symbols to registry metadata records.
-        Returns an empty dict if the file is missing or unparsable.
+        Returns an empty dict if Iceberg is unavailable.
     """
-    if not _REGISTRY_PATH.exists():
-        return {}
     try:
-        with open(_REGISTRY_PATH) as fh:
-            return json.load(fh)
+        from dashboard.callbacks.iceberg import _get_iceberg_repo
+
+        repo = _get_iceberg_repo()
+        if repo is not None:
+            return repo.get_all_registry()
     except Exception as exc:
-        _logger.warning("Could not load registry: %s", exc)
-        return {}
+        _logger.warning("Could not load registry from Iceberg: %s", exc)
+    return {}
 
 
 def _get_available_tickers() -> List[str]:

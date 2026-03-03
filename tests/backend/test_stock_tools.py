@@ -18,8 +18,14 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_ohlcv(rows: int = 300) -> pd.DataFrame:
-    """Return a minimal OHLCV DataFrame with a DatetimeIndex."""
+def _make_ohlcv(rows: int = 300, adj_close_nan: bool = False) -> pd.DataFrame:
+    """Return a minimal OHLCV DataFrame with a DatetimeIndex.
+
+    Args:
+        rows: Number of rows to generate.
+        adj_close_nan: If True, ``Adj Close`` column is all NaN
+            (simulates yfinance >= 1.2 or Iceberg with missing adj_close).
+    """
     idx = pd.date_range("2020-01-01", periods=rows, freq="B")
     rng = np.random.default_rng(0)
     close = 100 + rng.standard_normal(rows).cumsum()
@@ -29,13 +35,49 @@ def _make_ohlcv(rows: int = 300) -> pd.DataFrame:
             "High": close * 1.01,
             "Low": close * 0.98,
             "Close": close,
-            "Adj Close": close,
+            "Adj Close": [float("nan")] * rows if adj_close_nan else close,
             "Volume": rng.integers(1_000_000, 5_000_000, rows),
         },
         index=idx,
     )
     df.index.name = "Date"
     return df
+
+
+def _make_iceberg_ohlcv(rows: int = 300, ticker: str = "AAPL") -> pd.DataFrame:
+    """Return a DataFrame shaped like ``StockRepository.get_ohlcv()`` output."""
+    idx = pd.date_range("2020-01-01", periods=rows, freq="B")
+    rng = np.random.default_rng(0)
+    close = 100 + rng.standard_normal(rows).cumsum()
+    return pd.DataFrame({
+        "ticker": [ticker] * rows,
+        "date": idx.date,
+        "open": close * 0.99,
+        "high": close * 1.01,
+        "low": close * 0.98,
+        "close": close,
+        "adj_close": close,
+        "volume": rng.integers(1_000_000, 5_000_000, rows),
+    })
+
+
+def _mock_repo():
+    """Return a MagicMock configured as a StockRepository stand-in."""
+    repo = MagicMock()
+    repo.check_existing_data.return_value = None
+    repo.get_all_registry.return_value = {}
+    repo.get_latest_company_info_if_fresh.return_value = None
+    repo.get_latest_company_info.return_value = None
+    repo.get_currency.return_value = "USD"
+    repo.insert_ohlcv.return_value = 0
+    repo.insert_company_info.return_value = None
+    repo.upsert_registry.return_value = None
+    repo.insert_dividends.return_value = 0
+    repo.upsert_technical_indicators.return_value = None
+    repo.insert_analysis_summary.return_value = None
+    repo.insert_forecast_run.return_value = None
+    repo.insert_forecast_series.return_value = None
+    return repo
 
 
 # ---------------------------------------------------------------------------
@@ -48,14 +90,14 @@ class TestFetchStockData:
 
     def test_returns_string(self, tmp_path, monkeypatch):
         """fetch_stock_data must always return a string, never raise."""
+        import tools._stock_shared as _ss
         from tools import stock_data_tool
 
         df = _make_ohlcv()
+        repo = _mock_repo()
 
-        monkeypatch.setattr(stock_data_tool, "_DATA_RAW", tmp_path / "raw")
-        monkeypatch.setattr(stock_data_tool, "_DATA_METADATA", tmp_path / "meta")
-        monkeypatch.setattr(stock_data_tool, "_REGISTRY_PATH", tmp_path / "meta" / "registry.json")
-        monkeypatch.setattr(stock_data_tool, "_STOCK_REPO", None)
+        monkeypatch.setattr(_ss, "_DATA_RAW", tmp_path / "raw")
+        monkeypatch.setattr(_ss, "_STOCK_REPO", repo)
 
         mock_ticker = MagicMock()
         mock_ticker.history.return_value = df
@@ -68,12 +110,12 @@ class TestFetchStockData:
 
     def test_unknown_ticker_returns_error_string(self, tmp_path, monkeypatch):
         """Empty yfinance response must yield an error string, not an exception."""
+        import tools._stock_shared as _ss
         from tools import stock_data_tool
 
-        monkeypatch.setattr(stock_data_tool, "_DATA_RAW", tmp_path / "raw")
-        monkeypatch.setattr(stock_data_tool, "_DATA_METADATA", tmp_path / "meta")
-        monkeypatch.setattr(stock_data_tool, "_REGISTRY_PATH", tmp_path / "meta" / "registry.json")
-        monkeypatch.setattr(stock_data_tool, "_STOCK_REPO", None)
+        repo = _mock_repo()
+        monkeypatch.setattr(_ss, "_DATA_RAW", tmp_path / "raw")
+        monkeypatch.setattr(_ss, "_STOCK_REPO", repo)
 
         mock_ticker = MagicMock()
         mock_ticker.history.return_value = pd.DataFrame()
@@ -86,33 +128,25 @@ class TestFetchStockData:
 
     def test_up_to_date_skips_fetch(self, tmp_path, monkeypatch):
         """If registry shows today's date, no yfinance call is made."""
+        import tools._stock_shared as _ss
         from tools import stock_data_tool
 
-        meta_dir = tmp_path / "meta"
-        meta_dir.mkdir(parents=True)
         raw_dir = tmp_path / "raw"
         raw_dir.mkdir(parents=True)
-        registry_path = meta_dir / "registry.json"
 
-        monkeypatch.setattr(stock_data_tool, "_DATA_RAW", raw_dir)
-        monkeypatch.setattr(stock_data_tool, "_DATA_METADATA", meta_dir)
-        monkeypatch.setattr(stock_data_tool, "_REGISTRY_PATH", registry_path)
-        monkeypatch.setattr(stock_data_tool, "_STOCK_REPO", None)
+        repo = _mock_repo()
+        repo.check_existing_data.return_value = {
+            "ticker": "AAPL",
+            "last_fetch_date": str(date.today()),
+            "total_rows": 100,
+            "date_range": {"start": "2020-01-01", "end": str(date.today())},
+            "file_path": str(raw_dir / "AAPL_raw.parquet"),
+        }
 
-        # Write a registry entry saying data was fetched today
-        import json
-        registry_path.write_text(
-            json.dumps({
-                "AAPL": {
-                    "ticker": "AAPL",
-                    "last_fetch_date": str(date.today()),
-                    "total_rows": 100,
-                    "date_range": {"start": "2020-01-01", "end": str(date.today())},
-                    "file_path": str(raw_dir / "AAPL_raw.parquet"),
-                }
-            })
-        )
-        # Write a dummy parquet so file_path exists (not read in this path)
+        monkeypatch.setattr(_ss, "_DATA_RAW", raw_dir)
+        monkeypatch.setattr(_ss, "_STOCK_REPO", repo)
+
+        # Write a dummy parquet so file_path exists
         _make_ohlcv(100).to_parquet(raw_dir / "AAPL_raw.parquet")
 
         with patch("yfinance.Ticker") as mock_yf:
@@ -120,6 +154,70 @@ class TestFetchStockData:
             mock_yf.assert_not_called()
 
         assert "up to date" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# get_stock_info — Iceberg cache check
+# ---------------------------------------------------------------------------
+
+
+class TestGetStockInfo:
+    """Tests for :func:`tools.stock_data_tool.get_stock_info`."""
+
+    def test_returns_cached_when_fresh(self, monkeypatch):
+        """When Iceberg has a fresh snapshot, yfinance is not called."""
+        import tools._stock_shared as _ss
+        from tools import stock_data_tool
+
+        repo = _mock_repo()
+        repo.get_latest_company_info_if_fresh.return_value = {
+            "company_name": "Apple Inc.",
+            "sector": "Technology",
+            "industry": "Consumer Electronics",
+            "market_cap": 3000000000000,
+            "pe_ratio": 30.5,
+            "week_52_high": 200.0,
+            "week_52_low": 140.0,
+            "current_price": 190.0,
+            "currency": "USD",
+        }
+        monkeypatch.setattr(_ss, "_STOCK_REPO", repo)
+
+        with patch("yfinance.Ticker") as mock_yf:
+            result = stock_data_tool.get_stock_info.invoke({"ticker": "AAPL"})
+            mock_yf.assert_not_called()
+
+        assert "Apple" in result
+        assert isinstance(result, str)
+
+    def test_fetches_when_stale(self, monkeypatch):
+        """When Iceberg cache is stale, yfinance is called."""
+        import tools._stock_shared as _ss
+        from tools import stock_data_tool
+
+        repo = _mock_repo()
+        # Stale — returns None
+        repo.get_latest_company_info_if_fresh.return_value = None
+        monkeypatch.setattr(_ss, "_STOCK_REPO", repo)
+
+        mock_ticker = MagicMock()
+        mock_ticker.info = {
+            "longName": "Apple Inc.",
+            "sector": "Technology",
+            "industry": "Consumer Electronics",
+            "marketCap": 3000000000000,
+            "trailingPE": 30.5,
+            "fiftyTwoWeekHigh": 200.0,
+            "fiftyTwoWeekLow": 140.0,
+            "currentPrice": 190.0,
+            "currency": "USD",
+        }
+
+        with patch("yfinance.Ticker", return_value=mock_ticker):
+            result = stock_data_tool.get_stock_info.invoke({"ticker": "AAPL"})
+
+        assert "Apple" in result
+        repo.insert_company_info.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -132,36 +230,63 @@ class TestGetRepoRetry:
 
     def test_retries_after_failure(self, monkeypatch):
         """_get_repo should retry and succeed if initially unavailable."""
-        import tools.stock_data_tool as sdt
+        import tools._stock_shared as _ss
 
-        monkeypatch.setattr(sdt, "_STOCK_REPO", None)
-        call_count = {"n": 0}
+        monkeypatch.setattr(_ss, "_STOCK_REPO", None)
+        monkeypatch.setattr(_ss, "_STOCK_REPO_INIT_ATTEMPTED", False)
 
         class FakeRepo:
             pass
 
-        original_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
-
-        # First call raises, second returns a FakeRepo
-        def flaky_repo():
-            call_count["n"] += 1
-            if call_count["n"] < 2:
-                raise RuntimeError("catalog not ready")
-            return FakeRepo()
-
-        # Patch at the module level by controlling the global directly
         # First call: repo is None, init raises → still None
         with patch("stocks.repository.StockRepository", side_effect=RuntimeError("catalog not ready")):
-            result_first = sdt._get_repo()
+            result_first = _ss._get_repo()
         assert result_first is None
-        assert sdt._STOCK_REPO is None  # not cached after failure
 
         # Second call: init succeeds
-        monkeypatch.setattr(sdt, "_STOCK_REPO", None)  # reset
+        monkeypatch.setattr(_ss, "_STOCK_REPO", None)
+        monkeypatch.setattr(_ss, "_STOCK_REPO_INIT_ATTEMPTED", False)
         fake_instance = FakeRepo()
         with patch("stocks.repository.StockRepository", return_value=fake_instance):
-            result_second = sdt._get_repo()
+            result_second = _ss._get_repo()
         assert result_second is fake_instance
+
+
+# ---------------------------------------------------------------------------
+# _prepare_data_for_prophet — Adj Close fallback
+# ---------------------------------------------------------------------------
+
+
+class TestPrepareDataForProphet:
+    """Tests for :func:`tools._forecast_model._prepare_data_for_prophet`."""
+
+    def test_uses_adj_close_when_present(self):
+        """When Adj Close has valid data, it should be used."""
+        from tools._forecast_model import _prepare_data_for_prophet
+
+        df = _make_ohlcv(50)
+        result = _prepare_data_for_prophet(df)
+        assert len(result) == 50
+        # y values should match Adj Close (which equals Close in _make_ohlcv)
+        assert result["y"].iloc[-1] == pytest.approx(df["Adj Close"].iloc[-1])
+
+    def test_falls_back_to_close_when_adj_close_all_nan(self):
+        """When Adj Close is all NaN, Close must be used instead."""
+        from tools._forecast_model import _prepare_data_for_prophet
+
+        df = _make_ohlcv(50, adj_close_nan=True)
+        result = _prepare_data_for_prophet(df)
+        assert len(result) == 50
+        assert result["y"].iloc[-1] == pytest.approx(df["Close"].iloc[-1])
+
+    def test_falls_back_when_adj_close_missing(self):
+        """When Adj Close column is absent entirely, Close is used."""
+        from tools._forecast_model import _prepare_data_for_prophet
+
+        df = _make_ohlcv(50).drop(columns=["Adj Close"])
+        result = _prepare_data_for_prophet(df)
+        assert len(result) == 50
+        assert result["y"].iloc[-1] == pytest.approx(df["Close"].iloc[-1])
 
 
 # ---------------------------------------------------------------------------
@@ -242,41 +367,57 @@ class TestAnalyseStockPrice:
     """Tests for :func:`tools.price_analysis_tool.analyse_stock_price`."""
 
     def test_no_data_returns_error_string(self, tmp_path, monkeypatch):
-        """When no parquet file exists, tool must return an error string."""
+        """When Iceberg has no OHLCV data, tool must return an error string."""
         import tools._analysis_shared as _ash
-        from tools import price_analysis_tool  # noqa: F401 — ensure tool is importable
+        from tools import price_analysis_tool
 
-        monkeypatch.setattr(_ash, "_DATA_RAW", tmp_path / "raw")
-        monkeypatch.setattr(_ash, "_DATA_METADATA", tmp_path / "meta")
+        repo = _mock_repo()
+        repo.get_ohlcv.return_value = pd.DataFrame()
+
+        monkeypatch.setattr(_ash, "_require_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_CACHE_DIR", tmp_path / "cache")
-        monkeypatch.setattr(_ash, "_STOCK_REPO", None)
-        monkeypatch.setattr(_ash, "_STOCK_REPO_INIT_ATTEMPTED", True)
 
         result = price_analysis_tool.analyse_stock_price.invoke({"ticker": "AAPL"})
         assert isinstance(result, str)
-        assert "Error" in result or "No local data" in result
+        assert "Error" in result or "No local data" in result or "No OHLCV" in result
 
     def test_with_data_returns_report(self, tmp_path, monkeypatch):
-        """With a valid parquet file, tool must return a full report string."""
+        """With valid Iceberg OHLCV data, tool must return a full report string."""
         import tools._analysis_shared as _ash
-        from tools import price_analysis_tool  # noqa: F401
+        from tools import price_analysis_tool
 
-        raw_dir = tmp_path / "raw"
-        raw_dir.mkdir(parents=True)
-        df = _make_ohlcv(300)
-        df.to_parquet(raw_dir / "AAPL_raw.parquet")
+        repo = _mock_repo()
+        repo.get_ohlcv.return_value = _make_iceberg_ohlcv(300, "AAPL")
 
-        monkeypatch.setattr(_ash, "_DATA_RAW", raw_dir)
-        monkeypatch.setattr(_ash, "_DATA_METADATA", tmp_path / "meta")
+        monkeypatch.setattr(_ash, "_require_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_CACHE_DIR", tmp_path / "cache")
         monkeypatch.setattr(_ash, "_CHARTS_ANALYSIS", tmp_path / "charts")
-        monkeypatch.setattr(_ash, "_STOCK_REPO", None)
-        monkeypatch.setattr(_ash, "_STOCK_REPO_INIT_ATTEMPTED", True)
 
         result = price_analysis_tool.analyse_stock_price.invoke({"ticker": "AAPL"})
         assert isinstance(result, str)
         assert "AAPL" in result
         assert "PRICE ANALYSIS" in result
+
+        # Verify Iceberg writes were called (not swallowed)
+        repo.upsert_technical_indicators.assert_called_once()
+        repo.insert_analysis_summary.assert_called_once()
+
+    def test_iceberg_write_failure_propagates(self, tmp_path, monkeypatch):
+        """When Iceberg write fails, the error propagates as an error string."""
+        import tools._analysis_shared as _ash
+        from tools import price_analysis_tool
+
+        repo = _mock_repo()
+        repo.get_ohlcv.return_value = _make_iceberg_ohlcv(300, "AAPL")
+        repo.upsert_technical_indicators.side_effect = RuntimeError("Iceberg write failed")
+
+        monkeypatch.setattr(_ash, "_require_repo", lambda: repo)
+        monkeypatch.setattr(_ash, "_CACHE_DIR", tmp_path / "cache")
+        monkeypatch.setattr(_ash, "_CHARTS_ANALYSIS", tmp_path / "charts")
+
+        result = price_analysis_tool.analyse_stock_price.invoke({"ticker": "AAPL"})
+        assert isinstance(result, str)
+        assert "Error" in result
 
 
 # ---------------------------------------------------------------------------
@@ -288,40 +429,53 @@ class TestForecastStock:
     """Tests for :func:`tools.forecasting_tool.forecast_stock`."""
 
     def test_no_data_returns_error_string(self, tmp_path, monkeypatch):
-        """When no parquet file exists, tool must return an error string."""
+        """When Iceberg has no OHLCV data, tool must return an error string."""
         import tools._forecast_shared as _fsh
-        from tools import forecasting_tool  # noqa: F401 — ensure tool is importable
+        from tools import forecasting_tool
 
-        monkeypatch.setattr(_fsh, "_DATA_RAW", tmp_path / "raw")
-        monkeypatch.setattr(_fsh, "_DATA_METADATA", tmp_path / "meta")
+        repo = _mock_repo()
+        repo.get_ohlcv.return_value = pd.DataFrame()
+
+        monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
-        monkeypatch.setattr(_fsh, "_STOCK_REPO", None)
-        monkeypatch.setattr(_fsh, "_STOCK_REPO_INIT_ATTEMPTED", True)
 
         result = forecasting_tool.forecast_stock.invoke({"ticker": "AAPL", "months": 3})
         assert isinstance(result, str)
-        assert "Error" in result or "No local data" in result
+        assert "Error" in result or "No local data" in result or "No OHLCV" in result
 
     def test_with_data_returns_report(self, tmp_path, monkeypatch):
-        """With valid parquet data, forecast_stock must return a report string."""
+        """With valid Iceberg OHLCV data, forecast_stock must return a report string."""
         import tools._forecast_shared as _fsh
-        from tools import forecasting_tool  # noqa: F401
+        from tools import forecasting_tool
 
-        raw_dir = tmp_path / "raw"
-        raw_dir.mkdir(parents=True)
-        df = _make_ohlcv(600)  # ~2.5 years of data
-        df.to_parquet(raw_dir / "AAPL_raw.parquet")
+        repo = _mock_repo()
+        repo.get_ohlcv.return_value = _make_iceberg_ohlcv(600, "AAPL")
 
-        monkeypatch.setattr(_fsh, "_DATA_RAW", raw_dir)
-        monkeypatch.setattr(_fsh, "_DATA_METADATA", tmp_path / "meta")
+        monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_DATA_FORECASTS", tmp_path / "forecasts")
         monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
         monkeypatch.setattr(_fsh, "_CHARTS_FORECASTS", tmp_path / "charts")
-        monkeypatch.setattr(_fsh, "_STOCK_REPO", None)
-        monkeypatch.setattr(_fsh, "_STOCK_REPO_INIT_ATTEMPTED", True)
 
         result = forecasting_tool.forecast_stock.invoke({"ticker": "AAPL", "months": 3})
         assert isinstance(result, str)
         assert "AAPL" in result
         # Should contain PRICE FORECAST header or an error (model training is real)
         assert "FORECAST" in result or "Error" in result
+
+    def test_iceberg_write_failure_propagates(self, tmp_path, monkeypatch):
+        """When Iceberg write fails, the error propagates as an error string."""
+        import tools._forecast_shared as _fsh
+        from tools import forecasting_tool
+
+        repo = _mock_repo()
+        repo.get_ohlcv.return_value = _make_iceberg_ohlcv(600, "AAPL")
+        repo.insert_forecast_run.side_effect = RuntimeError("Iceberg write failed")
+
+        monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
+        monkeypatch.setattr(_fsh, "_DATA_FORECASTS", tmp_path / "forecasts")
+        monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
+        monkeypatch.setattr(_fsh, "_CHARTS_FORECASTS", tmp_path / "charts")
+
+        result = forecasting_tool.forecast_stock.invoke({"ticker": "AAPL", "months": 3})
+        assert isinstance(result, str)
+        assert "Error" in result

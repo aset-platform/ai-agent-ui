@@ -105,14 +105,13 @@ This is safe because `setup_logging()` always re-adds the correct handlers immed
 
 ---
 
-## Python 3.9 Compatibility
+## Python 3.12
 
-The `demoenv` virtualenv runs Python 3.9.13. Two 3.10+ features are avoided:
+The `demoenv` virtualenv runs Python 3.12.9. All modern Python features are available:
 
-- **Union type syntax** (`X | Y`, PEP 604) — replaced with `Optional[X]` from `typing`.
-- No use of `match` statements (PEP 634).
-
-The codebase does use `list[dict]` and `dict[str, T]` as type hints directly on class attributes. These are valid in Python 3.9 for annotations used at runtime in some contexts, but can cause `TypeError` at runtime if evaluated eagerly. Adding `from __future__ import annotations` to files that use these annotations would make them string-based (deferred evaluation) and fully compatible with 3.9.
+- **Union type syntax** (`X | None`) via PEP 604 is preferred over `Optional[X]`.
+- `match` statements (PEP 634) may be used where appropriate.
+- Built-in generics (`list[dict]`, `dict[str, T]`) work natively without `from __future__ import annotations`.
 
 ---
 
@@ -121,6 +120,16 @@ The codebase does use `list[dict]` and `dict[str, T]` as type hints directly on 
 The stock agent needs access to live web search, but `search_web` requires SerpAPI and is already owned by the general agent. Rather than registering `search_web` directly on the stock agent (which would duplicate the tool coupling), a factory function `create_search_market_news_tool(general_agent)` in `tools/agent_tool.py` wraps the general agent's `run()` method as a `@tool`. The stock agent calls this tool, which in turn triggers the general agent's full agentic loop (including `search_web`) and returns the result as a string.
 
 The key constraint this solves: the factory must run **after** the general agent is created but **before** the stock agent is instantiated (so the tool is in the registry when `BaseAgent._setup()` fetches tool names). This ordering is enforced in `ChatServer._register_agents()`.
+
+### Adj Close fallback to Close
+
+yfinance >= 1.2 dropped the `Adj Close` column from `yf.download()`. The Iceberg `stocks.ohlcv` table schema retains the `adj_close` field, but all values are `None` for data written with yfinance 1.2+. Three consumers check `notna().any()` before using `Adj Close` and fall back to `Close`:
+
+- `backend/tools/_forecast_model.py` — `_prepare_data_for_prophet()`
+- `dashboard/callbacks/forecast_cbs.py` — `update_forecast_chart()`
+- `dashboard/callbacks/iceberg.py` — `_get_ohlcv_cached()`
+
+For stocks without corporate actions (splits, dividends), `Close` and `Adj Close` are identical, so the fallback has no impact on analysis quality. For stocks with historical splits, the difference matters only for pre-split dates (which are already stored correctly in the flat parquet files from earlier yfinance versions).
 
 ### Same-day text cache for analyse_stock_price and forecast_stock
 
@@ -289,11 +298,11 @@ HS256 (HMAC-SHA256 with a shared secret) was chosen over RS256 (RSA with a publi
 
 The minimum key length is enforced at 32 characters (256 bits) by `AuthService.__init__`.
 
-### bcrypt via passlib, pinned to bcrypt==4.0.1
+### bcrypt 5.x (direct, no passlib)
 
-`passlib[bcrypt]` was chosen for password hashing because it is the standard Python bcrypt wrapper with a well-understood API. The passlib 1.7.4 + bcrypt 5.x combination is incompatible (bcrypt 5.0 changed its internal API in a way that breaks passlib's version-detection routine for passwords > 72 bytes). `bcrypt==4.0.1` is pinned in `requirements.txt`.
+Password hashing uses `bcrypt` directly (`bcrypt.hashpw()` / `bcrypt.checkpw()`) in `auth/password.py`. The previous `passlib` wrapper was removed because passlib 1.7.4 is incompatible with bcrypt 5.x and is no longer maintained. Direct bcrypt produces the same `$2b$` hash format — existing database hashes work without migration.
 
-Cost factor is the default (12), which gives ~250 ms per hash on a modern CPU — long enough to make brute force impractical, short enough not to noticeably affect login latency.
+Cost factor is 12, which gives ~250 ms per hash on a modern CPU — long enough to make brute force impractical, short enough not to noticeably affect login latency.
 
 ### In-memory refresh-token deny-list
 

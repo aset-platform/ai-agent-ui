@@ -9,9 +9,9 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends
 
+import auth.endpoints.helpers as _helpers
 from auth.dependencies import superuser_only
 from auth.models import UserContext
-import auth.endpoints.helpers as _helpers
 
 
 def register(router: APIRouter) -> None:
@@ -22,7 +22,9 @@ def register(router: APIRouter) -> None:
     """
 
     @router.get("/admin/audit-log", tags=["admin"])
-    def get_audit_log(_: UserContext = Depends(superuser_only)) -> Dict[str, List[Dict[str, Any]]]:
+    def get_audit_log(
+        _: UserContext = Depends(superuser_only),
+    ) -> Dict[str, List[Dict[str, Any]]]:
         """Return all audit log events, sorted newest-first.
 
         Args:

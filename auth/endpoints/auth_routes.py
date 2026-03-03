@@ -13,6 +13,7 @@ from typing import Dict
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
 
+import auth.endpoints.helpers as _helpers
 from auth.dependencies import get_auth_service, get_current_user
 from auth.models import (
     LoginRequest,
@@ -24,7 +25,6 @@ from auth.models import (
     UserContext,
 )
 from auth.service import AuthService
-import auth.endpoints.helpers as _helpers
 
 # Module-level logger; mutable but intentionally module-scoped for consistent log attribution.
 _logger = logging.getLogger(__name__)
@@ -61,8 +61,12 @@ def register(router: APIRouter) -> None:
             _logger.warning("Login failed for email=%s (wrong password).", body.email)
             raise HTTPException(status_code=401, detail="Invalid credentials")
         repo.update(user["user_id"], {"last_login_at": datetime.utcnow()})
-        repo.append_audit_event("LOGIN", actor_user_id=user["user_id"], target_user_id=user["user_id"])
-        access = service.create_access_token(user_id=user["user_id"], email=user["email"], role=user["role"])
+        repo.append_audit_event(
+            "LOGIN", actor_user_id=user["user_id"], target_user_id=user["user_id"]
+        )
+        access = service.create_access_token(
+            user_id=user["user_id"], email=user["email"], role=user["role"]
+        )
         refresh = service.create_refresh_token(user_id=user["user_id"])
         _logger.info("User logged in: user_id=%s", user["user_id"])
         return TokenResponse(access_token=access, refresh_token=refresh)
@@ -91,7 +95,9 @@ def register(router: APIRouter) -> None:
             raise HTTPException(status_code=401, detail="Invalid credentials")
         repo.update(user["user_id"], {"last_login_at": datetime.utcnow()})
         repo.append_audit_event("LOGIN", user["user_id"], user["user_id"])
-        access = service.create_access_token(user_id=user["user_id"], email=user["email"], role=user["role"])
+        access = service.create_access_token(
+            user_id=user["user_id"], email=user["email"], role=user["role"]
+        )
         refresh = service.create_refresh_token(user_id=user["user_id"])
         return TokenResponse(access_token=access, refresh_token=refresh)
 
@@ -119,7 +125,9 @@ def register(router: APIRouter) -> None:
         if user is None or not user.get("is_active", False):
             raise HTTPException(status_code=401, detail="User not found or deactivated")
         service.revoke_refresh_token(body.refresh_token)
-        access = service.create_access_token(user_id=user["user_id"], email=user["email"], role=user["role"])
+        access = service.create_access_token(
+            user_id=user["user_id"], email=user["email"], role=user["role"]
+        )
         new_refresh = service.create_refresh_token(user_id=user["user_id"])
         _logger.info("Token refreshed for user_id=%s", user_id)
         return TokenResponse(access_token=access, refresh_token=new_refresh)
@@ -163,17 +171,30 @@ def register(router: APIRouter) -> None:
             HTTPException: 404 if the user record is not found.
         """
         if str(body.email).lower() != current_user.email.lower():
-            raise HTTPException(status_code=403, detail="You may only reset your own password.")
+            raise HTTPException(
+                status_code=403, detail="You may only reset your own password."
+            )
         repo = _helpers._get_repo()
         user = repo.get_by_id(current_user.user_id)
         if user is None:
             raise HTTPException(status_code=404, detail="User not found")
         reset_token = str(uuid.uuid4())
         expiry = datetime.utcnow() + timedelta(minutes=30)
-        repo.update(current_user.user_id, {"password_reset_token": reset_token, "password_reset_expiry": expiry})
-        repo.append_audit_event("PASSWORD_RESET", actor_user_id=current_user.user_id, target_user_id=current_user.user_id, metadata={"stage": "request"})
+        repo.update(
+            current_user.user_id,
+            {"password_reset_token": reset_token, "password_reset_expiry": expiry},
+        )
+        repo.append_audit_event(
+            "PASSWORD_RESET",
+            actor_user_id=current_user.user_id,
+            target_user_id=current_user.user_id,
+            metadata={"stage": "request"},
+        )
         _logger.info("Password reset requested by user_id=%s", current_user.user_id)
-        return {"detail": "Password reset token generated (development: token included in response).", "reset_token": reset_token}
+        return {
+            "detail": "Password reset token generated (development: token included in response).",
+            "reset_token": reset_token,
+        }
 
     @router.post("/auth/password-reset/confirm", tags=["auth"])
     def password_reset_confirm(
@@ -208,7 +229,19 @@ def register(router: APIRouter) -> None:
             if datetime.utcnow() > expiry_naive:
                 raise HTTPException(status_code=400, detail="Reset token has expired")
         new_hash = service.hash_password(body.new_password)
-        repo.update(current_user.user_id, {"hashed_password": new_hash, "password_reset_token": None, "password_reset_expiry": None})
-        repo.append_audit_event("PASSWORD_RESET", actor_user_id=current_user.user_id, target_user_id=current_user.user_id, metadata={"stage": "confirm"})
+        repo.update(
+            current_user.user_id,
+            {
+                "hashed_password": new_hash,
+                "password_reset_token": None,
+                "password_reset_expiry": None,
+            },
+        )
+        repo.append_audit_event(
+            "PASSWORD_RESET",
+            actor_user_id=current_user.user_id,
+            target_user_id=current_user.user_id,
+            metadata={"stage": "confirm"},
+        )
         _logger.info("Password reset completed for user_id=%s", current_user.user_id)
         return {"detail": "Password updated successfully"}

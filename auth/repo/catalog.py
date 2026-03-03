@@ -12,7 +12,7 @@ import logging
 import os
 from typing import Any, Dict, Generator, List
 
-from auth.repo.schemas import _USERS_TABLE, _AUDIT_LOG_TABLE, _row_to_dict
+from auth.repo.schemas import _AUDIT_LOG_TABLE, _USERS_TABLE, _row_to_dict
 
 # Module-level logger; not mutable state — safe to keep at module level.
 _logger = logging.getLogger(__name__)
@@ -62,7 +62,8 @@ def get_catalog(root: str):
         return cat
     except Exception as exc:
         _logger.warning(
-            "Absolute-URI catalog load failed (%s); falling back to load_catalog('local').", exc
+            "Absolute-URI catalog load failed (%s); falling back to load_catalog('local').",
+            exc,
         )
 
     # Fallback: temporarily set cwd so the relative URI in .pyiceberg.yaml resolves.

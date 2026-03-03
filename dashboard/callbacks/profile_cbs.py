@@ -53,7 +53,9 @@ def register(app: dash.Dash) -> None:
             User profile dict from ``GET /auth/me``, or ``None`` on failure.
         """
         if not token or _validate_token(token) is None:
-            _logger.debug("load_user_profile: missing or invalid token; returning None.")
+            _logger.debug(
+                "load_user_profile: missing or invalid token; returning None."
+            )
             return None
         resp = _api_call("get", "/auth/me", token)
         if resp and resp.status_code == 200:
