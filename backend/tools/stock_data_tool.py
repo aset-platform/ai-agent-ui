@@ -16,7 +16,7 @@ Typical usage::
 
 import json
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -51,8 +51,9 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
     """Fetch OHLCV stock data from Yahoo Finance with smart delta fetching.
 
     On first call: fetches full history and saves as parquet.  On subsequent
-    calls: only fetches missing date range (delta) and appends to existing file.
-    If data is already up to date, the fetch is skipped.
+    calls: checks the actual last date of data in Iceberg (``date_range_end``)
+    and fetches from the day after that through today.  Already up-to-date
+    tickers are skipped.
 
     Args:
         ticker: Stock ticker symbol, e.g. ``"AAPL"``, ``"RELIANCE.NS"``.
@@ -94,22 +95,35 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
             _logger.info(msg)
             return msg
 
-        last_fetch = datetime.strptime(existing["last_fetch_date"], "%Y-%m-%d").date()
-        today = date.today()
-        delta_days = (today - last_fetch).days
+        # Use the actual last date of data (not the last *run* date)
+        # so that gaps caused by weekends / holidays are filled correctly.
+        dr_end_str = existing.get("date_range", {}).get("end", "")
+        if dr_end_str:
+            data_end = datetime.strptime(dr_end_str, "%Y-%m-%d").date()
+        else:
+            # Fallback: parse last_fetch_date if date_range is absent
+            data_end = datetime.strptime(existing["last_fetch_date"], "%Y-%m-%d").date()
 
-        if delta_days == 0:
-            msg = f"Data is already up to date for {ticker} (last fetch: {last_fetch})."
+        today = date.today()
+        # Start one day after the last data point to avoid
+        # re-fetching data that already exists in Iceberg.
+        fetch_start = data_end + timedelta(days=1)
+
+        if fetch_start > today:
+            msg = (
+                f"Data is already up to date for {ticker} " f"(last data: {data_end})."
+            )
             _logger.info(msg)
             return msg
 
-        new_df = yf.Ticker(ticker).history(
-            start=str(last_fetch), end=str(today), auto_adjust=False
-        )
+        # Omit `end` so yfinance fetches up to the current moment
+        # (including today's intraday data when the market is open).
+        new_df = yf.Ticker(ticker).history(start=str(fetch_start), auto_adjust=False)
 
         if new_df.empty:
             msg = (
-                f"No new trading data found for {ticker} since {last_fetch}. "
+                f"No new trading data found for {ticker} "
+                f"since {data_end}. "
                 "This may be a weekend or holiday period."
             )
             _logger.info(msg)
@@ -142,9 +156,11 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
             total_rows = int(existing.get("total_rows", 0)) + len(new_df)
             _update_registry(ticker, new_df, file_path)
 
+        new_end = new_df.index.max().date() if not new_df.empty else today
         msg = (
-            f"Delta fetch for {ticker}: {len(new_df)} new rows added "
-            f"({last_fetch} to {today}). Total: {total_rows} rows."
+            f"Delta fetch for {ticker}: {len(new_df)} new rows "
+            f"({fetch_start} to {new_end}). "
+            f"Total: {total_rows} rows."
         )
         _logger.info(msg)
         return msg

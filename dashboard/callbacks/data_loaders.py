@@ -55,7 +55,9 @@ def _load_reg_cb() -> dict:
         repo = _get_iceberg_repo()
         if repo is not None:
             registry = repo.get_all_registry()
-            _logger.debug("Registry loaded from Iceberg: %d tickers.", len(registry))
+            _logger.debug(
+                "Registry loaded from Iceberg: %d tickers.", len(registry)
+            )
             return registry
     except Exception as exc:
         _logger.warning("Iceberg registry load failed: %s", exc)
@@ -74,13 +76,18 @@ def _load_raw(ticker: str) -> Optional[pd.DataFrame]:
         ``Close``, ``Adj Close``, ``Volume``, or ``None`` if no data exists.
     """
     try:
-        from dashboard.callbacks.iceberg import _get_iceberg_repo, _get_ohlcv_cached
+        from dashboard.callbacks.iceberg import (
+            _get_iceberg_repo,
+            _get_ohlcv_cached,
+        )
 
         repo = _get_iceberg_repo()
         if repo is not None:
             return _get_ohlcv_cached(repo, ticker)
     except Exception as exc:
-        _logger.error("Error loading OHLCV from Iceberg for %s: %s", ticker, exc)
+        _logger.error(
+            "Error loading OHLCV from Iceberg for %s: %s", ticker, exc
+        )
     return None
 
 
@@ -100,7 +107,10 @@ def _load_forecast(ticker: str, horizon_months: int) -> Optional[pd.DataFrame]:
         columns, or ``None`` if no forecast exists.
     """
     try:
-        from dashboard.callbacks.iceberg import _get_forecast_cached, _get_iceberg_repo
+        from dashboard.callbacks.iceberg import (
+            _get_forecast_cached,
+            _get_iceberg_repo,
+        )
 
         repo = _get_iceberg_repo()
         if repo is None:
@@ -112,7 +122,39 @@ def _load_forecast(ticker: str, horizon_months: int) -> Optional[pd.DataFrame]:
             if result is not None:
                 return result
     except Exception as exc:
-        _logger.error("Error loading forecast from Iceberg for %s: %s", ticker, exc)
+        _logger.error(
+            "Error loading forecast from Iceberg for %s: %s", ticker, exc
+        )
+    return None
+
+
+def _load_dividends(
+    ticker: str,
+) -> Optional[pd.DataFrame]:
+    """Load dividend history for a ticker from Iceberg.
+
+    Args:
+        ticker: Uppercase ticker symbol.
+
+    Returns:
+        DataFrame with ``ex_date``, ``dividend_amount``,
+        ``currency`` columns, or ``None`` if unavailable.
+    """
+    try:
+        from dashboard.callbacks.iceberg import (  # noqa: PLC0415
+            _get_dividends_cached,
+            _get_iceberg_repo,
+        )
+
+        repo = _get_iceberg_repo()
+        if repo is not None:
+            return _get_dividends_cached(repo, ticker)
+    except Exception as exc:
+        _logger.error(
+            "Error loading dividends for %s: %s",
+            ticker,
+            exc,
+        )
     return None
 
 
@@ -131,9 +173,15 @@ def _add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     close = df["Close"]
-    df["SMA_50"] = ta.trend.SMAIndicator(close=close, window=50).sma_indicator()
-    df["SMA_200"] = ta.trend.SMAIndicator(close=close, window=200).sma_indicator()
-    df["EMA_20"] = ta.trend.EMAIndicator(close=close, window=20).ema_indicator()
+    df["SMA_50"] = ta.trend.SMAIndicator(
+        close=close, window=50
+    ).sma_indicator()
+    df["SMA_200"] = ta.trend.SMAIndicator(
+        close=close, window=200
+    ).sma_indicator()
+    df["EMA_20"] = ta.trend.EMAIndicator(
+        close=close, window=20
+    ).ema_indicator()
     df["RSI_14"] = ta.momentum.RSIIndicator(close=close, window=14).rsi()
     macd = ta.trend.MACD(close=close)
     df["MACD"] = macd.macd()
@@ -170,3 +218,16 @@ def _add_indicators_cached(ticker: str, df: pd.DataFrame) -> pd.DataFrame:
     result = _add_indicators(df)
     _INDICATOR_CACHE[ticker] = (result, now + _INDICATOR_TTL)
     return result
+
+
+def _clear_indicator_cache(ticker: str | None = None) -> None:
+    """Evict cached indicator data so the next read recomputes from Iceberg.
+
+    Args:
+        ticker: Uppercase ticker symbol.  If ``None``, the entire indicator
+            cache is cleared.
+    """
+    if ticker:
+        _INDICATOR_CACHE.pop(ticker, None)
+    else:
+        _INDICATOR_CACHE.clear()

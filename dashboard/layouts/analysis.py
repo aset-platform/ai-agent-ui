@@ -10,6 +10,9 @@ import time as _time
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
+from dashboard.components.refresh_button import (
+    refresh_button_group,
+)
 from dashboard.layouts.helpers import _get_available_tickers
 
 # Fix #17: module-level cache for ticker list (5-min TTL)
@@ -18,9 +21,9 @@ _TICKER_OPTIONS_TTL = 300  # seconds
 
 
 def _get_available_tickers_cached() -> list:
-    """Return sorted ticker list from registry, cached for ``_TICKER_OPTIONS_TTL`` seconds.
+    """Return sorted ticker list, cached for TTL seconds.
 
-    Avoids re-reading the registry JSON on every analysis page render.
+    Avoids re-reading the Iceberg registry on every render.
 
     Returns:
         Sorted list of ticker symbol strings.
@@ -54,13 +57,14 @@ def analysis_layout() -> html.Div:
 
     return html.Div(
         [
-            # ── Controls ──────────────────────────────────────────────────────
+            # ── Controls ─────────────────────────────────────────────
             dbc.Row(
                 [
                     dbc.Col(
                         [
                             html.Label(
-                                "Ticker", className="text-muted small fw-semibold"
+                                "Ticker",
+                                className="text-muted small fw-semibold",
                             ),
                             dcc.Dropdown(
                                 id="analysis-ticker-dropdown",
@@ -71,13 +75,14 @@ def analysis_layout() -> html.Div:
                             ),
                         ],
                         xs=12,
-                        md=3,
+                        md=2,
                         className="mb-3",
                     ),
                     dbc.Col(
                         [
                             html.Label(
-                                "Date Range", className="text-muted small fw-semibold"
+                                "Date Range",
+                                className=("text-muted small" " fw-semibold"),
                             ),
                             dcc.Slider(
                                 id="date-range-slider",
@@ -94,7 +99,9 @@ def analysis_layout() -> html.Div:
                                 },
                                 value=5,
                                 className="mt-1",
-                                tooltip={"always_visible": False},
+                                tooltip={
+                                    "always_visible": False,
+                                },
                             ),
                         ],
                         xs=12,
@@ -104,30 +111,68 @@ def analysis_layout() -> html.Div:
                     dbc.Col(
                         [
                             html.Label(
-                                "Overlays", className="text-muted small fw-semibold"
+                                "Overlays",
+                                className=("text-muted small" " fw-semibold"),
                             ),
-                            dbc.Checklist(
-                                id="overlay-toggles",
-                                options=[
-                                    {"label": "SMA 50", "value": "sma50"},
-                                    {"label": "SMA 200", "value": "sma200"},
-                                    {"label": "Bollinger Bands", "value": "bb"},
-                                    {"label": "Volume", "value": "volume"},
+                            html.Div(
+                                [
+                                    dbc.Checklist(
+                                        id="overlay-toggles",
+                                        options=[
+                                            {
+                                                "label": "SMA 50",
+                                                "value": "sma50",
+                                            },
+                                            {
+                                                "label": "SMA 200",
+                                                "value": "sma200",
+                                            },
+                                            {
+                                                "label": "Bollinger",
+                                                "value": "bb",
+                                            },
+                                            {
+                                                "label": "Volume",
+                                                "value": "volume",
+                                            },
+                                            {
+                                                "label": "Holidays",
+                                                "value": "holidays",
+                                            },
+                                            {
+                                                "label": "Dividends",
+                                                "value": "dividends",
+                                            },
+                                        ],
+                                        value=[
+                                            "sma50",
+                                            "sma200",
+                                        ],
+                                        inline=True,
+                                        switch=True,
+                                        className="mt-1",
+                                    ),
+                                    html.Div(
+                                        refresh_button_group(
+                                            "analysis-refresh",
+                                            icon_only=True,
+                                        ),
+                                        className="ms-auto",
+                                    ),
                                 ],
-                                value=["sma50", "sma200"],
-                                inline=True,
-                                switch=True,
-                                className="mt-1",
+                                className=("d-flex align-items-center"),
                             ),
                         ],
                         xs=12,
-                        md=5,
+                        md=6,
                         className="mb-3",
                     ),
                 ],
-                className="bg-light rounded p-3 mb-4 align-items-center border",
+                className=(
+                    "bg-light rounded p-3 mb-4" " align-items-center border"
+                ),
             ),
-            # ── Chart ─────────────────────────────────────────────────────────
+            # ── Chart ─────────────────────────────────────────────
             dcc.Loading(
                 id="loading-analysis",
                 type="circle",
@@ -138,8 +183,10 @@ def analysis_layout() -> html.Div:
                     style={"height": "800px"},
                 ),
             ),
-            # ── Summary stats ─────────────────────────────────────────────────
+            # ── Summary stats ─────────────────────────────────────
             html.Div(id="analysis-stats-row", className="mt-4"),
+            # ── Hidden stores ─────────────────────────────────────
+            dcc.Store(id="analysis-refresh-store", data=0),
         ]
     )
 

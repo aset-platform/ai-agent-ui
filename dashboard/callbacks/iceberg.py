@@ -54,6 +54,7 @@ _COMPANY_CACHE: dict = {"data": None, "expiry": 0.0}
 _FILLED_SUMMARY_CACHE: dict = {"data": None, "expiry": 0.0}
 _OHLCV_CACHE: dict = {}  # {ticker: (df, expiry_monotonic)}
 _FORECAST_CACHE: dict = {}  # {(ticker, horizon): (df, expiry_monotonic)}
+_DIVIDENDS_CACHE: dict = {}  # {ticker: (df, expiry_monotonic)}
 
 
 def _get_iceberg_repo() -> Optional[object]:
@@ -123,7 +124,10 @@ def _get_ohlcv_cached(repo: object, ticker: str) -> Optional[pd.DataFrame]:
             "Close": df["close"],
             "Adj Close": (
                 df["adj_close"]
-                if ("adj_close" in df.columns and df["adj_close"].notna().any())
+                if (
+                    "adj_close" in df.columns
+                    and df["adj_close"].notna().mean() > 0.5
+                )
                 else df["close"]
             ),
             "Volume": df["volume"],
@@ -182,6 +186,39 @@ def _get_forecast_cached(
 
     _FORECAST_CACHE[cache_key] = (result, now + _SHARED_TTL)
     return result
+
+
+# ------------------------------------------------------------------
+# Dividends cached helper
+# ------------------------------------------------------------------
+
+
+def _get_dividends_cached(
+    repo: object,
+    ticker: str,
+) -> Optional[pd.DataFrame]:
+    """Return dividend history for *ticker*, cached for ``_SHARED_TTL`` s.
+
+    Args:
+        repo: Active :class:`~stocks.repository.StockRepository`.
+        ticker: Uppercase ticker symbol.
+
+    Returns:
+        DataFrame with ``ex_date``, ``dividend_amount``,
+        ``currency`` columns, or ``None`` if no dividends.
+    """
+    now = _time.monotonic()
+    entry = _DIVIDENDS_CACHE.get(ticker)
+    if entry and entry[1] > now:
+        return entry[0]
+
+    df = repo.get_dividends(ticker)
+    if df.empty:
+        _DIVIDENDS_CACHE[ticker] = (None, now + _SHARED_TTL)
+        return None
+
+    _DIVIDENDS_CACHE[ticker] = (df, now + _SHARED_TTL)
+    return df
 
 
 # ------------------------------------------------------------------
@@ -294,7 +331,9 @@ def _get_analysis_with_gaps_filled(repo: object) -> pd.DataFrame:
                             "annualized_volatility_pct": movement.get(
                                 "annualized_volatility_pct"
                             ),
-                            "max_drawdown_pct": movement.get("max_drawdown_pct"),
+                            "max_drawdown_pct": movement.get(
+                                "max_drawdown_pct"
+                            ),
                             "max_drawdown_duration_days": movement.get(
                                 "max_drawdown_duration_days"
                             ),
@@ -303,7 +342,9 @@ def _get_analysis_with_gaps_filled(repo: object) -> pd.DataFrame:
                         }
                     )
                 except Exception as _e:
-                    _logger.debug("On-the-fly analysis failed for %s: %s", ticker, _e)
+                    _logger.debug(
+                        "On-the-fly analysis failed for %s: %s", ticker, _e
+                    )
         except Exception as _e:
             _logger.warning("On-the-fly analysis import failed: %s", _e)
         if extra_rows:
@@ -316,3 +357,33 @@ def _get_analysis_with_gaps_filled(repo: object) -> pd.DataFrame:
 
     _FILLED_SUMMARY_CACHE.update({"data": df, "expiry": now + _SHARED_TTL})
     return df
+
+
+def clear_caches(ticker: str | None = None) -> None:
+    """Invalidate TTL caches so subsequent reads fetch fresh Iceberg data.
+
+    When *ticker* is provided, only entries for that ticker are evicted from
+    the per-ticker caches (``_OHLCV_CACHE``, ``_FORECAST_CACHE``,
+    ``_DIVIDENDS_CACHE``).  The
+    global caches (``_SUMMARY_CACHE``, ``_COMPANY_CACHE``,
+    ``_FILLED_SUMMARY_CACHE``) are always fully cleared because they
+    aggregate data across all tickers.
+
+    Args:
+        ticker: Uppercase ticker symbol.  If ``None``, all per-ticker
+            entries are cleared as well.
+    """
+    if ticker:
+        _OHLCV_CACHE.pop(ticker, None)
+        _DIVIDENDS_CACHE.pop(ticker, None)
+        keys_to_drop = [k for k in _FORECAST_CACHE if k[0] == ticker]
+        for k in keys_to_drop:
+            _FORECAST_CACHE.pop(k, None)
+    else:
+        _OHLCV_CACHE.clear()
+        _FORECAST_CACHE.clear()
+        _DIVIDENDS_CACHE.clear()
+
+    _SUMMARY_CACHE.update({"data": None, "expiry": 0.0})
+    _COMPANY_CACHE.update({"data": None, "expiry": 0.0})
+    _FILLED_SUMMARY_CACHE.update({"data": None, "expiry": 0.0})

@@ -250,6 +250,60 @@ body {
   }
 }
 
+/* ── Refresh button group ────────────────────────────────── */
+
+.refresh-btn-group {
+  min-height: 31px;            /* match btn-sm height */
+  gap: 0.5rem;                 /* space between button and status box */
+}
+
+/* Icon-only circular refresh button */
+.refresh-icon-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  line-height: 1;
+  transition: transform 0.3s ease, box-shadow 0.2s ease;
+}
+
+.refresh-icon-btn:hover {
+  transform: rotate(90deg);
+  box-shadow: 0 2px 8px rgba(25, 135, 84, 0.3);
+}
+
+/* Fixed-width box that holds the spinner / status icon.
+   position:relative so the absolutely-positioned dcc.Loading
+   dots stay inside this box instead of overlapping the button. */
+.refresh-status-box {
+  position: relative;
+  min-width: 40px;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Shrink the dcc.Loading wrapper so it doesn't reserve 60px */
+.refresh-status-box ._dash-loading {
+  min-height: 0 !important;
+}
+
+.refresh-status-icon {
+  font-size: 1.25rem;
+  font-weight: 700;
+  animation: refreshFadeOut 1s ease-out 7s forwards;
+}
+
+@keyframes refreshFadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
 /* ── Page heading ────────────────────────────────────────── */
 
 h2.fw-bold {
