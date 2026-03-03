@@ -66,9 +66,9 @@ def _build_users_table(users: List[Dict[str, Any]]) -> Any:
                 html.Td(
                     dbc.Badge(
                         user.get("role", "—"),
-                        color="danger"
-                        if user.get("role") == "superuser"
-                        else "primary",
+                        color=(
+                            "danger" if user.get("role") == "superuser" else "primary"
+                        ),
                         className="fw-normal",
                     )
                 ),

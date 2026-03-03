@@ -64,9 +64,9 @@ def _backfill_registry() -> int:
                     entry.get("last_fetch_date", str(date.today()))
                 ),
                 total_rows=int(entry.get("total_rows", 0)),
-                date_range_start=date.fromisoformat(start_str)
-                if start_str
-                else date.today(),
+                date_range_start=(
+                    date.fromisoformat(start_str) if start_str else date.today()
+                ),
                 date_range_end=date.fromisoformat(end_str) if end_str else date.today(),
                 market="india" if ticker.upper().endswith((".NS", ".BO")) else "us",
             )

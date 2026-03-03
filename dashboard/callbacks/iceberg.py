@@ -121,9 +121,11 @@ def _get_ohlcv_cached(repo: object, ticker: str) -> Optional[pd.DataFrame]:
             "High": df["high"],
             "Low": df["low"],
             "Close": df["close"],
-            "Adj Close": df["adj_close"]
-            if ("adj_close" in df.columns and df["adj_close"].notna().any())
-            else df["close"],
+            "Adj Close": (
+                df["adj_close"]
+                if ("adj_close" in df.columns and df["adj_close"].notna().any())
+                else df["close"]
+            ),
             "Volume": df["volume"],
         }
     )

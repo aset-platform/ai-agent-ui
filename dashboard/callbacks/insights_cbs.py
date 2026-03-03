@@ -166,25 +166,31 @@ def register(app) -> None:
                     badge_class = (
                         "badge bg-danger"
                         if val == "Overbought"
-                        else "badge bg-success"
-                        if val == "Oversold"
-                        else "badge bg-secondary"
+                        else (
+                            "badge bg-success"
+                            if val == "Oversold"
+                            else "badge bg-secondary"
+                        )
                     )
                 if col == "MACD":
                     badge_class = (
                         "badge bg-success"
                         if val == "Bullish"
-                        else "badge bg-danger"
-                        if val == "Bearish"
-                        else "badge bg-secondary"
+                        else (
+                            "badge bg-danger"
+                            if val == "Bearish"
+                            else "badge bg-secondary"
+                        )
                     )
                 if col == "vs SMA 200":
                     badge_class = (
                         "badge bg-success"
                         if val == "Above"
-                        else "badge bg-danger"
-                        if val == "Below"
-                        else "badge bg-secondary"
+                        else (
+                            "badge bg-danger"
+                            if val == "Below"
+                            else "badge bg-secondary"
+                        )
                     )
                 if badge_class:
                     cells.append(html.Td(html.Span(val, className=badge_class)))
@@ -330,9 +336,11 @@ def register(app) -> None:
             sentiment_badge = (
                 "badge bg-success"
                 if sentiment == "Bullish"
-                else "badge bg-danger"
-                if sentiment == "Bearish"
-                else "badge bg-secondary"
+                else (
+                    "badge bg-danger"
+                    if sentiment == "Bearish"
+                    else "badge bg-secondary"
+                )
             )
             rows_html.append(
                 html.Tr(

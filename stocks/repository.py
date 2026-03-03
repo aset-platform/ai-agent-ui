@@ -388,9 +388,9 @@ class StockRepository:
             result[ticker] = {
                 "ticker": ticker,
                 "last_fetch_date": str(lfd)[:10] if lfd else "",
-                "total_rows": int(row["total_rows"])
-                if row.get("total_rows") is not None
-                else 0,
+                "total_rows": (
+                    int(row["total_rows"]) if row.get("total_rows") is not None else 0
+                ),
                 "date_range": {
                     "start": str(start)[:10] if start else "",
                     "end": str(end)[:10] if end else "",
@@ -427,9 +427,9 @@ class StockRepository:
         return {
             "ticker": ticker,
             "last_fetch_date": str(lfd)[:10] if lfd else "",
-            "total_rows": int(row["total_rows"])
-            if row.get("total_rows") is not None
-            else 0,
+            "total_rows": (
+                int(row["total_rows"]) if row.get("total_rows") is not None else 0
+            ),
             "date_range": {
                 "start": str(start)[:10] if start else "",
                 "end": str(end)[:10] if end else "",
@@ -915,9 +915,11 @@ class StockRepository:
                 "bb_lower": pa.array(_get("BB_Lower", "bb_lower"), pa.float64()),
                 "atr_14": pa.array(_get("ATR_14", "atr_14"), pa.float64()),
                 "daily_return": pa.array(
-                    [_safe_float(v) for v in df["daily_return"]]
-                    if "daily_return" in col_set
-                    else [None] * len(df),
+                    (
+                        [_safe_float(v) for v in df["daily_return"]]
+                        if "daily_return" in col_set
+                        else [None] * len(df)
+                    ),
                     pa.float64(),
                 ),
                 "computed_at": pa.array([now] * len(dates), pa.timestamp("us")),
