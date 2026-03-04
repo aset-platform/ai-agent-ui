@@ -147,9 +147,7 @@ class ChatServer:
         self.tool_registry.register(forecast_stock)
         # === END STOCK AGENT ROUTING ===
 
-        self.logger.info(
-            "Tools registered: %s", self.tool_registry.list_names()
-        )
+        self.logger.info("Tools registered: %s", self.tool_registry.list_names())
 
     def _register_agents(self) -> None:
         """Instantiate and register all agents with the agent registry.
@@ -239,9 +237,7 @@ class ChatServer:
             )
         try:
             loop = asyncio.get_event_loop()
-            future = loop.run_in_executor(
-                None, agent.run, req.message, req.history
-            )
+            future = loop.run_in_executor(None, agent.run, req.message, req.history)
             result = await asyncio.wait_for(
                 future, timeout=self.settings.agent_timeout_seconds
             )
@@ -254,14 +250,10 @@ class ChatServer:
             raise HTTPException(status_code=504, detail="Agent timed out")
         except Exception as e:
             self.logger.error("Chat handler error: %s", e, exc_info=True)
-            raise HTTPException(
-                status_code=500, detail="Agent execution failed"
-            )
+            raise HTTPException(status_code=500, detail="Agent execution failed")
         return ChatResponse(response=result, agent_id=req.agent_id)
 
-    async def _chat_stream_handler(
-        self, req: ChatRequest
-    ) -> StreamingResponse:
+    async def _chat_stream_handler(self, req: ChatRequest) -> StreamingResponse:
         """Handle ``POST /chat/stream`` requests via NDJSON streaming.
 
         Streams one JSON event per line as the agentic loop progresses.

@@ -40,9 +40,7 @@ class BaseAgent(ABC):
         llm_with_tools: The LLM with tools bound.
     """
 
-    def __init__(
-        self, config: AgentConfig, tool_registry: ToolRegistry
-    ) -> None:
+    def __init__(self, config: AgentConfig, tool_registry: ToolRegistry) -> None:
         """Initialise the agent and bind tools to the LLM.
 
         Args:
