@@ -71,15 +71,17 @@ def _load_parquet(ticker: str) -> Optional[pd.DataFrame]:
             return None
         df["date"] = pd.to_datetime(df["date"])
         df = df.sort_values("date").set_index("date")
+        # Use adj_close only when it has meaningful coverage
+        # (>50 %); otherwise fall back to close.
+        use_adj = "adj_close" in df.columns and df["adj_close"].notna().mean() > 0.5
+        adj_col = df["adj_close"] if use_adj else df["close"]
         result = pd.DataFrame(
             {
                 "Open": df["open"],
                 "High": df["high"],
                 "Low": df["low"],
                 "Close": df["close"],
-                "Adj Close": (
-                    df["adj_close"] if "adj_close" in df.columns else df["close"]
-                ),
+                "Adj Close": adj_col,
                 "Volume": df["volume"],
             }
         )

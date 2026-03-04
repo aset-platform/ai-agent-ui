@@ -2,6 +2,111 @@
 
 ---
 
+# Session: Mar 4, 2026 — Home page load latency optimisation
+
+## Summary
+Reduced home page load time from ~5 s to <500 ms (cold) and
+<100 ms (warm cache) by replacing 3N sequential per-ticker
+Iceberg scans with 2 batch reads + TTL-cached dict lookups.
+
+### Changes
+- **`stocks/repository.py`** — Added
+  `get_all_latest_forecast_runs(horizon_months)` batch method
+  (pattern matches `get_all_latest_company_info()`).
+- **`dashboard/callbacks/iceberg.py`** — Added
+  `_get_registry_cached()` and `_get_forecast_runs_cached()`
+  with 5-min TTL; updated `clear_caches()` to invalidate both.
+- **`dashboard/callbacks/home_cbs.py`** — Rewrote
+  `refresh_stock_cards()`: batch pre-fetch company info +
+  forecast runs before the loop; per-ticker body uses pure dict
+  lookups. Added timing instrumentation via `_logger.info()`.
+- **`dashboard/callbacks/data_loaders.py`** — `_load_reg_cb()`
+  now uses `_get_registry_cached()`.
+- **`dashboard/layouts/helpers.py`** — `_load_registry()` now
+  uses `_get_registry_cached()`.
+- **`tests/dashboard/test_home_perf.py`** — 9 new tests:
+  batch forecast runs (3), registry cache (2), forecast runs
+  cache (2), card batch shape (1), clear_caches coverage (1).
+
+### Performance
+| Scenario | Before | After | Speedup |
+|----------|--------|-------|---------|
+| Cold load (30 tickers) | ~5 s | ~500 ms | 10x |
+| Warm cache (within 5 min) | ~2 s | ~50 ms | 40x |
+
+### Test Suite
+157 tests passing (was 148); 9 new tests added.
+
+### Docs Updated
+- `docs/dashboard/overview.md` — Home section: batch
+  pre-fetch, per-card refresh, performance table, data flow
+  rewritten for Iceberg cached helpers, architecture tree
+  updated
+- `docs/backend/stocks_iceberg.md` — Added
+  `get_all_latest_forecast_runs()` to API reference; added
+  "Dashboard TTL-cached helpers" section with all 7 helpers
+- `docs/dev/changelog.md` — Mar 4 entry with performance
+  table, file changes, test counts
+- `docs/dev/decisions.md` — Added "Batch pre-fetch for Home
+  page cards" decision with reasoning and tradeoffs
+
+---
+
+# Session: Mar 4, 2026 — Per-ticker refresh + bug fixes
+
+## Summary
+Added per-ticker refresh buttons to home page scorecards and
+fixed 5 bugs discovered during the session.
+
+### Features
+- **Per-ticker refresh**: Each stock card now has a small
+  refresh icon (bottom-right) that triggers
+  `run_full_refresh()` in a `ThreadPoolExecutor` background
+  thread. CSS spinner while running, check/cross on
+  completion, 7-second fade-out. Multiple cards can refresh
+  concurrently. Uses Dash MATCH/ALL pattern-matching
+  callbacks with a 2-second polling interval.
+
+### Bug Fixes
+1. **TimedeltaIndex `.abs()` removed in pandas 2** —
+   `chart_builders.py` dividend marker snapping now uses
+   `np.abs()` instead of `.abs()`.
+2. **Negative cache TTL** — Empty OHLCV/forecast/dividend
+   Iceberg reads now expire after 30 s (`_NEGATIVE_TTL`)
+   instead of 5 min (`_SHARED_TTL`), fixing stale compare
+   page failures when shuffling stock pairs.
+3. **Compare error message** — `update_compare` now tracks
+   and reports which specific tickers failed to load.
+4. **Compare chart uses Adj Close** — Switched from base-100
+   normalised performance to actual Adj Close prices;
+   metrics table also uses Adj Close.
+5. **`poll_card_refreshes` empty ALL** — Returns `([], [])`
+   when no pattern-matched elements exist (Dash ALL outputs
+   require lists, not `no_update`).
+
+### Files Modified
+- `dashboard/layouts/home.py` — Interval + Store for
+  card-refresh polling
+- `dashboard/callbacks/home_cbs.py` — ThreadPoolExecutor,
+  MATCH/ALL callbacks, card structure with refresh overlay
+- `dashboard/assets/custom.css` — Card refresh button,
+  spinner, status icon styles
+- `dashboard/callbacks/chart_builders.py` — np.abs fix
+- `dashboard/callbacks/iceberg.py` — _NEGATIVE_TTL (30 s)
+- `dashboard/callbacks/analysis_cbs.py` — Adj Close compare,
+  failed-ticker tracking, refresh-store wiring
+- `dashboard/layouts/compare.py` — Updated heading/docstring
+
+### Tests
+- New: `tests/dashboard/test_session_bugfixes.py` — 15 tests
+  covering all 5 bug fixes
+- Full suite: **148 tests pass** (133 existing + 15 new)
+
+### Branch
+`feature/per-ticker-refresh-buttons` → PR to `dev`
+
+---
+
 # Session: Mar 3, 2026 — LangChain 0.3 → 1.x upgrade
 
 ## Summary

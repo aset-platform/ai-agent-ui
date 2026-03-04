@@ -1,8 +1,9 @@
-"""Compare Stocks page layout for the AI Stock Analysis Dashboard.
+"""Compare Stocks page layout for the Dashboard.
 
-Provides :func:`compare_layout`, which builds the stock comparison page
-containing a multi-select dropdown, a normalised performance chart, a
-metrics comparison table, and a returns correlation heatmap.
+Provides :func:`compare_layout`, which builds the stock
+comparison page containing a multi-select dropdown, an
+Adj Close price chart, a metrics comparison table, and a
+returns correlation heatmap.
 """
 
 import dash_bootstrap_components as dbc
@@ -14,11 +15,12 @@ from dashboard.layouts.helpers import _get_available_tickers
 def compare_layout() -> html.Div:
     """Build the Compare Stocks page layout.
 
-    Provides a multi-select dropdown (2–5 stocks), a normalised performance
-    chart, a metrics comparison table, and a returns correlation heatmap.
+    Provides a multi-select dropdown (2-5 stocks), an Adj
+    Close price chart, a metrics comparison table, and a
+    returns correlation heatmap.
 
     Returns:
-        :class:`~dash.html.Div` representing the full compare page.
+        :class:`~dash.html.Div` for the compare page.
     """
     tickers = _get_available_tickers()
     ticker_options = [{"label": t, "value": t} for t in tickers]
@@ -48,8 +50,11 @@ def compare_layout() -> html.Div:
                 ],
                 className="bg-light rounded p-3 mb-4 border",
             ),
-            # ── Normalised performance chart ───────────────────────────────────
-            html.H6("Normalised Performance (Base = 100)", className="text-muted mb-2"),
+            # ── Adj Close performance chart ──────────────
+            html.H6(
+                "Adj Close Price Comparison",
+                className="text-muted mb-2",
+            ),
             dcc.Loading(
                 children=dcc.Graph(
                     id="compare-perf-chart",
@@ -63,7 +68,8 @@ def compare_layout() -> html.Div:
                     dbc.Col(
                         [
                             html.H6(
-                                "Metrics Comparison", className="text-muted mb-2 mt-4"
+                                "Metrics Comparison",
+                                className="text-muted mb-2 mt-4",
                             ),
                             html.Div(id="compare-metrics-container"),
                         ],
@@ -73,7 +79,8 @@ def compare_layout() -> html.Div:
                     dbc.Col(
                         [
                             html.H6(
-                                "Returns Correlation", className="text-muted mb-2 mt-4"
+                                "Returns Correlation",
+                                className="text-muted mb-2 mt-4",
                             ),
                             dcc.Loading(
                                 children=dcc.Graph(

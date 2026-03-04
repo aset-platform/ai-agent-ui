@@ -10,7 +10,7 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 |---------|-------|------|---------|
 | **Frontend** | Next.js 16 + React 19 + Tailwind 4 | `3000` | Chat UI + SPA shell (login, chat, docs, dashboard, admin) |
 | **Backend** | FastAPI + LangChain + Claude Sonnet 4.6 | `8181` | Agentic loop + REST API + Auth endpoints |
-| **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard (Home / Analysis / Forecast / Compare) + Admin UI (Users + Audit Log) |
+| **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard (Home / Analysis / Forecast / Compare / 6 Insights pages) + Admin UI |
 | **Docs** | MkDocs Material | `8000` | Project documentation |
 
 ---
@@ -89,11 +89,10 @@ graph TD
         T6["forecast_stock<br/><i>Prophet + Plotly</i>"]
     end
 
-    subgraph Data["Data — local files"]
-        P["Parquet<br/>data/raw/"]
-        F["Forecasts<br/>data/forecasts/"]
+    subgraph Data["Data"]
+        IC["Iceberg<br/>data/iceberg/<br/><i>single source of truth</i>"]
         C["Cache<br/>data/cache/"]
-        IC["Iceberg<br/>data/iceberg/"]
+        P["Parquet backup<br/>data/raw/ + data/forecasts/"]
     end
 
     Login -->|"POST /auth/login"| AUTH
@@ -103,10 +102,10 @@ graph TD
     AR --> GA & SA
     GA --> T1 & T2
     SA --> T3 & T4 & T5 & T6
-    T4 --> P
-    T5 --> C
-    T6 --> F & C
-    IF_DASH -->|"reads directly"| P & F
+    T4 --> IC
+    T5 --> IC & C
+    T6 --> IC & C
+    IF_DASH -->|"reads Iceberg"| IC
     UI -->|"view=dashboard ?token=jwt"| IF_DASH
     UI -->|"view=docs"| IF_DOCS
 ```
@@ -184,7 +183,7 @@ graph TD
     Q["User query<br/><i>e.g. 'Analyse AAPL'</i>"]
     Q --> S1
     subgraph S1["Step 1 — Fetch Data"]
-        FSD["fetch_stock_data<br/><i>Yahoo Finance → parquet</i>"]
+        FSD["fetch_stock_data<br/><i>Yahoo Finance → Iceberg</i>"]
         GSI["get_stock_info<br/><i>company metadata</i>"]
     end
     S1 --> S2
@@ -310,10 +309,11 @@ ai-agent-ui/
 │       ├── price_analysis_tool.py  # analyse_stock_price
 │       └── forecasting_tool.py     # forecast_stock (Prophet)
 │
-├── stocks/                   # Iceberg persistence for all stock data
+├── stocks/                   # Iceberg persistence — single source of truth
 │   ├── create_tables.py      # Idempotent init of 8 tables (called by run.sh)
-│   ├── repository.py         # StockRepository — CRUD for all 8 tables
-│   └── backfill.py           # One-time flat-file → Iceberg migration
+│   ├── repository.py         # StockRepository — CRUD + batch reads for all 8 tables
+│   ├── backfill_metadata.py  # One-time JSON → Iceberg migration
+│   └── backfill_adj_close.py # One-time adj_close backfill from parquet
 │
 ├── dashboard/                # Plotly Dash (FLATLY light theme)
 │   ├── app.py                # Entry point, routing, auth store, dotenv loader
@@ -325,23 +325,22 @@ ai-agent-ui/
 │   │   ├── admin.py          # User management + audit log layout
 │   │   └── navbar.py         # Global navbar
 │   ├── callbacks/            # Interactive callbacks (package)
-│   │   ├── data_loaders.py   # Parquet + Iceberg reads, indicator caching
+│   │   ├── data_loaders.py   # Iceberg reads, indicator caching
 │   │   ├── chart_builders.py # Plotly figure construction
-│   │   ├── home_cbs.py       # Home page callbacks
+│   │   ├── home_cbs.py       # Home page callbacks (batch pre-fetch)
 │   │   ├── analysis_cbs.py   # Analysis + Compare callbacks
 │   │   ├── insights_cbs.py   # All Insights tab callbacks
 │   │   ├── admin_cbs.py      # User table callbacks
 │   │   ├── admin_cbs2.py     # Add/Edit/Deactivate user modals
-│   │   ├── iceberg.py        # Iceberg repo singleton + cached helpers
+│   │   ├── iceberg.py        # Iceberg repo singleton + 7 TTL-cached helpers
 │   │   └── utils.py          # Shared utilities (currency, market label)
 │   └── assets/custom.css     # Light theme styles
 │
 ├── data/
-│   ├── raw/                  # OHLCV parquet (gitignored)
-│   ├── forecasts/            # Prophet output parquet (gitignored)
+│   ├── iceberg/              # Iceberg catalog + warehouse — single source of truth (gitignored)
 │   ├── cache/                # Same-day text cache (gitignored)
-│   ├── iceberg/              # Iceberg catalog + warehouse (gitignored)
-│   └── metadata/             # Stock registry + company info (tracked)
+│   ├── raw/                  # OHLCV parquet backup (gitignored)
+│   └── forecasts/            # Prophet output parquet backup (gitignored)
 │
 ├── charts/                   # Generated Plotly HTML (gitignored)
 ├── docs/                     # MkDocs source
@@ -428,40 +427,21 @@ All backend variables live in `backend/.env` (gitignored).
 2. Register it in `ChatServer._register_agents()`.
 3. Add the agent ID to the `AGENTS` array in `frontend/lib/constants.ts`.
 
-### Install the pre-commit hook (one-time)
+### Install git hooks (one-time)
 
 ```bash
 cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+cp hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
 ```
 
-Runs on every `git commit` against **staged files only**. Four checks:
-
-| # | Check | API required? |
-|---|-------|--------------|
-| 1 | Bare `print()`, missing Google docstrings, naming, OOP, XSS/SQL injection — **auto-fixed** via Claude | Yes (auto-fix) |
-| 2 | `CLAUDE.md`, `PROGRESS.md`, `README.md` freshness — **auto-updated** | Yes |
-| 3 | Docs pages freshness — **auto-updated** | Yes |
-| 4 | `docs/dev/changelog.md` descending date order — **auto-reordered** | No |
-
-Set `ANTHROPIC_API_KEY` in `backend/.env` to enable checks 1–3. Skip entirely with `SKIP_PRE_COMMIT=1`.
+Pre-commit auto-fixes code style and updates meta-files on every commit (requires `ANTHROPIC_API_KEY`). Pre-push blocks on bare `print()` or failing `mkdocs build`. Skip with `SKIP_PRE_COMMIT=1`.
 
 ---
 
 ## Deployment Notes
 
 ### First run
-`./run.sh start` automatically runs `auth/create_tables.py` and `scripts/seed_admin.py` when `data/iceberg/catalog.db` does not yet exist. Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `backend/.env` before the first start.
-
-### Existing deployments (after SSO was added Feb 26)
-Run the schema migration once to add the three OAuth columns:
-```bash
-source backend/demoenv/bin/activate
-python auth/migrate_users_table.py
-```
-
-### Auth implementation quirks (important for debugging)
-- **JWT env propagation** — `auth/dependencies.py` reads `JWT_SECRET_KEY` from `os.environ` directly. `backend/main.py` copies all Pydantic settings into `os.environ` at startup to bridge the gap. If auth endpoints raise `ValueError: JWT_SECRET_KEY must be at least 32 characters`, check that `JWT_SECRET_KEY` is in `backend/.env`.
-- **Dashboard JWT** — Dash is a separate process; it never inherits `backend/.env`. `dashboard/app.py` calls `_load_dotenv()` at import time to load the file explicitly.
+`./run.sh start` automatically runs table creation, schema migrations, and superuser seeding when `data/iceberg/catalog.db` does not yet exist. Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `backend/.env` before the first start.
 
 ### SSO / OAuth2 (Google + Facebook PKCE)
 
@@ -469,11 +449,9 @@ python auth/migrate_users_table.py
 |----------|-------|
 | `GOOGLE_CLIENT_ID` | Required for Google SSO |
 | `GOOGLE_CLIENT_SECRET` | Required for Google SSO |
-| `FACEBOOK_APP_ID` | Facebook SSO (placeholder — button hidden until set) |
-| `FACEBOOK_APP_SECRET` | Facebook SSO (placeholder) |
+| `FACEBOOK_APP_ID` | Placeholder — button hidden until set |
+| `FACEBOOK_APP_SECRET` | Placeholder |
 | `OAUTH_REDIRECT_URI` | Default: `http://localhost:3000/auth/oauth/callback` |
-
-Register `http://localhost:3000/auth/oauth/callback` as an authorised redirect URI in Google Cloud Console.
 
 ---
 

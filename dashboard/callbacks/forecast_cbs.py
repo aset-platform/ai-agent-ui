@@ -1,8 +1,8 @@
 """Forecast-page Dash callbacks for the AI Stock Analysis Dashboard.
 
 Registers callbacks that sync the forecast ticker dropdown, update the
-forecast chart, target cards, and accuracy row, and run the full
-fetch → Prophet pipeline when the "Run New Analysis" button is clicked.
+forecast chart, target cards, and accuracy row, and run the full stock data
+refresh pipeline when the "Refresh Data & Run Analysis" button is clicked.
 
 Example::
 
@@ -14,7 +14,6 @@ import logging
 from typing import Optional
 from urllib.parse import parse_qs
 
-import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import Input, Output, State, html, no_update
 
@@ -26,7 +25,13 @@ from dashboard.callbacks.card_builders import (
 )
 from dashboard.callbacks.chart_builders import _empty_fig
 from dashboard.callbacks.chart_builders2 import _build_forecast_fig
-from dashboard.callbacks.data_loaders import _load_forecast, _load_raw
+from dashboard.callbacks.data_loaders import (
+    _clear_indicator_cache,
+    _load_forecast,
+    _load_raw,
+)
+from dashboard.callbacks.iceberg import clear_caches
+from dashboard.services.stock_refresh import run_full_refresh
 
 # Module-level logger — intentionally module-scoped (not inside a class)
 _logger = logging.getLogger(__name__)
@@ -137,7 +142,7 @@ def register(app) -> None:
         if forecast_df is None:
             msg = (
                 f"No forecast found for '{ticker}'. "
-                "Click 'Run New Analysis' to generate one."
+                "Click 'Refresh Data & Run Analysis' to generate one."
             )
             return (
                 _empty_fig(msg, height=550),
@@ -159,7 +164,8 @@ def register(app) -> None:
         target_cards = _build_target_cards(summary, current_price, ticker)
         accuracy_note = [
             html.P(
-                "Model accuracy metrics are computed when you click 'Run New Analysis'.",
+                "Model accuracy metrics are computed when you click "
+                "'Refresh Data & Run Analysis'.",
                 className="text-muted small",
             )
         ]
@@ -167,11 +173,11 @@ def register(app) -> None:
 
     @app.callback(
         [
-            Output("run-analysis-status", "children"),
+            Output("forecast-refresh-status", "children"),
             Output("forecast-refresh-store", "data"),
             Output("forecast-accuracy-row", "children", allow_duplicate=True),
         ],
-        Input("run-analysis-btn", "n_clicks"),
+        Input("forecast-refresh-btn", "n_clicks"),
         [
             State("forecast-ticker-dropdown", "value"),
             State("forecast-horizon-radio", "value"),
@@ -187,11 +193,13 @@ def register(app) -> None:
         current_refresh: Optional[int],
         token: Optional[str],
     ):
-        """Run the full fetch → Prophet forecast pipeline for the selected ticker.
+        """Run the full stock data refresh pipeline for the selected ticker.
 
-        Imports backend tool functions directly (no HTTP call to the backend
-        API).  Increments the ``forecast-refresh-store`` counter on success
-        to trigger a chart reload.
+        Delegates to :func:`~dashboard.services.stock_refresh.run_full_refresh`
+        which refreshes all 8 Iceberg tables (OHLCV, company info, dividends,
+        technical indicators, analysis summary, forecast runs, forecasts,
+        and the registry).  Clears dashboard caches on success and increments
+        the ``forecast-refresh-store`` counter to trigger a chart reload.
 
         Args:
             n_clicks: Button click counter.
@@ -201,7 +209,7 @@ def register(app) -> None:
             token: JWT access token from the auth-token-store.
 
         Returns:
-            Tuple of (status message, new refresh counter,
+            Tuple of (status icon span, new refresh counter,
             accuracy-row component).
         """
         if _validate_token(token) is None:
@@ -209,7 +217,10 @@ def register(app) -> None:
 
         if not ticker:
             return (
-                dbc.Alert("Please select a ticker first.", color="warning"),
+                html.Span(
+                    "\u2717 Select a ticker",
+                    className="refresh-status-icon text-warning",
+                ),
                 no_update,
                 [],
             )
@@ -217,60 +228,34 @@ def register(app) -> None:
         horizon_months = int(horizon) if horizon else 9
         ticker = ticker.upper().strip()
 
-        try:
-            # backend tools use `import tools.*` internally, so
-            # backend/ must be on sys.path for those imports to resolve.
-            import sys as _sys
+        result = run_full_refresh(ticker, horizon_months)
 
-            _backend_dir = str(Path(__file__).parent.parent.parent / "backend")
-            if _backend_dir not in _sys.path:
-                _sys.path.insert(0, _backend_dir)
+        # Clear all dashboard caches so subsequent reads get fresh data
+        clear_caches(ticker)
+        _clear_indicator_cache(ticker)
 
-            # ── Step 1: Fetch / delta-update price data ────────────────────
-            from tools.stock_data_tool import fetch_stock_data
-
-            fetch_result = fetch_stock_data.invoke({"ticker": ticker})
-            _logger.info("fetch_stock_data result: %s", fetch_result[:80])
-
-            # ── Step 2: Run Prophet forecast pipeline ──────────────────────
-            from tools.forecasting_tool import (
-                _calculate_forecast_accuracy,
-                _generate_forecast,
+        if result.success:
+            acc_row = (
+                _build_accuracy_row(result.accuracy, ticker) if result.accuracy else []
             )
-            from tools.forecasting_tool import _load_parquet as _ft_load
-            from tools.forecasting_tool import (
-                _prepare_data_for_prophet,
-                _save_forecast,
-                _train_prophet_model,
-            )
-
-            df = _ft_load(ticker)
-            if df is None:
-                raise ValueError(f"No data loaded for {ticker} after fetch.")
-
-            prophet_df = _prepare_data_for_prophet(df)
-            current_price = float(prophet_df["y"].iloc[-1])
-
-            _logger.info("Training Prophet model for %s (%dm)…", ticker, horizon_months)
-            model = _train_prophet_model(prophet_df)
-            forecast_df = _generate_forecast(model, prophet_df, horizon_months)
-            accuracy = _calculate_forecast_accuracy(model, prophet_df)
-            _save_forecast(forecast_df, ticker, horizon_months)
-
-            _logger.info("New analysis complete for %s.", ticker)
-
-            acc_row = _build_accuracy_row(accuracy, ticker)
-            status = dbc.Alert(
-                f"Analysis complete for {ticker}. Forecast updated.",
-                color="success",
-                duration=5000,
-            )
-            return status, (current_refresh or 0) + 1, acc_row
-
-        except Exception as exc:
-            _logger.error("run_new_analysis error: %s", exc, exc_info=True)
             return (
-                dbc.Alert(f"Error: {exc}", color="danger"),
-                no_update,
-                [],
+                html.Span(
+                    "\u2713",
+                    className="refresh-status-icon text-success",
+                    title=f"Refresh complete for {ticker}",
+                ),
+                (current_refresh or 0) + 1,
+                acc_row,
             )
+
+        error_msg = result.error or "Unknown error"
+        _logger.error("run_new_analysis failed: %s", error_msg)
+        return (
+            html.Span(
+                "\u2717",
+                className="refresh-status-icon text-danger",
+                title=error_msg[:200],
+            ),
+            no_update,
+            [],
+        )
