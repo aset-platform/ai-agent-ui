@@ -12,7 +12,7 @@ stocks/
 └── backfill.py        — one-time migration of existing flat files
 ```
 
-All backend tool functions write to **both** the flat files they always used **and** the Iceberg tables (dual-write). The flat files remain the source of truth for the core agent tools; Iceberg powers the Insights dashboard pages.
+Iceberg is the **single source of truth** for all stock data. All backend tool functions write to Iceberg; flat files in `data/raw/` and `data/forecasts/` are local backup only.
 
 ---
 
@@ -122,11 +122,30 @@ repo.get_analysis_history(ticker)
 # Forecast runs
 repo.insert_forecast_run(ticker, horizon_months, run_dict)
 repo.get_latest_forecast_run(ticker, horizon_months)
+repo.get_all_latest_forecast_runs(horizon_months)  # batch: 1 row per ticker
 
 # Forecast series
 repo.insert_forecast_series(ticker, horizon_months, run_date, forecast_df)
 repo.get_latest_forecast_series(ticker, horizon_months)
 ```
+
+---
+
+## Dashboard TTL-cached helpers
+
+`dashboard/callbacks/iceberg.py` wraps every `StockRepository` read in a 5-minute TTL cache. This eliminates redundant Iceberg scans when multiple callbacks or page loads share the same data within a refresh cycle.
+
+| Helper | Iceberg source | TTL |
+|--------|---------------|-----|
+| `_get_registry_cached(repo)` | `stocks.registry` | 5 min |
+| `_get_company_info_cached(repo)` | `stocks.company_info` | 5 min |
+| `_get_forecast_runs_cached(repo, horizon)` | `stocks.forecast_runs` | 5 min |
+| `_get_ohlcv_cached(repo, ticker)` | `stocks.ohlcv` | 5 min |
+| `_get_forecast_cached(repo, ticker, horizon)` | `stocks.forecasts` | 5 min |
+| `_get_dividends_cached(repo, ticker)` | `stocks.dividends` | 5 min |
+| `_get_analysis_summary_cached(repo)` | `stocks.analysis_summary` | 5 min |
+
+`clear_caches(ticker=None)` invalidates all caches (or per-ticker entries for OHLCV, forecasts, and dividends) so that manual card refreshes see fresh data immediately.
 
 ---
 

@@ -65,7 +65,9 @@ class AgentRegistry:
         """
         self._agents[agent.config.agent_id] = agent
         logger.debug(
-            "Registered agent: %s (%s)", agent.config.agent_id, agent.config.name
+            "Registered agent: %s (%s)",
+            agent.config.agent_id,
+            agent.config.name,
         )
 
     def get(self, agent_id: str) -> Optional[BaseAgent]:

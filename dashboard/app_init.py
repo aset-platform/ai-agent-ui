@@ -31,7 +31,10 @@ def create_app() -> dash.Dash:
         suppress_callback_exceptions=True,
         title="AI Stock Analysis Dashboard",
         meta_tags=[
-            {"name": "viewport", "content": "width=device-width, initial-scale=1"},
+            {
+                "name": "viewport",
+                "content": "width=device-width, initial-scale=1",
+            },
         ],
     )
 

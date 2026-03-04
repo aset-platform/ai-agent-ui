@@ -65,7 +65,9 @@ def create_access_token(
     return token
 
 
-def create_refresh_token(user_id: str, secret_key: str, expire_days: int) -> str:
+def create_refresh_token(
+    user_id: str, secret_key: str, expire_days: int
+) -> str:
     """Create a signed JWT refresh token.
 
     Args:
@@ -125,7 +127,9 @@ def decode_token(
         payload = jwt.decode(token, secret_key, algorithms=[_ALGORITHM])
     except JWTError as exc:
         _logger.warning("JWT decode failed: %s", exc)
-        raise HTTPException(status_code=401, detail="Invalid or expired token") from exc
+        raise HTTPException(
+            status_code=401, detail="Invalid or expired token"
+        ) from exc
 
     jti = payload.get("jti", "")
     if jti in deny_list:
@@ -140,7 +144,9 @@ def decode_token(
     return payload
 
 
-def revoke_refresh_token(token: str, secret_key: str, deny_list: Set[str]) -> None:
+def revoke_refresh_token(
+    token: str, secret_key: str, deny_list: Set[str]
+) -> None:
     """Add a refresh token's JTI to the deny-list.
 
     Args:

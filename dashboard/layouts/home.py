@@ -22,11 +22,13 @@ def home_layout() -> html.Div:
         :class:`~dash.html.Div` representing the full home page.
     """
     registry = _load_registry()
-    ticker_options = [{"label": t, "value": t} for t in sorted(registry.keys())]
+    ticker_options = [
+        {"label": t, "value": t} for t in sorted(registry.keys())
+    ]
 
     return html.Div(
         [
-            # ── Search / quick-select row ─────────────────────────────────────
+            # ── Search / quick-select row ──────────────────────────────
             dbc.Row(
                 [
                     dbc.Col(
@@ -35,7 +37,11 @@ def home_layout() -> html.Div:
                                 [
                                     dbc.Input(
                                         id="ticker-search-input",
-                                        placeholder="Enter ticker symbol (e.g. AAPL, TSLA, RELIANCE.NS)…",
+                                        placeholder=(
+                                            "Enter ticker symbol"
+                                            " (e.g. AAPL, TSLA,"
+                                            " RELIANCE.NS)\u2026"
+                                        ),
                                         type="text",
                                         debounce=False,
                                     ),
@@ -101,7 +107,9 @@ def home_layout() -> html.Div:
             dbc.Row(
                 [
                     dbc.Col(
-                        html.Small(id="home-count-text", className="text-muted"),
+                        html.Small(
+                            id="home-count-text", className="text-muted"
+                        ),
                         width="auto",
                         className="my-auto",
                     ),
@@ -138,5 +146,13 @@ def home_layout() -> html.Div:
             # Stores
             dcc.Store(id="stock-raw-data-store"),
             dcc.Store(id="market-filter-store", data="india"),
+            # Card-refresh background job poller (2 s)
+            dcc.Interval(
+                id="card-refresh-poll",
+                interval=2000,
+                n_intervals=0,
+            ),
+            # Incremented when any card refresh completes
+            dcc.Store(id="home-card-refresh-trigger", data=0),
         ]
     )

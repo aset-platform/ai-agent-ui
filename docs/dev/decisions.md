@@ -243,9 +243,19 @@ By default Flask/Werkzeug may send `X-Frame-Options: SAMEORIGIN`, and some brows
 
 ## Dashboard
 
-### Direct parquet reads instead of HTTP
+### Batch pre-fetch for Home page cards
 
-The dashboard reads OHLCV data and forecasts directly from local parquet files rather than going through the FastAPI backend. This means:
+The original `refresh_stock_cards()` callback made 3N sequential Iceberg scans for N tickers (OHLCV + forecast_run + company_info per ticker). With 30 tickers this was ~90 individual table reads taking ~5 seconds.
+
+The fix uses **batch pre-fetch**: before the per-ticker loop, two batch calls (`_get_company_info_cached()` and `_get_forecast_runs_cached()`) build `company_map`, `currency_map`, and `sentiment_map` dicts from just 2 Iceberg scans. The loop body uses pure dict lookups — no per-ticker Iceberg calls for company info, currency, or sentiment. The registry is also cached via `_get_registry_cached()` so layout and callback code share a single scan.
+
+All three new caches use the same 5-minute TTL as existing helpers. `clear_caches()` was extended to invalidate them so that manual per-card refreshes see fresh data immediately.
+
+The tradeoff is that batch reads load data for all tickers even when only a few cards are visible on screen. For the current dataset size (~30 tickers) this is negligible — the full `forecast_runs` table is a few KB. If the dataset grew to thousands of tickers, partition-level filtering would be needed.
+
+### Direct Iceberg reads instead of HTTP
+
+The dashboard reads all stock data directly from Iceberg tables via TTL-cached helpers rather than going through the FastAPI backend. This means:
 
 - The dashboard starts in under a second with no network dependency.
 - It can run fully offline after an initial data fetch.
