@@ -36,8 +36,7 @@ def forecast_layout() -> html.Div:
                     dbc.Col(
                         [
                             html.Label(
-                                "Ticker",
-                                className="text-muted small fw-semibold",
+                                "Ticker", className="text-muted small fw-semibold"
                             ),
                             dcc.Dropdown(
                                 id="forecast-ticker-dropdown",

@@ -53,9 +53,7 @@ def _is_valid_email(value: str) -> bool:
     return bool(_EMAIL_RE.match(value))
 
 
-def _check_input_safety(
-    value: str, field: str, max_len: int = 200
-) -> Optional[str]:
+def _check_input_safety(value: str, field: str, max_len: int = 200) -> Optional[str]:
     """Return an error string if *value* contains unsafe content, else ``None``.
 
     Checks performed (in order): max length, HTML characters, null bytes,
@@ -139,8 +137,7 @@ def _load_currency_from_iceberg(ticker: str) -> str:
                 return _currency_symbol(info.get("currency", "USD") or "USD")
     except Exception:
         logger.debug(
-            "Iceberg company_info unavailable for %r; defaulting to '$'.",
-            ticker,
+            "Iceberg company_info unavailable for %r; defaulting to '$'.", ticker
         )
     return "$"
 

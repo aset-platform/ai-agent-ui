@@ -85,47 +85,25 @@ def _registry_schema() -> Schema:
         Schema: One row per ticker; tracks fetch metadata and date ranges.
     """
     return Schema(
+        NestedField(field_id=1, name="ticker", field_type=StringType(), required=False),
         NestedField(
-            field_id=1, name="ticker", field_type=StringType(), required=False
+            field_id=2, name="last_fetch_date", field_type=DateType(), required=False
         ),
         NestedField(
-            field_id=2,
-            name="last_fetch_date",
-            field_type=DateType(),
-            required=False,
+            field_id=3, name="total_rows", field_type=LongType(), required=False
         ),
         NestedField(
-            field_id=3,
-            name="total_rows",
-            field_type=LongType(),
-            required=False,
+            field_id=4, name="date_range_start", field_type=DateType(), required=False
         ),
         NestedField(
-            field_id=4,
-            name="date_range_start",
-            field_type=DateType(),
-            required=False,
+            field_id=5, name="date_range_end", field_type=DateType(), required=False
+        ),
+        NestedField(field_id=6, name="market", field_type=StringType(), required=False),
+        NestedField(
+            field_id=7, name="created_at", field_type=TimestampType(), required=False
         ),
         NestedField(
-            field_id=5,
-            name="date_range_end",
-            field_type=DateType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=6, name="market", field_type=StringType(), required=False
-        ),
-        NestedField(
-            field_id=7,
-            name="created_at",
-            field_type=TimestampType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=8,
-            name="updated_at",
-            field_type=TimestampType(),
-            required=False,
+            field_id=8, name="updated_at", field_type=TimestampType(), required=False
         ),
     )
 
@@ -140,153 +118,78 @@ def _company_info_schema() -> Schema:
         NestedField(
             field_id=1, name="info_id", field_type=StringType(), required=False
         ),
+        NestedField(field_id=2, name="ticker", field_type=StringType(), required=False),
         NestedField(
-            field_id=2, name="ticker", field_type=StringType(), required=False
+            field_id=3, name="company_name", field_type=StringType(), required=False
+        ),
+        NestedField(field_id=4, name="sector", field_type=StringType(), required=False),
+        NestedField(
+            field_id=5, name="industry", field_type=StringType(), required=False
         ),
         NestedField(
-            field_id=3,
-            name="company_name",
-            field_type=StringType(),
-            required=False,
+            field_id=6, name="market_cap", field_type=LongType(), required=False
         ),
         NestedField(
-            field_id=4, name="sector", field_type=StringType(), required=False
+            field_id=7, name="pe_ratio", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=5,
-            name="industry",
-            field_type=StringType(),
-            required=False,
+            field_id=8, name="week_52_high", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=6,
-            name="market_cap",
-            field_type=LongType(),
-            required=False,
+            field_id=9, name="week_52_low", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=7,
-            name="pe_ratio",
-            field_type=DoubleType(),
-            required=False,
+            field_id=10, name="current_price", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=8,
-            name="week_52_high",
-            field_type=DoubleType(),
-            required=False,
+            field_id=11, name="currency", field_type=StringType(), required=False
         ),
         NestedField(
-            field_id=9,
-            name="week_52_low",
-            field_type=DoubleType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=10,
-            name="current_price",
-            field_type=DoubleType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=11,
-            name="currency",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=12,
-            name="fetched_at",
-            field_type=TimestampType(),
-            required=False,
+            field_id=12, name="fetched_at", field_type=TimestampType(), required=False
         ),
         # Extended fundamentals (Phase 3 extension)
         NestedField(
-            field_id=13,
-            name="exchange",
-            field_type=StringType(),
-            required=False,
+            field_id=13, name="exchange", field_type=StringType(), required=False
         ),
         NestedField(
-            field_id=14,
-            name="country",
-            field_type=StringType(),
-            required=False,
+            field_id=14, name="country", field_type=StringType(), required=False
         ),
         NestedField(
-            field_id=15,
-            name="employees",
-            field_type=LongType(),
-            required=False,
+            field_id=15, name="employees", field_type=LongType(), required=False
         ),
         NestedField(
-            field_id=16,
-            name="dividend_yield",
-            field_type=DoubleType(),
-            required=False,
+            field_id=16, name="dividend_yield", field_type=DoubleType(), required=False
+        ),
+        NestedField(field_id=17, name="beta", field_type=DoubleType(), required=False),
+        NestedField(
+            field_id=18, name="book_value", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=17, name="beta", field_type=DoubleType(), required=False
+            field_id=19, name="price_to_book", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=18,
-            name="book_value",
-            field_type=DoubleType(),
-            required=False,
+            field_id=20, name="earnings_growth", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=19,
-            name="price_to_book",
-            field_type=DoubleType(),
-            required=False,
+            field_id=21, name="revenue_growth", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=20,
-            name="earnings_growth",
-            field_type=DoubleType(),
-            required=False,
+            field_id=22, name="profit_margins", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=21,
-            name="revenue_growth",
-            field_type=DoubleType(),
-            required=False,
+            field_id=23, name="avg_volume", field_type=LongType(), required=False
         ),
         NestedField(
-            field_id=22,
-            name="profit_margins",
-            field_type=DoubleType(),
-            required=False,
+            field_id=24, name="float_shares", field_type=LongType(), required=False
         ),
         NestedField(
-            field_id=23,
-            name="avg_volume",
-            field_type=LongType(),
-            required=False,
+            field_id=25, name="short_ratio", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=24,
-            name="float_shares",
-            field_type=LongType(),
-            required=False,
+            field_id=26, name="analyst_target", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=25,
-            name="short_ratio",
-            field_type=DoubleType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=26,
-            name="analyst_target",
-            field_type=DoubleType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=27,
-            name="recommendation",
-            field_type=DoubleType(),
-            required=False,
+            field_id=27, name="recommendation", field_type=DoubleType(), required=False
         ),
     )
 
@@ -298,38 +201,18 @@ def _ohlcv_schema() -> Schema:
         Schema: OHLCV price history; composite key (ticker, date); partitioned by ticker.
     """
     return Schema(
+        NestedField(field_id=1, name="ticker", field_type=StringType(), required=False),
+        NestedField(field_id=2, name="date", field_type=DateType(), required=False),
+        NestedField(field_id=3, name="open", field_type=DoubleType(), required=False),
+        NestedField(field_id=4, name="high", field_type=DoubleType(), required=False),
+        NestedField(field_id=5, name="low", field_type=DoubleType(), required=False),
+        NestedField(field_id=6, name="close", field_type=DoubleType(), required=False),
         NestedField(
-            field_id=1, name="ticker", field_type=StringType(), required=False
+            field_id=7, name="adj_close", field_type=DoubleType(), required=False
         ),
+        NestedField(field_id=8, name="volume", field_type=LongType(), required=False),
         NestedField(
-            field_id=2, name="date", field_type=DateType(), required=False
-        ),
-        NestedField(
-            field_id=3, name="open", field_type=DoubleType(), required=False
-        ),
-        NestedField(
-            field_id=4, name="high", field_type=DoubleType(), required=False
-        ),
-        NestedField(
-            field_id=5, name="low", field_type=DoubleType(), required=False
-        ),
-        NestedField(
-            field_id=6, name="close", field_type=DoubleType(), required=False
-        ),
-        NestedField(
-            field_id=7,
-            name="adj_close",
-            field_type=DoubleType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=8, name="volume", field_type=LongType(), required=False
-        ),
-        NestedField(
-            field_id=9,
-            name="fetched_at",
-            field_type=TimestampType(),
-            required=False,
+            field_id=9, name="fetched_at", field_type=TimestampType(), required=False
         ),
     )
 
@@ -341,29 +224,16 @@ def _dividends_schema() -> Schema:
         Schema: Dividend payments; composite key (ticker, ex_date).
     """
     return Schema(
+        NestedField(field_id=1, name="ticker", field_type=StringType(), required=False),
+        NestedField(field_id=2, name="ex_date", field_type=DateType(), required=False),
         NestedField(
-            field_id=1, name="ticker", field_type=StringType(), required=False
+            field_id=3, name="dividend_amount", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=2, name="ex_date", field_type=DateType(), required=False
+            field_id=4, name="currency", field_type=StringType(), required=False
         ),
         NestedField(
-            field_id=3,
-            name="dividend_amount",
-            field_type=DoubleType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=4,
-            name="currency",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=5,
-            name="fetched_at",
-            field_type=TimestampType(),
-            required=False,
+            field_id=5, name="fetched_at", field_type=TimestampType(), required=False
         ),
     )
 
@@ -375,71 +245,38 @@ def _technical_indicators_schema() -> Schema:
         Schema: Computed technical indicators; 1:1 with ohlcv (ticker, date); partitioned by ticker.
     """
     return Schema(
-        NestedField(
-            field_id=1, name="ticker", field_type=StringType(), required=False
-        ),
-        NestedField(
-            field_id=2, name="date", field_type=DateType(), required=False
-        ),
-        NestedField(
-            field_id=3, name="sma_50", field_type=DoubleType(), required=False
-        ),
+        NestedField(field_id=1, name="ticker", field_type=StringType(), required=False),
+        NestedField(field_id=2, name="date", field_type=DateType(), required=False),
+        NestedField(field_id=3, name="sma_50", field_type=DoubleType(), required=False),
         NestedField(
             field_id=4, name="sma_200", field_type=DoubleType(), required=False
         ),
+        NestedField(field_id=5, name="ema_20", field_type=DoubleType(), required=False),
+        NestedField(field_id=6, name="rsi_14", field_type=DoubleType(), required=False),
+        NestedField(field_id=7, name="macd", field_type=DoubleType(), required=False),
         NestedField(
-            field_id=5, name="ema_20", field_type=DoubleType(), required=False
+            field_id=8, name="macd_signal", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=6, name="rsi_14", field_type=DoubleType(), required=False
+            field_id=9, name="macd_hist", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=7, name="macd", field_type=DoubleType(), required=False
+            field_id=10, name="bb_upper", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=8,
-            name="macd_signal",
-            field_type=DoubleType(),
-            required=False,
+            field_id=11, name="bb_middle", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=9,
-            name="macd_hist",
-            field_type=DoubleType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=10,
-            name="bb_upper",
-            field_type=DoubleType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=11,
-            name="bb_middle",
-            field_type=DoubleType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=12,
-            name="bb_lower",
-            field_type=DoubleType(),
-            required=False,
+            field_id=12, name="bb_lower", field_type=DoubleType(), required=False
         ),
         NestedField(
             field_id=13, name="atr_14", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=14,
-            name="daily_return",
-            field_type=DoubleType(),
-            required=False,
+            field_id=14, name="daily_return", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=15,
-            name="computed_at",
-            field_type=TimestampType(),
-            required=False,
+            field_id=15, name="computed_at", field_type=TimestampType(), required=False
         ),
     )
 
@@ -452,37 +289,20 @@ def _analysis_summary_schema() -> Schema:
     """
     return Schema(
         NestedField(
-            field_id=1,
-            name="summary_id",
-            field_type=StringType(),
-            required=False,
+            field_id=1, name="summary_id", field_type=StringType(), required=False
+        ),
+        NestedField(field_id=2, name="ticker", field_type=StringType(), required=False),
+        NestedField(
+            field_id=3, name="analysis_date", field_type=DateType(), required=False
         ),
         NestedField(
-            field_id=2, name="ticker", field_type=StringType(), required=False
+            field_id=4, name="bull_phase_pct", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=3,
-            name="analysis_date",
-            field_type=DateType(),
-            required=False,
+            field_id=5, name="bear_phase_pct", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=4,
-            name="bull_phase_pct",
-            field_type=DoubleType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=5,
-            name="bear_phase_pct",
-            field_type=DoubleType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=6,
-            name="max_drawdown_pct",
-            field_type=DoubleType(),
-            required=False,
+            field_id=6, name="max_drawdown_pct", field_type=DoubleType(), required=False
         ),
         NestedField(
             field_id=7,
@@ -503,16 +323,10 @@ def _analysis_summary_schema() -> Schema:
             required=False,
         ),
         NestedField(
-            field_id=10,
-            name="sharpe_ratio",
-            field_type=DoubleType(),
-            required=False,
+            field_id=10, name="sharpe_ratio", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=11,
-            name="all_time_high",
-            field_type=DoubleType(),
-            required=False,
+            field_id=11, name="all_time_high", field_type=DoubleType(), required=False
         ),
         NestedField(
             field_id=12,
@@ -521,22 +335,13 @@ def _analysis_summary_schema() -> Schema:
             required=False,
         ),
         NestedField(
-            field_id=13,
-            name="all_time_low",
-            field_type=DoubleType(),
-            required=False,
+            field_id=13, name="all_time_low", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=14,
-            name="all_time_low_date",
-            field_type=DateType(),
-            required=False,
+            field_id=14, name="all_time_low_date", field_type=DateType(), required=False
         ),
         NestedField(
-            field_id=15,
-            name="support_levels",
-            field_type=StringType(),
-            required=False,
+            field_id=15, name="support_levels", field_type=StringType(), required=False
         ),
         NestedField(
             field_id=16,
@@ -545,22 +350,13 @@ def _analysis_summary_schema() -> Schema:
             required=False,
         ),
         NestedField(
-            field_id=17,
-            name="sma_50_signal",
-            field_type=StringType(),
-            required=False,
+            field_id=17, name="sma_50_signal", field_type=StringType(), required=False
         ),
         NestedField(
-            field_id=18,
-            name="sma_200_signal",
-            field_type=StringType(),
-            required=False,
+            field_id=18, name="sma_200_signal", field_type=StringType(), required=False
         ),
         NestedField(
-            field_id=19,
-            name="rsi_signal",
-            field_type=StringType(),
-            required=False,
+            field_id=19, name="rsi_signal", field_type=StringType(), required=False
         ),
         NestedField(
             field_id=20,
@@ -569,34 +365,19 @@ def _analysis_summary_schema() -> Schema:
             required=False,
         ),
         NestedField(
-            field_id=21,
-            name="best_month",
-            field_type=StringType(),
-            required=False,
+            field_id=21, name="best_month", field_type=StringType(), required=False
         ),
         NestedField(
-            field_id=22,
-            name="worst_month",
-            field_type=StringType(),
-            required=False,
+            field_id=22, name="worst_month", field_type=StringType(), required=False
         ),
         NestedField(
-            field_id=23,
-            name="best_year",
-            field_type=StringType(),
-            required=False,
+            field_id=23, name="best_year", field_type=StringType(), required=False
         ),
         NestedField(
-            field_id=24,
-            name="worst_year",
-            field_type=StringType(),
-            required=False,
+            field_id=24, name="worst_year", field_type=StringType(), required=False
         ),
         NestedField(
-            field_id=25,
-            name="computed_at",
-            field_type=TimestampType(),
-            required=False,
+            field_id=25, name="computed_at", field_type=TimestampType(), required=False
         ),
     )
 
@@ -608,26 +389,14 @@ def _forecast_runs_schema() -> Schema:
         Schema: One row per Prophet run; stores targets at 3/6/9 months plus accuracy metrics.
     """
     return Schema(
+        NestedField(field_id=1, name="run_id", field_type=StringType(), required=False),
+        NestedField(field_id=2, name="ticker", field_type=StringType(), required=False),
         NestedField(
-            field_id=1, name="run_id", field_type=StringType(), required=False
+            field_id=3, name="horizon_months", field_type=IntegerType(), required=False
         ),
+        NestedField(field_id=4, name="run_date", field_type=DateType(), required=False),
         NestedField(
-            field_id=2, name="ticker", field_type=StringType(), required=False
-        ),
-        NestedField(
-            field_id=3,
-            name="horizon_months",
-            field_type=IntegerType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=4, name="run_date", field_type=DateType(), required=False
-        ),
-        NestedField(
-            field_id=5,
-            name="sentiment",
-            field_type=StringType(),
-            required=False,
+            field_id=5, name="sentiment", field_type=StringType(), required=False
         ),
         NestedField(
             field_id=6,
@@ -636,16 +405,10 @@ def _forecast_runs_schema() -> Schema:
             required=False,
         ),
         NestedField(
-            field_id=7,
-            name="target_3m_date",
-            field_type=DateType(),
-            required=False,
+            field_id=7, name="target_3m_date", field_type=DateType(), required=False
         ),
         NestedField(
-            field_id=8,
-            name="target_3m_price",
-            field_type=DoubleType(),
-            required=False,
+            field_id=8, name="target_3m_price", field_type=DoubleType(), required=False
         ),
         NestedField(
             field_id=9,
@@ -654,28 +417,16 @@ def _forecast_runs_schema() -> Schema:
             required=False,
         ),
         NestedField(
-            field_id=10,
-            name="target_3m_lower",
-            field_type=DoubleType(),
-            required=False,
+            field_id=10, name="target_3m_lower", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=11,
-            name="target_3m_upper",
-            field_type=DoubleType(),
-            required=False,
+            field_id=11, name="target_3m_upper", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=12,
-            name="target_6m_date",
-            field_type=DateType(),
-            required=False,
+            field_id=12, name="target_6m_date", field_type=DateType(), required=False
         ),
         NestedField(
-            field_id=13,
-            name="target_6m_price",
-            field_type=DoubleType(),
-            required=False,
+            field_id=13, name="target_6m_price", field_type=DoubleType(), required=False
         ),
         NestedField(
             field_id=14,
@@ -684,28 +435,16 @@ def _forecast_runs_schema() -> Schema:
             required=False,
         ),
         NestedField(
-            field_id=15,
-            name="target_6m_lower",
-            field_type=DoubleType(),
-            required=False,
+            field_id=15, name="target_6m_lower", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=16,
-            name="target_6m_upper",
-            field_type=DoubleType(),
-            required=False,
+            field_id=16, name="target_6m_upper", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=17,
-            name="target_9m_date",
-            field_type=DateType(),
-            required=False,
+            field_id=17, name="target_9m_date", field_type=DateType(), required=False
         ),
         NestedField(
-            field_id=18,
-            name="target_9m_price",
-            field_type=DoubleType(),
-            required=False,
+            field_id=18, name="target_9m_price", field_type=DoubleType(), required=False
         ),
         NestedField(
             field_id=19,
@@ -714,31 +453,16 @@ def _forecast_runs_schema() -> Schema:
             required=False,
         ),
         NestedField(
-            field_id=20,
-            name="target_9m_lower",
-            field_type=DoubleType(),
-            required=False,
+            field_id=20, name="target_9m_lower", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=21,
-            name="target_9m_upper",
-            field_type=DoubleType(),
-            required=False,
+            field_id=21, name="target_9m_upper", field_type=DoubleType(), required=False
         ),
+        NestedField(field_id=22, name="mae", field_type=DoubleType(), required=False),
+        NestedField(field_id=23, name="rmse", field_type=DoubleType(), required=False),
+        NestedField(field_id=24, name="mape", field_type=DoubleType(), required=False),
         NestedField(
-            field_id=22, name="mae", field_type=DoubleType(), required=False
-        ),
-        NestedField(
-            field_id=23, name="rmse", field_type=DoubleType(), required=False
-        ),
-        NestedField(
-            field_id=24, name="mape", field_type=DoubleType(), required=False
-        ),
-        NestedField(
-            field_id=25,
-            name="computed_at",
-            field_type=TimestampType(),
-            required=False,
+            field_id=25, name="computed_at", field_type=TimestampType(), required=False
         ),
     )
 
@@ -750,41 +474,22 @@ def _forecasts_schema() -> Schema:
         Schema: Full Prophet output series; partitioned by (ticker, horizon_months).
     """
     return Schema(
+        NestedField(field_id=1, name="ticker", field_type=StringType(), required=False),
         NestedField(
-            field_id=1, name="ticker", field_type=StringType(), required=False
+            field_id=2, name="horizon_months", field_type=IntegerType(), required=False
+        ),
+        NestedField(field_id=3, name="run_date", field_type=DateType(), required=False),
+        NestedField(
+            field_id=4, name="forecast_date", field_type=DateType(), required=False
         ),
         NestedField(
-            field_id=2,
-            name="horizon_months",
-            field_type=IntegerType(),
-            required=False,
+            field_id=5, name="predicted_price", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=3, name="run_date", field_type=DateType(), required=False
+            field_id=6, name="lower_bound", field_type=DoubleType(), required=False
         ),
         NestedField(
-            field_id=4,
-            name="forecast_date",
-            field_type=DateType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=5,
-            name="predicted_price",
-            field_type=DoubleType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=6,
-            name="lower_bound",
-            field_type=DoubleType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=7,
-            name="upper_bound",
-            field_type=DoubleType(),
-            required=False,
+            field_id=7, name="upper_bound", field_type=DoubleType(), required=False
         ),
     )
 
@@ -837,10 +542,7 @@ def _ticker_horizon_partition_spec(schema: Schema) -> PartitionSpec:
 
 
 def _create_table(
-    catalog: SqlCatalog,
-    identifier: str,
-    schema: Schema,
-    partition_spec: PartitionSpec,
+    catalog: SqlCatalog, identifier: str, schema: Schema, partition_spec: PartitionSpec
 ) -> None:
     """Create a single Iceberg table, skipping if it already exists.
 
@@ -892,27 +594,17 @@ def create_tables() -> None:
     empty_spec = PartitionSpec()
 
     _create_table(catalog, _REGISTRY_TABLE, _registry_schema(), empty_spec)
-    _create_table(
-        catalog, _COMPANY_INFO_TABLE, _company_info_schema(), empty_spec
-    )
+    _create_table(catalog, _COMPANY_INFO_TABLE, _company_info_schema(), empty_spec)
     _create_table(catalog, _DIVIDENDS_TABLE, _dividends_schema(), empty_spec)
     _create_table(
-        catalog,
-        _ANALYSIS_SUMMARY_TABLE,
-        _analysis_summary_schema(),
-        empty_spec,
+        catalog, _ANALYSIS_SUMMARY_TABLE, _analysis_summary_schema(), empty_spec
     )
-    _create_table(
-        catalog, _FORECAST_RUNS_TABLE, _forecast_runs_schema(), empty_spec
-    )
+    _create_table(catalog, _FORECAST_RUNS_TABLE, _forecast_runs_schema(), empty_spec)
 
     # Partitioned tables
     ohlcv_schema = _ohlcv_schema()
     _create_table(
-        catalog,
-        _OHLCV_TABLE,
-        ohlcv_schema,
-        _ticker_partition_spec(ohlcv_schema),
+        catalog, _OHLCV_TABLE, ohlcv_schema, _ticker_partition_spec(ohlcv_schema)
     )
 
     ti_schema = _technical_indicators_schema()

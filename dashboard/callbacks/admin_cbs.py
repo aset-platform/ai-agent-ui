@@ -17,10 +17,7 @@ import dash_bootstrap_components as dbc
 from dash import ALL, Input, Output, State, ctx, html, no_update
 
 from dashboard.callbacks.auth_utils import _api_call, _resolve_token
-from dashboard.callbacks.table_builders import (
-    _build_audit_table,
-    _build_users_table,
-)
+from dashboard.callbacks.table_builders import _build_audit_table, _build_users_table
 
 # Module-level logger; mutable but required at module scope for callback closures.
 _logger = logging.getLogger(__name__)
@@ -145,9 +142,7 @@ def register(app) -> None:
 
         total = len(users)
         if total == 0:
-            msg = (
-                "No matching users found." if q else "No user accounts found."
-            )
+            msg = "No matching users found." if q else "No user accounts found."
             return html.P(msg, className="text-muted"), 1, ""
         max_pages = max(1, math.ceil(total / page_size_int))
         page = min(active_page or 1, max_pages)
@@ -235,9 +230,7 @@ def register(app) -> None:
 
         total = len(events)
         if total == 0:
-            msg = (
-                "No matching events found." if q else "No audit events found."
-            )
+            msg = "No matching events found." if q else "No audit events found."
             return html.P(msg, className="text-muted"), 1, ""
         max_pages = max(1, math.ceil(total / page_size_int))
         page = min(active_page or 1, max_pages)

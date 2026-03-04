@@ -23,11 +23,7 @@ import pandas as pd
 import tools._stock_shared as _ss
 import yfinance as yf
 from langchain_core.tools import tool
-from tools._stock_registry import (
-    _check_existing_data,
-    _load_registry,
-    _update_registry,
-)
+from tools._stock_registry import _check_existing_data, _load_registry, _update_registry
 from tools._stock_shared import (
     _currency_symbol,
     _get_repo,
@@ -106,9 +102,7 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
             data_end = datetime.strptime(dr_end_str, "%Y-%m-%d").date()
         else:
             # Fallback: parse last_fetch_date if date_range is absent
-            data_end = datetime.strptime(
-                existing["last_fetch_date"], "%Y-%m-%d"
-            ).date()
+            data_end = datetime.strptime(existing["last_fetch_date"], "%Y-%m-%d").date()
 
         today = date.today()
         # Start one day after the last data point to avoid
@@ -117,17 +111,14 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
 
         if fetch_start > today:
             msg = (
-                f"Data is already up to date for {ticker} "
-                f"(last data: {data_end})."
+                f"Data is already up to date for {ticker} " f"(last data: {data_end})."
             )
             _logger.info(msg)
             return msg
 
         # Omit `end` so yfinance fetches up to the current moment
         # (including today's intraday data when the market is open).
-        new_df = yf.Ticker(ticker).history(
-            start=str(fetch_start), auto_adjust=False
-        )
+        new_df = yf.Ticker(ticker).history(start=str(fetch_start), auto_adjust=False)
 
         if new_df.empty:
             msg = (
@@ -175,9 +166,7 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
         return msg
 
     except Exception as e:
-        _logger.error(
-            "fetch_stock_data failed for %s: %s", ticker, e, exc_info=True
-        )
+        _logger.error("fetch_stock_data failed for %s: %s", ticker, e, exc_info=True)
         return f"Error fetching data for '{ticker}': {e}"
 
 
@@ -240,9 +229,7 @@ def get_stock_info(ticker: str) -> str:
         return json.dumps(result, indent=2)
 
     except Exception as e:
-        _logger.error(
-            "get_stock_info failed for %s: %s", ticker, e, exc_info=True
-        )
+        _logger.error("get_stock_info failed for %s: %s", ticker, e, exc_info=True)
         return f"Error fetching info for '{ticker}': {e}"
 
 
@@ -281,9 +268,7 @@ def load_stock_data(ticker: str) -> str:
             f"Columns: {cols}. Missing values: {missing}."
         )
     except Exception as e:
-        _logger.error(
-            "load_stock_data failed for %s: %s", ticker, e, exc_info=True
-        )
+        _logger.error("load_stock_data failed for %s: %s", ticker, e, exc_info=True)
         return f"Error loading data for '{ticker}': {e}"
 
 

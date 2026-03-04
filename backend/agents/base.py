@@ -21,12 +21,7 @@ from typing import Dict, Iterator, List
 import agents.loop as _loop
 import agents.stream as _stream
 from agents.config import MAX_ITERATIONS, AgentConfig
-from langchain_core.messages import (
-    AIMessage,
-    BaseMessage,
-    HumanMessage,
-    SystemMessage,
-)
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from tools.registry import ToolRegistry
 
 
@@ -45,9 +40,7 @@ class BaseAgent(ABC):
         llm_with_tools: The LLM with tools bound.
     """
 
-    def __init__(
-        self, config: AgentConfig, tool_registry: ToolRegistry
-    ) -> None:
+    def __init__(self, config: AgentConfig, tool_registry: ToolRegistry) -> None:
         """Initialise the agent and bind tools to the LLM.
 
         Args:
@@ -125,9 +118,7 @@ class BaseAgent(ABC):
         """
         return _loop.run(self, user_input, history)
 
-    def stream(
-        self, user_input: str, history: List[Dict] = []
-    ) -> Iterator[str]:
+    def stream(self, user_input: str, history: List[Dict] = []) -> Iterator[str]:
         """Execute the agentic loop, yielding NDJSON status events.
 
         Args:

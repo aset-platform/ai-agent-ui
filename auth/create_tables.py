@@ -73,50 +73,26 @@ def _users_schema() -> Schema:
         Schema: An Iceberg :class:`~pyiceberg.schema.Schema` describing all user fields.
     """
     return Schema(
+        NestedField(field_id=1, name="user_id", field_type=StringType(), required=True),
+        NestedField(field_id=2, name="email", field_type=StringType(), required=True),
         NestedField(
-            field_id=1, name="user_id", field_type=StringType(), required=True
+            field_id=3, name="hashed_password", field_type=StringType(), required=True
         ),
         NestedField(
-            field_id=2, name="email", field_type=StringType(), required=True
+            field_id=4, name="full_name", field_type=StringType(), required=True
+        ),
+        NestedField(field_id=5, name="role", field_type=StringType(), required=True),
+        NestedField(
+            field_id=6, name="is_active", field_type=BooleanType(), required=True
         ),
         NestedField(
-            field_id=3,
-            name="hashed_password",
-            field_type=StringType(),
-            required=True,
+            field_id=7, name="created_at", field_type=TimestampType(), required=True
         ),
         NestedField(
-            field_id=4,
-            name="full_name",
-            field_type=StringType(),
-            required=True,
+            field_id=8, name="updated_at", field_type=TimestampType(), required=True
         ),
         NestedField(
-            field_id=5, name="role", field_type=StringType(), required=True
-        ),
-        NestedField(
-            field_id=6,
-            name="is_active",
-            field_type=BooleanType(),
-            required=True,
-        ),
-        NestedField(
-            field_id=7,
-            name="created_at",
-            field_type=TimestampType(),
-            required=True,
-        ),
-        NestedField(
-            field_id=8,
-            name="updated_at",
-            field_type=TimestampType(),
-            required=True,
-        ),
-        NestedField(
-            field_id=9,
-            name="last_login_at",
-            field_type=TimestampType(),
-            required=False,
+            field_id=9, name="last_login_at", field_type=TimestampType(), required=False
         ),
         NestedField(
             field_id=10,
@@ -132,16 +108,10 @@ def _users_schema() -> Schema:
         ),
         # SSO columns — nullable; None for email-only accounts.
         NestedField(
-            field_id=12,
-            name="oauth_provider",
-            field_type=StringType(),
-            required=False,
+            field_id=12, name="oauth_provider", field_type=StringType(), required=False
         ),
         NestedField(
-            field_id=13,
-            name="oauth_sub",
-            field_type=StringType(),
-            required=False,
+            field_id=13, name="oauth_sub", field_type=StringType(), required=False
         ),
         NestedField(
             field_id=14,
@@ -169,22 +139,13 @@ def _audit_log_schema() -> Schema:
             field_id=1, name="event_id", field_type=StringType(), required=True
         ),
         NestedField(
-            field_id=2,
-            name="event_type",
-            field_type=StringType(),
-            required=True,
+            field_id=2, name="event_type", field_type=StringType(), required=True
         ),
         NestedField(
-            field_id=3,
-            name="actor_user_id",
-            field_type=StringType(),
-            required=True,
+            field_id=3, name="actor_user_id", field_type=StringType(), required=True
         ),
         NestedField(
-            field_id=4,
-            name="target_user_id",
-            field_type=StringType(),
-            required=True,
+            field_id=4, name="target_user_id", field_type=StringType(), required=True
         ),
         NestedField(
             field_id=5,
@@ -193,10 +154,7 @@ def _audit_log_schema() -> Schema:
             required=True,
         ),
         NestedField(
-            field_id=6,
-            name="metadata",
-            field_type=StringType(),
-            required=False,
+            field_id=6, name="metadata", field_type=StringType(), required=False
         ),
     )
 
@@ -237,9 +195,7 @@ def create_tables() -> None:
 
     # Create audit_log table
     try:
-        catalog.create_table(
-            identifier=_AUDIT_LOG_TABLE, schema=_audit_log_schema()
-        )
+        catalog.create_table(identifier=_AUDIT_LOG_TABLE, schema=_audit_log_schema())
         logger.info("Created Iceberg table '%s'.", _AUDIT_LOG_TABLE)
     except Exception:
         logger.info("Table '%s' already exists — skipping.", _AUDIT_LOG_TABLE)

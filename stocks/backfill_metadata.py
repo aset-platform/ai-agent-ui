@@ -52,9 +52,7 @@ def _backfill_registry() -> int:
 
     for ticker, entry in registry.items():
         if ticker in existing:
-            _logger.debug(
-                "Registry: %s already in Iceberg — skipping.", ticker
-            )
+            _logger.debug("Registry: %s already in Iceberg — skipping.", ticker)
             continue
         try:
             dr = entry.get("date_range", {})
@@ -67,18 +65,10 @@ def _backfill_registry() -> int:
                 ),
                 total_rows=int(entry.get("total_rows", 0)),
                 date_range_start=(
-                    date.fromisoformat(start_str)
-                    if start_str
-                    else date.today()
+                    date.fromisoformat(start_str) if start_str else date.today()
                 ),
-                date_range_end=(
-                    date.fromisoformat(end_str) if end_str else date.today()
-                ),
-                market=(
-                    "india"
-                    if ticker.upper().endswith((".NS", ".BO"))
-                    else "us"
-                ),
+                date_range_end=date.fromisoformat(end_str) if end_str else date.today(),
+                market="india" if ticker.upper().endswith((".NS", ".BO")) else "us",
             )
             inserted += 1
             _logger.info("Registry: inserted %s", ticker)
@@ -108,17 +98,14 @@ def _backfill_company_info() -> int:
         ticker = info_path.stem.replace("_info", "").upper()
         existing = repo.get_latest_company_info(ticker)
         if existing is not None:
-            _logger.debug(
-                "Company info: %s already in Iceberg — skipping.", ticker
-            )
+            _logger.debug("Company info: %s already in Iceberg — skipping.", ticker)
             continue
         try:
             with open(info_path) as fh:
                 info = json.load(fh)
             # Map flat JSON keys to yfinance-style keys for insert_company_info()
             mapped = {
-                "company_name": info.get("company_name")
-                or info.get("name", ""),
+                "company_name": info.get("company_name") or info.get("name", ""),
                 "sector": info.get("sector"),
                 "industry": info.get("industry"),
                 "marketCap": info.get("market_cap"),
@@ -132,9 +119,7 @@ def _backfill_company_info() -> int:
             inserted += 1
             _logger.info("Company info: inserted %s", ticker)
         except Exception as exc:
-            _logger.warning(
-                "Company info: failed to insert %s: %s", ticker, exc
-            )
+            _logger.warning("Company info: failed to insert %s: %s", ticker, exc)
 
     return inserted
 
@@ -164,9 +149,7 @@ def _backfill_ohlcv() -> int:
         existing = repo.get_ohlcv(ticker)
         if not existing.empty:
             _logger.debug(
-                "OHLCV: %s already has %d rows — skipping.",
-                ticker,
-                len(existing),
+                "OHLCV: %s already has %d rows — skipping.", ticker, len(existing)
             )
             continue
         try:

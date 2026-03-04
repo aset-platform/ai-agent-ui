@@ -13,11 +13,7 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import Input, Output, State, dcc, html
 
-from dashboard.callbacks import (
-    _admin_forbidden,
-    _unauth_notice,
-    _validate_token,
-)
+from dashboard.callbacks import _admin_forbidden, _unauth_notice, _validate_token
 from dashboard.layouts import (
     NAVBAR,
     admin_users_layout,
@@ -74,8 +70,7 @@ def build_layout(app: dash.Dash) -> None:
                     dbc.ModalBody(
                         [
                             html.Div(
-                                id="change-pw-error",
-                                className="text-danger small mb-2",
+                                id="change-pw-error", className="text-danger small mb-2"
                             ),
                             dbc.Row(
                                 [
@@ -173,8 +168,7 @@ def build_layout(app: dash.Dash) -> None:
         payload = _validate_token(token)
         if payload is None:
             _logger.debug(
-                "display_page: invalid or missing token for pathname=%s",
-                pathname,
+                "display_page: invalid or missing token for pathname=%s", pathname
             )
             return _unauth_notice()
 
@@ -190,16 +184,14 @@ def build_layout(app: dash.Dash) -> None:
         if pathname == "/insights":
             if role != "superuser" and not perms.get("insights"):
                 _logger.warning(
-                    "display_page: access denied to /insights for role=%s",
-                    role,
+                    "display_page: access denied to /insights for role=%s", role
                 )
                 return _admin_forbidden()
             return insights_layout()
         if pathname == "/admin/users":
             if role != "superuser" and not perms.get("admin"):
                 _logger.warning(
-                    "display_page: access denied to /admin/users for role=%s",
-                    role,
+                    "display_page: access denied to /admin/users for role=%s", role
                 )
                 return _admin_forbidden()
             return admin_users_layout()

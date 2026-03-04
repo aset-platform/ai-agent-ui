@@ -58,8 +58,7 @@ def admin_users_layout() -> html.Div:
                                     ),
                                     # Status message from save/delete operations
                                     html.Div(
-                                        id="users-action-status",
-                                        className="mb-3",
+                                        id="users-action-status", className="mb-3"
                                     ),
                                     # Search filter
                                     dbc.Input(
@@ -73,9 +72,7 @@ def admin_users_layout() -> html.Div:
                                         id="loading-users",
                                         type="circle",
                                         color="#4f46e5",
-                                        children=html.Div(
-                                            id="users-table-container"
-                                        ),
+                                        children=html.Div(id="users-table-container"),
                                     ),
                                     # Users pagination row
                                     dbc.Row(
@@ -142,10 +139,7 @@ def admin_users_layout() -> html.Div:
                             html.Div(
                                 className="mt-3",
                                 children=[
-                                    html.H5(
-                                        "Audit Log",
-                                        className="text-muted mb-3",
-                                    ),
+                                    html.H5("Audit Log", className="text-muted mb-3"),
                                     # Search filter
                                     dbc.Input(
                                         id="audit-search",
@@ -158,9 +152,7 @@ def admin_users_layout() -> html.Div:
                                         id="loading-audit",
                                         type="circle",
                                         color="#4f46e5",
-                                        children=html.Div(
-                                            id="audit-log-container"
-                                        ),
+                                        children=html.Div(id="audit-log-container"),
                                     ),
                                     # Audit pagination row
                                     dbc.Row(
@@ -352,20 +344,12 @@ def admin_users_layout() -> html.Div:
                             html.Div(
                                 id="user-permissions-section",
                                 children=[
-                                    dbc.Label(
-                                        "Page Access (for non-superuser roles)"
-                                    ),
+                                    dbc.Label("Page Access (for non-superuser roles)"),
                                     dbc.Checklist(
                                         id="user-permissions-checklist",
                                         options=[
-                                            {
-                                                "label": "Insights",
-                                                "value": "insights",
-                                            },
-                                            {
-                                                "label": "Admin",
-                                                "value": "admin",
-                                            },
+                                            {"label": "Insights", "value": "insights"},
+                                            {"label": "Admin", "value": "admin"},
                                         ],
                                         value=[],
                                         inline=True,

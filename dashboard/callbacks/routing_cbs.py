@@ -95,9 +95,7 @@ def register(app) -> None:
         resolved = pathname or "/"
         page_name = _PAGE_NAMES.get(resolved, "")
         logger.debug(
-            "Navbar page name updated to %r for pathname %r.",
-            page_name,
-            resolved,
+            "Navbar page name updated to %r for pathname %r.", page_name, resolved
         )
         return page_name
 
@@ -131,6 +129,4 @@ def register(app) -> None:
         insights_ok = role == "superuser" or bool(perms.get("insights"))
         admin_ok = role == "superuser" or bool(perms.get("admin"))
 
-        return (_show if insights_ok else _hide), (
-            _show if admin_ok else _hide
-        )
+        return (_show if insights_ok else _hide), (_show if admin_ok else _hide)
