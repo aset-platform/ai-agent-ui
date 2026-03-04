@@ -78,7 +78,9 @@ def create_search_market_news_tool(general_agent: BaseAgent) -> BaseTool:
         logger.info("search_market_news | query=%r", query)
         try:
             result = general_agent.run(user_input=query, history=[])
-            logger.debug("search_market_news result length: %d chars", len(result))
+            logger.debug(
+                "search_market_news result length: %d chars", len(result)
+            )
             return result
         except Exception as exc:
             logger.error("search_market_news failed: %s", exc, exc_info=True)

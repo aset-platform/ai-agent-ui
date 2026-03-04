@@ -248,7 +248,9 @@ class StockRepository:
                 return df
             return df[(df[col1] == val1) & (df[col2] == val2)].copy()
 
-    def _load_table_and_scan(self, identifier: str) -> Tuple[Any, pd.DataFrame]:
+    def _load_table_and_scan(
+        self, identifier: str
+    ) -> Tuple[Any, pd.DataFrame]:
         """Load a table and materialise its contents, returning both.
 
         Avoids the double load that occurs when code calls ``_table_to_df()``
@@ -389,12 +391,15 @@ class StockRepository:
                 "ticker": ticker,
                 "last_fetch_date": str(lfd)[:10] if lfd else "",
                 "total_rows": (
-                    int(row["total_rows"]) if row.get("total_rows") is not None else 0
+                    int(row["total_rows"])
+                    if row.get("total_rows") is not None
+                    else 0
                 ),
                 "date_range": {
                     "start": str(start)[:10] if start else "",
                     "end": str(end)[:10] if end else "",
                 },
+                "market": str(row.get("market", "us")),
                 "file_path": str(
                     Path(__file__).parent.parent
                     / "data"
@@ -428,14 +433,19 @@ class StockRepository:
             "ticker": ticker,
             "last_fetch_date": str(lfd)[:10] if lfd else "",
             "total_rows": (
-                int(row["total_rows"]) if row.get("total_rows") is not None else 0
+                int(row["total_rows"])
+                if row.get("total_rows") is not None
+                else 0
             ),
             "date_range": {
                 "start": str(start)[:10] if start else "",
                 "end": str(end)[:10] if end else "",
             },
             "file_path": str(
-                Path(__file__).parent.parent / "data" / "raw" / f"{ticker}_raw.parquet"
+                Path(__file__).parent.parent
+                / "data"
+                / "raw"
+                / f"{ticker}_raw.parquet"
             ),
         }
 
@@ -499,36 +509,62 @@ class StockRepository:
                 "info_id": pa.array([str(uuid.uuid4())], pa.string()),
                 "ticker": pa.array([ticker], pa.string()),
                 "company_name": pa.array(
-                    [str(info.get("company_name") or info.get("longName") or "")],
+                    [
+                        str(
+                            info.get("company_name")
+                            or info.get("longName")
+                            or ""
+                        )
+                    ],
                     pa.string(),
                 ),
                 "sector": pa.array([info.get("sector")], pa.string()),
                 "industry": pa.array([info.get("industry")], pa.string()),
                 "market_cap": pa.array(
-                    [_safe_int(info.get("market_cap") or info.get("marketCap"))],
+                    [
+                        _safe_int(
+                            info.get("market_cap") or info.get("marketCap")
+                        )
+                    ],
                     pa.int64(),
                 ),
                 "pe_ratio": pa.array(
-                    [_safe_float(info.get("pe_ratio") or info.get("trailingPE"))],
+                    [
+                        _safe_float(
+                            info.get("pe_ratio") or info.get("trailingPE")
+                        )
+                    ],
                     pa.float64(),
                 ),
                 "week_52_high": pa.array(
-                    [_safe_float(info.get("52w_high") or info.get("fiftyTwoWeekHigh"))],
+                    [
+                        _safe_float(
+                            info.get("52w_high")
+                            or info.get("fiftyTwoWeekHigh")
+                        )
+                    ],
                     pa.float64(),
                 ),
                 "week_52_low": pa.array(
-                    [_safe_float(info.get("52w_low") or info.get("fiftyTwoWeekLow"))],
+                    [
+                        _safe_float(
+                            info.get("52w_low") or info.get("fiftyTwoWeekLow")
+                        )
+                    ],
                     pa.float64(),
                 ),
                 "current_price": pa.array(
                     [
                         _safe_float(
-                            info.get("current_price") or info.get("currentPrice")
+                            info.get("current_price")
+                            or info.get("currentPrice")
                         )
                     ],
                     pa.float64(),
                 ),
-                "currency": pa.array([str(info.get("currency") or "USD")], pa.string()),
+                "currency": pa.array(
+                    [str(info.get("currency") or "USD")], pa.string()
+                ),
                 "fetched_at": pa.array([_now_utc()], pa.timestamp("us")),
                 "exchange": pa.array([info.get("exchange")], pa.string()),
                 "country": pa.array([info.get("country")], pa.string()),
@@ -538,7 +574,9 @@ class StockRepository:
                 "dividend_yield": pa.array(
                     [_safe_float(info.get("dividendYield"))], pa.float64()
                 ),
-                "beta": pa.array([_safe_float(info.get("beta"))], pa.float64()),
+                "beta": pa.array(
+                    [_safe_float(info.get("beta"))], pa.float64()
+                ),
                 "book_value": pa.array(
                     [_safe_float(info.get("bookValue"))], pa.float64()
                 ),
@@ -641,7 +679,9 @@ class StockRepository:
             return 0
 
         # Normalise index to date objects (Fix #10: use date objects not strings)
-        all_dates = pd.to_datetime(df.index).date  # numpy array of date objects
+        all_dates = pd.to_datetime(
+            df.index
+        ).date  # numpy array of date objects
 
         # Fix #1 + #2: load table once; predicate push-down for existing dates
         try:
@@ -660,13 +700,17 @@ class StockRepository:
                 existing_dates = set()
         except Exception as exc:
             _logger.warning(
-                "OHLCV predicate scan failed for %s (%s); falling back.", ticker, exc
+                "OHLCV predicate scan failed for %s (%s); falling back.",
+                ticker,
+                exc,
             )
             tbl = self._load_table(_OHLCV)
             full_df = tbl.scan().to_pandas()
             if not full_df.empty:
                 mask = full_df["ticker"] == ticker
-                existing_dates = {_to_date(d) for d in full_df.loc[mask, "date"]}
+                existing_dates = {
+                    _to_date(d) for d in full_df.loc[mask, "date"]
+                }
             else:
                 existing_dates = set()
 
@@ -703,7 +747,9 @@ class StockRepository:
                     [
                         _safe_float(v)
                         for v in (
-                            filtered[adj_col] if adj_col else [None] * len(filtered)
+                            filtered[adj_col]
+                            if adj_col
+                            else [None] * len(filtered)
                         )
                     ],
                     pa.float64(),
@@ -711,11 +757,15 @@ class StockRepository:
                 "volume": pa.array(
                     [_safe_int(v) for v in filtered["Volume"]], pa.int64()
                 ),
-                "fetched_at": pa.array([now] * len(new_dates), pa.timestamp("us")),
+                "fetched_at": pa.array(
+                    [now] * len(new_dates), pa.timestamp("us")
+                ),
             }
         )
         tbl.append(arrow_tbl)
-        _logger.debug("Inserted %d new OHLCV rows for %s", len(new_dates), ticker)
+        _logger.debug(
+            "Inserted %d new OHLCV rows for %s", len(new_dates), ticker
+        )
         return len(new_dates)
 
     def get_ohlcv(
@@ -760,6 +810,91 @@ class StockRepository:
             return None
         latest = pd.to_datetime(df["date"]).max()
         return latest.date() if pd.notna(latest) else None
+
+    def update_ohlcv_adj_close(self, ticker: str, adj_close_map: dict) -> int:
+        """Update ``adj_close`` values for existing OHLCV rows for *ticker*.
+
+        Uses copy-on-write: reads the full OHLCV table, merges
+        ``adj_close`` values from *adj_close_map* for the given ticker,
+        then overwrites the table.  Rows for other tickers are untouched.
+
+        Args:
+            ticker: Uppercase ticker symbol.
+            adj_close_map: Dict mapping :class:`datetime.date` objects
+                to ``adj_close`` float values.
+
+        Returns:
+            Number of rows updated.
+        """
+        if not adj_close_map:
+            return 0
+
+        ticker = ticker.upper()
+        tbl, full_df = self._load_table_and_scan(_OHLCV)
+        if full_df.empty:
+            _logger.warning("OHLCV table is empty — nothing to update.")
+            return 0
+
+        # Normalise date column so lookups use datetime.date objects
+        full_df["_date_key"] = pd.to_datetime(full_df["date"]).dt.date
+
+        mask = full_df["ticker"] == ticker
+        updated = 0
+        for idx in full_df.index[mask]:
+            d = full_df.at[idx, "_date_key"]
+            if d in adj_close_map:
+                new_val = _safe_float(adj_close_map[d])
+                if new_val is not None:
+                    full_df.at[idx, "adj_close"] = new_val
+                    updated += 1
+
+        full_df.drop(columns=["_date_key"], inplace=True)
+
+        if updated == 0:
+            _logger.debug("No adj_close updates needed for %s", ticker)
+            return 0
+
+        # Rebuild Arrow table matching the OHLCV schema
+        now = _now_utc()
+        arrow_tbl = pa.table(
+            {
+                "ticker": pa.array(full_df["ticker"].tolist(), pa.string()),
+                "date": pa.array(
+                    pd.to_datetime(full_df["date"]).dt.date.tolist(),
+                    pa.date32(),
+                ),
+                "open": pa.array(
+                    [_safe_float(v) for v in full_df["open"]],
+                    pa.float64(),
+                ),
+                "high": pa.array(
+                    [_safe_float(v) for v in full_df["high"]],
+                    pa.float64(),
+                ),
+                "low": pa.array(
+                    [_safe_float(v) for v in full_df["low"]],
+                    pa.float64(),
+                ),
+                "close": pa.array(
+                    [_safe_float(v) for v in full_df["close"]],
+                    pa.float64(),
+                ),
+                "adj_close": pa.array(
+                    [_safe_float(v) for v in full_df["adj_close"]],
+                    pa.float64(),
+                ),
+                "volume": pa.array(
+                    [_safe_int(v) for v in full_df["volume"]],
+                    pa.int64(),
+                ),
+                "fetched_at": pa.array(
+                    [now] * len(full_df), pa.timestamp("us")
+                ),
+            }
+        )
+        tbl.overwrite(arrow_tbl)
+        _logger.info("Updated %d adj_close rows for %s", updated, ticker)
+        return updated
 
     # ------------------------------------------------------------------
     # Dividends
@@ -810,7 +945,9 @@ class StockRepository:
             full_df = tbl.scan().to_pandas()
             if not full_df.empty:
                 mask = full_df["ticker"] == ticker
-                existing_dates = {_to_date(d) for d in full_df.loc[mask, "ex_date"]}
+                existing_dates = {
+                    _to_date(d) for d in full_df.loc[mask, "ex_date"]
+                }
             else:
                 existing_dates = set()
 
@@ -845,7 +982,9 @@ class StockRepository:
             }
         )
         tbl.append(arrow_tbl)
-        _logger.debug("Inserted %d new dividend rows for %s", len(tickers_out), ticker)
+        _logger.debug(
+            "Inserted %d new dividend rows for %s", len(tickers_out), ticker
+        )
         return len(tickers_out)
 
     def get_dividends(self, ticker: str) -> pd.DataFrame:
@@ -866,7 +1005,9 @@ class StockRepository:
     # Technical indicators
     # ------------------------------------------------------------------
 
-    def upsert_technical_indicators(self, ticker: str, df: pd.DataFrame) -> None:
+    def upsert_technical_indicators(
+        self, ticker: str, df: pd.DataFrame
+    ) -> None:
         """Insert or update technical indicator rows for *ticker*.
 
         Replaces all existing rows for this ticker (partition overwrite).
@@ -890,7 +1031,9 @@ class StockRepository:
         def _get(canonical: str, alt: str) -> List[Optional[float]]:
             """Extract a column by canonical or alternate name."""
             col = (
-                canonical if canonical in col_set else (alt if alt in col_set else None)
+                canonical
+                if canonical in col_set
+                else (alt if alt in col_set else None)
             )
             if col is None:
                 return [None] * len(df)
@@ -909,10 +1052,18 @@ class StockRepository:
                 "macd_signal": pa.array(
                     _get("MACD_Signal", "macd_signal"), pa.float64()
                 ),
-                "macd_hist": pa.array(_get("MACD_Hist", "macd_hist"), pa.float64()),
-                "bb_upper": pa.array(_get("BB_Upper", "bb_upper"), pa.float64()),
-                "bb_middle": pa.array(_get("BB_Middle", "bb_middle"), pa.float64()),
-                "bb_lower": pa.array(_get("BB_Lower", "bb_lower"), pa.float64()),
+                "macd_hist": pa.array(
+                    _get("MACD_Hist", "macd_hist"), pa.float64()
+                ),
+                "bb_upper": pa.array(
+                    _get("BB_Upper", "bb_upper"), pa.float64()
+                ),
+                "bb_middle": pa.array(
+                    _get("BB_Middle", "bb_middle"), pa.float64()
+                ),
+                "bb_lower": pa.array(
+                    _get("BB_Lower", "bb_lower"), pa.float64()
+                ),
                 "atr_14": pa.array(_get("ATR_14", "atr_14"), pa.float64()),
                 "daily_return": pa.array(
                     (
@@ -922,7 +1073,9 @@ class StockRepository:
                     ),
                     pa.float64(),
                 ),
-                "computed_at": pa.array([now] * len(dates), pa.timestamp("us")),
+                "computed_at": pa.array(
+                    [now] * len(dates), pa.timestamp("us")
+                ),
             }
         )
 
@@ -939,7 +1092,9 @@ class StockRepository:
             tbl.append(arrow_tbl)
 
         _logger.debug(
-            "Technical indicators upserted for %s (%d rows)", ticker, len(dates)
+            "Technical indicators upserted for %s (%d rows)",
+            ticker,
+            len(dates),
         )
 
     def get_technical_indicators(
@@ -971,7 +1126,9 @@ class StockRepository:
     # Analysis summary
     # ------------------------------------------------------------------
 
-    def insert_analysis_summary(self, ticker: str, summary: Dict[str, Any]) -> None:
+    def insert_analysis_summary(
+        self, ticker: str, summary: Dict[str, Any]
+    ) -> None:
         """Append a daily analysis summary snapshot for *ticker*.
 
         Args:
@@ -992,17 +1149,20 @@ class StockRepository:
                     [_safe_float(summary.get("bear_phase_pct"))], pa.float64()
                 ),
                 "max_drawdown_pct": pa.array(
-                    [_safe_float(summary.get("max_drawdown_pct"))], pa.float64()
+                    [_safe_float(summary.get("max_drawdown_pct"))],
+                    pa.float64(),
                 ),
                 "max_drawdown_duration_days": pa.array(
-                    [_safe_int(summary.get("max_drawdown_duration_days"))], pa.int64()
+                    [_safe_int(summary.get("max_drawdown_duration_days"))],
+                    pa.int64(),
                 ),
                 "annualized_volatility_pct": pa.array(
                     [_safe_float(summary.get("annualized_volatility_pct"))],
                     pa.float64(),
                 ),
                 "annualized_return_pct": pa.array(
-                    [_safe_float(summary.get("annualized_return_pct"))], pa.float64()
+                    [_safe_float(summary.get("annualized_return_pct"))],
+                    pa.float64(),
                 ),
                 "sharpe_ratio": pa.array(
                     [_safe_float(summary.get("sharpe_ratio"))], pa.float64()
@@ -1025,25 +1185,37 @@ class StockRepository:
                 "resistance_levels": pa.array(
                     [summary.get("resistance_levels")], pa.string()
                 ),
-                "sma_50_signal": pa.array([summary.get("sma_50_signal")], pa.string()),
+                "sma_50_signal": pa.array(
+                    [summary.get("sma_50_signal")], pa.string()
+                ),
                 "sma_200_signal": pa.array(
                     [summary.get("sma_200_signal")], pa.string()
                 ),
-                "rsi_signal": pa.array([summary.get("rsi_signal")], pa.string()),
+                "rsi_signal": pa.array(
+                    [summary.get("rsi_signal")], pa.string()
+                ),
                 "macd_signal_text": pa.array(
                     [summary.get("macd_signal_text")], pa.string()
                 ),
-                "best_month": pa.array([summary.get("best_month")], pa.string()),
-                "worst_month": pa.array([summary.get("worst_month")], pa.string()),
+                "best_month": pa.array(
+                    [summary.get("best_month")], pa.string()
+                ),
+                "worst_month": pa.array(
+                    [summary.get("worst_month")], pa.string()
+                ),
                 "best_year": pa.array([summary.get("best_year")], pa.string()),
-                "worst_year": pa.array([summary.get("worst_year")], pa.string()),
+                "worst_year": pa.array(
+                    [summary.get("worst_year")], pa.string()
+                ),
                 "computed_at": pa.array([_now_utc()], pa.timestamp("us")),
             }
         )
         self._append_rows(_ANALYSIS_SUMMARY, row)
         _logger.debug("analysis_summary appended for %s", ticker)
 
-    def get_latest_analysis_summary(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_latest_analysis_summary(
+        self, ticker: str
+    ) -> Optional[Dict[str, Any]]:
         """Return the most recent analysis summary for *ticker*.
 
         Args:
@@ -1055,7 +1227,9 @@ class StockRepository:
         df = self._scan_ticker(_ANALYSIS_SUMMARY, ticker.upper())
         if df.empty:
             return None
-        return df.sort_values("analysis_date", ascending=False).iloc[0].to_dict()
+        return (
+            df.sort_values("analysis_date", ascending=False).iloc[0].to_dict()
+        )
 
     def get_all_latest_analysis_summary(
         self,
@@ -1125,63 +1299,86 @@ class StockRepository:
                 "ticker": pa.array([ticker], pa.string()),
                 "horizon_months": pa.array([int(horizon_months)], pa.int32()),
                 "run_date": pa.array([_to_date(today)], pa.date32()),
-                "sentiment": pa.array([run_dict.get("sentiment")], pa.string()),
+                "sentiment": pa.array(
+                    [run_dict.get("sentiment")], pa.string()
+                ),
                 "current_price_at_run": pa.array(
-                    [_safe_float(run_dict.get("current_price_at_run"))], pa.float64()
+                    [_safe_float(run_dict.get("current_price_at_run"))],
+                    pa.float64(),
                 ),
                 "target_3m_date": pa.array(
                     [_to_date(run_dict.get("target_3m_date"))], pa.date32()
                 ),
                 "target_3m_price": pa.array(
-                    [_safe_float(run_dict.get("target_3m_price"))], pa.float64()
+                    [_safe_float(run_dict.get("target_3m_price"))],
+                    pa.float64(),
                 ),
                 "target_3m_pct_change": pa.array(
-                    [_safe_float(run_dict.get("target_3m_pct_change"))], pa.float64()
+                    [_safe_float(run_dict.get("target_3m_pct_change"))],
+                    pa.float64(),
                 ),
                 "target_3m_lower": pa.array(
-                    [_safe_float(run_dict.get("target_3m_lower"))], pa.float64()
+                    [_safe_float(run_dict.get("target_3m_lower"))],
+                    pa.float64(),
                 ),
                 "target_3m_upper": pa.array(
-                    [_safe_float(run_dict.get("target_3m_upper"))], pa.float64()
+                    [_safe_float(run_dict.get("target_3m_upper"))],
+                    pa.float64(),
                 ),
                 "target_6m_date": pa.array(
                     [_to_date(run_dict.get("target_6m_date"))], pa.date32()
                 ),
                 "target_6m_price": pa.array(
-                    [_safe_float(run_dict.get("target_6m_price"))], pa.float64()
+                    [_safe_float(run_dict.get("target_6m_price"))],
+                    pa.float64(),
                 ),
                 "target_6m_pct_change": pa.array(
-                    [_safe_float(run_dict.get("target_6m_pct_change"))], pa.float64()
+                    [_safe_float(run_dict.get("target_6m_pct_change"))],
+                    pa.float64(),
                 ),
                 "target_6m_lower": pa.array(
-                    [_safe_float(run_dict.get("target_6m_lower"))], pa.float64()
+                    [_safe_float(run_dict.get("target_6m_lower"))],
+                    pa.float64(),
                 ),
                 "target_6m_upper": pa.array(
-                    [_safe_float(run_dict.get("target_6m_upper"))], pa.float64()
+                    [_safe_float(run_dict.get("target_6m_upper"))],
+                    pa.float64(),
                 ),
                 "target_9m_date": pa.array(
                     [_to_date(run_dict.get("target_9m_date"))], pa.date32()
                 ),
                 "target_9m_price": pa.array(
-                    [_safe_float(run_dict.get("target_9m_price"))], pa.float64()
+                    [_safe_float(run_dict.get("target_9m_price"))],
+                    pa.float64(),
                 ),
                 "target_9m_pct_change": pa.array(
-                    [_safe_float(run_dict.get("target_9m_pct_change"))], pa.float64()
+                    [_safe_float(run_dict.get("target_9m_pct_change"))],
+                    pa.float64(),
                 ),
                 "target_9m_lower": pa.array(
-                    [_safe_float(run_dict.get("target_9m_lower"))], pa.float64()
+                    [_safe_float(run_dict.get("target_9m_lower"))],
+                    pa.float64(),
                 ),
                 "target_9m_upper": pa.array(
-                    [_safe_float(run_dict.get("target_9m_upper"))], pa.float64()
+                    [_safe_float(run_dict.get("target_9m_upper"))],
+                    pa.float64(),
                 ),
-                "mae": pa.array([_safe_float(run_dict.get("mae"))], pa.float64()),
-                "rmse": pa.array([_safe_float(run_dict.get("rmse"))], pa.float64()),
-                "mape": pa.array([_safe_float(run_dict.get("mape"))], pa.float64()),
+                "mae": pa.array(
+                    [_safe_float(run_dict.get("mae"))], pa.float64()
+                ),
+                "rmse": pa.array(
+                    [_safe_float(run_dict.get("rmse"))], pa.float64()
+                ),
+                "mape": pa.array(
+                    [_safe_float(run_dict.get("mape"))], pa.float64()
+                ),
                 "computed_at": pa.array([_now_utc()], pa.timestamp("us")),
             }
         )
         self._append_rows(_FORECAST_RUNS, row)
-        _logger.debug("forecast_run appended for %s %dm", ticker, horizon_months)
+        _logger.debug(
+            "forecast_run appended for %s %dm", ticker, horizon_months
+        )
 
     def get_latest_forecast_run(
         self, ticker: str, horizon_months: int
@@ -1205,6 +1402,35 @@ class StockRepository:
         if df.empty:
             return None
         return df.sort_values("run_date", ascending=False).iloc[0].to_dict()
+
+    def get_all_latest_forecast_runs(
+        self, horizon_months: int
+    ) -> pd.DataFrame:
+        """Return the most recent forecast run per ticker.
+
+        Reads the ``forecast_runs`` table once, filters by
+        *horizon_months*, and keeps only the row with the
+        latest ``run_date`` for each ticker.  Pattern matches
+        :meth:`get_all_latest_company_info`.
+
+        Args:
+            horizon_months: Forecast horizon (3, 6, or 9).
+
+        Returns:
+            DataFrame with one row per ticker (latest
+            ``run_date``), or an empty DataFrame.
+        """
+        df = self._table_to_df(_FORECAST_RUNS)
+        if df.empty:
+            return df
+        filtered = df[df["horizon_months"] == int(horizon_months)]
+        if filtered.empty:
+            return pd.DataFrame()
+        return (
+            filtered.sort_values("run_date", ascending=False)
+            .groupby("ticker", as_index=False)
+            .first()
+        )
 
     # ------------------------------------------------------------------
     # Forecast series
@@ -1244,7 +1470,9 @@ class StockRepository:
             mask = [
                 t == ticker and h == int(horizon_months) and d == run_date
                 for t, h, d in zip(
-                    existing["ticker"], existing["horizon_months"], run_date_vals
+                    existing["ticker"],
+                    existing["horizon_months"],
+                    run_date_vals,
                 )
             ]
             existing = existing[[not m for m in mask]]
@@ -1262,10 +1490,16 @@ class StockRepository:
         arrow_new = pa.table(
             {
                 "ticker": pa.array(new_rows["ticker"], pa.string()),
-                "horizon_months": pa.array(new_rows["horizon_months"], pa.int32()),
+                "horizon_months": pa.array(
+                    new_rows["horizon_months"], pa.int32()
+                ),
                 "run_date": pa.array(new_rows["run_date"], pa.date32()),
-                "forecast_date": pa.array(new_rows["forecast_date"], pa.date32()),
-                "predicted_price": pa.array(new_rows["predicted_price"], pa.float64()),
+                "forecast_date": pa.array(
+                    new_rows["forecast_date"], pa.date32()
+                ),
+                "predicted_price": pa.array(
+                    new_rows["predicted_price"], pa.float64()
+                ),
                 "lower_bound": pa.array(new_rows["lower_bound"], pa.float64()),
                 "upper_bound": pa.array(new_rows["upper_bound"], pa.float64()),
             }
@@ -1302,7 +1536,11 @@ class StockRepository:
             lower_bound, upper_bound — sorted by forecast_date.
         """
         df = self._scan_two_filters(
-            _FORECASTS, "ticker", ticker.upper(), "horizon_months", int(horizon_months)
+            _FORECASTS,
+            "ticker",
+            ticker.upper(),
+            "horizon_months",
+            int(horizon_months),
         )
         if df.empty:
             return df

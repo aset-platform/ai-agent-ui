@@ -86,11 +86,15 @@ class OAuthService:
         so the dict never grows unboundedly.
         """
         now = time.time()
-        expired = [k for k, v in self._state_store.items() if v["expires"] < now]
+        expired = [
+            k for k, v in self._state_store.items() if v["expires"] < now
+        ]
         for k in expired:
             del self._state_store[k]
         if expired:
-            self._logger.debug("Pruned %d expired OAuth state token(s).", len(expired))
+            self._logger.debug(
+                "Pruned %d expired OAuth state token(s).", len(expired)
+            )
 
     def generate_authorize_url(
         self, provider: str, code_challenge: str
@@ -238,7 +242,9 @@ class OAuthService:
 
         id_token_str = tokens.get("id_token")
         if not id_token_str:
-            raise ValueError("Google token response did not include an id_token.")
+            raise ValueError(
+                "Google token response did not include an id_token."
+            )
 
         # Decode without signature verification — trust HTTPS + Google's TLS.
         payload = jwt.decode(
@@ -324,7 +330,9 @@ class OAuthService:
         else:
             picture = None
 
-        self._logger.info("Facebook SSO exchange: fb_id=%s email=%s", fb_id, email)
+        self._logger.info(
+            "Facebook SSO exchange: fb_id=%s email=%s", fb_id, email
+        )
         return {
             "provider": "facebook",
             "sub": fb_id,

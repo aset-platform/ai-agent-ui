@@ -5,21 +5,53 @@ interactive analysis chart (candlestick + RSI + MACD).
 
 Example::
 
-    from dashboard.callbacks.chart_builders import _build_analysis_fig, _empty_fig
+    from dashboard.callbacks.chart_builders import (
+        _build_analysis_fig, _empty_fig,
+    )
 """
 
 import logging
 from typing import List
 
+import holidays as holidays_lib
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from dashboard.callbacks.data_loaders import _add_indicators  # noqa: F401 — re-exported
+from dashboard.callbacks.data_loaders import (  # noqa: F401 — re-exported
+    _add_indicators,
+)
 
 # Module-level logger — kept at module scope as a private constant.
 _logger = logging.getLogger(__name__)
+
+
+def _get_market_holidays(market: str, start_year: int, end_year: int) -> dict:
+    """Return exchange holidays as ``{date: name}`` dict.
+
+    Uses :func:`holidays.financial_holidays` with exchange
+    codes ``XNSE`` (India) or ``XNYS`` (US).
+
+    Args:
+        market: ``"india"`` or ``"us"``.
+        start_year: First calendar year to include.
+        end_year: Last calendar year to include.
+
+    Returns:
+        Dict mapping :class:`datetime.date` to holiday name.
+    """
+    exchange = "XNSE" if market == "india" else "XNYS"
+    try:
+        return dict(
+            holidays_lib.financial_holidays(
+                exchange,
+                years=range(start_year, end_year + 1),
+            )
+        )
+    except Exception:
+        _logger.debug("Could not load holidays for %s", exchange)
+        return {}
 
 
 def _empty_fig(message: str, height: int = 400) -> go.Figure:
@@ -58,22 +90,31 @@ def _build_analysis_fig(
     df: pd.DataFrame,
     ticker: str,
     overlays: List[str],
+    div_df: pd.DataFrame | None = None,
+    market: str = "us",
 ) -> go.Figure:
     """Build the 3-panel interactive analysis chart.
 
-    Panel 1 (60 %): Candlestick + optional SMA 50 / SMA 200 / Bollinger
-    Bands overlays + optional Volume bars on a secondary y-axis.
+    Panel 1 (60 %): Candlestick + optional SMA 50 / SMA 200 /
+    Bollinger Bands overlays + optional Volume bars on a
+    secondary y-axis.  Optional holiday annotations and
+    dividend markers.
     Panel 2 (20 %): RSI (14) with overbought/oversold zones.
     Panel 3 (20 %): MACD line, signal line, and histogram.
 
     Args:
-        df: OHLCV DataFrame with indicator columns already added.
+        df: OHLCV DataFrame with indicator columns.
         ticker: Ticker symbol used in the chart title.
-        overlays: List of active overlay keys
-            (``"sma50"``, ``"sma200"``, ``"bb"``, ``"volume"``).
+        overlays: Active overlay keys (``"sma50"``,
+            ``"sma200"``, ``"bb"``, ``"volume"``,
+            ``"holidays"``, ``"dividends"``).
+        div_df: Dividend DataFrame with ``ex_date`` and
+            ``dividend_amount`` columns, or ``None``.
+        market: ``"india"`` or ``"us"`` — selects the
+            exchange holiday calendar.
 
     Returns:
-        :class:`plotly.graph_objects.Figure` for use in a :class:`dcc.Graph`.
+        :class:`plotly.graph_objects.Figure`.
     """
     fig = make_subplots(
         rows=3,
@@ -160,7 +201,9 @@ def _build_analysis_fig(
 
     if "volume" in overlays and "Volume" in df.columns:
         # Fix #22: vectorised colour array — avoids Python loop over rows
-        vol_colors = np.where(df["Close"] >= df["Open"], "#26a69a", "#ef5350").tolist()
+        vol_colors = np.where(
+            df["Close"] >= df["Open"], "#26a69a", "#ef5350"
+        ).tolist()
         fig.add_trace(
             go.Bar(
                 x=df.index,
@@ -183,6 +226,87 @@ def _build_analysis_fig(
             tickfont=dict(size=9),
         )
 
+    # ── Holiday annotations ──────────────────────────────────────────
+    if "holidays" in overlays and len(df) > 0:
+        start_yr = df.index.min().year
+        end_yr = df.index.max().year
+        hols = _get_market_holidays(market, start_yr, end_yr)
+        chart_start = df.index.min()
+        chart_end = df.index.max()
+        for hol_date, hol_name in sorted(hols.items()):
+            hol_dt = pd.Timestamp(hol_date)
+            if hol_dt < chart_start or hol_dt > chart_end:
+                continue
+            # Skip weekends (exchange holidays on
+            # weekdays only are relevant for charts)
+            if hol_dt.weekday() >= 5:
+                continue
+            fig.add_vline(
+                x=hol_dt,
+                line_dash="dot",
+                line_color="gray",
+                opacity=0.35,
+                row=1,
+                col=1,
+            )
+            fig.add_annotation(
+                x=hol_dt,
+                y=1,
+                yref="y domain",
+                text=hol_name,
+                textangle=-90,
+                font=dict(size=8, color="gray"),
+                showarrow=False,
+                xanchor="left",
+                yanchor="top",
+                row=1,
+                col=1,
+            )
+
+    # ── Dividend markers ─────────────────────────────────────
+    if "dividends" in overlays and div_df is not None and not div_df.empty:
+        chart_start = df.index.min()
+        chart_end = df.index.max()
+        div_x, div_y, div_text = [], [], []
+        for _, row in div_df.iterrows():
+            ex_dt = pd.Timestamp(row["ex_date"])
+            if ex_dt < chart_start or ex_dt > chart_end:
+                continue
+            # Snap to nearest trading date via abs-diff
+            # (avoids get_indexer Timestamp arithmetic bug
+            # in pandas 2.x with freq-less DatetimeIndex)
+            diffs = np.abs(df.index - ex_dt)
+            nearest_idx = diffs.argmin()
+            nearest_dt = df.index[nearest_idx]
+            high_val = float(df.loc[nearest_dt, "High"])
+            div_x.append(nearest_dt)
+            div_y.append(high_val * 1.02)
+            amt = row.get("dividend_amount", 0)
+            div_text.append(
+                f"Div: {amt:.2f}<br>" f"{ex_dt.strftime('%Y-%m-%d')}"
+            )
+        if div_x:
+            fig.add_trace(
+                go.Scatter(
+                    x=div_x,
+                    y=div_y,
+                    mode="markers",
+                    name="Dividends",
+                    marker=dict(
+                        symbol="diamond",
+                        size=9,
+                        color="#f59e0b",
+                        line=dict(width=1, color="#d97706"),
+                    ),
+                    text=div_text,
+                    hoverinfo="text",
+                    showlegend=True,
+                ),
+                row=1,
+                col=1,
+                secondary_y=False,
+            )
+
     # ── Panel 2: RSI ──────────────────────────────────────────────────────
     if "RSI_14" in df.columns:
         fig.add_trace(
@@ -197,10 +321,20 @@ def _build_analysis_fig(
         )
         # add_hline is safe here — y=70/30 are numeric, not datetime
         fig.add_hline(
-            y=70, line_dash="dash", line_color="tomato", line_width=1, row=2, col=1
+            y=70,
+            line_dash="dash",
+            line_color="tomato",
+            line_width=1,
+            row=2,
+            col=1,
         )
         fig.add_hline(
-            y=30, line_dash="dash", line_color="#26a69a", line_width=1, row=2, col=1
+            y=30,
+            line_dash="dash",
+            line_color="#26a69a",
+            line_width=1,
+            row=2,
+            col=1,
         )
         fig.add_hrect(
             y0=70,
@@ -269,11 +403,17 @@ def _build_analysis_fig(
         showlegend=True,
         xaxis_rangeslider_visible=False,
         margin=dict(l=60, r=30, t=60, b=30),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+        ),
     )
     fig.update_xaxes(gridcolor="#e5e7eb")
     fig.update_yaxes(
-        gridcolor="#e5e7eb", title_text="Price", row=1, col=1, secondary_y=False
+        gridcolor="#e5e7eb",
+        title_text="Price",
+        row=1,
+        col=1,
+        secondary_y=False,
     )
     fig.update_yaxes(
         gridcolor="#e5e7eb", title_text="RSI", row=2, col=1, range=[0, 100]
