@@ -22,9 +22,7 @@ logger = logging.getLogger(__name__)
 # Kept at module level because it is derived from the file-system layout and
 # must be available before any class or function is instantiated.
 _AVATARS_DIR: str = os.path.join(
-    os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    ),
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "data",
     "avatars",
 )
@@ -39,9 +37,7 @@ def register(router: APIRouter) -> None:
     """
 
     @router.get("/auth/me", response_model=UserResponse, tags=["profile"])
-    def get_me(
-        current_user: UserContext = Depends(get_current_user),
-    ) -> UserResponse:
+    def get_me(current_user: UserContext = Depends(get_current_user)) -> UserResponse:
         """Return the authenticated user's own profile.
 
         Args:
@@ -129,8 +125,7 @@ def register(router: APIRouter) -> None:
         ct_lower = (file.content_type or "").lower()
         fn_lower = (file.filename or "").lower()
         if ct_lower in _unsupported or any(
-            fn_lower.endswith(s)
-            for s in (".heic", ".heif", ".tiff", ".tif", ".bmp")
+            fn_lower.endswith(s) for s in (".heic", ".heif", ".tiff", ".tif", ".bmp")
         ):
             raise HTTPException(
                 status_code=415,
@@ -149,7 +144,5 @@ def register(router: APIRouter) -> None:
         avatar_url = "/avatars/{}.{}".format(resolved_id, ext)
         repo = _helpers._get_repo()
         repo.update(resolved_id, {"profile_picture_url": avatar_url})
-        logger.info(
-            "Avatar uploaded for user_id=%s url=%s", resolved_id, avatar_url
-        )
+        logger.info("Avatar uploaded for user_id=%s url=%s", resolved_id, avatar_url)
         return {"avatar_url": avatar_url}

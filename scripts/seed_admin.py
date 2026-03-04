@@ -149,9 +149,7 @@ def main() -> None:
 
     # ── Import auth modules ────────────────────────────────────────────────
     try:
-        from auth.repository import (
-            IcebergUserRepository,  # type: ignore[import]
-        )
+        from auth.repository import IcebergUserRepository  # type: ignore[import]
         from auth.service import AuthService  # type: ignore[import]
     except ImportError as exc:
         logger.error(

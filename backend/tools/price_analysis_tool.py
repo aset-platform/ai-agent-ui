@@ -140,7 +140,5 @@ def analyse_stock_price(ticker: str) -> str:
         return report
 
     except Exception as e:
-        _logger.error(
-            "analyse_stock_price failed for %s: %s", ticker, e, exc_info=True
-        )
+        _logger.error("analyse_stock_price failed for %s: %s", ticker, e, exc_info=True)
         return f"Error analysing '{ticker}': {e}"

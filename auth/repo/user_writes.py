@@ -47,9 +47,7 @@ def create(cat, user_data: Dict[str, Any]) -> Dict[str, Any]:
         ValueError: If a user with the same email already exists.
     """
     if get_by_email(cat, user_data["email"]) is not None:
-        raise ValueError(
-            f"User with email '{user_data['email']}' already exists."
-        )
+        raise ValueError(f"User with email '{user_data['email']}' already exists.")
 
     now = _now_utc()
     row = {
@@ -63,9 +61,7 @@ def create(cat, user_data: Dict[str, Any]) -> Dict[str, Any]:
         "updated_at": _to_ts(user_data.get("updated_at", now)),
         "last_login_at": _to_ts(user_data.get("last_login_at")),
         "password_reset_token": user_data.get("password_reset_token"),
-        "password_reset_expiry": _to_ts(
-            user_data.get("password_reset_expiry")
-        ),
+        "password_reset_expiry": _to_ts(user_data.get("password_reset_expiry")),
         "oauth_provider": user_data.get("oauth_provider"),
         "oauth_sub": user_data.get("oauth_sub"),
         "profile_picture_url": user_data.get("profile_picture_url"),
@@ -76,14 +72,10 @@ def create(cat, user_data: Dict[str, Any]) -> Dict[str, Any]:
         ),
     }
 
-    arrow_table = pa.table(
-        {k: [v] for k, v in row.items()}, schema=_USERS_PA_SCHEMA
-    )
+    arrow_table = pa.table({k: [v] for k, v in row.items()}, schema=_USERS_PA_SCHEMA)
     tbl = users_table(cat)
     tbl.append(arrow_table)
-    _logger.info(
-        "Created user user_id=%s email=%s", row["user_id"], row["email"]
-    )
+    _logger.info("Created user user_id=%s email=%s", row["user_id"], row["email"])
 
     stored = dict(row)
     for ts_col in _USER_TS_COLS:
@@ -134,13 +126,9 @@ def update(cat, user_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
         if pa_field.name not in df.columns:
             df[pa_field.name] = None
 
-    new_arrow = pa.Table.from_pandas(
-        df, schema=_USERS_PA_SCHEMA, preserve_index=False
-    )
+    new_arrow = pa.Table.from_pandas(df, schema=_USERS_PA_SCHEMA, preserve_index=False)
     tbl.overwrite(new_arrow)
-    _logger.info(
-        "Updated user user_id=%s fields=%s", user_id, list(updates.keys())
-    )
+    _logger.info("Updated user user_id=%s fields=%s", user_id, list(updates.keys()))
 
     updated_row = df[mask].iloc[0].to_dict()
     from auth.repo.schemas import _row_to_dict

@@ -38,11 +38,7 @@ def _create_analysis_chart(df: pd.DataFrame, ticker: str) -> str:
         shared_xaxes=True,
         vertical_spacing=0.03,
         row_heights=[0.6, 0.2, 0.2],
-        subplot_titles=(
-            f"{ticker} — Price & Indicators",
-            "Volume",
-            "RSI (14)",
-        ),
+        subplot_titles=(f"{ticker} — Price & Indicators", "Volume", "RSI (14)"),
     )
 
     fig.add_trace(
@@ -135,38 +131,16 @@ def _create_analysis_chart(df: pd.DataFrame, ticker: str) -> str:
             col=1,
         )
         fig.add_hline(
-            y=70,
-            line_dash="dash",
-            line_color="tomato",
-            line_width=1,
-            row=3,
-            col=1,
+            y=70, line_dash="dash", line_color="tomato", line_width=1, row=3, col=1
         )
         fig.add_hline(
-            y=30,
-            line_dash="dash",
-            line_color="#26a69a",
-            line_width=1,
-            row=3,
-            col=1,
+            y=30, line_dash="dash", line_color="#26a69a", line_width=1, row=3, col=1
         )
         fig.add_hrect(
-            y0=70,
-            y1=100,
-            fillcolor="tomato",
-            opacity=0.07,
-            line_width=0,
-            row=3,
-            col=1,
+            y0=70, y1=100, fillcolor="tomato", opacity=0.07, line_width=0, row=3, col=1
         )
         fig.add_hrect(
-            y0=0,
-            y1=30,
-            fillcolor="#26a69a",
-            opacity=0.07,
-            line_width=0,
-            row=3,
-            col=1,
+            y0=0, y1=30, fillcolor="#26a69a", opacity=0.07, line_width=0, row=3, col=1
         )
 
     fig.update_layout(

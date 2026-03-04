@@ -207,9 +207,7 @@ class ChatServer:
             "avatars",
         )
         os.makedirs(_avatars_dir, exist_ok=True)
-        app.mount(
-            "/avatars", StaticFiles(directory=_avatars_dir), name="avatars"
-        )
+        app.mount("/avatars", StaticFiles(directory=_avatars_dir), name="avatars")
 
         return app
 

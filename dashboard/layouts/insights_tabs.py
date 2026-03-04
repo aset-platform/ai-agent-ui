@@ -75,17 +75,13 @@ def _screener_tab(ticker_options: List[dict]) -> List:
                         dbc.Col(
                             [
                                 html.Label(
-                                    "Market",
-                                    className="text-muted small fw-semibold",
+                                    "Market", className="text-muted small fw-semibold"
                                 ),
                                 dbc.RadioItems(
                                     id="screener-market-filter",
                                     options=[
                                         {"label": "All", "value": "all"},
-                                        {
-                                            "label": "🇮🇳 India",
-                                            "value": "india",
-                                        },
+                                        {"label": "🇮🇳 India", "value": "india"},
                                         {"label": "🇺🇸 US", "value": "us"},
                                     ],
                                     value="all",
@@ -110,8 +106,7 @@ def _screener_tab(ticker_options: List[dict]) -> List:
                     [
                         dbc.Col(
                             html.Small(
-                                id="screener-count-text",
-                                className="text-muted",
+                                id="screener-count-text", className="text-muted"
                             ),
                             width="auto",
                             className="my-auto",
@@ -174,8 +169,7 @@ def _targets_tab(ticker_options: List[dict]) -> List:
                         dbc.Col(
                             [
                                 html.Label(
-                                    "Ticker",
-                                    className="text-muted small fw-semibold",
+                                    "Ticker", className="text-muted small fw-semibold"
                                 ),
                                 dcc.Dropdown(
                                     id="targets-ticker-dropdown",
@@ -191,17 +185,13 @@ def _targets_tab(ticker_options: List[dict]) -> List:
                         dbc.Col(
                             [
                                 html.Label(
-                                    "Market",
-                                    className="text-muted small fw-semibold",
+                                    "Market", className="text-muted small fw-semibold"
                                 ),
                                 dbc.RadioItems(
                                     id="targets-market-filter",
                                     options=[
                                         {"label": "All", "value": "all"},
-                                        {
-                                            "label": "🇮🇳 India",
-                                            "value": "india",
-                                        },
+                                        {"label": "🇮🇳 India", "value": "india"},
                                         {"label": "🇺🇸 US", "value": "us"},
                                     ],
                                     value="all",
@@ -224,9 +214,7 @@ def _targets_tab(ticker_options: List[dict]) -> List:
                 dbc.Row(
                     [
                         dbc.Col(
-                            html.Small(
-                                id="targets-count-text", className="text-muted"
-                            ),
+                            html.Small(id="targets-count-text", className="text-muted"),
                             width="auto",
                             className="my-auto",
                         ),
@@ -288,8 +276,7 @@ def _dividends_tab(ticker_options: List[dict]) -> List:
                         dbc.Col(
                             [
                                 html.Label(
-                                    "Ticker",
-                                    className="text-muted small fw-semibold",
+                                    "Ticker", className="text-muted small fw-semibold"
                                 ),
                                 dcc.Dropdown(
                                     id="dividends-ticker-dropdown",
@@ -305,17 +292,13 @@ def _dividends_tab(ticker_options: List[dict]) -> List:
                         dbc.Col(
                             [
                                 html.Label(
-                                    "Market",
-                                    className="text-muted small fw-semibold",
+                                    "Market", className="text-muted small fw-semibold"
                                 ),
                                 dbc.RadioItems(
                                     id="dividends-market-filter",
                                     options=[
                                         {"label": "All", "value": "all"},
-                                        {
-                                            "label": "🇮🇳 India",
-                                            "value": "india",
-                                        },
+                                        {"label": "🇮🇳 India", "value": "india"},
                                         {"label": "🇺🇸 US", "value": "us"},
                                     ],
                                     value="all",
@@ -339,8 +322,7 @@ def _dividends_tab(ticker_options: List[dict]) -> List:
                     [
                         dbc.Col(
                             html.Small(
-                                id="dividends-count-text",
-                                className="text-muted",
+                                id="dividends-count-text", className="text-muted"
                             ),
                             width="auto",
                             className="my-auto",
@@ -403,8 +385,7 @@ def _risk_tab(ticker_options: List[dict]) -> List:
                         dbc.Col(
                             [
                                 html.Label(
-                                    "Sort By",
-                                    className="text-muted small fw-semibold",
+                                    "Sort By", className="text-muted small fw-semibold"
                                 ),
                                 dbc.RadioItems(
                                     id="risk-sort-by",
@@ -438,17 +419,13 @@ def _risk_tab(ticker_options: List[dict]) -> List:
                         dbc.Col(
                             [
                                 html.Label(
-                                    "Market",
-                                    className="text-muted small fw-semibold",
+                                    "Market", className="text-muted small fw-semibold"
                                 ),
                                 dbc.RadioItems(
                                     id="risk-market-filter",
                                     options=[
                                         {"label": "All", "value": "all"},
-                                        {
-                                            "label": "🇮🇳 India",
-                                            "value": "india",
-                                        },
+                                        {"label": "🇮🇳 India", "value": "india"},
                                         {"label": "🇺🇸 US", "value": "us"},
                                     ],
                                     value="all",
@@ -471,9 +448,7 @@ def _risk_tab(ticker_options: List[dict]) -> List:
                 dbc.Row(
                     [
                         dbc.Col(
-                            html.Small(
-                                id="risk-count-text", className="text-muted"
-                            ),
+                            html.Small(id="risk-count-text", className="text-muted"),
                             width="auto",
                             className="my-auto",
                         ),
@@ -552,9 +527,7 @@ def _sectors_tab(ticker_options: List[dict]) -> List:
                                 dcc.Loading(
                                     type="circle",
                                     color="#4f46e5",
-                                    children=html.Div(
-                                        id="sectors-table-container"
-                                    ),
+                                    children=html.Div(id="sectors-table-container"),
                                 ),
                             ],
                             xs=12,

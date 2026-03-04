@@ -19,9 +19,7 @@ from dash import html
 # Module-level logger — mutable but kept here as a module-level singleton
 logger = logging.getLogger(__name__)
 
-_FRONTEND_LOGIN_URL = (
-    os.environ.get("FRONTEND_URL", "http://localhost:3000") + "/login"
-)
+_FRONTEND_LOGIN_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000") + "/login"
 # Module-level configuration constant — kept module-level for shared access
 _BACKEND_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8181")
 
@@ -71,13 +69,8 @@ def _unauth_notice() -> html.Div:
     return html.Div(
         html.Div(
             [
-                html.Div(
-                    "🔒",
-                    style={"fontSize": "2.5rem", "marginBottom": "0.75rem"},
-                ),
-                html.H5(
-                    "Authentication required", className="mb-2 fw-semibold"
-                ),
+                html.Div("🔒", style={"fontSize": "2.5rem", "marginBottom": "0.75rem"}),
+                html.H5("Authentication required", className="mb-2 fw-semibold"),
                 html.P(
                     "Your session has expired or you are not signed in.",
                     className="text-muted mb-3",
@@ -117,10 +110,7 @@ def _admin_forbidden() -> html.Div:
     return html.Div(
         html.Div(
             [
-                html.Div(
-                    "⛔",
-                    style={"fontSize": "2.5rem", "marginBottom": "0.75rem"},
-                ),
+                html.Div("⛔", style={"fontSize": "2.5rem", "marginBottom": "0.75rem"}),
                 html.H5("Access denied", className="mb-2 fw-semibold"),
                 html.P(
                     "This page requires superuser privileges.",

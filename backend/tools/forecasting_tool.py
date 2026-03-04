@@ -171,7 +171,5 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
         return report
 
     except Exception as e:
-        _logger.error(
-            "forecast_stock failed for %s: %s", ticker, e, exc_info=True
-        )
+        _logger.error("forecast_stock failed for %s: %s", ticker, e, exc_info=True)
         return f"Error forecasting '{ticker}': {e}"

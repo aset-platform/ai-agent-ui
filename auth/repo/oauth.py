@@ -19,9 +19,7 @@ from auth.repo.user_writes import create, update
 _logger = logging.getLogger(__name__)
 
 
-def get_by_oauth_sub(
-    cat, provider: str, oauth_sub: str
-) -> Optional[Dict[str, Any]]:
+def get_by_oauth_sub(cat, provider: str, oauth_sub: str) -> Optional[Dict[str, Any]]:
     """Fetch a user matched by OAuth provider + subject ID.
 
     Args:
@@ -33,10 +31,7 @@ def get_by_oauth_sub(
         A user dict if a matching account is found, otherwise ``None``.
     """
     for row in scan_all_users(cat):
-        if (
-            row.get("oauth_provider") == provider
-            and row.get("oauth_sub") == oauth_sub
-        ):
+        if row.get("oauth_provider") == provider and row.get("oauth_sub") == oauth_sub:
             return row
     return None
 
@@ -106,8 +101,6 @@ def get_or_create_by_oauth(
         },
     )
     _logger.info(
-        "Created SSO account: user_id=%s provider=%s",
-        new_user["user_id"],
-        provider,
+        "Created SSO account: user_id=%s provider=%s", new_user["user_id"], provider
     )
     return new_user

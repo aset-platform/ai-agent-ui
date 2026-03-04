@@ -58,15 +58,11 @@ def register(router: APIRouter) -> None:
         user = repo.get_by_email(str(body.email))
         user = _helpers._require_active_user(user, str(body.email))
         if not service.verify_password(body.password, user["hashed_password"]):
-            _logger.warning(
-                "Login failed for email=%s (wrong password).", body.email
-            )
+            _logger.warning("Login failed for email=%s (wrong password).", body.email)
             raise HTTPException(status_code=401, detail="Invalid credentials")
         repo.update(user["user_id"], {"last_login_at": datetime.utcnow()})
         repo.append_audit_event(
-            "LOGIN",
-            actor_user_id=user["user_id"],
-            target_user_id=user["user_id"],
+            "LOGIN", actor_user_id=user["user_id"], target_user_id=user["user_id"]
         )
         access = service.create_access_token(
             user_id=user["user_id"], email=user["email"], role=user["role"]
@@ -75,9 +71,7 @@ def register(router: APIRouter) -> None:
         _logger.info("User logged in: user_id=%s", user["user_id"])
         return TokenResponse(access_token=access, refresh_token=refresh)
 
-    @router.post(
-        "/auth/login/form", response_model=TokenResponse, tags=["auth"]
-    )
+    @router.post("/auth/login/form", response_model=TokenResponse, tags=["auth"])
     def login_form(
         form: OAuth2PasswordRequestForm = Depends(),
         service: AuthService = Depends(get_auth_service),
@@ -124,16 +118,12 @@ def register(router: APIRouter) -> None:
         Raises:
             HTTPException: 401 if the refresh token is invalid or revoked.
         """
-        payload = service.decode_token(
-            body.refresh_token, expected_type="refresh"
-        )
+        payload = service.decode_token(body.refresh_token, expected_type="refresh")
         user_id: str = payload["sub"]
         repo = _helpers._get_repo()
         user = repo.get_by_id(user_id)
         if user is None or not user.get("is_active", False):
-            raise HTTPException(
-                status_code=401, detail="User not found or deactivated"
-            )
+            raise HTTPException(status_code=401, detail="User not found or deactivated")
         service.revoke_refresh_token(body.refresh_token)
         access = service.create_access_token(
             user_id=user["user_id"], email=user["email"], role=user["role"]
@@ -192,10 +182,7 @@ def register(router: APIRouter) -> None:
         expiry = datetime.utcnow() + timedelta(minutes=30)
         repo.update(
             current_user.user_id,
-            {
-                "password_reset_token": reset_token,
-                "password_reset_expiry": expiry,
-            },
+            {"password_reset_token": reset_token, "password_reset_expiry": expiry},
         )
         repo.append_audit_event(
             "PASSWORD_RESET",
@@ -203,9 +190,7 @@ def register(router: APIRouter) -> None:
             target_user_id=current_user.user_id,
             metadata={"stage": "request"},
         )
-        _logger.info(
-            "Password reset requested by user_id=%s", current_user.user_id
-        )
+        _logger.info("Password reset requested by user_id=%s", current_user.user_id)
         return {
             "detail": "Password reset token generated (development: token included in response).",
             "reset_token": reset_token,
@@ -240,13 +225,9 @@ def register(router: APIRouter) -> None:
         if not stored_token or stored_token != body.reset_token:
             raise HTTPException(status_code=400, detail="Invalid reset token")
         if expiry is not None:
-            expiry_naive = (
-                expiry.replace(tzinfo=None) if expiry.tzinfo else expiry
-            )
+            expiry_naive = expiry.replace(tzinfo=None) if expiry.tzinfo else expiry
             if datetime.utcnow() > expiry_naive:
-                raise HTTPException(
-                    status_code=400, detail="Reset token has expired"
-                )
+                raise HTTPException(status_code=400, detail="Reset token has expired")
         new_hash = service.hash_password(body.new_password)
         repo.update(
             current_user.user_id,
@@ -262,7 +243,5 @@ def register(router: APIRouter) -> None:
             target_user_id=current_user.user_id,
             metadata={"stage": "confirm"},
         )
-        _logger.info(
-            "Password reset completed for user_id=%s", current_user.user_id
-        )
+        _logger.info("Password reset completed for user_id=%s", current_user.user_id)
         return {"detail": "Password updated successfully"}

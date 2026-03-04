@@ -131,9 +131,7 @@ def register(app) -> None:
         total = len(df)
         max_pages = max(1, -(-total // page_size))
         page = min(page, max_pages)
-        df = df.iloc[(page - 1) * page_size : page * page_size].reset_index(
-            drop=True
-        )
+        df = df.iloc[(page - 1) * page_size : page * page_size].reset_index(drop=True)
         count_text = f"{total} stock{'s' if total != 1 else ''}"
 
         # Build display table
@@ -152,13 +150,7 @@ def register(app) -> None:
         display_df = df[display_cols].copy()
         display_df.columns = [cols_map[c] for c in display_cols]
 
-        for num_col in [
-            "Price",
-            "RSI (14)",
-            "Ann. Return %",
-            "Volatility %",
-            "Sharpe",
-        ]:
+        for num_col in ["Price", "RSI (14)", "Ann. Return %", "Volatility %", "Sharpe"]:
             if num_col in display_df.columns:
                 display_df[num_col] = pd.to_numeric(
                     display_df[num_col], errors="coerce"
@@ -201,9 +193,7 @@ def register(app) -> None:
                         )
                     )
                 if badge_class:
-                    cells.append(
-                        html.Td(html.Span(val, className=badge_class))
-                    )
+                    cells.append(html.Td(html.Span(val, className=badge_class)))
                 else:
                     cells.append(html.Td(str(val) if val is not None else "—"))
             rows_html.append(html.Tr(cells))
@@ -211,9 +201,7 @@ def register(app) -> None:
         return (
             dbc.Table(
                 [
-                    html.Thead(
-                        html.Tr([html.Th(c) for c in display_df.columns])
-                    ),
+                    html.Thead(html.Tr([html.Th(c) for c in display_df.columns])),
                     html.Tbody(rows_html),
                 ],
                 bordered=True,
@@ -263,8 +251,7 @@ def register(app) -> None:
         if repo is None:
             return (
                 dbc.Alert(
-                    "Iceberg unavailable — cannot load price targets.",
-                    color="warning",
+                    "Iceberg unavailable — cannot load price targets.", color="warning"
                 ),
                 "",
                 1,
@@ -274,9 +261,7 @@ def register(app) -> None:
             df = repo._table_to_df("stocks.forecast_runs")
         except Exception as exc:
             return (
-                dbc.Alert(
-                    "Could not load forecast_runs: " + str(exc), color="danger"
-                ),
+                dbc.Alert("Could not load forecast_runs: " + str(exc), color="danger"),
                 "",
                 1,
             )
@@ -313,8 +298,7 @@ def register(app) -> None:
         if df.empty:
             return (
                 dbc.Alert(
-                    "No forecast data for " + str(ticker_filter) + ".",
-                    color="info",
+                    "No forecast data for " + str(ticker_filter) + ".", color="info"
                 ),
                 "",
                 1,
@@ -326,9 +310,7 @@ def register(app) -> None:
         total = len(df)
         max_pages = max(1, -(-total // page_size))
         page = min(page, max_pages)
-        df = df.iloc[(page - 1) * page_size : page * page_size].reset_index(
-            drop=True
-        )
+        df = df.iloc[(page - 1) * page_size : page * page_size].reset_index(drop=True)
         count_text = f"{total} forecast{'s' if total != 1 else ''}"
 
         def _target_cell(price, pct, _m_label):
@@ -343,9 +325,7 @@ def register(app) -> None:
                 [
                     html.Span(f"{float(price):.2f}", className="fw-semibold"),
                     html.Br(),
-                    html.Small(
-                        f"{sign}{float(pct or 0):.1f}%", className=color
-                    ),
+                    html.Small(f"{sign}{float(pct or 0):.1f}%", className=color),
                 ]
             )
 
@@ -388,9 +368,7 @@ def register(app) -> None:
                             row.get("target_9m_pct_change"),
                             "9m",
                         ),
-                        html.Td(
-                            html.Span(sentiment, className=sentiment_badge)
-                        ),
+                        html.Td(html.Span(sentiment, className=sentiment_badge)),
                     ]
                 )
             )
@@ -668,21 +646,14 @@ def register(app) -> None:
 
         # Fix #5: replace iterrows() with to_dict("records") for faster iteration
         rows_html = [
-            html.Tr(
-                [
-                    html.Td(str(v) if v is not None else "—")
-                    for v in row.values()
-                ]
-            )
+            html.Tr([html.Td(str(v) if v is not None else "—") for v in row.values()])
             for row in display_df.to_dict("records")
         ]
 
         return (
             dbc.Table(
                 [
-                    html.Thead(
-                        html.Tr([html.Th(c) for c in display_df.columns])
-                    ),
+                    html.Thead(html.Tr([html.Th(c) for c in display_df.columns])),
                     html.Tbody(rows_html),
                 ],
                 bordered=True,
@@ -723,9 +694,7 @@ def register(app) -> None:
         )
 
         if repo is None:
-            return empty_fig, dbc.Alert(
-                "Iceberg unavailable.", color="warning"
-            )
+            return empty_fig, dbc.Alert("Iceberg unavailable.", color="warning")
 
         company_df = _get_company_info_cached(repo)
         analysis_df = _get_analysis_with_gaps_filled(repo)
@@ -753,9 +722,7 @@ def register(app) -> None:
         merged = merged[merged["sector"].notna() & (merged["sector"] != "N/A")]
 
         if merged.empty:
-            return empty_fig, dbc.Alert(
-                "No sector metadata found.", color="info"
-            )
+            return empty_fig, dbc.Alert("No sector metadata found.", color="info")
 
         sector_agg = (
             merged.groupby("sector")
@@ -770,10 +737,7 @@ def register(app) -> None:
         )
 
         # Bar chart — average annualised return by sector
-        colors = [
-            "#4caf50" if r >= 0 else "#ef5350"
-            for r in sector_agg["avg_return"]
-        ]
+        colors = ["#4caf50" if r >= 0 else "#ef5350" for r in sector_agg["avg_return"]]
         fig = go.Figure(
             go.Bar(
                 x=sector_agg["sector"],
@@ -855,9 +819,7 @@ def register(app) -> None:
                     from datetime import datetime, timedelta  # noqa: PLC0415
 
                     _days = 365 if period == "1y" else 3 * 365
-                    _cutoff_ts = pd.Timestamp(
-                        datetime.today() - timedelta(days=_days)
-                    )
+                    _cutoff_ts = pd.Timestamp(datetime.today() - timedelta(days=_days))
                     df_all["date"] = pd.to_datetime(df_all["date"])
                     df_all = df_all[df_all["date"] >= _cutoff_ts]
                 for ticker in df_all["ticker"].unique():
