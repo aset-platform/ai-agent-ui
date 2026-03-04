@@ -2,12 +2,14 @@
 
 Provides :func:`forecast_layout`, which builds the forecast page containing
 a ticker dropdown, forecast-horizon radio buttons, the forecast chart,
-price-target cards, model accuracy row, and a Run New Analysis button.
+price-target cards, model accuracy row, and a *Refresh Data & Run Analysis*
+button.
 """
 
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
+from dashboard.components.refresh_button import refresh_button_group
 from dashboard.layouts.helpers import _get_available_tickers
 
 
@@ -15,8 +17,9 @@ def forecast_layout() -> html.Div:
     """Build the Forecast page layout.
 
     Contains a ticker dropdown, forecast-horizon radio buttons, the forecast
-    chart, price-target cards, model accuracy row, and a *Run New Analysis*
-    button that triggers the backend Prophet pipeline.
+    chart, price-target cards, model accuracy row, and a
+    *Refresh Data & Run Analysis* button that triggers the full stock data
+    refresh pipeline.
 
     Returns:
         :class:`~dash.html.Div` representing the full forecast page.
@@ -33,7 +36,8 @@ def forecast_layout() -> html.Div:
                     dbc.Col(
                         [
                             html.Label(
-                                "Ticker", className="text-muted small fw-semibold"
+                                "Ticker",
+                                className="text-muted small fw-semibold",
                             ),
                             dcc.Dropdown(
                                 id="forecast-ticker-dropdown",
@@ -72,13 +76,7 @@ def forecast_layout() -> html.Div:
                     dbc.Col(
                         [
                             html.Label("\u00a0", className="d-block small"),
-                            dbc.Button(
-                                "Run New Analysis",
-                                id="run-analysis-btn",
-                                color="success",
-                                size="sm",
-                                className="w-100",
-                            ),
+                            refresh_button_group("forecast-refresh"),
                         ],
                         xs=12,
                         md=4,
@@ -87,8 +85,7 @@ def forecast_layout() -> html.Div:
                 ],
                 className="bg-light rounded p-3 mb-4 align-items-end border",
             ),
-            # ── Status message ────────────────────────────────────────────────
-            html.Div(id="run-analysis-status", className="mb-3"),
+            # ── Status (inline with button via dcc.Loading) ────────────────
             # ── Forecast chart ────────────────────────────────────────────────
             dcc.Loading(
                 id="loading-forecast",

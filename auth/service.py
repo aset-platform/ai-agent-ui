@@ -153,7 +153,9 @@ class AuthService:
         Raises:
             HTTPException: 401 on any validation failure.
         """
-        return _tk.decode_token(token, self._secret_key, self._deny_list, expected_type)
+        return _tk.decode_token(
+            token, self._secret_key, self._deny_list, expected_type
+        )
 
     def revoke_refresh_token(self, token: str) -> None:
         """Delegate to :func:`auth.tokens.revoke_refresh_token`.

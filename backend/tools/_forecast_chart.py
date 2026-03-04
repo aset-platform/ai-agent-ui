@@ -63,7 +63,10 @@ def _create_forecast_chart(
         go.Scatter(
             x=pd.concat([forecast_df["ds"], forecast_df["ds"].iloc[::-1]]),
             y=pd.concat(
-                [forecast_df["yhat_upper"], forecast_df["yhat_lower"].iloc[::-1]]
+                [
+                    forecast_df["yhat_upper"],
+                    forecast_df["yhat_lower"].iloc[::-1],
+                ]
             ),
             fill="toself",
             fillcolor="rgba(76,175,80,0.15)",

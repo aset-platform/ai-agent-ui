@@ -66,7 +66,12 @@ _AUDIT_PA_SCHEMA = pa.schema(
     ]
 )
 
-_USER_TS_COLS = ("created_at", "updated_at", "last_login_at", "password_reset_expiry")
+_USER_TS_COLS = (
+    "created_at",
+    "updated_at",
+    "last_login_at",
+    "password_reset_expiry",
+)
 
 
 def _now_utc() -> datetime:

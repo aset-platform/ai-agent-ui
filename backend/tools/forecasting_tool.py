@@ -96,7 +96,9 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
 
         forecast_df = _generate_forecast(model, prophet_df, months)
         accuracy = _calculate_forecast_accuracy(model, prophet_df)
-        summary = _generate_forecast_summary(forecast_df, current_price, ticker, months)
+        summary = _generate_forecast_summary(
+            forecast_df, current_price, ticker, months
+        )
 
         forecast_path = _save_forecast(forecast_df, ticker, months)
         chart_path = _create_forecast_chart(
@@ -169,5 +171,7 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
         return report
 
     except Exception as e:
-        _logger.error("forecast_stock failed for %s: %s", ticker, e, exc_info=True)
+        _logger.error(
+            "forecast_stock failed for %s: %s", ticker, e, exc_info=True
+        )
         return f"Error forecasting '{ticker}': {e}"

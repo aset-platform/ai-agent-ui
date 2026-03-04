@@ -81,16 +81,24 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
                 tool_args = tc.get("args", {})
                 agent.logger.debug("Tool args | %s: %s", tool_name, tool_args)
                 result = agent.tool_registry.invoke(tool_name, tool_args)
-                agent.logger.debug("Tool result | %s: %s", tool_name, result[:300])
-                messages.append(ToolMessage(content=result, tool_call_id=tc["id"]))
+                agent.logger.debug(
+                    "Tool result | %s: %s", tool_name, result[:300]
+                )
+                messages.append(
+                    ToolMessage(content=result, tool_call_id=tc["id"])
+                )
 
     except Exception:
         agent.logger.error("Agent run failed", exc_info=True)
         raise
 
     agent.logger.info(
-        "Request end | agent=%s | iterations=%d", agent.config.agent_id, iteration
+        "Request end | agent=%s | iterations=%d",
+        agent.config.agent_id,
+        iteration,
     )
     return (
-        (response.content or "No response") if response is not None else "No response"
+        (response.content or "No response")
+        if response is not None
+        else "No response"
     )

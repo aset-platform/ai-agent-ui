@@ -34,9 +34,15 @@ def _calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     high = df["High"]
     low = df["Low"]
 
-    df["SMA_50"] = ta.trend.SMAIndicator(close=close, window=50).sma_indicator()
-    df["SMA_200"] = ta.trend.SMAIndicator(close=close, window=200).sma_indicator()
-    df["EMA_20"] = ta.trend.EMAIndicator(close=close, window=20).ema_indicator()
+    df["SMA_50"] = ta.trend.SMAIndicator(
+        close=close, window=50
+    ).sma_indicator()
+    df["SMA_200"] = ta.trend.SMAIndicator(
+        close=close, window=200
+    ).sma_indicator()
+    df["EMA_20"] = ta.trend.EMAIndicator(
+        close=close, window=20
+    ).ema_indicator()
 
     df["RSI_14"] = ta.momentum.RSIIndicator(close=close, window=14).rsi()
 
@@ -54,5 +60,7 @@ def _calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         high=high, low=low, close=close, window=14
     ).average_true_range()
 
-    _logger.debug("Technical indicators calculated for DataFrame with %d rows", len(df))
+    _logger.debug(
+        "Technical indicators calculated for DataFrame with %d rows", len(df)
+    )
     return df

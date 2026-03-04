@@ -67,7 +67,9 @@ def _build_users_table(users: List[Dict[str, Any]]) -> Any:
                     dbc.Badge(
                         user.get("role", "—"),
                         color=(
-                            "danger" if user.get("role") == "superuser" else "primary"
+                            "danger"
+                            if user.get("role") == "superuser"
+                            else "primary"
                         ),
                         className="fw-normal",
                     )
@@ -79,13 +81,21 @@ def _build_users_table(users: List[Dict[str, Any]]) -> Any:
                         className="fw-normal",
                     )
                 ),
-                html.Td(created, style={"fontSize": "0.8rem", "color": "#6b7280"}),
-                html.Td(last_login, style={"fontSize": "0.8rem", "color": "#6b7280"}),
+                html.Td(
+                    created, style={"fontSize": "0.8rem", "color": "#6b7280"}
+                ),
+                html.Td(
+                    last_login,
+                    style={"fontSize": "0.8rem", "color": "#6b7280"},
+                ),
                 html.Td(
                     [
                         dbc.Button(
                             "Edit",
-                            id={"type": "edit-user-btn", "index": user["user_id"]},
+                            id={
+                                "type": "edit-user-btn",
+                                "index": user["user_id"],
+                            },
                             size="sm",
                             color="outline-primary",
                             className="me-1 py-0 px-2",
@@ -93,9 +103,16 @@ def _build_users_table(users: List[Dict[str, Any]]) -> Any:
                         ),
                         dbc.Button(
                             "Deactivate" if is_active else "Reactivate",
-                            id={"type": "toggle-user-btn", "index": user["user_id"]},
+                            id={
+                                "type": "toggle-user-btn",
+                                "index": user["user_id"],
+                            },
                             size="sm",
-                            color="outline-danger" if is_active else "outline-success",
+                            color=(
+                                "outline-danger"
+                                if is_active
+                                else "outline-success"
+                            ),
                             className="py-0 px-2",
                             style={"fontSize": "0.75rem"},
                         ),
@@ -172,14 +189,21 @@ def _build_audit_table(events: List[Dict[str, Any]]) -> Any:
                     ),
                     html.Td(
                         (ev.get("actor_user_id") or "—")[:8] + "…",
-                        style={"fontSize": "0.78rem", "fontFamily": "monospace"},
+                        style={
+                            "fontSize": "0.78rem",
+                            "fontFamily": "monospace",
+                        },
                     ),
                     html.Td(
                         (ev.get("target_user_id") or "—")[:8] + "…",
-                        style={"fontSize": "0.78rem", "fontFamily": "monospace"},
+                        style={
+                            "fontSize": "0.78rem",
+                            "fontFamily": "monospace",
+                        },
                     ),
                     html.Td(
-                        metadata, style={"fontSize": "0.78rem", "color": "#6b7280"}
+                        metadata,
+                        style={"fontSize": "0.78rem", "color": "#6b7280"},
                     ),
                 ]
             )

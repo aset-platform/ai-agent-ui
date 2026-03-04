@@ -1,6 +1,6 @@
 # Dashboard
 
-The AI Stock Analysis Dashboard is a four-page interactive web app built with [Plotly Dash](https://dash.plotly.com/) and [dash-bootstrap-components](https://dash-bootstrap-components.opensource.faculty.ai/). It reads data directly from local parquet files — no API keys or backend server required.
+The AI Stock Analysis Dashboard is a multi-page interactive web app built with [Plotly Dash](https://dash.plotly.com/) and [dash-bootstrap-components](https://dash-bootstrap-components.opensource.faculty.ai/). All stock data is read from Iceberg (the single source of truth) via TTL-cached helpers — no API keys or backend server required.
 
 ---
 
@@ -18,7 +18,7 @@ python dashboard/app.py
 Open [http://127.0.0.1:8050](http://127.0.0.1:8050) in your browser.
 
 !!! note "No backend required"
-    The dashboard reads `data/raw/*.parquet` and `data/forecasts/*.parquet` directly. The FastAPI backend does **not** need to be running. The only prerequisite is that stock data has been fetched at least once via the chat interface or the stock agent pipeline.
+    The dashboard reads all stock data from Iceberg tables (single source of truth). The FastAPI backend does **not** need to be running. The only prerequisite is that stock data has been fetched at least once via the chat interface or the stock agent pipeline.
 
 ---
 
@@ -26,16 +26,30 @@ Open [http://127.0.0.1:8050](http://127.0.0.1:8050) in your browser.
 
 ### Home `/`
 
-Stock overview cards auto-loaded from `data/metadata/stock_registry.json`.
+Stock overview cards loaded from Iceberg via batch pre-fetch.
 
 Each card shows:
 
-- **Ticker** and company name (from `data/metadata/{TICKER}_info.json`)
-- **Current price** — last closing price from the raw parquet
+- **Ticker** and company name (from Iceberg `stocks.company_info`)
+- **Current price** — last closing price from Iceberg OHLCV data
 - **10Y Return** — total return since the first available row
-- **AI Sentiment** badge — Bullish / Neutral / Bearish derived from the latest Prophet forecast
+- **AI Sentiment** badge — Bullish / Neutral / Bearish derived from the latest Prophet forecast run
+- **Per-card refresh button** — triggers a background `run_full_refresh()` for that ticker
 
 A search box and dropdown let you jump directly to the Analysis page for any ticker. Cards refresh automatically every 30 minutes via a `dcc.Interval`.
+
+#### Performance
+
+The `refresh_stock_cards` callback uses **batch pre-fetch** to avoid per-ticker Iceberg scans:
+
+| Step | Calls | Cached? |
+|------|-------|---------|
+| `_get_registry_cached()` | 1 | 5-min TTL |
+| `_get_company_info_cached()` | 1 | 5-min TTL |
+| `_get_forecast_runs_cached()` | 1 | 5-min TTL |
+| `_get_ohlcv_cached()` per ticker | N | 5-min TTL |
+
+Before the per-ticker loop, two batch Iceberg reads build `company_map`, `currency_map`, and `sentiment_map` dicts. The loop body uses pure dict lookups — no Iceberg calls. Cold load: ~500 ms; warm cache: ~50 ms.
 
 #### Market filter
 
@@ -165,26 +179,31 @@ dashboard/
 │   ├── admin.py         # User management + audit log layout
 │   └── navbar.py        # Global navbar
 ├── callbacks/           # Interactive callbacks (package)
-│   ├── data_loaders.py  # Parquet + Iceberg reads, TTL indicator cache
+│   ├── data_loaders.py  # Iceberg reads, TTL indicator cache
 │   ├── chart_builders.py # Plotly figure construction
-│   ├── home_cbs.py      # Home page callbacks
+│   ├── home_cbs.py      # Home page callbacks (batch pre-fetch)
 │   ├── analysis_cbs.py  # Analysis + Compare callbacks
 │   ├── insights_cbs.py  # All Insights tab callbacks
 │   ├── admin_cbs.py     # User table callbacks
 │   ├── admin_cbs2.py    # Add/Edit/Deactivate user modals
 │   ├── iceberg.py       # Iceberg repo singleton + TTL cached helpers
-│   └── utils.py         # Shared utilities (currency TTL cache, market label)
+│   └── utils.py         # Shared utilities (currency, market label)
 └── assets/
     └── custom.css       # Light theme styles (gray-50 bg, white cards, indigo accent)
 ```
 
 ### Data flow
 
+All data reads go through Iceberg (single source of truth) via TTL-cached helpers in `iceberg.py`:
+
 ```
-data/raw/{TICKER}_raw.parquet          ──► Analysis chart, Compare page
-data/forecasts/{TICKER}_{N}m_forecast.parquet ──► Forecast chart, Home sentiment, Compare 6M upside
-data/metadata/stock_registry.json     ──► Home cards, all dropdowns
-data/metadata/{TICKER}_info.json      ──► Company name on Home cards
+stocks.registry          ──► Home cards, all dropdowns     (_get_registry_cached, 5-min TTL)
+stocks.company_info      ──► Company names, currency       (_get_company_info_cached, 5-min TTL)
+stocks.ohlcv             ──► Analysis chart, Compare page  (_get_ohlcv_cached, 5-min TTL)
+stocks.forecast_runs     ──► Home sentiment, Compare 6M    (_get_forecast_runs_cached, 5-min TTL)
+stocks.forecasts         ──► Forecast chart                (_get_forecast_cached, 5-min TTL)
+stocks.analysis_summary  ──► Insights pages                (_get_analysis_summary_cached, 5-min TTL)
+stocks.dividends         ──► Dividend history              (_get_dividends_cached, 5-min TTL)
 ```
 
 ### Key design decisions
@@ -193,7 +212,7 @@ data/metadata/{TICKER}_info.json      ──► Company name on Home cards
 
 **Iframe embedding headers** — `app.py` registers a Flask `@server.after_request` hook that adds `X-Frame-Options: ALLOWALL` and `Content-Security-Policy: frame-ancestors *` to every response, allowing the dashboard to be embedded inside the Next.js SPA iframe from any origin.
 
-**Direct parquet reads** — no HTTP call to the FastAPI backend. The dashboard can run standalone as long as parquet files exist. Fetching new data from Yahoo Finance requires the "Run New Analysis" button (or running the stock agent pipeline manually).
+**Iceberg reads with TTL caching** — no HTTP call to the FastAPI backend. The dashboard reads from Iceberg tables via cached helpers (5-min TTL). Fetching new data from Yahoo Finance requires the "Run New Analysis" button, a per-card refresh, or running the stock agent pipeline manually.
 
 **`dcc.Store` for cross-page ticker** — the `nav-ticker-store` component carries the ticker selected on the Home page to the Analysis and Forecast dropdowns, enabling one-click navigation from a stock card.
 
@@ -201,7 +220,7 @@ data/metadata/{TICKER}_info.json      ──► Company name on Home cards
 
 **`allow_duplicate=True` on forecast-accuracy-row** — two callbacks write to `forecast-accuracy-row.children`: `update_forecast_chart` (placeholder text) and `run_new_analysis` (real MAE/RMSE/MAPE metrics). Dash requires `allow_duplicate=True` on the second callback's output.
 
-**Data/render split for Home cards** — `refresh_stock_cards` stores raw serialisable dicts (ticker, prices, sentiment, market) in a `dcc.Store`. A separate `render_home_cards` callback reads the store, filters by market, and paginates — making the filter and page controls fully client-side without re-fetching Yahoo Finance data.
+**Data/render split for Home cards** — `refresh_stock_cards` uses batch pre-fetch (2 Iceberg scans for company info + forecast runs) to build `company_map`, `currency_map`, and `sentiment_map` dicts before the per-ticker loop. The loop body uses pure dict lookups and stores raw serialisable dicts in a `dcc.Store`. A separate `render_home_cards` callback reads the store, filters by market, and paginates — making the filter and page controls fully client-side without re-fetching data.
 
 **`allow_duplicate=True` on `home-pagination.active_page`** — both `update_market_filter` (resets to 1 on market switch) and `reset_home_page_on_size_change` (resets to 1 on page-size change) write to this output. Dash requires `allow_duplicate=True` on the second callback.
 

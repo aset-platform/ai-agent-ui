@@ -134,7 +134,9 @@ class IcebergUserRepository:
         Returns:
             A user dict if found, otherwise ``None``.
         """
-        return _oauth.get_by_oauth_sub(self._get_catalog(), provider, oauth_sub)
+        return _oauth.get_by_oauth_sub(
+            self._get_catalog(), provider, oauth_sub
+        )
 
     def get_or_create_by_oauth(
         self,
@@ -157,7 +159,12 @@ class IcebergUserRepository:
             The full user dict after upsert.
         """
         return _oauth.get_or_create_by_oauth(
-            self._get_catalog(), provider, oauth_sub, email, full_name, picture_url
+            self._get_catalog(),
+            provider,
+            oauth_sub,
+            email,
+            full_name,
+            picture_url,
         )
 
     # ------------------------------------------------------------------
@@ -180,7 +187,11 @@ class IcebergUserRepository:
             metadata: Optional extra context dict.
         """
         _audit.append_audit_event(
-            self._get_catalog(), event_type, actor_user_id, target_user_id, metadata
+            self._get_catalog(),
+            event_type,
+            actor_user_id,
+            target_user_id,
+            metadata,
         )
 
     def list_audit_events(self) -> List[Dict[str, Any]]:
