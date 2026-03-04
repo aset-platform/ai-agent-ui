@@ -27,13 +27,19 @@ def _load_registry() -> dict:
         Returns an empty dict if Iceberg is unavailable.
     """
     try:
-        from dashboard.callbacks.iceberg import _get_iceberg_repo
+        from dashboard.callbacks.iceberg import (
+            _get_iceberg_repo,
+            _get_registry_cached,
+        )
 
         repo = _get_iceberg_repo()
         if repo is not None:
-            return repo.get_all_registry()
+            return _get_registry_cached(repo)
     except Exception as exc:
-        _logger.warning("Could not load registry from Iceberg: %s", exc)
+        _logger.warning(
+            "Could not load registry from Iceberg: %s",
+            exc,
+        )
     return {}
 
 

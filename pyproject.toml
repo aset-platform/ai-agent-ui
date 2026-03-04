@@ -1,0 +1,18 @@
+# pyproject.toml — Unified Python tool configuration
+#
+# Aligns black and isort to 79-char line length (matching flake8 in .flake8).
+# This eliminates the black (88) vs flake8 (79) conflict.
+
+[tool.black]
+line-length = 79
+target-version = ["py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 79
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

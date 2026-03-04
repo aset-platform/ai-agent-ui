@@ -1,12 +1,65 @@
 # CLAUDE.md — AI Agent UI
 
-Project context for Claude Code. Read this before making any changes.
+> Project instructions for Claude Code. Read before making any changes.
+> For deep dives, see `README.md`, `PROGRESS.md`, and `docs/`.
 
 ---
 
-## Session Rules (ALWAYS FOLLOW — NO EXCEPTIONS)
+## 1. Project Overview
 
-Before making **any** changes, every session:
+Fullstack agentic chat app with stock analysis and Prophet forecasting.
+
+| Service | Port | Entry point | Stack |
+|---------|------|-------------|-------|
+| Backend | 8181 | `backend/main.py` | Python 3.12, FastAPI, LangChain 1.x |
+| Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19, TypeScript |
+| Dashboard | 8050 | `dashboard/app.py` | Plotly Dash (FLATLY theme) |
+| Docs | 8000 | `mkdocs serve` | MkDocs Material |
+
+```bash
+./run.sh start                              # all services
+./run.sh status                             # health check
+source backend/demoenv/bin/activate         # Python virtualenv
+```
+
+**Key directories**: `backend/` (agents, tools, config), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg persistence — 8 tables, single source of truth), `frontend/` (SPA), `dashboard/` (Dash + services), `hooks/` (pre-commit, pre-push).
+
+**Config files**: `pyproject.toml` (black + isort, 79 chars), `.flake8` (flake8, 79 chars), `frontend/eslint.config.mjs`.
+
+**Data**: Iceberg is primary (`data/iceberg/`). `data/raw/` and `data/forecasts/` are local backup only. `data/cache/` is same-day, gitignored.
+
+**Env**: `~/.ai-agent-ui/backend.env` and `frontend.env.local` (master); `backend/.env` and `frontend/.env.local` are symlinks created by `setup.sh`.
+
+---
+
+## 2. Architecture Summary
+
+### Core patterns
+
+- **`ChatServer`** (`backend/main.py`) — owns `ToolRegistry`, `AgentRegistry`, FastAPI app. All state in this class, no module-level mutable globals.
+- **`BaseAgent`** (`backend/agents/base.py`) — ABC with agentic loop (`MAX_ITERATIONS=15`) + streaming. Subclasses only override `_build_llm()`.
+- **LLM**: Claude Sonnet 4.6 via `langchain_anthropic.ChatAnthropic`. Config in `agents/general_agent.py` and `agents/stock_agent.py`.
+- **Streaming**: `POST /chat/stream` returns NDJSON events: `thinking`, `tool_start`, `tool_done`, `warning`, `final`, `error`.
+- **Same-day cache**: `data/cache/{TICKER}_{key}_{YYYY-MM-DD}.txt` — repeat tool calls return instantly.
+- **Tool registration order**: `search_market_news` registered _after_ GeneralAgent, _before_ StockAgent.
+
+### Iceberg (single source of truth)
+
+- ALL stock data lives in Iceberg. `_require_repo()` raises `RuntimeError` if unavailable; `_get_repo()` returns `None`.
+- **Copy-on-write upserts**: read full table -> mutate DataFrame -> `table.overwrite()` (no native UPDATE in PyIceberg 0.11).
+- `_load_parquet()` reads from Iceberg, not flat files. Dashboard uses `_get_ohlcv_cached` / `_get_forecast_cached`.
+- Single repo singleton via `_stock_shared.py`. Writes MUST NOT be silenced — failures propagate to tool exception handlers.
+
+### Auth
+
+- JWT env propagation: `main.py` copies Pydantic settings into `os.environ` for `auth/dependencies.py`.
+- bcrypt 5.x direct (`hashpw`/`checkpw`). OAuth PKCE with `code_verifier` in sessionStorage.
+
+---
+
+## 3. Coding Standards
+
+### 3.1 Session start (ALWAYS — NO EXCEPTIONS)
 
 ```bash
 git fetch origin && git checkout dev && git pull origin dev
@@ -14,291 +67,539 @@ git checkout -b feature/<short-description>
 git branch --show-current   # confirm before touching files
 ```
 
-- **NEVER** commit directly to `dev`, `qa`, `release`, or `main`
-- **ALWAYS** branch off `dev`; after work remind user to raise PR: `feature/*` → `dev`
-- If `feature/*` already exists for the task, check it out instead of creating a new one
+- **NEVER** commit directly to `dev`, `qa`, `release`, or `main`.
+- **ALWAYS** branch off `dev`. If `feature/*` exists, check it out.
 
----
+### 3.2 Python rules
 
-## Pre-Commit / Pre-Push Lint Checklist (ALWAYS — NO EXCEPTIONS)
+- **Line length: 79 chars** — black, isort, flake8 all aligned via `pyproject.toml` + `.flake8`. Write short from the start.
+- **Python 3.12** — use `X | None` not `Optional[X]` (PEP 604).
+- **No bare `print()`** — use `logging.getLogger(__name__)`.
+- **Docstrings** — Google-style Sphinx on every module, class, public method.
+- **No bare `except:`** — always `except Exception` or specific.
+- **No module-level mutable globals** — all state in class instances.
 
-**Every commit and PR must be lint-clean.** Run these locally before pushing — CI will reject lint failures.
+#### Line-wrapping patterns (when > 79 chars)
 
-### Frontend (from `frontend/`)
+```python
+# Function calls — break after opening paren
+result = some_function(
+    first_arg, second_arg, third_arg,
+)
 
-```bash
-cd frontend
-npx eslint . --fix          # auto-fix what it can
-npx eslint .                # verify zero errors remain
+# Chained methods — break before dot
+df = (
+    pd.read_parquet(path)
+    .dropna(subset=["close"])
+    .sort_values("date")
+)
+
+# Long strings — parenthesised f-strings (NOT implicit concat)
+msg = (
+    f"Processed {count} rows for {ticker}"
+    f" from {start} to {end}."
+)
+
+# Long imports — parentheses
+from tools._forecast_accuracy import (
+    _calculate_forecast_accuracy,
+)
 ```
 
-- ESLint flat config: `frontend/eslint.config.mjs`
-- Key rules enforced by CI: `@next/next/no-img-element` (use `<Image />` from `next/image`), `react-hooks/*`, no unused imports
-- If a rule must be suppressed, use **block-level** `/* eslint-disable rule-name */` with a comment explaining why — never blanket-disable
+#### black gotchas
 
-### Backend (from project root, inside virtualenv)
+- black WILL NOT wrap docstrings or comments — keep ≤ 79 manually.
+- black merges implicit string concatenation onto one line — use f-strings or explicit `+`.
+- `# fmt: off` / `# fmt: on` — last resort only.
+
+### 3.3 TypeScript rules
+
+- Use `apiFetch` (not `fetch`) for all backend calls — auto-refreshes JWT.
+- ESLint: `@next/next/no-img-element` (use `<Image />`), `react-hooks/*`, no unused imports.
+- Suppress with block-level `/* eslint-disable rule */` + reason comment — never blanket-disable.
+
+### 3.4 OOP conventions
+
+- New agents: subclass `BaseAgent`, override only `_build_llm()`.
+- New tools: `@tool`-decorated, registered via `ToolRegistry.register()` in `ChatServer._register_tools()`.
+- New HTTP bodies: Pydantic models in `main.py`.
+
+### 3.5 Lint commands
 
 ```bash
-source backend/demoenv/bin/activate
-black backend/ auth/ stocks/ scripts/ dashboard/ --check           # formatting
-isort backend/ auth/ stocks/ scripts/ dashboard/ --profile black --check  # import order
-flake8 backend/ auth/ stocks/ scripts/ dashboard/                  # style + errors
-```
-
-To auto-fix:
-
-```bash
+# Python auto-fix + verify
 black backend/ auth/ stocks/ scripts/ dashboard/
 isort backend/ auth/ stocks/ scripts/ dashboard/ --profile black
-# Then fix any remaining flake8 issues manually
+flake8 backend/ auth/ stocks/ scripts/ dashboard/
+
+# Frontend
+cd frontend && npx eslint . --fix && npx eslint .
 ```
 
-> **Always use `--profile black` with isort** — without it, isort and black fight over import formatting in an infinite loop.
+**Workflow**: Write code (≤79 chars) -> black + isort -> flake8 -> git add -> commit -> push. NEVER push with lint errors.
 
-### Workflow
+### 3.6 Testing
 
+```bash
+python -m pytest tests/ -v             # all (133 tests)
+python -m pytest tests/backend/ -v     # backend
+python -m pytest tests/dashboard/ -v   # dashboard
+cd frontend && npx vitest run          # frontend (18 tests)
 ```
-Write code → lint & auto-fix → git add → git commit (pre-commit hook runs) → push
-```
 
-> **Never push code with linting errors.** Pre-commit hooks catch most issues, but always verify with a manual lint pass before creating a PR.
+**Mock patching gotcha**: Lazy imports inside functions CANNOT be patched on the importing module. Patch at the SOURCE: `@patch("stocks.repository.StockRepository")` not `@patch("stocks.backfill_adj_close.StockRepository")`. For `tools.*` in dashboard, use `patch.object()` on the imported module.
+
+**DataFrame mutation**: Functions that mutate DataFrames in-place also mutate the mock's return value. Save lookup data BEFORE calling the function under test.
+
+**Cross-package imports**: Dashboard tests needing `tools.*` MUST add `backend/` to `sys.path`.
+
+**Test-after-feature rule**: After every feature addition and successful smoke test, update the test suite immediately — add unit tests covering the new logic (happy path + 1 error path minimum). Do NOT defer test writing to a later session.
 
 ---
 
-## Project Overview
+## 4. Git Branching Strategy and Workflow
 
-Fullstack agentic chat app. See `README.md` for full architecture, quick start, and tech stack.
-
-| Service | Port | Entry point |
-|---------|------|-------------|
-| Backend | 8181 | `backend/main.py` |
-| Frontend | 3000 | `frontend/app/page.tsx` |
-| Dashboard | 8050 | `dashboard/app.py` |
-| Docs | 8000 | `mkdocs serve` |
-
-Run all: `./run.sh start`  ·  Status: `./run.sh status`  ·  Virtualenv: `source backend/demoenv/bin/activate`
-
----
-
-## Key File Locations
-
-```
-setup.sh                     # First-time installer — run once on fresh clone
-                             #   Usage: ./setup.sh (interactive) or ./setup.sh --non-interactive
-
-backend/
-  main.py                  # ChatServer (owns ToolRegistry + AgentRegistry + FastAPI app)
-  config.py                # Pydantic Settings — reads backend/.env
-  agents/base.py           # BaseAgent ABC + agentic loop (MAX_ITERATIONS=15) + stream()
-  agents/general_agent.py  # GeneralAgent — Groq, tools: [get_current_time, search_web]
-  agents/stock_agent.py    # StockAgent — Groq, 9 stock tools
-  tools/                   # @tool functions; registered in ChatServer._register_tools()
-
-auth/                      # JWT auth + RBAC; Iceberg/SQLite storage
-  create_tables.py         # Idempotent init — run once per deployment
-  migrate_users_table.py   # Iceberg schema migration — run once per deployment
-  oauth_service.py         # Google/Facebook SSO (PKCE)
-
-stocks/                    # Iceberg persistence layer for all stock data (single source of truth)
-  create_tables.py         # Idempotent init of 8 stocks.* tables — called by run.sh on every start
-  repository.py            # StockRepository — CRUD for all 8 tables + registry/company_info queries
-  backfill_metadata.py     # One-time JSON→Iceberg migration for registry + company_info (idempotent)
-
-scripts/seed_admin.py      # Bootstrap superuser from env vars
-
-frontend/app/page.tsx      # Full SPA — chat, docs, dashboard, admin views
-frontend/lib/auth.ts       # JWT token helpers
-frontend/lib/apiFetch.ts   # Authenticated fetch wrapper (auto-refresh)
-
-dashboard/app.py           # Dash entry — loads backend/.env via _load_dotenv()
-
-hooks/pre-commit           # 4-check quality gate (Bash + hooks/pre_commit_checks.py)
-hooks/pre-push             # Blocks push to main on print() or mkdocs build failure
-```
-
-Data paths:
-- Raw OHLCV: `data/raw/{TICKER}_raw.parquet` (local backup only; Iceberg is primary)
-- Forecasts: `data/forecasts/{TICKER}_{N}m_forecast.parquet` (local backup only; Iceberg is primary)
-- Cache (same-day, gitignored): `data/cache/`
-- Iceberg catalog: `data/iceberg/catalog.db` (SQLite); warehouse: `data/iceberg/warehouse/`
-- Metadata JSON files (legacy, gitignored): `data/metadata/*.json` — replaced by Iceberg tables
-
-Env files (external — safe from git):
-- `~/.ai-agent-ui/backend.env` — master backend secrets + config
-- `~/.ai-agent-ui/frontend.env.local` — master frontend service URLs
-- `backend/.env` → symlink to `~/.ai-agent-ui/backend.env`
-- `frontend/.env.local` → symlink to `~/.ai-agent-ui/frontend.env.local`
-- `setup.sh` auto-migrates existing real files and creates symlinks
-
----
-
-## Code Standards
-
-### Python (backend/)
-- **Python 3.12** — prefer `X | None` over `Optional[X]` (PEP 604 supported)
-- **No bare `print()`** — use `logging.getLogger(__name__)` per module
-- **Docstrings** — Google-style Sphinx on every module, class, and public method/`@tool`
-- **Error handling** — `HTTPException` with correct status codes; tool failures return error strings (not exceptions) so the LLM receives a `ToolMessage`
-- **No module-level mutable globals** — all state in class instances
-
-### OOP rules
-- New agents: subclass `BaseAgent`, only override `_build_llm()`
-- New tools: `@tool`-decorated functions, registered via `ToolRegistry.register()` in `ChatServer._register_tools()`
-- New HTTP bodies: Pydantic models in `main.py`
-- No bare `except:` — always `except Exception` or a specific type
-
-### TypeScript (frontend/)
-- Use `apiFetch` (not `fetch`) for all backend calls — handles JWT auto-refresh and 401 redirect
-
----
-
-## Branching & Promotion Strategy
-
-### Golden Rule
+### Golden rule
 
 > **Changes flow UP, sync flows DOWN. After every merge UP, immediately merge DOWN.**
 
 ```
-feature/* → dev → qa → release → main      (changes flow UP via PR)
-                ↑         ↑          ↑
-          merge back  merge back  merge back  (sync flows DOWN immediately)
-            to dev      to qa       to release
+feature/* -> dev -> qa -> release -> main    (UP via PR)
+               ^         ^          ^
+         merge back merge back merge back    (DOWN immediately)
 ```
 
-This keeps all branches in sync and prevents the 80+ conflict nightmare on the next promotion.
+### Conventions
 
-### Branch flow
+| Item | Format |
+|------|--------|
+| PR title | `[TYPE] Short description` — feat/fix/chore/refactor/hotfix/docs |
+| Commit | `type: description` — feat/fix/refactor/docs/chore |
+| Hotfix | Branch off `main`, PR to `main`, sync DOWN |
+| Tags | `git tag -a v1.0.0 -m "Release v1.0.0"` |
 
-| | |
-|---|---|
-| **Promotion** | `feature/* → dev → qa → release → main` (one direction only) |
-| **Hotfix** | Branch off `main`, PR to `main`, then sync DOWN to `dev` |
-| **PR title** | `[TYPE] Short description` — feat / fix / chore / refactor / hotfix / docs |
-| **Commit format** | `type: description` — feat / fix / refactor / docs / chore |
-| **Tag releases** | `git tag -a v1.0.0 -m "Release v1.0.0"` |
-
-### Promoting UP (e.g. dev → qa)
+### Promoting UP (e.g. dev -> qa)
 
 ```bash
-# 1. Create a promotion branch from the TARGET
 git fetch origin
 git checkout -b chore/promote-dev-to-qa origin/qa
-
-# 2. Merge the SOURCE into it — resolve all conflicts locally (source wins)
-git merge origin/dev
-# If conflicts → resolve (accept dev's version), then: git add <files> && git commit
-
-# 3. Lint after merge — merges can introduce formatting drift
+git merge origin/dev       # resolve conflicts locally (source wins)
 black backend/ auth/ stocks/ scripts/ dashboard/
 isort backend/ auth/ stocks/ scripts/ dashboard/ --profile black
-
-# 4. Push and PR
-git push -u origin chore/promote-dev-to-qa
-gh pr create --base qa
+git push -u origin chore/promote-dev-to-qa && gh pr create --base qa
 ```
 
-### Syncing DOWN after merge (CRITICAL — do this immediately)
-
-After `chore/promote-dev-to-qa` is merged to `qa`:
+### Syncing DOWN (immediately after every upward merge)
 
 ```bash
-# Sync qa back DOWN to dev so dev has everything qa has
-git fetch origin
-git checkout dev && git pull origin dev
-git merge origin/qa        # should be fast-forward or trivial
-git push origin dev        # if protected, do via PR
+git fetch origin && git checkout dev && git pull origin dev
+git merge origin/qa && git push origin dev
 ```
 
-Repeat for every tier: after qa→release merge, sync release→qa→dev. After release→main, sync main→release→qa→dev.
+### Branch protection
 
-**Why this works:** The 80+ conflict problem happens because qa accumulates merge commits that dev never sees. Syncing DOWN after every promotion keeps the branches identical except for in-flight features.
+| Branch | Rules |
+|--------|-------|
+| `main` | No direct push, 2 approvals, CI pass |
+| `release` | PR from `qa` only, 1 approval + QA lead |
+| `qa` | PR from `dev` only, 1 approval |
+| `dev` | PR from `feature/*`, 1 approval, tests + lint |
 
-### Feature branch workflow
+### Hard rules (NO EXCEPTIONS)
 
-```bash
-# Before pushing a feature branch
-git fetch origin
-git merge origin/dev          # catch conflicts early
-# resolve if needed, re-run lint
-git push origin HEAD
-
-# Before raising PR
-git fetch origin
-git merge origin/dev          # final sync
-git push origin HEAD
-gh pr create --base dev
-```
-
-### Rules (NO EXCEPTIONS)
-
-- **No conflicts on GitHub** — all conflicts resolved locally before pushing
-- **No direct pushes** to `dev`, `qa`, `release`, or `main` — always PR
-- **Sync DOWN immediately** after every upward promotion merge
-- **Re-run lint after every merge** — formatting drift is the #1 conflict source
-- **Long-lived feature branches** (> 1 day) — merge dev into them daily
-
-### Branch protection (GitHub → Settings → Branches)
-
-- `main`: no direct push, 2 approvals, CI must pass
-- `release`: PR from `qa` only, 1 approval + QA lead
-- `qa`: PR from `dev` only, 1 approval
-- `dev`: PR from `feature/*`, 1 approval, unit tests + lint must pass
+- NEVER push directly to `dev`, `qa`, `release`, or `main`.
+- ALWAYS resolve conflicts locally before pushing.
+- ALWAYS re-run lint after every merge.
+- Long-lived feature branches (> 1 day) MUST merge dev daily.
 
 ---
 
-## Architectural Decisions
+## 5. PR Review Rules
 
-- **`ChatServer` in `main.py`** — all state (registries, FastAPI app) in one class; no module-level globals
-- **`BaseAgent` pattern** — subclasses implement only `_build_llm()`; loop and streaming live in base
-- **`search_market_news` tool** — factory in `tools/agent_tool.py` wraps GeneralAgent as a `@tool`; must be registered _after_ GeneralAgent and _before_ StockAgent
-- **Same-day cache** — `data/cache/{TICKER}_{key}_{YYYY-MM-DD}.txt`; repeat tool calls return instantly
-- **Streaming** — `POST /chat/stream` returns NDJSON events: `thinking`, `tool_start`, `tool_done`, `warning`, `final`, `error`; daemon thread + `queue.Queue` + timeout
-- **JWT env propagation** — `backend/main.py` copies Pydantic settings into `os.environ` at startup so `auth/dependencies.py` (which reads env directly) can find `JWT_SECRET_KEY`
-- **Dashboard dotenv** — `dashboard/app.py` calls `_load_dotenv()` at import time; Dash is a separate process that never inherits `backend/.env` otherwise
-- **PyIceberg 0.11** — `table.append()` requires `pa.Table`; `TimestampType` → `pa.timestamp("us")` (naive UTC datetimes only)
-- **bcrypt 5.x (direct)** — passlib removed; `auth/password.py` uses `bcrypt.hashpw()`/`bcrypt.checkpw()` directly
-- **OAuth PKCE** — `code_verifier` in sessionStorage; `code_challenge = base64url(SHA-256(verifier))`; Facebook button hidden until real credentials provided
-- **SerpAPI over Google CSE** — simpler (one key, no Google Cloud project); 100 free/month sufficient
-- **Iceberg single source of truth** — ALL stock data (OHLCV, metadata, analysis, forecasts) lives exclusively in Iceberg; `_require_repo()` raises `RuntimeError` if unavailable; `_load_parquet()` reads from Iceberg (not flat files); `data/raw/` and `data/forecasts/` are local backup only
-- **Iceberg writes must not be silenced** — `price_analysis_tool` and `forecasting_tool` call `_require_repo()` directly (no `try/except`); write failures propagate to the tool's main exception handler, returning an error string to the LLM
-- **Single repo singleton** — `_analysis_shared` and `_forecast_shared` import `_get_repo`/`_require_repo` from `_stock_shared` (no duplicate singletons)
-- **Iceberg upserts via copy-on-write** — no native UPDATE; pattern: read full table → mutate pandas DataFrame → `table.overwrite()`; used for `stocks.registry` and `stocks.technical_indicators`
-- **Dashboard reads Iceberg only** — `_load_raw()` and `_load_forecast()` in `data_loaders.py` use cached Iceberg helpers (`_get_ohlcv_cached`, `_get_forecast_cached`); no flat parquet file reads; `/screener`, `/targets`, `/dividends`, `/risk`, `/sectors`, `/correlation` pages all via `StockRepository`
+### Review focus hierarchy (in priority order)
+
+1. **Security** — auth bypass, injection, secret exposure, OWASP Top 10.
+2. **Correctness** — logic errors, edge cases, data loss risk.
+3. **Breaking changes** — API contracts, database schema, config format.
+4. **Performance** — N+1 queries, memory leaks, blocking calls.
+5. **Maintainability** — readability, naming, dead code.
+
+### What to review
+
+- ONLY files changed in the PR (not pre-existing issues).
+- Focus on the "why" — does the change achieve its stated goal?
+- Verify test coverage for new logic paths.
+- Check that error messages do not leak sensitive information.
+
+### What NOT to review
+
+- Pre-existing issues not introduced by this PR.
+- Style/formatting issues that linters catch.
+- Lines with `# noqa` or `// eslint-disable` (already justified).
+- Nitpicks that don't affect correctness or security.
+
+### PR checklist (for authors)
+
+- [ ] All lint checks pass (black, isort, flake8, ESLint).
+- [ ] All tests pass (`python -m pytest tests/ -v`).
+- [ ] New code has tests (target: happy path + 1 error path).
+- [ ] No hardcoded secrets, no `print()` statements.
+- [ ] PR title follows `[TYPE] Description` format.
+- [ ] PROGRESS.md updated with dated entry.
+
+### Feedback severity labels
+
+- **CRITICAL**: MUST fix before merge (security, correctness, data loss).
+- **WARNING**: SHOULD fix (convention violation, performance).
+- **SUGGESTION**: COULD improve (naming, readability, optional refactor).
 
 ---
 
-## LLM Switch (when Anthropic API is available)
+## 6. Anti-Patterns to Detect
 
-In `agents/general_agent.py` and `agents/stock_agent.py` (2-line change each):
+### Python
+
+| Anti-Pattern | Correct Pattern |
+|---|---|
+| Bare `except:` | `except Exception as exc:` or specific type |
+| Bare `print()` | `logging.getLogger(__name__).info(...)` |
+| `Optional[X]` | `X \| None` (Python 3.12 PEP 604) |
+| Module-level mutable globals | State in class instances |
+| Silent error swallowing (`except: pass`) | Log + re-raise or return error string |
+| `eval()` / `exec()` | NEVER — find a safe alternative |
+| Nested conditionals > 2 levels | Early returns / guard clauses |
+| Hardcoded secrets in source | Environment variables via `config.py` |
+| `from module import *` | Explicit named imports |
+| Mutable default args (`def f(x=[])`) | `def f(x=None): x = x or []` |
+| SQL string concatenation | Parameterized queries only |
+| Lines > 79 chars | Wrap using patterns in section 3.2 |
+| Implicit string concat on long lines | Use f-strings or explicit `+` |
+
+### TypeScript
+
+| Anti-Pattern | Correct Pattern |
+|---|---|
+| `any` type | `unknown` + type narrowing |
+| Raw `fetch()` calls | `apiFetch()` from `lib/apiFetch.ts` |
+| `<img>` elements | `<Image />` from `next/image` |
+| `innerHTML` assignment | Sanitized rendering or React JSX |
+| Unused imports | Remove before commit |
+
+### Architecture
+
+| Anti-Pattern | Correct Pattern |
+|---|---|
+| Flat file reads for stock data | Iceberg via `_load_parquet()` / `StockRepository` |
+| Duplicate repo singletons | Import from `_stock_shared.py` |
+| Silencing Iceberg write failures | Let errors propagate to tool handler |
+| Patching lazy imports on importing module | Patch at the SOURCE module |
+| Creating new files when editing suffices | Edit existing files first |
+| Premature abstraction / over-engineering | Minimum complexity for current task |
+| Adding features/refactors not requested | Only change what is asked |
+
+---
+
+## 7. Security Constraints
+
+### Secrets and credentials
+
+- **NEVER** hardcode API keys, passwords, tokens, or connection strings in source.
+- **NEVER** commit `.env` files, `credentials.json`, or private keys.
+- All secrets MUST come from environment variables via `backend/config.py` (Pydantic Settings).
+- Validate required secrets at startup — fail fast with a clear error.
+
+### Input validation
+
+- All user input MUST be validated at system boundaries (API endpoints, tool inputs).
+- Use Pydantic models for request body validation.
+- Sanitize ticker symbols: `ticker.upper().strip()`, reject non-alphanumeric (except `.`).
+- Dashboard: `dashboard/utils.py:check_input_safety()` checks length, SQL injection patterns, XSS.
+
+### OWASP Top 10 awareness
+
+- **Injection**: Parameterized queries only. No string concatenation for SQL or shell commands.
+- **Broken auth**: JWT with proper expiry. Refresh token deny-list (in-memory).
+- **Sensitive data exposure**: Error messages MUST NOT reveal stack traces, file paths, or secrets to end users. Log full details server-side only.
+- **XSS**: No `innerHTML`, no `dangerouslySetInnerHTML` without sanitization.
+- **SSRF**: Validate URLs before fetching. No user-controlled URLs in server-side requests.
+
+### Critical files (modify with extra care)
+
+- `backend/.env` — symlink to secrets; never commit.
+- `auth/password.py` — bcrypt hashing; changes can lock out users.
+- `stocks/repository.py` — Iceberg schemas; breaking changes cause data loss.
+- `hooks/*` — quality gates; disabling degrades the pipeline.
+
+---
+
+## 8. Review for Code Performance
+
+### Database / Iceberg
+
+- **Copy-on-write is expensive**: `table.overwrite()` reads + rewrites the full table. Batch updates; minimize calls.
+- **N+1 queries**: Load all data in one call where possible, not one query per iteration.
+- **Cache awareness**: `data/cache/` provides same-day caching. Clear only on refresh (`_clear_tool_cache()`).
+
+### Python
+
+- **Prefer vectorized pandas/numpy** over `iterrows()`. Use `iterrows()` only for dict-building or < 1000 rows.
+- **Avoid blocking I/O in async paths**: Long-running tasks run in the agentic loop's thread, not in async handlers.
+- **Memory**: Release large DataFrames after use. Use `.copy()` only when mutation isolation is needed.
+- **Strings**: Use f-strings or `"".join()`, not repeated `+` in loops.
+
+### Frontend
+
+- **Minimize re-renders**: `React.memo`, `useMemo`, `useCallback` for stable objects/functions.
+- **Lazy loading**: Heavy components via `dynamic()` imports.
+- **Images**: Always `<Image />` from `next/image` (enforced by ESLint).
+
+### Thresholds
+
+| Metric | Target |
+|--------|--------|
+| API p95 (non-LLM) | < 500ms |
+| LLM first token | < 2s |
+| LLM full response | < 30s |
+| Dashboard page load | < 3s |
+| Test suite | < 30s (currently ~17s) |
+
+---
+
+## 9. Review Tone Guidance
+
+### Principles
+
+- **Be direct, not harsh.** State what needs to change and why.
+- **Correctness over style.** Only flag style issues linters miss.
+- **Acknowledge good work** briefly when a solution is elegant.
+- **Explain the "why"** — not just "change X to Y".
+- **One fix per comment.** Don't bundle unrelated feedback.
+
+### Language precision (RFC 2119)
+
+| Keyword | Meaning |
+|---------|---------|
+| **MUST** / **MUST NOT** | Hard requirement. PR cannot merge without this. |
+| **SHOULD** / **SHOULD NOT** | Strong recommendation. Override only with reason. |
+| **MAY** / **CONSIDER** | Optional suggestion. Author decides. |
+
+### Comment format
+
+```
+[SEVERITY] Brief title
+
+Explanation of the issue and why it matters.
+Suggested fix (if not obvious).
+```
+
+### Avoid
+
+- Passive-aggressive tone.
+- Vague feedback ("This could be better").
+- Bikeshedding unless it causes genuine confusion.
+- Reviewing code not changed in the PR.
+- Requesting changes based on personal preference.
+
+---
+
+## 10. Error Handling & Logging
+
+### Logging standards
+
+- Every module: `_logger = logging.getLogger(__name__)` at module level.
+- Use appropriate levels: `DEBUG` (developer detail), `INFO` (normal flow), `WARNING` (recoverable issue), `ERROR` (failure requiring attention).
+- Log messages MUST include context: `_logger.info("Fetched %d rows for %s", count, ticker)` — not `_logger.info("Done")`.
+- NEVER log secrets, tokens, passwords, or full stack traces at INFO level. Use `DEBUG` or `exc_info=True` at `ERROR` level.
+
+### Error handling patterns
 
 ```python
-from langchain_anthropic import ChatAnthropic                                          # replace langchain_groq import
-return ChatAnthropic(model="claude-sonnet-4-6", temperature=self.config.temperature)   # in _build_llm()
+# Backend tools — return error strings, not exceptions
+@tool
+def my_tool(ticker: str) -> str:
+    try:
+        result = do_work(ticker)
+        return f"Success: {result}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+# API endpoints — HTTPException with correct codes
+raise HTTPException(status_code=404, detail="Ticker not found")
+
+# Iceberg writes — MUST NOT be silenced
+repo = _require_repo()   # raises RuntimeError if unavailable
+repo.insert_ohlcv(...)   # let exceptions propagate
+
+# Non-critical pipeline steps — log and continue
+try:
+    info_msg = get_stock_info.invoke({"ticker": ticker})
+    _record(result, "Company info", True, info_msg[:120])
+except Exception as exc:
+    _record(result, "Company info", False, str(exc)[:120])
 ```
-Update `model` field in factory to `"claude-sonnet-4-6"`. Set `ANTHROPIC_API_KEY` in `backend/.env`.
+
+### Error categories
+
+| Category | Handling | Example |
+|----------|----------|---------|
+| User input error | Return 400/422 with clear message | Invalid ticker format |
+| Auth error | Return 401/403 | Expired JWT, missing role |
+| External service failure | Log WARNING, retry or degrade gracefully | yfinance rate limit |
+| Data integrity error | Log ERROR, abort operation | Iceberg schema mismatch |
+| Configuration error | Log CRITICAL, fail fast at startup | Missing `ANTHROPIC_API_KEY` |
 
 ---
 
-## Hooks
+## 11. Dependency Management
 
-Install (one-time):
+### Python (backend)
+
+- **Virtualenv**: `backend/demoenv` (Python 3.12.9). Activate with `source backend/demoenv/bin/activate`.
+- **Installing new packages**: `pip install <package>` inside the virtualenv, then update `requirements.txt` or `setup.sh` accordingly.
+- **Version pinning**: Pin major versions in `setup.sh` for stability. Use `pip show <package>` to verify installed version.
+- **Upgrade protocol**: Test in feature branch -> verify all 133+ tests pass -> verify lint clean -> PR to dev.
+- **Key dependencies**: FastAPI, LangChain 1.x, PyIceberg 0.11, Prophet, yfinance, pandas, pyarrow, bcrypt 5.x.
+
+### Frontend (Next.js)
+
+- **Package manager**: npm. Lockfile: `frontend/package-lock.json`.
+- **Adding packages**: `cd frontend && npm install <package>`. Commit the updated `package-lock.json`.
+- **Upgrade protocol**: Same as Python — feature branch, tests pass, lint clean, PR.
+
+### Rules
+
+- NEVER install packages globally. Always use the project virtualenv or project-local `node_modules`.
+- NEVER upgrade multiple major dependencies in the same PR. One major upgrade per PR for clean rollback.
+- ALWAYS run the full test suite after dependency changes.
+- Check for breaking changes in changelogs before upgrading.
+
+---
+
+## 12. Documentation Standards
+
+### What MUST be updated
+
+| Trigger | Update |
+|---------|--------|
+| Every session | `PROGRESS.md` — dated entry summarising changes |
+| New/changed API endpoint | `docs/` — relevant API page |
+| Architecture change | `CLAUDE.md` — Section 2 (Architecture Summary) |
+| New config/env var | `README.md` — env vars table |
+| New deployment step | `CLAUDE.md` — Appendix (Deployment) |
+| New Iceberg table | `stocks/create_tables.py` + `docs/` |
+
+### Docstring requirements
+
+- **Every Python module**: top-of-file docstring describing the module's purpose.
+- **Every class**: docstring with description and key attributes.
+- **Every public method / `@tool` function**: Google-style Sphinx with `Args:`, `Returns:`, `Raises:` sections.
+- **Private methods**: docstring recommended if logic is non-obvious.
+
+### Docstring example
+
+```python
+def update_ohlcv_adj_close(
+    self, ticker: str, adj_close_map: dict
+) -> int:
+    """Update adj_close for existing OHLCV rows.
+
+    Uses copy-on-write: reads all rows, merges values,
+    overwrites table.
+
+    Args:
+        ticker: Uppercase ticker symbol.
+        adj_close_map: ``{date: float}`` mapping.
+
+    Returns:
+        Number of rows updated.
+    """
+```
+
+### Markdown style
+
+- Use ATX headers (`#`, `##`, `###`). No more than 3 levels deep.
+- Code blocks MUST have language tags (```python, ```bash, ```typescript).
+- Tables for structured data. Bullet lists for sequences.
+
+---
+
+## 13. Debugging & Troubleshooting
+
+### Common issues
+
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| `ModuleNotFoundError: tools` | `backend/` not on `sys.path` | Add `backend/` to `sys.path` (see Section 3.6) |
+| `RuntimeError: StockRepository unavailable` | Iceberg catalog missing | Run `python stocks/create_tables.py` |
+| yfinance returns empty DataFrame | Ticker invalid or rate-limited | Verify ticker on Yahoo Finance; wait and retry |
+| `table.overwrite()` fails | Schema mismatch after column addition | Verify Arrow schema matches table definition |
+| black + flake8 line length conflict | Missing `pyproject.toml` | Ensure `pyproject.toml` has `line-length = 79` |
+| `isort` and `black` fight over imports | Missing `--profile black` | Always use `isort --profile black` |
+| Pre-commit hook fails | `ANTHROPIC_API_KEY` not set | Export key or `SKIP_PRE_COMMIT=1` |
+| Dashboard can't read `.env` | `_load_dotenv()` not called | Dashboard is a separate process; dotenv loads at import |
+| JWT auth fails across services | Missing env propagation | `main.py` copies settings to `os.environ` at startup |
+| Tests fail with `AttributeError: module has no attribute` | Patching lazy import on wrong module | Patch at the SOURCE module (see Section 3.6) |
+
+### Debug logging
+
+```bash
+# Enable debug logging for a specific module
+export LOG_LEVEL=DEBUG
+python -c "
+import logging; logging.basicConfig(level=logging.DEBUG)
+from stocks.repository import StockRepository
+repo = StockRepository()
+print(repo.get_all_registry().keys())
+"
+```
+
+### Iceberg data inspection
+
+```python
+from stocks.repository import StockRepository
+repo = StockRepository()
+
+# Check registry
+print(sorted(repo.get_all_registry().keys()))
+
+# Check OHLCV coverage
+for t in sorted(repo.get_all_registry().keys()):
+    df = repo.get_ohlcv(t)
+    adj = df["adj_close"].notna().mean() * 100
+    print(f"{t}: {len(df)} rows, {adj:.1f}% adj_close")
+```
+
+---
+
+## Appendix: Deployment & Known Limitations
+
+### First-time deployment
+
+```bash
+python auth/create_tables.py
+python auth/migrate_users_table.py
+python stocks/create_tables.py
+python stocks/backfill_metadata.py
+python stocks/backfill_adj_close.py
+```
+
+### Hooks (one-time install)
+
 ```bash
 cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 cp hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
 ```
 
-**Pre-commit** (runs on staged files): code quality auto-fix, meta-file freshness, docs freshness, changelog order. Requires `ANTHROPIC_API_KEY`. Bypass: `SKIP_PRE_COMMIT=1`.
+Pre-commit: auto-fix + freshness checks (requires `ANTHROPIC_API_KEY`). Bypass: `SKIP_PRE_COMMIT=1`.
+Pre-push: blocks on bare `print()` or `mkdocs build` failure.
 
-**Pre-push** (hard blocks pushes to `main`): no bare `print()` in backend Python; `mkdocs build` must pass.
+### Known limitations
 
-**After every session**: update `PROGRESS.md` (dated entry) + `CLAUDE.md` (if structure/API changed) + relevant `docs/` page(s).
+- Facebook SSO: code complete, credentials are placeholders (button hidden).
+- `SERPAPI_API_KEY` required for `search_web` (100 free/month).
+- Refresh token deny-list is in-memory (cleared on restart).
+- Copy-on-write Iceberg upserts do not scale to very large tables (fine for current dataset sizes).
 
----
+### After every session
 
-## Known Limitations / TODOs
-
-- **Facebook SSO** — code complete, credentials are placeholders; button hidden on login page
-- **`SERPAPI_API_KEY` required** for `search_web` tool (100 free/month at serpapi.com)
-- **Refresh token deny-list is in-memory** — cleared on backend restart; tokens remain valid until natural expiry
-- **Run once per new deployment**: `python auth/create_tables.py` + `python auth/migrate_users_table.py` + `python stocks/create_tables.py` + `python stocks/backfill_metadata.py`
-- **LangChain 1.x** — upgraded from 0.3.x; `langchain-community` is at 0.4.x (community package uses separate versioning)
+Update `PROGRESS.md` (dated entry) + `CLAUDE.md` (if structure changed) + relevant `docs/` pages.

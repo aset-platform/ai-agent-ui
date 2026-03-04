@@ -31,7 +31,11 @@ def _prepare_data_for_prophet(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame with exactly two columns: ``ds`` (datetime) and ``y``
         (adjusted close price), sorted ascending, with no NaN values.
     """
-    if "Adj Close" in df.columns and df["Adj Close"].notna().any():
+    # Use Adj Close only when >50 % of values are non-NaN;
+    # Indian stocks via yfinance often store adj_close as
+    # almost entirely NaN, which would leave too few rows
+    # for Prophet after dropna.
+    if "Adj Close" in df.columns and df["Adj Close"].notna().mean() > 0.5:
         price_col = "Adj Close"
     else:
         price_col = "Close"
