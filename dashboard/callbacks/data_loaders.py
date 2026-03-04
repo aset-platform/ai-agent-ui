@@ -50,13 +50,17 @@ def _load_reg_cb() -> dict:
         Registry dict keyed by ticker symbol; empty dict on failure.
     """
     try:
-        from dashboard.callbacks.iceberg import _get_iceberg_repo
+        from dashboard.callbacks.iceberg import (
+            _get_iceberg_repo,
+            _get_registry_cached,
+        )
 
         repo = _get_iceberg_repo()
         if repo is not None:
-            registry = repo.get_all_registry()
+            registry = _get_registry_cached(repo)
             _logger.debug(
-                "Registry loaded from Iceberg: %d tickers.", len(registry)
+                "Registry loaded from Iceberg:" " %d tickers.",
+                len(registry),
             )
             return registry
     except Exception as exc:

@@ -1403,6 +1403,35 @@ class StockRepository:
             return None
         return df.sort_values("run_date", ascending=False).iloc[0].to_dict()
 
+    def get_all_latest_forecast_runs(
+        self, horizon_months: int
+    ) -> pd.DataFrame:
+        """Return the most recent forecast run per ticker.
+
+        Reads the ``forecast_runs`` table once, filters by
+        *horizon_months*, and keeps only the row with the
+        latest ``run_date`` for each ticker.  Pattern matches
+        :meth:`get_all_latest_company_info`.
+
+        Args:
+            horizon_months: Forecast horizon (3, 6, or 9).
+
+        Returns:
+            DataFrame with one row per ticker (latest
+            ``run_date``), or an empty DataFrame.
+        """
+        df = self._table_to_df(_FORECAST_RUNS)
+        if df.empty:
+            return df
+        filtered = df[df["horizon_months"] == int(horizon_months)]
+        if filtered.empty:
+            return pd.DataFrame()
+        return (
+            filtered.sort_values("run_date", ascending=False)
+            .groupby("ticker", as_index=False)
+            .first()
+        )
+
     # ------------------------------------------------------------------
     # Forecast series
     # ------------------------------------------------------------------

@@ -275,7 +275,7 @@ def _build_analysis_fig(
             # Snap to nearest trading date via abs-diff
             # (avoids get_indexer Timestamp arithmetic bug
             # in pandas 2.x with freq-less DatetimeIndex)
-            diffs = (df.index - ex_dt).abs()
+            diffs = np.abs(df.index - ex_dt)
             nearest_idx = diffs.argmin()
             nearest_dt = df.index[nearest_idx]
             high_val = float(df.loc[nearest_dt, "High"])

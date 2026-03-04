@@ -49,9 +49,12 @@ _DASH_REPO_TTL = 3600  # 1 hour
 
 # Fix #6: TTL caches for expensive shared Iceberg reads (5-min TTL)
 _SHARED_TTL = 300
+_NEGATIVE_TTL = 30  # short TTL for empty/None results
 _SUMMARY_CACHE: dict = {"data": None, "expiry": 0.0}
 _COMPANY_CACHE: dict = {"data": None, "expiry": 0.0}
 _FILLED_SUMMARY_CACHE: dict = {"data": None, "expiry": 0.0}
+_REGISTRY_CACHE: dict = {"data": None, "expiry": 0.0}
+_FORECAST_RUNS_CACHE: dict = {"data": None, "expiry": 0.0}
 _OHLCV_CACHE: dict = {}  # {ticker: (df, expiry_monotonic)}
 _FORECAST_CACHE: dict = {}  # {(ticker, horizon): (df, expiry_monotonic)}
 _DIVIDENDS_CACHE: dict = {}  # {ticker: (df, expiry_monotonic)}
@@ -84,6 +87,64 @@ def _get_iceberg_repo() -> Optional[object]:
 
 
 # ------------------------------------------------------------------
+# Registry cached helper
+# ------------------------------------------------------------------
+
+
+def _get_registry_cached(repo: object) -> dict:
+    """Return the stock registry dict, cached for ``_SHARED_TTL`` s.
+
+    Eliminates duplicate ``get_all_registry()`` Iceberg scans
+    when both layout and callback code load the registry within
+    the same refresh cycle.
+
+    Args:
+        repo: Active :class:`~stocks.repository.StockRepository`.
+
+    Returns:
+        Dict keyed by ticker symbol, or empty dict.
+    """
+    now = _time.monotonic()
+    if _REGISTRY_CACHE["data"] is not None and now < _REGISTRY_CACHE["expiry"]:
+        return _REGISTRY_CACHE["data"]
+    data = repo.get_all_registry()
+    _REGISTRY_CACHE.update({"data": data, "expiry": now + _SHARED_TTL})
+    return data
+
+
+# ------------------------------------------------------------------
+# Forecast runs cached helper
+# ------------------------------------------------------------------
+
+
+def _get_forecast_runs_cached(
+    repo: object, horizon_months: int = 9
+) -> pd.DataFrame:
+    """Return all latest forecast runs, cached for ``_SHARED_TTL`` s.
+
+    One Iceberg scan replaces N per-ticker
+    ``get_latest_forecast_run()`` calls.
+
+    Args:
+        repo: Active :class:`~stocks.repository.StockRepository`.
+        horizon_months: Forecast horizon (default 9).
+
+    Returns:
+        DataFrame with one row per ticker (latest run),
+        or an empty DataFrame.
+    """
+    now = _time.monotonic()
+    if (
+        _FORECAST_RUNS_CACHE["data"] is not None
+        and now < _FORECAST_RUNS_CACHE["expiry"]
+    ):
+        return _FORECAST_RUNS_CACHE["data"]
+    data = repo.get_all_latest_forecast_runs(horizon_months)
+    _FORECAST_RUNS_CACHE.update({"data": data, "expiry": now + _SHARED_TTL})
+    return data
+
+
+# ------------------------------------------------------------------
 # OHLCV cached helper
 # ------------------------------------------------------------------
 
@@ -110,7 +171,7 @@ def _get_ohlcv_cached(repo: object, ticker: str) -> Optional[pd.DataFrame]:
 
     df = repo.get_ohlcv(ticker)
     if df.empty:
-        _OHLCV_CACHE[ticker] = (None, now + _SHARED_TTL)
+        _OHLCV_CACHE[ticker] = (None, now + _NEGATIVE_TTL)
         return None
 
     # Reshape Iceberg columns to match parquet format
@@ -171,7 +232,7 @@ def _get_forecast_cached(
 
     df = repo.get_latest_forecast_series(ticker, horizon_months)
     if df.empty:
-        _FORECAST_CACHE[cache_key] = (None, now + _SHARED_TTL)
+        _FORECAST_CACHE[cache_key] = (None, now + _NEGATIVE_TTL)
         return None
 
     # Reshape Iceberg columns to match expected format
@@ -214,7 +275,7 @@ def _get_dividends_cached(
 
     df = repo.get_dividends(ticker)
     if df.empty:
-        _DIVIDENDS_CACHE[ticker] = (None, now + _SHARED_TTL)
+        _DIVIDENDS_CACHE[ticker] = (None, now + _NEGATIVE_TTL)
         return None
 
     _DIVIDENDS_CACHE[ticker] = (df, now + _SHARED_TTL)
@@ -387,3 +448,5 @@ def clear_caches(ticker: str | None = None) -> None:
     _SUMMARY_CACHE.update({"data": None, "expiry": 0.0})
     _COMPANY_CACHE.update({"data": None, "expiry": 0.0})
     _FILLED_SUMMARY_CACHE.update({"data": None, "expiry": 0.0})
+    _REGISTRY_CACHE.update({"data": None, "expiry": 0.0})
+    _FORECAST_RUNS_CACHE.update({"data": None, "expiry": 0.0})

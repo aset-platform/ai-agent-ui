@@ -263,18 +263,21 @@ def register(app) -> None:
             Output("compare-heatmap", "figure"),
         ],
         Input("compare-ticker-dropdown", "value"),
+        Input("analysis-refresh-store", "data"),
         State("auth-token-store", "data"),
     )
-    def update_compare(tickers, token):
-        """Build the normalised performance chart, metrics table, and heatmap.
+    def update_compare(tickers, refresh_trigger, token):
+        """Build the Adj Close performance chart, metrics table,
+        and heatmap.
 
         Args:
-            tickers: List of selected ticker symbols (2–5).
-            token: JWT access token from the auth-token-store.
+            tickers: List of selected ticker symbols (2-5).
+            refresh_trigger: Bumped after a data refresh.
+            token: JWT access token from auth-token-store.
 
         Returns:
-            Tuple of (performance figure, metrics table component,
-            heatmap figure).
+            Tuple of (performance figure, metrics table
+            component, heatmap figure).
         """
         if _validate_token(token) is None:
             empty = _empty_fig("Authentication required.", height=450)
@@ -290,43 +293,57 @@ def register(app) -> None:
                 empty_heat,
             )
 
-        # ── Load data ─────────────────────────────────────────────────────
+        # ── Load data ────────────────────────────────────
         dfs = {}
+        failed = []
         for t in tickers[:5]:
             df = _load_raw(t)
             if df is not None and len(df) > 1:
                 dfs[t] = df
+            else:
+                failed.append(t)
+                _logger.warning("Compare: no OHLCV data for %s", t)
 
         if len(dfs) < 2:
+            if failed:
+                missing = ", ".join(failed)
+                hint = (
+                    f"No data for: {missing}. "
+                    "Refresh these stocks from the"
+                    " home page first."
+                )
+            else:
+                hint = "Could not load data for 2 or" " more selected stocks."
             return (
-                _empty_fig(
-                    "Could not load data for 2 or more selected stocks.", 450
+                _empty_fig(hint, 450),
+                html.P(
+                    hint,
+                    className="text-muted",
                 ),
-                html.P("Data unavailable.", className="text-muted"),
                 empty_heat,
             )
 
-        # ── Common start date ─────────────────────────────────────────────
+        # ── Common start date ──────────────────────────
         common_start = max(df.index.min() for df in dfs.values())
         aligned = {
-            t: df[df.index >= common_start]["Close"] for t, df in dfs.items()
+            t: df[df.index >= common_start]["Adj Close"]
+            for t, df in dfs.items()
         }
 
-        # ── Normalised performance chart ──────────────────────────────────
+        # ── Adj Close performance chart ───────────────
         perf_fig = go.Figure()
         final_values = {}
         for t, series in aligned.items():
-            norm = (series / series.iloc[0]) * 100
             perf_fig.add_trace(
                 go.Scatter(
-                    x=norm.index,
-                    y=norm,
+                    x=series.index,
+                    y=series,
                     name=t,
                     mode="lines",
                     line=dict(width=2),
                 )
             )
-            final_values[t] = float(norm.iloc[-1])
+            final_values[t] = float(series.iloc[-1])
 
         best_ticker = max(final_values, key=final_values.get)
         perf_fig.update_layout(
@@ -336,13 +353,18 @@ def register(app) -> None:
             plot_bgcolor="#f9fafb",
             font=dict(color="#111827"),
             title=dict(
-                text="Normalised Performance (Base = 100)", font=dict(size=15)
+                text="Adj Close Price Comparison",
+                font=dict(size=15),
             ),
-            yaxis_title="Value (Base 100)",
+            yaxis_title="Adj Close Price",
             margin=dict(l=60, r=30, t=60, b=40),
             hovermode="x unified",
             legend=dict(
-                orientation="h", yanchor="bottom", y=1.02, x=1, xanchor="right"
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                x=1,
+                xanchor="right",
             ),
         )
         perf_fig.update_xaxes(gridcolor="#e5e7eb")
@@ -354,7 +376,7 @@ def register(app) -> None:
             df = dfs[t]
             # Fix #1/#2/#14: use cached indicator computation
             df_ind = _add_indicators_cached(t, df)
-            close = df["Close"]
+            close = df["Adj Close"]
             daily = close.pct_change().dropna()
             ann_vol = daily.std() * math.sqrt(252)
             ann_ret = daily.mean() * 252

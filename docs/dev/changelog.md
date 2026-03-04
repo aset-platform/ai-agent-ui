@@ -4,6 +4,39 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 4, 2026 — Home page load latency optimisation
+
+### Performance
+
+Reduced home page load time from ~5 s to ~500 ms (cold) and ~50 ms (warm cache) by replacing 3N sequential per-ticker Iceberg scans with 2 batch reads + TTL-cached dict lookups.
+
+| Scenario | Before | After | Speedup |
+|----------|--------|-------|---------|
+| Cold load (30 tickers) | ~5 s | ~500 ms | 10x |
+| Warm cache (within 5 min) | ~2 s | ~50 ms | 40x |
+
+### Changes
+
+| File | Change |
+|------|--------|
+| `stocks/repository.py` | Added `get_all_latest_forecast_runs(horizon_months)` — batch read, one row per ticker |
+| `dashboard/callbacks/iceberg.py` | Added `_get_registry_cached()`, `_get_forecast_runs_cached()` (5-min TTL); updated `clear_caches()` |
+| `dashboard/callbacks/home_cbs.py` | Rewrote `refresh_stock_cards()`: batch pre-fetch + dict lookups replace per-ticker Iceberg calls; timing instrumentation added |
+| `dashboard/callbacks/data_loaders.py` | `_load_reg_cb()` uses `_get_registry_cached()` |
+| `dashboard/layouts/helpers.py` | `_load_registry()` uses `_get_registry_cached()` |
+
+### Tests (+9 new → 157 total)
+
+| Class | Tests |
+|-------|-------|
+| `TestGetAllLatestForecastRuns` | 3 — batch returns 1 row/ticker, filters by horizon, handles empty table |
+| `TestRegistryCached` | 2 — caches on 2nd call, refreshes after TTL |
+| `TestForecastRunsCached` | 2 — caches on 2nd call, refreshes after TTL |
+| `TestRefreshStockCardsBatch` | 1 — batch card shape with mocked helpers |
+| `TestClearCachesIncludesNewCaches` | 1 — both new caches invalidated |
+
+---
+
 ## Mar 2, 2026 — Fix Adj Close NaN IndexError on forecast page
 
 ### Bug fix
