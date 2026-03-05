@@ -61,8 +61,14 @@ data/iceberg/
 # Uploaded user avatars (runtime-generated)
 data/avatars/
 
+# Auth — persisted JWT deny-list (runtime-generated)
+data/auth_deny_list.json
+
 # Iceberg catalog config (contains absolute local paths)
 .pyiceberg.yaml
 
 # Local Claude Code instructions (personal, not for repo)
 instruction.txt
+
+# MCP server config (contains API keys)
+.mcp.json

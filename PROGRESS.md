@@ -2,6 +2,86 @@
 
 ---
 
+# Session: Mar 5, 2026 — Quarterly Results feature
+
+## Summary
+Added a new "Quarterly Results" tab to the Insights page that
+fetches, stores, and displays quarterly financial statements
+(Income Statement, Balance Sheet, Cash Flow) for tracked stocks.
+Data sourced from yfinance, persisted in Iceberg, displayed as
+sortable table + QoQ bar chart.
+
+### Changes
+- **`stocks/create_tables.py`** — Added 9th Iceberg table
+  `stocks.quarterly_results` with 21 columns (ticker,
+  quarter_end, fiscal_year/quarter, statement_type,
+  15 financial metrics, updated_at).
+- **`stocks/repository.py`** — Added 4 CRUD methods:
+  `insert_quarterly_results`, `get_quarterly_results`,
+  `get_all_quarterly_results`,
+  `get_quarterly_results_if_fresh`.
+- **`backend/tools/stock_data_tool.py`** — Added
+  `fetch_quarterly_results` @tool with yfinance metric
+  extraction and 7-day freshness cache.
+- **`backend/main.py`** — Registered new tool.
+- **`dashboard/callbacks/iceberg.py`** — Added
+  `_get_quarterly_cached()` with 5-min TTL; added to
+  `clear_caches()`.
+- **`dashboard/layouts/insights_tabs.py`** — Added
+  `_quarterly_tab()` with ticker/market/sector/statement
+  type filters, QoQ chart, and sortable table.
+- **`dashboard/layouts/insights.py`** — Added 7th tab +
+  `quarterly-sort-store`.
+- **`dashboard/callbacks/insights_cbs.py`** — Added
+  `update_quarterly` callback with market/sector/ticker/
+  statement filters, QoQ grouped bar chart, sortable table.
+  Added "quarterly" to sort callback registration loop.
+- **Tests** (6 new, 180 total):
+  - `tests/backend/test_quarterly_repo.py`
+  - `tests/backend/test_fetch_quarterly.py`
+  - `tests/dashboard/test_quarterly_tab.py`
+
+---
+
+# Session: Mar 4, 2026 — Sortable column headers for all tables
+
+## Summary
+Added clickable column-header sorting to all 6 data tables
+(Screener, Price Targets, Dividends, Risk Metrics, Users,
+Audit Log). Replaced the Risk tab's RadioItems sort control
+with header-click sorting. Sort cycles: unsorted -> asc -> desc
+-> unsorted.
+
+### Changes
+- **`dashboard/callbacks/sort_helpers.py`** (NEW) — Reusable
+  module: `build_sortable_thead()`, `apply_sort()`,
+  `apply_sort_list()`, `next_sort_state()`,
+  `register_sort_callback()`.
+- **`dashboard/assets/custom.css`** — Added `.sort-header-btn`
+  and `.sort-arrow` styles with hover/active states.
+- **`dashboard/layouts/insights.py`** — Added 4 `dcc.Store`
+  components for sort state (screener, targets, dividends, risk).
+- **`dashboard/layouts/insights_tabs.py`** — Removed
+  `risk-sort-by` RadioItems; kept Market filter only.
+- **`dashboard/layouts/admin.py`** — Added 2 `dcc.Store`
+  for users and audit sort state.
+- **`dashboard/callbacks/insights_cbs.py`** — Integrated
+  sorting into all 4 table callbacks; added pagination-reset
+  callbacks on sort change; registered sort callbacks.
+- **`dashboard/callbacks/admin_cbs.py`** — Added sort input
+  to render callbacks; extended pagination-reset triggers.
+- **`dashboard/callbacks/table_builders.py`** — Added
+  `sort_state` param to `_build_users_table` and
+  `_build_audit_table`; uses `build_sortable_thead()`.
+- **`tests/dashboard/test_sort_helpers.py`** (NEW) — 14 tests
+  covering cycle logic, DataFrame/list sorting, and thead
+  structure.
+
+### Test Results
+171 tests pass (157 existing + 14 new), 17s runtime.
+
+---
+
 # Session: Mar 4, 2026 — Home page load latency optimisation
 
 ## Summary

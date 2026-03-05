@@ -23,7 +23,11 @@ import pandas as pd
 import tools._stock_shared as _ss
 import yfinance as yf
 from langchain_core.tools import tool
-from tools._stock_registry import _check_existing_data, _load_registry, _update_registry
+from tools._stock_registry import (
+    _check_existing_data,
+    _load_registry,
+    _update_registry,
+)
 from tools._stock_shared import (
     _currency_symbol,
     _get_repo,
@@ -102,7 +106,9 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
             data_end = datetime.strptime(dr_end_str, "%Y-%m-%d").date()
         else:
             # Fallback: parse last_fetch_date if date_range is absent
-            data_end = datetime.strptime(existing["last_fetch_date"], "%Y-%m-%d").date()
+            data_end = datetime.strptime(
+                existing["last_fetch_date"], "%Y-%m-%d"
+            ).date()
 
         today = date.today()
         # Start one day after the last data point to avoid
@@ -111,14 +117,17 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
 
         if fetch_start > today:
             msg = (
-                f"Data is already up to date for {ticker} " f"(last data: {data_end})."
+                f"Data is already up to date for {ticker} "
+                f"(last data: {data_end})."
             )
             _logger.info(msg)
             return msg
 
         # Omit `end` so yfinance fetches up to the current moment
         # (including today's intraday data when the market is open).
-        new_df = yf.Ticker(ticker).history(start=str(fetch_start), auto_adjust=False)
+        new_df = yf.Ticker(ticker).history(
+            start=str(fetch_start), auto_adjust=False
+        )
 
         if new_df.empty:
             msg = (
@@ -166,7 +175,9 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
         return msg
 
     except Exception as e:
-        _logger.error("fetch_stock_data failed for %s: %s", ticker, e, exc_info=True)
+        _logger.error(
+            "fetch_stock_data failed for %s: %s", ticker, e, exc_info=True
+        )
         return f"Error fetching data for '{ticker}': {e}"
 
 
@@ -229,7 +240,9 @@ def get_stock_info(ticker: str) -> str:
         return json.dumps(result, indent=2)
 
     except Exception as e:
-        _logger.error("get_stock_info failed for %s: %s", ticker, e, exc_info=True)
+        _logger.error(
+            "get_stock_info failed for %s: %s", ticker, e, exc_info=True
+        )
         return f"Error fetching info for '{ticker}': {e}"
 
 
@@ -268,7 +281,9 @@ def load_stock_data(ticker: str) -> str:
             f"Columns: {cols}. Missing values: {missing}."
         )
     except Exception as e:
-        _logger.error("load_stock_data failed for %s: %s", ticker, e, exc_info=True)
+        _logger.error(
+            "load_stock_data failed for %s: %s", ticker, e, exc_info=True
+        )
         return f"Error loading data for '{ticker}': {e}"
 
 
@@ -356,6 +371,178 @@ def get_dividend_history(ticker: str) -> str:
             "get_dividend_history failed for %s: %s", ticker, e, exc_info=True
         )
         return f"Error fetching dividend history for '{ticker}': {e}"
+
+
+# Mapping from yfinance row labels to schema columns
+_INCOME_MAP = {
+    "Total Revenue": "revenue",
+    "Net Income": "net_income",
+    "Gross Profit": "gross_profit",
+    "Operating Income": "operating_income",
+    "EBITDA": "ebitda",
+    "Basic EPS": "eps_basic",
+    "Diluted EPS": "eps_diluted",
+}
+
+_BALANCE_MAP = {
+    "Total Assets": "total_assets",
+    "Total Liabilities Net Minority Interest": ("total_liabilities"),
+    "Stockholders Equity": "total_equity",
+    "Total Debt": "total_debt",
+    "Cash And Cash Equivalents": "cash_and_equivalents",
+}
+
+_CASHFLOW_MAP = {
+    "Operating Cash Flow": "operating_cashflow",
+    "Capital Expenditure": "capex",
+    "Free Cash Flow": "free_cashflow",
+}
+
+
+def _extract_statement(
+    stmt_df: pd.DataFrame,
+    metric_map: dict,
+    statement_type: str,
+    ticker: str,
+) -> list[dict]:
+    """Extract quarterly rows from a yfinance statement.
+
+    Args:
+        stmt_df: Raw yfinance statement (rows=metrics,
+            cols=quarter-end dates).
+        metric_map: Label-to-column mapping.
+        statement_type: ``"income"``, ``"balance"``, or
+            ``"cashflow"``.
+        ticker: Uppercase ticker symbol.
+
+    Returns:
+        List of row dicts ready for DataFrame construction.
+    """
+    if stmt_df is None or stmt_df.empty:
+        return []
+    rows = []
+    for col_date in stmt_df.columns:
+        qe = pd.Timestamp(col_date).date()
+        row = {
+            "ticker": ticker,
+            "quarter_end": qe,
+            "fiscal_year": qe.year,
+            "fiscal_quarter": f"Q{(qe.month - 1) // 3 + 1}",
+            "statement_type": statement_type,
+        }
+        # Initialise all metric cols to None
+        all_cols = (
+            list(_INCOME_MAP.values())
+            + list(_BALANCE_MAP.values())
+            + list(_CASHFLOW_MAP.values())
+        )
+        for c in all_cols:
+            row.setdefault(c, None)
+        for label, col_name in metric_map.items():
+            try:
+                val = stmt_df.loc[label, col_date]
+                row[col_name] = float(val) if pd.notna(val) else None
+            except (KeyError, ValueError, TypeError):
+                row[col_name] = None
+        rows.append(row)
+    return rows
+
+
+@tool
+def fetch_quarterly_results(ticker: str) -> str:
+    """Fetch quarterly financial statements from Yahoo Finance.
+
+    Retrieves quarterly income statement, balance sheet, and
+    cash flow data and persists to the Iceberg
+    ``stocks.quarterly_results`` table. Data is cached for 7 days.
+
+    Args:
+        ticker: Stock ticker symbol, e.g. ``"AAPL"``.
+
+    Returns:
+        Summary string describing fetched quarters.
+
+    Example:
+        >>> result = fetch_quarterly_results.invoke(
+        ...     {"ticker": "AAPL"}
+        ... )
+        >>> "AAPL" in result
+        True
+    """
+    ticker = ticker.upper().strip()
+    _logger.info("fetch_quarterly_results | ticker=%s", ticker)
+
+    try:
+        repo = _require_repo()
+
+        # Check freshness (7-day cache)
+        cached = repo.get_quarterly_results_if_fresh(ticker, days=7)
+        if cached is not None:
+            n = len(cached)
+            return (
+                f"Quarterly results for {ticker} are "
+                f"up-to-date ({n} records, fetched "
+                f"within last 7 days)."
+            )
+
+        yt = yf.Ticker(ticker)
+        all_rows = []
+
+        # Income Statement
+        all_rows.extend(
+            _extract_statement(
+                yt.quarterly_income_stmt,
+                _INCOME_MAP,
+                "income",
+                ticker,
+            )
+        )
+
+        # Balance Sheet
+        all_rows.extend(
+            _extract_statement(
+                yt.quarterly_balance_sheet,
+                _BALANCE_MAP,
+                "balance",
+                ticker,
+            )
+        )
+
+        # Cash Flow
+        all_rows.extend(
+            _extract_statement(
+                yt.quarterly_cashflow,
+                _CASHFLOW_MAP,
+                "cashflow",
+                ticker,
+            )
+        )
+
+        if not all_rows:
+            return f"No quarterly financial data found " f"for {ticker}."
+
+        df = pd.DataFrame(all_rows)
+        repo.insert_quarterly_results(ticker, df)
+
+        n_quarters = df["quarter_end"].nunique()
+        stmts = df["statement_type"].unique().tolist()
+        msg = (
+            f"Fetched quarterly results for {ticker}: "
+            f"{n_quarters} quarters, statements: "
+            f"{', '.join(stmts)}. "
+            f"Total {len(df)} records saved."
+        )
+        _logger.info(msg)
+        return msg
+
+    except Exception as e:
+        _logger.error(
+            "fetch_quarterly_results failed for %s: %s",
+            ticker,
+            e,
+            exc_info=True,
+        )
+        return f"Error fetching quarterly results " f"for '{ticker}': {e}"
 
 
 @tool

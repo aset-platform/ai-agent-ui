@@ -363,6 +363,54 @@ body {
   animation: refreshFadeOut 1s ease-out 7s forwards;
 }
 
+/* ── Sortable column headers ─────────────────────────────── */
+
+.sort-header-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.sort-header-btn:hover {
+  color: var(--accent);
+}
+
+.sort-header-btn.sort-active {
+  color: var(--accent);
+}
+
+.sort-arrow {
+  font-size: 0.65rem;
+  opacity: 0.35;
+  line-height: 1;
+}
+
+.sort-arrow.sort-active {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* ── Sharpe info icon (tooltip target) ───────────────────── */
+
+.sharpe-info-icon {
+  font-size: 0.65rem;
+  cursor: help;
+  opacity: 0.5;
+  margin-left: 0.15em;
+}
+
+.sharpe-info-icon:hover {
+  opacity: 1;
+}
+
 /* ── Page heading ────────────────────────────────────────── */
 
 h2.fw-bold {

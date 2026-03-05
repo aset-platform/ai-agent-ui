@@ -1,7 +1,7 @@
 """Iceberg-backed repository for all stock market data tables.
 
 This module provides :class:`StockRepository`, the single point of access
-for reading and writing to the 8 ``stocks`` Iceberg tables.  No code
+for reading and writing to the 9 ``stocks`` Iceberg tables.  No code
 outside this module should interact with the tables directly.
 
 Write semantics
@@ -18,6 +18,8 @@ Write semantics
 - **forecast_runs** — append-only per ``(ticker, horizon_months, run_date)``.
 - **forecasts** — append per ``(ticker, horizon_months, run_date)``; existing
   series for the same run are dropped before re-inserting.
+- **quarterly_results** — upsert per ``(ticker, quarter_end, statement_type)``
+  (copy-on-write).
 
 PyIceberg quirks
 ----------------
@@ -40,7 +42,7 @@ Usage::
 import logging
 import math
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -58,15 +60,19 @@ _TECHNICAL_INDICATORS = f"{_NAMESPACE}.technical_indicators"
 _ANALYSIS_SUMMARY = f"{_NAMESPACE}.analysis_summary"
 _FORECAST_RUNS = f"{_NAMESPACE}.forecast_runs"
 _FORECASTS = f"{_NAMESPACE}.forecasts"
+_QUARTERLY_RESULTS = f"{_NAMESPACE}.quarterly_results"
 
 
 def _now_utc() -> datetime:
-    """Return current UTC time as a naive datetime (PyIceberg TimestampType compat).
+    """Return current UTC time as a naive datetime.
+
+    PyIceberg ``TimestampType`` requires naive datetimes, so
+    ``tzinfo`` is stripped after construction.
 
     Returns:
         Naive :class:`datetime.datetime` in UTC.
     """
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _to_date(value: Any) -> Optional[date]:
@@ -1550,3 +1556,197 @@ class StockRepository:
             .sort_values("forecast_date")
             .reset_index(drop=True)
         )
+
+    # ------------------------------------------------------------------
+    # Quarterly Results
+    # ------------------------------------------------------------------
+
+    def insert_quarterly_results(self, ticker: str, df: pd.DataFrame) -> None:
+        """Upsert quarterly results for *ticker* (copy-on-write).
+
+        Deduplicates on ``(ticker, quarter_end, statement_type)``
+        keeping the newest rows from *df*.
+
+        Args:
+            ticker: Stock ticker symbol.
+            df: DataFrame with quarterly result columns matching
+                the ``stocks.quarterly_results`` schema.
+        """
+        ticker = ticker.upper()
+        # Read ALL rows (copy-on-write: full table overwrite)
+        all_existing = self._table_to_df(_QUARTERLY_RESULTS)
+        if not all_existing.empty:
+            # Keep rows for OTHER tickers unchanged
+            other = all_existing[all_existing["ticker"] != ticker]
+            # For this ticker, keep rows not being replaced
+            same_ticker = all_existing[all_existing["ticker"] == ticker]
+            if not same_ticker.empty:
+                keys = set(
+                    zip(
+                        df["quarter_end"].astype(str),
+                        df["statement_type"],
+                    )
+                )
+                mask = ~same_ticker.apply(
+                    lambda r: (
+                        str(r["quarter_end"]),
+                        r["statement_type"],
+                    )
+                    in keys,
+                    axis=1,
+                )
+                kept = same_ticker[mask]
+            else:
+                kept = same_ticker
+            combined = pd.concat([other, kept, df], ignore_index=True)
+        else:
+            combined = df.copy()
+
+        # Build Arrow table matching schema
+        now = _now_utc()
+        arrow = pa.table(
+            {
+                "ticker": pa.array(
+                    combined["ticker"].tolist(),
+                    pa.string(),
+                ),
+                "quarter_end": pa.array(
+                    [_to_date(d) for d in combined["quarter_end"]],
+                    pa.date32(),
+                ),
+                "fiscal_year": pa.array(
+                    [_safe_int(v) for v in combined["fiscal_year"]],
+                    pa.int32(),
+                ),
+                "fiscal_quarter": pa.array(
+                    combined["fiscal_quarter"].tolist(),
+                    pa.string(),
+                ),
+                "statement_type": pa.array(
+                    combined["statement_type"].tolist(),
+                    pa.string(),
+                ),
+                "revenue": pa.array(
+                    [_safe_float(v) for v in combined["revenue"]],
+                    pa.float64(),
+                ),
+                "net_income": pa.array(
+                    [_safe_float(v) for v in combined["net_income"]],
+                    pa.float64(),
+                ),
+                "gross_profit": pa.array(
+                    [_safe_float(v) for v in combined["gross_profit"]],
+                    pa.float64(),
+                ),
+                "operating_income": pa.array(
+                    [_safe_float(v) for v in combined["operating_income"]],
+                    pa.float64(),
+                ),
+                "ebitda": pa.array(
+                    [_safe_float(v) for v in combined["ebitda"]],
+                    pa.float64(),
+                ),
+                "eps_basic": pa.array(
+                    [_safe_float(v) for v in combined["eps_basic"]],
+                    pa.float64(),
+                ),
+                "eps_diluted": pa.array(
+                    [_safe_float(v) for v in combined["eps_diluted"]],
+                    pa.float64(),
+                ),
+                "total_assets": pa.array(
+                    [_safe_float(v) for v in combined["total_assets"]],
+                    pa.float64(),
+                ),
+                "total_liabilities": pa.array(
+                    [_safe_float(v) for v in combined["total_liabilities"]],
+                    pa.float64(),
+                ),
+                "total_equity": pa.array(
+                    [_safe_float(v) for v in combined["total_equity"]],
+                    pa.float64(),
+                ),
+                "total_debt": pa.array(
+                    [_safe_float(v) for v in combined["total_debt"]],
+                    pa.float64(),
+                ),
+                "cash_and_equivalents": pa.array(
+                    [_safe_float(v) for v in combined["cash_and_equivalents"]],
+                    pa.float64(),
+                ),
+                "operating_cashflow": pa.array(
+                    [_safe_float(v) for v in combined["operating_cashflow"]],
+                    pa.float64(),
+                ),
+                "capex": pa.array(
+                    [_safe_float(v) for v in combined["capex"]],
+                    pa.float64(),
+                ),
+                "free_cashflow": pa.array(
+                    [_safe_float(v) for v in combined["free_cashflow"]],
+                    pa.float64(),
+                ),
+                "updated_at": pa.array(
+                    [now] * len(combined),
+                    pa.timestamp("us"),
+                ),
+            }
+        )
+        tbl = self._load_table(_QUARTERLY_RESULTS)
+        tbl.overwrite(arrow)
+        _logger.info(
+            "quarterly_results upserted %d rows for %s",
+            len(df),
+            ticker,
+        )
+
+    def get_quarterly_results(self, ticker: str) -> pd.DataFrame:
+        """Get all quarterly results for *ticker*.
+
+        Args:
+            ticker: Stock ticker symbol.
+
+        Returns:
+            DataFrame sorted by quarter_end descending.
+        """
+        df = self._scan_ticker(_QUARTERLY_RESULTS, ticker.upper())
+        if df.empty:
+            return df
+        return df.sort_values("quarter_end", ascending=False).reset_index(
+            drop=True
+        )
+
+    def get_all_quarterly_results(
+        self,
+    ) -> pd.DataFrame:
+        """Get quarterly results for all tickers.
+
+        Returns:
+            DataFrame with all quarterly result rows.
+        """
+        return self._table_to_df(_QUARTERLY_RESULTS)
+
+    def get_quarterly_results_if_fresh(
+        self, ticker: str, days: int = 7
+    ) -> pd.DataFrame | None:
+        """Return cached quarterly data if updated within *days*.
+
+        Args:
+            ticker: Stock ticker symbol.
+            days: Freshness threshold in days.
+
+        Returns:
+            DataFrame if fresh, ``None`` if stale or missing.
+        """
+        df = self._scan_ticker(_QUARTERLY_RESULTS, ticker.upper())
+        if df.empty:
+            return None
+        if "updated_at" not in df.columns:
+            return None
+        latest = pd.to_datetime(df["updated_at"]).max()
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            days=days
+        )
+        if latest >= cutoff:
+            return df
+        return None

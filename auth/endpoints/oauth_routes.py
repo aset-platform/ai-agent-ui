@@ -6,6 +6,7 @@ Functions
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -30,8 +31,6 @@ def register(router: APIRouter) -> None:
     Args:
         router: The :class:`~fastapi.APIRouter` to attach routes to.
     """
-    from datetime import datetime
-
     @router.get("/auth/oauth/providers", tags=["oauth"])
     def list_oauth_providers() -> Dict[str, List[str]]:
         """List OAuth providers that are currently enabled.
@@ -55,7 +54,9 @@ def register(router: APIRouter) -> None:
         response_model=OAuthAuthorizeResponse,
         tags=["oauth"],
     )
-    def oauth_authorize(provider: str, code_challenge: str) -> OAuthAuthorizeResponse:
+    def oauth_authorize(
+        provider: str, code_challenge: str
+    ) -> OAuthAuthorizeResponse:
         """Generate a provider consent URL and a server-side CSRF state token.
 
         Args:
@@ -79,9 +80,17 @@ def register(router: APIRouter) -> None:
         from config import get_settings
 
         settings = get_settings()
-        if provider_enum == OAuthProvider.google and not settings.google_client_id:
-            raise HTTPException(status_code=503, detail="Google SSO is not configured.")
-        if provider_enum == OAuthProvider.facebook and not settings.facebook_app_id:
+        if (
+            provider_enum == OAuthProvider.google
+            and not settings.google_client_id
+        ):
+            raise HTTPException(
+                status_code=503, detail="Google SSO is not configured."
+            )
+        if (
+            provider_enum == OAuthProvider.facebook
+            and not settings.facebook_app_id
+        ):
             raise HTTPException(
                 status_code=503, detail="Facebook SSO is not configured."
             )
@@ -95,7 +104,9 @@ def register(router: APIRouter) -> None:
         _logger.info("OAuth authorize: provider=%s", provider)
         return OAuthAuthorizeResponse(state=state, authorize_url=authorize_url)
 
-    @router.post("/auth/oauth/callback", response_model=TokenResponse, tags=["oauth"])
+    @router.post(
+        "/auth/oauth/callback", response_model=TokenResponse, tags=["oauth"]
+    )
     def oauth_callback(
         body: OAuthCallbackRequest,
         service: AuthService = Depends(get_auth_service),
@@ -116,7 +127,9 @@ def register(router: APIRouter) -> None:
         oauth_svc = _helpers._get_oauth_svc()
         repo = _helpers._get_repo()
         if not oauth_svc.validate_state(body.state, body.provider.value):
-            _logger.warning("Invalid OAuth state token: provider=%s", body.provider)
+            _logger.warning(
+                "Invalid OAuth state token: provider=%s", body.provider
+            )
             raise HTTPException(
                 status_code=400, detail="Invalid or expired OAuth state token."
             )
@@ -129,10 +142,13 @@ def register(router: APIRouter) -> None:
                 user_info = oauth_svc.exchange_facebook_code(body.code)
         except Exception as exc:
             _logger.error(
-                "OAuth code exchange failed: provider=%s error=%s", body.provider, exc
+                "OAuth code exchange failed: provider=%s error=%s",
+                body.provider,
+                exc,
             )
             raise HTTPException(
-                status_code=400, detail="OAuth token exchange failed: {}".format(exc)
+                status_code=400,
+                detail="OAuth token exchange failed: {}".format(exc),
             )
         user = repo.get_or_create_by_oauth(
             provider=user_info["provider"],
@@ -142,8 +158,12 @@ def register(router: APIRouter) -> None:
             picture_url=user_info.get("picture"),
         )
         if not user.get("is_active", False):
-            raise HTTPException(status_code=403, detail="Account is deactivated.")
-        repo.update(user["user_id"], {"last_login_at": datetime.utcnow()})
+            raise HTTPException(
+                status_code=403, detail="Account is deactivated."
+            )
+        repo.update(
+            user["user_id"], {"last_login_at": datetime.now(timezone.utc)}
+        )
         access = service.create_access_token(
             user_id=user["user_id"], email=user["email"], role=user["role"]
         )
@@ -155,6 +175,8 @@ def register(router: APIRouter) -> None:
             metadata={"provider": body.provider.value, "email": user["email"]},
         )
         _logger.info(
-            "OAuth login: user_id=%s provider=%s", user["user_id"], body.provider
+            "OAuth login: user_id=%s provider=%s",
+            user["user_id"],
+            body.provider,
         )
         return TokenResponse(access_token=access, refresh_token=refresh)

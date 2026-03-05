@@ -46,7 +46,9 @@ def append_audit_event(
         "event_timestamp": _to_ts(_now_utc()),
         "metadata": json.dumps(metadata) if metadata else None,
     }
-    arrow_table = pa.table({k: [v] for k, v in row.items()}, schema=_AUDIT_PA_SCHEMA)
+    arrow_table = pa.table(
+        {k: [v] for k, v in row.items()}, schema=_AUDIT_PA_SCHEMA
+    )
     audit_table(cat).append(arrow_table)
     logger.debug(
         "Audit event type=%s actor=%s target=%s",

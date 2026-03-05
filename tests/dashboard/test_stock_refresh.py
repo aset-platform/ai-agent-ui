@@ -180,3 +180,200 @@ class TestFullOhlcvRefreshAdjCloseFill:
 
         fill_map = repo.update_ohlcv_adj_close.call_args[0][1]
         assert len(fill_map) == 5
+
+
+# ===================================================================
+# run_full_refresh — quarterly results step
+# ===================================================================
+
+
+class TestRunFullRefreshQuarterlyStep:
+    """Verify quarterly results appears in the pipeline."""
+
+    @patch(
+        "dashboard.services.stock_refresh._full_ohlcv_refresh",
+        return_value="OK",
+    )
+    def test_quarterly_step_present(self, _mock_ohlcv):
+        """run_full_refresh includes 'Quarterly results'."""
+        import tools._forecast_accuracy as _fa
+        import tools._forecast_model as _fm
+        import tools._forecast_persist as _fp
+        import tools._forecast_shared as _fs
+        import tools.stock_data_tool as _sdt
+
+        fake_df = pd.DataFrame(
+            {"ds": pd.date_range("2020-01-01", periods=100), "y": range(100)}
+        )
+        model = MagicMock()
+
+        with (
+            patch.object(
+                _sdt,
+                "get_stock_info",
+                MagicMock(invoke=MagicMock(return_value="info ok")),
+            ),
+            patch.object(
+                _sdt,
+                "get_dividend_history",
+                MagicMock(invoke=MagicMock(return_value="div ok")),
+            ),
+            patch.object(
+                _sdt,
+                "fetch_quarterly_results",
+                MagicMock(invoke=MagicMock(return_value="quarterly ok")),
+            ),
+            patch(
+                "tools.price_analysis_tool" ".analyse_stock_price",
+                MagicMock(invoke=MagicMock(return_value="analysis ok")),
+            ),
+            patch.object(
+                _fs,
+                "_load_parquet",
+                return_value=fake_df,
+            ),
+            patch.object(
+                _fm,
+                "_prepare_data_for_prophet",
+                return_value=fake_df,
+            ),
+            patch.object(
+                _fm,
+                "_train_prophet_model",
+                return_value=model,
+            ),
+            patch.object(
+                _fm,
+                "_generate_forecast",
+                return_value=fake_df,
+            ),
+            patch.object(
+                _fa,
+                "_calculate_forecast_accuracy",
+                return_value={
+                    "MAE": 1.0,
+                    "RMSE": 1.5,
+                    "MAPE_pct": 2.0,
+                },
+            ),
+            patch.object(_fp, "_save_forecast"),
+            patch.object(
+                _fa,
+                "_generate_forecast_summary",
+                return_value={
+                    "sentiment": "bullish",
+                    "targets": {},
+                },
+            ),
+            patch.object(
+                _fs,
+                "_require_repo",
+                return_value=_mock_repo(),
+            ),
+        ):
+            from dashboard.services.stock_refresh import (
+                run_full_refresh,
+            )
+
+            result = run_full_refresh("AAPL")
+
+        step_names = [s["name"] for s in result.steps]
+        assert "Quarterly results" in step_names
+
+    @patch(
+        "dashboard.services.stock_refresh._full_ohlcv_refresh",
+        return_value="OK",
+    )
+    def test_quarterly_failure_non_critical(self, _mock_ohlcv):
+        """Quarterly failure doesn't abort the pipeline."""
+        import tools._forecast_accuracy as _fa
+        import tools._forecast_model as _fm
+        import tools._forecast_persist as _fp
+        import tools._forecast_shared as _fs
+        import tools.stock_data_tool as _sdt
+
+        fake_df = pd.DataFrame(
+            {"ds": pd.date_range("2020-01-01", periods=100), "y": range(100)}
+        )
+        model = MagicMock()
+
+        with (
+            patch.object(
+                _sdt,
+                "get_stock_info",
+                MagicMock(invoke=MagicMock(return_value="info ok")),
+            ),
+            patch.object(
+                _sdt,
+                "get_dividend_history",
+                MagicMock(invoke=MagicMock(return_value="div ok")),
+            ),
+            patch.object(
+                _sdt,
+                "fetch_quarterly_results",
+                MagicMock(
+                    invoke=MagicMock(side_effect=RuntimeError("no data"))
+                ),
+            ),
+            patch(
+                "tools.price_analysis_tool" ".analyse_stock_price",
+                MagicMock(invoke=MagicMock(return_value="analysis ok")),
+            ),
+            patch.object(
+                _fs,
+                "_load_parquet",
+                return_value=fake_df,
+            ),
+            patch.object(
+                _fm,
+                "_prepare_data_for_prophet",
+                return_value=fake_df,
+            ),
+            patch.object(
+                _fm,
+                "_train_prophet_model",
+                return_value=model,
+            ),
+            patch.object(
+                _fm,
+                "_generate_forecast",
+                return_value=fake_df,
+            ),
+            patch.object(
+                _fa,
+                "_calculate_forecast_accuracy",
+                return_value={
+                    "MAE": 1.0,
+                    "RMSE": 1.5,
+                    "MAPE_pct": 2.0,
+                },
+            ),
+            patch.object(_fp, "_save_forecast"),
+            patch.object(
+                _fa,
+                "_generate_forecast_summary",
+                return_value={
+                    "sentiment": "bullish",
+                    "targets": {},
+                },
+            ),
+            patch.object(
+                _fs,
+                "_require_repo",
+                return_value=_mock_repo(),
+            ),
+        ):
+            from dashboard.services.stock_refresh import (
+                run_full_refresh,
+            )
+
+            result = run_full_refresh("AAPL")
+
+        # Pipeline should still succeed despite quarterly
+        # failure
+        assert result.success is True
+        qtr_step = [
+            s for s in result.steps if s["name"] == "Quarterly results"
+        ]
+        assert len(qtr_step) == 1
+        assert qtr_step[0]["ok"] is False

@@ -58,6 +58,7 @@ _FORECAST_RUNS_CACHE: dict = {"data": None, "expiry": 0.0}
 _OHLCV_CACHE: dict = {}  # {ticker: (df, expiry_monotonic)}
 _FORECAST_CACHE: dict = {}  # {(ticker, horizon): (df, expiry_monotonic)}
 _DIVIDENDS_CACHE: dict = {}  # {ticker: (df, expiry_monotonic)}
+_QUARTERLY_CACHE: dict = {"data": None, "expiry": 0.0}
 
 
 def _get_iceberg_repo() -> Optional[object]:
@@ -420,6 +421,26 @@ def _get_analysis_with_gaps_filled(repo: object) -> pd.DataFrame:
     return df
 
 
+def _get_quarterly_cached(repo: object) -> pd.DataFrame:
+    """Return all quarterly results, cached for ``_SHARED_TTL`` s.
+
+    Args:
+        repo: Active :class:`~stocks.repository.StockRepository`.
+
+    Returns:
+        DataFrame of quarterly results, or empty DataFrame.
+    """
+    now = _time.monotonic()
+    if (
+        _QUARTERLY_CACHE["data"] is not None
+        and now < _QUARTERLY_CACHE["expiry"]
+    ):
+        return _QUARTERLY_CACHE["data"]
+    data = repo.get_all_quarterly_results()
+    _QUARTERLY_CACHE.update({"data": data, "expiry": now + _SHARED_TTL})
+    return data
+
+
 def clear_caches(ticker: str | None = None) -> None:
     """Invalidate TTL caches so subsequent reads fetch fresh Iceberg data.
 
@@ -450,3 +471,4 @@ def clear_caches(ticker: str | None = None) -> None:
     _FILLED_SUMMARY_CACHE.update({"data": None, "expiry": 0.0})
     _REGISTRY_CACHE.update({"data": None, "expiry": 0.0})
     _FORECAST_RUNS_CACHE.update({"data": None, "expiry": 0.0})
+    _QUARTERLY_CACHE.update({"data": None, "expiry": 0.0})

@@ -66,16 +66,24 @@ _AUDIT_PA_SCHEMA = pa.schema(
     ]
 )
 
-_USER_TS_COLS = ("created_at", "updated_at", "last_login_at", "password_reset_expiry")
+_USER_TS_COLS = (
+    "created_at",
+    "updated_at",
+    "last_login_at",
+    "password_reset_expiry",
+)
 
 
 def _now_utc() -> datetime:
-    """Return the current UTC time as a naive datetime (no tzinfo).
+    """Return the current UTC time as a naive datetime.
+
+    PyArrow storage requires naive datetimes, so ``tzinfo``
+    is stripped after construction.
 
     Returns:
         A naive :class:`datetime.datetime` in UTC.
     """
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _to_ts(dt: Optional[datetime]) -> Optional[datetime]:

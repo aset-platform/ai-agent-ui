@@ -16,8 +16,17 @@ from typing import Any, Dict, List, Optional
 import dash_bootstrap_components as dbc
 from dash import ALL, Input, Output, State, ctx, html, no_update
 
-from dashboard.callbacks.auth_utils import _api_call, _resolve_token
-from dashboard.callbacks.table_builders import _build_audit_table, _build_users_table
+from dashboard.callbacks.auth_utils import (
+    _api_call,
+    _resolve_token,
+)
+from dashboard.callbacks.sort_helpers import (
+    register_sort_callback,
+)
+from dashboard.callbacks.table_builders import (
+    _build_audit_table,
+    _build_users_table,
+)
 
 # Module-level logger; mutable but required at module scope for callback closures.
 _logger = logging.getLogger(__name__)
@@ -34,14 +43,16 @@ def register(app) -> None:
         Output("users-pagination", "active_page"),
         Input("users-search", "value"),
         Input("users-page-size", "value"),
+        Input("users-sort-store", "data"),
         prevent_initial_call=True,
     )
-    def reset_users_page_on_filter(search, page_size):
-        """Reset users pagination to page 1 when search or page size changes.
+    def reset_users_page_on_filter(search, page_size, _sort):
+        """Reset users pagination to page 1 on filter or sort change.
 
         Args:
             search: Current search input value.
             page_size: New page size value.
+            _sort: Sort state (triggers reset).
 
         Returns:
             Integer ``1`` to reset the active page.
@@ -52,14 +63,16 @@ def register(app) -> None:
         Output("audit-pagination", "active_page"),
         Input("audit-search", "value"),
         Input("audit-page-size", "value"),
+        Input("audit-sort-store", "data"),
         prevent_initial_call=True,
     )
-    def reset_audit_page_on_filter(search, page_size):
-        """Reset audit log pagination to page 1 when search or page size changes.
+    def reset_audit_page_on_filter(search, page_size, _sort):
+        """Reset audit pagination to page 1 on filter or sort change.
 
         Args:
             search: Current search input value.
             page_size: New page size value.
+            _sort: Sort state (triggers reset).
 
         Returns:
             Integer ``1`` to reset the active page.
@@ -113,19 +126,31 @@ def register(app) -> None:
         Input("users-pagination", "active_page"),
         Input("users-search", "value"),
         Input("users-page-size", "value"),
+        Input("users-sort-store", "data"),
     )
-    def render_users_page(users_data, active_page, search_term, page_size):
-        """Filter, slice, and render one page of the users table.
+    def render_users_page(
+        users_data,
+        active_page,
+        search_term,
+        page_size,
+        sort_state=None,
+    ):
+        """Filter, sort, slice, and render one page of the users table.
 
         Args:
-            users_data: Full list of user dicts from ``users-store``.
+            users_data: Full list of user dicts.
             active_page: Current pagination page (1-indexed).
-            search_term: Debounced search text (name, email or role).
-            page_size: Number of rows per page as a string (e.g. ``"10"``).
+            search_term: Debounced search text.
+            page_size: Rows per page as string.
+            sort_state: Column sort state dict.
 
         Returns:
-            Tuple of (table component, pagination max_value, count text).
+            Tuple of (table, max_value, count text).
         """
+        sort_state = sort_state or {
+            "col": None,
+            "dir": "none",
+        }
         page_size_int = int(page_size or 10)
         users = users_data or []
 
@@ -142,14 +167,27 @@ def register(app) -> None:
 
         total = len(users)
         if total == 0:
-            msg = "No matching users found." if q else "No user accounts found."
-            return html.P(msg, className="text-muted"), 1, ""
+            msg = (
+                "No matching users found." if q else "No user accounts found."
+            )
+            return (
+                html.P(msg, className="text-muted"),
+                1,
+                "",
+            )
         max_pages = max(1, math.ceil(total / page_size_int))
         page = min(active_page or 1, max_pages)
         start = (page - 1) * page_size_int
-        count_txt = f"Showing {start + 1}\u2013{min(start + page_size_int, total)} of {total} users"
+        count_txt = (
+            f"Showing {start + 1}\u2013"
+            f"{min(start + page_size_int, total)}"
+            f" of {total} users"
+        )
         return (
-            _build_users_table(users[start : start + page_size_int]),
+            _build_users_table(
+                users[start : start + page_size_int],
+                sort_state,
+            ),
             max_pages,
             count_txt,
         )
@@ -200,19 +238,31 @@ def register(app) -> None:
         Input("audit-pagination", "active_page"),
         Input("audit-search", "value"),
         Input("audit-page-size", "value"),
+        Input("audit-sort-store", "data"),
     )
-    def render_audit_page(audit_data, active_page, search_term, page_size):
-        """Filter, slice, and render one page of the audit log table.
+    def render_audit_page(
+        audit_data,
+        active_page,
+        search_term,
+        page_size,
+        sort_state=None,
+    ):
+        """Filter, sort, slice, and render one page of the audit log.
 
         Args:
-            audit_data: Full list of audit event dicts from ``audit-data-store``.
+            audit_data: Full list of audit event dicts.
             active_page: Current pagination page (1-indexed).
-            search_term: Debounced search text (event type, actor/target ID, details).
-            page_size: Number of rows per page as a string (e.g. ``"10"``).
+            search_term: Debounced search text.
+            page_size: Rows per page as string.
+            sort_state: Column sort state dict.
 
         Returns:
-            Tuple of (table component, pagination max_value, count text).
+            Tuple of (table, max_value, count text).
         """
+        sort_state = sort_state or {
+            "col": None,
+            "dir": "none",
+        }
         page_size_int = int(page_size or 10)
         events = audit_data or []
 
@@ -230,14 +280,31 @@ def register(app) -> None:
 
         total = len(events)
         if total == 0:
-            msg = "No matching events found." if q else "No audit events found."
-            return html.P(msg, className="text-muted"), 1, ""
+            msg = (
+                "No matching events found." if q else "No audit events found."
+            )
+            return (
+                html.P(msg, className="text-muted"),
+                1,
+                "",
+            )
         max_pages = max(1, math.ceil(total / page_size_int))
         page = min(active_page or 1, max_pages)
         start = (page - 1) * page_size_int
-        count_txt = f"Showing {start + 1}\u2013{min(start + page_size_int, total)} of {total} events"
+        count_txt = (
+            f"Showing {start + 1}\u2013"
+            f"{min(start + page_size_int, total)}"
+            f" of {total} events"
+        )
         return (
-            _build_audit_table(events[start : start + page_size_int]),
+            _build_audit_table(
+                events[start : start + page_size_int],
+                sort_state,
+            ),
             max_pages,
             count_txt,
         )
+
+    # ── Sort-header callbacks ─────────────────────────────
+    register_sort_callback(app, "users")
+    register_sort_callback(app, "audit")

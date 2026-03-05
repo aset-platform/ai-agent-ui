@@ -33,7 +33,9 @@ def _make_fallback(groq_mock, anthropic_mock):
 
     with (
         patch.object(llm_fallback, "ChatGroq", return_value=groq_mock),
-        patch.object(llm_fallback, "ChatAnthropic", return_value=anthropic_mock),
+        patch.object(
+            llm_fallback, "ChatAnthropic", return_value=anthropic_mock
+        ),
         patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}),
     ):
         llm = llm_fallback.FallbackLLM(
@@ -134,7 +136,9 @@ class TestFallbackLLMBothFail:
         groq_mock.invoke.side_effect = RateLimitError(
             "rate limit", response=MagicMock(), body={}
         )
-        anthropic_mock.invoke.side_effect = RuntimeError("Anthropic also failed")
+        anthropic_mock.invoke.side_effect = RuntimeError(
+            "Anthropic also failed"
+        )
 
         llm = _make_fallback(groq_mock, anthropic_mock)
         llm.bind_tools([])

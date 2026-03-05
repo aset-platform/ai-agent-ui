@@ -11,6 +11,7 @@ Tab builders exported here:
 - :func:`_risk_tab` — Risk Metrics (Sharpe, drawdown, volatility)
 - :func:`_sectors_tab` — Sector Analysis charts
 - :func:`_correlation_tab` — Pairwise Returns Correlation heatmap
+- :func:`_quarterly_tab` — Quarterly Financial Results
 """
 
 from typing import List
@@ -19,23 +20,29 @@ import dash_bootstrap_components as dbc
 from dash import dcc, html
 
 
-def _screener_tab(ticker_options: List[dict]) -> List:
+def _screener_tab(
+    ticker_options: List[dict],
+    sector_options: List[dict] | None = None,
+) -> List:
     """Build the Screener tab panel children.
 
     Args:
-        ticker_options: List of ``{"label": ..., "value": ...}`` dicts for
-            the ticker dropdown (unused in this tab but kept for API
-            consistency with other tab builders).
+        ticker_options: Ticker dropdown options (unused but
+            kept for API consistency).
+        sector_options: Sector dropdown options.
 
     Returns:
         List of Dash components for the Screener tab body.
     """
+    sector_options = sector_options or []
     return [
         html.Div(
             className="mt-3",
             children=[
                 html.P(
-                    "Screen all tracked stocks by technical signals and performance metrics.",
+                    "Screen all tracked stocks by "
+                    "technical signals and "
+                    "performance metrics.",
                     className="text-muted mb-3",
                 ),
                 dbc.Row(
@@ -44,22 +51,27 @@ def _screener_tab(ticker_options: List[dict]) -> List:
                             [
                                 html.Label(
                                     "RSI Signal",
-                                    className="text-muted small fw-semibold",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
                                 ),
                                 dbc.RadioItems(
                                     id="screener-rsi-filter",
                                     options=[
-                                        {"label": "All", "value": "all"},
                                         {
-                                            "label": "Oversold (< 30)",
+                                            "label": "All",
+                                            "value": "all",
+                                        },
+                                        {
+                                            "label": ("Oversold (< 30)"),
                                             "value": "oversold",
                                         },
                                         {
-                                            "label": "Neutral (30–70)",
+                                            "label": ("Neutral (30\u201370)"),
                                             "value": "neutral",
                                         },
                                         {
-                                            "label": "Overbought (> 70)",
+                                            "label": ("Overbought (> 70)"),
                                             "value": "overbought",
                                         },
                                     ],
@@ -69,20 +81,38 @@ def _screener_tab(ticker_options: List[dict]) -> List:
                                 ),
                             ],
                             xs=12,
-                            md=6,
+                            md=4,
                             className="mb-3",
                         ),
                         dbc.Col(
                             [
                                 html.Label(
-                                    "Market", className="text-muted small fw-semibold"
+                                    "Market",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
                                 ),
                                 dbc.RadioItems(
                                     id="screener-market-filter",
                                     options=[
-                                        {"label": "All", "value": "all"},
-                                        {"label": "🇮🇳 India", "value": "india"},
-                                        {"label": "🇺🇸 US", "value": "us"},
+                                        {
+                                            "label": "All",
+                                            "value": "all",
+                                        },
+                                        {
+                                            "label": (
+                                                "\U0001f1ee"
+                                                "\U0001f1f3"
+                                                " India"
+                                            ),
+                                            "value": "india",
+                                        },
+                                        {
+                                            "label": (
+                                                "\U0001f1fa" "\U0001f1f8" " US"
+                                            ),
+                                            "value": "us",
+                                        },
                                     ],
                                     value="all",
                                     inline=True,
@@ -90,11 +120,30 @@ def _screener_tab(ticker_options: List[dict]) -> List:
                                 ),
                             ],
                             xs=12,
-                            md=6,
+                            md=4,
+                            className="mb-3",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Sector",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
+                                ),
+                                dcc.Dropdown(
+                                    id=("screener-sector" "-filter"),
+                                    options=sector_options,
+                                    value="all",
+                                    clearable=False,
+                                ),
+                            ],
+                            xs=12,
+                            md=4,
                             className="mb-3",
                         ),
                     ],
-                    className="bg-light rounded p-3 mb-4 border",
+                    className=("bg-light rounded" " p-3 mb-4 border"),
                 ),
                 dcc.Loading(
                     id="loading-screener",
@@ -106,7 +155,8 @@ def _screener_tab(ticker_options: List[dict]) -> List:
                     [
                         dbc.Col(
                             html.Small(
-                                id="screener-count-text", className="text-muted"
+                                id="screener-count-text",
+                                className="text-muted",
                             ),
                             width="auto",
                             className="my-auto",
@@ -145,23 +195,28 @@ def _screener_tab(ticker_options: List[dict]) -> List:
     ]
 
 
-def _targets_tab(ticker_options: List[dict]) -> List:
+def _targets_tab(
+    ticker_options: List[dict],
+    sector_options: List[dict] | None = None,
+) -> List:
     """Build the Price Targets tab panel children.
 
     Args:
-        ticker_options: List of ``{"label": ..., "value": ...}`` dicts
-            including an "All tickers" sentinel, used to populate the
-            ticker filter dropdown.
+        ticker_options: Ticker dropdown options including
+            an "All tickers" sentinel.
+        sector_options: Sector dropdown options.
 
     Returns:
-        List of Dash components for the Price Targets tab body.
+        List of Dash components for the Price Targets tab.
     """
+    sector_options = sector_options or []
     return [
         html.Div(
             className="mt-3",
             children=[
                 html.P(
-                    "Latest AI-generated price targets from Prophet forecasts.",
+                    "Latest AI-generated price targets"
+                    " from Prophet forecasts.",
                     className="text-muted mb-3",
                 ),
                 dbc.Row(
@@ -169,30 +224,51 @@ def _targets_tab(ticker_options: List[dict]) -> List:
                         dbc.Col(
                             [
                                 html.Label(
-                                    "Ticker", className="text-muted small fw-semibold"
+                                    "Ticker",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
                                 ),
                                 dcc.Dropdown(
-                                    id="targets-ticker-dropdown",
+                                    id=("targets-ticker" "-dropdown"),
                                     options=ticker_options,
                                     value="all",
                                     clearable=False,
                                 ),
                             ],
                             xs=12,
-                            md=6,
+                            md=4,
                             className="mb-3",
                         ),
                         dbc.Col(
                             [
                                 html.Label(
-                                    "Market", className="text-muted small fw-semibold"
+                                    "Market",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
                                 ),
                                 dbc.RadioItems(
                                     id="targets-market-filter",
                                     options=[
-                                        {"label": "All", "value": "all"},
-                                        {"label": "🇮🇳 India", "value": "india"},
-                                        {"label": "🇺🇸 US", "value": "us"},
+                                        {
+                                            "label": "All",
+                                            "value": "all",
+                                        },
+                                        {
+                                            "label": (
+                                                "\U0001f1ee"
+                                                "\U0001f1f3"
+                                                " India"
+                                            ),
+                                            "value": "india",
+                                        },
+                                        {
+                                            "label": (
+                                                "\U0001f1fa" "\U0001f1f8" " US"
+                                            ),
+                                            "value": "us",
+                                        },
                                     ],
                                     value="all",
                                     inline=True,
@@ -200,11 +276,30 @@ def _targets_tab(ticker_options: List[dict]) -> List:
                                 ),
                             ],
                             xs=12,
-                            md=6,
+                            md=4,
+                            className="mb-3",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Sector",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
+                                ),
+                                dcc.Dropdown(
+                                    id=("targets-sector" "-filter"),
+                                    options=sector_options,
+                                    value="all",
+                                    clearable=False,
+                                ),
+                            ],
+                            xs=12,
+                            md=4,
                             className="mb-3",
                         ),
                     ],
-                    className="bg-light rounded p-3 mb-4 border",
+                    className=("bg-light rounded" " p-3 mb-4 border"),
                 ),
                 dcc.Loading(
                     type="circle",
@@ -214,7 +309,9 @@ def _targets_tab(ticker_options: List[dict]) -> List:
                 dbc.Row(
                     [
                         dbc.Col(
-                            html.Small(id="targets-count-text", className="text-muted"),
+                            html.Small(
+                                id="targets-count-text", className="text-muted"
+                            ),
                             width="auto",
                             className="my-auto",
                         ),
@@ -252,23 +349,27 @@ def _targets_tab(ticker_options: List[dict]) -> List:
     ]
 
 
-def _dividends_tab(ticker_options: List[dict]) -> List:
+def _dividends_tab(
+    ticker_options: List[dict],
+    sector_options: List[dict] | None = None,
+) -> List:
     """Build the Dividends tab panel children.
 
     Args:
-        ticker_options: List of ``{"label": ..., "value": ...}`` dicts
-            including an "All tickers" sentinel, used to populate the
-            ticker filter dropdown.
+        ticker_options: Ticker dropdown options including
+            an "All tickers" sentinel.
+        sector_options: Sector dropdown options.
 
     Returns:
-        List of Dash components for the Dividends tab body.
+        List of Dash components for the Dividends tab.
     """
+    sector_options = sector_options or []
     return [
         html.Div(
             className="mt-3",
             children=[
                 html.P(
-                    "Full dividend payment history for all tracked stocks.",
+                    "Full dividend payment history " "for all tracked stocks.",
                     className="text-muted mb-3",
                 ),
                 dbc.Row(
@@ -276,30 +377,51 @@ def _dividends_tab(ticker_options: List[dict]) -> List:
                         dbc.Col(
                             [
                                 html.Label(
-                                    "Ticker", className="text-muted small fw-semibold"
+                                    "Ticker",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
                                 ),
                                 dcc.Dropdown(
-                                    id="dividends-ticker-dropdown",
+                                    id=("dividends-ticker" "-dropdown"),
                                     options=ticker_options,
                                     value="all",
                                     clearable=False,
                                 ),
                             ],
                             xs=12,
-                            md=6,
+                            md=4,
                             className="mb-3",
                         ),
                         dbc.Col(
                             [
                                 html.Label(
-                                    "Market", className="text-muted small fw-semibold"
+                                    "Market",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
                                 ),
                                 dbc.RadioItems(
-                                    id="dividends-market-filter",
+                                    id=("dividends-market" "-filter"),
                                     options=[
-                                        {"label": "All", "value": "all"},
-                                        {"label": "🇮🇳 India", "value": "india"},
-                                        {"label": "🇺🇸 US", "value": "us"},
+                                        {
+                                            "label": "All",
+                                            "value": "all",
+                                        },
+                                        {
+                                            "label": (
+                                                "\U0001f1ee"
+                                                "\U0001f1f3"
+                                                " India"
+                                            ),
+                                            "value": "india",
+                                        },
+                                        {
+                                            "label": (
+                                                "\U0001f1fa" "\U0001f1f8" " US"
+                                            ),
+                                            "value": "us",
+                                        },
                                     ],
                                     value="all",
                                     inline=True,
@@ -307,11 +429,30 @@ def _dividends_tab(ticker_options: List[dict]) -> List:
                                 ),
                             ],
                             xs=12,
-                            md=6,
+                            md=4,
+                            className="mb-3",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Sector",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
+                                ),
+                                dcc.Dropdown(
+                                    id=("dividends-sector" "-filter"),
+                                    options=sector_options,
+                                    value="all",
+                                    clearable=False,
+                                ),
+                            ],
+                            xs=12,
+                            md=4,
                             className="mb-3",
                         ),
                     ],
-                    className="bg-light rounded p-3 mb-4 border",
+                    className=("bg-light rounded" " p-3 mb-4 border"),
                 ),
                 dcc.Loading(
                     type="circle",
@@ -322,7 +463,8 @@ def _dividends_tab(ticker_options: List[dict]) -> List:
                     [
                         dbc.Col(
                             html.Small(
-                                id="dividends-count-text", className="text-muted"
+                                id="dividends-count-text",
+                                className="text-muted",
                             ),
                             width="auto",
                             className="my-auto",
@@ -361,23 +503,29 @@ def _dividends_tab(ticker_options: List[dict]) -> List:
     ]
 
 
-def _risk_tab(ticker_options: List[dict]) -> List:
+def _risk_tab(
+    ticker_options: List[dict],
+    sector_options: List[dict] | None = None,
+) -> List:
     """Build the Risk Metrics tab panel children.
 
     Args:
-        ticker_options: List of ``{"label": ..., "value": ...}`` dicts
-            (unused in this tab but kept for API consistency with other
-            tab builders).
+        ticker_options: Ticker dropdown options (unused
+            but kept for API consistency).
+        sector_options: Sector dropdown options.
 
     Returns:
-        List of Dash components for the Risk Metrics tab body.
+        List of Dash components for the Risk Metrics tab.
     """
+    sector_options = sector_options or []
     return [
         html.Div(
             className="mt-3",
             children=[
                 html.P(
-                    "Volatility, drawdown, and risk-adjusted return metrics for all tracked stocks.",
+                    "Volatility, drawdown, and "
+                    "risk-adjusted return metrics "
+                    "for all tracked stocks.",
                     className="text-muted mb-3",
                 ),
                 dbc.Row(
@@ -385,48 +533,32 @@ def _risk_tab(ticker_options: List[dict]) -> List:
                         dbc.Col(
                             [
                                 html.Label(
-                                    "Sort By", className="text-muted small fw-semibold"
-                                ),
-                                dbc.RadioItems(
-                                    id="risk-sort-by",
-                                    options=[
-                                        {
-                                            "label": "Sharpe Ratio",
-                                            "value": "sharpe_ratio",
-                                        },
-                                        {
-                                            "label": "Max Drawdown",
-                                            "value": "max_drawdown_pct",
-                                        },
-                                        {
-                                            "label": "Volatility",
-                                            "value": "annualized_volatility_pct",
-                                        },
-                                        {
-                                            "label": "Annualised Return",
-                                            "value": "annualized_return_pct",
-                                        },
-                                    ],
-                                    value="sharpe_ratio",
-                                    inline=True,
-                                    className="mt-1",
-                                ),
-                            ],
-                            xs=12,
-                            md=8,
-                            className="mb-3",
-                        ),
-                        dbc.Col(
-                            [
-                                html.Label(
-                                    "Market", className="text-muted small fw-semibold"
+                                    "Market",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
                                 ),
                                 dbc.RadioItems(
                                     id="risk-market-filter",
                                     options=[
-                                        {"label": "All", "value": "all"},
-                                        {"label": "🇮🇳 India", "value": "india"},
-                                        {"label": "🇺🇸 US", "value": "us"},
+                                        {
+                                            "label": "All",
+                                            "value": "all",
+                                        },
+                                        {
+                                            "label": (
+                                                "\U0001f1ee"
+                                                "\U0001f1f3"
+                                                " India"
+                                            ),
+                                            "value": "india",
+                                        },
+                                        {
+                                            "label": (
+                                                "\U0001f1fa" "\U0001f1f8" " US"
+                                            ),
+                                            "value": "us",
+                                        },
                                     ],
                                     value="all",
                                     inline=True,
@@ -434,11 +566,30 @@ def _risk_tab(ticker_options: List[dict]) -> List:
                                 ),
                             ],
                             xs=12,
-                            md=4,
+                            md=6,
+                            className="mb-3",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Sector",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
+                                ),
+                                dcc.Dropdown(
+                                    id="risk-sector-filter",
+                                    options=sector_options,
+                                    value="all",
+                                    clearable=False,
+                                ),
+                            ],
+                            xs=12,
+                            md=6,
                             className="mb-3",
                         ),
                     ],
-                    className="bg-light rounded p-3 mb-4 border",
+                    className=("bg-light rounded" " p-3 mb-4 border"),
                 ),
                 dcc.Loading(
                     type="circle",
@@ -448,7 +599,9 @@ def _risk_tab(ticker_options: List[dict]) -> List:
                 dbc.Row(
                     [
                         dbc.Col(
-                            html.Small(id="risk-count-text", className="text-muted"),
+                            html.Small(
+                                id="risk-count-text", className="text-muted"
+                            ),
                             width="auto",
                             className="my-auto",
                         ),
@@ -502,8 +655,53 @@ def _sectors_tab(ticker_options: List[dict]) -> List:
             className="mt-3",
             children=[
                 html.P(
-                    "Average technical signals and returns grouped by sector.",
+                    "Average technical signals and returns "
+                    "grouped by sector.",
                     className="text-muted mb-3",
+                ),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Market",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
+                                ),
+                                dbc.RadioItems(
+                                    id="sectors-market-filter",
+                                    options=[
+                                        {
+                                            "label": "All",
+                                            "value": "all",
+                                        },
+                                        {
+                                            "label": (
+                                                "\U0001f1ee"
+                                                "\U0001f1f3"
+                                                " India"
+                                            ),
+                                            "value": "india",
+                                        },
+                                        {
+                                            "label": (
+                                                "\U0001f1fa" "\U0001f1f8" " US"
+                                            ),
+                                            "value": "us",
+                                        },
+                                    ],
+                                    value="india",
+                                    inline=True,
+                                    className="mt-1",
+                                ),
+                            ],
+                            xs=12,
+                            md=6,
+                            className="mb-3",
+                        ),
+                    ],
+                    className=("bg-light rounded p-3 mb-4 border"),
                 ),
                 dbc.Row(
                     [
@@ -515,23 +713,25 @@ def _sectors_tab(ticker_options: List[dict]) -> List:
                                     children=dcc.Graph(
                                         id="sectors-bar-chart",
                                         config={"displayModeBar": False},
-                                        style={"height": "420px"},
+                                        style={"height": "340px"},
                                     ),
                                 ),
                             ],
                             xs=12,
-                            lg=8,
+                            lg=6,
                         ),
                         dbc.Col(
                             [
                                 dcc.Loading(
                                     type="circle",
                                     color="#4f46e5",
-                                    children=html.Div(id="sectors-table-container"),
+                                    children=html.Div(
+                                        id=("sectors-table" "-container")
+                                    ),
                                 ),
                             ],
                             xs=12,
-                            lg=4,
+                            lg=6,
                         ),
                     ]
                 ),
@@ -540,23 +740,28 @@ def _sectors_tab(ticker_options: List[dict]) -> List:
     ]
 
 
-def _correlation_tab(ticker_options: List[dict]) -> List:
+def _correlation_tab(
+    ticker_options: List[dict],
+    sector_options: List[dict] | None = None,
+) -> List:
     """Build the Returns Correlation tab panel children.
 
     Args:
-        ticker_options: List of ``{"label": ..., "value": ...}`` dicts
-            (unused in this tab but kept for API consistency with other
-            tab builders).
+        ticker_options: Ticker dropdown options (unused
+            but kept for API consistency).
+        sector_options: Sector dropdown options.
 
     Returns:
-        List of Dash components for the Correlation tab body.
+        List of Dash components for the Correlation tab.
     """
+    sector_options = sector_options or []
     return [
         html.Div(
             className="mt-3",
             children=[
                 html.P(
-                    "Pairwise daily-returns correlation across all tracked stocks.",
+                    "Pairwise daily-returns correlation"
+                    " across all tracked stocks.",
                     className="text-muted mb-3",
                 ),
                 dbc.Row(
@@ -565,14 +770,25 @@ def _correlation_tab(ticker_options: List[dict]) -> List:
                             [
                                 html.Label(
                                     "Lookback Period",
-                                    className="text-muted small fw-semibold",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
                                 ),
                                 dbc.RadioItems(
                                     id="corr-period-filter",
                                     options=[
-                                        {"label": "1 Year", "value": "1y"},
-                                        {"label": "3 Years", "value": "3y"},
-                                        {"label": "All", "value": "all"},
+                                        {
+                                            "label": "1 Year",
+                                            "value": "1y",
+                                        },
+                                        {
+                                            "label": "3 Years",
+                                            "value": "3y",
+                                        },
+                                        {
+                                            "label": "All",
+                                            "value": "all",
+                                        },
                                     ],
                                     value="1y",
                                     inline=True,
@@ -580,10 +796,69 @@ def _correlation_tab(ticker_options: List[dict]) -> List:
                                 ),
                             ],
                             xs=12,
+                            md=4,
+                            className="mb-3",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Market",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
+                                ),
+                                dbc.RadioItems(
+                                    id="corr-market-filter",
+                                    options=[
+                                        {
+                                            "label": "All",
+                                            "value": "all",
+                                        },
+                                        {
+                                            "label": (
+                                                "\U0001f1ee"
+                                                "\U0001f1f3"
+                                                " India"
+                                            ),
+                                            "value": "india",
+                                        },
+                                        {
+                                            "label": (
+                                                "\U0001f1fa" "\U0001f1f8" " US"
+                                            ),
+                                            "value": "us",
+                                        },
+                                    ],
+                                    value="all",
+                                    inline=True,
+                                    className="mt-1",
+                                ),
+                            ],
+                            xs=12,
+                            md=4,
+                            className="mb-3",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Sector",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
+                                ),
+                                dcc.Dropdown(
+                                    id="corr-sector-filter",
+                                    options=sector_options,
+                                    value="all",
+                                    clearable=False,
+                                ),
+                            ],
+                            xs=12,
+                            md=4,
                             className="mb-3",
                         ),
                     ],
-                    className="bg-light rounded p-3 mb-4 border",
+                    className=("bg-light rounded" " p-3 mb-4 border"),
                 ),
                 dcc.Loading(
                     type="circle",
@@ -593,6 +868,169 @@ def _correlation_tab(ticker_options: List[dict]) -> List:
                         config={"displayModeBar": False},
                         style={"height": "600px"},
                     ),
+                ),
+            ],
+        ),
+    ]
+
+
+def _quarterly_tab(
+    ticker_options: List[dict],
+    sector_options: List[dict] | None = None,
+) -> List:
+    """Build the Quarterly Results tab panel children.
+
+    Args:
+        ticker_options: Ticker dropdown options including
+            an "All tickers" sentinel.
+        sector_options: Sector dropdown options.
+
+    Returns:
+        List of Dash components for the Quarterly tab.
+    """
+    sector_options = sector_options or []
+    return [
+        html.Div(
+            className="mt-3",
+            children=[
+                html.P(
+                    "Quarterly income statement, "
+                    "balance sheet, and cash flow "
+                    "data for tracked stocks.",
+                    className="text-muted mb-3",
+                ),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Ticker",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
+                                ),
+                                dcc.Dropdown(
+                                    id=("quarterly-ticker" "-filter"),
+                                    options=ticker_options,
+                                    value="all",
+                                    clearable=False,
+                                ),
+                            ],
+                            xs=12,
+                            md=3,
+                            className="mb-3",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Market",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
+                                ),
+                                dbc.RadioItems(
+                                    id=("quarterly-market" "-filter"),
+                                    options=[
+                                        {
+                                            "label": "All",
+                                            "value": "all",
+                                        },
+                                        {
+                                            "label": (
+                                                "\U0001f1ee"
+                                                "\U0001f1f3"
+                                                " India"
+                                            ),
+                                            "value": "india",
+                                        },
+                                        {
+                                            "label": (
+                                                "\U0001f1fa" "\U0001f1f8" " US"
+                                            ),
+                                            "value": "us",
+                                        },
+                                    ],
+                                    value="all",
+                                    inline=True,
+                                    className="mt-1",
+                                ),
+                            ],
+                            xs=12,
+                            md=3,
+                            className="mb-3",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Sector",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
+                                ),
+                                dcc.Dropdown(
+                                    id=("quarterly-sector" "-filter"),
+                                    options=sector_options,
+                                    value="all",
+                                    clearable=False,
+                                ),
+                            ],
+                            xs=12,
+                            md=3,
+                            className="mb-3",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Statement",
+                                    className=(
+                                        "text-muted small" " fw-semibold"
+                                    ),
+                                ),
+                                dbc.RadioItems(
+                                    id=("quarterly" "-statement" "-filter"),
+                                    options=[
+                                        {
+                                            "label": "All",
+                                            "value": "all",
+                                        },
+                                        {
+                                            "label": ("Income"),
+                                            "value": ("income"),
+                                        },
+                                        {
+                                            "label": ("Balance"),
+                                            "value": ("balance"),
+                                        },
+                                        {
+                                            "label": ("Cash Flow"),
+                                            "value": ("cashflow"),
+                                        },
+                                    ],
+                                    value="all",
+                                    inline=True,
+                                    className="mt-1",
+                                ),
+                            ],
+                            xs=12,
+                            md=3,
+                            className="mb-3",
+                        ),
+                    ],
+                    className=("bg-light rounded" " p-3 mb-4 border"),
+                ),
+                dcc.Loading(
+                    type="circle",
+                    color="#4f46e5",
+                    children=dcc.Graph(
+                        id="quarterly-chart",
+                        config={"displayModeBar": False},
+                        style={"height": "380px"},
+                    ),
+                ),
+                dcc.Loading(
+                    type="circle",
+                    color="#4f46e5",
+                    children=html.Div(id=("quarterly-table" "-container")),
                 ),
             ],
         ),

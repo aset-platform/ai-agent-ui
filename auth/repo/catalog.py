@@ -54,7 +54,9 @@ def get_catalog(root: str):
             **{
                 "type": "sql",
                 "uri": f"sqlite:///{db_path}",
-                "warehouse": os.path.join(root, "data", "iceberg", "warehouse"),
+                "warehouse": os.path.join(
+                    root, "data", "iceberg", "warehouse"
+                ),
             },
         )
         _logger.debug("Iceberg catalog loaded (singleton).")

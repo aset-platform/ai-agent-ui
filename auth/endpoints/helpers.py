@@ -86,7 +86,9 @@ def _user_to_response(user: Dict[str, Any]) -> UserResponse:
     )
 
 
-def _require_active_user(user: Optional[Dict[str, Any]], email: str) -> Dict[str, Any]:
+def _require_active_user(
+    user: Optional[Dict[str, Any]], email: str
+) -> Dict[str, Any]:
     """Raise HTTP 401 if the user is not found or is deactivated.
 
     Args:
@@ -100,6 +102,8 @@ def _require_active_user(user: Optional[Dict[str, Any]], email: str) -> Dict[str
         HTTPException: 401 with ``"Invalid credentials"`` detail.
     """
     if user is None or not user.get("is_active", False):
-        _logger.warning("Login failed for email=%s (not found or inactive).", email)
+        _logger.warning(
+            "Login failed for email=%s (not found or inactive).", email
+        )
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return user

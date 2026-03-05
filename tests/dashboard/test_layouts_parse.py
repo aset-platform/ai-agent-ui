@@ -31,7 +31,9 @@ def _top_level_names(tree: ast.Module):
     """Return a set of names defined at the module top-level."""
     names = set()
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
             names.add(node.name)
         elif isinstance(node, ast.Assign):
             for target in node.targets:
@@ -50,10 +52,14 @@ class TestLayoutsParse:
 
     def test_layouts_parses_without_errors(self):
         """All sub-modules in the layouts package must parse without errors."""
-        assert _LAYOUTS_PKG.is_dir(), "dashboard/layouts/ package directory does not exist"
+        assert (
+            _LAYOUTS_PKG.is_dir()
+        ), "dashboard/layouts/ package directory does not exist"
         for py_file in _LAYOUTS_PKG.glob("*.py"):
             tree = _parse(py_file)
-            assert isinstance(tree, ast.Module), f"{py_file.name} failed to parse"
+            assert isinstance(
+                tree, ast.Module
+            ), f"{py_file.name} failed to parse"
 
     def test_layouts_has_module_docstring(self):
         """The layouts package __init__.py must have a module-level docstring."""
@@ -92,10 +98,14 @@ class TestCallbacksParse:
 
     def test_callbacks_parses_without_errors(self):
         """All sub-modules in the callbacks package must parse without errors."""
-        assert _CALLBACKS_PKG.is_dir(), "dashboard/callbacks/ package directory does not exist"
+        assert (
+            _CALLBACKS_PKG.is_dir()
+        ), "dashboard/callbacks/ package directory does not exist"
         for py_file in _CALLBACKS_PKG.glob("*.py"):
             tree = _parse(py_file)
-            assert isinstance(tree, ast.Module), f"{py_file.name} failed to parse"
+            assert isinstance(
+                tree, ast.Module
+            ), f"{py_file.name} failed to parse"
 
     def test_callbacks_has_module_docstring(self):
         """The callbacks package __init__.py must have a module-level docstring."""
@@ -112,14 +122,18 @@ class TestCallbacksParse:
         utils_py = _CALLBACKS_PKG / "utils.py"
         tree = _parse(utils_py)
         names = _top_level_names(tree)
-        assert "_get_market" in names, "_get_market not found in callbacks/utils.py"
+        assert (
+            "_get_market" in names
+        ), "_get_market not found in callbacks/utils.py"
 
     def test_callbacks_defines_validate_token(self):
         """_validate_token must be defined in callbacks/auth_utils.py."""
         auth_py = _CALLBACKS_PKG / "auth_utils.py"
         tree = _parse(auth_py)
         names = _top_level_names(tree)
-        assert "_validate_token" in names, "_validate_token not found in callbacks/auth_utils.py"
+        assert (
+            "_validate_token" in names
+        ), "_validate_token not found in callbacks/auth_utils.py"
 
 
 # ---------------------------------------------------------------------------
