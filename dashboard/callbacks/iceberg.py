@@ -25,21 +25,25 @@ import pandas as pd
 # Module-level logger — must remain module-level for use outside any class scope
 _logger = logging.getLogger(__name__)
 
-# Ensure project root on sys.path before stocks import
+# Ensure project root + backend/ on sys.path before imports
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+_BACKEND_DIR = str(_PROJECT_ROOT / "backend")
+for _p in (_BACKEND_DIR, str(_PROJECT_ROOT)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from paths import ICEBERG_CATALOG_URI, ICEBERG_WAREHOUSE_URI  # noqa: E402
 
 # Ensure PyIceberg can find the catalog regardless of CWD.
 # PyIceberg's _ENV_CONFIG singleton reads env vars once at import time,
 # so these must be set BEFORE any pyiceberg import.
 os.environ.setdefault(
     "PYICEBERG_CATALOG__LOCAL__URI",
-    f"sqlite:///{_PROJECT_ROOT.resolve()}/data/iceberg/catalog.db",
+    ICEBERG_CATALOG_URI,
 )
 os.environ.setdefault(
     "PYICEBERG_CATALOG__LOCAL__WAREHOUSE",
-    f"file:///{_PROJECT_ROOT.resolve()}/data/iceberg/warehouse",
+    ICEBERG_WAREHOUSE_URI,
 )
 
 # Fix #10: TTL-based singleton — re-initialises after 1 h to survive Iceberg restarts

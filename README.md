@@ -90,9 +90,9 @@ graph TD
     end
 
     subgraph Data["Data"]
-        IC["Iceberg<br/>data/iceberg/<br/><i>single source of truth</i>"]
-        C["Cache<br/>data/cache/"]
-        P["Parquet backup<br/>data/raw/ + data/forecasts/"]
+        IC["Iceberg<br/>~/.ai-agent-ui/data/iceberg/<br/><i>single source of truth</i>"]
+        C["Cache<br/>~/.ai-agent-ui/data/cache/"]
+        P["Parquet backup<br/>~/.ai-agent-ui/data/{raw,forecasts}/"]
     end
 
     Login -->|"POST /auth/login"| AUTH
@@ -199,7 +199,7 @@ graph TD
         SMN["search_market_news<br/><i>delegates to GeneralAgent → SerpAPI</i>"]
     end
     S4 --> S5["Step 5 — Structured Report"]
-    S2 & S3 -.->|"same-day cache hit"| CACHE[("data/cache/")]
+    S2 & S3 -.->|"same-day cache hit"| CACHE[("~/.ai-agent-ui/data/cache/")]
 ```
 
 ---
@@ -336,15 +336,15 @@ ai-agent-ui/
 │   │   └── utils.py          # Shared utilities (currency, market label)
 │   └── assets/custom.css     # Light theme styles
 │
-├── data/
-│   ├── iceberg/              # Iceberg catalog + warehouse — single source of truth (gitignored)
-│   ├── cache/                # Same-day text cache (gitignored)
-│   ├── raw/                  # OHLCV parquet backup (gitignored)
-│   └── forecasts/            # Prophet output parquet backup (gitignored)
-│
-├── charts/                   # Generated Plotly HTML (gitignored)
 ├── docs/                     # MkDocs source
 └── mkdocs.yml
+
+# Runtime data lives OUTSIDE the repo at ~/.ai-agent-ui/:
+# ~/.ai-agent-ui/
+# ├── data/iceberg/           # Iceberg catalog + warehouse (single source of truth)
+# ├── data/{cache,raw,forecasts,avatars}/  # runtime data
+# ├── charts/{analysis,forecasts}/         # Plotly HTML
+# └── logs/                                # rotating service + agent logs
 ```
 
 ---
@@ -406,7 +406,7 @@ All backend variables live in `backend/.env` (gitignored).
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | No | `60` | JWT access token TTL |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | No | `7` | JWT refresh token TTL |
 | `LOG_LEVEL` | No | `DEBUG` | Minimum log severity |
-| `LOG_TO_FILE` | No | `true` | Write logs to `backend/logs/agent.log` |
+| `LOG_TO_FILE` | No | `true` | Write logs to `~/.ai-agent-ui/logs/agent.log` |
 | `NEXT_PUBLIC_BACKEND_URL` | No | `http://127.0.0.1:8181` | `frontend/.env.local` |
 | `NEXT_PUBLIC_DASHBOARD_URL` | No | `http://127.0.0.1:8050` | `frontend/.env.local` |
 | `NEXT_PUBLIC_DOCS_URL` | No | `http://127.0.0.1:8000` | `frontend/.env.local` |
@@ -441,7 +441,7 @@ Pre-commit auto-fixes code style and updates meta-files on every commit (require
 ## Deployment Notes
 
 ### First run
-`./run.sh start` automatically runs table creation, schema migrations, and superuser seeding when `data/iceberg/catalog.db` does not yet exist. Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `backend/.env` before the first start.
+`./run.sh start` automatically runs table creation, schema migrations, and superuser seeding when `~/.ai-agent-ui/data/iceberg/catalog.db` does not yet exist. If upgrading from a project-local data layout, `run.sh` auto-migrates data to `~/.ai-agent-ui/` on first start. Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `backend/.env` before the first start.
 
 ### SSO / OAuth2 (Google + Facebook PKCE)
 

@@ -98,9 +98,13 @@ def main() -> None:
     """
     admin_email: str = os.environ.get("ADMIN_EMAIL", "").strip()
     admin_password: str = os.environ.get("ADMIN_PASSWORD", "").strip()
-    admin_full_name: str = os.environ.get("ADMIN_FULL_NAME", "Admin User").strip()
+    admin_full_name: str = os.environ.get(
+        "ADMIN_FULL_NAME", "Admin User"
+    ).strip()
     jwt_secret: str = os.environ.get("JWT_SECRET_KEY", "").strip()
-    access_minutes: int = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+    access_minutes: int = int(
+        os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
+    )
     refresh_days: int = int(os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
     # ── Validate required env vars ─────────────────────────────────────────
@@ -115,7 +119,9 @@ def main() -> None:
     ]
 
     if missing:
-        logger.error("Missing required environment variables: %s", ", ".join(missing))
+        logger.error(
+            "Missing required environment variables: %s", ", ".join(missing)
+        )
         logger.error(
             "Set them in .env at the project root (or backend/.env) "
             "or export them before running this script."
@@ -143,7 +149,9 @@ def main() -> None:
 
     # ── Import auth modules ────────────────────────────────────────────────
     try:
-        from auth.repository import IcebergUserRepository  # type: ignore[import]
+        from auth.repository import (
+            IcebergUserRepository,  # type: ignore[import]
+        )
         from auth.service import AuthService  # type: ignore[import]
     except ImportError as exc:
         logger.error(

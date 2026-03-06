@@ -91,7 +91,7 @@ Benefits over `print()`:
 
 Log files rotate at midnight. The previous 7 days are kept and older files are deleted automatically. This bounds disk usage without requiring a separate log rotation daemon (like `logrotate`).
 
-The `logs/` directory is gitignored so log files are never accidentally committed.
+Logs are written to `~/.ai-agent-ui/logs/` (outside the repo) so log files are never accidentally committed.
 
 ### Clearing handlers on uvicorn hot-reload
 
@@ -133,7 +133,7 @@ For stocks without corporate actions (splits, dividends), `Close` and `Adj Close
 
 ### Same-day text cache for analyse_stock_price and forecast_stock
 
-Running the full analysis pipeline (technical indicators + Prophet training) takes 30–90 seconds. A user who asks about AAPL twice in the same day should not wait twice. Both tools now check for a dated text file in `data/cache/` before running. If a file matching `{TICKER}_{key}_{date.today()}.txt` exists, it is returned immediately. On the first run, the result is saved to that file. The cache is keyed by date so it automatically expires at midnight with no cron job required. `data/cache/` is gitignored.
+Running the full analysis pipeline (technical indicators + Prophet training) takes 30–90 seconds. A user who asks about AAPL twice in the same day should not wait twice. Both tools now check for a dated text file in `~/.ai-agent-ui/data/cache/` before running. If a file matching `{TICKER}_{key}_{date.today()}.txt` exists, it is returned immediately. On the first run, the result is saved to that file. The cache is keyed by date so it automatically expires at midnight with no cron job required.
 
 ---
 

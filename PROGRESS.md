@@ -2,6 +2,72 @@
 
 ---
 
+# Session: Mar 7, 2026 — Fix Iceberg avro path issue after migration
+
+## Summary
+Diagnosed and fixed the dashboard showing "No stocks saved yet"
+after the data migration to `~/.ai-agent-ui/`. Root cause: binary
+Iceberg avro manifest files contain hardcoded absolute paths that
+the JSON-only migration script couldn't rewrite. Created a symlink
+from the old project-local path to the new location.
+
+### Root Cause
+The Iceberg read chain has 4 levels of path resolution:
+1. `catalog.db` → metadata JSON path (rewritten by migration)
+2. metadata JSON → snap avro path (rewritten by migration)
+3. snap avro → manifest avro path (**binary, NOT rewritten**)
+4. manifest avro → data parquet path (**binary, NOT rewritten**)
+
+After the old `data/iceberg/` was cleaned, steps 3-4 broke because
+avro files still referenced the old project-local paths.
+
+### Fix
+- Created symlink: `data/iceberg/ → ~/.ai-agent-ui/data/iceberg/`
+- Updated `scripts/migrate_data_home.py` to create this symlink
+  automatically during migration.
+- Symlink is gitignored (`data/iceberg/` already in `.gitignore`).
+- New Iceberg writes use correct `~/.ai-agent-ui/` paths; old
+  snapshots will be naturally replaced over time.
+
+### All tests passing: 202 total.
+
+---
+
+# Session: Mar 6, 2026 — Migrate data & logs to ~/.ai-agent-ui
+
+## Summary
+Moved all runtime data (Iceberg, cache, raw, forecasts, avatars,
+charts) and logs from the project root to `~/.ai-agent-ui/`,
+keeping the repository clean of generated files. Centralised all
+filesystem paths in `backend/paths.py` with `AI_AGENT_UI_HOME`
+env-var override for CI/Docker.
+
+### Changes
+- **`backend/paths.py`** (NEW) — single source of truth for all
+  filesystem paths. `APP_HOME = ~/.ai-agent-ui` by default.
+  `ensure_dirs()` creates the full directory tree.
+- **`scripts/migrate_data_home.py`** (NEW) — idempotent migration
+  script (copy, not move). Dry-run by default, `--apply` to copy.
+  Creates backwards-compat symlink for binary avro paths.
+- **14 files updated** to import paths from `paths.py`:
+  `_stock_shared.py`, `_analysis_shared.py`, `_forecast_shared.py`,
+  `iceberg.py`, `stock_refresh.py`, `profile_routes.py`,
+  `catalog.py`, `logging_config.py`, `create_tables.py` (auth +
+  stocks), `backfill_metadata.py`, `backfill_adj_close.py`.
+- **`run.sh`** — log dir and catalog check point to
+  `~/.ai-agent-ui/`. Auto-migration on startup when old layout
+  detected.
+- **`setup.sh`** — directory creation + `.pyiceberg.yaml` generation
+  target `~/.ai-agent-ui/`.
+- **`.pyiceberg.yaml`** — URIs point to new paths.
+- **`.gitignore`** — consolidated; old project-local rules kept for
+  backwards-compat.
+- **`tests/backend/test_paths.py`** (NEW) — 14 tests (defaults,
+  env override, ensure_dirs).
+- **202 total tests**, all passing (188 existing + 14 new).
+
+---
+
 # Session: Mar 6, 2026 — Quarterly data robustness & dashboard improvements
 
 ## Summary

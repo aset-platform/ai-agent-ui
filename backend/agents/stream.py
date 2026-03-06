@@ -22,7 +22,9 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-def stream(agent: "BaseAgent", user_input: str, history: List[Dict]) -> Iterator[str]:
+def stream(
+    agent: "BaseAgent", user_input: str, history: List[Dict]
+) -> Iterator[str]:
     """Execute the agentic loop, yielding NDJSON status events.
 
     Each yielded value is a JSON-encoded object followed by ``\\n``.
@@ -67,10 +69,14 @@ def stream(agent: "BaseAgent", user_input: str, history: List[Dict]) -> Iterator
                     agent.config.agent_id,
                     MAX_ITERATIONS,
                 )
-                yield json.dumps({"type": "warning", "message": warning_msg}) + "\n"
+                yield json.dumps(
+                    {"type": "warning", "message": warning_msg}
+                ) + "\n"
                 break
 
-            yield json.dumps({"type": "thinking", "iteration": iteration}) + "\n"
+            yield json.dumps(
+                {"type": "thinking", "iteration": iteration}
+            ) + "\n"
 
             response = agent.llm_with_tools.invoke(messages)
             messages.append(response)
@@ -83,7 +89,11 @@ def stream(agent: "BaseAgent", user_input: str, history: List[Dict]) -> Iterator
                 tool_args = tc.get("args", {})
                 yield (
                     json.dumps(
-                        {"type": "tool_start", "tool": tool_name, "args": tool_args}
+                        {
+                            "type": "tool_start",
+                            "tool": tool_name,
+                            "args": tool_args,
+                        }
                     )
                     + "\n"
                 )
@@ -98,7 +108,9 @@ def stream(agent: "BaseAgent", user_input: str, history: List[Dict]) -> Iterator
                     )
                     + "\n"
                 )
-                messages.append(ToolMessage(content=result, tool_call_id=tc["id"]))
+                messages.append(
+                    ToolMessage(content=result, tool_call_id=tc["id"])
+                )
 
     except Exception as exc:
         agent.logger.error("Agent stream failed", exc_info=True)
@@ -106,7 +118,9 @@ def stream(agent: "BaseAgent", user_input: str, history: List[Dict]) -> Iterator
         raise
 
     final_response = (
-        (response.content or "No response") if response is not None else "No response"
+        (response.content or "No response")
+        if response is not None
+        else "No response"
     )
     agent.logger.info(
         "Stream end | agent=%s | iterations=%d",
@@ -115,7 +129,11 @@ def stream(agent: "BaseAgent", user_input: str, history: List[Dict]) -> Iterator
     )
     yield (
         json.dumps(
-            {"type": "final", "response": final_response, "iterations": iteration}
+            {
+                "type": "final",
+                "response": final_response,
+                "iterations": iteration,
+            }
         )
         + "\n"
     )

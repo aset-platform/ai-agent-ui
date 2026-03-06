@@ -58,7 +58,9 @@ def _generate_summary_stats(df: pd.DataFrame, ticker: str) -> dict:
 
     if rsi is not None:
         rsi_signal = (
-            "Overbought" if rsi >= 70 else ("Oversold" if rsi <= 30 else "Neutral")
+            "Overbought"
+            if rsi >= 70
+            else ("Oversold" if rsi <= 30 else "Neutral")
         )
     else:
         rsi_signal = "N/A"
@@ -67,7 +69,9 @@ def _generate_summary_stats(df: pd.DataFrame, ticker: str) -> dict:
         float(df["MACD"].iloc[-1]) if "MACD" in df.columns else None
     )
     macd_sig: Optional[float] = (
-        float(df["MACD_Signal"].iloc[-1]) if "MACD_Signal" in df.columns else None
+        float(df["MACD_Signal"].iloc[-1])
+        if "MACD_Signal" in df.columns
+        else None
     )
     if macd_val is not None and macd_sig is not None:
         macd_signal_str = "Bullish" if macd_val > macd_sig else "Bearish"

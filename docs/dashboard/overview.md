@@ -129,7 +129,7 @@ Prophet time-series forecast with price targets.
 
 1. `fetch_stock_data` — delta-fetch any missing OHLCV data from Yahoo Finance
 2. `_prepare_data_for_prophet` → `_train_prophet_model` → `_generate_forecast` — train and generate the Prophet forecast
-3. `_save_forecast` — persist result to `data/forecasts/{TICKER}_{N}m_forecast.parquet`
+3. `_save_forecast` — persist result to Iceberg + backup parquet at `~/.ai-agent-ui/data/forecasts/`
 4. `_calculate_forecast_accuracy` — MAE, RMSE, MAPE via 12-month in-sample backtest
 
 Model accuracy metrics appear below the chart after the run completes.

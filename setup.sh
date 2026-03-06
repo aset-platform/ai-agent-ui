@@ -360,23 +360,23 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 step "8/11" "Creating project directories"
 
+APP_DATA_HOME="${HOME}/.ai-agent-ui"
 DIRS=(
-    "data/iceberg"
-    "data/iceberg/warehouse"
-    "data/raw"
-    "data/forecasts"
-    "data/cache"
-    "data/avatars"
-    "data/metadata"
-    "data/processed"
-    "logs"
-    "backend/logs"
-    "charts/analysis"
-    "charts/forecasts"
+    "${APP_DATA_HOME}/data/iceberg"
+    "${APP_DATA_HOME}/data/iceberg/warehouse"
+    "${APP_DATA_HOME}/data/raw"
+    "${APP_DATA_HOME}/data/forecasts"
+    "${APP_DATA_HOME}/data/cache"
+    "${APP_DATA_HOME}/data/avatars"
+    "${APP_DATA_HOME}/data/metadata"
+    "${APP_DATA_HOME}/data/processed"
+    "${APP_DATA_HOME}/logs"
+    "${APP_DATA_HOME}/charts/analysis"
+    "${APP_DATA_HOME}/charts/forecasts"
 )
 
 for d in "${DIRS[@]}"; do
-    mkdir -p "$SCRIPT_DIR/$d"
+    mkdir -p "$d"
 done
 
 ok "All directories created"
@@ -602,10 +602,10 @@ else
 catalog:
   local:
     type: sql
-    uri: sqlite:///data/iceberg/catalog.db
-    warehouse: file://${SCRIPT_DIR}/data/iceberg/warehouse
+    uri: sqlite:///${HOME}/.ai-agent-ui/data/iceberg/catalog.db
+    warehouse: file:///${HOME}/.ai-agent-ui/data/iceberg/warehouse
 ICEEOF
-    ok ".pyiceberg.yaml created (warehouse: ${SCRIPT_DIR}/data/iceberg/warehouse)"
+    ok ".pyiceberg.yaml created (warehouse: ${HOME}/.ai-agent-ui/data/iceberg/warehouse)"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -703,7 +703,7 @@ _check "Frontend node_modules" "[[ -d '$FRONTEND_DIR/node_modules' ]]"
 _check "backend/.env (symlink)" "[[ -L '$BACKEND_ENV_LINK' ]] && [[ -f '$BACKEND_ENV_REAL' ]]"
 _check "frontend/.env.local (symlink)" "[[ -L '$FRONTEND_ENV_LINK' ]] && [[ -f '$FRONTEND_ENV_REAL' ]]"
 _check ".pyiceberg.yaml" "[[ -f '$PYICEBERG_YAML' ]]"
-_check "Iceberg catalog" "[[ -f '$SCRIPT_DIR/data/iceberg/catalog.db' ]]"
+_check "Iceberg catalog" "[[ -f '$HOME/.ai-agent-ui/data/iceberg/catalog.db' ]]"
 _check "Git pre-commit hook" "[[ -x '$HOOKS_DIR/pre-commit' ]]"
 _check "Git pre-push hook" "[[ -x '$HOOKS_DIR/pre-push' ]]"
 

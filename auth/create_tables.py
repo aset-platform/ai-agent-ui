@@ -28,10 +28,28 @@ import logging
 import os
 import sys
 
-import pyarrow as pa
-from pyiceberg.catalog.sql import SqlCatalog
-from pyiceberg.schema import Schema
-from pyiceberg.types import BooleanType, NestedField, StringType, TimestampType
+# Ensure backend/ is on sys.path so paths module can be imported
+_SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_BACKEND_DIR = os.path.join(_SCRIPT_DIR, "backend")
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
+
+from paths import ICEBERG_CATALOG_URI, ICEBERG_WAREHOUSE_URI  # noqa: E402
+
+os.environ.setdefault("PYICEBERG_CATALOG__LOCAL__URI", ICEBERG_CATALOG_URI)
+os.environ.setdefault(
+    "PYICEBERG_CATALOG__LOCAL__WAREHOUSE", ICEBERG_WAREHOUSE_URI
+)
+
+import pyarrow as pa  # noqa: E402, F401
+from pyiceberg.catalog.sql import SqlCatalog  # noqa: E402
+from pyiceberg.schema import Schema  # noqa: E402
+from pyiceberg.types import (  # noqa: E402
+    BooleanType,
+    NestedField,
+    StringType,
+    TimestampType,
+)
 
 # Module-level logger; mutable but required at module scope for use outside any class.
 logger = logging.getLogger(__name__)

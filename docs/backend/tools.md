@@ -166,14 +166,14 @@ self.agent_registry.register(stock)
 
 Both analysis tools cache their text output to avoid re-running expensive pipelines (30–90 s) when the same ticker is requested more than once in a day.
 
-**Cache location:** `data/cache/` (gitignored)
+**Cache location:** `~/.ai-agent-ui/data/cache/`
 
 **Key format:**
 
 | Tool | File |
 |------|------|
-| `analyse_stock_price(ticker)` | `data/cache/{TICKER}_analysis_{YYYY-MM-DD}.txt` |
-| `forecast_stock(ticker, months)` | `data/cache/{TICKER}_forecast_{N}m_{YYYY-MM-DD}.txt` |
+| `analyse_stock_price(ticker)` | `~/.ai-agent-ui/data/cache/{TICKER}_analysis_{YYYY-MM-DD}.txt` |
+| `forecast_stock(ticker, months)` | `~/.ai-agent-ui/data/cache/{TICKER}_forecast_{N}m_{YYYY-MM-DD}.txt` |
 
 **Logic (identical in both tools):**
 
