@@ -410,6 +410,7 @@ def _extract_statement(
     Skips quarters where every mapped metric is null (e.g.
     partially reported balance sheets for some Indian stocks).
 
+
     Args:
         stmt_df: Raw yfinance statement (rows=metrics,
             cols=quarter-end dates).

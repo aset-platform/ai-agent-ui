@@ -47,6 +47,7 @@ cashflow fallback, statement-aware table/chart, and UI polish.
 
 ---
 
+
 # Session: Mar 5, 2026 — Quarterly Results feature
 
 ## Summary
