@@ -18,27 +18,32 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+
+from paths import (
+    ICEBERG_CATALOG_URI,
+    ICEBERG_WAREHOUSE_URI,
+    PROCESSED_DIR,
+    PROJECT_ROOT,
+    RAW_DIR,
+)
 
 # Module-level logger; kept at module scope intentionally for shared utility use.
 _logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).parent.parent.parent
-_DATA_RAW = _PROJECT_ROOT / "data" / "raw"
-_DATA_PROCESSED = _PROJECT_ROOT / "data" / "processed"
+_PROJECT_ROOT = PROJECT_ROOT
+_DATA_RAW = RAW_DIR
+_DATA_PROCESSED = PROCESSED_DIR
 
 # Ensure PyIceberg can find the catalog regardless of CWD.
-# The backend process runs from backend/ but .pyiceberg.yaml lives at
-# the project root with a relative SQLite URI.  PyIceberg's _ENV_CONFIG
-# singleton reads env vars once at import time, so these must be set
-# BEFORE any pyiceberg import.
+# PyIceberg's _ENV_CONFIG singleton reads env vars once at import
+# time, so these must be set BEFORE any pyiceberg import.
 os.environ.setdefault(
     "PYICEBERG_CATALOG__LOCAL__URI",
-    f"sqlite:///{_PROJECT_ROOT.resolve()}/data/iceberg/catalog.db",
+    ICEBERG_CATALOG_URI,
 )
 os.environ.setdefault(
     "PYICEBERG_CATALOG__LOCAL__WAREHOUSE",
-    f"file:///{_PROJECT_ROOT.resolve()}/data/iceberg/warehouse",
+    ICEBERG_WAREHOUSE_URI,
 )
 
 _STOCK_REPO = None

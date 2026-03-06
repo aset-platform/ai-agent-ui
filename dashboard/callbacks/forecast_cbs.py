@@ -50,7 +50,9 @@ def register(app) -> None:
         State("nav-ticker-store", "data"),
     )
     def sync_forecast_ticker(
-        search: Optional[str], pathname: Optional[str], stored_ticker: Optional[str]
+        search: Optional[str],
+        pathname: Optional[str],
+        stored_ticker: Optional[str],
     ):
         """Pre-select the forecast dropdown when navigating from a stock card.
 
@@ -236,7 +238,9 @@ def register(app) -> None:
 
         if result.success:
             acc_row = (
-                _build_accuracy_row(result.accuracy, ticker) if result.accuracy else []
+                _build_accuracy_row(result.accuracy, ticker)
+                if result.accuracy
+                else []
             )
             return (
                 html.Span(

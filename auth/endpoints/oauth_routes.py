@@ -31,6 +31,7 @@ def register(router: APIRouter) -> None:
     Args:
         router: The :class:`~fastapi.APIRouter` to attach routes to.
     """
+
     @router.get("/auth/oauth/providers", tags=["oauth"])
     def list_oauth_providers() -> Dict[str, List[str]]:
         """List OAuth providers that are currently enabled.

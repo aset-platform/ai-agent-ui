@@ -41,28 +41,21 @@ logs/
 *.tsbuildinfo
 next-env.d.ts
 
-# Stock agent — generated data
+# Runtime data, charts, and Iceberg are now stored at ~/.ai-agent-ui/
+# Keep these rules for backwards-compat if old project-local dirs remain.
 data/raw/
 data/processed/
 data/forecasts/
 data/cache/
 data/metadata/*.json
-
-# Stock agent — generated chart HTML files
 charts/analysis/
 charts/forecasts/
+data/iceberg/
+data/avatars/
+data/auth_deny_list.json
 
 # MkDocs static build output
 site/
-
-# Auth module — Iceberg catalog + warehouse (runtime-generated)
-data/iceberg/
-
-# Uploaded user avatars (runtime-generated)
-data/avatars/
-
-# Auth — persisted JWT deny-list (runtime-generated)
-data/auth_deny_list.json
 
 # Iceberg catalog config (contains absolute local paths)
 .pyiceberg.yaml

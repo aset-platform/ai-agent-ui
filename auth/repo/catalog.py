@@ -47,16 +47,17 @@ def get_catalog(root: str):
 
     # Fix #12: resolve the SQLite URI with an absolute path so we never need
     # os.chdir() (which has global side effects on the whole process).
-    db_path = os.path.join(root, "data", "iceberg", "catalog.db")
+    # Paths centralised in backend/paths.py; the *root* parameter is now
+    # only used as a fallback for the legacy cwd-based catalog load below.
     try:
+        from paths import ICEBERG_CATALOG_URI, ICEBERG_WAREHOUSE_URI
+
         cat = load_catalog(
             "local",
             **{
                 "type": "sql",
-                "uri": f"sqlite:///{db_path}",
-                "warehouse": os.path.join(
-                    root, "data", "iceberg", "warehouse"
-                ),
+                "uri": ICEBERG_CATALOG_URI,
+                "warehouse": str(ICEBERG_WAREHOUSE_URI),
             },
         )
         _logger.debug("Iceberg catalog loaded (singleton).")

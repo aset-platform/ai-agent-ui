@@ -1,17 +1,19 @@
 import logging
 from datetime import date
-from pathlib import Path
 from typing import Optional
 
 import pandas as pd
-from tools._stock_shared import _get_repo, _require_repo  # noqa: F401 — re-exported
+from paths import CACHE_DIR, CHARTS_ANALYSIS_DIR
+from tools._stock_shared import (  # noqa: F401 — re-exported
+    _get_repo,
+    _require_repo,
+)
 
 # Module-level logger; mutable but required at module scope for pre-class logging.
 _logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).parent.parent.parent
-_CHARTS_ANALYSIS = _PROJECT_ROOT / "charts" / "analysis"
-_CACHE_DIR = _PROJECT_ROOT / "data" / "cache"
+_CHARTS_ANALYSIS = CHARTS_ANALYSIS_DIR
+_CACHE_DIR = CACHE_DIR
 
 
 def _load_cache(ticker: str, key: str) -> Optional[str]:
@@ -73,7 +75,9 @@ def _load_parquet(ticker: str) -> Optional[pd.DataFrame]:
         df = df.sort_values("date").set_index("date")
         # Use adj_close only when it has meaningful coverage
         # (>50 %); otherwise fall back to close.
-        use_adj = "adj_close" in df.columns and df["adj_close"].notna().mean() > 0.5
+        use_adj = (
+            "adj_close" in df.columns and df["adj_close"].notna().mean() > 0.5
+        )
         adj_col = df["adj_close"] if use_adj else df["close"]
         result = pd.DataFrame(
             {

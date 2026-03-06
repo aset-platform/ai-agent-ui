@@ -45,9 +45,12 @@ _logger = logging.getLogger(__name__)
 # Ensure backend/ is on sys.path so tool imports resolve
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _BACKEND_DIR = str(_PROJECT_ROOT / "backend")
-_CACHE_DIR = _PROJECT_ROOT / "data" / "cache"
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
+
+from paths import CACHE_DIR  # noqa: E402
+
+_CACHE_DIR = CACHE_DIR
 
 
 @dataclass

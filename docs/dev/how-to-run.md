@@ -35,7 +35,7 @@ EOF
 cp frontend/.env.local.example frontend/.env.local
 ```
 
-`./run.sh start` will automatically create the Iceberg tables and seed the superuser on first run (detected by the absence of `data/iceberg/catalog.db`).
+`./run.sh start` will automatically create the Iceberg tables and seed the superuser on first run (detected by the absence of `~/.ai-agent-ui/data/iceberg/catalog.db`). If upgrading from a project-local data layout, it auto-migrates data to `~/.ai-agent-ui/`.
 
 ---
 
@@ -61,7 +61,7 @@ After `start`, the table output looks like:
   dashboard     32014     http://127.0.0.1:8050             ● up
 ```
 
-Logs are written to `/tmp/ai-agent-ui-logs/`:
+Logs are written to `~/.ai-agent-ui/logs/`:
 
 | File | Service |
 |------|---------|
@@ -69,6 +69,7 @@ Logs are written to `/tmp/ai-agent-ui-logs/`:
 | `frontend.log` | Next.js dev server output |
 | `docs.log` | MkDocs serve output |
 | `dashboard.log` | Plotly Dash output |
+| `agent.log` | Rotating application log (7-day retention) |
 
 ---
 
@@ -116,7 +117,7 @@ All variables and their defaults:
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `60` | JWT access token TTL |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | JWT refresh token TTL |
 | `LOG_LEVEL` | `DEBUG` | Minimum log severity |
-| `LOG_TO_FILE` | `true` | Write logs to `backend/logs/agent.log` |
+| `LOG_TO_FILE` | `true` | Write logs to `~/.ai-agent-ui/logs/agent.log` |
 
 ### 3. Start the server
 

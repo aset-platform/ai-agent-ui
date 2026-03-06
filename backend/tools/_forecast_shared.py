@@ -14,20 +14,22 @@ _CACHE_DIR : pathlib.Path
 
 import logging
 from datetime import date
-from pathlib import Path
 from typing import Optional
 
 import holidays as holidays_lib
 import pandas as pd
-from tools._stock_shared import _get_repo, _require_repo  # noqa: F401 — re-exported
+from paths import CACHE_DIR, CHARTS_FORECASTS_DIR, FORECASTS_DIR
+from tools._stock_shared import (  # noqa: F401 — re-exported
+    _get_repo,
+    _require_repo,
+)
 
 # Module-level logger; mutable but required at module scope for use before any class is instantiated.
 _logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).parent.parent.parent
-_DATA_FORECASTS = _PROJECT_ROOT / "data" / "forecasts"
-_CHARTS_FORECASTS = _PROJECT_ROOT / "charts" / "forecasts"
-_CACHE_DIR = _PROJECT_ROOT / "data" / "cache"
+_DATA_FORECASTS = FORECASTS_DIR
+_CHARTS_FORECASTS = CHARTS_FORECASTS_DIR
+_CACHE_DIR = CACHE_DIR
 
 
 def _load_cache(ticker: str, key: str) -> Optional[str]:
@@ -90,7 +92,9 @@ def _load_parquet(ticker: str) -> Optional[pd.DataFrame]:
         # Use adj_close only when it has meaningful coverage (>50 %);
         # otherwise fall back to close.  Indian stocks via yfinance
         # often have adj_close as all-NaN or nearly so.
-        use_adj = "adj_close" in df.columns and df["adj_close"].notna().mean() > 0.5
+        use_adj = (
+            "adj_close" in df.columns and df["adj_close"].notna().mean() > 0.5
+        )
         adj_col = df["adj_close"] if use_adj else df["close"]
         result = pd.DataFrame(
             {
@@ -121,5 +125,10 @@ def _build_holidays_df(years: range) -> pd.DataFrame:
         (:class:`pandas.Timestamp`), ready to pass to :class:`Prophet`.
     """
     us_hols = holidays_lib.country_holidays("US", years=list(years))
-    rows = [{"holiday": name, "ds": pd.Timestamp(dt)} for dt, name in us_hols.items()]
-    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["holiday", "ds"])
+    rows = [
+        {"holiday": name, "ds": pd.Timestamp(dt)}
+        for dt, name in us_hols.items()
+    ]
+    return (
+        pd.DataFrame(rows) if rows else pd.DataFrame(columns=["holiday", "ds"])
+    )

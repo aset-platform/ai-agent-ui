@@ -66,7 +66,9 @@ def _analyse_price_movement(df: pd.DataFrame) -> dict:
 
     in_drawdown = (drawdown < 0).astype(int)
     groups = in_drawdown * (
-        in_drawdown.groupby((in_drawdown != in_drawdown.shift()).cumsum()).cumcount()
+        in_drawdown.groupby(
+            (in_drawdown != in_drawdown.shift()).cumsum()
+        ).cumcount()
         + 1
     )
     max_dd_duration = int(groups.max())

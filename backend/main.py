@@ -202,15 +202,13 @@ class ChatServer:
         app.include_router(create_auth_router())
 
         # Serve uploaded avatars as static files at /avatars/{filename}
-        _avatars_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "..",
-            "data",
-            "avatars",
-        )
-        os.makedirs(_avatars_dir, exist_ok=True)
+        from paths import AVATARS_DIR, ensure_dirs
+
+        ensure_dirs()
         app.mount(
-            "/avatars", StaticFiles(directory=_avatars_dir), name="avatars"
+            "/avatars",
+            StaticFiles(directory=str(AVATARS_DIR)),
+            name="avatars",
         )
 
         return app

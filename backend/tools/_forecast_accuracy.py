@@ -17,7 +17,9 @@ from prophet import Prophet
 _logger = logging.getLogger(__name__)
 
 
-def _calculate_forecast_accuracy(model: Prophet, prophet_df: pd.DataFrame) -> dict:
+def _calculate_forecast_accuracy(
+    model: Prophet, prophet_df: pd.DataFrame
+) -> dict:
     """Evaluate model accuracy via in-sample backtesting on the last 12 months.
 
     Generates in-sample predictions for the entire training period, then

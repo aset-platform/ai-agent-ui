@@ -26,7 +26,7 @@ source backend/demoenv/bin/activate         # Python virtualenv
 
 **Config files**: `pyproject.toml` (black + isort, 79 chars), `.flake8` (flake8, 79 chars), `frontend/eslint.config.mjs`.
 
-**Data**: Iceberg is primary (`data/iceberg/`). `data/raw/` and `data/forecasts/` are local backup only. `data/cache/` is same-day, gitignored.
+**Data**: All runtime data lives at `~/.ai-agent-ui/` (override: `AI_AGENT_UI_HOME`). Iceberg is primary (`~/.ai-agent-ui/data/iceberg/`). Paths centralised in `backend/paths.py`.
 
 **Env**: `~/.ai-agent-ui/backend.env` and `frontend.env.local` (master); `backend/.env` and `frontend/.env.local` are symlinks created by `setup.sh`.
 
@@ -40,15 +40,32 @@ source backend/demoenv/bin/activate         # Python virtualenv
 - **`BaseAgent`** (`backend/agents/base.py`) — ABC with agentic loop (`MAX_ITERATIONS=15`) + streaming. Subclasses only override `_build_llm()`.
 - **LLM**: Claude Sonnet 4.6 via `langchain_anthropic.ChatAnthropic`. Config in `agents/general_agent.py` and `agents/stock_agent.py`.
 - **Streaming**: `POST /chat/stream` returns NDJSON events: `thinking`, `tool_start`, `tool_done`, `warning`, `final`, `error`.
-- **Same-day cache**: `data/cache/{TICKER}_{key}_{YYYY-MM-DD}.txt` — repeat tool calls return instantly.
+- **Same-day cache**: `~/.ai-agent-ui/data/cache/{TICKER}_{key}_{YYYY-MM-DD}.txt` — repeat tool calls return instantly.
+- **Centralised paths**: `backend/paths.py` — single source of truth for all filesystem locations. Override root with `AI_AGENT_UI_HOME` env var.
 - **Tool registration order**: `search_market_news` registered _after_ GeneralAgent, _before_ StockAgent.
 
 ### Iceberg (single source of truth)
 
-- ALL stock data lives in Iceberg. `_require_repo()` raises `RuntimeError` if unavailable; `_get_repo()` returns `None`.
+- ALL stock data lives in Iceberg at `~/.ai-agent-ui/data/iceberg/`. `_require_repo()` raises `RuntimeError` if unavailable; `_get_repo()` returns `None`.
 - **Copy-on-write upserts**: read full table -> mutate DataFrame -> `table.overwrite()` (no native UPDATE in PyIceberg 0.11).
 - `_load_parquet()` reads from Iceberg, not flat files. Dashboard uses `_get_ohlcv_cached` / `_get_forecast_cached`.
 - Single repo singleton via `_stock_shared.py`. Writes MUST NOT be silenced — failures propagate to tool exception handlers.
+
+### Filesystem layout (`backend/paths.py`)
+
+All runtime data, logs, and charts live under `~/.ai-agent-ui/` (override: `AI_AGENT_UI_HOME` env var). The `backend/paths.py` module is the single source of truth for all paths — never hardcode data directories elsewhere.
+
+```
+~/.ai-agent-ui/
+├── data/iceberg/{catalog.db,warehouse/}   # Iceberg tables
+├── data/{cache,raw,forecasts,avatars}/     # runtime data
+├── charts/{analysis,forecasts}/            # HTML charts
+├── logs/                                   # rotating agent.log + service logs
+├── backend.env                             # secrets (symlinked)
+└── frontend.env.local                      # service URLs (symlinked)
+```
+
+Key: `ensure_dirs()` creates the full tree (called at startup). Migration from old project-local layout: `python scripts/migrate_data_home.py --apply`.
 
 ### Auth
 
@@ -338,7 +355,7 @@ git merge origin/qa && git push origin dev
 
 - **Copy-on-write is expensive**: `table.overwrite()` reads + rewrites the full table. Batch updates; minimize calls.
 - **N+1 queries**: Load all data in one call where possible, not one query per iteration.
-- **Cache awareness**: `data/cache/` provides same-day caching. Clear only on refresh (`_clear_tool_cache()`).
+- **Cache awareness**: `~/.ai-agent-ui/data/cache/` provides same-day caching. Clear only on refresh (`_clear_tool_cache()`).
 
 ### Python
 
@@ -582,6 +599,17 @@ python stocks/create_tables.py
 python stocks/backfill_metadata.py
 python stocks/backfill_adj_close.py
 ```
+
+### Migrating from project-local data layout
+
+If upgrading from a version that stored data under the project root:
+
+```bash
+python scripts/migrate_data_home.py          # dry-run (preview)
+python scripts/migrate_data_home.py --apply  # copy files
+```
+
+`run.sh start` auto-detects the old layout and migrates on first run.
 
 ### Hooks (one-time install)
 

@@ -29,12 +29,26 @@ Tables created
 
 import logging
 import os
+import sys
 
-from pyiceberg.catalog.sql import SqlCatalog
-from pyiceberg.partitioning import PartitionField, PartitionSpec
-from pyiceberg.schema import Schema
-from pyiceberg.transforms import IdentityTransform
-from pyiceberg.types import (
+# Ensure backend/ is on sys.path so paths module can be imported
+_SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_BACKEND_DIR = os.path.join(_SCRIPT_DIR, "backend")
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
+
+from paths import ICEBERG_CATALOG_URI, ICEBERG_WAREHOUSE_URI  # noqa: E402
+
+os.environ.setdefault("PYICEBERG_CATALOG__LOCAL__URI", ICEBERG_CATALOG_URI)
+os.environ.setdefault(
+    "PYICEBERG_CATALOG__LOCAL__WAREHOUSE", ICEBERG_WAREHOUSE_URI
+)
+
+from pyiceberg.catalog.sql import SqlCatalog  # noqa: E402
+from pyiceberg.partitioning import PartitionField, PartitionSpec  # noqa: E402
+from pyiceberg.schema import Schema  # noqa: E402
+from pyiceberg.transforms import IdentityTransform  # noqa: E402
+from pyiceberg.types import (  # noqa: E402
     DateType,
     DoubleType,
     IntegerType,

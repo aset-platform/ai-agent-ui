@@ -17,7 +17,11 @@ from typing import Any, Dict, List, Optional
 import dash_bootstrap_components as dbc
 from dash import ALL, Input, Output, State, ctx, html, no_update
 
-from dashboard.callbacks.auth_utils import _api_call, _resolve_token, _validate_token
+from dashboard.callbacks.auth_utils import (
+    _api_call,
+    _resolve_token,
+    _validate_token,
+)
 from dashboard.callbacks.utils import _check_input_safety, _is_valid_email
 
 # Module-level logger — kept at module scope as required by the logging API.
@@ -161,7 +165,10 @@ def register(app) -> None:
             )
 
         # ── Edit user ─────────────────────────────────────────────────────
-        if isinstance(triggered, dict) and triggered.get("type") == "edit-user-btn":
+        if (
+            isinstance(triggered, dict)
+            and triggered.get("type") == "edit-user-btn"
+        ):
             # triggered_value is None when Dash fires due to DOM injection
             # (pattern-match re-fires when Edit buttons are added to the layout)
             # rather than an actual user click.  Skip in that case.
@@ -213,7 +220,9 @@ def register(app) -> None:
                 perms_style = {}
                 perms_value = [k for k, v in perms.items() if v]
             # Build current avatar preview.
-            avatar_url = user.get("avatar_url") or user.get("profile_picture_url")
+            avatar_url = user.get("avatar_url") or user.get(
+                "profile_picture_url"
+            )
             if avatar_url:
                 full_url = (
                     _BACKEND_URL + avatar_url
@@ -353,7 +362,12 @@ def register(app) -> None:
 
         if mode == "add":
             if not (password and password.strip()):
-                return True, no_update, "Password is required for new users.", no_update
+                return (
+                    True,
+                    no_update,
+                    "Password is required for new users.",
+                    no_update,
+                )
             payload: Dict[str, Any] = {
                 "full_name": full_name.strip(),
                 "email": email.strip(),
@@ -385,7 +399,9 @@ def register(app) -> None:
                     "insights": "insights" in perms_checked,
                     "admin": "admin" in perms_checked,
                 }
-            resp = _api_call("patch", "/users/" + user_id, token, json_body=updates)
+            resp = _api_call(
+                "patch", "/users/" + user_id, token, json_body=updates
+            )
 
         if resp is None:
             return True, no_update, "Could not reach backend.", no_update
@@ -395,7 +411,12 @@ def register(app) -> None:
         if resp.status_code == 409:
             return True, no_update, "Email already in use.", no_update
         if not resp.ok:
-            return True, no_update, "Error " + str(resp.status_code) + ".", no_update
+            return (
+                True,
+                no_update,
+                "Error " + str(resp.status_code) + ".",
+                no_update,
+            )
 
         # Upload avatar if one was provided.
         if avatar_contents and saved_user_id and token:
@@ -480,7 +501,10 @@ def register(app) -> None:
             action = "deactivated"
         else:
             resp = _api_call(
-                "patch", "/users/" + user_id, token, json_body={"is_active": True}
+                "patch",
+                "/users/" + user_id,
+                token,
+                json_body={"is_active": True},
             )
             action = "reactivated"
 
@@ -564,7 +588,10 @@ def register(app) -> None:
         )
         if resp1 is None or not resp1.ok:
             detail = "" if resp1 is None else resp1.json().get("detail", "")
-            return True, "Request failed: " + (detail or "backend unreachable") + "."
+            return (
+                True,
+                "Request failed: " + (detail or "backend unreachable") + ".",
+            )
 
         reset_token = resp1.json().get("reset_token", "")
         if not reset_token:
@@ -579,6 +606,9 @@ def register(app) -> None:
         )
         if resp2 is None or not resp2.ok:
             detail = "" if resp2 is None else resp2.json().get("detail", "")
-            return True, "Confirm failed: " + (detail or "backend unreachable") + "."
+            return (
+                True,
+                "Confirm failed: " + (detail or "backend unreachable") + ".",
+            )
 
         return False, ""

@@ -19,15 +19,19 @@ from auth.models import ProfileUpdateRequest, UserContext, UserResponse
 logger = logging.getLogger(__name__)
 
 # Module-level path constant — prefixed with _ to signal internal use.
-# Kept at module level because it is derived from the file-system layout and
-# must be available before any class or function is instantiated.
-_AVATARS_DIR: str = os.path.join(
-    os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    ),
-    "data",
-    "avatars",
+# Centralised in backend/paths.py; imported here for consistency.
+import sys as _sys
+
+_project_root = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
+_backend_dir = os.path.join(_project_root, "backend")
+if _backend_dir not in _sys.path:
+    _sys.path.insert(0, _backend_dir)
+
+from paths import AVATARS_DIR as _AVATARS_DIR_PATH  # noqa: E402
+
+_AVATARS_DIR: str = str(_AVATARS_DIR_PATH)
 _MAX_AVATAR_BYTES: int = 10 * 1024 * 1024  # 10 MB
 
 
