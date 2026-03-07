@@ -36,6 +36,7 @@ from dashboard.callbacks.data_loaders import (
     _load_reg_cb,
 )
 from dashboard.callbacks.iceberg import clear_caches
+from dashboard.components.error_overlay import make_error_banner
 from dashboard.services.stock_refresh import run_full_refresh
 
 # Module-level logger — intentionally module-scoped (not inside a class)
@@ -206,7 +207,16 @@ def register(app) -> None:
         [
             Output("forecast-refresh-status", "children"),
             Output("forecast-refresh-store", "data"),
-            Output("forecast-accuracy-row", "children", allow_duplicate=True),
+            Output(
+                "forecast-accuracy-row",
+                "children",
+                allow_duplicate=True,
+            ),
+            Output(
+                "error-overlay-container",
+                "children",
+                allow_duplicate=True,
+            ),
         ],
         Input("forecast-refresh-btn", "n_clicks"),
         [
@@ -224,36 +234,43 @@ def register(app) -> None:
         current_refresh: Optional[int],
         token: Optional[str],
     ):
-        """Run the full stock data refresh pipeline for the selected ticker.
+        """Run the full stock data refresh pipeline.
 
-        Delegates to :func:`~dashboard.services.stock_refresh.run_full_refresh`
-        which refreshes all 8 Iceberg tables (OHLCV, company info, dividends,
-        technical indicators, analysis summary, forecast runs, forecasts,
-        and the registry).  Clears dashboard caches on success and increments
-        the ``forecast-refresh-store`` counter to trigger a chart reload.
+        Delegates to
+        :func:`~dashboard.services.stock_refresh.run_full_refresh`
+        which refreshes all 8 Iceberg tables.  Clears
+        dashboard caches on success and increments the
+        ``forecast-refresh-store`` counter to trigger a
+        chart reload.
 
         Args:
             n_clicks: Button click counter.
             ticker: Selected ticker symbol.
             horizon: Forecast horizon string.
-            current_refresh: Current store value (incremented on success).
-            token: JWT access token from the auth-token-store.
+            current_refresh: Current store value.
+            token: JWT access token.
 
         Returns:
-            Tuple of (status icon span, new refresh counter,
-            accuracy-row component).
+            Tuple of (status icon, counter,
+            accuracy-row, overlay).
         """
         if _validate_token(token) is None:
-            return _unauth_notice(), no_update, []
+            return (
+                _unauth_notice(),
+                no_update,
+                [],
+                no_update,
+            )
 
         if not ticker:
             return (
                 html.Span(
                     "\u2717 Select a ticker",
-                    className="refresh-status-icon text-warning",
+                    className=("refresh-status-icon" " text-warning"),
                 ),
                 no_update,
                 [],
+                no_update,
             )
 
         horizon_months = int(horizon) if horizon else 9
@@ -261,7 +278,6 @@ def register(app) -> None:
 
         result = run_full_refresh(ticker, horizon_months)
 
-        # Clear all dashboard caches so subsequent reads get fresh data
         clear_caches(ticker)
         _clear_indicator_cache(ticker)
 
@@ -274,21 +290,28 @@ def register(app) -> None:
             return (
                 html.Span(
                     "\u2713",
-                    className="refresh-status-icon text-success",
-                    title=f"Refresh complete for {ticker}",
+                    className=("refresh-status-icon" " text-success"),
+                    title=(f"Refresh complete" f" for {ticker}"),
                 ),
                 (current_refresh or 0) + 1,
                 acc_row,
+                no_update,
             )
 
         error_msg = result.error or "Unknown error"
-        _logger.error("run_new_analysis failed: %s", error_msg)
+        _logger.error(
+            "run_new_analysis failed: %s",
+            error_msg,
+        )
         return (
             html.Span(
                 "\u2717",
-                className="refresh-status-icon text-danger",
+                className=("refresh-status-icon text-danger"),
                 title=error_msg[:200],
             ),
             no_update,
             [],
+            make_error_banner(
+                f"Refresh failed for {ticker}" f" \u2014 {error_msg[:150]}"
+            ),
         )

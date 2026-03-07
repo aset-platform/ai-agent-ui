@@ -18,6 +18,9 @@ from dashboard.callbacks import (
     _unauth_notice,
     _validate_token,
 )
+from dashboard.components.error_overlay import (
+    error_overlay_container,
+)
 from dashboard.layouts import (
     NAVBAR,
     admin_users_layout,
@@ -51,6 +54,7 @@ def build_layout(app: dash.Dash) -> None:
             dcc.Store(id="nav-ticker-store", data=None),
             dcc.Store(id="auth-token-store", storage_type="local"),
             dcc.Store(id="user-profile-store", storage_type="session"),
+            error_overlay_container(),
             NAVBAR,
             html.Div(
                 id="page-content",

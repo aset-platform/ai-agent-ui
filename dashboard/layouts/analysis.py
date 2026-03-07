@@ -205,26 +205,29 @@ def analysis_tabs_layout() -> html.Div:
 
     return html.Div(
         [
-            dbc.Tabs(
-                id="analysis-page-tabs",
-                active_tab="analysis-tab",
-                children=[
-                    dbc.Tab(
-                        label="Price Analysis",
-                        tab_id="analysis-tab",
-                        children=[analysis_layout()],
-                    ),
-                    dbc.Tab(
-                        label="Forecast",
-                        tab_id="forecast-tab",
-                        children=[forecast_layout()],
-                    ),
-                    dbc.Tab(
-                        label="Compare Stocks",
-                        tab_id="compare-tab",
-                        children=[compare_layout()],
-                    ),
-                ],
+            html.Div(
+                dbc.Tabs(
+                    id="analysis-page-tabs",
+                    active_tab="analysis-tab",
+                    children=[
+                        dbc.Tab(
+                            label="Price Analysis",
+                            tab_id="analysis-tab",
+                            children=[analysis_layout()],
+                        ),
+                        dbc.Tab(
+                            label="Forecast",
+                            tab_id="forecast-tab",
+                            children=[forecast_layout()],
+                        ),
+                        dbc.Tab(
+                            label="Compare Stocks",
+                            tab_id="compare-tab",
+                            children=[compare_layout()],
+                        ),
+                    ],
+                ),
+                **{"data-testid": "analysis-tabs"},
             ),
         ]
     )

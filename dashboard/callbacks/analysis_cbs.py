@@ -45,6 +45,7 @@ from dashboard.callbacks.sort_helpers import (
     MACD_TOOLTIP,
     RSI_TOOLTIP,
 )
+from dashboard.components.error_overlay import make_error_banner
 from dashboard.services.stock_refresh import (
     run_full_refresh,
 )
@@ -218,6 +219,11 @@ def register(app) -> None:
         [
             Output("analysis-refresh-status", "children"),
             Output("analysis-refresh-store", "data"),
+            Output(
+                "error-overlay-container",
+                "children",
+                allow_duplicate=True,
+            ),
         ],
         Input("analysis-refresh-btn", "n_clicks"),
         [
@@ -242,10 +248,10 @@ def register(app) -> None:
             token: JWT access token.
 
         Returns:
-            Tuple of (status icon span, new counter).
+            Tuple of (status icon, counter, overlay).
         """
         if _validate_token(token) is None:
-            return _unauth_notice(), no_update
+            return _unauth_notice(), no_update, no_update
 
         if not ticker:
             return (
@@ -253,6 +259,7 @@ def register(app) -> None:
                     "\u2717 Select a ticker",
                     className=("refresh-status-icon" " text-warning"),
                 ),
+                no_update,
                 no_update,
             )
 
@@ -270,6 +277,7 @@ def register(app) -> None:
                     title=(f"Refresh complete for {ticker}"),
                 ),
                 (current_refresh or 0) + 1,
+                no_update,
             )
 
         error_msg = result.error or "Unknown error"
@@ -284,6 +292,9 @@ def register(app) -> None:
                 title=error_msg[:200],
             ),
             no_update,
+            make_error_banner(
+                f"Refresh failed for {ticker}" f" \u2014 {error_msg[:150]}"
+            ),
         )
 
     @app.callback(
