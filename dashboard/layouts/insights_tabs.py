@@ -50,9 +50,35 @@ def _screener_tab(
                         dbc.Col(
                             [
                                 html.Label(
-                                    "RSI Signal",
+                                    [
+                                        "RSI Signal ",
+                                        html.Span(
+                                            "\u2139",
+                                            id=(
+                                                "screener-filter"
+                                                "-rsi-tip"
+                                            ),
+                                            className=(
+                                                "col-info-icon"
+                                            ),
+                                        ),
+                                        dbc.Tooltip(
+                                            "RSI (Relative"
+                                            " Strength Index):"
+                                            " momentum oscillator"
+                                            " (0\u2013100)."
+                                            " > 70 = overbought,"
+                                            " < 30 = oversold.",
+                                            target=(
+                                                "screener-filter"
+                                                "-rsi-tip"
+                                            ),
+                                            placement="top",
+                                        ),
+                                    ],
                                     className=(
-                                        "text-muted small" " fw-semibold"
+                                        "text-muted small"
+                                        " fw-semibold"
                                     ),
                                 ),
                                 dbc.RadioItems(

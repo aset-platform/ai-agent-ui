@@ -265,11 +265,21 @@ def register(app) -> None:
                     cells.append(html.Td(str(val) if val is not None else "—"))
             rows_html.append(html.Tr(cells))
 
+        _tip_map = {
+            "sharpe_ratio": "sharpe",
+            "rsi_14": "rsi",
+            "rsi_signal": "rsi",
+            "macd_signal_text": "macd",
+        }
         scr_col_defs = [
             {
                 "key": k,
                 "label": cols_map[k],
-                **({"tooltip": "sharpe"} if k == "sharpe_ratio" else {}),
+                **(
+                    {"tooltip": _tip_map[k]}
+                    if k in _tip_map
+                    else {}
+                ),
             }
             for k in display_cols
         ]

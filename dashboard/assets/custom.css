@@ -398,16 +398,16 @@ body {
   color: var(--accent);
 }
 
-/* ── Sharpe info icon (tooltip target) ───────────────────── */
+/* ── Column info icon (tooltip target) ───────────────────── */
 
-.sharpe-info-icon {
+.col-info-icon {
   font-size: 0.65rem;
   cursor: help;
   opacity: 0.5;
   margin-left: 0.15em;
 }
 
-.sharpe-info-icon:hover {
+.col-info-icon:hover {
   opacity: 1;
 }
 

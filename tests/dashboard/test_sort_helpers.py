@@ -6,9 +6,12 @@ import pytest
 from dash import html
 
 from dashboard.callbacks.sort_helpers import (
+    RSI_TOOLTIP,
+    MACD_TOOLTIP,
     apply_sort,
     apply_sort_list,
     build_sortable_thead,
+    label_with_tooltip,
     next_sort_state,
     sharpe_label_with_tooltip,
 )
@@ -211,7 +214,7 @@ class TestBuildSortableThead:
             c
             for c in btn.children
             if isinstance(c, html.Span)
-            and getattr(c, "className", "") == "sharpe-info-icon"
+            and getattr(c, "className", "") == "col-info-icon"
         ]
         assert len(icon_spans) == 1
 
@@ -228,7 +231,7 @@ class TestBuildSortableThead:
             c
             for c in btn.children
             if isinstance(c, html.Span)
-            and getattr(c, "className", "") == "sharpe-info-icon"
+            and getattr(c, "className", "") == "col-info-icon"
         ]
         assert len(icon_spans) == 0
 
@@ -246,5 +249,102 @@ class TestSharpeLabelWithTooltip:
         assert isinstance(result[0], html.Span)
         assert isinstance(result[1], html.Span)
         assert isinstance(result[2], dbc.Tooltip)
-        assert result[1].className == "sharpe-info-icon"
+        assert result[1].className == "col-info-icon"
         assert result[2].target == "uid"
+
+
+# ── label_with_tooltip (generic) ────────────────────────────
+
+
+class TestLabelWithTooltip:
+    """Verify generic tooltip helper for RSI/MACD/Sharpe."""
+
+    def test_rsi_tooltip_text(self):
+        """RSI key produces RSI tooltip text."""
+        result = label_with_tooltip("RSI", "rsi-id", "rsi")
+        assert len(result) == 3
+        assert isinstance(result[2], dbc.Tooltip)
+        assert result[2].children == RSI_TOOLTIP
+        assert result[2].target == "rsi-id"
+
+    def test_macd_tooltip_text(self):
+        """MACD key produces MACD tooltip text."""
+        result = label_with_tooltip("MACD", "m-id", "macd")
+        assert result[2].children == MACD_TOOLTIP
+
+    def test_unknown_key_gives_empty_text(self):
+        """Unknown tooltip key produces empty text."""
+        result = label_with_tooltip("X", "x-id", "unknown")
+        assert result[2].children == ""
+
+
+class TestBuildSortableTheadRsiMacd:
+    """Verify RSI/MACD tooltip columns in thead."""
+
+    def test_rsi_tooltip_in_thead(self):
+        """Column with tooltip='rsi' gets info icon."""
+        cols = [
+            {"key": "rsi_14", "label": "RSI", "tooltip": "rsi"},
+        ]
+        state = {"col": None, "dir": "none"}
+        thead = build_sortable_thead(cols, "t", state)
+        btn = thead.children.children[0].children
+        icons = [
+            c
+            for c in btn.children
+            if isinstance(c, html.Span)
+            and getattr(c, "className", "") == "col-info-icon"
+        ]
+        assert len(icons) == 1
+
+    def test_macd_tooltip_in_thead(self):
+        """Column with tooltip='macd' gets info icon."""
+        cols = [
+            {
+                "key": "macd_signal_text",
+                "label": "MACD",
+                "tooltip": "macd",
+            },
+        ]
+        state = {"col": None, "dir": "none"}
+        thead = build_sortable_thead(cols, "t", state)
+        btn = thead.children.children[0].children
+        icons = [
+            c
+            for c in btn.children
+            if isinstance(c, html.Span)
+            and getattr(c, "className", "") == "col-info-icon"
+        ]
+        assert len(icons) == 1
+
+    def test_no_duplicate_ids_for_same_tooltip_key(self):
+        """Two columns with tooltip='rsi' get unique IDs."""
+        cols = [
+            {
+                "key": "rsi_14",
+                "label": "RSI (14)",
+                "tooltip": "rsi",
+            },
+            {
+                "key": "rsi_signal",
+                "label": "RSI Signal",
+                "tooltip": "rsi",
+            },
+        ]
+        state = {"col": None, "dir": "none"}
+        thead = build_sortable_thead(cols, "scr", state)
+        tr = thead.children
+        ids = []
+        for th in tr.children:
+            btn = th.children
+            for c in btn.children:
+                if (
+                    isinstance(c, html.Span)
+                    and getattr(c, "className", "")
+                    == "col-info-icon"
+                ):
+                    ids.append(c.id)
+        assert len(ids) == 2
+        assert ids[0] != ids[1]
+        assert ids[0] == "scr-rsi_14-tip"
+        assert ids[1] == "scr-rsi_signal-tip"

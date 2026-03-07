@@ -28,6 +28,10 @@ from dashboard.callbacks.auth_utils import (
 from dashboard.callbacks.card_builders import (
     _build_stats_cards,
 )
+from dashboard.callbacks.sort_helpers import (
+    RSI_TOOLTIP,
+    MACD_TOOLTIP,
+)
 from dashboard.callbacks.chart_builders import (
     _build_analysis_fig,
     _empty_fig,
@@ -442,10 +446,39 @@ def register(app) -> None:
             )
 
         metrics_df = pd.DataFrame(rows)
-        header_cells = [
-            html.Th(col, className="text-muted small")
-            for col in metrics_df.columns
-        ]
+        _col_tips = {
+            "RSI": ("cmp-rsi-tip", RSI_TOOLTIP),
+            "MACD": ("cmp-macd-tip", MACD_TOOLTIP),
+        }
+        header_cells = []
+        for col in metrics_df.columns:
+            if col in _col_tips:
+                uid, tip = _col_tips[col]
+                header_cells.append(
+                    html.Th(
+                        [
+                            html.Span(col),
+                            html.Span(
+                                "\u2139",
+                                id=uid,
+                                className="col-info-icon",
+                            ),
+                            dbc.Tooltip(
+                                tip,
+                                target=uid,
+                                placement="top",
+                            ),
+                        ],
+                        className="text-muted small",
+                    )
+                )
+            else:
+                header_cells.append(
+                    html.Th(
+                        col,
+                        className="text-muted small",
+                    )
+                )
         body_rows = []
         for _, row in metrics_df.iterrows():
             cells = [html.Td(str(v), className="small") for v in row]
