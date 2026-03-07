@@ -5,7 +5,9 @@ records and audit log events in the admin section of the dashboard.
 
 Example::
 
-    from dashboard.callbacks.table_builders import _build_users_table, _build_audit_table
+    from dashboard.callbacks.table_builders import (
+        _build_users_table, _build_audit_table,
+    )
 """
 
 import json

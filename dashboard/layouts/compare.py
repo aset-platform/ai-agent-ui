@@ -28,7 +28,7 @@ def compare_layout() -> html.Div:
 
     return html.Div(
         [
-            # ── Controls ──────────────────────────────────────────────────────
+            # ── Controls ─────────────────────────────────────────────────
             dbc.Row(
                 [
                     dbc.Col(
@@ -62,7 +62,7 @@ def compare_layout() -> html.Div:
                     style={"height": "450px"},
                 ),
             ),
-            # ── Metrics table + heatmap ────────────────────────────────────────
+            # ── Metrics table + heatmap ─────────────────────────────────────
             dbc.Row(
                 [
                     dbc.Col(

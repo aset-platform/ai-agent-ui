@@ -5,21 +5,24 @@ summary statistics, price targets, model accuracy, and forecast summaries.
 
 Example::
 
-    from dashboard.callbacks.card_builders import _build_stats_cards, _build_target_cards
+    from dashboard.callbacks.card_builders import (
+        _build_stats_cards, _build_target_cards,
+    )
 """
 
 import logging
 import math
 from datetime import date
-from typing import Any, Optional
+from typing import Any
 
 import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import html
 
-from dashboard.callbacks.utils import _currency_symbol, _get_currency
+from dashboard.callbacks.utils import _get_currency
 
-# Module-level logger; intentionally kept at module scope for this utility module.
+# Module-level logger; intentionally kept at module
+# scope for this utility module.
 _logger = logging.getLogger(__name__)
 
 
@@ -128,7 +131,10 @@ def _build_target_cards(
                     [
                         dbc.CardHeader(
                             label_map[key],
-                            className=f"text-center bg-transparent border-{color_map[key]}",
+                            className=(
+                                "text-center bg-transparent"
+                                f" border-{color_map[key]}"
+                            ),
                         ),
                         dbc.CardBody(
                             [
@@ -138,10 +144,16 @@ def _build_target_cards(
                                 ),
                                 html.P(
                                     f"{sign}{t['pct_change']:.1f}%",
-                                    className=f"text-center fw-bold mb-1 {text_color}",
+                                    className=(
+                                        "text-center fw-bold"
+                                        f" mb-1 {text_color}"
+                                    ),
                                 ),
                                 html.Small(
-                                    f"{sym}{t['lower']:,} – {sym}{t['upper']:,}",
+                                    (
+                                        f"{sym}{t['lower']:,}"
+                                        f" – {sym}{t['upper']:,}"
+                                    ),
                                     className="text-muted d-block text-center",
                                 ),
                             ]

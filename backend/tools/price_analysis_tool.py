@@ -109,35 +109,60 @@ def analyse_stock_price(ticker: str) -> str:
         }
         repo.insert_analysis_summary(ticker, _iceberg_summary)
 
+        ath = stats["all_time_high"]
+        ath_d = stats["all_time_high_date"]
+        atl = stats["all_time_low"]
+        atl_d = stats["all_time_low_date"]
+        tr = stats["total_return_pct"]
+        aar = stats["avg_annual_return_pct"]
+        vol = movement["annualized_volatility_pct"]
+        sr = movement["sharpe_ratio"]
+        bull = movement["bull_phase_pct"]
+        bear = movement["bear_phase_pct"]
+        mdd = movement["max_drawdown_pct"]
+        mdd_d = movement["max_drawdown_duration_days"]
+        sup = movement["support_levels"]
+        res = movement["resistance_levels"]
+        bm = stats["best_month"]
+        bmr = stats["best_month_return_pct"]
+        wm = stats["worst_month"]
+        wmr = stats["worst_month_return_pct"]
+        by = stats["best_year"]
+        byr = stats["best_year_return_pct"]
+        wy = stats["worst_year"]
+        wyr = stats["worst_year_return_pct"]
         report = (
             f"=== PRICE ANALYSIS: {ticker} ===\n\n"
             f"PRICE SUMMARY\n"
             f"  Current Price   : {sym}{stats['current_price']}\n"
-            f"  All Time High   : {sym}{stats['all_time_high']} ({stats['all_time_high_date']})\n"
-            f"  All Time Low    : {sym}{stats['all_time_low']} ({stats['all_time_low_date']})\n"
-            f"  10Y Total Return: {stats['total_return_pct']:+.1f}%\n"
-            f"  Avg Annual Ret  : {stats['avg_annual_return_pct']:+.1f}%\n\n"
+            f"  All Time High   : {sym}{ath} ({ath_d})\n"
+            f"  All Time Low    : {sym}{atl} ({atl_d})\n"
+            f"  10Y Total Return: {tr:+.1f}%\n"
+            f"  Avg Annual Ret  : {aar:+.1f}%\n\n"
             f"TECHNICAL INDICATORS\n"
-            f"  SMA 50          : {sym}{stats['sma_50']} ({stats['sma_50_signal']})\n"
-            f"  SMA 200         : {sym}{stats['sma_200']} ({stats['sma_200_signal']})\n"
-            f"  RSI (14)        : {stats['rsi_14']} — {stats['rsi_signal']}\n"
+            f"  SMA 50          : {sym}{stats['sma_50']}"
+            f" ({stats['sma_50_signal']})\n"
+            f"  SMA 200         : {sym}{stats['sma_200']}"
+            f" ({stats['sma_200_signal']})\n"
+            f"  RSI (14)        : {stats['rsi_14']}"
+            f" — {stats['rsi_signal']}\n"
             f"  MACD            : {stats['macd_signal']}\n"
-            f"  Volatility      : {movement['annualized_volatility_pct']}% annualised\n"
-            f"  Sharpe Ratio    : {movement['sharpe_ratio']}\n\n"
+            f"  Volatility      : {vol}% annualised\n"
+            f"  Sharpe Ratio    : {sr}\n\n"
             f"MARKET PHASES (vs SMA 200)\n"
-            f"  Bull phase      : {movement['bull_phase_pct']}% of time\n"
-            f"  Bear phase      : {movement['bear_phase_pct']}% of time\n\n"
+            f"  Bull phase      : {bull}% of time\n"
+            f"  Bear phase      : {bear}% of time\n\n"
             f"DRAWDOWN\n"
-            f"  Max Drawdown    : {movement['max_drawdown_pct']:.1f}%\n"
-            f"  Max DD Duration : {movement['max_drawdown_duration_days']} trading days\n\n"
+            f"  Max Drawdown    : {mdd:.1f}%\n"
+            f"  Max DD Duration : {mdd_d} trading days\n\n"
             f"KEY LEVELS (last 252 days)\n"
-            f"  Support         : {movement['support_levels']}\n"
-            f"  Resistance      : {movement['resistance_levels']}\n\n"
+            f"  Support         : {sup}\n"
+            f"  Resistance      : {res}\n\n"
             f"CALENDAR PERFORMANCE\n"
-            f"  Best Month      : {stats['best_month']} ({stats['best_month_return_pct']:+.1f}%)\n"
-            f"  Worst Month     : {stats['worst_month']} ({stats['worst_month_return_pct']:+.1f}%)\n"
-            f"  Best Year       : {stats['best_year']} ({stats['best_year_return_pct']:+.1f}%)\n"
-            f"  Worst Year      : {stats['worst_year']} ({stats['worst_year_return_pct']:+.1f}%)\n\n"
+            f"  Best Month      : {bm} ({bmr:+.1f}%)\n"
+            f"  Worst Month     : {wm} ({wmr:+.1f}%)\n"
+            f"  Best Year       : {by} ({byr:+.1f}%)\n"
+            f"  Worst Year      : {wy} ({wyr:+.1f}%)\n\n"
             f"CHART\n"
             f"  Saved to: {chart_path}\n"
         )

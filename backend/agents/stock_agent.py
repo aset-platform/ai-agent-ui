@@ -3,19 +3,18 @@
 :class:`StockAgent` extends :class:`~agents.base.BaseAgent` and is wired
 with eight financial analysis tools:
 
-- :func:`~tools.stock_data_tool.fetch_stock_data` — smart delta-fetch OHLCV data
+- :func:`~tools.stock_data_tool.fetch_stock_data` — delta-fetch
 - :func:`~tools.stock_data_tool.get_stock_info` — company metadata
-- :func:`~tools.stock_data_tool.load_stock_data` — inspect locally stored data
-- :func:`~tools.stock_data_tool.fetch_multiple_stocks` — batch fetch multiple tickers
-- :func:`~tools.stock_data_tool.get_dividend_history` — dividend payment history
-- :func:`~tools.stock_data_tool.list_available_stocks` — list the local registry
-- :func:`~tools.price_analysis_tool.analyse_stock_price` — technical indicators + chart
-- :func:`~tools.forecasting_tool.forecast_stock` — Prophet forecast + chart
+- :func:`~tools.stock_data_tool.load_stock_data` — inspect data
+- :func:`~tools.stock_data_tool.fetch_multiple_stocks` — batch fetch
+- :func:`~tools.stock_data_tool.get_dividend_history` — dividends
+- :func:`~tools.stock_data_tool.list_available_stocks` — registry
+- :func:`~tools.price_analysis_tool.analyse_stock_price` — analysis
+- :func:`~tools.forecasting_tool.forecast_stock` — forecast
 
-The agentic loop (inherited from :class:`~agents.base.BaseAgent`) drives
-the LLM through the **fetch → analyse → forecast** pipeline automatically.
-The agent uses :class:`~llm_fallback.FallbackLLM` which tries Groq first and
-automatically falls back to Anthropic Claude on rate-limit or connection errors.
+The agentic loop (inherited from BaseAgent) drives the LLM through
+the **fetch -> analyse -> forecast** pipeline automatically.
+The agent uses FallbackLLM (Groq-first, Anthropic fallback).
 
 Typical usage::
 
@@ -36,31 +35,48 @@ from tools.registry import ToolRegistry
 # System prompt
 # ---------------------------------------------------------------------------
 
-_STOCK_SYSTEM_PROMPT = """You are a professional stock market analyst with deep expertise \
-in technical analysis and time-series price forecasting.
-
-STANDARD PIPELINE — follow this order for every single-stock request:
-1. Call fetch_stock_data to download/update local OHLCV data (handles delta automatically).
-2. Call get_stock_info to retrieve company metadata (name, sector, market cap, PE ratio).
-3. Call analyse_stock_price for full technical analysis and chart generation.
-4. Call forecast_stock for Prophet price targets and forecast chart.
-5. Call search_market_news with a query like "{TICKER} latest news earnings analyst 2026" \
-to include recent developments in the report.
-6. Synthesise all results into a clear, structured report.
-
-COMPARISON PIPELINE — for multi-stock requests:
-1. Call fetch_multiple_stocks with a comma-separated list of tickers.
-2. For each ticker: call analyse_stock_price then forecast_stock.
-3. Present a side-by-side comparison table sorted by 6-month upside potential.
-
-RULES:
-- Use exact ticker symbols (e.g. AAPL, TSLA, RELIANCE.NS, MSFT).
-- Always include chart file paths in your response so the user can open them.
-- Present price targets at 3, 6, and 9 month marks with percentage change.
-- State sentiment clearly: Bullish (>+10%), Neutral, or Bearish (<-10%).
-- If a ticker returns an error, explain it and suggest the correct format.
-- If data is already up to date, skip re-fetching and proceed to analysis.
-- Never fabricate prices or statistics — only report what the tools return."""
+_STOCK_SYSTEM_PROMPT = (
+    "You are a professional stock market analyst with "
+    "deep expertise in technical analysis and "
+    "time-series price forecasting.\n\n"
+    "STANDARD PIPELINE — follow this order for every "
+    "single-stock request:\n"
+    "1. Call fetch_stock_data to download/update local "
+    "OHLCV data (handles delta automatically).\n"
+    "2. Call get_stock_info to retrieve company metadata "
+    "(name, sector, market cap, PE ratio).\n"
+    "3. Call analyse_stock_price for full technical "
+    "analysis and chart generation.\n"
+    "4. Call forecast_stock for Prophet price targets "
+    "and forecast chart.\n"
+    "5. Call search_market_news with a query like "
+    '"{TICKER} latest news earnings analyst 2026" '
+    "to include recent developments in the report.\n"
+    "6. Synthesise all results into a clear, "
+    "structured report.\n\n"
+    "COMPARISON PIPELINE — for multi-stock requests:\n"
+    "1. Call fetch_multiple_stocks with a "
+    "comma-separated list of tickers.\n"
+    "2. For each ticker: call analyse_stock_price "
+    "then forecast_stock.\n"
+    "3. Present a side-by-side comparison table "
+    "sorted by 6-month upside potential.\n\n"
+    "RULES:\n"
+    "- Use exact ticker symbols "
+    "(e.g. AAPL, TSLA, RELIANCE.NS, MSFT).\n"
+    "- Always include chart file paths in your "
+    "response so the user can open them.\n"
+    "- Present price targets at 3, 6, and 9 month "
+    "marks with percentage change.\n"
+    "- State sentiment clearly: Bullish (>+10%), "
+    "Neutral, or Bearish (<-10%).\n"
+    "- If a ticker returns an error, explain it "
+    "and suggest the correct format.\n"
+    "- If data is already up to date, skip "
+    "re-fetching and proceed to analysis.\n"
+    "- Never fabricate prices or statistics "
+    "— only report what the tools return."
+)
 
 # ---------------------------------------------------------------------------
 # Agent class and factory
@@ -68,12 +84,12 @@ RULES:
 
 
 class StockAgent(BaseAgent):
-    """Stock analysis agent with Groq-first / Anthropic-fallback LLM.
+    """Stock analysis agent with Groq/Anthropic fallback.
 
-    Inherits the complete agentic loop from :class:`~agents.base.BaseAgent`
-    and only overrides :meth:`_build_llm` to supply :class:`~llm_fallback.FallbackLLM`.
-    The system prompt in :data:`_STOCK_SYSTEM_PROMPT` guides the LLM through
-    the fetch → analyse → forecast pipeline automatically.
+    Inherits the agentic loop from BaseAgent and overrides
+    :meth:`_build_llm` to supply FallbackLLM.  The system
+    prompt guides the LLM through the fetch -> analyse ->
+    forecast pipeline automatically.
     """
 
     def _build_llm(self) -> FallbackLLM:
@@ -123,7 +139,7 @@ def create_stock_agent(tool_registry: ToolRegistry) -> StockAgent:
         description=(
             "Analyses stocks with 10-year OHLCV data, technical indicators "
             "(SMA, RSI, MACD, Bollinger Bands), Prophet price forecasting, "
-            "and interactive Plotly charts. Supports single stocks and comparisons."
+            "and interactive Plotly charts."
         ),
         model="openai/gpt-oss-120b",
         temperature=0.0,

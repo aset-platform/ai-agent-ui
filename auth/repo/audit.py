@@ -1,4 +1,4 @@
-"""Audit log append and query operations for the ``auth.audit_log`` Iceberg table.
+"""Audit log append and query operations for auth.
 
 Functions
 ---------
@@ -17,7 +17,8 @@ import pyarrow as pa
 from auth.repo.catalog import audit_table
 from auth.repo.schemas import _AUDIT_PA_SCHEMA, _from_ts, _now_utc, _to_ts
 
-# Module-level logger; kept at module scope intentionally (not a mutable data global).
+# Module-level logger; kept at module scope intentionally
+# (not a mutable data global).
 logger = logging.getLogger(__name__)
 
 

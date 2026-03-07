@@ -30,7 +30,7 @@ def forecast_layout() -> html.Div:
 
     return html.Div(
         [
-            # ── Controls ──────────────────────────────────────────────────────
+            # ── Controls ─────────────────────────────────────────────────
             dbc.Row(
                 [
                     dbc.Col(
@@ -83,10 +83,12 @@ def forecast_layout() -> html.Div:
                         className="mb-3",
                     ),
                 ],
-                className="bg-light rounded p-3 mb-4 align-items-end border",
+                className=(
+                    "bg-light rounded p-3" " mb-4 align-items-end border"
+                ),
             ),
             # ── Status (inline with button via dcc.Loading) ────────────────
-            # ── Forecast chart ────────────────────────────────────────────────
+            # ── Forecast chart ─────────────────────────────────────────────
             dcc.Loading(
                 id="loading-forecast",
                 type="circle",
@@ -97,11 +99,11 @@ def forecast_layout() -> html.Div:
                     style={"height": "550px"},
                 ),
             ),
-            # ── Price target cards ────────────────────────────────────────────
+            # ── Price target cards ─────────────────────────────────────────
             html.Div(id="forecast-target-cards", className="mt-4"),
-            # ── Accuracy row ──────────────────────────────────────────────────
+            # ── Accuracy row ─────────────────────────────────────────────
             html.Div(id="forecast-accuracy-row", className="mt-3"),
-            # ── Hidden stores ─────────────────────────────────────────────────
+            # ── Hidden stores ──────────────────────────────────────────────
             dcc.Store(id="forecast-refresh-store", data=0),
             dcc.Store(id="accuracy-store", data=None),
         ]

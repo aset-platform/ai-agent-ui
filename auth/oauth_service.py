@@ -29,7 +29,7 @@ Both packages are listed in ``backend/requirements.txt``.
 import logging
 import secrets
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 from urllib.parse import urlencode
 
 import httpx
@@ -273,7 +273,7 @@ class OAuthService:
     # ------------------------------------------------------------------
 
     def exchange_facebook_code(self, code: str) -> Dict[str, Any]:
-        """Exchange a Facebook authorization code for user identity information.
+        """Exchange a Facebook code for user info.
 
         Two HTTP calls are made:
         1. Exchange the code for an access token at the Facebook token URL.

@@ -3,7 +3,7 @@
 Provides functions for looking up and updating ticker metadata in the
 ``stocks.registry`` Iceberg table — the single source of truth.
 
-All accesses to the repository go through ``tools._stock_shared._require_repo()``
+All accesses go through ``tools._stock_shared._require_repo()``
 so that monkeypatching works in tests.
 
 Functions
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pandas as pd
 
-# Module-level logger — kept here as a module-level constant (not a mutable global).
+# Module-level logger (not a mutable global).
 _logger = logging.getLogger(__name__)
 
 

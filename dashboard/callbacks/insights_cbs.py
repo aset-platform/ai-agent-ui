@@ -21,7 +21,6 @@ import plotly.graph_objects as go
 from dash import Input, Output, html, no_update
 
 from dashboard.callbacks.iceberg import (
-    _get_analysis_summary_cached,
     _get_analysis_with_gaps_filled,
     _get_company_info_cached,
     _get_iceberg_repo,
@@ -34,7 +33,8 @@ from dashboard.callbacks.sort_helpers import (
     register_sort_callback,
 )
 
-# Module-level logger; kept at module scope as a private-style name per convention.
+# Module-level logger; kept at module scope as a
+# private-style name per convention.
 _logger = logging.getLogger(__name__)
 
 
@@ -129,7 +129,9 @@ def register(app) -> None:
         if df.empty:
             return (
                 dbc.Alert(
-                    "No analysis data available. Analyse stocks via the chat agent first.",
+                    "No analysis data available."
+                    " Analyse stocks via the"
+                    " chat agent first.",
                     color="warning",
                     className="mt-3",
                 ),
@@ -221,7 +223,8 @@ def register(app) -> None:
                     display_df[num_col], errors="coerce"
                 ).round(2)
 
-        # Fix #5: replace iterrows() with to_dict("records") for faster iteration
+        # Fix #5: replace iterrows() with to_dict("records")
+        # for faster iteration
         rows_html = []
         for record in display_df.to_dict("records"):
             cells = []
@@ -437,7 +440,8 @@ def register(app) -> None:
                 ]
             )
 
-        # Fix #5: replace iterrows() with to_dict("records") for faster iteration
+        # Fix #5: replace iterrows() with to_dict("records")
+        # for faster iteration
         rows_html = []
         for row in df.to_dict("records"):
             sentiment = row.get("sentiment", "—") or "—"
@@ -624,7 +628,8 @@ def register(app) -> None:
             "CAD": "CA$",
         }
 
-        # Fix #5: replace iterrows() with to_dict("records") for faster iteration
+        # Fix #5: replace iterrows() with to_dict("records")
+        # for faster iteration
         rows_html = []
         for row in page_df.to_dict("records"):
             currency = str(row.get("currency", "USD") or "USD")
@@ -788,7 +793,8 @@ def register(app) -> None:
                     display_df[num_col], errors="coerce"
                 ).round(2)
 
-        # Fix #5: replace iterrows() with to_dict("records") for faster iteration
+        # Fix #5: replace iterrows() with to_dict("records")
+        # for faster iteration
         rows_html = [
             html.Tr(
                 [

@@ -2,10 +2,11 @@
 
 :class:`GeneralAgent` is the default agent registered at server startup.
 It extends :class:`~agents.base.BaseAgent` and is wired with two tools:
-:func:`~tools.time_tool.get_current_time` and :func:`~tools.search_tool.search_web`.
+:func:`~tools.time_tool.get_current_time` and
+:func:`~tools.search_tool.search_web`.
 
-The agent uses :class:`~llm_fallback.FallbackLLM` which tries Groq first and
-automatically falls back to Anthropic Claude on rate-limit or connection errors.
+The agent uses :class:`~llm_fallback.FallbackLLM` which tries Groq
+first, falling back to Anthropic Claude on rate-limit errors.
 
 Typical usage::
 
@@ -24,10 +25,10 @@ from tools.registry import ToolRegistry
 
 
 class GeneralAgent(BaseAgent):
-    """General-purpose conversational agent with Groq-first / Anthropic-fallback LLM.
+    """General-purpose agent with Groq/Anthropic fallback LLM.
 
-    Inherits the complete agentic loop from :class:`~agents.base.BaseAgent`
-    and only overrides :meth:`_build_llm` to supply :class:`~llm_fallback.FallbackLLM`.
+    Inherits the agentic loop from :class:`~agents.base.BaseAgent`
+    and overrides :meth:`_build_llm` to supply FallbackLLM.
     """
 
     def _build_llm(self) -> FallbackLLM:
@@ -50,11 +51,11 @@ class GeneralAgent(BaseAgent):
 
 
 def create_general_agent(tool_registry: ToolRegistry) -> GeneralAgent:
-    """Factory function that builds a :class:`GeneralAgent` with default settings.
+    """Build a :class:`GeneralAgent` with default settings.
 
-    Constructs an :class:`~agents.base.AgentConfig` with the ``"general"``
-    agent ID, registers the two default tools, and returns a fully
-    initialised :class:`GeneralAgent`.
+    Constructs an :class:`~agents.base.AgentConfig` with
+    ``"general"`` agent ID, registers the two default tools,
+    and returns a fully initialised :class:`GeneralAgent`.
 
     Args:
         tool_registry: The shared :class:`~tools.registry.ToolRegistry`
@@ -76,7 +77,10 @@ def create_general_agent(tool_registry: ToolRegistry) -> GeneralAgent:
     config = AgentConfig(
         agent_id="general",
         name="General Agent",
-        description="A general-purpose agent that can answer questions and search the web.",
+        description=(
+            "A general-purpose agent that can answer"
+            " questions and search the web."
+        ),
         model="openai/gpt-oss-120b",
         temperature=0.0,
         tool_names=["get_current_time", "search_web"],

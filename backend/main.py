@@ -59,24 +59,24 @@ _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from agents.general_agent import create_general_agent
-from agents.registry import AgentRegistry
-from agents.stock_agent import create_stock_agent
-from config import Settings, get_settings
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from logging_config import setup_logging
-from models import ChatRequest, ChatResponse
-from tools.agent_tool import create_search_market_news_tool
-from tools.forecasting_tool import forecast_stock
-from tools.price_analysis_tool import analyse_stock_price
-from tools.registry import ToolRegistry
-from tools.search_tool import search_web
+from agents.general_agent import create_general_agent  # noqa: E402
+from agents.registry import AgentRegistry  # noqa: E402
+from agents.stock_agent import create_stock_agent  # noqa: E402
+from config import Settings, get_settings  # noqa: E402
+from fastapi import FastAPI, HTTPException  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import StreamingResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+from logging_config import setup_logging  # noqa: E402
+from models import ChatRequest, ChatResponse  # noqa: E402
+from tools.agent_tool import create_search_market_news_tool  # noqa: E402
+from tools.forecasting_tool import forecast_stock  # noqa: E402
+from tools.price_analysis_tool import analyse_stock_price  # noqa: E402
+from tools.registry import ToolRegistry  # noqa: E402
+from tools.search_tool import search_web  # noqa: E402
 
 # === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
-from tools.stock_data_tool import (
+from tools.stock_data_tool import (  # noqa: E402
     fetch_multiple_stocks,
     fetch_quarterly_results,
     fetch_stock_data,
@@ -85,9 +85,9 @@ from tools.stock_data_tool import (
     list_available_stocks,
     load_stock_data,
 )
-from tools.time_tool import get_current_time
+from tools.time_tool import get_current_time  # noqa: E402
 
-from auth.api import create_auth_router
+from auth.api import create_auth_router  # noqa: E402
 
 # === END STOCK AGENT ROUTING ===
 
@@ -101,7 +101,8 @@ class ChatServer:
     Instantiating this class registers all tools and agents, then builds
     the ASGI application.  The order of operations in :meth:`__init__` is
     significant: tools must be registered before agents because agents
-    fetch their tools from the registry during :meth:`~agents.base.BaseAgent._setup`.
+    fetch their tools from the registry during
+    :meth:`~agents.base.BaseAgent._setup`.
 
     Attributes:
         logger: Logger instance named after this module.
@@ -162,7 +163,8 @@ class ChatServer:
         general = create_general_agent(self.tool_registry)
         self.agent_registry.register(general)
 
-        # Register news tool now that general agent exists (stock agent depends on it)
+        # Register news tool now that general agent exists
+        # (stock agent depends on it)
         search_market_news = create_search_market_news_tool(general)
         self.tool_registry.register(search_market_news)
 

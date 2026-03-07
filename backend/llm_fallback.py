@@ -110,7 +110,7 @@ class FallbackLLM:
         return self
 
     def invoke(self, messages: List[Any], **kwargs: Any) -> Any:
-        """Invoke Groq; fall back to Anthropic on rate-limit or connection errors.
+        """Invoke Groq; fall back to Anthropic on errors.
 
         When Groq is not configured, Anthropic is called directly without
         any fallback attempt.

@@ -2,7 +2,7 @@
 
 Functions
 ---------
-- :func:`_create_analysis_chart` — build and save a 3-panel candlestick/RSI chart.
+- :func:`_create_analysis_chart` — 3-panel candlestick/RSI chart.
 """
 
 import logging

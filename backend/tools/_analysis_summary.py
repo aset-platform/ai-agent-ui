@@ -2,7 +2,7 @@
 
 Functions
 ---------
-- :func:`_generate_summary_stats` — all-time high/low, calendar perf, RSI/MACD signals.
+- :func:`_generate_summary_stats` — ATH/ATL, calendar perf, signals.
 """
 
 import logging

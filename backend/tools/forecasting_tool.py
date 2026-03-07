@@ -37,7 +37,7 @@ from tools._forecast_model import (
 from tools._forecast_persist import _save_forecast
 from validation import validate_ticker
 
-# Module-level logger — must remain module-level for LangChain @tool compatibility
+# Module-level logger — required for LangChain @tool
 _logger = logging.getLogger(__name__)
 
 # Re-export so tests can still monkeypatch via forecasting_tool.*

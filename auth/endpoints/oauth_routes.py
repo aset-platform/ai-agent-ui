@@ -21,7 +21,8 @@ from auth.models import (
 )
 from auth.service import AuthService
 
-# Module-level logger; cannot be moved into a class as this module uses plain functions.
+# Module-level logger; cannot be moved into a class
+# as this module uses plain functions.
 _logger = logging.getLogger(__name__)
 
 
@@ -65,7 +66,8 @@ def register(router: APIRouter) -> None:
             code_challenge: PKCE challenge (base64url SHA-256 of the verifier).
 
         Returns:
-            :class:`~auth.models.OAuthAuthorizeResponse` with ``state`` and ``authorize_url``.
+            :class:`~auth.models.OAuthAuthorizeResponse`
+            with ``state`` and ``authorize_url``.
 
         Raises:
             HTTPException: 400 if *provider* is not supported.

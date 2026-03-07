@@ -1,4 +1,7 @@
-"""Backward-compatible shim — re-exports create_auth_router from auth.endpoints."""
+"""Backward-compatible shim.
+
+Re-exports create_auth_router from auth.endpoints.
+"""
 
 import logging
 

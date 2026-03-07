@@ -33,7 +33,9 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # _UNSAFE_SQL: compiled pattern for common SQL injection sequences
 _UNSAFE_SQL = re.compile(
-    r"(--|/\*|\*/|';\s*|\";\s*|union\s+select|drop\s+table|or\s+1\s*=\s*1|or\s+'1'\s*=\s*'1')",
+    r"(--|/\*|\*/|';\s*|\";\s*|union\s+select"
+    r"|drop\s+table|or\s+1\s*=\s*1"
+    r"|or\s+'1'\s*=\s*'1')",
     re.IGNORECASE,
 )
 
@@ -56,7 +58,7 @@ def _is_valid_email(value: str) -> bool:
 def _check_input_safety(
     value: str, field: str, max_len: int = 200
 ) -> Optional[str]:
-    """Return an error string if *value* contains unsafe content, else ``None``.
+    """Return an error string if *value* is unsafe, else ``None``.
 
     Checks performed (in order): max length, HTML characters, null bytes,
     XSS-style URI schemes, and common SQL injection sequences.
@@ -146,7 +148,9 @@ def _load_currency_from_iceberg(ticker: str) -> str:
 
 
 def _get_currency(ticker: str) -> str:
-    """Return the currency symbol for *ticker*, cached for ``_CURRENCY_TTL`` seconds.
+    """Return the currency symbol for *ticker*.
+
+    Cached for ``_CURRENCY_TTL`` seconds.
 
     Reads from Iceberg company_info on first call (or after TTL expiry);
     subsequent calls within the TTL window return the cached symbol.

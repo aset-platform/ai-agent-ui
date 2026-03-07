@@ -11,9 +11,11 @@ Write semantics
 - **company_info** — append-only snapshots; never updated or deleted.
 - **ohlcv** — append new rows; deduplication on ``(ticker, date)`` at
   application level (existing rows are never re-inserted).
-- **dividends** — same as ohlcv: append, deduplicate on ``(ticker, ex_date)``.
+- **dividends** — same as ohlcv: append, deduplicate
+  on ``(ticker, ex_date)``.
 - **technical_indicators** — upsert per ``(ticker, date)`` (copy-on-write for
-  the ticker partition; acceptable for typical dataset sizes < 5 000 rows/ticker).
+  the ticker partition; acceptable for typical
+  dataset sizes < 5 000 rows/ticker).
 - **analysis_summary** — append-only snapshots.
 - **forecast_runs** — append-only per ``(ticker, horizon_months, run_date)``.
 - **forecasts** — append per ``(ticker, horizon_months, run_date)``; existing
@@ -35,7 +37,10 @@ Usage::
     from datetime import date
 
     repo = StockRepository()
-    repo.upsert_registry("AAPL", date.today(), 2500, date(2015,1,2), date(2026,2,28), "us")
+    repo.upsert_registry(
+        "AAPL", date.today(), 2500,
+        date(2015,1,2), date(2026,2,28), "us",
+    )
     df = repo.get_ohlcv("AAPL")
 """
 
@@ -204,7 +209,8 @@ class StockRepository:
             return tbl.scan(row_filter=EqualTo("ticker", ticker)).to_pandas()
         except Exception as exc:
             _logger.warning(
-                "Predicate push-down failed for %s ticker=%s (%s); falling back to full scan.",
+                "Predicate push-down failed for %s"
+                " ticker=%s (%s); falling back.",
                 identifier,
                 ticker,
                 exc,
@@ -245,7 +251,8 @@ class StockRepository:
             ).to_pandas()
         except Exception as exc:
             _logger.warning(
-                "Compound predicate failed for %s (%s); falling back to full scan.",
+                "Compound predicate failed for %s"
+                " (%s); falling back to full scan.",
                 identifier,
                 exc,
             )
@@ -308,7 +315,8 @@ class StockRepository:
 
         Args:
             ticker: Stock ticker symbol (already uppercased).
-            last_fetch_date: Date of the most recent successful Yahoo Finance pull.
+            last_fetch_date: Date of the most recent
+                successful Yahoo Finance pull.
             total_rows: Total OHLCV row count for this ticker.
             date_range_start: Earliest trading date in OHLCV.
             date_range_end: Most recent trading date in OHLCV.
@@ -418,7 +426,8 @@ class StockRepository:
     def check_existing_data(self, ticker: str) -> Optional[Dict]:
         """Look up a single ticker in the registry.
 
-        Returns a dict matching the legacy JSON shape (with ``last_fetch_date``,
+        Returns a dict matching the legacy JSON shape
+        (with ``last_fetch_date``,
         ``total_rows``, ``date_range``, ``file_path``) or ``None`` if the
         ticker is not registered.
 
@@ -465,7 +474,8 @@ class StockRepository:
 
         Args:
             ticker: Stock ticker symbol.
-            as_of_date: Date to check freshness against (typically ``date.today()``).
+            as_of_date: Date to check freshness
+                against (typically ``date.today()``).
 
         Returns:
             Dict of company info fields if the latest snapshot's ``fetched_at``
@@ -484,7 +494,8 @@ class StockRepository:
         return latest.to_dict()
 
     def get_currency(self, ticker: str) -> str:
-        """Return the ISO currency code for *ticker* from the latest company info.
+        """Return the ISO currency code for *ticker*
+        from the latest company info.
 
         Falls back to ``"USD"`` if no company info snapshot exists.
 
@@ -508,7 +519,8 @@ class StockRepository:
 
         Args:
             ticker: Stock ticker symbol (already uppercased).
-            info: Dict from ``yf.Ticker(ticker).info`` plus optional extra fields.
+            info: Dict from ``yf.Ticker(ticker).info``
+                plus optional extra fields.
         """
         row = pa.table(
             {
@@ -667,7 +679,8 @@ class StockRepository:
     # ------------------------------------------------------------------
 
     def insert_ohlcv(self, ticker: str, df: pd.DataFrame) -> int:
-        """Append new OHLCV rows for *ticker*, skipping existing (ticker, date) pairs.
+        """Append new OHLCV rows for *ticker*,
+        skipping existing (ticker, date) pairs.
 
         Uses predicate push-down to fetch only existing dates for this ticker,
         avoiding a full table scan.  Deduplication uses :class:`datetime.date`
@@ -675,7 +688,8 @@ class StockRepository:
 
         Args:
             ticker: Stock ticker symbol (already uppercased).
-            df: DataFrame with DatetimeIndex and columns Open, High, Low, Close,
+            df: DataFrame with DatetimeIndex and
+                columns Open, High, Low, Close,
                 Adj Close (optional), Volume as returned by yfinance.
 
         Returns:
@@ -684,7 +698,8 @@ class StockRepository:
         if df.empty:
             return 0
 
-        # Normalise index to date objects (Fix #10: use date objects not strings)
+        # Normalise index to date objects
+        # (Fix #10: use date objects not strings)
         all_dates = pd.to_datetime(
             df.index
         ).date  # numpy array of date objects
@@ -909,14 +924,16 @@ class StockRepository:
     def insert_dividends(
         self, ticker: str, df: pd.DataFrame, currency: str = "USD"
     ) -> int:
-        """Append dividend rows for *ticker*, skipping existing (ticker, ex_date) pairs.
+        """Append dividend rows for *ticker*,
+        skipping existing (ticker, ex_date) pairs.
 
         Uses predicate push-down for the existing-date check.  Deduplication
         uses :class:`datetime.date` objects (not string conversion).
 
         Args:
             ticker: Stock ticker symbol.
-            df: DataFrame with columns ``date`` and ``dividend`` (from yfinance).
+            df: DataFrame with columns ``date``
+                and ``dividend`` (from yfinance).
             currency: ISO currency code for this ticker, e.g. ``"INR"``.
                 Defaults to ``"USD"``.
 
@@ -926,7 +943,8 @@ class StockRepository:
         if df.empty:
             return 0
 
-        # Fix #1 + #2: load table once; predicate push-down for existing ex_dates
+        # Fix #1 + #2: load table once;
+        # predicate push-down for existing ex_dates
         try:
             from pyiceberg.expressions import EqualTo
 
@@ -1139,7 +1157,8 @@ class StockRepository:
 
         Args:
             ticker: Stock ticker symbol.
-            summary: Dict with keys matching the ``stocks.analysis_summary`` schema.
+            summary: Dict with keys matching the
+                ``stocks.analysis_summary`` schema.
                      ``analysis_date`` defaults to today if not provided.
         """
         today = summary.get("analysis_date") or date.today()
@@ -1268,7 +1287,8 @@ class StockRepository:
         return result
 
     def get_analysis_history(self, ticker: str) -> pd.DataFrame:
-        """Return all analysis summary rows for *ticker* sorted by date ascending.
+        """Return all analysis summary rows for
+        *ticker* sorted by date ascending.
 
         Args:
             ticker: Stock ticker symbol.
@@ -1389,7 +1409,8 @@ class StockRepository:
     def get_latest_forecast_run(
         self, ticker: str, horizon_months: int
     ) -> Optional[Dict[str, Any]]:
-        """Return the most recent forecast run for *ticker* and *horizon_months*.
+        """Return the most recent forecast run for
+        *ticker* and *horizon_months*.
 
         Args:
             ticker: Stock ticker symbol.
@@ -1451,7 +1472,8 @@ class StockRepository:
     ) -> None:
         """Append the full Prophet output series for a forecast run.
 
-        Drops any existing rows for the same ``(ticker, horizon_months, run_date)``
+        Drops any existing rows for the same
+        ``(ticker, horizon_months, run_date)``
         before inserting to keep the table clean on re-runs.  Loads the table
         object only once to avoid a second catalog round-trip.
 
@@ -1459,7 +1481,8 @@ class StockRepository:
             ticker: Stock ticker symbol.
             horizon_months: Forecast horizon (3, 6, or 9).
             run_date: The date this forecast was run.
-            forecast_df: DataFrame with columns ``ds``, ``yhat``, ``yhat_lower``,
+            forecast_df: DataFrame with columns
+                ``ds``, ``yhat``, ``yhat_lower``,
                 ``yhat_upper`` as returned by Prophet.
         """
         if forecast_df.empty:

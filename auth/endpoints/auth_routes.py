@@ -26,7 +26,8 @@ from auth.models import (
 )
 from auth.service import AuthService
 
-# Module-level logger; mutable but intentionally module-scoped for consistent log attribution.
+# Module-level logger; mutable but intentionally
+# module-scoped for consistent log attribution.
 _logger = logging.getLogger(__name__)
 
 
@@ -52,7 +53,8 @@ def register(router: APIRouter) -> None:
             A :class:`~auth.models.TokenResponse`.
 
         Raises:
-            HTTPException: 401 if credentials are invalid or account is deactivated.
+            HTTPException: 401 if credentials are invalid
+                or account is deactivated.
         """
         repo = _helpers._get_repo()
         user = repo.get_by_email(str(body.email))
@@ -116,7 +118,7 @@ def register(router: APIRouter) -> None:
         body: RefreshRequest,
         service: AuthService = Depends(get_auth_service),
     ) -> TokenResponse:
-        """Exchange a valid refresh token for a new access + refresh token pair.
+        """Exchange a valid refresh token for new tokens.
 
         Args:
             body: Request body with ``refresh_token``.
@@ -211,7 +213,11 @@ def register(router: APIRouter) -> None:
             "Password reset requested by user_id=%s", current_user.user_id
         )
         return {
-            "detail": "Password reset token generated (development: token included in response).",
+            "detail": (
+                "Password reset token generated"
+                " (development: token included"
+                " in response)."
+            ),
             "reset_token": reset_token,
         }
 

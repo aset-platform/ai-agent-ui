@@ -15,7 +15,8 @@ from auth.repo.schemas import _now_utc
 from auth.repo.user_reads import get_by_email, get_by_id
 from auth.repo.user_writes import create, update
 
-# Module-level logger; kept at module scope as logging configuration is immutable.
+# Module-level logger; kept at module scope as logging
+# configuration is immutable.
 _logger = logging.getLogger(__name__)
 
 
@@ -71,7 +72,8 @@ def get_or_create_by_oauth(
 
     existing = get_by_oauth_sub(cat, provider, oauth_sub)
     if existing is not None:
-        # Only refresh the SSO avatar if the user has not uploaded a custom one.
+        # Only refresh the SSO avatar if the user has
+        # not uploaded a custom one.
         sso_updates = {"last_login_at": now}
         if not existing.get("profile_picture_url") and picture_url:
             sso_updates["profile_picture_url"] = picture_url

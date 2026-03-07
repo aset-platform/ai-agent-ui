@@ -59,7 +59,7 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
             iteration += 1
             if iteration > MAX_ITERATIONS:
                 agent.logger.warning(
-                    "Agent '%s' hit MAX_ITERATIONS (%d). Returning last response.",
+                    "Agent '%s' hit MAX_ITERATIONS (%d).",
                     agent.config.agent_id,
                     MAX_ITERATIONS,
                 )

@@ -63,7 +63,8 @@ def register(app: dash.Dash) -> None:
                 return resp.json()
             except Exception as exc:  # noqa: BLE001
                 _logger.warning(
-                    "load_user_profile: failed to decode JSON from /auth/me: %s",
+                    "load_user_profile: failed to decode"
+                    " JSON from /auth/me: %s",
                     exc,
                 )
                 return None

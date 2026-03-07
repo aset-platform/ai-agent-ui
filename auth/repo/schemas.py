@@ -33,7 +33,8 @@ _AUDIT_LOG_TABLE = f"{_NAMESPACE}.audit_log"
 # _TS is an immutable constant; kept module-level as a shared type reference.
 _TS = pa.timestamp("us")
 
-# _USERS_PA_SCHEMA is an immutable constant; kept module-level as a shared schema reference.
+# _USERS_PA_SCHEMA is an immutable constant; kept
+# module-level as a shared schema reference.
 _USERS_PA_SCHEMA = pa.schema(
     [
         pa.field("user_id", pa.string(), nullable=False),
@@ -54,7 +55,8 @@ _USERS_PA_SCHEMA = pa.schema(
     ]
 )
 
-# _AUDIT_PA_SCHEMA is an immutable constant; kept module-level as a shared schema reference.
+# _AUDIT_PA_SCHEMA is an immutable constant; kept
+# module-level as a shared schema reference.
 _AUDIT_PA_SCHEMA = pa.schema(
     [
         pa.field("event_id", pa.string(), nullable=False),

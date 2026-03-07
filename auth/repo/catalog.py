@@ -10,7 +10,7 @@ Functions
 
 import logging
 import os
-from typing import Any, Dict, Generator, List
+from typing import Any, Dict, List
 
 from auth.repo.schemas import _AUDIT_LOG_TABLE, _USERS_TABLE, _row_to_dict
 
@@ -65,11 +65,13 @@ def get_catalog(root: str):
         return cat
     except Exception as exc:
         _logger.warning(
-            "Absolute-URI catalog load failed (%s); falling back to load_catalog('local').",
+            "Absolute-URI catalog load failed (%s);"
+            " falling back to load_catalog('local').",
             exc,
         )
 
-    # Fallback: temporarily set cwd so the relative URI in .pyiceberg.yaml resolves.
+    # Fallback: temporarily set cwd so the relative URI
+    # in .pyiceberg.yaml resolves.
     orig_cwd = os.getcwd()
     try:
         os.chdir(root)
@@ -127,7 +129,8 @@ def scan_all_users(cat) -> List[Dict[str, Any]]:
     """
     tbl = users_table(cat)
     result: List[Dict[str, Any]] = []
-    # Fix #11: iterate over Arrow record batches instead of converting the whole
+    # Fix #11: iterate over Arrow record batches instead
+    # of converting the whole
     # table to a Python list in one shot — keeps peak memory proportional to a
     # single batch rather than all rows simultaneously.
     for batch in tbl.scan().to_arrow().to_batches():

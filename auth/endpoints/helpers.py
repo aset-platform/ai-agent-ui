@@ -20,18 +20,19 @@ from auth.models import UserResponse
 from auth.oauth_service import OAuthService
 from auth.repository import IcebergUserRepository
 
-# Module-level logger; cannot be moved into a class as these are module-level functions.
+# Module-level logger; cannot be moved into a class
+# as these are module-level functions.
 _logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
 def _get_repo() -> IcebergUserRepository:
-    """Return the application-wide :class:`~auth.repository.IcebergUserRepository`.
+    """Return the app-wide IcebergUserRepository.
 
     Constructed once and cached for the process lifetime.
 
     Returns:
-        The cached :class:`~auth.repository.IcebergUserRepository` instance.
+        The cached IcebergUserRepository instance.
     """
     return IcebergUserRepository()
 
@@ -49,13 +50,14 @@ def _get_oauth_svc() -> OAuthService:
 
 
 def _user_to_response(user: Dict[str, Any]) -> UserResponse:
-    """Convert a raw user dict from the repository to a :class:`~auth.models.UserResponse`.
+    """Convert a raw user dict to a UserResponse.
 
     Sensitive fields (``hashed_password``, ``password_reset_token``,
     ``password_reset_expiry``) are intentionally excluded.
 
     Args:
-        user: A user dict as returned by :class:`~auth.repository.IcebergUserRepository`.
+        user: A user dict as returned by
+            :class:`~auth.repository.IcebergUserRepository`.
 
     Returns:
         A :class:`~auth.models.UserResponse` safe to include in API responses.

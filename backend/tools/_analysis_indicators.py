@@ -2,7 +2,7 @@
 
 Functions
 ---------
-- :func:`_calculate_technical_indicators` — add SMA/EMA/RSI/MACD/BB/ATR columns.
+- :func:`_calculate_technical_indicators` — SMA/EMA/RSI/MACD/BB/ATR.
 """
 
 import logging

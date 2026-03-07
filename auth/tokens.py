@@ -1,7 +1,8 @@
 """JWT creation, validation, and revocation helpers.
 
 All functions accept explicit parameters (no ``self``) so they can be used
-independently of :class:`~auth.service.AuthService` and are easily unit-testable.
+independently of :class:`~auth.service.AuthService`
+and are easily unit-testable.
 
 Functions
 ---------
@@ -46,7 +47,9 @@ def create_access_token(
         A signed JWT string.
 
     Example:
-        >>> token = create_access_token("uid", "u@x.com", "general", "a"*32, 60)
+        >>> token = create_access_token(
+        ...     "uid", "u@x.com", "general", "a"*32, 60
+        ... )
         >>> isinstance(token, str)
         True
     """
@@ -138,7 +141,11 @@ def decode_token(
     if expected_type and payload.get("type") != expected_type:
         raise HTTPException(
             status_code=401,
-            detail=f"Expected token type '{expected_type}', got '{payload.get('type')}'",
+            detail=(
+                f"Expected token type"
+                f" '{expected_type}', got"
+                f" '{payload.get('type')}'"
+            ),
         )
 
     return payload

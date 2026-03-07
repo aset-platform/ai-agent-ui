@@ -8,7 +8,9 @@ refresh cycle do not duplicate Iceberg scans.
 
 Example::
 
-    from dashboard.callbacks.iceberg import _get_iceberg_repo, _get_ohlcv_cached
+    from dashboard.callbacks.iceberg import (
+        _get_iceberg_repo, _get_ohlcv_cached,
+    )
     repo = _get_iceberg_repo()
     df = _get_ohlcv_cached(repo, "AAPL")
 """
@@ -22,7 +24,8 @@ from typing import Optional
 
 import pandas as pd
 
-# Module-level logger — must remain module-level for use outside any class scope
+# Module-level logger — must remain module-level for
+# use outside any class scope
 _logger = logging.getLogger(__name__)
 
 # Ensure project root + backend/ on sys.path before imports
@@ -46,7 +49,8 @@ os.environ.setdefault(
     ICEBERG_WAREHOUSE_URI,
 )
 
-# Fix #10: TTL-based singleton — re-initialises after 1 h to survive Iceberg restarts
+# Fix #10: TTL-based singleton — re-initialises after
+# 1 h to survive Iceberg restarts
 _DASH_REPO = None
 _DASH_REPO_EXPIRY: float = 0.0
 _DASH_REPO_TTL = 3600  # 1 hour
@@ -66,7 +70,7 @@ _QUARTERLY_CACHE: dict = {"data": None, "expiry": 0.0}
 
 
 def _get_iceberg_repo() -> Optional[object]:
-    """Return the module-level :class:`~stocks.repository.StockRepository` singleton.
+    """Return the module-level StockRepository singleton.
 
     Re-initialised after ``_DASH_REPO_TTL`` seconds so the dashboard can
     recover automatically after an Iceberg catalog restart without requiring
@@ -155,7 +159,9 @@ def _get_forecast_runs_cached(
 
 
 def _get_ohlcv_cached(repo: object, ticker: str) -> Optional[pd.DataFrame]:
-    """Return OHLCV data for *ticker* from Iceberg, cached for ``_SHARED_TTL`` seconds.
+    """Return OHLCV data for *ticker* from Iceberg.
+
+    Cached for ``_SHARED_TTL`` seconds.
 
     The returned DataFrame has a DatetimeIndex and columns ``Open``, ``High``,
     ``Low``, ``Close``, ``Adj Close``, ``Volume`` — matching the shape produced
@@ -219,7 +225,8 @@ def _get_forecast_cached(
 
     Cached for ``_SHARED_TTL`` seconds.  The returned DataFrame has columns
     ``ds``, ``yhat``, ``yhat_lower``, ``yhat_upper`` — matching the shape
-    produced by ``pd.read_parquet(data/forecasts/{TICKER}_{H}m_forecast.parquet)``.
+    produced by ``pd.read_parquet(
+    data/forecasts/{TICKER}_{H}m_forecast.parquet)``.
 
     Args:
         repo: Active :class:`~stocks.repository.StockRepository` instance.
@@ -293,7 +300,9 @@ def _get_dividends_cached(
 
 
 def _get_analysis_summary_cached(repo: object):
-    """Return all latest analysis summaries, cached for ``_SHARED_TTL`` seconds.
+    """Return all latest analysis summaries.
+
+    Cached for ``_SHARED_TTL`` seconds.
 
     Avoids repeated Iceberg scans when multiple callbacks (screener, risk,
     sectors) all need the same table within the same refresh cycle.

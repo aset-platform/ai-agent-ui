@@ -1,4 +1,4 @@
-"""LangChain tool that performs live web searches via the SerpAPI Google Search wrapper.
+"""LangChain tool for live web searches via SerpAPI.
 
 :func:`search_web` delegates to
 :class:`~langchain_community.utilities.SerpAPIWrapper`, which calls the

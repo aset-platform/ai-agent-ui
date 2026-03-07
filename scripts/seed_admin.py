@@ -139,8 +139,11 @@ def main() -> None:
     # ── Validate JWT secret length ─────────────────────────────────────────
     if len(jwt_secret) < 32:
         logger.error(
-            "JWT_SECRET_KEY must be at least 32 characters. "
-            'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+            "JWT_SECRET_KEY must be at least "
+            "32 characters. Generate one with: "
+            "python -c "
+            '"import secrets; '
+            'print(secrets.token_hex(32))"'
         )
         sys.exit(1)
 
@@ -177,13 +180,15 @@ def main() -> None:
     if existing is not None:
         if existing.get("role") == "superuser":
             logger.info(
-                "Superuser '%s' already exists (user_id=%s). Nothing to do.",
+                "Superuser '%s' already exists "
+                "(user_id=%s). Nothing to do.",
                 admin_email,
                 existing["user_id"],
             )
         else:
             logger.warning(
-                "A user with email '%s' exists but has role '%s' (not superuser). "
+                "A user with email '%s' exists but has "
+                "role '%s' (not superuser). "
                 "No changes made.",
                 admin_email,
                 existing.get("role"),

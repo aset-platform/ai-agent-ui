@@ -1,4 +1,4 @@
-"""Shared path constants, Iceberg repo singleton, and small helpers for stock tools.
+"""Shared path constants, Iceberg repo singleton, and helpers.
 
 All sub-modules (``_stock_registry``, ``_stock_fetch``) access these values as
 module attributes (``import tools._stock_shared as _ss; _ss._DATA_RAW``) so
@@ -27,7 +27,7 @@ from paths import (
     RAW_DIR,
 )
 
-# Module-level logger; kept at module scope intentionally for shared utility use.
+# Module-level logger for shared utility use.
 _logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = PROJECT_ROOT
@@ -97,7 +97,8 @@ def _require_repo():
     repo = _get_repo()
     if repo is None:
         raise RuntimeError(
-            "StockRepository is unavailable — Iceberg catalog may not be initialised. "
+            "StockRepository is unavailable — Iceberg "
+            "catalog may not be initialised. "
             "Run 'python stocks/create_tables.py' first."
         )
     return repo
@@ -119,4 +120,4 @@ def _parquet_path(ticker: str) -> Path:
 
 # Fix #6: delegate to shared helpers module to eliminate duplication.
 # Fix #5: TTL cache is implemented in _helpers._load_currency.
-from tools._helpers import _currency_symbol, _load_currency  # noqa: F401
+from tools._helpers import _currency_symbol, _load_currency  # noqa: F401,E402

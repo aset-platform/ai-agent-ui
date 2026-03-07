@@ -16,10 +16,9 @@ from typing import Optional
 from urllib.parse import parse_qs
 
 import dash_bootstrap_components as dbc
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Input, Output, State, ctx, html, no_update
+from dash import Input, Output, State, html, no_update
 
 from dashboard.callbacks.auth_utils import (
     _unauth_notice,
@@ -33,7 +32,6 @@ from dashboard.callbacks.chart_builders import (
     _empty_fig,
 )
 from dashboard.callbacks.data_loaders import (
-    _add_indicators,
     _add_indicators_cached,
     _clear_indicator_cache,
     _load_dividends,
@@ -50,7 +48,8 @@ from dashboard.services.stock_refresh import (
     run_full_refresh,
 )
 
-# Module-level logger; mutable but intentionally module-scoped for callback registration.
+# Module-level logger; mutable but intentionally
+# module-scoped for callback registration.
 _logger = logging.getLogger(__name__)
 
 

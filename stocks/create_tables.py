@@ -150,7 +150,8 @@ def _company_info_schema() -> Schema:
     """Return the Iceberg schema for ``stocks.company_info``.
 
     Returns:
-        Schema: Append-only company metadata snapshots; query latest by fetched_at DESC.
+        Schema: Append-only company metadata snapshots;
+            query latest by fetched_at DESC.
     """
     return Schema(
         NestedField(
@@ -311,7 +312,8 @@ def _ohlcv_schema() -> Schema:
     """Return the Iceberg schema for ``stocks.ohlcv``.
 
     Returns:
-        Schema: OHLCV price history; composite key (ticker, date); partitioned by ticker.
+        Schema: OHLCV price history; composite key
+            (ticker, date); partitioned by ticker.
     """
     return Schema(
         NestedField(
@@ -388,7 +390,9 @@ def _technical_indicators_schema() -> Schema:
     """Return the Iceberg schema for ``stocks.technical_indicators``.
 
     Returns:
-        Schema: Computed technical indicators; 1:1 with ohlcv (ticker, date); partitioned by ticker.
+        Schema: Computed technical indicators; 1:1
+            with ohlcv (ticker, date);
+            partitioned by ticker.
     """
     return Schema(
         NestedField(
@@ -464,7 +468,8 @@ def _analysis_summary_schema() -> Schema:
     """Return the Iceberg schema for ``stocks.analysis_summary``.
 
     Returns:
-        Schema: Daily analysis snapshots; structured replacement for flat text cache files.
+        Schema: Daily analysis snapshots; structured
+            replacement for flat text cache files.
     """
     return Schema(
         NestedField(
@@ -621,7 +626,9 @@ def _forecast_runs_schema() -> Schema:
     """Return the Iceberg schema for ``stocks.forecast_runs``.
 
     Returns:
-        Schema: One row per Prophet run; stores targets at 3/6/9 months plus accuracy metrics.
+        Schema: One row per Prophet run; stores
+            targets at 3/6/9 months plus accuracy
+            metrics.
     """
     return Schema(
         NestedField(
@@ -763,7 +770,8 @@ def _forecasts_schema() -> Schema:
     """Return the Iceberg schema for ``stocks.forecasts``.
 
     Returns:
-        Schema: Full Prophet output series; partitioned by (ticker, horizon_months).
+        Schema: Full Prophet output series;
+            partitioned by (ticker, horizon_months).
     """
     return Schema(
         NestedField(
@@ -962,10 +970,12 @@ def _ticker_partition_spec(schema: Schema) -> PartitionSpec:
 
 
 def _ticker_horizon_partition_spec(schema: Schema) -> PartitionSpec:
-    """Return a partition spec that partitions by ``ticker`` and ``horizon_months``.
+    """Return a partition spec by ``ticker`` and
+    ``horizon_months``.
 
     Args:
-        schema: The Iceberg schema containing ``ticker`` and ``horizon_months`` fields.
+        schema: The Iceberg schema containing
+            ``ticker`` and ``horizon_months`` fields.
 
     Returns:
         PartitionSpec: Identity partition on ticker then horizon_months.

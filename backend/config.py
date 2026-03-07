@@ -1,7 +1,7 @@
-"""Application configuration loaded from environment variables and an optional ``.env`` file.
+"""App config from environment variables and an optional ``.env`` file.
 
-:class:`Settings` is a `Pydantic Settings <https://docs.pydantic.dev/latest/concepts/pydantic_settings/>`_
-model that reads every field from the process environment.  An optional
+:class:`Settings` is a Pydantic Settings model that reads every field
+from the process environment.  An optional
 ``.env`` file in the backend working directory is also consulted (lower
 priority than real environment variables).
 
@@ -45,23 +45,23 @@ class Settings(BaseSettings):
             may run before the request is abandoned.  Applied to both the
             synchronous ``POST /chat`` endpoint and the streaming
             ``POST /chat/stream`` endpoint.  Defaults to ``900``.
-        jwt_secret_key: Secret used to sign and verify JWT tokens.  Must be
-            at least 32 random characters.  Maps to ``JWT_SECRET_KEY``.
-            Generate with ``python -c "import secrets; print(secrets.token_hex(32))"``.
-        access_token_expire_minutes: Lifetime of an access token in minutes.
-            Defaults to ``60``.
+        jwt_secret_key: Secret used to sign and verify JWT tokens.
+            Must be at least 32 random characters.
+            Maps to ``JWT_SECRET_KEY``.
+        access_token_expire_minutes: Lifetime of an access
+            token in minutes.  Defaults to ``60``.
         refresh_token_expire_days: Lifetime of a refresh token in days.
             Defaults to ``7``.
         google_client_id: OAuth 2.0 client ID from Google Cloud Console.
             Maps to ``GOOGLE_CLIENT_ID``.  Leave empty to disable Google SSO.
-        google_client_secret: OAuth 2.0 client secret from Google Cloud Console.
-            Maps to ``GOOGLE_CLIENT_SECRET``.
+        google_client_secret: OAuth 2.0 client secret from Google
+            Cloud Console.  Maps to ``GOOGLE_CLIENT_SECRET``.
         facebook_app_id: App ID from Facebook Developers portal.
             Maps to ``FACEBOOK_APP_ID``.  Leave empty to disable Facebook SSO.
         facebook_app_secret: App secret from Facebook Developers portal.
             Maps to ``FACEBOOK_APP_SECRET``.
-        oauth_redirect_uri: The redirect URI registered with each OAuth provider.
-            Must match exactly.  Defaults to
+        oauth_redirect_uri: The redirect URI registered with each
+            OAuth provider.  Must match exactly.  Defaults to
             ``"http://localhost:3000/auth/oauth/callback"``.
     """
 
@@ -80,8 +80,9 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
 
     # SSO / OAuth2 settings.
-    # Google: obtain from https://console.cloud.google.com — create an OAuth 2.0
-    #   Web Application client.  Add the redirect URI below as an authorised URI.
+    # Google: obtain from console.cloud.google.com
+    #   — create an OAuth 2.0 Web Application client.
+    #   Add redirect URI below as an authorised URI.
     # Facebook: obtain from https://developers.facebook.com — create a Consumer
     #   app with the Facebook Login product.
     google_client_id: str = ""

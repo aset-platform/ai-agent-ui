@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Module-level path constant — prefixed with _ to signal internal use.
 # Centralised in backend/paths.py; imported here for consistency.
-import sys as _sys
+import sys as _sys  # noqa: E402
 
 _project_root = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -138,7 +138,11 @@ def register(router: APIRouter) -> None:
         ):
             raise HTTPException(
                 status_code=415,
-                detail="Unsupported image format. Please upload JPEG, PNG, GIF, or WebP.",
+                detail=(
+                    "Unsupported image format."
+                    " Please upload JPEG, PNG,"
+                    " GIF, or WebP."
+                ),
             )
         data = await file.read()
         if len(data) > _MAX_AVATAR_BYTES:

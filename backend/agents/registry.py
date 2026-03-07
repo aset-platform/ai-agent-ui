@@ -1,4 +1,4 @@
-"""In-process registry that maps agent IDs to :class:`~agents.base.BaseAgent` instances.
+"""Registry mapping agent IDs to BaseAgent instances.
 
 :class:`AgentRegistry` is the runtime counterpart to
 :class:`~tools.registry.ToolRegistry`.  It holds every agent that the server
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 class AgentRegistry:
-    """Thread-unsafe in-process store for named :class:`~agents.base.BaseAgent` instances.
+    """In-process store for named BaseAgent instances.
 
     Agents are keyed by :attr:`~agents.base.AgentConfig.agent_id`.
     Registering an agent with a duplicate ID silently overwrites the

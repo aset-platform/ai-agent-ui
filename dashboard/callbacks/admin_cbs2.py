@@ -1,4 +1,6 @@
-"""Admin modal and password-change Dash callbacks for the AI Stock Analysis Dashboard.
+"""Admin modal and password-change Dash callbacks.
+
+Callbacks for the AI Stock Analysis Dashboard.
 
 Registers callbacks for the Add/Edit user modal, user create/update/toggle
 actions, and the Change Password modal accessible from the NAVBAR.
@@ -27,7 +29,8 @@ from dashboard.callbacks.utils import _check_input_safety, _is_valid_email
 # Module-level logger — kept at module scope as required by the logging API.
 _logger = logging.getLogger(__name__)
 
-# Module-level configuration constant — prefixed with _ to signal non-public use.
+# Module-level configuration constant — prefixed with _
+# to signal non-public use.
 _BACKEND_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8181")
 
 
@@ -170,7 +173,8 @@ def register(app) -> None:
             and triggered.get("type") == "edit-user-btn"
         ):
             # triggered_value is None when Dash fires due to DOM injection
-            # (pattern-match re-fires when Edit buttons are added to the layout)
+            # (pattern-match re-fires when Edit buttons
+            # are added to the layout)
             # rather than an actual user click.  Skip in that case.
             if not triggered_value:
                 return (

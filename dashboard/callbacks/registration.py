@@ -21,7 +21,8 @@ from dashboard.callbacks.insights_cbs import register as _reg_insights
 from dashboard.callbacks.profile_cbs import register as _reg_profile
 from dashboard.callbacks.routing_cbs import register as _reg_routing
 
-# Module-level logger; kept here as a module-level constant (not mutable state).
+# Module-level logger; kept here as a module-level
+# constant (not mutable state).
 _logger = logging.getLogger(__name__)
 
 

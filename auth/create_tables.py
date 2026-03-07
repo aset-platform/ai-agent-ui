@@ -51,7 +51,8 @@ from pyiceberg.types import (  # noqa: E402
     TimestampType,
 )
 
-# Module-level logger; mutable but required at module scope for use outside any class.
+# Module-level logger; mutable but required at module scope
+# for use outside any class.
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -66,7 +67,8 @@ def _get_catalog() -> SqlCatalog:
     """Load the local Iceberg SqlCatalog from ``.pyiceberg.yaml``.
 
     Returns:
-        SqlCatalog: A configured :class:`pyiceberg.catalog.sql.SqlCatalog` instance.
+        SqlCatalog: A configured
+            :class:`pyiceberg.catalog.sql.SqlCatalog`.
 
     Raises:
         RuntimeError: If the catalog cannot be loaded.
@@ -88,7 +90,8 @@ def _users_schema() -> Schema:
     """Return the Iceberg schema for the ``users`` table.
 
     Returns:
-        Schema: An Iceberg :class:`~pyiceberg.schema.Schema` describing all user fields.
+        Schema: An Iceberg :class:`~pyiceberg.schema.Schema`
+            describing all user fields.
     """
     return Schema(
         NestedField(
@@ -180,7 +183,8 @@ def _audit_log_schema() -> Schema:
     """Return the Iceberg schema for the ``audit_log`` table.
 
     Returns:
-        Schema: An Iceberg :class:`~pyiceberg.schema.Schema` for audit log events.
+        Schema: An Iceberg :class:`~pyiceberg.schema.Schema`
+            for audit log events.
     """
     return Schema(
         NestedField(

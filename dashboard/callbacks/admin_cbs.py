@@ -11,10 +11,9 @@ Example::
 
 import logging
 import math
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
-import dash_bootstrap_components as dbc
-from dash import ALL, Input, Output, State, ctx, html, no_update
+from dash import Input, Output, State, html, no_update
 
 from dashboard.callbacks.auth_utils import (
     _api_call,
@@ -28,7 +27,8 @@ from dashboard.callbacks.table_builders import (
     _build_users_table,
 )
 
-# Module-level logger; mutable but required at module scope for callback closures.
+# Module-level logger; mutable but required at module
+# scope for callback closures.
 _logger = logging.getLogger(__name__)
 
 
@@ -206,7 +206,9 @@ def register(app) -> None:
         stored_token: Optional[str],
         url_search: Optional[str],
     ):
-        """Fetch the audit log from the backend API and store the raw event list.
+        """Fetch the audit log from the backend API.
+
+        Store the raw event list.
 
         Fires when the admin page is visited or when the user switches to
         the Audit Log tab.  Rendering is handled by ``render_audit_page``.

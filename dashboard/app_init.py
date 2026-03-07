@@ -10,7 +10,8 @@ import logging
 import dash
 import dash_bootstrap_components as dbc
 
-# Module-level logger; kept at module scope as a private sentinel for the factory.
+# Module-level logger; kept at module scope as a private
+# sentinel for the factory.
 _logger = logging.getLogger(__name__)
 
 

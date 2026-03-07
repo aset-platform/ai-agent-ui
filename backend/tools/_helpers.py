@@ -12,7 +12,6 @@ Usage::
 
 import logging
 import time
-from typing import Optional
 
 # Module-level logger; kept at module scope as a conventional singleton.
 _logger = logging.getLogger(__name__)

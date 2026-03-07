@@ -20,7 +20,7 @@ from typing import Dict, Iterator, List
 
 import agents.loop as _loop
 import agents.stream as _stream
-from agents.config import MAX_ITERATIONS, AgentConfig
+from agents.config import AgentConfig
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -80,14 +80,14 @@ class BaseAgent(ABC):
 
         Returns:
             An uninvoked LangChain chat model instance (or duck-typed
-            equivalent with ``bind_tools`` and ``invoke`` methods).
+            equivalent with ``bind_tools``/``invoke`` methods).
         """
         ...
 
     def _build_messages(
         self, user_input: str, history: List[Dict]
     ) -> List[BaseMessage]:
-        """Convert raw conversation history and user input into LangChain messages.
+        """Convert raw history and user input into LangChain messages.
 
         Args:
             user_input: The latest message from the user.
@@ -95,7 +95,7 @@ class BaseAgent(ABC):
                 ``[{"role": "user"|"assistant", "content": "..."}]``.
 
         Returns:
-            An ordered list of :class:`~langchain_core.messages.BaseMessage` objects.
+            Ordered list of BaseMessage objects.
         """
         messages: List[BaseMessage] = []
         if self.config.system_prompt:
@@ -121,7 +121,7 @@ class BaseAgent(ABC):
             The final natural-language response.
 
         Raises:
-            Exception: Any exception raised by the LLM or tools is re-raised.
+            Exception: Any LLM or tool exception is re-raised.
         """
         return _loop.run(self, user_input, history)
 
@@ -138,6 +138,6 @@ class BaseAgent(ABC):
             JSON-encoded event strings, each terminated with ``\\n``.
 
         Raises:
-            Exception: Any exception is re-raised after yielding an error event.
+            Exception: Re-raised after yielding an error event.
         """
         return _stream.stream(self, user_input, history)

@@ -1,4 +1,4 @@
-"""FastAPI dependency functions for JWT authentication and role-based access control.
+"""FastAPI dependency functions for JWT auth and RBAC.
 
 This module exposes two FastAPI ``Depends``-compatible functions:
 
@@ -79,10 +79,11 @@ def _get_service() -> AuthService:
 
 
 def get_auth_service() -> AuthService:
-    """FastAPI dependency that returns the :class:`~auth.service.AuthService` singleton.
+    """Return the :class:`~auth.service.AuthService` singleton.
 
-    Wrap endpoints that need direct service access (e.g. login, logout, refresh)
-    with ``Depends(get_auth_service)``.
+    Wrap endpoints that need direct service access
+    (e.g. login, logout, refresh) with
+    ``Depends(get_auth_service)``.
 
     Returns:
         The cached :class:`~auth.service.AuthService` instance.
@@ -98,11 +99,11 @@ def get_current_user(
     token: str = Depends(oauth2_scheme),
     service: AuthService = Depends(get_auth_service),
 ) -> UserContext:
-    """FastAPI dependency that validates the Bearer token and returns the caller's context.
+    """Validate the Bearer token and return the caller's context.
 
-    Decodes the JWT, checks its signature and expiry, verifies it is an access
-    token (not a refresh token), and returns a :class:`~auth.models.UserContext`
-    for the authenticated user.
+    Decodes the JWT, checks its signature and expiry,
+    verifies it is an access token (not a refresh token),
+    and returns a :class:`~auth.models.UserContext`.
 
     Args:
         token: Raw JWT string extracted from the ``Authorization: Bearer``
@@ -117,8 +118,8 @@ def get_current_user(
     Raises:
         HTTPException: 401 if the token is missing, invalid, expired, or
             of the wrong type.
-        HTTPException: 401 if the user's ``user_id`` or ``role`` is absent
-            from the token payload.
+        HTTPException: 401 if the user's ``user_id`` or
+            ``role`` is absent from the token payload.
 
     Example:
         >>> # In a route:

@@ -23,7 +23,7 @@ from auth.repo.catalog import get_catalog
 
 
 class IcebergUserRepository:
-    """CRUD repository for the ``auth.users`` and ``auth.audit_log`` Iceberg tables.
+    """CRUD repository for auth Iceberg tables.
 
     Attributes:
         _catalog: Lazily loaded Iceberg catalog instance.
@@ -91,7 +91,9 @@ class IcebergUserRepository:
         """Append a new user row.
 
         Args:
-            user_data: Dict with ``email``, ``hashed_password``, ``full_name``, ``role``.
+            user_data: Dict with ``email``,
+                ``hashed_password``, ``full_name``,
+                ``role``.
 
         Returns:
             The full stored user dict.

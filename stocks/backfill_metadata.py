@@ -13,7 +13,7 @@ Usage::
 import json
 import logging
 import sys
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -121,7 +121,8 @@ def _backfill_company_info() -> int:
         try:
             with open(info_path) as fh:
                 info = json.load(fh)
-            # Map flat JSON keys to yfinance-style keys for insert_company_info()
+            # Map flat JSON keys to yfinance-style
+            # keys for insert_company_info()
             mapped = {
                 "company_name": info.get("company_name")
                 or info.get("name", ""),
@@ -196,7 +197,8 @@ def main() -> None:
     ohlcv_count = _backfill_ohlcv()
 
     _logger.info(
-        "Backfill complete: %d registry, %d company info, %d OHLCV tickers inserted.",
+        "Backfill complete: %d registry, %d company"
+        " info, %d OHLCV tickers inserted.",
         reg_count,
         info_count,
         ohlcv_count,

@@ -2,7 +2,7 @@
 
 Functions
 ---------
-- :func:`_create_forecast_chart` — build and save an interactive forecast chart.
+- :func:`_create_forecast_chart` — interactive forecast chart.
 """
 
 import logging
@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 import tools._forecast_shared as _sh
 from prophet import Prophet
 
-# Module-level logger; kept module-level as this is a module utility, not a class.
+# Module-level logger; module utility, not a class.
 _logger = logging.getLogger(__name__)
 
 
@@ -38,7 +38,7 @@ def _create_forecast_chart(
         prophet_df: Historical training data in Prophet format.
         ticker: Stock ticker symbol (title and filename).
         current_price: Most recent closing price.
-        summary: Output of :func:`~tools._forecast_accuracy._generate_forecast_summary`.
+        summary: Output of :func:`_generate_forecast_summary`.
 
     Returns:
         Absolute path to the saved HTML chart file as a string.

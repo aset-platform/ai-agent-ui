@@ -1,4 +1,4 @@
-"""In-process registry that maps tool names to LangChain :class:`~langchain_core.tools.BaseTool` instances.
+"""Registry mapping tool names to LangChain BaseTool instances.
 
 :class:`ToolRegistry` acts as a service locator for all callable tools in the
 system.  Agents do not import tool modules directly; instead they request a
@@ -107,7 +107,7 @@ class ToolRegistry:
     def invoke(self, name: str, args: dict) -> str:
         """Execute a registered tool by name and return its output as a string.
 
-        This is the primary execution path used by :class:`~agents.base.BaseAgent`
+        This is the primary execution path used by BaseAgent
         during the agentic loop.  If the requested tool is not found, an
         error string is returned rather than raising an exception, so the
         LLM can receive a meaningful ``ToolMessage`` and recover gracefully.

@@ -13,7 +13,6 @@ Functions
 import json as _json
 import logging
 import uuid
-from datetime import datetime
 from typing import Any, Dict
 
 import pyarrow as pa
@@ -28,7 +27,8 @@ from auth.repo.schemas import (
 )
 from auth.repo.user_reads import get_by_email
 
-# Module-level logger; kept here as a module-level constant (immutable binding).
+# Module-level logger; kept here as a module-level
+# constant (immutable binding).
 _logger = logging.getLogger(__name__)
 
 

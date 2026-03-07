@@ -13,7 +13,6 @@ import os
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs
 
-import dash_bootstrap_components as dbc
 from dash import html
 
 # Module-level logger — mutable but kept here as a module-level singleton
@@ -45,7 +44,8 @@ def _validate_token(token: Optional[str]) -> Optional[Dict[str, Any]]:
     secret = os.environ.get("JWT_SECRET_KEY", "")
     if not secret:
         logger.warning(
-            "_validate_token: JWT_SECRET_KEY not set — all dashboard requests will be denied."
+            "_validate_token: JWT_SECRET_KEY not set"
+            " — all dashboard requests will be denied."
         )
         return None
     try:
@@ -109,7 +109,7 @@ def _unauth_notice() -> html.Div:
 
 
 def _admin_forbidden() -> html.Div:
-    """Return a Dash layout component shown when a non-superuser visits /admin/*.
+    """Return a Dash layout for non-superuser /admin/* access.
 
     Returns:
         A :class:`~dash.html.Div` with a 403-style message and a back link.

@@ -5,8 +5,8 @@ Wraps the :class:`~agents.base.BaseAgent` agentic loop as a LangChain
 Agent (which already has ``search_web`` bound) without requiring a separate
 SerpAPI call in the stock tool layer.
 
-The tool is constructed at server startup time (after the General Agent has
-been created) and registered into the shared :class:`~tools.registry.ToolRegistry`
+The tool is constructed at server startup time (after the General
+Agent has been created) and registered into the shared ToolRegistry
 before the Stock Agent is instantiated.
 
 Typical usage (in ``main.py``)::
@@ -72,7 +72,9 @@ def create_search_market_news_tool(general_agent: BaseAgent) -> BaseTool:
             if the search fails.
 
         Example:
-            >>> result = search_market_news.invoke({"query": "AAPL latest news 2026"})
+            >>> result = search_market_news.invoke(
+            ...     {"query": "AAPL latest news 2026"}
+            ... )
             >>> isinstance(result, str)
             True
         """

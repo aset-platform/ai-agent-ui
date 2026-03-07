@@ -63,7 +63,11 @@ def stream(
         while True:
             iteration += 1
             if iteration > MAX_ITERATIONS:
-                warning_msg = f"Agent hit MAX_ITERATIONS ({MAX_ITERATIONS}); returning last response."
+                warning_msg = (
+                    f"Agent hit MAX_ITERATIONS "
+                    f"({MAX_ITERATIONS}); returning "
+                    f"last response."
+                )
                 agent.logger.warning(
                     "Agent '%s' hit MAX_ITERATIONS (%d).",
                     agent.config.agent_id,

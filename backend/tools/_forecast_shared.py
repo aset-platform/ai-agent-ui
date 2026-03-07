@@ -24,7 +24,7 @@ from tools._stock_shared import (  # noqa: F401 — re-exported
     _require_repo,
 )
 
-# Module-level logger; mutable but required at module scope for use before any class is instantiated.
+# Module-level logger; required at module scope.
 _logger = logging.getLogger(__name__)
 
 _DATA_FORECASTS = FORECASTS_DIR
@@ -40,7 +40,7 @@ def _load_cache(ticker: str, key: str) -> Optional[str]:
         key: Cache key string, e.g. ``"forecast_9m"``.
 
     Returns:
-        The cached result string, or ``None`` if no cache file exists for today.
+        Cached result string, or ``None`` if absent.
     """
     path = _CACHE_DIR / f"{ticker}_{key}_{date.today()}.txt"
     if path.exists():
@@ -64,7 +64,7 @@ def _save_cache(ticker: str, key: str, result: str) -> None:
 
 # Fix #6: delegate to shared helpers module to eliminate duplication.
 # Fix #5: TTL cache is implemented in _helpers._load_currency.
-from tools._helpers import _currency_symbol, _load_currency  # noqa: F401
+from tools._helpers import _currency_symbol, _load_currency  # noqa: F401,E402
 
 
 def _load_parquet(ticker: str) -> Optional[pd.DataFrame]:

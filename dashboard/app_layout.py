@@ -28,7 +28,8 @@ from dashboard.layouts import (
     insights_layout,
 )
 
-# Module-level logger; intentionally module-scoped for use inside nested callback.
+# Module-level logger; intentionally module-scoped
+# for use inside nested callback.
 _logger = logging.getLogger(__name__)
 
 
@@ -85,7 +86,10 @@ def build_layout(app: dash.Dash) -> None:
                                             dbc.Input(
                                                 id="change-pw-new",
                                                 type="password",
-                                                placeholder="Min 8 chars, at least one digit",
+                                                placeholder=(
+                                                    "Min 8 chars,"
+                                                    " at least one digit"
+                                                ),
                                             ),
                                         ]
                                     ),
@@ -100,7 +104,9 @@ def build_layout(app: dash.Dash) -> None:
                                             dbc.Input(
                                                 id="change-pw-confirm",
                                                 type="password",
-                                                placeholder="Repeat new password",
+                                                placeholder=(
+                                                    "Repeat new" " password"
+                                                ),
                                             ),
                                         ]
                                     ),
@@ -154,14 +160,19 @@ def build_layout(app: dash.Dash) -> None:
         ``/admin/users`` (requires superuser or ``admin`` page permission).
 
         Args:
-            pathname: Current URL path provided by :class:`~dash.dcc.Location`.
-            search: Query string portion of the URL (e.g. ``"?token=xxx"``).
-            stored_token: JWT string from ``localStorage``.
-            profile_store: Cached user profile dict from ``user-profile-store``.
+            pathname: Current URL path provided by
+                :class:`~dash.dcc.Location`.
+            search: Query string portion of the URL
+                (e.g. ``"?token=xxx"``).
+            stored_token: JWT string from
+                ``localStorage``.
+            profile_store: Cached user profile dict
+                from ``user-profile-store``.
 
         Returns:
-            The page-level :class:`~dash.html.Div` layout, or the unauthenticated
-            notice if the token is missing or invalid.
+            The page-level :class:`~dash.html.Div`
+            layout, or the unauthenticated notice if the
+            token is missing or invalid.
         """
         token: Optional[str] = stored_token
         if search:
