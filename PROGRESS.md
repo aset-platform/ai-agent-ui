@@ -2,6 +2,60 @@
 
 ---
 
+# Session: Mar 10, 2026 — Team knowledge sharing ecosystem
+
+## Summary
+Built a team knowledge sharing ecosystem for 4-5 developers using
+Claude Code + Serena. Slimmed CLAUDE.md from ~650 lines to ~85 lines
+(saving ~2,500 tokens/message), migrated all detailed content to 15
+shared Serena memories, and created automation tooling.
+
+### Knowledge sharing infrastructure
+
+| # | Deliverable | Details |
+|---|-------------|---------|
+| 1 | Slim `CLAUDE.md` | 650 → 85 lines (~800 tokens vs ~3,500) |
+| 2 | 15 shared Serena memories | architecture/ (5), conventions/ (6), debugging/ (2), onboarding/ (1), api/ (1) |
+| 3 | Selective `.serena/` gitignore | Shared memories tracked, session/personal ignored |
+| 4 | `/promote-memory` skill | AI-powered promotion from session to shared with cleanup |
+| 5 | `/check-stale-memories` skill | Serena-powered semantic staleness detection |
+| 6 | `scripts/check-stale-memories.sh` | CI grep-based stale memory check |
+| 7 | `scripts/dev-setup.sh` | Single-command AI tooling onboarding (~5 min) |
+
+### Design decisions
+
+- **Hybrid sharing model**: Shared memories git-committed + PR-reviewed;
+  session/personal memories gitignored.
+- **On-demand loading**: Serena loads memories only when relevant,
+  reducing context window usage vs always-loaded CLAUDE.md.
+- **Memory conflict resolution**: Small focused files + PR review gate.
+  Conflicts resolved via `/promote-memory` re-clean.
+- **Two-layer staleness detection**: CI script (grep-based) + Claude
+  Code skill (Serena semantic analysis).
+
+### Files changed: 21 new, 2 modified
+
+| File | Change |
+|------|--------|
+| `.serena/memories/shared/architecture/*.md` (5) | NEW — system overview, iceberg, auth, agent-init, groq |
+| `.serena/memories/shared/conventions/*.md` (6) | NEW — python, typescript, git, testing, performance, errors |
+| `.serena/memories/shared/debugging/*.md` (2) | NEW — common issues, mock patching |
+| `.serena/memories/shared/onboarding/setup-guide.md` | NEW — onboarding guide |
+| `.serena/memories/shared/api/streaming-protocol.md` | NEW — NDJSON streaming |
+| `.claude/commands/promote-memory.md` | NEW — promote skill |
+| `.claude/commands/check-stale-memories.md` | NEW — stale check skill |
+| `scripts/dev-setup.sh` | NEW — AI tooling onboarding |
+| `scripts/check-stale-memories.sh` | NEW — CI stale checker |
+| `docs/plans/2026-03-09-team-knowledge-sharing-design.md` | NEW — design doc |
+| `docs/plans/2026-03-09-team-knowledge-sharing-plan.md` | NEW — impl plan |
+| `CLAUDE.md` | REWRITE — slimmed to ~85 lines |
+| `.gitignore` | EDIT — selective .serena/ ignoring |
+
+**Branch**: `feature/team-knowledge-sharing` (worktree)
+**PR**: #68
+
+---
+
 # Session: Mar 9, 2026 — Seed fixes, profile NaN, backfill, Groq chunking
 
 ## Summary

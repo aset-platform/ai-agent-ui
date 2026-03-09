@@ -26,6 +26,14 @@ cd ai-agent-ui
 
 `setup.sh` handles everything: Python 3.12 virtualenv, pip install, npm ci, directory creation, config files, `.pyiceberg.yaml`, Iceberg database init, admin seeding, and git hooks. Safe to re-run. For CI/Docker: `ANTHROPIC_API_KEY=sk-ant-... ./setup.sh --non-interactive`
 
+### AI Tooling Setup (for developers using Claude Code + Serena)
+
+```bash
+./scripts/dev-setup.sh    # verifies Claude Code, Serena, shared memories
+```
+
+This script checks prerequisites, validates shared Serena memories, creates local memory directories, and installs git hooks. Run after `setup.sh`.
+
 **Env files are stored externally** at `~/.ai-agent-ui/` so branch checkouts and merges never overwrite your secrets. `backend/.env` and `frontend/.env.local` are symlinks to the master copies. Edit the files at `~/.ai-agent-ui/` directly.
 
 ## Quick Start (Manual)
@@ -400,6 +408,33 @@ ai-agent-ui/
 | pyiceberg[sql-sqlite] | Apache Iceberg storage (SQLite catalog) |
 | python-multipart | OAuth2 form endpoint support |
 | email-validator | `EmailStr` field validation |
+
+---
+
+## Team Knowledge Sharing
+
+Project knowledge is shared via git-committed Serena memories:
+
+```
+.serena/memories/
+├── shared/              # Git-tracked, PR-reviewed
+│   ├── architecture/    # System design (5 files)
+│   ├── conventions/     # Coding standards (6 files)
+│   ├── debugging/       # Gotchas & workarounds (2 files)
+│   ├── onboarding/      # Setup guide (1 file)
+│   └── api/             # Protocol docs (1 file)
+├── session/             # Gitignored — daily progress
+└── personal/            # Gitignored — individual notes
+```
+
+| Command | Purpose |
+|---------|---------|
+| `/promote-memory` | Promote session memory to shared (AI cleanup) |
+| `/check-stale-memories` | Detect outdated shared memories |
+| `./scripts/check-stale-memories.sh` | CI stale memory check |
+| `./scripts/dev-setup.sh` | AI tooling onboarding |
+
+CLAUDE.md contains only hard rules (~85 lines). All detailed architecture, conventions, and debugging knowledge lives in Serena shared memories, loaded on-demand to minimize token usage.
 
 ---
 
