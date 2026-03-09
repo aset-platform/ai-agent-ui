@@ -39,6 +39,31 @@ cp frontend/.env.local.example frontend/.env.local
 
 ---
 
+## AI Tooling Setup
+
+After running the first-time setup, developers using Claude Code + Serena should also run:
+
+```bash
+./scripts/dev-setup.sh
+```
+
+This script:
+1. Verifies Python virtualenv, Node.js, and git are ready
+2. Checks Claude Code CLI is installed
+3. Verifies Serena MCP server is configured
+4. Validates shared Serena memories exist (15 files)
+5. Creates local memory directories (`session/`, `personal/`)
+6. Installs git hooks if missing
+7. Checks GitHub CLI authentication
+
+**Shared memories** at `.serena/memories/shared/` are tracked in git and updated via PRs. Session and personal memories are gitignored.
+
+**Useful slash commands:**
+- `/promote-memory` — promote session insight to shared team memory
+- `/check-stale-memories` — detect outdated references in shared memories
+
+---
+
 ## All Services at Once (Recommended)
 
 `run.sh` in the project root starts, stops, and monitors all four services.

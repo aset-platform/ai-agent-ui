@@ -4,6 +4,42 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 10, 2026 — Team knowledge sharing ecosystem
+
+### Infrastructure
+
+- **Slim CLAUDE.md**: Rewrote from ~650 lines (~3,500 tokens) to ~85 lines (~800 tokens). Hard rules only; all detailed architecture, conventions, debugging, and onboarding content migrated to Serena shared memories
+- **15 shared Serena memories**: Git-committed, PR-reviewed knowledge base across 5 categories — architecture (5), conventions (6), debugging (2), onboarding (1), api (1)
+- **Selective `.serena/` gitignore**: `memories/shared/` tracked in git; `session/`, `personal/`, `cache/`, `project.local.yml` remain gitignored
+
+### Automation
+
+- **`/promote-memory` Claude Code skill**: AI-powered promotion from session/personal memories to shared. Cleans session-specific context, generalizes findings, creates branch + commit for PR
+- **`/check-stale-memories` Claude Code skill**: Semantic staleness detection using Serena's `find_symbol` and `search_for_pattern`. Reports stale references with suggested fixes
+- **`scripts/check-stale-memories.sh`**: CI grep-based stale memory check. Scans shared memories for backtick-quoted file paths that no longer exist. Non-blocking (exit 0)
+- **`scripts/dev-setup.sh`**: Single-command AI tooling onboarding — verifies Claude Code, Serena, shared memories, creates local dirs, installs hooks. ~5 minutes for new developers
+
+### Design
+
+- Design doc: `docs/plans/2026-03-09-team-knowledge-sharing-design.md`
+- Implementation plan: `docs/plans/2026-03-09-team-knowledge-sharing-plan.md`
+- Hybrid sharing model with PR review gate for shared memories
+- Two-layer staleness detection (CI + AI)
+
+### Files changed: 21 new, 2 modified
+
+| File | Change |
+|------|--------|
+| `.serena/memories/shared/**/*.md` (15) | NEW — shared memories |
+| `.claude/commands/*.md` (2) | NEW — skills |
+| `scripts/dev-setup.sh` | NEW — onboarding |
+| `scripts/check-stale-memories.sh` | NEW — CI check |
+| `docs/plans/*.md` (2) | NEW — design + plan |
+| `CLAUDE.md` | REWRITE — 650→85 lines |
+| `.gitignore` | EDIT — selective .serena/ |
+
+---
+
 ## Mar 9, 2026 — Seed fixes, profile NaN fix, backfill script, Groq chunking strategy
 
 ### Bug Fixes
