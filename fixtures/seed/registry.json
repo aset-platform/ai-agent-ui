@@ -1,0 +1,42 @@
+[
+  {
+    "ticker": "AAPL",
+    "last_fetch_date": "2026-03-09",
+    "total_rows": 2537,
+    "date_range_start": "2016-02-22",
+    "date_range_end": "2026-03-06",
+    "market": "us"
+  },
+  {
+    "ticker": "MSFT",
+    "last_fetch_date": "2026-03-07",
+    "total_rows": 2525,
+    "date_range_start": "2016-02-22",
+    "date_range_end": "2026-03-06",
+    "market": "us"
+  },
+  {
+    "ticker": "RELIANCE.NS",
+    "last_fetch_date": "2026-03-08",
+    "total_rows": 2479,
+    "date_range_start": "2016-02-23",
+    "date_range_end": "2026-03-06",
+    "market": "india"
+  },
+  {
+    "ticker": "TCS.NS",
+    "last_fetch_date": "2026-03-06",
+    "total_rows": 2479,
+    "date_range_start": "2016-02-23",
+    "date_range_end": "2026-03-06",
+    "market": "india"
+  },
+  {
+    "ticker": "TSLA",
+    "last_fetch_date": "2026-03-07",
+    "total_rows": 2525,
+    "date_range_start": "2016-02-22",
+    "date_range_end": "2026-03-06",
+    "market": "us"
+  }
+]

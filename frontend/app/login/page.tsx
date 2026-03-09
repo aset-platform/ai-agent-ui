@@ -162,6 +162,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
+                data-testid="login-email-input"
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition"
               />
             </div>
@@ -182,13 +183,14 @@ export default function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
+                data-testid="login-password-input"
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition"
               />
             </div>
 
             {/* Error message */}
             {error && (
-              <div className="flex items-start gap-2 rounded-xl bg-red-50 border border-red-100 px-4 py-3">
+              <div className="flex items-start gap-2 rounded-xl bg-red-50 border border-red-100 px-4 py-3" data-testid="login-error-message">
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   className="w-4 h-4 text-red-500 shrink-0 mt-0.5"
@@ -211,6 +213,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading || !email || !password}
+              data-testid="login-submit-button"
               className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 disabled:cursor-not-allowed text-white font-medium py-2.5 text-sm transition-colors shadow-sm flex items-center justify-center gap-2"
             >
               {loading ? (
@@ -239,6 +242,7 @@ export default function LoginPage() {
                   <button
                     onClick={() => handleOAuthLogin("google")}
                     disabled={!!oauthLoading}
+                    data-testid="oauth-google-button"
                     className="w-full flex items-center justify-center gap-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors shadow-sm"
                   >
                     {oauthLoading === "google" ? (

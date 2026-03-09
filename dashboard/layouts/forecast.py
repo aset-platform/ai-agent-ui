@@ -89,20 +89,27 @@ def forecast_layout() -> html.Div:
             ),
             # ── Status (inline with button via dcc.Loading) ────────────────
             # ── Forecast chart ─────────────────────────────────────────────
-            dcc.Loading(
-                id="loading-forecast",
-                type="circle",
-                color="#4f46e5",
-                children=dcc.Graph(
-                    id="forecast-chart",
-                    config={"displayModeBar": True},
-                    style={"height": "550px"},
+            html.Div(
+                dcc.Loading(
+                    id="loading-forecast",
+                    type="circle",
+                    color="#4f46e5",
+                    children=dcc.Graph(
+                        id="forecast-chart",
+                        config={"displayModeBar": True},
+                        style={"height": "550px"},
+                    ),
                 ),
+                **{"data-testid": ("forecast-chart-container")},
             ),
             # ── Price target cards ─────────────────────────────────────────
             html.Div(id="forecast-target-cards", className="mt-4"),
             # ── Accuracy row ─────────────────────────────────────────────
-            html.Div(id="forecast-accuracy-row", className="mt-3"),
+            html.Div(
+                id="forecast-accuracy-row",
+                className="mt-3",
+                **{"data-testid": ("forecast-accuracy-row")},
+            ),
             # ── Hidden stores ──────────────────────────────────────────────
             dcc.Store(id="forecast-refresh-store", data=0),
             dcc.Store(id="accuracy-store", data=None),

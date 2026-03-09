@@ -61,12 +61,24 @@ def admin_users_layout() -> html.Div:
                                                 ),
                                             ),
                                             dbc.Col(
-                                                dbc.Button(
-                                                    "+ Add User",
-                                                    id="add-user-btn",
-                                                    color="primary",
-                                                    size="sm",
-                                                    className=("float-end"),
+                                                html.Span(
+                                                    dbc.Button(
+                                                        "+ Add User",
+                                                        id="add-user-btn",
+                                                        color="primary",
+                                                        size="sm",
+                                                        className=(
+                                                            "float-end"
+                                                        ),
+                                                    ),
+                                                    **{
+                                                        "data-testid": (
+                                                            "admin"
+                                                            "-create"
+                                                            "-user"
+                                                            "-btn"
+                                                        )
+                                                    },
                                                 ),
                                                 className=("text-end"),
                                             ),
@@ -96,7 +108,12 @@ def admin_users_layout() -> html.Div:
                                         type="circle",
                                         color="#4f46e5",
                                         children=html.Div(
-                                            id=("users-table" "-container")
+                                            id=("users-table" "-container"),
+                                            **{
+                                                "data-testid": (
+                                                    "admin-user" "-table"
+                                                )
+                                            },
                                         ),
                                     ),
                                     # Users pagination row

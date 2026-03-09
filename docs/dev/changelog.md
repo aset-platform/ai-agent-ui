@@ -4,6 +4,45 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 8, 2026 — E2E test stabilization
+
+Ran full Playwright E2E suite against live services and fixed all failures. 10 root causes identified and resolved:
+
+- **React 19 `fill()` incompatibility**: `pressSequentially()` for controlled textarea inputs
+- **dbc 2.0.4 `data-testid` crash**: Wrapped dbc components in `html.Div` for test attributes
+- **Dash debug menu overlay**: `{ force: true }` on pagination clicks
+- **Mock NDJSON field name**: `response` not `content`
+- **Agent selector**: Button group, not dropdown — `getByRole("button")`
+- **Transient 500s**: Login retry loop (3 attempts) in `apiLogin()`
+- **Dash reloader**: Test `outputDir` moved to `/tmp/` to avoid file-watcher restarts
+
+**Result**: 49 tests passing (48 clean + 1 flaky), 0 hard failures. Exceeds the 43-test target.
+
+---
+
+## Mar 7, 2026 — Error overlay + Playwright E2E framework
+
+### Error Overlay
+
+Reusable error banner for dashboard refresh failures (`dashboard/components/error_overlay.py`). Fixed-position red banner with `dbc.Alert(duration=8000)` auto-dismiss. Wired to 3 refresh callbacks (home, analysis, forecast).
+
+### Playwright E2E Framework
+
+Full `e2e/` project at project root — Playwright 1.50+, TypeScript, Page Object Model.
+
+| Component | Details |
+|-----------|---------|
+| Projects | 6: setup, auth, frontend, dashboard, admin, errors |
+| Spec files | 14 across `tests/{auth,frontend,dashboard,errors}/` |
+| POMs | 10 classes in `pages/{frontend,dashboard}/` |
+| Fixtures | Auth setup (storageState), JWT token fixture for Dash |
+| Dash helpers | `waitForDashCallback`, `waitForPlotlyChart`, `waitForDashLoading` |
+| CI | `.github/workflows/e2e.yml` — chromium-only, caches browsers |
+
+Added `data-testid` attributes to 16 frontend and 11 dashboard components.
+
+---
+
 ## Mar 7, 2026 — 5-Epic feature sprint
 
 ### Epic 1: Admin Password Reset

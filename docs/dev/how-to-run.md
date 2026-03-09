@@ -9,7 +9,7 @@
 | Python | 3.12+ | Virtualenv at `~/.ai-agent-ui/venv` (Python 3.12.9) |
 | Node.js | 18+ | Required by Next.js 16 |
 | npm | 9+ | Comes with Node.js |
-| GROQ_API_KEY | — | Get at [console.groq.com](https://console.groq.com) |
+| ANTHROPIC_API_KEY | — | Get at [console.anthropic.com](https://console.anthropic.com) |
 | SERPAPI_API_KEY | — | Get at [serpapi.com](https://serpapi.com) (100 free searches/month) |
 
 ---
@@ -24,7 +24,7 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 # Create backend/.env  (never commit this file)
 cat > backend/.env <<EOF
-GROQ_API_KEY=gsk_...
+ANTHROPIC_API_KEY=sk-ant-...
 SERPAPI_API_KEY=abc123...
 JWT_SECRET_KEY=<paste-output-above>
 ADMIN_EMAIL=admin@example.com
@@ -90,7 +90,7 @@ Create `backend/.env` (never commit this file):
 
 ```dotenv
 # Required
-GROQ_API_KEY=gsk_...
+ANTHROPIC_API_KEY=sk-ant-...
 JWT_SECRET_KEY=<min-32-random-chars>
 
 # Required on first run only (used by seed_admin.py)
@@ -109,7 +109,7 @@ All variables and their defaults:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GROQ_API_KEY` | — | Required for chat |
+| `ANTHROPIC_API_KEY` | — | Required for chat (Claude Sonnet 4.6) |
 | `JWT_SECRET_KEY` | — | Required for auth — min 32 chars |
 | `ADMIN_EMAIL` | — | First-run seed only |
 | `ADMIN_PASSWORD` | — | First-run seed only |
@@ -212,31 +212,6 @@ pip install -r backend/requirements.txt
 
 ---
 
-## Switching to Claude Sonnet 4.6
-
-When the Anthropic API is available, switch the backend in three steps (all in `backend/agents/general_agent.py`):
-
-```python
-# 1. Change the import at the top of the file
-from langchain_anthropic import ChatAnthropic   # was: from langchain_groq import ChatGroq
-
-# 2. Change _build_llm() in GeneralAgent
-def _build_llm(self) -> ChatAnthropic:
-    return ChatAnthropic(model=self.config.model, temperature=self.config.temperature)
-
-# 3. Change model name in create_general_agent()
-model="claude-sonnet-4-6",   # was: "openai/gpt-oss-120b"
-```
-
-Then update your environment:
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-# Remove or unset GROQ_API_KEY
-```
-
----
-
 ## Dashboard
 
 The dashboard can be started on its own — no API keys required.
@@ -264,3 +239,45 @@ Build the static site:
 ```bash
 mkdocs build --site-dir site/
 ```
+
+---
+
+## E2E Tests (Playwright)
+
+The `e2e/` directory contains 49 Playwright tests covering all 3
+app surfaces.
+
+### First-time setup
+
+```bash
+cd e2e
+npm install
+npx playwright install chromium
+```
+
+### Running tests
+
+```bash
+npm test                            # all tests (headless)
+npx playwright test --headed        # visible browser
+npx playwright test --ui            # interactive UI mode
+npx playwright test --project=frontend-chromium   # frontend only
+npx playwright test --project=dashboard-chromium  # dashboard only
+npx playwright test --project=auth-chromium       # auth only
+```
+
+All 3 services must be running (`./run.sh start`) before tests
+execute. The config will auto-start services via `webServer` if
+they are not already running.
+
+### Test output
+
+- **HTML report**: `npx playwright show-report`
+- **Traces** (on retry): `npx playwright show-trace <path>`
+- **Screenshots** (on failure): saved to `/tmp/e2e-test-results/`
+
+### CI
+
+`.github/workflows/e2e.yml` runs on every PR — chromium only,
+caches browsers, uploads HTML report (14 days) and traces on
+failure (7 days).

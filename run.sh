@@ -189,6 +189,12 @@ _init_stocks() {
     else
         echo -e "${G}  stocks Iceberg tables ready.${N}"
     fi
+
+    # Seed demo data on first run (idempotent — skips if data exists)
+    if [[ "${SKIP_SEED:-}" != "1" ]]; then
+        (cd "$SCRIPT_DIR" && "$PYTHON" scripts/seed_demo_data.py \
+              >> "${LOG_DIR}/seed_demo.log" 2>&1) || true
+    fi
 }
 
 # ── Commands ──────────────────────────────────────────────────────────────────

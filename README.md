@@ -339,6 +339,13 @@ ai-agent-ui/
 │   │   └── utils.py          # Shared utilities (currency, market label)
 │   └── assets/custom.css     # Light theme styles
 │
+├── e2e/                      # Playwright E2E tests
+│   ├── playwright.config.ts  # 6 projects (setup, auth, frontend, dashboard, admin, errors)
+│   ├── pages/                # Page Object Models (10 classes)
+│   ├── tests/                # 14 spec files, 49 tests
+│   ├── fixtures/             # Auth token fixtures for Dash
+│   └── utils/                # Selectors, wait helpers, API helpers
+│
 ├── docs/                     # MkDocs source
 └── mkdocs.yml
 
@@ -456,6 +463,36 @@ Pre-commit auto-fixes code style and updates meta-files on every commit (require
 | `FACEBOOK_APP_ID` | Placeholder — button hidden until set |
 | `FACEBOOK_APP_SECRET` | Placeholder |
 | `OAUTH_REDIRECT_URI` | Default: `http://localhost:3000/auth/oauth/callback` |
+
+---
+
+## E2E Testing (Playwright)
+
+The `e2e/` directory contains a Playwright test suite covering all 3 app surfaces (Next.js frontend, Plotly Dash dashboard, FastAPI backend).
+
+```bash
+cd e2e && npm install               # first time only
+npx playwright install chromium     # first time only
+
+npm test                            # run all 49 tests (headless)
+npx playwright test --headed        # watch tests in a visible browser
+npx playwright test --ui            # interactive UI mode (best for exploration)
+npx playwright test --project=frontend-chromium   # frontend only
+npx playwright test --project=dashboard-chromium  # dashboard only
+```
+
+| Area | Tests | Coverage |
+|------|-------|----------|
+| Auth (login, logout, OAuth, token refresh) | 8 | Login flow, RBAC, token expiry |
+| Frontend chat | 8 | Send, stream, agent switch, clear, Enter key |
+| Frontend navigation + profile | 5 | Menu, iframe, modals |
+| Dashboard home | 6 | Cards, search, dropdown, pagination, filter |
+| Dashboard analysis + forecast | 8 | Tabs, charts, refresh, accuracy |
+| Dashboard marketplace + admin | 6 | Add/remove tickers, user table, RBAC |
+| Error handling | 5 | Network errors, auth expiry, 500s |
+| **Total** | **49** | |
+
+CI runs automatically on PRs via `.github/workflows/e2e.yml` (chromium-only, caches browsers).
 
 ---
 

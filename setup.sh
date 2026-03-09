@@ -671,6 +671,18 @@ else
     info "No admin credentials provided — skipping admin seed"
 fi
 
+# ── Seed demo data ────────────────────────────────────────────────────────────
+if [[ "${SKIP_SEED:-}" != "1" ]]; then
+    info "Seeding demo data (5 tickers + 2 users)..."
+    if (cd "$SCRIPT_DIR" && "$VENV_PYTHON" scripts/seed_demo_data.py 2>&1); then
+        ok "Demo data seeded (admin@demo.local / Admin123!, test@demo.local / Test1234!)"
+    else
+        warn "scripts/seed_demo_data.py had issues (data may already exist)"
+    fi
+else
+    info "SKIP_SEED=1 — skipping demo data seed"
+fi
+
 # ── Git hooks ─────────────────────────────────────────────────────────────────
 info "Installing git hooks..."
 HOOKS_DIR="$SCRIPT_DIR/.git/hooks"

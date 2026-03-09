@@ -102,7 +102,13 @@ def home_layout() -> html.Div:
                 ],
                 className="mb-2 align-items-center",
             ),
-            dbc.Row(id="stock-cards-container", className="g-3"),
+            html.Div(
+                dbc.Row(
+                    id="stock-cards-container",
+                    className="g-3",
+                ),
+                **{"data-testid": "stock-cards-grid"},
+            ),
             # Pagination row
             dbc.Row(
                 [

@@ -58,6 +58,7 @@ def marketplace_layout() -> html.Div:
                 color="#4f46e5",
                 children=html.Div(
                     id="marketplace-table-container",
+                    **{"data-testid": ("marketplace-grid")},
                 ),
             ),
             # Pagination row

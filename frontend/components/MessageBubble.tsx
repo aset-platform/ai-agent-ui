@@ -16,7 +16,7 @@ interface MessageBubbleProps {
 
 export function MessageBubble({ message: msg, onInternalLink }: MessageBubbleProps) {
   return (
-    <div className={`flex items-end gap-2.5 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
+    <div className={`flex items-end gap-2.5 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`} data-testid={msg.role === "user" ? "user-message" : "assistant-message"}>
       {msg.role === "assistant" ? (
         <div className="w-8 h-8 shrink-0 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold select-none">
           ✦
