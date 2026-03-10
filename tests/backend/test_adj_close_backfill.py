@@ -134,15 +134,18 @@ class TestUpdateOhlcvAdjClose:
         repo = StockRepository()
         mock_table = MagicMock()
 
-        with patch.object(
-            repo,
-            "_load_table_and_scan",
-            return_value=(mock_table, full_df),
+        with (
+            patch.object(
+                repo,
+                "_load_table_and_scan",
+                return_value=(mock_table, full_df),
+            ),
+            patch.object(repo, "_overwrite_table") as mock_ow,
         ):
             updated = repo.update_ohlcv_adj_close("AAPL", adj_map)
 
         assert updated == 2
-        mock_table.overwrite.assert_called_once()
+        mock_ow.assert_called_once()
 
     def test_empty_map_returns_zero(self):
         """An empty adj_close_map must return 0 without touching Iceberg."""
@@ -166,15 +169,18 @@ class TestUpdateOhlcvAdjClose:
         repo = StockRepository()
         mock_table = MagicMock()
 
-        with patch.object(
-            repo,
-            "_load_table_and_scan",
-            return_value=(mock_table, full_df),
+        with (
+            patch.object(
+                repo,
+                "_load_table_and_scan",
+                return_value=(mock_table, full_df),
+            ),
+            patch.object(repo, "_overwrite_table") as mock_ow,
         ):
             result = repo.update_ohlcv_adj_close("AAPL", adj_map)
 
         assert result == 0
-        mock_table.overwrite.assert_not_called()
+        mock_ow.assert_not_called()
 
     def test_only_updates_target_ticker(self):
         """Rows for other tickers must not be modified."""
@@ -188,18 +194,21 @@ class TestUpdateOhlcvAdjClose:
         repo = StockRepository()
         mock_table = MagicMock()
 
-        with patch.object(
-            repo,
-            "_load_table_and_scan",
-            return_value=(mock_table, full_df),
+        with (
+            patch.object(
+                repo,
+                "_load_table_and_scan",
+                return_value=(mock_table, full_df),
+            ),
+            patch.object(repo, "_overwrite_table") as mock_ow,
         ):
             updated = repo.update_ohlcv_adj_close("AAPL", adj_map)
 
         assert updated == 1
-        mock_table.overwrite.assert_called_once()
+        mock_ow.assert_called_once()
 
-        # Inspect the Arrow table passed to overwrite
-        arrow_arg = mock_table.overwrite.call_args[0][0]
+        # Inspect the Arrow table passed to _overwrite_table
+        arrow_arg = mock_ow.call_args[0][1]
         written_df = arrow_arg.to_pandas()
 
         # MSFT rows should be unchanged (still 20 rows)
@@ -213,16 +222,19 @@ class TestUpdateOhlcvAdjClose:
         repo = StockRepository()
         mock_table = MagicMock()
 
-        with patch.object(
-            repo,
-            "_load_table_and_scan",
-            return_value=(mock_table, pd.DataFrame()),
+        with (
+            patch.object(
+                repo,
+                "_load_table_and_scan",
+                return_value=(mock_table, pd.DataFrame()),
+            ),
+            patch.object(repo, "_overwrite_table") as mock_ow,
         ):
             adj_map = {date(2020, 1, 1): 100.0}
             result = repo.update_ohlcv_adj_close("AAPL", adj_map)
 
         assert result == 0
-        mock_table.overwrite.assert_not_called()
+        mock_ow.assert_not_called()
 
     def test_nan_and_inf_values_skipped(self):
         """NaN and inf values in adj_close_map are skipped via _safe_float."""

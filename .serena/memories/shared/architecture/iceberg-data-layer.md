@@ -31,6 +31,14 @@
 - Cache awareness: `~/.ai-agent-ui/data/cache/` provides same-day
   caching. Clear only on refresh (`_clear_tool_cache()`).
 
+## Concurrency & Retry (Mar 10, 2026)
+
+- `_retry_commit(identifier, operation, *args)` retries Iceberg writes up to 3x with exponential backoff (0.5s, 1s, 2s) on `CommitFailedException`
+- `_append_rows` and `_overwrite_table` both delegate to `_retry_commit`
+- Table object is reloaded on each retry for fresh snapshot
+- All 8 write methods in `StockRepository` use these helpers — no direct `tbl.append()`/`tbl.overwrite()` calls remain
+- Needed because dashboard card refresh runs 4 concurrent pipelines via `ThreadPoolExecutor(max_workers=4)`
+
 ## Inspection
 
 ```python

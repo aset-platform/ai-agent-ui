@@ -46,6 +46,7 @@ Usage::
 
 import logging
 import math
+import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -53,6 +54,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import pyarrow as pa
+from pyiceberg.exceptions import CommitFailedException
 
 _logger = logging.getLogger(__name__)
 
@@ -284,15 +286,74 @@ class StockRepository:
             df = pd.DataFrame()
         return tbl, df
 
-    def _append_rows(self, identifier: str, arrow_table: pa.Table) -> None:
-        """Append a PyArrow table to an Iceberg table.
+    # ------------------------------------------------------------------
+    # Retry helpers for Iceberg OCC
+    # ------------------------------------------------------------------
+
+    _MAX_RETRIES = 3
+    _BACKOFF_SECONDS = (0.5, 1.0, 2.0)
+
+    def _retry_commit(self, identifier, operation, *args):
+        """Retry an Iceberg write on CommitFailedException.
+
+        Reloads the table object on each retry so the
+        snapshot is fresh.
 
         Args:
             identifier: Fully-qualified table name.
-            arrow_table: Rows to append (must match the table schema).
+            operation: ``"append"`` or ``"overwrite"``.
+            *args: Arguments forwarded to the table method.
+
+        Raises:
+            CommitFailedException: If all retries are
+                exhausted.
         """
-        tbl = self._load_table(identifier)
-        tbl.append(arrow_table)
+        last_exc = None
+        for attempt in range(self._MAX_RETRIES + 1):
+            tbl = self._load_table(identifier)
+            try:
+                getattr(tbl, operation)(*args)
+                return
+            except CommitFailedException as exc:
+                last_exc = exc
+                if attempt < self._MAX_RETRIES:
+                    delay = self._BACKOFF_SECONDS[attempt]
+                    _logger.warning(
+                        "Iceberg commit conflict on %s "
+                        "(%s), retry %d/%d in %.1fs",
+                        identifier,
+                        operation,
+                        attempt + 1,
+                        self._MAX_RETRIES,
+                        delay,
+                    )
+                    time.sleep(delay)
+        raise last_exc  # type: ignore[misc]
+
+    def _append_rows(self, identifier: str, arrow_table: pa.Table) -> None:
+        """Append a PyArrow table to an Iceberg table.
+
+        Retries automatically on concurrent commit
+        conflicts.
+
+        Args:
+            identifier: Fully-qualified table name.
+            arrow_table: Rows to append (must match
+                the table schema).
+        """
+        self._retry_commit(identifier, "append", arrow_table)
+
+    def _overwrite_table(self, identifier: str, arrow_table: pa.Table) -> None:
+        """Overwrite an Iceberg table with retry.
+
+        Retries automatically on concurrent commit
+        conflicts.
+
+        Args:
+            identifier: Fully-qualified table name.
+            arrow_table: Full replacement data.
+        """
+        self._retry_commit(identifier, "overwrite", arrow_table)
 
     # ------------------------------------------------------------------
     # Registry
@@ -361,7 +422,7 @@ class StockRepository:
             preserve_index=False,
         )
 
-        tbl.overwrite(arrow_tbl)
+        self._overwrite_table(_REGISTRY, arrow_tbl)
         _logger.debug("Registry upserted for %s", ticker)
 
     def get_registry(self, ticker: Optional[str] = None) -> pd.DataFrame:
@@ -783,7 +844,7 @@ class StockRepository:
                 ),
             }
         )
-        tbl.append(arrow_tbl)
+        self._append_rows(_OHLCV, arrow_tbl)
         _logger.debug(
             "Inserted %d new OHLCV rows for %s", len(new_dates), ticker
         )
@@ -913,7 +974,7 @@ class StockRepository:
                 ),
             }
         )
-        tbl.overwrite(arrow_tbl)
+        self._overwrite_table(_OHLCV, arrow_tbl)
         _logger.info("Updated %d adj_close rows for %s", updated, ticker)
         return updated
 
@@ -1005,7 +1066,7 @@ class StockRepository:
                 "fetched_at": pa.array(fetched_at_out, pa.timestamp("us")),
             }
         )
-        tbl.append(arrow_tbl)
+        self._append_rows(_DIVIDENDS, arrow_tbl)
         _logger.debug(
             "Inserted %d new dividend rows for %s", len(tickers_out), ticker
         )
@@ -1108,12 +1169,14 @@ class StockRepository:
         if not existing.empty:
             existing = existing[existing["ticker"] != ticker]
             rebuilt = pa.Table.from_pandas(
-                existing, schema=arrow_tbl.schema, preserve_index=False
+                existing,
+                schema=arrow_tbl.schema,
+                preserve_index=False,
             )
             combined = pa.concat_tables([rebuilt, arrow_tbl])
-            tbl.overwrite(combined)
+            self._overwrite_table(_TECHNICAL_INDICATORS, combined)
         else:
-            tbl.append(arrow_tbl)
+            self._append_rows(_TECHNICAL_INDICATORS, arrow_tbl)
 
         _logger.debug(
             "Technical indicators upserted for %s (%d rows)",
@@ -1536,12 +1599,14 @@ class StockRepository:
 
         if not existing.empty:
             arrow_existing = pa.Table.from_pandas(
-                existing, schema=arrow_new.schema, preserve_index=False
+                existing,
+                schema=arrow_new.schema,
+                preserve_index=False,
             )
             combined = pa.concat_tables([arrow_existing, arrow_new])
-            tbl.overwrite(combined)
+            self._overwrite_table(_FORECASTS, combined)
         else:
-            tbl.append(arrow_new)
+            self._append_rows(_FORECASTS, arrow_new)
 
         _logger.debug(
             "forecast_series inserted for %s %dm run %s (%d rows)",
@@ -1715,8 +1780,7 @@ class StockRepository:
                 ),
             }
         )
-        tbl = self._load_table(_QUARTERLY_RESULTS)
-        tbl.overwrite(arrow)
+        self._overwrite_table(_QUARTERLY_RESULTS, arrow)
         _logger.info(
             "quarterly_results upserted %d rows for %s",
             len(df),
@@ -1819,7 +1883,7 @@ class StockRepository:
                         schema=schema,
                         preserve_index=False,
                     )
-                    tbl.overwrite(new_arrow)
+                    self._overwrite_table(table_id, new_arrow)
                     _logger.info(
                         "Deleted %d rows for %s from %s",
                         removed,
