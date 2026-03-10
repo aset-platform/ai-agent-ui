@@ -4,6 +4,42 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 10, 2026 — N-tier Groq LLM cascade
+
+### LLM Architecture Refactor
+
+Replaced the 2-model (router/responder) FallbackLLM with an N-tier cascade: 4 Groq models tried in order, with Anthropic Claude Sonnet 4.6 as the final paid fallback.
+
+**Tier order:** `llama-3.3-70b-versatile` (12K TPM) → `kimi-k2-instruct` (10K TPM) → `gpt-oss-120b` (8K TPM) → `llama-4-scout-17b` (30K TPM) → `claude-sonnet-4-6` (paid, unlimited).
+
+### Key Changes
+
+| # | Change | Details |
+|---|--------|---------|
+| 1 | N-tier FallbackLLM | `llm_fallback.py` rewritten — `groq_models: List[str]` replaces `router_model`/`responder_model` |
+| 2 | Budget-aware routing | Per-model TPM checks with progressive compression at 70% headroom |
+| 3 | Groq SDK `max_retries=0` | Disabled internal retries (was 45-56s delay); errors cascade immediately |
+| 4 | `APIStatusError` cascade | 413 errors now caught and cascaded (not just 429) |
+| 5 | Ticker auto-linking fix | Frontend sends `user_id`; 3 missing tools wired with `auto_link_ticker()` |
+| 6 | Config simplification | Single `groq_model_tiers` CSV replaces router/responder/threshold fields |
+| 7 | Test rewrite | 12 tests covering N-tier API: cascade, budget skip, compression, no-key fallback |
+
+### Files changed: 9 modified
+
+| File | Change |
+|------|--------|
+| `backend/llm_fallback.py` | REWRITE — N-tier cascade |
+| `backend/config.py` | `groq_model_tiers` CSV setting |
+| `backend/agents/config.py` | `groq_model_tiers: List[str]` field |
+| `backend/agents/general_agent.py` | N-tier factory |
+| `backend/agents/stock_agent.py` | N-tier factory |
+| `tests/backend/test_llm_fallback.py` | 12 tests rewritten |
+| `frontend/lib/auth.ts` | `getUserIdFromToken()` added |
+| `frontend/hooks/useSendMessage.ts` | Sends `user_id` in chat body |
+| `backend/tools/stock_data_tool.py` | `auto_link_ticker()` in 3 tools |
+
+---
+
 ## Mar 10, 2026 — Team knowledge sharing ecosystem
 
 ### Infrastructure

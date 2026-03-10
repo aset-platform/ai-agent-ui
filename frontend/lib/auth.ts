@@ -110,6 +110,16 @@ export function getRoleFromToken(): string | null {
   return decodePayload(token)?.role ?? null;
 }
 
+/**
+ * Extract the user ID (sub claim) from the stored access token.
+ * Returns null if no valid token is present.
+ */
+export function getUserIdFromToken(): string | null {
+  const token = getAccessToken();
+  if (!token) return null;
+  return decodePayload(token)?.sub ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Token refresh
 // ---------------------------------------------------------------------------

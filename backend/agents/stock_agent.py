@@ -1,4 +1,4 @@
-"""Stock Analysis Agent with three-tier Groq/Anthropic LLM routing.
+"""Stock Analysis Agent with N-tier Groq/Anthropic LLM cascade.
 
 :class:`StockAgent` extends :class:`~agents.base.BaseAgent` and is wired
 with eight financial analysis tools:
@@ -14,7 +14,9 @@ with eight financial analysis tools:
 
 The agentic loop (inherited from BaseAgent) drives the LLM through
 the **fetch -> analyse -> forecast** pipeline automatically.
-The agent uses FallbackLLM with tiered Groq model routing.
+The agent uses :class:`~llm_fallback.FallbackLLM` which cascades
+through an ordered list of Groq models before falling back to
+Anthropic Claude.
 
 Typical usage::
 
@@ -34,9 +36,9 @@ from message_compressor import MessageCompressor
 from token_budget import TokenBudget
 from tools.registry import ToolRegistry
 
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------
 # System prompt
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------
 
 _STOCK_SYSTEM_PROMPT = (
     "You are a professional stock market analyst with "
@@ -81,32 +83,34 @@ _STOCK_SYSTEM_PROMPT = (
     "— only report what the tools return."
 )
 
-# ---------------------------------------------------------------------------
+
+def _parse_tiers(csv: str) -> list[str]:
+    """Split a comma-separated model list into a clean list."""
+    return [m.strip() for m in csv.split(",") if m.strip()]
+
+
+# -------------------------------------------------------------------
 # Agent class and factory
-# ---------------------------------------------------------------------------
+# -------------------------------------------------------------------
 
 
 class StockAgent(BaseAgent):
-    """Stock analysis agent with three-tier LLM routing.
+    """Stock analysis agent with N-tier LLM cascade.
 
-    Inherits the agentic loop from BaseAgent and overrides
-    :meth:`_build_llm` to supply FallbackLLM with budget-aware
-    routing through router, responder, and Anthropic tiers.
+    Inherits the agentic loop from :class:`~agents.base.BaseAgent`
+    and overrides :meth:`_build_llm` to supply FallbackLLM with
+    budget-aware cascading.
     """
 
     def _build_llm(self) -> FallbackLLM:
-        """Instantiate a three-tier :class:`~llm_fallback.FallbackLLM`.
-
-        Uses the shared :attr:`token_budget` and :attr:`compressor`
-        from the agent instance (injected by the factory function).
+        """Instantiate an N-tier :class:`~llm_fallback.FallbackLLM`.
 
         Returns:
-            A :class:`~llm_fallback.FallbackLLM` with router,
-            responder, and Anthropic tiers.
+            A :class:`~llm_fallback.FallbackLLM` with Groq tiers
+            and Anthropic fallback.
         """
         return FallbackLLM(
-            router_model=(self.config.router_model or self.config.model),
-            responder_model=self.config.model,
+            groq_models=self.config.groq_model_tiers,
             anthropic_model="claude-sonnet-4-6",
             temperature=self.config.temperature,
             agent_id=self.config.agent_id,
@@ -142,8 +146,9 @@ def create_stock_agent(
             "Bollinger Bands), Prophet price forecasting, "
             "and interactive Plotly charts."
         ),
-        model=settings.groq_responder_model,
-        router_model=settings.groq_router_model,
+        groq_model_tiers=_parse_tiers(
+            settings.groq_model_tiers,
+        ),
         temperature=0.0,
         system_prompt=_STOCK_SYSTEM_PROMPT,
         tool_names=[

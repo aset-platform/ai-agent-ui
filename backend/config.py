@@ -72,9 +72,14 @@ class Settings(BaseSettings):
     log_to_file: bool = True
     agent_timeout_seconds: int = 900
 
-    # Groq model routing — tiered strategy to maximise free-tier usage.
-    groq_router_model: str = "meta-llama/llama-4-scout-17b-16e-instruct"
-    groq_responder_model: str = "openai/gpt-oss-120b"
+    # Groq model tiers — tried in order; cascade on budget
+    # exhaustion or API error.  Comma-separated in env var.
+    groq_model_tiers: str = (
+        "llama-3.3-70b-versatile,"
+        "moonshotai/kimi-k2-instruct,"
+        "openai/gpt-oss-120b,"
+        "meta-llama/llama-4-scout-17b-16e-instruct"
+    )
 
     # Message compression settings.
     max_history_turns: int = 3

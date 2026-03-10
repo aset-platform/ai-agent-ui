@@ -17,8 +17,14 @@
 - **`BaseAgent`** (`backend/agents/base.py`) — ABC with agentic loop
   (`MAX_ITERATIONS=15`) + streaming. Subclasses only override
   `_build_llm()`.
-- **LLM**: Claude Sonnet 4.6 via `langchain_anthropic.ChatAnthropic`.
-  Config in `agents/general_agent.py` and `agents/stock_agent.py`.
+- **LLM**: N-tier Groq cascade + Anthropic Claude Sonnet 4.6 fallback
+  via `FallbackLLM` in `backend/llm_fallback.py`. Config: `AgentConfig.
+  groq_model_tiers` list, parsed from `GROQ_MODEL_TIERS` CSV env var.
+  Default: llama-3.3-70b → kimi-k2 → gpt-oss-120b → scout-17b →
+  claude-sonnet-4-6.
+- **Budget tracking**: `backend/token_budget.py` — sliding-window
+  TPM/RPM per Groq model. `backend/message_compressor.py` — 3-stage
+  compression (system prompt, history, tool results).
 - **Streaming**: `POST /chat/stream` returns NDJSON events:
   `thinking`, `tool_start`, `tool_done`, `warning`, `final`, `error`.
 - **Same-day cache**:
@@ -29,7 +35,7 @@
   GeneralAgent, before StockAgent.
 - **Ticker auto-linking**: `tools/_ticker_linker.py` uses
   `threading.local()` to pass `user_id` from HTTP handler into
-  `@tool` functions.
+  `@tool` functions. Frontend sends `user_id` via `getUserIdFromToken()`.
 - **Freshness gates**: Analysis skips if done today (Iceberg check);
   forecast skips if run within 7 days. Both non-blocking.
 
@@ -50,7 +56,7 @@ Paths centralised in `backend/paths.py`.
 
 ## Key Directories
 
-- `backend/` — agents, tools, config
+- `backend/` — agents, tools, config, llm_fallback, token_budget
 - `auth/` — JWT + RBAC + OAuth PKCE + user-ticker linking
 - `stocks/` — Iceberg persistence (9 tables, single source of truth)
 - `frontend/` — SPA (Next.js)

@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { apiFetch } from "@/lib/apiFetch";
+import { getUserIdFromToken } from "@/lib/auth";
 import type { Message } from "@/lib/constants";
 import { toolLabel } from "@/lib/constants";
 
@@ -75,6 +76,7 @@ export function useSendMessage({
           message: userMessage.content,
           history: messages.map((m) => ({ role: m.role, content: m.content })),
           agent_id: agentId,
+          user_id: getUserIdFromToken(),
         }),
         signal: controller.signal,
       });

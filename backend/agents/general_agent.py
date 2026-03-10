@@ -1,13 +1,12 @@
-"""General-purpose agent with three-tier Groq/Anthropic LLM routing.
+"""General-purpose agent with N-tier Groq/Anthropic LLM cascade.
 
 :class:`GeneralAgent` is the default agent registered at server startup.
 It extends :class:`~agents.base.BaseAgent` and is wired with two tools:
 :func:`~tools.time_tool.get_current_time` and
 :func:`~tools.search_tool.search_web`.
 
-The agent uses :class:`~llm_fallback.FallbackLLM` which routes through
-a high-TPM router model, a quality responder model, and falls back to
-Anthropic Claude only when both Groq models are exhausted.
+The agent uses :class:`~llm_fallback.FallbackLLM` which cascades through
+an ordered list of Groq models before falling back to Anthropic Claude.
 
 Typical usage::
 
@@ -28,27 +27,28 @@ from token_budget import TokenBudget
 from tools.registry import ToolRegistry
 
 
+def _parse_tiers(csv: str) -> list[str]:
+    """Split a comma-separated model list into a clean list."""
+    return [m.strip() for m in csv.split(",") if m.strip()]
+
+
 class GeneralAgent(BaseAgent):
-    """General-purpose agent with three-tier LLM routing.
+    """General-purpose agent with N-tier LLM cascade.
 
     Inherits the agentic loop from :class:`~agents.base.BaseAgent`
     and overrides :meth:`_build_llm` to supply FallbackLLM with
-    budget-aware routing.
+    budget-aware cascading.
     """
 
     def _build_llm(self) -> FallbackLLM:
-        """Instantiate a three-tier :class:`~llm_fallback.FallbackLLM`.
-
-        Uses the shared :attr:`token_budget` and :attr:`compressor`
-        from the agent instance (injected by the factory function).
+        """Instantiate an N-tier :class:`~llm_fallback.FallbackLLM`.
 
         Returns:
-            A :class:`~llm_fallback.FallbackLLM` with router,
-            responder, and Anthropic tiers.
+            A :class:`~llm_fallback.FallbackLLM` with Groq tiers
+            and Anthropic fallback.
         """
         return FallbackLLM(
-            router_model=(self.config.router_model or self.config.model),
-            responder_model=self.config.model,
+            groq_models=self.config.groq_model_tiers,
             anthropic_model="claude-sonnet-4-6",
             temperature=self.config.temperature,
             agent_id=self.config.agent_id,
@@ -82,8 +82,9 @@ def create_general_agent(
             "A general-purpose agent that can answer"
             " questions and search the web."
         ),
-        model=settings.groq_responder_model,
-        router_model=settings.groq_router_model,
+        groq_model_tiers=_parse_tiers(
+            settings.groq_model_tiers,
+        ),
         temperature=0.0,
         tool_names=["get_current_time", "search_web"],
     )

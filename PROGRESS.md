@@ -2,6 +2,39 @@
 
 ---
 
+# Session: Mar 10, 2026 — N-tier Groq LLM cascade
+
+## Summary
+Refactored the 2-model (router/responder) LLM fallback into an N-tier
+cascade with 4 Groq models + Anthropic paid fallback. Fixed multiple
+issues: progressive compression, Groq SDK retries, 413 error cascade,
+and ticker auto-linking.
+
+### Changes
+
+| # | Deliverable | Details |
+|---|-------------|---------|
+| 1 | N-tier FallbackLLM | 4 Groq tiers → Anthropic: 70b → kimi-k2 → gpt-oss-120b → scout-17b → claude-sonnet-4-6 |
+| 2 | Budget-aware routing | Per-model TPM checks with progressive compression at 70% headroom |
+| 3 | Groq SDK `max_retries=0` | Disabled internal retries (was 45-56s delay); errors cascade immediately |
+| 4 | `APIStatusError` cascade | 413 errors now caught and cascaded (not just 429) |
+| 5 | Ticker auto-linking fix | Frontend sends `user_id`; 3 missing tools wired with `auto_link_ticker()` |
+| 6 | Config simplification | Single `groq_model_tiers` CSV replaces router/responder/threshold fields |
+| 7 | Test rewrite | 12 tests covering N-tier API: cascade, budget skip, compression, no-key fallback |
+
+### Files changed
+- `backend/llm_fallback.py` — N-tier cascade (was 2-model)
+- `backend/config.py` — `groq_model_tiers` CSV setting
+- `backend/agents/config.py` — `groq_model_tiers: List[str]` field
+- `backend/agents/general_agent.py` — N-tier factory
+- `backend/agents/stock_agent.py` — N-tier factory
+- `tests/backend/test_llm_fallback.py` — 12 tests rewritten
+- `frontend/lib/auth.ts` — `getUserIdFromToken()` added
+- `frontend/hooks/useSendMessage.ts` — sends `user_id` in chat body
+- `backend/tools/stock_data_tool.py` — `auto_link_ticker()` in 3 tools
+
+---
+
 # Session: Mar 10, 2026 — Team knowledge sharing ecosystem
 
 ## Summary

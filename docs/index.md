@@ -10,7 +10,7 @@ A fullstack agentic chat application built with Next.js and FastAPI. The LLM run
 |-------|------------|
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS 4 |
 | Backend | Python 3.12, FastAPI, LangChain |
-| LLM | Groq `openai/gpt-oss-120b` *(temporary — Claude Sonnet 4.6 intended)* |
+| LLM | N-tier Groq cascade (4 models) + Anthropic Claude Sonnet 4.6 fallback |
 | Web search tool | SerpAPI via `langchain-community` |
 | Package management | npm (frontend), pip + virtualenv (backend) |
 
@@ -42,11 +42,15 @@ Response text returned to the frontend and rendered as a chat bubble
 ## Quick Start
 
 ```bash
-# 1. Start the backend
+# 1. Start all services
+./run.sh start
+
+# Or manually:
 cd backend
 source ~/.ai-agent-ui/venv/bin/activate
-export GROQ_API_KEY=...
-export SERPAPI_API_KEY=...
+export GROQ_API_KEY=...          # optional — enables Groq tiers
+export ANTHROPIC_API_KEY=...     # required — Claude fallback
+export SERPAPI_API_KEY=...       # optional — web search
 uvicorn main:app --port 8181 --reload
 
 # 2. Start the frontend (separate terminal)
@@ -67,14 +71,22 @@ ai-agent-ui/
 │   ├── main.py              # ChatServer class + uvicorn entry point
 │   ├── config.py            # Pydantic Settings (env vars / .env)
 │   ├── logging_config.py    # Centralised logging setup
+│   ├── llm_fallback.py      # FallbackLLM — N-tier Groq + Anthropic cascade
+│   ├── token_budget.py      # Sliding-window TPM/RPM budget tracker
+│   ├── message_compressor.py # 3-stage message compression
 │   ├── agents/              # Agent framework
-│   │   ├── base.py          # AgentConfig + BaseAgent ABC (agentic loop)
+│   │   ├── base.py          # BaseAgent ABC (agentic loop)
+│   │   ├── config.py        # AgentConfig dataclass
+│   │   ├── loop.py          # Agentic loop logic
+│   │   ├── stream.py        # NDJSON streaming
 │   │   ├── registry.py      # AgentRegistry
-│   │   └── general_agent.py # GeneralAgent + factory
+│   │   ├── general_agent.py # GeneralAgent + factory
+│   │   └── stock_agent.py   # StockAgent + factory
 │   ├── tools/               # Tool framework
 │   │   ├── registry.py      # ToolRegistry
 │   │   ├── time_tool.py     # get_current_time
-│   │   └── search_tool.py   # search_web
+│   │   ├── search_tool.py   # search_web
+│   │   └── stock_data_tool.py # 7 Yahoo Finance tools
 │   └── requirements.txt
 ├── frontend/
 │   └── app/

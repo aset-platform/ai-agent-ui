@@ -131,6 +131,18 @@ class TokenBudget:
         }
         self._state: Dict[str, _ModelState] = {}
 
+    def get_tpm(self, model: str) -> int | None:
+        """Return the TPM limit for *model*, or ``None``.
+
+        Args:
+            model: Groq model identifier.
+
+        Returns:
+            Tokens-per-minute limit, or ``None`` if unknown.
+        """
+        lim = self._limits.get(model)
+        return lim.tpm if lim is not None else None
+
     # ------------------------------------------------------------------
     # Token estimation
     # ------------------------------------------------------------------

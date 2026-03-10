@@ -9,7 +9,7 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 | Service | Stack | Port | Purpose |
 |---------|-------|------|---------|
 | **Frontend** | Next.js 16 + React 19 + Tailwind 4 | `3000` | Chat UI + SPA shell (login, chat, docs, dashboard, admin) |
-| **Backend** | FastAPI + LangChain + Claude Sonnet 4.6 | `8181` | Agentic loop + REST API + Auth endpoints |
+| **Backend** | FastAPI + LangChain + N-tier Groq/Anthropic | `8181` | Agentic loop + REST API + Auth endpoints |
 | **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard (Home / Analysis / Forecast / Compare / Marketplace / 7 Insights tabs) + Admin UI |
 | **Docs** | MkDocs Material | `8000` | Project documentation |
 
@@ -84,8 +84,8 @@ graph TD
     end
 
     subgraph Agents["Agents"]
-        GA["GeneralAgent<br/><i>Claude Sonnet 4.6</i>"]
-        SA["StockAgent<br/><i>Claude Sonnet 4.6</i>"]
+        GA["GeneralAgent<br/><i>N-tier Groq → Anthropic</i>"]
+        SA["StockAgent<br/><i>N-tier Groq → Anthropic</i>"]
     end
 
     subgraph Tools["Tools"]
@@ -129,7 +129,7 @@ sequenceDiagram
     participant U as User
     participant FE as Frontend
     participant BE as FastAPI
-    participant LLM as Claude Sonnet 4.6
+    participant LLM as FallbackLLM<br/>Groq → Anthropic
     participant T as Tool(s)
 
     U->>FE: sends message
@@ -299,7 +299,9 @@ ai-agent-ui/
 │   ├── main.py               # ChatServer, routes, auth router mount
 │   ├── config.py             # Pydantic Settings (.env support)
 │   ├── logging_config.py     # Rotating file + console logging
-│   ├── llm_fallback.py       # FallbackLLM — Groq primary, Anthropic fallback
+│   ├── llm_fallback.py       # FallbackLLM — N-tier Groq cascade + Anthropic fallback
+│   ├── token_budget.py       # Sliding-window TPM/RPM budget tracker
+│   ├── message_compressor.py # 3-stage message compression
 │   ├── agents/
 │   │   ├── base.py           # BaseAgent ABC
 │   │   ├── config.py         # AgentConfig dataclass
@@ -384,7 +386,8 @@ ai-agent-ui/
 |---------|------|
 | FastAPI + uvicorn | HTTP server |
 | LangChain | Agentic loop + tool binding |
-| langchain-anthropic | Anthropic Claude LLM provider |
+| langchain-anthropic | Anthropic Claude LLM provider (fallback) |
+| langchain-groq | Groq LLM provider (primary N-tier cascade) |
 | Pydantic v2 + pydantic-settings | Request/response models + settings |
 | yfinance | Yahoo Finance OHLCV data |
 | Prophet | Time-series forecasting |
@@ -444,7 +447,9 @@ All backend variables live in `backend/.env` (gitignored).
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key (Claude Sonnet 4.6) |
+| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key — Claude Sonnet 4.6 (final fallback) |
+| `GROQ_API_KEY` | No | — | Groq API key — enables N-tier Groq cascade before Anthropic |
+| `GROQ_MODEL_TIERS` | No | *(4 models)* | Comma-separated Groq model names tried in order |
 | `JWT_SECRET_KEY` | Yes | — | JWT signing secret — min 32 random chars |
 | `ADMIN_EMAIL` | First run | — | Superuser email for seed script |
 | `ADMIN_PASSWORD` | First run | — | Superuser password (min 8 chars, 1 digit) |

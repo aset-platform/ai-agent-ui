@@ -34,9 +34,27 @@ Putting the loop in `BaseAgent` and making `_build_llm()` abstract means:
 - Switching from Groq to Claude requires changing two lines in one file (`general_agent.py`), not rewriting the loop.
 - Adding a new agent with a different LLM takes ~10 lines of code.
 
-### Claude Sonnet 4.6 is the active LLM
+### N-tier LLM Cascade (FallbackLLM)
 
-Both `GeneralAgent` and `StockAgent` now use `langchain_anthropic.ChatAnthropic` with `model="claude-sonnet-4-6"`. Set `ANTHROPIC_API_KEY` in `backend/.env`. The `FallbackLLM` wrapper in `backend/llm_fallback.py` attempts Groq first (if `GROQ_API_KEY` is set) and falls back to Anthropic on `RateLimitError` or `APIConnectionError`.
+Both `GeneralAgent` and `StockAgent` use `FallbackLLM` from `backend/llm_fallback.py`, which cascades through an ordered list of Groq models before falling back to Anthropic Claude Sonnet 4.6.
+
+**Default tier order:**
+
+| Tier | Model | TPM | Notes |
+|------|-------|-----|-------|
+| 1 | `llama-3.3-70b-versatile` | 12K | Reliable tool-calling, parallel tools |
+| 2 | `moonshotai/kimi-k2-instruct` | 10K | Parallel tools |
+| 3 | `openai/gpt-oss-120b` | 8K | Quality |
+| 4 | `meta-llama/llama-4-scout-17b` | 30K | Fast, small |
+| 5 | `claude-sonnet-4-6` | unlimited | Paid Anthropic fallback |
+
+The tier order is configurable via `GROQ_MODEL_TIERS` (comma-separated env var). Tier 1 is the most capable model for tool-calling reliability; small models are parked at the end as they may skip tool calls on complex prompts.
+
+**Budget-aware routing:** `TokenBudget` tracks sliding-window TPM/RPM per model. When a tier's budget is exhausted, `FallbackLLM` applies progressive compression (targeting 70% of the model's TPM). If still unaffordable, the next tier is tried.
+
+**Error cascading:** On `RateLimitError` (429), `APIStatusError` (413), or `APIConnectionError`, the next tier is tried immediately (`max_retries=0` on ChatGroq disables Groq SDK internal retries).
+
+Set `ANTHROPIC_API_KEY` in `backend/.env` (required). Set `GROQ_API_KEY` to enable Groq tiers (optional — without it, all requests go directly to Anthropic).
 
 ---
 

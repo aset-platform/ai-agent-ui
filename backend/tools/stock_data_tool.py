@@ -221,6 +221,9 @@ def get_stock_info(ticker: str) -> str:
     if err:
         return f"Error: {err}"
     ticker = ticker.upper().strip()
+    from tools._ticker_linker import auto_link_ticker
+
+    auto_link_ticker(ticker)
     _logger.info("get_stock_info | ticker=%s", ticker)
 
     try:
@@ -380,6 +383,9 @@ def get_dividend_history(ticker: str) -> str:
     if err:
         return f"Error: {err}"
     ticker = ticker.upper().strip()
+    from tools._ticker_linker import auto_link_ticker
+
+    auto_link_ticker(ticker)
     _logger.info(
         "get_dividend_history | ticker=%s",
         ticker,
@@ -534,6 +540,9 @@ def fetch_quarterly_results(ticker: str) -> str:
     if err:
         return f"Error: {err}"
     ticker = ticker.upper().strip()
+    from tools._ticker_linker import auto_link_ticker
+
+    auto_link_ticker(ticker)
     _logger.info(
         "fetch_quarterly_results | ticker=%s",
         ticker,
