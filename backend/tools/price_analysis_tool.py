@@ -64,6 +64,10 @@ def analyse_stock_price(ticker: str) -> str:
         A formatted multi-section string report with all key metrics and
         the chart file path, or an error string if data is unavailable.
 
+    Raises:
+        Exception: Caught internally; returns an error string rather than
+            propagating so the LangChain agent can handle it gracefully.
+
     Example:
         >>> result = analyse_stock_price.invoke({"ticker": "AAPL"})
         >>> "AAPL" in result
