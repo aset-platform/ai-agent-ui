@@ -8,7 +8,7 @@ Usage::
     from auth.rate_limit import limiter
 
     @router.post("/auth/login")
-    @limiter.limit("5/15minutes")
+    @limiter.limit("30/15minutes")
     def login(request: Request, ...):
         ...
 """

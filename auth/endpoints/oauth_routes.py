@@ -113,7 +113,7 @@ def register(router: APIRouter) -> None:
     @router.post(
         "/auth/oauth/callback", response_model=TokenResponse, tags=["oauth"]
     )
-    @limiter.limit("10/minute")
+    @limiter.limit("30/minute")
     def oauth_callback(
         request: Request,
         body: OAuthCallbackRequest,

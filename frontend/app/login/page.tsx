@@ -107,8 +107,12 @@ export default function LoginPage() {
       });
 
       if (!res.ok) {
-        // Never reveal whether the email or password was wrong.
-        setError("Invalid email or password.");
+        if (res.status === 429) {
+          setError("Too many login attempts. Please try again later.");
+        } else {
+          // Never reveal whether the email or password was wrong.
+          setError("Invalid email or password.");
+        }
         return;
       }
 

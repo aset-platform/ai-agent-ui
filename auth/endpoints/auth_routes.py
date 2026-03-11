@@ -79,7 +79,7 @@ def register(router: APIRouter) -> None:
     """
 
     @router.post("/auth/login", response_model=TokenResponse, tags=["auth"])
-    @limiter.limit("5/15minutes")
+    @limiter.limit("30/15minutes")
     def login(
         request: Request,
         body: LoginRequest,
@@ -283,7 +283,7 @@ def register(router: APIRouter) -> None:
         return resp
 
     @router.post("/auth/password-reset/request", tags=["auth"])
-    @limiter.limit("3/hour")
+    @limiter.limit("10/hour")
     def password_reset_request(
         request: Request,
         body: PasswordResetRequestBody,
