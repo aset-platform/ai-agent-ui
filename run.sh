@@ -20,12 +20,15 @@ _VENV_HOME="${AI_AGENT_UI_HOME:-${HOME}/.ai-agent-ui}/venv"
 if [[ -x "${_VENV_HOME}/bin/python" ]]; then
     PYTHON="${_VENV_HOME}/bin/python"
     MKDOCS="${_VENV_HOME}/bin/mkdocs"
+    GUNICORN="${_VENV_HOME}/bin/gunicorn"
 elif [[ -x "${SCRIPT_DIR}/backend/demoenv/bin/python" ]]; then
     PYTHON="${SCRIPT_DIR}/backend/demoenv/bin/python"
     MKDOCS="${SCRIPT_DIR}/backend/demoenv/bin/mkdocs"
+    GUNICORN="${SCRIPT_DIR}/backend/demoenv/bin/gunicorn"
 else
     PYTHON="${_VENV_HOME}/bin/python"
     MKDOCS="${_VENV_HOME}/bin/mkdocs"
+    GUNICORN="${_VENV_HOME}/bin/gunicorn"
 fi
 NPM="$(command -v npm 2>/dev/null || echo 'npm')"
 
@@ -251,8 +254,19 @@ do_start() {
         "$MKDOCS" serve --dev-addr "127.0.0.1:${DOCS_PORT}"
 
     echo "  Launching dashboard…"
+    # macOS Obj-C runtime aborts forked workers unless this is set.
+    # Harmless on Linux. Gunicorn gthread uses 1 process + 4 threads
+    # so parallel E2E requests are handled without blocking.
+    OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES \
     _launch "dashboard" "${SCRIPT_DIR}" \
-        "$PYTHON" dashboard/app.py
+        "$GUNICORN" "dashboard.app:server" \
+        --bind "127.0.0.1:${DASHBOARD_PORT}" \
+        --worker-class gthread \
+        --workers 1 \
+        --threads 4 \
+        --timeout 120 \
+        --preload \
+        --access-logfile -
 
     echo ""
     echo "  Waiting for services to start…"

@@ -142,18 +142,6 @@ export async function refreshAccessToken(): Promise<string | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
 
-  // Fix #14: 10-second timeout prevents a hung refresh from blocking all API calls
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
-
-  // Fix #14: 10-second timeout prevents a hung refresh from blocking all API calls
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
-
-  // Fix #14: 10-second timeout prevents a hung refresh from blocking all API calls
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
-
   try {
     // The refresh token is sent automatically via HttpOnly cookie.
     const res = await fetch(`${BACKEND_URL}/auth/refresh`, {
