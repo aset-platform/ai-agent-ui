@@ -328,6 +328,24 @@ ai-agent-ui/
 │   ├── backfill_metadata.py  # One-time JSON → Iceberg migration
 │   └── backfill_adj_close.py # One-time adj_close backfill from parquet
 │
+├── stocks/                   # Iceberg persistence — single source of truth
+│   ├── create_tables.py      # Idempotent init of 8 tables (called by run.sh)
+│   ├── repository.py         # StockRepository — CRUD + batch reads for all 8 tables
+│   ├── backfill_metadata.py  # One-time JSON → Iceberg migration
+│   └── backfill_adj_close.py # One-time adj_close backfill from parquet
+│
+├── stocks/                   # Iceberg persistence — single source of truth
+│   ├── create_tables.py      # Idempotent init of 8 tables (called by run.sh)
+│   ├── repository.py         # StockRepository — CRUD + batch reads for all 8 tables
+│   ├── backfill_metadata.py  # One-time JSON → Iceberg migration
+│   └── backfill_adj_close.py # One-time adj_close backfill from parquet
+│
+├── stocks/                   # Iceberg persistence — single source of truth
+│   ├── create_tables.py      # Idempotent init of 8 tables (called by run.sh)
+│   ├── repository.py         # StockRepository — CRUD + batch reads for all 8 tables
+│   ├── backfill_metadata.py  # One-time JSON → Iceberg migration
+│   └── backfill_adj_close.py # One-time adj_close backfill from parquet
+│
 ├── dashboard/                # Plotly Dash (FLATLY light theme)
 │   ├── app.py                # Entry point, routing, auth store, dotenv loader
 │   ├── app_layout.py         # Root layout + display_page routing callback
