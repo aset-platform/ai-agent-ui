@@ -13,7 +13,14 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import Input, Output, State, dcc, html
 
-from dashboard.callbacks import _admin_forbidden, _unauth_notice, _validate_token
+from dashboard.callbacks import (
+    _admin_forbidden,
+    _unauth_notice,
+    _validate_token,
+)
+from dashboard.components.error_overlay import (
+    error_overlay_container,
+)
 from dashboard.layouts import (
     NAVBAR,
     admin_users_layout,
@@ -22,9 +29,11 @@ from dashboard.layouts import (
     forecast_layout,
     home_layout,
     insights_layout,
+    marketplace_layout,
 )
 
-# Module-level logger; intentionally module-scoped for use inside nested callback.
+# Module-level logger; intentionally module-scoped
+# for use inside nested callback.
 _logger = logging.getLogger(__name__)
 
 
@@ -45,6 +54,7 @@ def build_layout(app: dash.Dash) -> None:
             dcc.Store(id="nav-ticker-store", data=None),
             dcc.Store(id="auth-token-store", storage_type="local"),
             dcc.Store(id="user-profile-store", storage_type="session"),
+            error_overlay_container(),
             NAVBAR,
             html.Div(
                 id="page-content",
@@ -70,7 +80,8 @@ def build_layout(app: dash.Dash) -> None:
                     dbc.ModalBody(
                         [
                             html.Div(
-                                id="change-pw-error", className="text-danger small mb-2"
+                                id="change-pw-error",
+                                className="text-danger small mb-2",
                             ),
                             dbc.Row(
                                 [
@@ -80,7 +91,10 @@ def build_layout(app: dash.Dash) -> None:
                                             dbc.Input(
                                                 id="change-pw-new",
                                                 type="password",
-                                                placeholder="Min 8 chars, at least one digit",
+                                                placeholder=(
+                                                    "Min 8 chars,"
+                                                    " at least one digit"
+                                                ),
                                             ),
                                         ]
                                     ),
@@ -95,7 +109,9 @@ def build_layout(app: dash.Dash) -> None:
                                             dbc.Input(
                                                 id="change-pw-confirm",
                                                 type="password",
-                                                placeholder="Repeat new password",
+                                                placeholder=(
+                                                    "Repeat new" " password"
+                                                ),
                                             ),
                                         ]
                                     ),
@@ -131,7 +147,7 @@ def build_layout(app: dash.Dash) -> None:
         Output("page-content", "children"),
         Input("url", "pathname"),
         Input("url", "search"),
-        State("auth-token-store", "data"),
+        Input("auth-token-store", "data"),
         State("user-profile-store", "data"),
     )
     def display_page(
@@ -149,14 +165,19 @@ def build_layout(app: dash.Dash) -> None:
         ``/admin/users`` (requires superuser or ``admin`` page permission).
 
         Args:
-            pathname: Current URL path provided by :class:`~dash.dcc.Location`.
-            search: Query string portion of the URL (e.g. ``"?token=xxx"``).
-            stored_token: JWT string from ``localStorage``.
-            profile_store: Cached user profile dict from ``user-profile-store``.
+            pathname: Current URL path provided by
+                :class:`~dash.dcc.Location`.
+            search: Query string portion of the URL
+                (e.g. ``"?token=xxx"``).
+            stored_token: JWT string from
+                ``localStorage``.
+            profile_store: Cached user profile dict
+                from ``user-profile-store``.
 
         Returns:
-            The page-level :class:`~dash.html.Div` layout, or the unauthenticated
-            notice if the token is missing or invalid.
+            The page-level :class:`~dash.html.Div`
+            layout, or the unauthenticated notice if the
+            token is missing or invalid.
         """
         token: Optional[str] = stored_token
         if search:
@@ -168,7 +189,8 @@ def build_layout(app: dash.Dash) -> None:
         payload = _validate_token(token)
         if payload is None:
             _logger.debug(
-                "display_page: invalid or missing token for pathname=%s", pathname
+                "display_page: invalid or missing token for pathname=%s",
+                pathname,
             )
             return _unauth_notice()
 
@@ -184,14 +206,18 @@ def build_layout(app: dash.Dash) -> None:
         if pathname == "/insights":
             if role != "superuser" and not perms.get("insights"):
                 _logger.warning(
-                    "display_page: access denied to /insights for role=%s", role
+                    "display_page: access denied to /insights for role=%s",
+                    role,
                 )
                 return _admin_forbidden()
             return insights_layout()
+        if pathname == "/marketplace":
+            return marketplace_layout()
         if pathname == "/admin/users":
             if role != "superuser" and not perms.get("admin"):
                 _logger.warning(
-                    "display_page: access denied to /admin/users for role=%s", role
+                    "display_page: access denied to /admin/users for role=%s",
+                    role,
                 )
                 return _admin_forbidden()
             return admin_users_layout()

@@ -1,20 +1,24 @@
 """Dash-agnostic full stock data refresh pipeline.
 
-Runs the same 5-step pipeline that the Stock Agent uses:
+Runs the same 6-step pipeline that the Stock Agent uses:
 
-1. **Full OHLCV re-fetch** — fetches the entire date range from yfinance
-   (not a delta) so that any gaps in the middle of the data are filled.
-   Iceberg deduplication on ``(ticker, date)`` ensures existing rows
-   are not duplicated.
+1. **Full OHLCV re-fetch** — fetches the entire date range
+   from yfinance (not a delta) so that any gaps in the middle
+   of the data are filled.  Iceberg deduplication on
+   ``(ticker, date)`` ensures existing rows are not duplicated.
 2. Company info (``stocks.company_info``) — non-critical
 3. Dividends (``stocks.dividends``) — non-critical
 4. Technical analysis (``stocks.technical_indicators``,
    ``stocks.analysis_summary``) — non-critical
-5. Prophet forecast (``stocks.forecast_runs``, ``stocks.forecasts``)
+5. Quarterly results (``stocks.quarterly_results``)
+   — non-critical
+6. Prophet forecast (``stocks.forecast_runs``,
+   ``stocks.forecasts``)
 
-All 8 Iceberg tables are refreshed.  Steps 2-4 are non-critical:
-failures are recorded but do not abort the pipeline.  Only the OHLCV
-fetch (step 1) and Prophet forecast (step 5) are critical.
+All 9 Iceberg tables are refreshed.  Steps 2-5 are
+non-critical: failures are recorded but do not abort the
+pipeline.  Only the OHLCV fetch (step 1) and Prophet forecast
+(step 6) are critical.
 
 Usage::
 
@@ -41,9 +45,12 @@ _logger = logging.getLogger(__name__)
 # Ensure backend/ is on sys.path so tool imports resolve
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _BACKEND_DIR = str(_PROJECT_ROOT / "backend")
-_CACHE_DIR = _PROJECT_ROOT / "data" / "cache"
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
+
+from paths import CACHE_DIR  # noqa: E402
+
+_CACHE_DIR = CACHE_DIR
 
 
 @dataclass
@@ -199,7 +206,7 @@ def _full_ohlcv_refresh(ticker: str) -> str:
 
 
 def run_full_refresh(ticker: str, horizon_months: int = 9) -> RefreshResult:
-    """Execute the full 5-step stock data refresh pipeline.
+    """Execute the full 6-step stock data refresh pipeline.
 
     Step 1 performs a **full** re-fetch (not a delta) so that any
     gaps in the OHLCV data are filled.
@@ -264,7 +271,28 @@ def run_full_refresh(ticker: str, horizon_months: int = 9) -> RefreshResult:
                 str(exc)[:120],
             )
 
-        # ── Step 5: Prophet forecast ─────────────────────────
+        # ── Step 5: Quarterly results (non-critical) ─────────
+        try:
+            from tools.stock_data_tool import (
+                fetch_quarterly_results,
+            )
+
+            qtr_msg = fetch_quarterly_results.invoke({"ticker": ticker})
+            _record(
+                result,
+                "Quarterly results",
+                True,
+                qtr_msg[:120],
+            )
+        except Exception as exc:
+            _record(
+                result,
+                "Quarterly results",
+                False,
+                str(exc)[:120],
+            )
+
+        # ── Step 6: Prophet forecast ─────────────────────────
         from tools._forecast_accuracy import (
             _calculate_forecast_accuracy,
         )

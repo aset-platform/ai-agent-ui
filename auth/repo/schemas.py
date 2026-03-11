@@ -1,8 +1,9 @@
 """PyArrow schemas and timestamp helpers for auth Iceberg tables.
 
-Defines the immutable schema constants used when reading from and writing to
-the ``auth.users`` and ``auth.audit_log`` Iceberg tables, plus helper
-functions for datetime normalisation.
+Defines the immutable schema constants used when reading from and
+writing to the ``auth.users``, ``auth.audit_log``, and
+``auth.user_tickers`` Iceberg tables, plus helper functions for
+datetime normalisation.
 
 Constants
 ---------
@@ -11,6 +12,8 @@ Constants
 - :data:`_USERS_PA_SCHEMA`
 - :data:`_AUDIT_PA_SCHEMA`
 - :data:`_USER_TS_COLS`
+- :data:`_USER_TICKERS_TABLE`
+- :data:`_USER_TICKERS_PA_SCHEMA`
 """
 
 import logging
@@ -28,12 +31,14 @@ logger = logging.getLogger(__name__)
 _NAMESPACE = "auth"
 _USERS_TABLE = f"{_NAMESPACE}.users"
 _AUDIT_LOG_TABLE = f"{_NAMESPACE}.audit_log"
+_USER_TICKERS_TABLE = f"{_NAMESPACE}.user_tickers"
 
 # pa.timestamp("us") matches PyIceberg TimestampType (microseconds, no tz).
 # _TS is an immutable constant; kept module-level as a shared type reference.
 _TS = pa.timestamp("us")
 
-# _USERS_PA_SCHEMA is an immutable constant; kept module-level as a shared schema reference.
+# _USERS_PA_SCHEMA is an immutable constant; kept
+# module-level as a shared schema reference.
 _USERS_PA_SCHEMA = pa.schema(
     [
         pa.field("user_id", pa.string(), nullable=False),
@@ -54,7 +59,8 @@ _USERS_PA_SCHEMA = pa.schema(
     ]
 )
 
-# _AUDIT_PA_SCHEMA is an immutable constant; kept module-level as a shared schema reference.
+# _AUDIT_PA_SCHEMA is an immutable constant; kept
+# module-level as a shared schema reference.
 _AUDIT_PA_SCHEMA = pa.schema(
     [
         pa.field("event_id", pa.string(), nullable=False),
@@ -66,16 +72,35 @@ _AUDIT_PA_SCHEMA = pa.schema(
     ]
 )
 
-_USER_TS_COLS = ("created_at", "updated_at", "last_login_at", "password_reset_expiry")
+# _USER_TICKERS_PA_SCHEMA is an immutable constant; kept
+# module-level as a shared schema reference.
+_USER_TICKERS_PA_SCHEMA = pa.schema(
+    [
+        pa.field("user_id", pa.string(), nullable=False),
+        pa.field("ticker", pa.string(), nullable=False),
+        pa.field("linked_at", _TS, nullable=False),
+        pa.field("source", pa.string(), nullable=False),
+    ]
+)
+
+_USER_TS_COLS = (
+    "created_at",
+    "updated_at",
+    "last_login_at",
+    "password_reset_expiry",
+)
 
 
 def _now_utc() -> datetime:
-    """Return the current UTC time as a naive datetime (no tzinfo).
+    """Return the current UTC time as a naive datetime.
+
+    PyArrow storage requires naive datetimes, so ``tzinfo``
+    is stripped after construction.
 
     Returns:
         A naive :class:`datetime.datetime` in UTC.
     """
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _to_ts(dt: Optional[datetime]) -> Optional[datetime]:

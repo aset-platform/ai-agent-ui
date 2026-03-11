@@ -1,4 +1,4 @@
-"""FastAPI dependency functions for JWT authentication and role-based access control.
+"""FastAPI dependency functions for JWT auth and RBAC.
 
 This module exposes two FastAPI ``Depends``-compatible functions:
 
@@ -35,13 +35,13 @@ Usage in a FastAPI route::
 import logging
 import os
 from functools import lru_cache
-from typing import Optional
 
 from fastapi import Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
 
 from auth.models import UserContext
 from auth.service import AuthService
+from auth.token_store import create_token_store
 
 logger = logging.getLogger(__name__)
 
@@ -69,20 +69,28 @@ def _get_service() -> AuthService:
         True
     """
     secret = os.environ.get("JWT_SECRET_KEY", "")
-    access_mins = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
-    refresh_days = int(os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+    access_mins = int(
+        os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"),
+    )
+    refresh_days = int(
+        os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "7"),
+    )
+    redis_url = os.environ.get("REDIS_URL", "")
+    store = create_token_store(redis_url)
     return AuthService(
         secret_key=secret,
         access_expire_minutes=access_mins,
         refresh_expire_days=refresh_days,
+        token_store=store,
     )
 
 
 def get_auth_service() -> AuthService:
-    """FastAPI dependency that returns the :class:`~auth.service.AuthService` singleton.
+    """Return the :class:`~auth.service.AuthService` singleton.
 
-    Wrap endpoints that need direct service access (e.g. login, logout, refresh)
-    with ``Depends(get_auth_service)``.
+    Wrap endpoints that need direct service access
+    (e.g. login, logout, refresh) with
+    ``Depends(get_auth_service)``.
 
     Returns:
         The cached :class:`~auth.service.AuthService` instance.
@@ -98,11 +106,11 @@ def get_current_user(
     token: str = Depends(oauth2_scheme),
     service: AuthService = Depends(get_auth_service),
 ) -> UserContext:
-    """FastAPI dependency that validates the Bearer token and returns the caller's context.
+    """Validate the Bearer token and return the caller's context.
 
-    Decodes the JWT, checks its signature and expiry, verifies it is an access
-    token (not a refresh token), and returns a :class:`~auth.models.UserContext`
-    for the authenticated user.
+    Decodes the JWT, checks its signature and expiry,
+    verifies it is an access token (not a refresh token),
+    and returns a :class:`~auth.models.UserContext`.
 
     Args:
         token: Raw JWT string extracted from the ``Authorization: Bearer``
@@ -117,8 +125,8 @@ def get_current_user(
     Raises:
         HTTPException: 401 if the token is missing, invalid, expired, or
             of the wrong type.
-        HTTPException: 401 if the user's ``user_id`` or ``role`` is absent
-            from the token payload.
+        HTTPException: 401 if the user's ``user_id`` or
+            ``role`` is absent from the token payload.
 
     Example:
         >>> # In a route:
@@ -126,9 +134,9 @@ def get_current_user(
     """
     payload = service.decode_token(token, expected_type="access")
 
-    user_id: Optional[str] = payload.get("sub")
-    email: Optional[str] = payload.get("email")
-    role: Optional[str] = payload.get("role")
+    user_id: str | None = payload.get("sub")
+    email: str | None = payload.get("email")
+    role: str | None = payload.get("role")
 
     if not user_id or not role:
         raise HTTPException(status_code=401, detail="Malformed token payload")

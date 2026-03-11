@@ -10,7 +10,9 @@ The backend is a Python FastAPI server that runs an agentic loop powered by Lang
 main.py              Entry point. ChatServer class owns all state.
  ├── config.py       Pydantic Settings — env vars + .env file
  ├── logging_config.py setup_logging() — console + rotating file
- ├── llm_fallback.py  FallbackLLM — Groq primary, Anthropic fallback
+ ├── llm_fallback.py  FallbackLLM — N-tier Groq cascade + Anthropic fallback
+ ├── token_budget.py  Sliding-window TPM/RPM budget tracker
+ ├── message_compressor.py  3-stage message compression
  ├── tools/
  │    ├── registry.py   ToolRegistry — maps names → BaseTool instances
  │    ├── time_tool.py  get_current_time @tool
@@ -30,7 +32,7 @@ main.py              Entry point. ChatServer class owns all state.
 - `config.py` and `logging_config.py` have **no internal imports** — they only use the stdlib and third-party libraries.
 - `tools/*` modules do not import from `agents/*`.
 - `agents/base.py` imports `tools.registry.ToolRegistry` (for tool lookup during the loop).
-- `agents/general_agent.py` imports from `agents/base.py` and the LLM provider (`langchain_anthropic`).
+- `agents/general_agent.py` imports from `agents/base.py` and `llm_fallback.py`.
 - `main.py` is the only module that imports from all layers and wires them together.
 
 ---
@@ -60,11 +62,13 @@ ChatServer.__init__(settings)
  ├── AgentRegistry()                   ← empty registry created
  ├── _register_agents()
  │    └── create_general_agent(tool_registry)
- │         ├── AgentConfig(agent_id="general", model="claude-sonnet-4-6",
- │         │               tool_names=["get_current_time", "search_web"], ...)
+ │         ├── AgentConfig(agent_id="general",
+ │         │    groq_model_tiers=["llama-3.3-70b-versatile", ...],
+ │         │    tool_names=["get_current_time", "search_web"], ...)
  │         └── GeneralAgent(config, tool_registry)
  │              └── _setup()
- │                   ├── _build_llm() → ChatAnthropic(model=..., temperature=...)
+ │                   ├── _build_llm() → FallbackLLM(groq_models=...,
+ │                   │     anthropic_model="claude-sonnet-4-6")
  │                   ├── tool_registry.get_tools(["get_current_time", "search_web"])
  │                   └── llm.bind_tools(tools)  ← bakes tool schemas into LLM
  │

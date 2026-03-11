@@ -1,20 +1,21 @@
 import logging
 from datetime import date
-from pathlib import Path
-from typing import Optional
 
 import pandas as pd
-from tools._stock_shared import _get_repo, _require_repo  # noqa: F401 — re-exported
+from paths import CACHE_DIR, CHARTS_ANALYSIS_DIR
+from tools._stock_shared import (  # noqa: F401 — re-exported
+    _get_repo,
+    _require_repo,
+)
 
-# Module-level logger; mutable but required at module scope for pre-class logging.
+# Module-level logger; required at module scope.
 _logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).parent.parent.parent
-_CHARTS_ANALYSIS = _PROJECT_ROOT / "charts" / "analysis"
-_CACHE_DIR = _PROJECT_ROOT / "data" / "cache"
+_CHARTS_ANALYSIS = CHARTS_ANALYSIS_DIR
+_CACHE_DIR = CACHE_DIR
 
 
-def _load_cache(ticker: str, key: str) -> Optional[str]:
+def _load_cache(ticker: str, key: str) -> str | None:
     """Return cached result text for today if it exists, otherwise ``None``.
 
     Args:
@@ -22,7 +23,7 @@ def _load_cache(ticker: str, key: str) -> Optional[str]:
         key: Cache key string, e.g. ``"analysis"``.
 
     Returns:
-        The cached result string, or ``None`` if no cache file exists for today.
+        Cached result string, or ``None`` if absent.
     """
     path = _CACHE_DIR / f"{ticker}_{key}_{date.today()}.txt"
     if path.exists():
@@ -46,10 +47,10 @@ def _save_cache(ticker: str, key: str, result: str) -> None:
 
 # Fix #6: delegate to shared helpers module to eliminate duplication.
 # Fix #5: TTL cache is implemented in _helpers._load_currency.
-from tools._helpers import _currency_symbol, _load_currency  # noqa: F401
+from tools._helpers import _currency_symbol, _load_currency  # noqa: F401,E402
 
 
-def _load_parquet(ticker: str) -> Optional[pd.DataFrame]:
+def _load_parquet(ticker: str) -> pd.DataFrame | None:
     """Load OHLCV data for a ticker from Iceberg.
 
     Returns a DataFrame with a DatetimeIndex and columns ``Open``, ``High``,
@@ -73,7 +74,9 @@ def _load_parquet(ticker: str) -> Optional[pd.DataFrame]:
         df = df.sort_values("date").set_index("date")
         # Use adj_close only when it has meaningful coverage
         # (>50 %); otherwise fall back to close.
-        use_adj = "adj_close" in df.columns and df["adj_close"].notna().mean() > 0.5
+        use_adj = (
+            "adj_close" in df.columns and df["adj_close"].notna().mean() > 0.5
+        )
         adj_col = df["adj_close"] if use_adj else df["close"]
         result = pd.DataFrame(
             {

@@ -5,21 +5,24 @@ summary statistics, price targets, model accuracy, and forecast summaries.
 
 Example::
 
-    from dashboard.callbacks.card_builders import _build_stats_cards, _build_target_cards
+    from dashboard.callbacks.card_builders import (
+        _build_stats_cards, _build_target_cards,
+    )
 """
 
 import logging
 import math
 from datetime import date
-from typing import Any, Optional
+from typing import Any
 
 import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import html
 
-from dashboard.callbacks.utils import _currency_symbol, _get_currency
+from dashboard.callbacks.utils import _get_currency
 
-# Module-level logger; intentionally kept at module scope for this utility module.
+# Module-level logger; intentionally kept at module
+# scope for this utility module.
 _logger = logging.getLogger(__name__)
 
 
@@ -48,7 +51,11 @@ def _build_stats_cards(df: pd.DataFrame, ticker: str) -> Any:
 
     ann_vol_dec = daily_returns.std() * math.sqrt(252)
     sharpe = round(
-        (daily_returns.mean() * 252 - 0.04) / ann_vol_dec if ann_vol_dec > 0 else 0.0,
+        (
+            (daily_returns.mean() * 252 - 0.04) / ann_vol_dec
+            if ann_vol_dec > 0
+            else 0.0
+        ),
         2,
     )
 
@@ -73,7 +80,9 @@ def _build_stats_cards(df: pd.DataFrame, ticker: str) -> Any:
                     dbc.CardBody(
                         [
                             html.Small(label, className="text-muted d-block"),
-                            html.Span(value, className=f"fs-5 fw-bold {color_cls}"),
+                            html.Span(
+                                value, className=f"fs-5 fw-bold {color_cls}"
+                            ),
                         ]
                     ),
                     className="stat-card h-100",
@@ -87,7 +96,9 @@ def _build_stats_cards(df: pd.DataFrame, ticker: str) -> Any:
     return dbc.Row(cols)
 
 
-def _build_target_cards(summary: dict, current_price: float, ticker: str = "") -> Any:
+def _build_target_cards(
+    summary: dict, current_price: float, ticker: str = ""
+) -> Any:
     """Build price-target cards for the forecast page.
 
     Args:
@@ -120,19 +131,29 @@ def _build_target_cards(summary: dict, current_price: float, ticker: str = "") -
                     [
                         dbc.CardHeader(
                             label_map[key],
-                            className=f"text-center bg-transparent border-{color_map[key]}",
+                            className=(
+                                "text-center bg-transparent"
+                                f" border-{color_map[key]}"
+                            ),
                         ),
                         dbc.CardBody(
                             [
                                 html.H5(
-                                    f"{sym}{t['price']:,}", className="text-center mb-1"
+                                    f"{sym}{t['price']:,}",
+                                    className="text-center mb-1",
                                 ),
                                 html.P(
                                     f"{sign}{t['pct_change']:.1f}%",
-                                    className=f"text-center fw-bold mb-1 {text_color}",
+                                    className=(
+                                        "text-center fw-bold"
+                                        f" mb-1 {text_color}"
+                                    ),
                                 ),
                                 html.Small(
-                                    f"{sym}{t['lower']:,} – {sym}{t['upper']:,}",
+                                    (
+                                        f"{sym}{t['lower']:,}"
+                                        f" – {sym}{t['upper']:,}"
+                                    ),
                                     className="text-muted d-block text-center",
                                 ),
                             ]
@@ -161,13 +182,19 @@ def _build_accuracy_row(accuracy: dict, ticker: str = "") -> Any:
         :class:`dash_bootstrap_components.Row` or an error paragraph.
     """
     if "error" in accuracy:
-        return html.P(f"Accuracy: {accuracy['error']}", className="text-muted small")
+        return html.P(
+            f"Accuracy: {accuracy['error']}", className="text-muted small"
+        )
 
     sym = _get_currency(ticker) if ticker else "$"
     metrics = [
         ("MAE", f"{sym}{accuracy['MAE']:,.2f}", "Mean Absolute Error"),
         ("RMSE", f"{sym}{accuracy['RMSE']:,.2f}", "Root Mean Square Error"),
-        ("MAPE", f"{accuracy['MAPE_pct']:.1f}%", "Mean Abs % Error (lower = better)"),
+        (
+            "MAPE",
+            f"{accuracy['MAPE_pct']:.1f}%",
+            "Mean Abs % Error (lower = better)",
+        ),
     ]
     cols = [
         dbc.Col(
@@ -233,7 +260,9 @@ def _generate_forecast_summary_cb(
     )
     final_pct = targets.get(last_key, {}).get("pct_change", 0.0)
     sentiment = (
-        "Bullish" if final_pct > 10 else ("Bearish" if final_pct < -10 else "Neutral")
+        "Bullish"
+        if final_pct > 10
+        else ("Bearish" if final_pct < -10 else "Neutral")
     )
 
     return {

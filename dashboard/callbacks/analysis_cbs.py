@@ -16,12 +16,13 @@ from typing import Optional
 from urllib.parse import parse_qs
 
 import dash_bootstrap_components as dbc
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Input, Output, State, ctx, html, no_update
+from dash import Input, Output, State, html, no_update
 
 from dashboard.callbacks.auth_utils import (
+    _fetch_user_tickers,
+    _resolve_token,
     _unauth_notice,
     _validate_token,
 )
@@ -33,7 +34,6 @@ from dashboard.callbacks.chart_builders import (
     _empty_fig,
 )
 from dashboard.callbacks.data_loaders import (
-    _add_indicators,
     _add_indicators_cached,
     _clear_indicator_cache,
     _load_dividends,
@@ -42,11 +42,17 @@ from dashboard.callbacks.data_loaders import (
     _load_reg_cb,
 )
 from dashboard.callbacks.iceberg import clear_caches
+from dashboard.callbacks.sort_helpers import (
+    MACD_TOOLTIP,
+    RSI_TOOLTIP,
+)
+from dashboard.components.error_overlay import make_error_banner
 from dashboard.services.stock_refresh import (
     run_full_refresh,
 )
 
-# Module-level logger; mutable but intentionally module-scoped for callback registration.
+# Module-level logger; mutable but intentionally
+# module-scoped for callback registration.
 _logger = logging.getLogger(__name__)
 
 
@@ -86,6 +92,35 @@ def register(app) -> None:
         return tickers[0] if tickers else no_update
 
     @app.callback(
+        Output("analysis-ticker-dropdown", "options"),
+        Output("compare-ticker-dropdown", "options"),
+        Input("url", "pathname"),
+        State("auth-token-store", "data"),
+        State("url", "search"),
+    )
+    def filter_ticker_dropdowns(pathname, token, search):
+        """Update analysis + compare dropdowns to user tickers.
+
+        Args:
+            pathname: Current URL path.
+            token: JWT access token.
+            search: URL query string for token fallback.
+
+        Returns:
+            Tuple of (analysis options, compare options).
+        """
+        token = _resolve_token(token, search)
+        registry = _load_reg_cb()
+        all_tickers = sorted(registry.keys())
+        ut = _fetch_user_tickers(token)
+        if ut is not None:
+            tickers = [t for t in all_tickers if t in ut]
+        else:
+            tickers = all_tickers
+        opts = [{"label": t, "value": t} for t in tickers]
+        return opts, opts
+
+    @app.callback(
         [
             Output("analysis-chart", "figure"),
             Output("analysis-stats-row", "children"),
@@ -96,7 +131,10 @@ def register(app) -> None:
             Input("overlay-toggles", "value"),
             Input("analysis-refresh-store", "data"),
         ],
-        State("auth-token-store", "data"),
+        [
+            State("auth-token-store", "data"),
+            State("url", "search"),
+        ],
     )
     def update_analysis_chart(
         ticker,
@@ -104,6 +142,7 @@ def register(app) -> None:
         overlays,
         refresh_trigger,
         token,
+        search,
     ):
         """Rebuild the 3-panel analysis chart and stats.
 
@@ -114,10 +153,12 @@ def register(app) -> None:
             overlays: List of active overlay keys.
             refresh_trigger: Counter from refresh store.
             token: JWT access token.
+            search: URL query string for token fallback.
 
         Returns:
             Tuple of (figure, stats row component).
         """
+        token = _resolve_token(token, search)
         if _validate_token(token) is None:
             return (
                 _empty_fig("Authentication required."),
@@ -188,6 +229,11 @@ def register(app) -> None:
         [
             Output("analysis-refresh-status", "children"),
             Output("analysis-refresh-store", "data"),
+            Output(
+                "error-overlay-container",
+                "children",
+                allow_duplicate=True,
+            ),
         ],
         Input("analysis-refresh-btn", "n_clicks"),
         [
@@ -212,10 +258,13 @@ def register(app) -> None:
             token: JWT access token.
 
         Returns:
-            Tuple of (status icon span, new counter).
+            Tuple of (status icon, counter, overlay).
         """
+        if not n_clicks:
+            return no_update, no_update, no_update
+
         if _validate_token(token) is None:
-            return _unauth_notice(), no_update
+            return _unauth_notice(), no_update, no_update
 
         if not ticker:
             return (
@@ -223,6 +272,7 @@ def register(app) -> None:
                     "\u2717 Select a ticker",
                     className=("refresh-status-icon" " text-warning"),
                 ),
+                no_update,
                 no_update,
             )
 
@@ -240,6 +290,7 @@ def register(app) -> None:
                     title=(f"Refresh complete for {ticker}"),
                 ),
                 (current_refresh or 0) + 1,
+                no_update,
             )
 
         error_msg = result.error or "Unknown error"
@@ -254,6 +305,9 @@ def register(app) -> None:
                 title=error_msg[:200],
             ),
             no_update,
+            make_error_banner(
+                f"Refresh failed for {ticker}" f" \u2014 {error_msg[:150]}"
+            ),
         )
 
     @app.callback(
@@ -264,9 +318,12 @@ def register(app) -> None:
         ],
         Input("compare-ticker-dropdown", "value"),
         Input("analysis-refresh-store", "data"),
-        State("auth-token-store", "data"),
+        [
+            State("auth-token-store", "data"),
+            State("url", "search"),
+        ],
     )
-    def update_compare(tickers, refresh_trigger, token):
+    def update_compare(tickers, refresh_trigger, token, search):
         """Build the Adj Close performance chart, metrics table,
         and heatmap.
 
@@ -274,11 +331,13 @@ def register(app) -> None:
             tickers: List of selected ticker symbols (2-5).
             refresh_trigger: Bumped after a data refresh.
             token: JWT access token from auth-token-store.
+            search: URL query string for token fallback.
 
         Returns:
             Tuple of (performance figure, metrics table
             component, heatmap figure).
         """
+        token = _resolve_token(token, search)
         if _validate_token(token) is None:
             empty = _empty_fig("Authentication required.", height=450)
             return empty, _unauth_notice(), _empty_fig("", height=380)
@@ -442,10 +501,39 @@ def register(app) -> None:
             )
 
         metrics_df = pd.DataFrame(rows)
-        header_cells = [
-            html.Th(col, className="text-muted small")
-            for col in metrics_df.columns
-        ]
+        _col_tips = {
+            "RSI": ("cmp-rsi-tip", RSI_TOOLTIP),
+            "MACD": ("cmp-macd-tip", MACD_TOOLTIP),
+        }
+        header_cells = []
+        for col in metrics_df.columns:
+            if col in _col_tips:
+                uid, tip = _col_tips[col]
+                header_cells.append(
+                    html.Th(
+                        [
+                            html.Span(col),
+                            html.Span(
+                                "\u2139",
+                                id=uid,
+                                className="col-info-icon",
+                            ),
+                            dbc.Tooltip(
+                                tip,
+                                target=uid,
+                                placement="top",
+                            ),
+                        ],
+                        className="text-muted small",
+                    )
+                )
+            else:
+                header_cells.append(
+                    html.Th(
+                        col,
+                        className="text-muted small",
+                    )
+                )
         body_rows = []
         for _, row in metrics_df.iterrows():
             cells = [html.Td(str(v), className="small") for v in row]

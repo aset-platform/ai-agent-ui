@@ -10,7 +10,8 @@ import logging
 import dash
 import dash_bootstrap_components as dbc
 
-# Module-level logger; kept at module scope as a private sentinel for the factory.
+# Module-level logger; kept at module scope as a private
+# sentinel for the factory.
 _logger = logging.getLogger(__name__)
 
 
@@ -31,7 +32,10 @@ def create_app() -> dash.Dash:
         suppress_callback_exceptions=True,
         title="AI Stock Analysis Dashboard",
         meta_tags=[
-            {"name": "viewport", "content": "width=device-width, initial-scale=1"},
+            {
+                "name": "viewport",
+                "content": "width=device-width, initial-scale=1",
+            },
         ],
     )
 

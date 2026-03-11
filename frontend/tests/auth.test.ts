@@ -153,13 +153,14 @@ describe("token storage helpers", () => {
     mod = await import("../lib/auth");
   });
 
-  it("setTokens persists both tokens", () => {
+  it("setTokens persists access token only", () => {
     mod.setTokens("access-tok", "refresh-tok");
     expect(mod.getAccessToken()).toBe("access-tok");
-    expect(mod.getRefreshToken()).toBe("refresh-tok");
+    // Refresh token is now HttpOnly cookie — not in localStorage.
+    expect(mod.getRefreshToken()).toBeNull();
   });
 
-  it("clearTokens removes both tokens", () => {
+  it("clearTokens removes access token", () => {
     mod.setTokens("access-tok", "refresh-tok");
     mod.clearTokens();
     expect(mod.getAccessToken()).toBeNull();

@@ -41,28 +41,40 @@ logs/
 *.tsbuildinfo
 next-env.d.ts
 
-# Stock agent — generated data
+# Runtime data, charts, and Iceberg are now stored at ~/.ai-agent-ui/
+# Keep these rules for backwards-compat if old project-local dirs remain.
 data/raw/
 data/processed/
 data/forecasts/
 data/cache/
 data/metadata/*.json
-
-# Stock agent — generated chart HTML files
 charts/analysis/
 charts/forecasts/
+data/iceberg
+data/iceberg/
+data/avatars/
+data/auth_deny_list.json
 
 # MkDocs static build output
 site/
-
-# Auth module — Iceberg catalog + warehouse (runtime-generated)
-data/iceberg/
-
-# Uploaded user avatars (runtime-generated)
-data/avatars/
 
 # Iceberg catalog config (contains absolute local paths)
 .pyiceberg.yaml
 
 # Local Claude Code instructions (personal, not for repo)
 instruction.txt
+
+# MCP server config (contains API keys)
+.mcp.json
+
+# Serena — selective ignore (shared memories are tracked)
+.serena/cache/
+.serena/project.local.yml
+.serena/memories/session/
+.serena/memories/personal/
+
+# Auto-generated project index (local)
+PROJECT_INDEX.md
+
+# Backend runtime data (deny-list, etc.)
+backend/data/

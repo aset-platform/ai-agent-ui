@@ -50,3 +50,31 @@ def _get_available_tickers() -> List[str]:
         Alphabetically sorted list of ticker strings.
     """
     return sorted(_load_registry().keys())
+
+
+def _get_available_sectors() -> List[str]:
+    """Return sorted unique sector names from company info.
+
+    Reads the cached ``stocks.company_info`` table and extracts
+    distinct, non-empty sector values.
+
+    Returns:
+        Alphabetically sorted list of sector strings.
+    """
+    try:
+        from dashboard.callbacks.iceberg import (  # noqa: PLC0415
+            _get_company_info_cached,
+            _get_iceberg_repo,
+        )
+
+        repo = _get_iceberg_repo()
+        if repo is not None:
+            df = _get_company_info_cached(repo)
+            if not df.empty and "sector" in df.columns:
+                sectors = (
+                    df["sector"].dropna().loc[lambda s: s != "N/A"].unique()
+                )
+                return sorted(sectors)
+    except Exception as exc:
+        _logger.warning("Could not load sectors: %s", exc)
+    return []

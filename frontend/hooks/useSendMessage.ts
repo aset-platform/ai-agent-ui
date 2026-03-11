@@ -8,6 +8,8 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { apiFetch } from "@/lib/apiFetch";
+import { getUserIdFromToken } from "@/lib/auth";
+import { BACKEND_URL } from "@/lib/config";
 import type { Message } from "@/lib/constants";
 import { toolLabel } from "@/lib/constants";
 
@@ -67,14 +69,14 @@ export function useSendMessage({
     }
 
     try {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8181";
-      const res = await apiFetch(`${backendUrl}/chat/stream`, {
+      const res = await apiFetch(`${BACKEND_URL}/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: userMessage.content,
           history: messages.map((m) => ({ role: m.role, content: m.content })),
           agent_id: agentId,
+          user_id: getUserIdFromToken(),
         }),
         signal: controller.signal,
       });

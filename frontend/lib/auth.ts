@@ -22,11 +22,9 @@ export {
   storeOAuthSession,
 } from "@/lib/oauth";
 
-const ACCESS_KEY = "auth_access_token";
-const REFRESH_KEY = "auth_refresh_token";
+import { BACKEND_URL } from "@/lib/config";
 
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8181";
+const ACCESS_KEY = "auth_access_token";
 
 // ---------------------------------------------------------------------------
 // Storage helpers
@@ -38,24 +36,32 @@ export function getAccessToken(): string | null {
   return localStorage.getItem(ACCESS_KEY);
 }
 
-/** Return the stored refresh token, or null if unavailable. */
+/**
+ * Return the stored refresh token.
+ *
+ * @deprecated Refresh tokens are now HttpOnly cookies managed by
+ *   the server. This function returns null; kept for backward
+ *   compatibility with callers that have not been updated yet.
+ */
 export function getRefreshToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(REFRESH_KEY);
+  return null;
 }
 
-/** Persist both tokens to localStorage. */
-export function setTokens(access: string, refresh: string): void {
+/**
+ * Persist tokens.
+ *
+ * Only the access token is stored in localStorage; the refresh
+ * token is set as an HttpOnly cookie by the server.
+ */
+export function setTokens(access: string, _refresh?: string): void {
   if (typeof window === "undefined") return;
   localStorage.setItem(ACCESS_KEY, access);
-  localStorage.setItem(REFRESH_KEY, refresh);
 }
 
-/** Remove both tokens from localStorage (called on logout or auth failure). */
+/** Remove the access token from localStorage. */
 export function clearTokens(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(ACCESS_KEY);
-  localStorage.removeItem(REFRESH_KEY);
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +116,16 @@ export function getRoleFromToken(): string | null {
   return decodePayload(token)?.role ?? null;
 }
 
+/**
+ * Extract the user ID (sub claim) from the stored access token.
+ * Returns null if no valid token is present.
+ */
+export function getUserIdFromToken(): string | null {
+  const token = getAccessToken();
+  if (!token) return null;
+  return decodePayload(token)?.sub ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Token refresh
 // ---------------------------------------------------------------------------
@@ -122,18 +138,21 @@ export function getRoleFromToken(): string | null {
  * to `/login`).
  */
 export async function refreshAccessToken(): Promise<string | null> {
-  const refresh = getRefreshToken();
-  if (!refresh) return null;
+  // Fix #14: 10-second timeout prevents a hung refresh from blocking all API calls
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
 
   // Fix #14: 10-second timeout prevents a hung refresh from blocking all API calls
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
 
   try {
+    // The refresh token is sent automatically via HttpOnly cookie.
     const res = await fetch(`${BACKEND_URL}/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: refresh }),
+      credentials: "include",
+      body: JSON.stringify({}),
       signal: controller.signal,
     });
 
@@ -146,7 +165,7 @@ export async function refreshAccessToken(): Promise<string | null> {
       access_token: string;
       refresh_token: string;
     };
-    setTokens(data.access_token, data.refresh_token);
+    setTokens(data.access_token);
     return data.access_token;
   } catch {
     clearTokens();

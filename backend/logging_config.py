@@ -29,9 +29,9 @@ from logging.handlers import TimedRotatingFileHandler
 def setup_logging(
     level: str = "DEBUG",
     log_to_file: bool = True,
-    log_dir: str = "logs",
+    log_dir: str | None = None,
 ) -> logging.Logger:
-    """Configure the root logger with a console handler and an optional rotating file handler.
+    """Configure the root logger with console and optional file handler.
 
     Should be called **once** at application startup before any other module
     imports or uses :mod:`logging`.  Calling it more than once (e.g. due to
@@ -51,8 +51,8 @@ def setup_logging(
         log_to_file: When ``True``, a rotating file handler is added in
             addition to the console handler.  Defaults to ``True``.
         log_dir: Directory in which the log file is created.  Created
-            automatically if it does not exist.  Defaults to ``"logs"``
-            (relative to the process working directory).
+            automatically if it does not exist.  Defaults to
+            ``~/.ai-agent-ui/logs`` (via ``paths.LOGS_DIR``).
 
     Returns:
         The configured root :class:`logging.Logger` instance.
@@ -63,6 +63,11 @@ def setup_logging(
         >>> root = setup_logging(level="INFO", log_to_file=False)
         >>> root.info("Server starting")
     """
+    if log_dir is None:
+        from paths import LOGS_DIR
+
+        log_dir = str(LOGS_DIR)
+
     log_level = getattr(logging, level.upper(), logging.DEBUG)
     fmt = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
     formatter = logging.Formatter(fmt)

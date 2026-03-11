@@ -1,7 +1,7 @@
 """Iceberg-backed repository for all stock market data tables.
 
 This module provides :class:`StockRepository`, the single point of access
-for reading and writing to the 8 ``stocks`` Iceberg tables.  No code
+for reading and writing to the 9 ``stocks`` Iceberg tables.  No code
 outside this module should interact with the tables directly.
 
 Write semantics
@@ -11,13 +11,17 @@ Write semantics
 - **company_info** — append-only snapshots; never updated or deleted.
 - **ohlcv** — append new rows; deduplication on ``(ticker, date)`` at
   application level (existing rows are never re-inserted).
-- **dividends** — same as ohlcv: append, deduplicate on ``(ticker, ex_date)``.
+- **dividends** — same as ohlcv: append, deduplicate
+  on ``(ticker, ex_date)``.
 - **technical_indicators** — upsert per ``(ticker, date)`` (copy-on-write for
-  the ticker partition; acceptable for typical dataset sizes < 5 000 rows/ticker).
+  the ticker partition; acceptable for typical
+  dataset sizes < 5 000 rows/ticker).
 - **analysis_summary** — append-only snapshots.
 - **forecast_runs** — append-only per ``(ticker, horizon_months, run_date)``.
 - **forecasts** — append per ``(ticker, horizon_months, run_date)``; existing
   series for the same run are dropped before re-inserting.
+- **quarterly_results** — upsert per ``(ticker, quarter_end, statement_type)``
+  (copy-on-write).
 
 PyIceberg quirks
 ----------------
@@ -33,19 +37,24 @@ Usage::
     from datetime import date
 
     repo = StockRepository()
-    repo.upsert_registry("AAPL", date.today(), 2500, date(2015,1,2), date(2026,2,28), "us")
+    repo.upsert_registry(
+        "AAPL", date.today(), 2500,
+        date(2015,1,2), date(2026,2,28), "us",
+    )
     df = repo.get_ohlcv("AAPL")
 """
 
 import logging
 import math
+import time
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import pyarrow as pa
+from pyiceberg.exceptions import CommitFailedException
 
 _logger = logging.getLogger(__name__)
 
@@ -58,15 +67,19 @@ _TECHNICAL_INDICATORS = f"{_NAMESPACE}.technical_indicators"
 _ANALYSIS_SUMMARY = f"{_NAMESPACE}.analysis_summary"
 _FORECAST_RUNS = f"{_NAMESPACE}.forecast_runs"
 _FORECASTS = f"{_NAMESPACE}.forecasts"
+_QUARTERLY_RESULTS = f"{_NAMESPACE}.quarterly_results"
 
 
 def _now_utc() -> datetime:
-    """Return current UTC time as a naive datetime (PyIceberg TimestampType compat).
+    """Return current UTC time as a naive datetime.
+
+    PyIceberg ``TimestampType`` requires naive datetimes, so
+    ``tzinfo`` is stripped after construction.
 
     Returns:
         Naive :class:`datetime.datetime` in UTC.
     """
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _to_date(value: Any) -> Optional[date]:
@@ -134,6 +147,7 @@ class StockRepository:
     def __init__(self) -> None:
         """Initialise the repository without loading the catalog yet."""
         self._catalog = None
+        self._dirty_tables: set[str] = set()
 
     # ------------------------------------------------------------------
     # Catalog access
@@ -173,32 +187,52 @@ class StockRepository:
         """
         try:
             tbl = self._load_table(identifier)
+            if identifier in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(identifier)
             return tbl.scan().to_pandas()
         except Exception as exc:
             _logger.warning("Could not read table %s: %s", identifier, exc)
             return pd.DataFrame()
 
-    def _scan_ticker(self, identifier: str, ticker: str) -> pd.DataFrame:
+    def _scan_ticker(
+        self,
+        identifier: str,
+        ticker: str,
+        selected_fields: list[str] | None = None,
+    ) -> pd.DataFrame:
         """Scan a table filtered to a single ticker using predicate push-down.
 
         Attempts a server-side ``EqualTo("ticker", ticker)`` predicate first;
         falls back to a full table scan with Python-level filtering on failure.
 
         Args:
-            identifier: Fully-qualified table name (e.g. ``"stocks.ohlcv"``).
+            identifier: Fully-qualified table name
+                (e.g. ``"stocks.ohlcv"``).
             ticker: Stock ticker symbol (already uppercased).
+            selected_fields: Optional list of column names to
+                project.  ``None`` selects all columns.
 
         Returns:
-            DataFrame containing only rows for *ticker*, or an empty DataFrame.
+            DataFrame containing only rows for *ticker*,
+            or an empty DataFrame.
         """
         try:
             from pyiceberg.expressions import EqualTo
 
             tbl = self._load_table(identifier)
-            return tbl.scan(row_filter=EqualTo("ticker", ticker)).to_pandas()
+            if identifier in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(identifier)
+            scan_kwargs = {"row_filter": EqualTo("ticker", ticker)}
+            if selected_fields:
+                scan_kwargs["selected_fields"] = selected_fields
+            scan = tbl.scan(**scan_kwargs)
+            return scan.to_pandas()
         except Exception as exc:
             _logger.warning(
-                "Predicate push-down failed for %s ticker=%s (%s); falling back to full scan.",
+                "Predicate push-down failed for %s"
+                " ticker=%s (%s); falling back.",
                 identifier,
                 ticker,
                 exc,
@@ -206,7 +240,11 @@ class StockRepository:
             df = self._table_to_df(identifier)
             if df.empty:
                 return df
-            return df[df["ticker"] == ticker].copy()
+            filtered = df[df["ticker"] == ticker].copy()
+            if selected_fields:
+                cols = [c for c in selected_fields if c in filtered.columns]
+                return filtered[cols]
+            return filtered
 
     def _scan_two_filters(
         self,
@@ -234,12 +272,16 @@ class StockRepository:
             from pyiceberg.expressions import And, EqualTo
 
             tbl = self._load_table(identifier)
+            if identifier in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(identifier)
             return tbl.scan(
                 row_filter=And(EqualTo(col1, val1), EqualTo(col2, val2))
             ).to_pandas()
         except Exception as exc:
             _logger.warning(
-                "Compound predicate failed for %s (%s); falling back to full scan.",
+                "Compound predicate failed for %s"
+                " (%s); falling back to full scan.",
                 identifier,
                 exc,
             )
@@ -264,6 +306,9 @@ class StockRepository:
             on read failure; the table object is always returned.
         """
         tbl = self._load_table(identifier)
+        if identifier in self._dirty_tables:
+            tbl.refresh()
+            self._dirty_tables.discard(identifier)
         try:
             df = tbl.scan().to_pandas()
         except Exception as exc:
@@ -271,15 +316,75 @@ class StockRepository:
             df = pd.DataFrame()
         return tbl, df
 
-    def _append_rows(self, identifier: str, arrow_table: pa.Table) -> None:
-        """Append a PyArrow table to an Iceberg table.
+    # ------------------------------------------------------------------
+    # Retry helpers for Iceberg OCC
+    # ------------------------------------------------------------------
+
+    _MAX_RETRIES = 3
+    _BACKOFF_SECONDS = (0.5, 1.0, 2.0)
+
+    def _retry_commit(self, identifier, operation, *args):
+        """Retry an Iceberg write on CommitFailedException.
+
+        Reloads the table object on each retry so the
+        snapshot is fresh.
 
         Args:
             identifier: Fully-qualified table name.
-            arrow_table: Rows to append (must match the table schema).
+            operation: ``"append"`` or ``"overwrite"``.
+            *args: Arguments forwarded to the table method.
+
+        Raises:
+            CommitFailedException: If all retries are
+                exhausted.
         """
-        tbl = self._load_table(identifier)
-        tbl.append(arrow_table)
+        last_exc = None
+        for attempt in range(self._MAX_RETRIES + 1):
+            tbl = self._load_table(identifier)
+            try:
+                getattr(tbl, operation)(*args)
+                self._dirty_tables.add(identifier)
+                return
+            except CommitFailedException as exc:
+                last_exc = exc
+                if attempt < self._MAX_RETRIES:
+                    delay = self._BACKOFF_SECONDS[attempt]
+                    _logger.warning(
+                        "Iceberg commit conflict on %s "
+                        "(%s), retry %d/%d in %.1fs",
+                        identifier,
+                        operation,
+                        attempt + 1,
+                        self._MAX_RETRIES,
+                        delay,
+                    )
+                    time.sleep(delay)
+        raise last_exc  # type: ignore[misc]
+
+    def _append_rows(self, identifier: str, arrow_table: pa.Table) -> None:
+        """Append a PyArrow table to an Iceberg table.
+
+        Retries automatically on concurrent commit
+        conflicts.
+
+        Args:
+            identifier: Fully-qualified table name.
+            arrow_table: Rows to append (must match
+                the table schema).
+        """
+        self._retry_commit(identifier, "append", arrow_table)
+
+    def _overwrite_table(self, identifier: str, arrow_table: pa.Table) -> None:
+        """Overwrite an Iceberg table with retry.
+
+        Retries automatically on concurrent commit
+        conflicts.
+
+        Args:
+            identifier: Fully-qualified table name.
+            arrow_table: Full replacement data.
+        """
+        self._retry_commit(identifier, "overwrite", arrow_table)
 
     # ------------------------------------------------------------------
     # Registry
@@ -302,7 +407,8 @@ class StockRepository:
 
         Args:
             ticker: Stock ticker symbol (already uppercased).
-            last_fetch_date: Date of the most recent successful Yahoo Finance pull.
+            last_fetch_date: Date of the most recent
+                successful Yahoo Finance pull.
             total_rows: Total OHLCV row count for this ticker.
             date_range_start: Earliest trading date in OHLCV.
             date_range_end: Most recent trading date in OHLCV.
@@ -347,7 +453,7 @@ class StockRepository:
             preserve_index=False,
         )
 
-        tbl.overwrite(arrow_tbl)
+        self._overwrite_table(_REGISTRY, arrow_tbl)
         _logger.debug("Registry upserted for %s", ticker)
 
     def get_registry(self, ticker: Optional[str] = None) -> pd.DataFrame:
@@ -412,7 +518,8 @@ class StockRepository:
     def check_existing_data(self, ticker: str) -> Optional[Dict]:
         """Look up a single ticker in the registry.
 
-        Returns a dict matching the legacy JSON shape (with ``last_fetch_date``,
+        Returns a dict matching the legacy JSON shape
+        (with ``last_fetch_date``,
         ``total_rows``, ``date_range``, ``file_path``) or ``None`` if the
         ticker is not registered.
 
@@ -459,7 +566,8 @@ class StockRepository:
 
         Args:
             ticker: Stock ticker symbol.
-            as_of_date: Date to check freshness against (typically ``date.today()``).
+            as_of_date: Date to check freshness
+                against (typically ``date.today()``).
 
         Returns:
             Dict of company info fields if the latest snapshot's ``fetched_at``
@@ -478,15 +586,18 @@ class StockRepository:
         return latest.to_dict()
 
     def get_currency(self, ticker: str) -> str:
-        """Return the ISO currency code for *ticker* from the latest company info.
+        """Return the ISO currency code for *ticker*
+        from the latest company info.
 
-        Falls back to ``"USD"`` if no company info snapshot exists.
+        Falls back to ``"USD"`` if no company info snapshot
+        exists.
 
         Args:
             ticker: Stock ticker symbol.
 
         Returns:
-            ISO currency code string, e.g. ``"USD"`` or ``"INR"``.
+            ISO currency code string, e.g. ``"USD"``
+            or ``"INR"``.
         """
         info = self.get_latest_company_info(ticker)
         if info is None:
@@ -502,7 +613,8 @@ class StockRepository:
 
         Args:
             ticker: Stock ticker symbol (already uppercased).
-            info: Dict from ``yf.Ticker(ticker).info`` plus optional extra fields.
+            info: Dict from ``yf.Ticker(ticker).info``
+                plus optional extra fields.
         """
         row = pa.table(
             {
@@ -661,7 +773,8 @@ class StockRepository:
     # ------------------------------------------------------------------
 
     def insert_ohlcv(self, ticker: str, df: pd.DataFrame) -> int:
-        """Append new OHLCV rows for *ticker*, skipping existing (ticker, date) pairs.
+        """Append new OHLCV rows for *ticker*,
+        skipping existing (ticker, date) pairs.
 
         Uses predicate push-down to fetch only existing dates for this ticker,
         avoiding a full table scan.  Deduplication uses :class:`datetime.date`
@@ -669,7 +782,8 @@ class StockRepository:
 
         Args:
             ticker: Stock ticker symbol (already uppercased).
-            df: DataFrame with DatetimeIndex and columns Open, High, Low, Close,
+            df: DataFrame with DatetimeIndex and
+                columns Open, High, Low, Close,
                 Adj Close (optional), Volume as returned by yfinance.
 
         Returns:
@@ -678,7 +792,8 @@ class StockRepository:
         if df.empty:
             return 0
 
-        # Normalise index to date objects (Fix #10: use date objects not strings)
+        # Normalise index to date objects
+        # (Fix #10: use date objects not strings)
         all_dates = pd.to_datetime(
             df.index
         ).date  # numpy array of date objects
@@ -762,7 +877,7 @@ class StockRepository:
                 ),
             }
         )
-        tbl.append(arrow_tbl)
+        self._append_rows(_OHLCV, arrow_tbl)
         _logger.debug(
             "Inserted %d new OHLCV rows for %s", len(new_dates), ticker
         )
@@ -805,7 +920,11 @@ class StockRepository:
         Returns:
             :class:`datetime.date` or ``None`` if no data exists.
         """
-        df = self._scan_ticker(_OHLCV, ticker.upper())
+        df = self._scan_ticker(
+            _OHLCV,
+            ticker.upper(),
+            selected_fields=["ticker", "date"],
+        )
         if df.empty:
             return None
         latest = pd.to_datetime(df["date"]).max()
@@ -892,7 +1011,7 @@ class StockRepository:
                 ),
             }
         )
-        tbl.overwrite(arrow_tbl)
+        self._overwrite_table(_OHLCV, arrow_tbl)
         _logger.info("Updated %d adj_close rows for %s", updated, ticker)
         return updated
 
@@ -903,14 +1022,16 @@ class StockRepository:
     def insert_dividends(
         self, ticker: str, df: pd.DataFrame, currency: str = "USD"
     ) -> int:
-        """Append dividend rows for *ticker*, skipping existing (ticker, ex_date) pairs.
+        """Append dividend rows for *ticker*,
+        skipping existing (ticker, ex_date) pairs.
 
         Uses predicate push-down for the existing-date check.  Deduplication
         uses :class:`datetime.date` objects (not string conversion).
 
         Args:
             ticker: Stock ticker symbol.
-            df: DataFrame with columns ``date`` and ``dividend`` (from yfinance).
+            df: DataFrame with columns ``date``
+                and ``dividend`` (from yfinance).
             currency: ISO currency code for this ticker, e.g. ``"INR"``.
                 Defaults to ``"USD"``.
 
@@ -920,7 +1041,8 @@ class StockRepository:
         if df.empty:
             return 0
 
-        # Fix #1 + #2: load table once; predicate push-down for existing ex_dates
+        # Fix #1 + #2: load table once;
+        # predicate push-down for existing ex_dates
         try:
             from pyiceberg.expressions import EqualTo
 
@@ -981,7 +1103,7 @@ class StockRepository:
                 "fetched_at": pa.array(fetched_at_out, pa.timestamp("us")),
             }
         )
-        tbl.append(arrow_tbl)
+        self._append_rows(_DIVIDENDS, arrow_tbl)
         _logger.debug(
             "Inserted %d new dividend rows for %s", len(tickers_out), ticker
         )
@@ -1084,12 +1206,14 @@ class StockRepository:
         if not existing.empty:
             existing = existing[existing["ticker"] != ticker]
             rebuilt = pa.Table.from_pandas(
-                existing, schema=arrow_tbl.schema, preserve_index=False
+                existing,
+                schema=arrow_tbl.schema,
+                preserve_index=False,
             )
             combined = pa.concat_tables([rebuilt, arrow_tbl])
-            tbl.overwrite(combined)
+            self._overwrite_table(_TECHNICAL_INDICATORS, combined)
         else:
-            tbl.append(arrow_tbl)
+            self._append_rows(_TECHNICAL_INDICATORS, arrow_tbl)
 
         _logger.debug(
             "Technical indicators upserted for %s (%d rows)",
@@ -1133,7 +1257,8 @@ class StockRepository:
 
         Args:
             ticker: Stock ticker symbol.
-            summary: Dict with keys matching the ``stocks.analysis_summary`` schema.
+            summary: Dict with keys matching the
+                ``stocks.analysis_summary`` schema.
                      ``analysis_date`` defaults to today if not provided.
         """
         today = summary.get("analysis_date") or date.today()
@@ -1224,11 +1349,19 @@ class StockRepository:
         Returns:
             Dict of analysis fields, or ``None`` if no record exists.
         """
-        df = self._scan_ticker(_ANALYSIS_SUMMARY, ticker.upper())
+        df = self._scan_ticker(
+            _ANALYSIS_SUMMARY,
+            ticker.upper(),
+        )
         if df.empty:
             return None
         return (
-            df.sort_values("analysis_date", ascending=False).iloc[0].to_dict()
+            df.sort_values(
+                "analysis_date",
+                ascending=False,
+            )
+            .iloc[0]
+            .to_dict()
         )
 
     def get_all_latest_analysis_summary(
@@ -1262,7 +1395,8 @@ class StockRepository:
         return result
 
     def get_analysis_history(self, ticker: str) -> pd.DataFrame:
-        """Return all analysis summary rows for *ticker* sorted by date ascending.
+        """Return all analysis summary rows for
+        *ticker* sorted by date ascending.
 
         Args:
             ticker: Stock ticker symbol.
@@ -1383,7 +1517,8 @@ class StockRepository:
     def get_latest_forecast_run(
         self, ticker: str, horizon_months: int
     ) -> Optional[Dict[str, Any]]:
-        """Return the most recent forecast run for *ticker* and *horizon_months*.
+        """Return the most recent forecast run for
+        *ticker* and *horizon_months*.
 
         Args:
             ticker: Stock ticker symbol.
@@ -1445,7 +1580,8 @@ class StockRepository:
     ) -> None:
         """Append the full Prophet output series for a forecast run.
 
-        Drops any existing rows for the same ``(ticker, horizon_months, run_date)``
+        Drops any existing rows for the same
+        ``(ticker, horizon_months, run_date)``
         before inserting to keep the table clean on re-runs.  Loads the table
         object only once to avoid a second catalog round-trip.
 
@@ -1453,7 +1589,8 @@ class StockRepository:
             ticker: Stock ticker symbol.
             horizon_months: Forecast horizon (3, 6, or 9).
             run_date: The date this forecast was run.
-            forecast_df: DataFrame with columns ``ds``, ``yhat``, ``yhat_lower``,
+            forecast_df: DataFrame with columns
+                ``ds``, ``yhat``, ``yhat_lower``,
                 ``yhat_upper`` as returned by Prophet.
         """
         if forecast_df.empty:
@@ -1507,12 +1644,14 @@ class StockRepository:
 
         if not existing.empty:
             arrow_existing = pa.Table.from_pandas(
-                existing, schema=arrow_new.schema, preserve_index=False
+                existing,
+                schema=arrow_new.schema,
+                preserve_index=False,
             )
             combined = pa.concat_tables([arrow_existing, arrow_new])
-            tbl.overwrite(combined)
+            self._overwrite_table(_FORECASTS, combined)
         else:
-            tbl.append(arrow_new)
+            self._append_rows(_FORECASTS, arrow_new)
 
         _logger.debug(
             "forecast_series inserted for %s %dm run %s (%d rows)",
@@ -1550,3 +1689,259 @@ class StockRepository:
             .sort_values("forecast_date")
             .reset_index(drop=True)
         )
+
+    # ------------------------------------------------------------------
+    # Quarterly Results
+    # ------------------------------------------------------------------
+
+    def insert_quarterly_results(self, ticker: str, df: pd.DataFrame) -> None:
+        """Upsert quarterly results for *ticker* (copy-on-write).
+
+        Deduplicates on ``(ticker, quarter_end, statement_type)``
+        keeping the newest rows from *df*.
+
+        Args:
+            ticker: Stock ticker symbol.
+            df: DataFrame with quarterly result columns matching
+                the ``stocks.quarterly_results`` schema.
+        """
+        ticker = ticker.upper()
+        # Read ALL rows (copy-on-write: full table overwrite)
+        all_existing = self._table_to_df(_QUARTERLY_RESULTS)
+        if not all_existing.empty:
+            # Keep rows for OTHER tickers unchanged
+            other = all_existing[all_existing["ticker"] != ticker]
+            # For this ticker, keep rows not being replaced
+            same_ticker = all_existing[all_existing["ticker"] == ticker]
+            if not same_ticker.empty:
+                keys = set(
+                    zip(
+                        df["quarter_end"].astype(str),
+                        df["statement_type"],
+                    )
+                )
+                mask = ~same_ticker.apply(
+                    lambda r: (
+                        str(r["quarter_end"]),
+                        r["statement_type"],
+                    )
+                    in keys,
+                    axis=1,
+                )
+                kept = same_ticker[mask]
+            else:
+                kept = same_ticker
+            combined = pd.concat([other, kept, df], ignore_index=True)
+        else:
+            combined = df.copy()
+
+        # Build Arrow table matching schema
+        now = _now_utc()
+        arrow = pa.table(
+            {
+                "ticker": pa.array(
+                    combined["ticker"].tolist(),
+                    pa.string(),
+                ),
+                "quarter_end": pa.array(
+                    [_to_date(d) for d in combined["quarter_end"]],
+                    pa.date32(),
+                ),
+                "fiscal_year": pa.array(
+                    [_safe_int(v) for v in combined["fiscal_year"]],
+                    pa.int32(),
+                ),
+                "fiscal_quarter": pa.array(
+                    combined["fiscal_quarter"].tolist(),
+                    pa.string(),
+                ),
+                "statement_type": pa.array(
+                    combined["statement_type"].tolist(),
+                    pa.string(),
+                ),
+                "revenue": pa.array(
+                    [_safe_float(v) for v in combined["revenue"]],
+                    pa.float64(),
+                ),
+                "net_income": pa.array(
+                    [_safe_float(v) for v in combined["net_income"]],
+                    pa.float64(),
+                ),
+                "gross_profit": pa.array(
+                    [_safe_float(v) for v in combined["gross_profit"]],
+                    pa.float64(),
+                ),
+                "operating_income": pa.array(
+                    [_safe_float(v) for v in combined["operating_income"]],
+                    pa.float64(),
+                ),
+                "ebitda": pa.array(
+                    [_safe_float(v) for v in combined["ebitda"]],
+                    pa.float64(),
+                ),
+                "eps_basic": pa.array(
+                    [_safe_float(v) for v in combined["eps_basic"]],
+                    pa.float64(),
+                ),
+                "eps_diluted": pa.array(
+                    [_safe_float(v) for v in combined["eps_diluted"]],
+                    pa.float64(),
+                ),
+                "total_assets": pa.array(
+                    [_safe_float(v) for v in combined["total_assets"]],
+                    pa.float64(),
+                ),
+                "total_liabilities": pa.array(
+                    [_safe_float(v) for v in combined["total_liabilities"]],
+                    pa.float64(),
+                ),
+                "total_equity": pa.array(
+                    [_safe_float(v) for v in combined["total_equity"]],
+                    pa.float64(),
+                ),
+                "total_debt": pa.array(
+                    [_safe_float(v) for v in combined["total_debt"]],
+                    pa.float64(),
+                ),
+                "cash_and_equivalents": pa.array(
+                    [_safe_float(v) for v in combined["cash_and_equivalents"]],
+                    pa.float64(),
+                ),
+                "operating_cashflow": pa.array(
+                    [_safe_float(v) for v in combined["operating_cashflow"]],
+                    pa.float64(),
+                ),
+                "capex": pa.array(
+                    [_safe_float(v) for v in combined["capex"]],
+                    pa.float64(),
+                ),
+                "free_cashflow": pa.array(
+                    [_safe_float(v) for v in combined["free_cashflow"]],
+                    pa.float64(),
+                ),
+                "updated_at": pa.array(
+                    [now] * len(combined),
+                    pa.timestamp("us"),
+                ),
+            }
+        )
+        self._overwrite_table(_QUARTERLY_RESULTS, arrow)
+        _logger.info(
+            "quarterly_results upserted %d rows for %s",
+            len(df),
+            ticker,
+        )
+
+    def get_quarterly_results(self, ticker: str) -> pd.DataFrame:
+        """Get all quarterly results for *ticker*.
+
+        Args:
+            ticker: Stock ticker symbol.
+
+        Returns:
+            DataFrame sorted by quarter_end descending.
+        """
+        df = self._scan_ticker(_QUARTERLY_RESULTS, ticker.upper())
+        if df.empty:
+            return df
+        return df.sort_values("quarter_end", ascending=False).reset_index(
+            drop=True
+        )
+
+    def get_all_quarterly_results(
+        self,
+    ) -> pd.DataFrame:
+        """Get quarterly results for all tickers.
+
+        Returns:
+            DataFrame with all quarterly result rows.
+        """
+        return self._table_to_df(_QUARTERLY_RESULTS)
+
+    def get_quarterly_results_if_fresh(
+        self, ticker: str, days: int = 7
+    ) -> pd.DataFrame | None:
+        """Return cached quarterly data if updated within *days*.
+
+        Args:
+            ticker: Stock ticker symbol.
+            days: Freshness threshold in days.
+
+        Returns:
+            DataFrame if fresh, ``None`` if stale or missing.
+        """
+        df = self._scan_ticker(_QUARTERLY_RESULTS, ticker.upper())
+        if df.empty:
+            return None
+        if "updated_at" not in df.columns:
+            return None
+        latest = pd.to_datetime(df["updated_at"]).max()
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            days=days
+        )
+        if latest >= cutoff:
+            return df
+        return None
+
+    # ── Bulk delete ──────────────────────────────────────
+
+    _ALL_TICKER_TABLES = (
+        "stocks.registry",
+        "stocks.company_info",
+        "stocks.ohlcv",
+        "stocks.dividends",
+        "stocks.technical_indicators",
+        "stocks.analysis_summary",
+        "stocks.forecast_runs",
+        "stocks.forecasts",
+        "stocks.quarterly_results",
+    )
+
+    def delete_ticker_data(self, ticker: str) -> Dict[str, int]:
+        """Remove all rows for *ticker* from every stocks table.
+
+        Uses copy-on-write: reads the full table, filters out
+        the ticker, then overwrites.
+
+        Args:
+            ticker: Uppercase ticker symbol.
+
+        Returns:
+            Dict mapping table name to number of rows deleted.
+        """
+        ticker = ticker.upper()
+        deleted: Dict[str, int] = {}
+        for table_id in self._ALL_TICKER_TABLES:
+            try:
+                tbl, df = self._load_table_and_scan(table_id)
+                if df.empty or "ticker" not in df.columns:
+                    deleted[table_id] = 0
+                    continue
+                before = len(df)
+                df = df[df["ticker"] != ticker]
+                removed = before - len(df)
+                if removed > 0:
+                    arrow_tbl = tbl.scan().to_arrow()
+                    schema = arrow_tbl.schema
+                    new_arrow = pa.Table.from_pandas(
+                        df,
+                        schema=schema,
+                        preserve_index=False,
+                    )
+                    self._overwrite_table(table_id, new_arrow)
+                    _logger.info(
+                        "Deleted %d rows for %s from %s",
+                        removed,
+                        ticker,
+                        table_id,
+                    )
+                deleted[table_id] = removed
+            except Exception as exc:
+                _logger.warning(
+                    "Failed to delete %s from %s: %s",
+                    ticker,
+                    table_id,
+                    exc,
+                )
+                deleted[table_id] = 0
+        return deleted

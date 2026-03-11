@@ -9,8 +9,8 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 | Service | Stack | Port | Purpose |
 |---------|-------|------|---------|
 | **Frontend** | Next.js 16 + React 19 + Tailwind 4 | `3000` | Chat UI + SPA shell (login, chat, docs, dashboard, admin) |
-| **Backend** | FastAPI + LangChain + Claude Sonnet 4.6 | `8181` | Agentic loop + REST API + Auth endpoints |
-| **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard (Home / Analysis / Forecast / Compare / 6 Insights pages) + Admin UI |
+| **Backend** | FastAPI + LangChain + N-tier Groq/Anthropic | `8181` | Agentic loop + REST API + Auth endpoints |
+| **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard (Home / Analysis / Forecast / Compare / Marketplace / 7 Insights tabs) + Admin UI |
 | **Docs** | MkDocs Material | `8000` | Project documentation |
 
 ---
@@ -25,6 +25,14 @@ cd ai-agent-ui
 ```
 
 `setup.sh` handles everything: Python 3.12 virtualenv, pip install, npm ci, directory creation, config files, `.pyiceberg.yaml`, Iceberg database init, admin seeding, and git hooks. Safe to re-run. For CI/Docker: `ANTHROPIC_API_KEY=sk-ant-... ./setup.sh --non-interactive`
+
+### AI Tooling Setup (for developers using Claude Code + Serena)
+
+```bash
+./scripts/dev-setup.sh    # verifies Claude Code, Serena, shared memories
+```
+
+This script checks prerequisites, validates shared Serena memories, creates local memory directories, and installs git hooks. Run after `setup.sh`.
 
 **Env files are stored externally** at `~/.ai-agent-ui/` so branch checkouts and merges never overwrite your secrets. `backend/.env` and `frontend/.env.local` are symlinks to the master copies. Edit the files at `~/.ai-agent-ui/` directly.
 
@@ -76,8 +84,8 @@ graph TD
     end
 
     subgraph Agents["Agents"]
-        GA["GeneralAgent<br/><i>Claude Sonnet 4.6</i>"]
-        SA["StockAgent<br/><i>Claude Sonnet 4.6</i>"]
+        GA["GeneralAgent<br/><i>N-tier Groq → Anthropic</i>"]
+        SA["StockAgent<br/><i>N-tier Groq → Anthropic</i>"]
     end
 
     subgraph Tools["Tools"]
@@ -90,9 +98,9 @@ graph TD
     end
 
     subgraph Data["Data"]
-        IC["Iceberg<br/>data/iceberg/<br/><i>single source of truth</i>"]
-        C["Cache<br/>data/cache/"]
-        P["Parquet backup<br/>data/raw/ + data/forecasts/"]
+        IC["Iceberg<br/>~/.ai-agent-ui/data/iceberg/<br/><i>single source of truth</i>"]
+        C["Cache<br/>~/.ai-agent-ui/data/cache/"]
+        P["Parquet backup<br/>~/.ai-agent-ui/data/{raw,forecasts}/"]
     end
 
     Login -->|"POST /auth/login"| AUTH
@@ -121,7 +129,7 @@ sequenceDiagram
     participant U as User
     participant FE as Frontend
     participant BE as FastAPI
-    participant LLM as Claude Sonnet 4.6
+    participant LLM as FallbackLLM<br/>Groq → Anthropic
     participant T as Tool(s)
 
     U->>FE: sends message
@@ -162,16 +170,18 @@ sequenceDiagram
     FE->>BE: POST /auth/login
     BE->>DB: lookup user, verify bcrypt hash
     DB-->>BE: user record
-    BE-->>FE: {access_token, refresh_token}
-    FE->>FE: setTokens() → localStorage
+    BE-->>FE: {access_token} + HttpOnly refresh cookie
+    FE->>FE: setTokens(access) → localStorage
     FE->>U: redirect to /
 
     Note over FE,BE: All subsequent API calls include Authorization: Bearer <token>
+    Note over BE: Refresh token in HttpOnly cookie (not localStorage)
 
     FE->>FE: token expires (60 min)
-    FE->>BE: POST /auth/refresh {refresh_token}
-    BE-->>FE: new {access_token, refresh_token}
-    FE->>FE: setTokens() — old refresh token revoked
+    FE->>BE: POST /auth/refresh (cookie sent automatically)
+    BE->>BE: Revoke old refresh via TokenStore (Redis or in-memory)
+    BE-->>FE: new {access_token} + new HttpOnly cookie
+    FE->>FE: setTokens(access) — rotation complete
 ```
 
 ---
@@ -199,7 +209,7 @@ graph TD
         SMN["search_market_news<br/><i>delegates to GeneralAgent → SerpAPI</i>"]
     end
     S4 --> S5["Step 5 — Structured Report"]
-    S2 & S3 -.->|"same-day cache hit"| CACHE[("data/cache/")]
+    S2 & S3 -.->|"same-day cache hit"| CACHE[("~/.ai-agent-ui/data/cache/")]
 ```
 
 ---
@@ -239,14 +249,14 @@ ai-agent-ui/
 │
 ├── auth/                     # Auth package (project root — importable by backend + scripts)
 │   ├── __init__.py
-│   ├── create_tables.py      # One-time Iceberg table init (idempotent)
+│   ├── create_tables.py      # One-time Iceberg table init (incl. user_tickers, idempotent)
 │   ├── migrate_users_table.py # Iceberg schema evolution (add columns)
 │   ├── service.py            # AuthService — bcrypt + JWT lifecycle + deny-list
 │   ├── dependencies.py       # FastAPI dependency functions
 │   ├── oauth_service.py      # Google + Facebook PKCE OAuth2
 │   ├── models/               # Pydantic request/response models (package)
 │   ├── repo/                 # IcebergUserRepository, user writes, OAuth repo (package)
-│   └── endpoints/            # create_auth_router() — 12+ endpoints (package)
+│   └── endpoints/            # Auth + ticker routes — 15+ endpoints (package)
 │
 ├── hooks/
 │   ├── pre-commit            # Bash entry — quality gate on every commit
@@ -291,7 +301,9 @@ ai-agent-ui/
 │   ├── main.py               # ChatServer, routes, auth router mount
 │   ├── config.py             # Pydantic Settings (.env support)
 │   ├── logging_config.py     # Rotating file + console logging
-│   ├── llm_fallback.py       # FallbackLLM — Groq primary, Anthropic fallback
+│   ├── llm_fallback.py       # FallbackLLM — N-tier Groq cascade + Anthropic fallback
+│   ├── token_budget.py       # Sliding-window TPM/RPM budget tracker
+│   ├── message_compressor.py # 3-stage message compression
 │   ├── agents/
 │   │   ├── base.py           # BaseAgent ABC
 │   │   ├── config.py         # AgentConfig dataclass
@@ -305,9 +317,16 @@ ai-agent-ui/
 │       ├── time_tool.py      # get_current_time
 │       ├── search_tool.py    # search_web (SerpAPI)
 │       ├── agent_tool.py     # search_market_news (wraps GeneralAgent)
-│       ├── stock_data_tool.py      # 6 Yahoo Finance tools
+│       ├── stock_data_tool.py      # 7 Yahoo Finance tools (incl. fetch_quarterly_results)
 │       ├── price_analysis_tool.py  # analyse_stock_price
-│       └── forecasting_tool.py     # forecast_stock (Prophet)
+│       ├── forecasting_tool.py     # forecast_stock (Prophet)
+│       └── _ticker_linker.py      # Auto-link tickers to users from chat
+│
+├── stocks/                   # Iceberg persistence — single source of truth
+│   ├── create_tables.py      # Idempotent init of 9 tables (called by run.sh)
+│   ├── repository.py         # StockRepository — CRUD + batch reads for all 9 tables
+│   ├── backfill_metadata.py  # One-time JSON → Iceberg migration
+│   └── backfill_adj_close.py # One-time adj_close backfill from parquet
 │
 ├── stocks/                   # Iceberg persistence — single source of truth
 │   ├── create_tables.py      # Idempotent init of 8 tables (called by run.sh)
@@ -321,8 +340,9 @@ ai-agent-ui/
 │   ├── layouts/              # Stateless page-layout factories (package)
 │   │   ├── home.py           # Home cards + market filter + pagination
 │   │   ├── analysis.py       # Technical analysis chart layout
-│   │   ├── insights_tabs.py  # Screener/Targets/Dividends/Risk/Sectors/Correlation
+│   │   ├── insights_tabs.py  # Screener/Targets/Dividends/Risk/Sectors/Correlation/Quarterly
 │   │   ├── admin.py          # User management + audit log layout
+│   │   ├── marketplace.py   # Ticker marketplace — browse & add tickers
 │   │   └── navbar.py         # Global navbar
 │   ├── callbacks/            # Interactive callbacks (package)
 │   │   ├── data_loaders.py   # Iceberg reads, indicator caching
@@ -332,19 +352,28 @@ ai-agent-ui/
 │   │   ├── insights_cbs.py   # All Insights tab callbacks
 │   │   ├── admin_cbs.py      # User table callbacks
 │   │   ├── admin_cbs2.py     # Add/Edit/Deactivate user modals
-│   │   ├── iceberg.py        # Iceberg repo singleton + 7 TTL-cached helpers
+│   │   ├── marketplace_cbs.py # Marketplace add/remove ticker callbacks
+│   │   ├── iceberg.py        # Iceberg repo singleton + 8 TTL-cached helpers
 │   │   └── utils.py          # Shared utilities (currency, market label)
 │   └── assets/custom.css     # Light theme styles
 │
-├── data/
-│   ├── iceberg/              # Iceberg catalog + warehouse — single source of truth (gitignored)
-│   ├── cache/                # Same-day text cache (gitignored)
-│   ├── raw/                  # OHLCV parquet backup (gitignored)
-│   └── forecasts/            # Prophet output parquet backup (gitignored)
+├── e2e/                      # Playwright E2E tests
+│   ├── playwright.config.ts  # 6 projects (setup, auth, frontend, dashboard, admin, errors)
+│   ├── pages/                # Page Object Models (10 classes)
+│   ├── tests/                # 14 spec files, 49 tests
+│   ├── fixtures/             # Auth token fixtures for Dash
+│   └── utils/                # Selectors, wait helpers, API helpers
 │
-├── charts/                   # Generated Plotly HTML (gitignored)
 ├── docs/                     # MkDocs source
 └── mkdocs.yml
+
+# Runtime data lives OUTSIDE the repo at ~/.ai-agent-ui/:
+# ~/.ai-agent-ui/
+# ├── data/iceberg/           # Iceberg catalog + warehouse (single source of truth)
+# ├── data/{cache,raw,forecasts,avatars}/  # runtime data
+# ├── charts/{analysis,forecasts}/         # Plotly HTML
+# ├── venv/                                # Python virtualenv (relocated from backend/demoenv)
+# └── logs/                                # rotating service + agent logs
 ```
 
 ---
@@ -365,7 +394,8 @@ ai-agent-ui/
 |---------|------|
 | FastAPI + uvicorn | HTTP server |
 | LangChain | Agentic loop + tool binding |
-| langchain-anthropic | Anthropic Claude LLM provider |
+| langchain-anthropic | Anthropic Claude LLM provider (fallback) |
+| langchain-groq | Groq LLM provider (primary N-tier cascade) |
 | Pydantic v2 + pydantic-settings | Request/response models + settings |
 | yfinance | Yahoo Finance OHLCV data |
 | Prophet | Time-series forecasting |
@@ -392,13 +422,42 @@ ai-agent-ui/
 
 ---
 
+## Team Knowledge Sharing
+
+Project knowledge is shared via git-committed Serena memories:
+
+```
+.serena/memories/
+├── shared/              # Git-tracked, PR-reviewed
+│   ├── architecture/    # System design (5 files)
+│   ├── conventions/     # Coding standards (6 files)
+│   ├── debugging/       # Gotchas & workarounds (2 files)
+│   ├── onboarding/      # Setup guide (1 file)
+│   └── api/             # Protocol docs (1 file)
+├── session/             # Gitignored — daily progress
+└── personal/            # Gitignored — individual notes
+```
+
+| Command | Purpose |
+|---------|---------|
+| `/promote-memory` | Promote session memory to shared (AI cleanup) |
+| `/check-stale-memories` | Detect outdated shared memories |
+| `./scripts/check-stale-memories.sh` | CI stale memory check |
+| `./scripts/dev-setup.sh` | AI tooling onboarding |
+
+CLAUDE.md contains only hard rules (~85 lines). All detailed architecture, conventions, and debugging knowledge lives in Serena shared memories, loaded on-demand to minimize token usage.
+
+---
+
 ## Environment Variables
 
 All backend variables live in `backend/.env` (gitignored).
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key (Claude Sonnet 4.6) |
+| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key — Claude Sonnet 4.6 (final fallback) |
+| `GROQ_API_KEY` | No | — | Groq API key — enables N-tier Groq cascade before Anthropic |
+| `GROQ_MODEL_TIERS` | No | *(4 models)* | Comma-separated Groq model names tried in order |
 | `JWT_SECRET_KEY` | Yes | — | JWT signing secret — min 32 random chars |
 | `ADMIN_EMAIL` | First run | — | Superuser email for seed script |
 | `ADMIN_PASSWORD` | First run | — | Superuser password (min 8 chars, 1 digit) |
@@ -406,7 +465,7 @@ All backend variables live in `backend/.env` (gitignored).
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | No | `60` | JWT access token TTL |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | No | `7` | JWT refresh token TTL |
 | `LOG_LEVEL` | No | `DEBUG` | Minimum log severity |
-| `LOG_TO_FILE` | No | `true` | Write logs to `backend/logs/agent.log` |
+| `LOG_TO_FILE` | No | `true` | Write logs to `~/.ai-agent-ui/logs/agent.log` |
 | `NEXT_PUBLIC_BACKEND_URL` | No | `http://127.0.0.1:8181` | `frontend/.env.local` |
 | `NEXT_PUBLIC_DASHBOARD_URL` | No | `http://127.0.0.1:8050` | `frontend/.env.local` |
 | `NEXT_PUBLIC_DOCS_URL` | No | `http://127.0.0.1:8000` | `frontend/.env.local` |
@@ -441,7 +500,25 @@ Pre-commit auto-fixes code style and updates meta-files on every commit (require
 ## Deployment Notes
 
 ### First run
-`./run.sh start` automatically runs table creation, schema migrations, and superuser seeding when `data/iceberg/catalog.db` does not yet exist. Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `backend/.env` before the first start.
+`./run.sh start` automatically runs table creation, schema migrations, and superuser seeding when `~/.ai-agent-ui/data/iceberg/catalog.db` does not yet exist. If upgrading from a project-local data layout, `run.sh` auto-migrates data to `~/.ai-agent-ui/` on first start. Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `backend/.env` before the first start.
+
+### Token Store (Redis optional)
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `REDIS_URL` | `""` (in-memory) | `redis://host:6379/0` for persistent deny-list + OAuth state |
+
+When `REDIS_URL` is empty, the backend uses an in-memory `TokenStore` with TTL-based expiry. Set a Redis URL for production deployments where token revocation must survive restarts.
+
+### API Versioning
+
+All core endpoints are dual-mounted at `/` (legacy) and `/v1/`:
+
+```
+POST /chat/stream   ←→   POST /v1/chat/stream
+GET  /health         ←→   GET  /v1/health
+GET  /agents         ←→   GET  /v1/agents
+```
 
 ### SSO / OAuth2 (Google + Facebook PKCE)
 
@@ -455,11 +532,43 @@ Pre-commit auto-fixes code style and updates meta-files on every commit (require
 
 ---
 
+## E2E Testing (Playwright)
+
+The `e2e/` directory contains a Playwright test suite covering all 3 app surfaces (Next.js frontend, Plotly Dash dashboard, FastAPI backend).
+
+```bash
+cd e2e && npm install               # first time only
+npx playwright install chromium     # first time only
+
+npm test                            # run all 50 tests (headless)
+npx playwright test --headed        # watch tests in a visible browser
+npx playwright test --ui            # interactive UI mode (best for exploration)
+npx playwright test --project=frontend-chromium   # frontend only
+npx playwright test --project=dashboard-chromium  # dashboard only
+```
+
+| Area | Tests | Coverage |
+|------|-------|----------|
+| Auth (login, logout, OAuth, token refresh) | 8 | Login flow, RBAC, token expiry |
+| Frontend chat | 8 | Send, stream, agent switch, clear, Enter key |
+| Frontend navigation + profile | 5 | Menu, iframe, modals |
+| Dashboard home | 6 | Cards, search, dropdown, pagination, filter |
+| Dashboard analysis + forecast | 8 | Tabs, charts, refresh, accuracy |
+| Dashboard marketplace + admin | 6 | Add/remove tickers, user table, RBAC |
+| Error handling | 5 | Network errors, auth expiry, 500s |
+| **Total** | **50** | |
+
+CI runs automatically on PRs via `.github/workflows/e2e.yml` (chromium-only, caches browsers).
+
+---
+
 ## Known Limitations
 
 | Issue | Notes |
 |-------|-------|
 | **`SERPAPI_API_KEY` required for web search** | Free tier (100/month) at serpapi.com |
-| **Refresh token deny-list is in-memory** | Cleared on backend restart — revoked tokens become valid again until natural expiry (7 days) |
+| **Token store is in-memory by default** | Set `REDIS_URL` for persistent deny-list across restarts; without Redis, revoked tokens valid until natural expiry (7 days) |
 | **Facebook SSO** | Code complete; credentials are placeholders — button hidden until real credentials added |
 | **yfinance >= 1.2 dropped `Adj Close`** | Iceberg `stocks.ohlcv` stores `adj_close` as NaN; all consumers fall back to `Close` automatically |
+| **Quarterly cashflow unavailable for some Indian stocks** | yfinance returns empty quarterly cashflow for tickers like RELIANCE.NS; tool falls back to annual cashflow (marked `fiscal_quarter="FY"`) |
+| **Dashboard E2E flaky under parallel workers** | Single-threaded Dash server cannot handle concurrent browser connections; run with `--workers=1` for 50/50 pass rate |

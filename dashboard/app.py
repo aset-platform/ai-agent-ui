@@ -28,7 +28,11 @@ _ROOT = Path(__file__).parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from dashboard.app_env import _PROJECT_ROOT, _load_dotenv, setup_sys_path  # noqa: E402
+from dashboard.app_env import (  # noqa: E402
+    _PROJECT_ROOT,
+    _load_dotenv,
+    setup_sys_path,
+)
 
 # Ensure project root is registered via the canonical helper too
 setup_sys_path()
@@ -54,5 +58,7 @@ build_layout(_app)
 register_callbacks(_app)
 
 if __name__ == "__main__":
-    _logger.info("Starting AI Stock Analysis Dashboard on http://127.0.0.1:8050")
+    _logger.info(
+        "Starting AI Stock Analysis Dashboard on http://127.0.0.1:8050"
+    )
     _app.run(debug=True, port=8050)

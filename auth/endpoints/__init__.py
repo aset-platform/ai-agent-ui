@@ -16,13 +16,14 @@ from auth.endpoints import (
     auth_routes,
     oauth_routes,
     profile_routes,
+    ticker_routes,
     user_routes,
 )
 
 logger = logging.getLogger(__name__)
 
 # Module-level export list; kept here as required by the package public API.
-_all_public = ["create_auth_router"]
+_all_public = ["create_auth_router", "get_ticker_router"]
 
 __all__ = _all_public
 
@@ -49,3 +50,15 @@ def create_auth_router() -> APIRouter:
     admin_routes.register(router)
     logger.debug("Auth router created with all sub-routes registered.")
     return router
+
+
+def get_ticker_router() -> APIRouter:
+    """Return the user-ticker management router.
+
+    This router uses its own ``/users/me`` prefix and is
+    mounted separately from the main auth router.
+
+    Returns:
+        The ticker :class:`~fastapi.APIRouter`.
+    """
+    return ticker_routes.router

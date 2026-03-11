@@ -51,7 +51,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
 
-
 # ---------------------------------------------------------------------------
 # Bootstrap — project root
 # ---------------------------------------------------------------------------
@@ -63,12 +62,12 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # ANSI colour helpers
 # ---------------------------------------------------------------------------
 
-_RESET  = "\033[0m"
-_RED    = "\033[31m"
+_RESET = "\033[0m"
+_RED = "\033[31m"
 _YELLOW = "\033[33m"
-_GREEN  = "\033[32m"
-_CYAN   = "\033[36m"
-_BOLD   = "\033[1m"
+_GREEN = "\033[32m"
+_CYAN = "\033[36m"
+_BOLD = "\033[1m"
 
 
 def _c(text: str, colour: str) -> str:
@@ -84,15 +83,26 @@ def _c(text: str, colour: str) -> str:
     return f"{colour}{text}{_RESET}" if sys.stdout.isatty() else text
 
 
-def _ok(msg: str)   -> None: print(f"  {_c('✅', _GREEN)}  {msg}")
-def _warn(msg: str) -> None: print(f"  {_c('⚠️ ', _YELLOW)} {msg}")
-def _err(msg: str)  -> None: print(f"  {_c('❌', _RED)}  {msg}")
-def _info(msg: str) -> None: print(f"  {_c('ℹ️ ', _CYAN)}  {msg}")
+def _ok(msg: str) -> None:
+    print(f"  {_c('✅', _GREEN)}  {msg}")
+
+
+def _warn(msg: str) -> None:
+    print(f"  {_c('⚠️ ', _YELLOW)} {msg}")
+
+
+def _err(msg: str) -> None:
+    print(f"  {_c('❌', _RED)}  {msg}")
+
+
+def _info(msg: str) -> None:
+    print(f"  {_c('ℹ️ ', _CYAN)}  {msg}")
 
 
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class Issue:
@@ -122,41 +132,62 @@ class Issue:
 _PYTHON_DIRS = {"backend", "auth", "dashboard", "scripts"}
 
 # Paths that should never be analysed
-_SKIP_SEGMENTS = {"demoenv", "__pycache__", "node_modules", ".next", "site", ".git"}
+_SKIP_SEGMENTS = {
+    "demoenv",
+    "__pycache__",
+    "node_modules",
+    ".next",
+    "site",
+    ".git",
+}
 
 # ---------------------------------------------------------------------------
 # Security patterns
 # ---------------------------------------------------------------------------
 
 _SQL_PATTERNS: List[Tuple[re.Pattern, str]] = [
-    (re.compile(r'\.execute\s*\(\s*f[\'"]'),
-     "SQL injection: f-string in .execute() — use parameterised queries"),
-    (re.compile(r'\.execute\s*\(\s*["\'][^"\']*\{'),
-     "SQL injection: string-format in .execute() — use parameterised queries"),
-    (re.compile(r'(?:execute|query)\s*\([^)]*\+\s*\w'),
-     "SQL injection: concatenation in query call — use parameterised queries"),
+    (
+        re.compile(r'\.execute\s*\(\s*f[\'"]'),
+        "SQL injection: f-string in .execute() — use parameterised queries",
+    ),
+    (
+        re.compile(r'\.execute\s*\(\s*["\'][^"\']*\{'),
+        "SQL injection: string-format in .execute() — use parameterised queries",
+    ),
+    (
+        re.compile(r"(?:execute|query)\s*\([^)]*\+\s*\w"),
+        "SQL injection: concatenation in query call — use parameterised queries",
+    ),
 ]
 
 _XSS_PY_PATTERNS: List[Tuple[re.Pattern, str]] = [
-    (re.compile(r'html\.\w+\(\s*f[\'"].*<[a-zA-Z]'),
-     "XSS risk: f-string with HTML tags inside a Dash component"),
-    (re.compile(r'innerHTML\s*=\s*f[\'"]'),
-     "XSS risk: f-string assigned directly to innerHTML"),
+    (
+        re.compile(r'html\.\w+\(\s*f[\'"].*<[a-zA-Z]'),
+        "XSS risk: f-string with HTML tags inside a Dash component",
+    ),
+    (
+        re.compile(r'innerHTML\s*=\s*f[\'"]'),
+        "XSS risk: f-string assigned directly to innerHTML",
+    ),
 ]
 
 _XSS_TS_PATTERNS: List[Tuple[re.Pattern, str]] = [
-    (re.compile(r'dangerouslySetInnerHTML\s*=\s*\{\{'),
-     "XSS risk: dangerouslySetInnerHTML — ensure value is sanitised"),
-    (re.compile(r'\.innerHTML\s*=(?!=)'),
-     "XSS risk: direct innerHTML assignment"),
-    (re.compile(r'document\.write\s*\('),
-     "XSS risk: document.write()"),
+    (
+        re.compile(r"dangerouslySetInnerHTML\s*=\s*\{\{"),
+        "XSS risk: dangerouslySetInnerHTML — ensure value is sanitised",
+    ),
+    (
+        re.compile(r"\.innerHTML\s*=(?!=)"),
+        "XSS risk: direct innerHTML assignment",
+    ),
+    (re.compile(r"document\.write\s*\("), "XSS risk: document.write()"),
 ]
 
 
 # ---------------------------------------------------------------------------
 # Main checker class
 # ---------------------------------------------------------------------------
+
 
 class PreCommitChecker:
     """Orchestrates all three pre-commit quality checks.
@@ -175,15 +206,19 @@ class PreCommitChecker:
         ).splitlines()
 
         self.staged_py: List[str] = [
-            f for f in self.staged_files
+            f
+            for f in self.staged_files
             if f.endswith(".py") and self._is_eligible_python(f)
         ]
         self.staged_ts: List[str] = [
-            f for f in self.staged_files
+            f
+            for f in self.staged_files
             if f.endswith((".ts", ".tsx"))
             and not any(seg in f for seg in _SKIP_SEGMENTS)
         ]
-        self.current_branch: str = os.environ.get("GIT_CURRENT_BRANCH", "unknown")
+        self.current_branch: str = os.environ.get(
+            "GIT_CURRENT_BRANCH", "unknown"
+        )
 
     # ── Entry point ───────────────────────────────────────────────────────────
 
@@ -199,21 +234,29 @@ class PreCommitChecker:
         blocking = False
 
         # ── 1. Static code analysis ───────────────────────────────────────
-        print(f"\n{_BOLD}── [1/3] Code quality analysis  (branch: {self.current_branch}){_RESET}")
+        print(
+            f"\n{_BOLD}── [1/3] Code quality analysis  (branch: {self.current_branch}){_RESET}"
+        )
         issues = self._collect_static_issues()
 
         if issues:
-            errors   = [i for i in issues if i.severity == "error"]
+            errors = [i for i in issues if i.severity == "error"]
             warnings = [i for i in issues if i.severity == "warning"]
             if errors:
-                _info(f"{len(errors)} error(s) found — commit will be blocked.")
+                _info(
+                    f"{len(errors)} error(s) found — commit will be blocked."
+                )
                 for iss in errors:
-                    _err(f"{iss.filepath}:{iss.line}  [{iss.category}] {iss.description}")
+                    _err(
+                        f"{iss.filepath}:{iss.line}  [{iss.category}] {iss.description}"
+                    )
                 blocking = True
             if warnings:
                 _info(f"{len(warnings)} warning(s) found (non-blocking).")
                 for iss in warnings:
-                    _warn(f"{iss.filepath}:{iss.line}  [{iss.category}] {iss.description}")
+                    _warn(
+                        f"{iss.filepath}:{iss.line}  [{iss.category}] {iss.description}"
+                    )
         else:
             _ok("No violations found in staged Python / TypeScript files.")
 
@@ -222,7 +265,9 @@ class PreCommitChecker:
         if self._run_mkdocs_build():
             _ok("mkdocs build passed.")
         else:
-            _warn("mkdocs build failed — fix before pushing (pre-push hook will block).")
+            _warn(
+                "mkdocs build failed — fix before pushing (pre-push hook will block)."
+            )
 
         # ── 3. Changelog date ordering ────────────────────────────────────
         print(f"\n{_BOLD}── [3/3] Changelog date ordering{_RESET}")
@@ -248,8 +293,15 @@ class PreCommitChecker:
             try:
                 tree = ast.parse(source, filename=rel_path)
             except SyntaxError as exc:
-                issues.append(Issue(rel_path, exc.lineno or 0, "syntax", "error",
-                                    f"Syntax error — cannot analyse file: {exc}"))
+                issues.append(
+                    Issue(
+                        rel_path,
+                        exc.lineno or 0,
+                        "syntax",
+                        "error",
+                        f"Syntax error — cannot analyse file: {exc}",
+                    )
+                )
                 continue
 
             issues.extend(self._check_prints(rel_path, tree))
@@ -285,10 +337,15 @@ class PreCommitChecker:
                 and isinstance(node.func, ast.Name)
                 and node.func.id == "print"
             ):
-                issues.append(Issue(
-                    filepath, node.lineno, "print", "error",
-                    "Bare print() — replace with logger.info() / logger.debug()",
-                ))
+                issues.append(
+                    Issue(
+                        filepath,
+                        node.lineno,
+                        "print",
+                        "error",
+                        "Bare print() — replace with logger.info() / logger.debug()",
+                    )
+                )
         return issues
 
     @staticmethod
@@ -315,8 +372,15 @@ class PreCommitChecker:
                 and isinstance(tree.body[0].value.value, str)
             )
             if not has_mod_doc:
-                issues.append(Issue(filepath, 1, "docstring", "warning",
-                                    "Missing module-level docstring"))
+                issues.append(
+                    Issue(
+                        filepath,
+                        1,
+                        "docstring",
+                        "warning",
+                        "Missing module-level docstring",
+                    )
+                )
 
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
@@ -326,10 +390,15 @@ class PreCommitChecker:
                     and isinstance(node.body[0].value, ast.Constant)
                 )
                 if not has_doc:
-                    issues.append(Issue(
-                        filepath, node.lineno, "docstring", "warning",
-                        f"Class '{node.name}' is missing a docstring",
-                    ))
+                    issues.append(
+                        Issue(
+                            filepath,
+                            node.lineno,
+                            "docstring",
+                            "warning",
+                            f"Class '{node.name}' is missing a docstring",
+                        )
+                    )
 
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 if node.name.startswith("_") and node.name != "__init__":
@@ -340,10 +409,15 @@ class PreCommitChecker:
                     and isinstance(node.body[0].value, ast.Constant)
                 )
                 if not has_doc:
-                    issues.append(Issue(
-                        filepath, node.lineno, "docstring", "warning",
-                        f"Function/method '{node.name}' is missing a docstring",
-                    ))
+                    issues.append(
+                        Issue(
+                            filepath,
+                            node.lineno,
+                            "docstring",
+                            "warning",
+                            f"Function/method '{node.name}' is missing a docstring",
+                        )
+                    )
         return issues
 
     @staticmethod
@@ -364,24 +438,34 @@ class PreCommitChecker:
         """
         issues = []
         _pascal = re.compile(r"^[A-Z][a-zA-Z0-9]*$")
-        _snake  = re.compile(r"^[a-z_][a-z0-9_]*$")
+        _snake = re.compile(r"^[a-z_][a-z0-9_]*$")
 
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 if not _pascal.match(node.name):
-                    issues.append(Issue(
-                        filepath, node.lineno, "naming", "warning",
-                        f"Class '{node.name}' should be PascalCase",
-                    ))
+                    issues.append(
+                        Issue(
+                            filepath,
+                            node.lineno,
+                            "naming",
+                            "warning",
+                            f"Class '{node.name}' should be PascalCase",
+                        )
+                    )
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 name = node.name
                 if name.startswith("__") and name.endswith("__"):
                     continue
                 if not name.startswith("_") and not _snake.match(name):
-                    issues.append(Issue(
-                        filepath, node.lineno, "naming", "warning",
-                        f"Function '{name}' should be snake_case",
-                    ))
+                    issues.append(
+                        Issue(
+                            filepath,
+                            node.lineno,
+                            "naming",
+                            "warning",
+                            f"Function '{name}' should be snake_case",
+                        )
+                    )
         return issues
 
     @staticmethod
@@ -404,17 +488,24 @@ class PreCommitChecker:
         for node in tree.body:
             if not isinstance(node, ast.Assign):
                 continue
-            is_mutable = isinstance(node.value, (ast.List, ast.Dict, ast.Set, ast.Call))
+            is_mutable = isinstance(
+                node.value, (ast.List, ast.Dict, ast.Set, ast.Call)
+            )
             if not is_mutable:
                 continue
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     if not _constant_re.match(target.id):
-                        issues.append(Issue(
-                            filepath, node.lineno, "oop", "warning",
-                            f"Module-level mutable global '{target.id}' — "
-                            "consider moving to a class instance attribute",
-                        ))
+                        issues.append(
+                            Issue(
+                                filepath,
+                                node.lineno,
+                                "oop",
+                                "warning",
+                                f"Module-level mutable global '{target.id}' — "
+                                "consider moving to a class instance attribute",
+                            )
+                        )
         return issues
 
     @staticmethod
@@ -432,7 +523,11 @@ class PreCommitChecker:
         for lineno, line in enumerate(source.splitlines(), start=1):
             for pattern, description in _SQL_PATTERNS + _XSS_PY_PATTERNS:
                 if pattern.search(line):
-                    issues.append(Issue(filepath, lineno, "security", "error", description))
+                    issues.append(
+                        Issue(
+                            filepath, lineno, "security", "error", description
+                        )
+                    )
         return issues
 
     @staticmethod
@@ -450,7 +545,15 @@ class PreCommitChecker:
         for lineno, line in enumerate(source.splitlines(), start=1):
             for pattern, description in _XSS_TS_PATTERNS:
                 if pattern.search(line):
-                    issues.append(Issue(filepath, lineno, "security", "warning", description))
+                    issues.append(
+                        Issue(
+                            filepath,
+                            lineno,
+                            "security",
+                            "warning",
+                            description,
+                        )
+                    )
         return issues
 
     # ── Check 2: MkDocs build ─────────────────────────────────────────────────
@@ -458,16 +561,31 @@ class PreCommitChecker:
     def _run_mkdocs_build(self) -> bool:
         """Run ``mkdocs build`` in a temp directory and return True if it passes.
 
-        Uses the project's demoenv mkdocs binary.  The generated site is
+        Uses the project venv mkdocs binary.  The generated site is
         written to a temporary directory and cleaned up immediately after.
 
         Returns:
             ``True`` if ``mkdocs build`` exits with code 0, ``False`` otherwise.
         """
         import tempfile
-        mkdocs_bin = _PROJECT_ROOT / "backend" / "demoenv" / "bin" / "mkdocs"
+
+        _venv_home = (
+            Path(
+                os.environ.get(
+                    "AI_AGENT_UI_HOME",
+                    Path.home() / ".ai-agent-ui",
+                )
+            )
+            / "venv"
+        )
+        mkdocs_bin = _venv_home / "bin" / "mkdocs"
         if not mkdocs_bin.exists():
-            _warn("mkdocs not found in demoenv — skipping build validation.")
+            # Backwards compat: try old project-local path
+            mkdocs_bin = (
+                _PROJECT_ROOT / "backend" / "demoenv" / "bin" / "mkdocs"
+            )
+        if not mkdocs_bin.exists():
+            _warn("mkdocs not found — skipping build validation.")
             return True
         tmpdir = tempfile.mkdtemp(prefix="pre_commit_mkdocs_")
         try:
@@ -475,8 +593,10 @@ class PreCommitChecker:
                 [
                     str(mkdocs_bin),
                     "build",
-                    "--config-file", str(_PROJECT_ROOT / "mkdocs.yml"),
-                    "--site-dir", tmpdir,
+                    "--config-file",
+                    str(_PROJECT_ROOT / "mkdocs.yml"),
+                    "--site-dir",
+                    tmpdir,
                     "--quiet",
                 ],
                 cwd=_PROJECT_ROOT,
@@ -573,8 +693,14 @@ class PreCommitChecker:
             new_content += h + b
 
         changelog.write_text(new_content, encoding="utf-8")
-        subprocess.run(["git", "add", "docs/dev/changelog.md"], cwd=_PROJECT_ROOT, capture_output=True)
-        print(f"  {_c('🔧', _CYAN)}  Reordered changelog sections to newest-first order.")
+        subprocess.run(
+            ["git", "add", "docs/dev/changelog.md"],
+            cwd=_PROJECT_ROOT,
+            capture_output=True,
+        )
+        print(
+            f"  {_c('🔧', _CYAN)}  Reordered changelog sections to newest-first order."
+        )
 
     # ── Utilities ─────────────────────────────────────────────────────────────
 

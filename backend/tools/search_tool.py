@@ -1,4 +1,4 @@
-"""LangChain tool that performs live web searches via the SerpAPI Google Search wrapper.
+"""LangChain tool for live web searches via SerpAPI.
 
 :func:`search_web` delegates to
 :class:`~langchain_community.utilities.SerpAPIWrapper`, which calls the
@@ -24,36 +24,39 @@ Typical usage::
 
 from langchain.tools import tool
 from langchain_community.utilities import SerpAPIWrapper
+from validation import validate_search_query
 
 
 @tool
 def search_web(query: str) -> str:
-    """Search the web for up-to-date information on the given query.
+    """Search the web for up-to-date information.
 
-    Use this tool when the user asks about recent events, current news,
-    live data (prices, scores, weather), or any topic that may have changed
-    since the model's training cut-off.
+    Use this tool when the user asks about recent events,
+    current news, live data (prices, scores, weather), or
+    any topic that may have changed since the model's
+    training cut-off.
 
     Args:
-        query: A natural-language or keyword search query, e.g.
-            ``"Python 3.12 new features"`` or ``"current Bitcoin price"``.
+        query: A natural-language or keyword search query,
+            e.g. ``"Python 3.12 new features"``.
 
     Returns:
-        A summary string of the top organic search results, as provided
-        by SerpAPI.  If the request fails for any reason (missing API key,
-        network error, quota exceeded), returns a descriptive error string
-        of the form ``"Search failed: <reason>"``.
+        A summary string of top organic search results, as
+        provided by SerpAPI.  Returns a descriptive error
+        string if the request fails.
 
     Example:
-        >>> # Requires SERPAPI_API_KEY to be set in the environment.
-        >>> result = search_web.invoke({"query": "Python 3.12 release date"})
+        >>> result = search_web.invoke(
+        ...     {"query": "Python 3.12 release date"}
+        ... )
         >>> isinstance(result, str)
         True
     """
+    err = validate_search_query(query)
+    if err:
+        return f"Search failed: {err}"
     try:
         search = SerpAPIWrapper()
-        return search.run(query)
+        return search.run(query.strip())
     except Exception as e:
-        # Return the error as a string so the LLM receives a ToolMessage
-        # rather than an unhandled exception propagating up the stack.
         return f"Search failed: {e}"

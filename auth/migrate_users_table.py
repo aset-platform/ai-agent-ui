@@ -7,7 +7,7 @@ already exist are skipped without error.
 Usage::
 
     cd ai-agent-ui
-    source backend/demoenv/bin/activate
+    source ~/.ai-agent-ui/venv/bin/activate
     python auth/migrate_users_table.py
 
 New columns added
@@ -22,14 +22,16 @@ New columns added
 import logging
 import os
 
-from pyiceberg.types import NestedField, StringType
+from pyiceberg.types import StringType
 
-# Module-level logger (non-mutable). Prefixed with '_' to indicate internal use.
+# Module-level logger (non-mutable).
+# Prefixed with '_' to indicate internal use.
 _logger = logging.getLogger(__name__)
 
 _USERS_TABLE = "auth.users"
 
-# Immutable collection of new columns to add. Prefixed with '_' as internal constant.
+# Immutable collection of new columns to add.
+# Prefixed with '_' as internal constant.
 _NEW_COLUMNS = (
     ("oauth_provider", StringType()),
     ("oauth_sub", StringType()),

@@ -18,7 +18,11 @@ from concurrent.futures import Future, ThreadPoolExecutor
 import dash_bootstrap_components as dbc
 from dash import ALL, MATCH, Input, Output, State, ctx, html, no_update
 
-from dashboard.callbacks.auth_utils import _validate_token
+from dashboard.callbacks.auth_utils import (
+    _api_call,
+    _resolve_token,
+    _validate_token,
+)
 from dashboard.callbacks.data_loaders import (
     _clear_indicator_cache,
     _load_raw,
@@ -34,6 +38,7 @@ from dashboard.callbacks.utils import (
     _currency_symbol,
     _get_market,
 )
+from dashboard.components.error_overlay import make_error_banner
 from dashboard.services.stock_refresh import run_full_refresh
 
 # Module-level logger
@@ -61,31 +66,61 @@ def register(app) -> None:
             Input("url", "pathname"),
             Input("home-card-refresh-trigger", "data"),
         ],
+        [
+            State("auth-token-store", "data"),
+            State("url", "search"),
+        ],
     )
-    def refresh_stock_cards(n_intervals, pathname, refresh_trigger):
+    def refresh_stock_cards(
+        n_intervals, pathname, refresh_trigger, token, search
+    ):
         """Load stock data and store raw dicts for rendering.
 
         Fires on page load, interval tick, or after a
-        per-card background refresh completes.
+        per-card background refresh completes.  Cards are
+        filtered to the current user's linked tickers when
+        a valid token is available; the dropdown always
+        shows all registry tickers.
 
         Args:
             n_intervals: Auto-refresh interval counter.
             pathname: Current URL path.
-            refresh_trigger: Incremented when a card refresh
-                completes.
+            refresh_trigger: Incremented when a card
+                refresh completes.
+            token: JWT access token from localStorage.
+            search: URL query string for token fallback.
 
         Returns:
             Tuple of (list of raw card data dicts,
             dropdown options list).
         """
+        token = _resolve_token(token, search)
         t0 = _time.monotonic()
         registry = _load_reg_cb()
         if not registry:
             return [], []
 
-        dropdown_options = [
-            {"label": t, "value": t} for t in sorted(registry.keys())
-        ]
+        # Filter cards + dropdown by user's linked tickers
+        user_tickers = None
+        if token:
+            resp = _api_call("get", "/users/me/tickers", token)
+            if resp is not None and resp.status_code == 200:
+                data = resp.json()
+                user_tickers = set(data.get("tickers", []))
+
+        # Dropdown shows user's tickers (or all if no auth)
+        if user_tickers is not None:
+            dropdown_tickers = sorted(t for t in registry if t in user_tickers)
+        else:
+            dropdown_tickers = sorted(registry.keys())
+        dropdown_options = [{"label": t, "value": t} for t in dropdown_tickers]
+
+        if user_tickers is not None:
+            filtered_registry = {
+                k: v for k, v in registry.items() if k in user_tickers
+            }
+        else:
+            filtered_registry = registry
 
         # -- Batch pre-fetch (2 Iceberg scans total) --
         company_map: dict = {}
@@ -114,13 +149,13 @@ def register(app) -> None:
                 _logger.info(
                     "Home batch pre-fetch: %.0fms" " (%d tickers)",
                     elapsed,
-                    len(registry),
+                    len(filtered_registry),
                 )
             except Exception as exc:
                 _logger.warning("Batch pre-fetch error: %s", exc)
 
         card_data = []
-        for ticker, entry in sorted(registry.items()):
+        for ticker, entry in sorted(filtered_registry.items()):
             last_updated = entry.get("last_fetch_date", "Unknown")
             raw_df = _load_raw(ticker)
 
@@ -520,6 +555,11 @@ def register(app) -> None:
             "data",
             allow_duplicate=True,
         ),
+        Output(
+            "error-overlay-container",
+            "children",
+            allow_duplicate=True,
+        ),
         Input("card-refresh-poll", "n_intervals"),
         State(
             {"type": "card-refresh-status", "index": ALL},
@@ -547,23 +587,22 @@ def register(app) -> None:
             flags list, new trigger value).
         """
         if not status_ids:
-            return [], [], no_update
+            return [], [], no_update, no_update
 
         statuses = []
         disabled_flags = []
         any_completed = False
+        error_msgs: list[str] = []
 
         for sid in status_ids:
             ticker = sid["index"]
             fut = _refresh_futures.get(ticker)
 
             if fut is None or not fut.done():
-                # No job or still running — keep current
                 statuses.append(no_update)
                 disabled_flags.append(no_update)
                 continue
 
-            # Harvest the completed future
             any_completed = True
             try:
                 result = fut.result()
@@ -597,6 +636,7 @@ def register(app) -> None:
                             title=err[:200],
                         )
                     )
+                    error_msgs.append(f"{ticker}: {err[:120]}")
             except Exception as exc:
                 _logger.error(
                     "Card refresh exception for" " %s: %s",
@@ -610,16 +650,20 @@ def register(app) -> None:
                         title=str(exc)[:200],
                     )
                 )
+                error_msgs.append(f"{ticker}: {str(exc)[:120]}")
 
             disabled_flags.append(False)
-            # Clear caches for refreshed ticker
             clear_caches(ticker)
             _clear_indicator_cache(ticker)
-            # Remove harvested future
             _refresh_futures.pop(ticker, None)
 
         trigger = (current_trigger or 0) + 1 if any_completed else no_update
-        return statuses, disabled_flags, trigger
+        overlay = (
+            make_error_banner("Refresh failed \u2014 " + "; ".join(error_msgs))
+            if error_msgs
+            else no_update
+        )
+        return statuses, disabled_flags, trigger, overlay
 
     @app.callback(
         [

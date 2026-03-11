@@ -16,6 +16,7 @@ The tool framework lives in `backend/tools/`. It provides a registry that decoup
 | `tools/price_analysis_tool.py` | `analyse_stock_price` — technical indicators + chart + same-day cache |
 | `tools/forecasting_tool.py` | `forecast_stock` — Prophet forecast + chart + same-day cache |
 | `tools/__init__.py` | Empty (marks directory as a Python package) |
+| `validation.py` | Shared input validators: `validate_ticker`, `validate_search_query`, `validate_ticker_batch` |
 
 ---
 
@@ -166,14 +167,14 @@ self.agent_registry.register(stock)
 
 Both analysis tools cache their text output to avoid re-running expensive pipelines (30–90 s) when the same ticker is requested more than once in a day.
 
-**Cache location:** `data/cache/` (gitignored)
+**Cache location:** `~/.ai-agent-ui/data/cache/`
 
 **Key format:**
 
 | Tool | File |
 |------|------|
-| `analyse_stock_price(ticker)` | `data/cache/{TICKER}_analysis_{YYYY-MM-DD}.txt` |
-| `forecast_stock(ticker, months)` | `data/cache/{TICKER}_forecast_{N}m_{YYYY-MM-DD}.txt` |
+| `analyse_stock_price(ticker)` | `~/.ai-agent-ui/data/cache/{TICKER}_analysis_{YYYY-MM-DD}.txt` |
+| `forecast_stock(ticker, months)` | `~/.ai-agent-ui/data/cache/{TICKER}_forecast_{N}m_{YYYY-MM-DD}.txt` |
 
 **Logic (identical in both tools):**
 

@@ -2,8 +2,8 @@
 
 Functions
 ---------
-- :func:`_calculate_returns` — daily, monthly, annual, cumulative return series.
-- :func:`_analyse_price_movement` — bull/bear phases, drawdown, support/resistance.
+- :func:`_calculate_returns` — daily/monthly/annual/cumulative returns.
+- :func:`_analyse_price_movement` — bull/bear, drawdown, S/R.
 """
 
 import logging
@@ -11,7 +11,7 @@ import math
 
 import pandas as pd
 
-# Module-level logger; cannot be moved into a class as these are module-level functions.
+# Module-level logger; these are module-level functions.
 _logger = logging.getLogger(__name__)
 
 
@@ -39,7 +39,7 @@ def _calculate_returns(df: pd.DataFrame) -> dict:
 
 
 def _analyse_price_movement(df: pd.DataFrame) -> dict:
-    """Analyse bull/bear phases, drawdown, support/resistance, volatility, Sharpe.
+    """Analyse bull/bear phases, drawdown, S/R, volatility.
 
     Args:
         df: DataFrame with indicators already added by
@@ -66,13 +66,17 @@ def _analyse_price_movement(df: pd.DataFrame) -> dict:
 
     in_drawdown = (drawdown < 0).astype(int)
     groups = in_drawdown * (
-        in_drawdown.groupby((in_drawdown != in_drawdown.shift()).cumsum()).cumcount()
+        in_drawdown.groupby(
+            (in_drawdown != in_drawdown.shift()).cumsum()
+        ).cumcount()
         + 1
     )
     max_dd_duration = int(groups.max())
 
     recent = df.tail(252)
-    support_levels = sorted(recent["Low"].nsmallest(3).round(2).tolist())
+    support_levels = sorted(
+        recent["Low"].nsmallest(3).round(2).tolist()
+    )
     resistance_levels = sorted(
         recent["High"].nlargest(3).round(2).tolist(), reverse=True
     )

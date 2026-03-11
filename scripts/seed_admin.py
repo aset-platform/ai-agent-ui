@@ -6,7 +6,7 @@ the script exits with a success message and makes no changes.
 
 Usage::
 
-    # from the project root, with demoenv activated:
+    # from the project root, with venv activated:
     python scripts/seed_admin.py
 
 Required environment variables (or set in .env at the project root or
@@ -98,9 +98,13 @@ def main() -> None:
     """
     admin_email: str = os.environ.get("ADMIN_EMAIL", "").strip()
     admin_password: str = os.environ.get("ADMIN_PASSWORD", "").strip()
-    admin_full_name: str = os.environ.get("ADMIN_FULL_NAME", "Admin User").strip()
+    admin_full_name: str = os.environ.get(
+        "ADMIN_FULL_NAME", "Admin User"
+    ).strip()
     jwt_secret: str = os.environ.get("JWT_SECRET_KEY", "").strip()
-    access_minutes: int = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+    access_minutes: int = int(
+        os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
+    )
     refresh_days: int = int(os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
     # ── Validate required env vars ─────────────────────────────────────────
@@ -115,7 +119,9 @@ def main() -> None:
     ]
 
     if missing:
-        logger.error("Missing required environment variables: %s", ", ".join(missing))
+        logger.error(
+            "Missing required environment variables: %s", ", ".join(missing)
+        )
         logger.error(
             "Set them in .env at the project root (or backend/.env) "
             "or export them before running this script."
@@ -133,8 +139,11 @@ def main() -> None:
     # ── Validate JWT secret length ─────────────────────────────────────────
     if len(jwt_secret) < 32:
         logger.error(
-            "JWT_SECRET_KEY must be at least 32 characters. "
-            'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+            "JWT_SECRET_KEY must be at least "
+            "32 characters. Generate one with: "
+            "python -c "
+            '"import secrets; '
+            'print(secrets.token_hex(32))"'
         )
         sys.exit(1)
 
@@ -143,7 +152,9 @@ def main() -> None:
 
     # ── Import auth modules ────────────────────────────────────────────────
     try:
-        from auth.repository import IcebergUserRepository  # type: ignore[import]
+        from auth.repository import (
+            IcebergUserRepository,  # type: ignore[import]
+        )
         from auth.service import AuthService  # type: ignore[import]
     except ImportError as exc:
         logger.error(
@@ -169,13 +180,15 @@ def main() -> None:
     if existing is not None:
         if existing.get("role") == "superuser":
             logger.info(
-                "Superuser '%s' already exists (user_id=%s). Nothing to do.",
+                "Superuser '%s' already exists "
+                "(user_id=%s). Nothing to do.",
                 admin_email,
                 existing["user_id"],
             )
         else:
             logger.warning(
-                "A user with email '%s' exists but has role '%s' (not superuser). "
+                "A user with email '%s' exists but has "
+                "role '%s' (not superuser). "
                 "No changes made.",
                 admin_email,
                 existing.get("role"),

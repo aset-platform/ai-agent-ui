@@ -24,9 +24,7 @@ import { IFrameView } from "@/components/IFrameView";
 import { NavigationMenu } from "@/components/NavigationMenu";
 import { EditProfileModal } from "@/components/EditProfileModal";
 import { ChangePasswordModal } from "@/components/ChangePasswordModal";
-
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8181";
+import { BACKEND_URL, DASHBOARD_URL, DOCS_URL } from "@/lib/config";
 
 export default function ChatPage() {
   useAuthGuard();
@@ -105,9 +103,7 @@ export default function ChatPage() {
   };
 
   const handleInternalLink = (href: string) => {
-    const dashboardBase = process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050";
-    const docsBase = process.env.NEXT_PUBLIC_DOCS_URL ?? "http://127.0.0.1:8000";
-    if (href.startsWith(dashboardBase)) {
+    if (href.startsWith(DASHBOARD_URL)) {
       const token = getAccessToken();
       const dashUrl = token
         ? `${href}${href.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`
@@ -116,7 +112,7 @@ export default function ChatPage() {
       setIframeUrl(dashUrl);
       setIframeLoading(true);
       setIframeError(false);
-    } else if (href.startsWith(docsBase)) {
+    } else if (href.startsWith(DOCS_URL)) {
       setView("docs");
       setIframeUrl(href);
       setIframeLoading(true);
@@ -126,13 +122,11 @@ export default function ChatPage() {
 
   // Fix #7: memoize iframeSrc — avoids calling getAccessToken() on every render
   const iframeSrc = useMemo(() => {
-    const docsBase = process.env.NEXT_PUBLIC_DOCS_URL ?? "http://127.0.0.1:8000";
-    const dashBase = process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050";
-    if (view === "docs") return iframeUrl ?? docsBase;
+    if (view === "docs") return iframeUrl ?? DOCS_URL;
     const defaultUrl =
-      view === "admin" ? `${dashBase}/admin/users` :
-      view === "insights" ? `${dashBase}/insights` :
-      dashBase;
+      view === "admin" ? `${DASHBOARD_URL}/admin/users` :
+      view === "insights" ? `${DASHBOARD_URL}/insights` :
+      DASHBOARD_URL;
     const base = iframeUrl ?? defaultUrl;
     const token = getAccessToken();
     if (!token) return base;

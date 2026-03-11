@@ -8,14 +8,14 @@ Namespace: ``stocks`` (alongside ``auth`` in the same SQLite catalog).
 
 Tables
 ------
-- ``stocks.registry``              — one row per ticker; fetch metadata
-- ``stocks.company_info``          — append-only snapshots; latest by ``fetched_at DESC``
-- ``stocks.ohlcv``                 — OHLCV price history; partitioned by ticker
-- ``stocks.dividends``             — dividend payments; one row per (ticker, ex_date)
-- ``stocks.technical_indicators``  — computed indicators; partitioned by ticker
-- ``stocks.analysis_summary``      — daily analysis snapshots per ticker
-- ``stocks.forecast_runs``         — Prophet run metadata + accuracy + targets
-- ``stocks.forecasts``             — full Prophet output series; partitioned by (ticker, horizon_months)
+- ``stocks.registry`` — one row per ticker
+- ``stocks.company_info`` — append-only snapshots
+- ``stocks.ohlcv`` — OHLCV price history
+- ``stocks.dividends`` — dividend payments
+- ``stocks.technical_indicators`` — computed indicators
+- ``stocks.analysis_summary`` — daily analysis snapshots
+- ``stocks.forecast_runs`` — Prophet run metadata
+- ``stocks.forecasts`` — full Prophet output series
 
 Usage::
 

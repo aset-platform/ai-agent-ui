@@ -21,8 +21,17 @@ set -uo pipefail
 
 PROJECT_ROOT="$(git rev-parse --show-toplevel)"
 BACKEND_DIR="$PROJECT_ROOT/backend"
-PYTHON="$PROJECT_ROOT/backend/demoenv/bin/python"
-ACTIVATE="$PROJECT_ROOT/backend/demoenv/bin/activate"
+_VENV_HOME="${AI_AGENT_UI_HOME:-${HOME}/.ai-agent-ui}/venv"
+if [[ -x "${_VENV_HOME}/bin/python" ]]; then
+    PYTHON="${_VENV_HOME}/bin/python"
+    ACTIVATE="${_VENV_HOME}/bin/activate"
+elif [[ -x "$PROJECT_ROOT/backend/demoenv/bin/python" ]]; then
+    PYTHON="$PROJECT_ROOT/backend/demoenv/bin/python"
+    ACTIVATE="$PROJECT_ROOT/backend/demoenv/bin/activate"
+else
+    PYTHON="${_VENV_HOME}/bin/python"
+    ACTIVATE="${_VENV_HOME}/bin/activate"
+fi
 
 # ── Branch guard ─────────────────────────────────────────────────────────────
 # git passes push targets on stdin: <local_ref> <local_oid> <remote_ref> <remote_oid>
@@ -167,7 +176,7 @@ rm -rf "$MKDOCS_TMPDIR"
 if [[ $MKDOCS_EXIT -ne 0 ]]; then
     echo "$MKDOCS_OUTPUT"
     echo ""
-    echo "  Fix: source backend/demoenv/bin/activate && mkdocs serve"
+    echo "  Fix: source ~/.ai-agent-ui/venv/bin/activate && mkdocs serve"
     ERRORS=$((ERRORS + 1))
 else
     echo "  [OK] mkdocs build passed."

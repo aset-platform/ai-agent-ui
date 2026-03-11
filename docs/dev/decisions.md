@@ -34,9 +34,27 @@ Putting the loop in `BaseAgent` and making `_build_llm()` abstract means:
 - Switching from Groq to Claude requires changing two lines in one file (`general_agent.py`), not rewriting the loop.
 - Adding a new agent with a different LLM takes ~10 lines of code.
 
-### Claude Sonnet 4.6 is the active LLM
+### N-tier LLM Cascade (FallbackLLM)
 
-Both `GeneralAgent` and `StockAgent` now use `langchain_anthropic.ChatAnthropic` with `model="claude-sonnet-4-6"`. Set `ANTHROPIC_API_KEY` in `backend/.env`. The `FallbackLLM` wrapper in `backend/llm_fallback.py` attempts Groq first (if `GROQ_API_KEY` is set) and falls back to Anthropic on `RateLimitError` or `APIConnectionError`.
+Both `GeneralAgent` and `StockAgent` use `FallbackLLM` from `backend/llm_fallback.py`, which cascades through an ordered list of Groq models before falling back to Anthropic Claude Sonnet 4.6.
+
+**Default tier order:**
+
+| Tier | Model | TPM | Notes |
+|------|-------|-----|-------|
+| 1 | `llama-3.3-70b-versatile` | 12K | Reliable tool-calling, parallel tools |
+| 2 | `moonshotai/kimi-k2-instruct` | 10K | Parallel tools |
+| 3 | `openai/gpt-oss-120b` | 8K | Quality |
+| 4 | `meta-llama/llama-4-scout-17b` | 30K | Fast, small |
+| 5 | `claude-sonnet-4-6` | unlimited | Paid Anthropic fallback |
+
+The tier order is configurable via `GROQ_MODEL_TIERS` (comma-separated env var). Tier 1 is the most capable model for tool-calling reliability; small models are parked at the end as they may skip tool calls on complex prompts.
+
+**Budget-aware routing:** `TokenBudget` tracks sliding-window TPM/RPM per model. When a tier's budget is exhausted, `FallbackLLM` applies progressive compression (targeting 70% of the model's TPM). If still unaffordable, the next tier is tried.
+
+**Error cascading:** On `RateLimitError` (429), `APIStatusError` (413), or `APIConnectionError`, the next tier is tried immediately (`max_retries=0` on ChatGroq disables Groq SDK internal retries).
+
+Set `ANTHROPIC_API_KEY` in `backend/.env` (required). Set `GROQ_API_KEY` to enable Groq tiers (optional — without it, all requests go directly to Anthropic).
 
 ---
 
@@ -91,7 +109,7 @@ Benefits over `print()`:
 
 Log files rotate at midnight. The previous 7 days are kept and older files are deleted automatically. This bounds disk usage without requiring a separate log rotation daemon (like `logrotate`).
 
-The `logs/` directory is gitignored so log files are never accidentally committed.
+Logs are written to `~/.ai-agent-ui/logs/` (outside the repo) so log files are never accidentally committed.
 
 ### Clearing handlers on uvicorn hot-reload
 
@@ -107,7 +125,7 @@ This is safe because `setup_logging()` always re-adds the correct handlers immed
 
 ## Python 3.12
 
-The `demoenv` virtualenv runs Python 3.12.9. All modern Python features are available:
+The project virtualenv (`~/.ai-agent-ui/venv`) runs Python 3.12.9. All modern Python features are available:
 
 - **Union type syntax** (`X | None`) via PEP 604 is preferred over `Optional[X]`.
 - `match` statements (PEP 634) may be used where appropriate.
@@ -133,7 +151,7 @@ For stocks without corporate actions (splits, dividends), `Close` and `Adj Close
 
 ### Same-day text cache for analyse_stock_price and forecast_stock
 
-Running the full analysis pipeline (technical indicators + Prophet training) takes 30–90 seconds. A user who asks about AAPL twice in the same day should not wait twice. Both tools now check for a dated text file in `data/cache/` before running. If a file matching `{TICKER}_{key}_{date.today()}.txt` exists, it is returned immediately. On the first run, the result is saved to that file. The cache is keyed by date so it automatically expires at midnight with no cron job required. `data/cache/` is gitignored.
+Running the full analysis pipeline (technical indicators + Prophet training) takes 30–90 seconds. A user who asks about AAPL twice in the same day should not wait twice. Both tools now check for a dated text file in `~/.ai-agent-ui/data/cache/` before running. If a file matching `{TICKER}_{key}_{date.today()}.txt` exists, it is returned immediately. On the first run, the result is saved to that file. The cache is keyed by date so it automatically expires at midnight with no cron job required.
 
 ---
 
@@ -352,7 +370,7 @@ The Dash process is launched by `run.sh` with `exec` — it inherits only the sh
 
 ### Virtualenv excluded from git
 
-`backend/demoenv/` is listed in `.gitignore` as both `demoenv/` and `*env/`. The virtualenv is reconstructable from `requirements.txt`.
+The virtualenv now lives at `~/.ai-agent-ui/venv` (with `backend/demoenv` kept as a backwards-compat symlink). Both paths are covered by `.gitignore` (`demoenv/` and `*env/`). The virtualenv is reconstructable from `requirements.txt`.
 
 ### frontend/.git removed
 

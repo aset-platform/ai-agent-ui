@@ -11,26 +11,44 @@
 import { useState, useEffect, useRef } from "react";
 import type { Message } from "@/lib/constants";
 
-export function useChatHistory(agentId: string) {
-  // Hydrate from localStorage via lazy initializer (avoids setState-in-effect).
-  const [histories, setHistories] = useState<Record<string, Message[]>>(() => {
-    if (typeof window === "undefined") return { general: [], stock: [] };
-    try {
-      const saved = localStorage.getItem("chat_histories");
-      if (saved) {
-        const parsed = JSON.parse(saved) as Record<
-          string,
-          { role: "user" | "assistant"; content: string; timestamp: string }[]
-        >;
-        const revived: Record<string, Message[]> = {};
-        for (const [id, msgs] of Object.entries(parsed)) {
-          revived[id] = msgs.map((m) => ({ ...m, timestamp: new Date(m.timestamp) }));
-        }
-        return revived;
+const _EMPTY: Record<string, Message[]> = { general: [], stock: [] };
+
+function _readStorage(): Record<string, Message[]> {
+  try {
+    const saved = localStorage.getItem("chat_histories");
+    if (saved) {
+      const parsed = JSON.parse(saved) as Record<
+        string,
+        { role: "user" | "assistant"; content: string; timestamp: string }[]
+      >;
+      const revived: Record<string, Message[]> = {};
+      for (const [id, msgs] of Object.entries(parsed)) {
+        revived[id] = msgs.map((m) => ({ ...m, timestamp: new Date(m.timestamp) }));
       }
-    } catch { /* ignore corrupt data */ }
-    return { general: [], stock: [] };
-  });
+      return revived;
+    }
+  } catch { /* ignore corrupt data */ }
+  return _EMPTY;
+}
+
+export function useChatHistory(agentId: string) {
+  // Always initialise with _EMPTY so server and client produce identical
+  // HTML on first render (prevents Next.js hydration mismatch).
+  const [histories, setHistories] = useState<Record<string, Message[]>>(_EMPTY);
+  const hydrated = useRef(false);
+
+  // Hydrate from localStorage once after mount.  The ref guard ensures
+  // this runs exactly once and the subscription below handles persistence.
+  // setState in effect is intentional — one-shot hydration from localStorage.
+  useEffect(() => {
+    if (hydrated.current) return;
+    hydrated.current = true;
+    const stored = _readStorage();
+    if (Object.keys(stored).some((k) => (stored[k]?.length ?? 0) > 0)) {
+      /* eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot hydration from external store (localStorage) */
+      setHistories(stored);
+    }
+  }, []);
 
   // Fix #3: debounce localStorage writes — streaming triggers many rapid updates;
   // writing synchronously on every chunk blocks the main thread on large histories.

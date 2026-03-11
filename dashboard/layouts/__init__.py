@@ -6,14 +6,23 @@ Re-exports all public layout constants and factory functions so that
 
 import logging
 
-from dashboard.layouts.admin import admin_users_layout
-from dashboard.layouts.analysis import analysis_layout, analysis_tabs_layout
-from dashboard.layouts.compare import compare_layout
-from dashboard.layouts.forecast import forecast_layout
-from dashboard.layouts.helpers import _get_available_tickers, _load_registry
-from dashboard.layouts.home import home_layout
-from dashboard.layouts.insights import insights_layout
-from dashboard.layouts.navbar import NAVBAR
+from dashboard.layouts.admin import admin_users_layout  # noqa: F401
+from dashboard.layouts.analysis import (  # noqa: F401
+    analysis_layout,
+    analysis_tabs_layout,
+)
+from dashboard.layouts.compare import compare_layout  # noqa: F401
+from dashboard.layouts.forecast import forecast_layout  # noqa: F401
+from dashboard.layouts.helpers import (  # noqa: F401
+    _get_available_tickers,
+    _load_registry,
+)
+from dashboard.layouts.home import home_layout  # noqa: F401
+from dashboard.layouts.insights import insights_layout  # noqa: F401
+from dashboard.layouts.marketplace import (  # noqa: F401
+    marketplace_layout,
+)
+from dashboard.layouts.navbar import NAVBAR  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +37,7 @@ _all_exports = [
     "compare_layout",
     "admin_users_layout",
     "insights_layout",
+    "marketplace_layout",
     "_load_registry",
     "_get_available_tickers",
 ]

@@ -8,9 +8,10 @@
 import { useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { DASHBOARD_URL, DOCS_URL } from "@/lib/config";
 
 function preprocessContent(content: string): string {
-  const dashboardUrl = process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050";
+  const dashboardUrl = DASHBOARD_URL;
 
   content = content.replace(
     /\S+\/charts\/analysis\/([A-Z0-9._-]+)_analysis\.html/g,
@@ -31,8 +32,8 @@ interface MarkdownContentProps {
 }
 
 export function MarkdownContent({ content, onInternalLink }: MarkdownContentProps) {
-  const dashboardBase = process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050";
-  const docsBase = process.env.NEXT_PUBLIC_DOCS_URL ?? "http://127.0.0.1:8000";
+  const dashboardBase = DASHBOARD_URL;
+  const docsBase = DOCS_URL;
 
   // Fix #4: memoize preprocessing — avoids re-running regex on every streaming chunk
   const processedContent = useMemo(() => preprocessContent(content), [content]);

@@ -65,7 +65,10 @@ def _build_forecast_fig(
         go.Scatter(
             x=pd.concat([forecast_df["ds"], forecast_df["ds"].iloc[::-1]]),
             y=pd.concat(
-                [forecast_df["yhat_upper"], forecast_df["yhat_lower"].iloc[::-1]]
+                [
+                    forecast_df["yhat_upper"],
+                    forecast_df["yhat_lower"].iloc[::-1],
+                ]
             ),
             fill="toself",
             fillcolor="rgba(76,175,80,0.15)",
@@ -134,7 +137,10 @@ def _build_forecast_fig(
         fig.add_annotation(
             x=target["date"],
             y=target["price"],
-            text=f"{key}: {sym}{target['price']}<br>{sign}{target['pct_change']:.1f}%",
+            text=(
+                f"{key}: {sym}{target['price']}"
+                f"<br>{sign}{target['pct_change']:.1f}%"
+            ),
             showarrow=True,
             arrowhead=2,
             arrowcolor=colors.get(key, "#111827"),
@@ -150,7 +156,11 @@ def _build_forecast_fig(
         plot_bgcolor="#f9fafb",
         font=dict(color="#111827"),
         title=dict(
-            text=f"{ticker} — Price Forecast  {sentiment_emoji} {summary.get('sentiment','')}",
+            text=(
+                f"{ticker} — Price Forecast"
+                f"  {sentiment_emoji}"
+                f" {summary.get('sentiment', '')}"
+            ),
             font=dict(size=16),
         ),
         height=550,
