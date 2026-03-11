@@ -70,6 +70,7 @@ export default function OAuthCallbackPage() {
         const res = await fetch(`${BACKEND_URL}/auth/oauth/callback`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({
             provider,
             code,
@@ -98,8 +99,8 @@ export default function OAuthCallbackPage() {
 
         if (cancelled) return;
 
-        // Persist tokens and clean up session storage.
-        setTokens(data.access_token, data.refresh_token);
+        // Refresh token is now in HttpOnly cookie.
+        setTokens(data.access_token);
         clearOAuthSession();
 
         // Redirect to the main app.

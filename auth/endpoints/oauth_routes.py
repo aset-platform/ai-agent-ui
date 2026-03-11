@@ -10,9 +10,11 @@ from datetime import datetime, timezone
 from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 import auth.endpoints.helpers as _helpers
 from auth.dependencies import get_auth_service
+from auth.endpoints.auth_routes import _set_refresh_cookie
 from auth.models import (
     OAuthAuthorizeResponse,
     OAuthCallbackRequest,
@@ -171,18 +173,32 @@ def register(router: APIRouter) -> None:
             user["user_id"], {"last_login_at": datetime.now(timezone.utc)}
         )
         access = service.create_access_token(
-            user_id=user["user_id"], email=user["email"], role=user["role"]
+            user_id=user["user_id"],
+            email=user["email"],
+            role=user["role"],
         )
-        refresh = service.create_refresh_token(user_id=user["user_id"])
+        refresh = service.create_refresh_token(
+            user_id=user["user_id"],
+        )
         repo.append_audit_event(
             "OAUTH_LOGIN",
             actor_user_id=user["user_id"],
             target_user_id=user["user_id"],
-            metadata={"provider": body.provider.value, "email": user["email"]},
+            metadata={
+                "provider": body.provider.value,
+                "email": user["email"],
+            },
         )
         _logger.info(
             "OAuth login: user_id=%s provider=%s",
             user["user_id"],
             body.provider,
         )
-        return TokenResponse(access_token=access, refresh_token=refresh)
+        resp = JSONResponse(
+            content=TokenResponse(
+                access_token=access,
+                refresh_token=refresh,
+            ).model_dump(),
+        )
+        _set_refresh_cookie(resp, refresh)
+        return resp

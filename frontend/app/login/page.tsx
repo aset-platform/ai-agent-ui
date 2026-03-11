@@ -103,6 +103,7 @@ export default function LoginPage() {
       const res = await fetch(`${BACKEND_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email, password }),
         signal: controller.signal,
       });
@@ -117,7 +118,8 @@ export default function LoginPage() {
         access_token: string;
         refresh_token: string;
       };
-      setTokens(data.access_token, data.refresh_token);
+      // Refresh token is now in HttpOnly cookie.
+      setTokens(data.access_token);
       router.replace("/");
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
