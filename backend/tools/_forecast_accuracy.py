@@ -2,8 +2,8 @@
 
 Functions
 ---------
-- :func:`_calculate_forecast_accuracy` — MAE, RMSE, MAPE via 12-month backtest.
-- :func:`_generate_forecast_summary` — price targets at 3/6/9 months + sentiment.
+- :func:`_calculate_forecast_accuracy` — MAE, RMSE, MAPE backtest.
+- :func:`_generate_forecast_summary` — 3/6/9m price targets.
 """
 
 import logging
@@ -17,7 +17,9 @@ from prophet import Prophet
 _logger = logging.getLogger(__name__)
 
 
-def _calculate_forecast_accuracy(model: Prophet, prophet_df: pd.DataFrame) -> dict:
+def _calculate_forecast_accuracy(
+    model: Prophet, prophet_df: pd.DataFrame
+) -> dict:
     """Evaluate model accuracy via in-sample backtesting on the last 12 months.
 
     Generates in-sample predictions for the entire training period, then
@@ -59,7 +61,7 @@ def _calculate_forecast_accuracy(model: Prophet, prophet_df: pd.DataFrame) -> di
 def _generate_forecast_summary(
     forecast_df: pd.DataFrame, current_price: float, ticker: str, months: int
 ) -> dict:
-    """Extract price targets at 3, 6, and 9 month marks and determine sentiment.
+    """Extract price targets at 3/6/9 months and sentiment.
 
     Args:
         forecast_df: Future-only forecast DataFrame (``ds``, ``yhat``,

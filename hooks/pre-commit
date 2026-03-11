@@ -33,13 +33,20 @@ if [[ "${SKIP_PRE_COMMIT:-0}" == "1" ]]; then
 fi
 
 PROJECT_ROOT="$(git rev-parse --show-toplevel)"
-PYTHON="$PROJECT_ROOT/backend/demoenv/bin/python"
+_VENV_HOME="${AI_AGENT_UI_HOME:-${HOME}/.ai-agent-ui}/venv"
+if [[ -x "${_VENV_HOME}/bin/python" ]]; then
+    PYTHON="${_VENV_HOME}/bin/python"
+elif [[ -x "$PROJECT_ROOT/backend/demoenv/bin/python" ]]; then
+    PYTHON="$PROJECT_ROOT/backend/demoenv/bin/python"
+else
+    PYTHON="${_VENV_HOME}/bin/python"
+fi
 HOOK_SCRIPT="$PROJECT_ROOT/hooks/pre_commit_checks.py"
 
 # ── Sanity checks ──────────────────────────────────────────────────────────────
 if [[ ! -x "$PYTHON" ]]; then
-    echo "[pre-commit] WARNING: demoenv not found at $PYTHON — skipping checks."
-    echo "[pre-commit]   Run: cd backend && python -m venv demoenv && pip install -r requirements.txt"
+    echo "[pre-commit] WARNING: venv not found at $PYTHON — skipping checks."
+    echo "[pre-commit]   Run: ./setup.sh   (creates venv at ~/.ai-agent-ui/venv)"
     exit 0
 fi
 

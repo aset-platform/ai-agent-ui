@@ -5,7 +5,9 @@ records and audit log events in the admin section of the dashboard.
 
 Example::
 
-    from dashboard.callbacks.table_builders import _build_users_table, _build_audit_table
+    from dashboard.callbacks.table_builders import (
+        _build_users_table, _build_audit_table,
+    )
 """
 
 import json
@@ -15,40 +17,54 @@ from typing import Any, Dict, List
 import dash_bootstrap_components as dbc
 from dash import html
 
+from dashboard.callbacks.sort_helpers import (
+    apply_sort_list,
+    build_sortable_thead,
+)
+
 # Module-level logger; prefixed with underscore to indicate internal use
 _logger = logging.getLogger(__name__)
 
 
-def _build_users_table(users: List[Dict[str, Any]]) -> Any:
-    """Render a Bootstrap table of user records with action buttons.
+_USERS_COL_DEFS = [
+    {"key": "full_name", "label": "Name"},
+    {"key": "email", "label": "Email"},
+    {"key": "role", "label": "Role"},
+    {"key": "is_active", "label": "Status"},
+    {"key": "created_at", "label": "Created"},
+    {"key": "last_login_at", "label": "Last Login"},
+    {"key": "_actions", "label": "Actions"},
+]
 
-    Each row displays name, email, role, status, timestamps, and two
-    action buttons: Edit (opens the edit modal) and Deactivate/Reactivate
-    (calls the API directly).
+
+def _build_users_table(
+    users: List[Dict[str, Any]],
+    sort_state: Dict[str, Any] | None = None,
+) -> Any:
+    """Render a Bootstrap table of user records with action buttons.
 
     Args:
         users: List of user dicts as returned by ``GET /users``.
+        sort_state: Column sort state dict (optional).
 
     Returns:
         A :class:`~dash_bootstrap_components.Table`, or a plain
         :class:`~dash.html.P` element when *users* is empty.
     """
+    sort_state = sort_state or {
+        "col": None,
+        "dir": "none",
+    }
     if not users:
-        return html.P("No user accounts found.", className="text-muted")
-
-    header = html.Thead(
-        html.Tr(
-            [
-                html.Th("Name"),
-                html.Th("Email"),
-                html.Th("Role"),
-                html.Th("Status"),
-                html.Th("Created"),
-                html.Th("Last Login"),
-                html.Th("Actions", className="text-end"),
-            ]
+        return html.P(
+            "No user accounts found.",
+            className="text-muted",
         )
-    )
+
+    # Sort (skip _actions pseudo-column)
+    users = apply_sort_list(users, sort_state)
+
+    header = build_sortable_thead(_USERS_COL_DEFS, "users", sort_state)
 
     rows = []
     for user in users:
@@ -67,7 +83,9 @@ def _build_users_table(users: List[Dict[str, Any]]) -> Any:
                     dbc.Badge(
                         user.get("role", "—"),
                         color=(
-                            "danger" if user.get("role") == "superuser" else "primary"
+                            "danger"
+                            if user.get("role") == "superuser"
+                            else "primary"
                         ),
                         className="fw-normal",
                     )
@@ -79,23 +97,49 @@ def _build_users_table(users: List[Dict[str, Any]]) -> Any:
                         className="fw-normal",
                     )
                 ),
-                html.Td(created, style={"fontSize": "0.8rem", "color": "#6b7280"}),
-                html.Td(last_login, style={"fontSize": "0.8rem", "color": "#6b7280"}),
+                html.Td(
+                    created, style={"fontSize": "0.8rem", "color": "#6b7280"}
+                ),
+                html.Td(
+                    last_login,
+                    style={"fontSize": "0.8rem", "color": "#6b7280"},
+                ),
                 html.Td(
                     [
                         dbc.Button(
                             "Edit",
-                            id={"type": "edit-user-btn", "index": user["user_id"]},
+                            id={
+                                "type": "edit-user-btn",
+                                "index": user["user_id"],
+                            },
                             size="sm",
                             color="outline-primary",
                             className="me-1 py-0 px-2",
                             style={"fontSize": "0.75rem"},
                         ),
                         dbc.Button(
-                            "Deactivate" if is_active else "Reactivate",
-                            id={"type": "toggle-user-btn", "index": user["user_id"]},
+                            "Reset Pwd",
+                            id={
+                                "type": "reset-pw-btn",
+                                "index": user["user_id"],
+                            },
                             size="sm",
-                            color="outline-danger" if is_active else "outline-success",
+                            color="outline-warning",
+                            className="me-1 py-0 px-2",
+                            style={"fontSize": "0.75rem"},
+                        ),
+                        dbc.Button(
+                            ("Deactivate" if is_active else "Reactivate"),
+                            id={
+                                "type": "toggle-user-btn",
+                                "index": user["user_id"],
+                            },
+                            size="sm",
+                            color=(
+                                "outline-danger"
+                                if is_active
+                                else "outline-success"
+                            ),
                             className="py-0 px-2",
                             style={"fontSize": "0.75rem"},
                         ),
@@ -115,30 +159,43 @@ def _build_users_table(users: List[Dict[str, Any]]) -> Any:
     )
 
 
-def _build_audit_table(events: List[Dict[str, Any]]) -> Any:
-    """Render a Bootstrap table of audit log events, newest-first.
+_AUDIT_COL_DEFS = [
+    {"key": "event_timestamp", "label": "When"},
+    {"key": "event_type", "label": "Event"},
+    {"key": "actor_user_id", "label": "Actor"},
+    {"key": "target_user_id", "label": "Target"},
+    {"key": "metadata", "label": "Details"},
+]
+
+
+def _build_audit_table(
+    events: List[Dict[str, Any]],
+    sort_state: Dict[str, Any] | None = None,
+) -> Any:
+    """Render a Bootstrap table of audit log events.
 
     Args:
-        events: List of audit event dicts from ``GET /admin/audit-log``.
+        events: List of audit event dicts.
+        sort_state: Column sort state dict (optional).
 
     Returns:
         A :class:`~dash_bootstrap_components.Table`, or a plain
         :class:`~dash.html.P` when *events* is empty.
     """
+    sort_state = sort_state or {
+        "col": None,
+        "dir": "none",
+    }
     if not events:
-        return html.P("No audit events found.", className="text-muted")
-
-    header = html.Thead(
-        html.Tr(
-            [
-                html.Th("When"),
-                html.Th("Event"),
-                html.Th("Actor"),
-                html.Th("Target"),
-                html.Th("Details"),
-            ]
+        return html.P(
+            "No audit events found.",
+            className="text-muted",
         )
-    )
+
+    # Sort
+    events = apply_sort_list(events, sort_state)
+
+    header = build_sortable_thead(_AUDIT_COL_DEFS, "audit", sort_state)
 
     rows = []
     for ev in events:
@@ -172,14 +229,21 @@ def _build_audit_table(events: List[Dict[str, Any]]) -> Any:
                     ),
                     html.Td(
                         (ev.get("actor_user_id") or "—")[:8] + "…",
-                        style={"fontSize": "0.78rem", "fontFamily": "monospace"},
+                        style={
+                            "fontSize": "0.78rem",
+                            "fontFamily": "monospace",
+                        },
                     ),
                     html.Td(
                         (ev.get("target_user_id") or "—")[:8] + "…",
-                        style={"fontSize": "0.78rem", "fontFamily": "monospace"},
+                        style={
+                            "fontSize": "0.78rem",
+                            "fontFamily": "monospace",
+                        },
                     ),
                     html.Td(
-                        metadata, style={"fontSize": "0.78rem", "color": "#6b7280"}
+                        metadata,
+                        style={"fontSize": "0.78rem", "color": "#6b7280"},
                     ),
                 ]
             )

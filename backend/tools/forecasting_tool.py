@@ -20,7 +20,7 @@ Typical usage (via LangChain tool call)::
 """
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 import tools._forecast_shared as _sh
 from langchain_core.tools import tool
@@ -35,8 +35,9 @@ from tools._forecast_model import (
     _train_prophet_model,
 )
 from tools._forecast_persist import _save_forecast
+from validation import validate_ticker
 
-# Module-level logger — must remain module-level for LangChain @tool compatibility
+# Module-level logger — required for LangChain @tool
 _logger = logging.getLogger(__name__)
 
 # Re-export so tests can still monkeypatch via forecasting_tool.*
@@ -48,15 +49,17 @@ _require_repo = _sh._require_repo
 def forecast_stock(ticker: str, months: int = 9) -> str:
     """Forecast the stock price using Meta Prophet and generate a chart.
 
-    Loads locally stored OHLCV data, trains a Prophet model with yearly
-    and weekly seasonality and US market holidays, generates a price
-    forecast for the requested horizon, evaluates accuracy via 12-month
-    in-sample backtesting, and saves both the forecast (parquet) and an
-    interactive Plotly chart.
+    **IMPORTANT**: OHLCV data must already exist in Iceberg before calling
+    this tool.  Call ``fetch_stock_data`` for the ticker in a **prior step**
+    and wait for it to complete.  Do NOT call both tools in the same step.
+
+    Trains a Prophet model with yearly and weekly seasonality and US
+    market holidays, generates a price forecast for the requested
+    horizon, evaluates accuracy via 12-month in-sample backtesting,
+    and saves both the forecast (parquet) and an interactive Plotly chart.
 
     Args:
-        ticker: Stock ticker symbol, e.g. ``"AAPL"``. Data must already be
-            fetched via :func:`fetch_stock_data` before calling this tool.
+        ticker: Stock ticker symbol, e.g. ``"AAPL"``.
         months: Forecast horizon in months. Targets are shown at 3, 6, and
             9 months (whichever fall within the horizon). Defaults to ``9``.
 
@@ -70,22 +73,72 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
         >>> "AAPL" in result
         True
     """
+    err = validate_ticker(ticker)
+    if err:
+        return f"Error: {err}"
     ticker = ticker.upper().strip()
+    from tools._ticker_linker import auto_link_ticker
+
+    auto_link_ticker(ticker)
     months = max(1, int(months))
-    _logger.info("forecast_stock | ticker=%s | months=%d", ticker, months)
+    _logger.info(
+        "forecast_stock | ticker=%s | months=%d",
+        ticker,
+        months,
+    )
     sym = _sh._currency_symbol(_sh._load_currency(ticker))
 
     cached = _sh._load_cache(ticker, f"forecast_{months}m")
     if cached:
-        _logger.info("Returning cached forecast for %s (%dm)", ticker, months)
+        _logger.info(
+            "Returning cached forecast for %s (%dm)",
+            ticker,
+            months,
+        )
         return cached
+
+    # 7-day cooldown: skip re-running Prophet if a forecast
+    # was generated within the last 7 days (in Iceberg).
+    try:
+        repo_check = _sh._get_repo()
+        if repo_check is not None:
+            latest_run = repo_check.get_latest_forecast_run(ticker, months)
+            if latest_run is not None:
+                rd = latest_run.get("run_date")
+                if rd is not None:
+                    if hasattr(rd, "date"):
+                        rd = rd.date()
+                    cutoff = date.today() - timedelta(days=7)
+                    if rd > cutoff:
+                        _logger.info(
+                            "Forecast cooldown: %s %dm"
+                            " last run on %s (<7d ago)",
+                            ticker,
+                            months,
+                            rd,
+                        )
+                        return (
+                            f"Forecast for {ticker} "
+                            f"({months}-month) was last "
+                            f"run on {rd} (within 7 "
+                            f"days). Next forecast "
+                            f"available after "
+                            f"{rd + timedelta(days=7)}. "
+                            f"Use the dashboard to view "
+                            f"current forecast results."
+                        )
+    except Exception as exc:
+        _logger.debug("Cooldown check skipped for %s: %s", ticker, exc)
 
     try:
         df = _sh._load_parquet(ticker)
         if df is None:
             return (
-                f"No local data found for '{ticker}'. "
-                "Please run fetch_stock_data first."
+                f"No OHLCV data found for '{ticker}'. "
+                "You MUST call fetch_stock_data for "
+                "this ticker first, then call "
+                "forecast_stock again in the next "
+                "step."
             )
 
         prophet_df = _prepare_data_for_prophet(df)
@@ -96,7 +149,9 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
 
         forecast_df = _generate_forecast(model, prophet_df, months)
         accuracy = _calculate_forecast_accuracy(model, prophet_df)
-        summary = _generate_forecast_summary(forecast_df, current_price, ticker, months)
+        summary = _generate_forecast_summary(
+            forecast_df, current_price, ticker, months
+        )
 
         forecast_path = _save_forecast(forecast_df, ticker, months)
         chart_path = _create_forecast_chart(
@@ -169,5 +224,7 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
         return report
 
     except Exception as e:
-        _logger.error("forecast_stock failed for %s: %s", ticker, e, exc_info=True)
+        _logger.error(
+            "forecast_stock failed for %s: %s", ticker, e, exc_info=True
+        )
         return f"Error forecasting '{ticker}': {e}"

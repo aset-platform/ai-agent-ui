@@ -20,7 +20,9 @@ from fastapi import FastAPI
 from starlette.testclient import TestClient
 
 # JWT secret must be set before any auth import
-os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-unit-tests-only-32ch")
+os.environ.setdefault(
+    "JWT_SECRET_KEY", "test-secret-key-for-unit-tests-only-32ch"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +55,9 @@ class _FakeRepo:
 
     def create(self, data: Dict[str, Any]) -> Dict[str, Any]:
         if self.get_by_email(data["email"]):
-            raise ValueError(f"User with email '{data['email']}' already exists.")
+            raise ValueError(
+                f"User with email '{data['email']}' already exists."
+            )
         now = self._now()
         row = {
             "user_id": data.get("user_id", str(uuid.uuid4())),
@@ -88,9 +92,14 @@ class _FakeRepo:
     def delete(self, user_id: str) -> None:
         self.update(user_id, {"is_active": False})
 
-    def get_by_oauth_sub(self, provider: str, sub: str) -> Optional[Dict[str, Any]]:
+    def get_by_oauth_sub(
+        self, provider: str, sub: str
+    ) -> Optional[Dict[str, Any]]:
         for u in self._users.values():
-            if u.get("oauth_provider") == provider and u.get("oauth_sub") == sub:
+            if (
+                u.get("oauth_provider") == provider
+                and u.get("oauth_sub") == sub
+            ):
                 return dict(u)
         return None
 
@@ -101,7 +110,10 @@ class _FakeRepo:
         if existing:
             return self.update(
                 existing["user_id"],
-                {"profile_picture_url": picture_url, "last_login_at": self._now()},
+                {
+                    "profile_picture_url": picture_url,
+                    "last_login_at": self._now(),
+                },
             )
         return self.create(
             {
@@ -133,23 +145,28 @@ def fake_repo():
     repo = _FakeRepo()
     # Import AuthService to hash the password properly
     from auth.service import AuthService
+
     svc = AuthService(
         secret_key=os.environ["JWT_SECRET_KEY"],
         access_expire_minutes=60,
         refresh_expire_days=7,
     )
-    repo.create({
-        "email": "alice@example.com",
-        "hashed_password": svc.hash_password("Password1"),
-        "full_name": "Alice Smith",
-        "role": "general",
-    })
-    repo.create({
-        "email": "superadmin@example.com",
-        "hashed_password": svc.hash_password("AdminPass1"),
-        "full_name": "Super Admin",
-        "role": "superuser",
-    })
+    repo.create(
+        {
+            "email": "alice@example.com",
+            "hashed_password": svc.hash_password("Password1!"),
+            "full_name": "Alice Smith",
+            "role": "general",
+        }
+    )
+    repo.create(
+        {
+            "email": "superadmin@example.com",
+            "hashed_password": svc.hash_password("AdminPass1!"),
+            "full_name": "Super Admin",
+            "role": "superuser",
+        }
+    )
     return repo
 
 
@@ -195,7 +212,7 @@ class TestLogin:
     def test_login_success_returns_tokens(self, client):
         r = client.post(
             "/auth/login",
-            json={"email": "alice@example.com", "password": "Password1"},
+            json={"email": "alice@example.com", "password": "Password1!"},
         )
         assert r.status_code == 200, r.text
         body = r.json()
@@ -212,7 +229,7 @@ class TestLogin:
     def test_login_unknown_email_returns_401(self, client):
         r = client.post(
             "/auth/login",
-            json={"email": "nobody@example.com", "password": "Password1"},
+            json={"email": "nobody@example.com", "password": "Password1!"},
         )
         assert r.status_code == 401, r.text
 
@@ -226,8 +243,10 @@ class TestRefresh:
     """Tests for ``POST /auth/refresh``."""
 
     def test_refresh_returns_new_access_token(self, client):
-        tokens = _login(client, "alice@example.com", "Password1")
-        r = client.post("/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+        tokens = _login(client, "alice@example.com", "Password1!")
+        r = client.post(
+            "/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+        )
         assert r.status_code == 200, r.text
         new_body = r.json()
         assert "access_token" in new_body
@@ -235,7 +254,9 @@ class TestRefresh:
         assert new_body["access_token"] != tokens["access_token"]
 
     def test_refresh_with_invalid_token_returns_401(self, client):
-        r = client.post("/auth/refresh", json={"refresh_token": "not-a-real-token"})
+        r = client.post(
+            "/auth/refresh", json={"refresh_token": "not-a-real-token"}
+        )
         assert r.status_code in (401, 422), r.text
 
 
@@ -248,7 +269,7 @@ class TestLogout:
     """Tests for ``POST /auth/logout``."""
 
     def test_logout_succeeds(self, client):
-        tokens = _login(client, "alice@example.com", "Password1")
+        tokens = _login(client, "alice@example.com", "Password1!")
         r = client.post(
             "/auth/logout",
             json={"refresh_token": tokens["refresh_token"]},
@@ -257,13 +278,15 @@ class TestLogout:
         assert r.status_code in (200, 204), r.text
 
     def test_refresh_after_logout_returns_401(self, client):
-        tokens = _login(client, "alice@example.com", "Password1")
+        tokens = _login(client, "alice@example.com", "Password1!")
         client.post(
             "/auth/logout",
             json={"refresh_token": tokens["refresh_token"]},
             headers={"Authorization": f"Bearer {tokens['access_token']}"},
         )
-        r = client.post("/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+        r = client.post(
+            "/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+        )
         assert r.status_code == 401, r.text
 
 
@@ -280,7 +303,7 @@ class TestGetMe:
         assert r.status_code in (401, 403), r.text
 
     def test_get_me_with_valid_token(self, client):
-        tokens = _login(client, "alice@example.com", "Password1")
+        tokens = _login(client, "alice@example.com", "Password1!")
         r = client.get(
             "/auth/me",
             headers={"Authorization": f"Bearer {tokens['access_token']}"},
@@ -290,7 +313,7 @@ class TestGetMe:
         assert body["email"] == "alice@example.com"
 
     def test_patch_me_updates_full_name(self, client):
-        tokens = _login(client, "alice@example.com", "Password1")
+        tokens = _login(client, "alice@example.com", "Password1!")
         r = client.patch(
             "/auth/me",
             json={"full_name": "Alice Updated"},
@@ -309,7 +332,7 @@ class TestCreateUser:
     """Tests for ``POST /users`` (superuser only)."""
 
     def _superuser_token(self, client: TestClient) -> str:
-        tokens = _login(client, "superadmin@example.com", "AdminPass1")
+        tokens = _login(client, "superadmin@example.com", "AdminPass1!")
         return tokens["access_token"]
 
     def test_create_user_as_superuser(self, client):
@@ -318,7 +341,7 @@ class TestCreateUser:
             "/users",
             json={
                 "email": "new@example.com",
-                "password": "Password1",
+                "password": "Password1!",
                 "full_name": "New User",
                 "role": "general",
             },
@@ -333,7 +356,7 @@ class TestCreateUser:
             "/users",
             json={
                 "email": "anon@example.com",
-                "password": "Password1",
+                "password": "Password1!",
                 "full_name": "Anon",
             },
         )
@@ -345,10 +368,89 @@ class TestCreateUser:
             "/users",
             json={
                 "email": "alice@example.com",
-                "password": "Password1",
+                "password": "Password1!",
                 "full_name": "Alice Dup",
                 "role": "general",
             },
             headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 409, r.text
+
+
+# ---------------------------------------------------------------------------
+# POST /users/{user_id}/reset-password  (superuser only)
+# ---------------------------------------------------------------------------
+
+
+class TestAdminPasswordReset:
+    """Tests for ``POST /users/{user_id}/reset-password``."""
+
+    def _superuser_token(self, client: TestClient) -> str:
+        tokens = _login(client, "superadmin@example.com", "AdminPass1!")
+        return tokens["access_token"]
+
+    def _alice_id(self, fake_repo) -> str:
+        user = fake_repo.get_by_email("alice@example.com")
+        return user["user_id"]
+
+    def test_admin_reset_password_success(self, client, fake_repo):
+        """Superuser can reset another user's password."""
+        token = self._superuser_token(client)
+        alice_id = self._alice_id(fake_repo)
+        r = client.post(
+            f"/users/{alice_id}/reset-password",
+            json={"new_password": "NewPass99!"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["detail"] == "Password reset successfully"
+        # Verify Alice can log in with the new password
+        r2 = client.post(
+            "/auth/login",
+            json={
+                "email": "alice@example.com",
+                "password": "NewPass99!",
+            },
+        )
+        assert r2.status_code == 200, r2.text
+
+    def test_admin_reset_password_non_superuser_403(self, client, fake_repo):
+        """Non-superuser gets 403 when trying to reset."""
+        tokens = _login(client, "alice@example.com", "Password1!")
+        alice_id = self._alice_id(fake_repo)
+        r = client.post(
+            f"/users/{alice_id}/reset-password",
+            json={"new_password": "NewPass99!"},
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+        assert r.status_code == 403, r.text
+
+    def test_admin_reset_password_unknown_user_404(self, client):
+        """Returns 404 for a non-existent user_id."""
+        token = self._superuser_token(client)
+        r = client.post(
+            "/users/nonexistent-id/reset-password",
+            json={"new_password": "NewPass99!"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 404, r.text
+
+    def test_admin_reset_password_weak_password_400(self, client, fake_repo):
+        """Weak password gets rejected with 400."""
+        token = self._superuser_token(client)
+        alice_id = self._alice_id(fake_repo)
+        r = client.post(
+            f"/users/{alice_id}/reset-password",
+            json={"new_password": "short"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code in (400, 422), r.text
+
+    def test_admin_reset_no_auth_401(self, client, fake_repo):
+        """Unauthenticated request returns 401."""
+        alice_id = self._alice_id(fake_repo)
+        r = client.post(
+            f"/users/{alice_id}/reset-password",
+            json={"new_password": "NewPass99!"},
+        )
+        assert r.status_code in (401, 403), r.text

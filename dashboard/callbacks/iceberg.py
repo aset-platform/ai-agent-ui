@@ -8,7 +8,9 @@ refresh cycle do not duplicate Iceberg scans.
 
 Example::
 
-    from dashboard.callbacks.iceberg import _get_iceberg_repo, _get_ohlcv_cached
+    from dashboard.callbacks.iceberg import (
+        _get_iceberg_repo, _get_ohlcv_cached,
+    )
     repo = _get_iceberg_repo()
     df = _get_ohlcv_cached(repo, "AAPL")
 """
@@ -22,27 +24,33 @@ from typing import Optional
 
 import pandas as pd
 
-# Module-level logger — must remain module-level for use outside any class scope
+# Module-level logger — must remain module-level for
+# use outside any class scope
 _logger = logging.getLogger(__name__)
 
-# Ensure project root on sys.path before stocks import
+# Ensure project root + backend/ on sys.path before imports
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+_BACKEND_DIR = str(_PROJECT_ROOT / "backend")
+for _p in (_BACKEND_DIR, str(_PROJECT_ROOT)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from paths import ICEBERG_CATALOG_URI, ICEBERG_WAREHOUSE_URI  # noqa: E402
 
 # Ensure PyIceberg can find the catalog regardless of CWD.
 # PyIceberg's _ENV_CONFIG singleton reads env vars once at import time,
 # so these must be set BEFORE any pyiceberg import.
 os.environ.setdefault(
     "PYICEBERG_CATALOG__LOCAL__URI",
-    f"sqlite:///{_PROJECT_ROOT.resolve()}/data/iceberg/catalog.db",
+    ICEBERG_CATALOG_URI,
 )
 os.environ.setdefault(
     "PYICEBERG_CATALOG__LOCAL__WAREHOUSE",
-    f"file:///{_PROJECT_ROOT.resolve()}/data/iceberg/warehouse",
+    ICEBERG_WAREHOUSE_URI,
 )
 
-# Fix #10: TTL-based singleton — re-initialises after 1 h to survive Iceberg restarts
+# Fix #10: TTL-based singleton — re-initialises after
+# 1 h to survive Iceberg restarts
 _DASH_REPO = None
 _DASH_REPO_EXPIRY: float = 0.0
 _DASH_REPO_TTL = 3600  # 1 hour
@@ -58,10 +66,11 @@ _FORECAST_RUNS_CACHE: dict = {"data": None, "expiry": 0.0}
 _OHLCV_CACHE: dict = {}  # {ticker: (df, expiry_monotonic)}
 _FORECAST_CACHE: dict = {}  # {(ticker, horizon): (df, expiry_monotonic)}
 _DIVIDENDS_CACHE: dict = {}  # {ticker: (df, expiry_monotonic)}
+_QUARTERLY_CACHE: dict = {"data": None, "expiry": 0.0}
 
 
 def _get_iceberg_repo() -> Optional[object]:
-    """Return the module-level :class:`~stocks.repository.StockRepository` singleton.
+    """Return the module-level StockRepository singleton.
 
     Re-initialised after ``_DASH_REPO_TTL`` seconds so the dashboard can
     recover automatically after an Iceberg catalog restart without requiring
@@ -150,7 +159,9 @@ def _get_forecast_runs_cached(
 
 
 def _get_ohlcv_cached(repo: object, ticker: str) -> Optional[pd.DataFrame]:
-    """Return OHLCV data for *ticker* from Iceberg, cached for ``_SHARED_TTL`` seconds.
+    """Return OHLCV data for *ticker* from Iceberg.
+
+    Cached for ``_SHARED_TTL`` seconds.
 
     The returned DataFrame has a DatetimeIndex and columns ``Open``, ``High``,
     ``Low``, ``Close``, ``Adj Close``, ``Volume`` — matching the shape produced
@@ -214,7 +225,8 @@ def _get_forecast_cached(
 
     Cached for ``_SHARED_TTL`` seconds.  The returned DataFrame has columns
     ``ds``, ``yhat``, ``yhat_lower``, ``yhat_upper`` — matching the shape
-    produced by ``pd.read_parquet(data/forecasts/{TICKER}_{H}m_forecast.parquet)``.
+    produced by ``pd.read_parquet(
+    data/forecasts/{TICKER}_{H}m_forecast.parquet)``.
 
     Args:
         repo: Active :class:`~stocks.repository.StockRepository` instance.
@@ -288,7 +300,9 @@ def _get_dividends_cached(
 
 
 def _get_analysis_summary_cached(repo: object):
-    """Return all latest analysis summaries, cached for ``_SHARED_TTL`` seconds.
+    """Return all latest analysis summaries.
+
+    Cached for ``_SHARED_TTL`` seconds.
 
     Avoids repeated Iceberg scans when multiple callbacks (screener, risk,
     sectors) all need the same table within the same refresh cycle.
@@ -420,6 +434,26 @@ def _get_analysis_with_gaps_filled(repo: object) -> pd.DataFrame:
     return df
 
 
+def _get_quarterly_cached(repo: object) -> pd.DataFrame:
+    """Return all quarterly results, cached for ``_SHARED_TTL`` s.
+
+    Args:
+        repo: Active :class:`~stocks.repository.StockRepository`.
+
+    Returns:
+        DataFrame of quarterly results, or empty DataFrame.
+    """
+    now = _time.monotonic()
+    if (
+        _QUARTERLY_CACHE["data"] is not None
+        and now < _QUARTERLY_CACHE["expiry"]
+    ):
+        return _QUARTERLY_CACHE["data"]
+    data = repo.get_all_quarterly_results()
+    _QUARTERLY_CACHE.update({"data": data, "expiry": now + _SHARED_TTL})
+    return data
+
+
 def clear_caches(ticker: str | None = None) -> None:
     """Invalidate TTL caches so subsequent reads fetch fresh Iceberg data.
 
@@ -450,3 +484,4 @@ def clear_caches(ticker: str | None = None) -> None:
     _FILLED_SUMMARY_CACHE.update({"data": None, "expiry": 0.0})
     _REGISTRY_CACHE.update({"data": None, "expiry": 0.0})
     _FORECAST_RUNS_CACHE.update({"data": None, "expiry": 0.0})
+    _QUARTERLY_CACHE.update({"data": None, "expiry": 0.0})

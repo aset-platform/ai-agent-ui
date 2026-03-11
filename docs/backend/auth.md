@@ -61,6 +61,7 @@ Two Iceberg tables backed by a SQLite catalog at `data/iceberg/catalog.db`.
 |---|---|---|
 | `auth.users` | `auth` | User accounts and credentials |
 | `auth.audit_log` | `auth` | Immutable event history |
+| `auth.user_tickers` | `auth` | Per-user linked ticker watchlist |
 
 The warehouse lives at `data/iceberg/warehouse/` and is gitignored.  The catalog config is read from `.pyiceberg.yaml` in the project root (gitignored; copy from `.pyiceberg.yaml.example`).
 
@@ -273,6 +274,28 @@ Return all audit log events, sorted newest‑first.
 
 ---
 
+### Ticker Management
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/users/me/tickers` | JWT | List the authenticated user's linked tickers |
+| POST | `/users/me/tickers` | JWT | Link a ticker (`{"ticker": "AAPL", "source": "manual"}`) |
+| DELETE | `/users/me/tickers/{ticker}` | JWT | Unlink a ticker from the user |
+
+Tickers are also auto-linked when a user analyses a stock via the chat server. New users receive `RELIANCE.NS` as a default linked ticker.
+
+---
+
+### Admin Password Reset
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/users/{user_id}/reset-password` | Superuser | Reset any user's password |
+
+Body: `{"new_password": "..."}` (min 8 chars). Clears pending reset tokens. Audit-logged as `ADMIN_PASSWORD_RESET`.
+
+---
+
 ### OAuth / SSO
 
 #### `GET /auth/oauth/providers`
@@ -391,7 +414,7 @@ A one‑time Iceberg schema migration adds three nullable columns to `auth.users
 Run the migration after deploying the new code:
 
 ```bash
-cd ai-agent-ui && source backend/demoenv/bin/activate
+cd ai-agent-ui && source ~/.ai-agent-ui/venv/bin/activate
 python auth/migrate_users_table.py
 ```
 

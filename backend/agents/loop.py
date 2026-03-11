@@ -59,7 +59,7 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
             iteration += 1
             if iteration > MAX_ITERATIONS:
                 agent.logger.warning(
-                    "Agent '%s' hit MAX_ITERATIONS (%d). Returning last response.",
+                    "Agent '%s' hit MAX_ITERATIONS (%d).",
                     agent.config.agent_id,
                     MAX_ITERATIONS,
                 )
@@ -67,7 +67,10 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
             agent.logger.debug(
                 "Iteration %d | message_count=%d", iteration, len(messages)
             )
-            response = agent.llm_with_tools.invoke(messages)
+            response = agent.llm_with_tools.invoke(
+                messages,
+                iteration=iteration,
+            )
             messages.append(response)
 
             if not response.tool_calls:
@@ -79,18 +82,35 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
             for tc in response.tool_calls:
                 tool_name = tc["name"]
                 tool_args = tc.get("args", {})
-                agent.logger.debug("Tool args | %s: %s", tool_name, tool_args)
+                agent.logger.debug(
+                    "Tool args | %s: %s",
+                    tool_name,
+                    tool_args,
+                )
                 result = agent.tool_registry.invoke(tool_name, tool_args)
-                agent.logger.debug("Tool result | %s: %s", tool_name, result[:300])
-                messages.append(ToolMessage(content=result, tool_call_id=tc["id"]))
+                agent.logger.debug(
+                    "Tool result | %s: %s",
+                    tool_name,
+                    result[:300],
+                )
+                messages.append(
+                    ToolMessage(
+                        content=result,
+                        tool_call_id=tc["id"],
+                    )
+                )
 
     except Exception:
         agent.logger.error("Agent run failed", exc_info=True)
         raise
 
     agent.logger.info(
-        "Request end | agent=%s | iterations=%d", agent.config.agent_id, iteration
+        "Request end | agent=%s | iterations=%d",
+        agent.config.agent_id,
+        iteration,
     )
     return (
-        (response.content or "No response") if response is not None else "No response"
+        (response.content or "No response")
+        if response is not None
+        else "No response"
     )

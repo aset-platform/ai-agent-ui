@@ -22,7 +22,8 @@ class AgentConfig:
         agent_id: Unique string identifier for routing and logging.
         name: Human-readable display name.
         description: One-sentence description exposed via ``GET /agents``.
-        model: LLM model identifier passed to the provider SDK.
+        groq_model_tiers: Ordered list of Groq model names,
+            tried first-to-last before the Anthropic fallback.
         temperature: Sampling temperature.  ``0.0`` produces deterministic
             outputs; higher values increase creativity.
         system_prompt: Optional system message prepended to every conversation.
@@ -32,7 +33,9 @@ class AgentConfig:
     agent_id: str
     name: str
     description: str
-    model: str
+    groq_model_tiers: list[str] = field(
+        default_factory=list,
+    )
     temperature: float = 0.0
     system_prompt: str = ""
-    tool_names: list = field(default_factory=list)
+    tool_names: list[str] = field(default_factory=list)

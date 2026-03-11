@@ -7,6 +7,7 @@ exclude =
     .git,
     __pycache__,
     backend/demoenv,
+    **/venv,
     .eggs,
     build,
     dist

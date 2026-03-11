@@ -4,6 +4,323 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 11, 2026 — Sprint Phase 3 + Dashboard fixes
+
+### Redis Token Store (Story 1.3)
+
+Introduced a pluggable `TokenStore` protocol (`auth/token_store.py`) with two implementations:
+
+- **`InMemoryTokenStore`** — dict-based with lazy TTL expiry (default)
+- **`RedisTokenStore`** — uses `SETEX` for auto-expiry; lazy `import redis`
+
+Factory: `create_token_store(redis_url, prefix)` — empty URL returns in-memory; connection failure falls back gracefully.
+
+The JWT deny-list and OAuth state store now use `TokenStore` instead of raw `Set[str]` / `Dict`. Entries auto-expire via TTL matching token lifetime.
+
+### API Versioning (Story 2.2)
+
+Dual-mount of core routes at `/` (backward compat) and `/v1/`:
+
+| Endpoint | Legacy | Versioned |
+|----------|--------|-----------|
+| Chat stream | `POST /chat/stream` | `POST /v1/chat/stream` |
+| Health | `GET /health` | `GET /v1/health` |
+| Agents | `GET /agents` | `GET /v1/agents` |
+
+### Frontend Config Centralization
+
+New `frontend/lib/config.ts` exports `BACKEND_URL`, `DASHBOARD_URL`, `DOCS_URL`. Replaced 18 duplicate `process.env.NEXT_PUBLIC_*` declarations across 9 frontend files.
+
+### Dashboard Callback Race Conditions
+
+Fixed two E2E failures caused by Dash callback timing:
+
+1. **Admin RBAC blank page**: `display_page` used `State("auth-token-store")` — changed to `Input()` so it re-fires after `store_token_from_url` persists the JWT
+2. **Analysis "Authentication required"**: Chart callbacks (`update_analysis_chart`, `update_compare`, etc.) only read `auth-token-store` State. Added `State("url", "search")` + `_resolve_token()` fallback to 6 callbacks
+
+### Rate Limit Tuning
+
+Increased from 5/15min → 30/15min (login), 3/hr → 10/hr (register), 10/min → 30/min (OAuth). Added 429 retry logic to E2E `apiLogin` and `auth.setup.ts`. Frontend login page shows distinct rate-limit message.
+
+### Files changed: 7 new, 20+ modified
+
+| File | Change |
+|------|--------|
+| `auth/token_store.py` | NEW — TokenStore protocol + implementations |
+| `frontend/lib/config.ts` | NEW — centralized URL config |
+| `auth/service.py` | REWRITE — uses TokenStore |
+| `auth/tokens.py` | REWRITE — uses TokenStore |
+| `auth/dependencies.py` | Creates store via factory |
+| `auth/oauth_service.py` | OAuth state via TokenStore |
+| `backend/routes.py` | Dual-mount /v1/ |
+| `dashboard/app_layout.py` | Input trigger fix |
+| `dashboard/callbacks/analysis_cbs.py` | URL token fallback |
+| `dashboard/callbacks/forecast_cbs.py` | URL token fallback |
+| `dashboard/callbacks/home_cbs.py` | URL token fallback |
+
+**Tests**: 324 unit + 50 E2E pass. 16 new token store tests.
+
+---
+
+## Mar 11, 2026 — Sprint execution (Phases 1–2)
+
+### Security Hardening
+
+| # | Fix | Details |
+|---|-----|---------|
+| 1 | CORS | Whitelisted origins replace `allow_origins=["*"]` |
+| 2 | Security headers | X-Content-Type-Options, X-Frame-Options, Referrer-Policy |
+| 3 | Avatar traversal | Ext allowlist + `resolve().is_relative_to()` |
+| 4 | Password reset | `secrets.token_urlsafe(32)` replaces `uuid4()` |
+| 5 | PEP 604 | `Optional[X]` → `X \| None` in 6 files |
+
+### Phase 1 — Rate limiting, JWKS, caching, algo opts
+
+| # | Story | Details |
+|---|-------|---------|
+| 1.1 | Rate limiting | slowapi on login, password-reset, OAuth |
+| 1.4 | JWKS verification | PyJWKClient for Google OAuth |
+| 3.1 | Iceberg caching | Column projection + CachedRepository |
+| 3.2 | Algo optimizations | TokenBudget O(1) totals, compressor early-exit |
+
+### Phase 2 — Decomposition + HttpOnly cookies
+
+| # | Story | Details |
+|---|-------|---------|
+| 2.1 | ChatServer decomp | Extracted `bootstrap.py` + `routes.py` |
+| 1.2 | HttpOnly cookies | Refresh token in HttpOnly cookie |
+
+---
+
+## Mar 10, 2026 — N-tier Groq LLM cascade
+
+### LLM Architecture Refactor
+
+Replaced the 2-model (router/responder) FallbackLLM with an N-tier cascade: 4 Groq models tried in order, with Anthropic Claude Sonnet 4.6 as the final paid fallback.
+
+**Tier order:** `llama-3.3-70b-versatile` (12K TPM) → `kimi-k2-instruct` (10K TPM) → `gpt-oss-120b` (8K TPM) → `llama-4-scout-17b` (30K TPM) → `claude-sonnet-4-6` (paid, unlimited).
+
+### Key Changes
+
+| # | Change | Details |
+|---|--------|---------|
+| 1 | N-tier FallbackLLM | `llm_fallback.py` rewritten — `groq_models: List[str]` replaces `router_model`/`responder_model` |
+| 2 | Budget-aware routing | Per-model TPM checks with progressive compression at 70% headroom |
+| 3 | Groq SDK `max_retries=0` | Disabled internal retries (was 45-56s delay); errors cascade immediately |
+| 4 | `APIStatusError` cascade | 413 errors now caught and cascaded (not just 429) |
+| 5 | Ticker auto-linking fix | Frontend sends `user_id`; 3 missing tools wired with `auto_link_ticker()` |
+| 6 | Config simplification | Single `groq_model_tiers` CSV replaces router/responder/threshold fields |
+| 7 | Test rewrite | 12 tests covering N-tier API: cascade, budget skip, compression, no-key fallback |
+
+### Files changed: 9 modified
+
+| File | Change |
+|------|--------|
+| `backend/llm_fallback.py` | REWRITE — N-tier cascade |
+| `backend/config.py` | `groq_model_tiers` CSV setting |
+| `backend/agents/config.py` | `groq_model_tiers: List[str]` field |
+| `backend/agents/general_agent.py` | N-tier factory |
+| `backend/agents/stock_agent.py` | N-tier factory |
+| `tests/backend/test_llm_fallback.py` | 12 tests rewritten |
+| `frontend/lib/auth.ts` | `getUserIdFromToken()` added |
+| `frontend/hooks/useSendMessage.ts` | Sends `user_id` in chat body |
+| `backend/tools/stock_data_tool.py` | `auto_link_ticker()` in 3 tools |
+
+---
+
+## Mar 10, 2026 — Team knowledge sharing ecosystem
+
+### Infrastructure
+
+- **Slim CLAUDE.md**: Rewrote from ~650 lines (~3,500 tokens) to ~85 lines (~800 tokens). Hard rules only; all detailed architecture, conventions, debugging, and onboarding content migrated to Serena shared memories
+- **15 shared Serena memories**: Git-committed, PR-reviewed knowledge base across 5 categories — architecture (5), conventions (6), debugging (2), onboarding (1), api (1)
+- **Selective `.serena/` gitignore**: `memories/shared/` tracked in git; `session/`, `personal/`, `cache/`, `project.local.yml` remain gitignored
+
+### Automation
+
+- **`/promote-memory` Claude Code skill**: AI-powered promotion from session/personal memories to shared. Cleans session-specific context, generalizes findings, creates branch + commit for PR
+- **`/check-stale-memories` Claude Code skill**: Semantic staleness detection using Serena's `find_symbol` and `search_for_pattern`. Reports stale references with suggested fixes
+- **`scripts/check-stale-memories.sh`**: CI grep-based stale memory check. Scans shared memories for backtick-quoted file paths that no longer exist. Non-blocking (exit 0)
+- **`scripts/dev-setup.sh`**: Single-command AI tooling onboarding — verifies Claude Code, Serena, shared memories, creates local dirs, installs hooks. ~5 minutes for new developers
+
+### Design
+
+- Design doc: `docs/plans/2026-03-09-team-knowledge-sharing-design.md`
+- Implementation plan: `docs/plans/2026-03-09-team-knowledge-sharing-plan.md`
+- Hybrid sharing model with PR review gate for shared memories
+- Two-layer staleness detection (CI + AI)
+
+### Files changed: 21 new, 2 modified
+
+| File | Change |
+|------|--------|
+| `.serena/memories/shared/**/*.md` (15) | NEW — shared memories |
+| `.claude/commands/*.md` (2) | NEW — skills |
+| `scripts/dev-setup.sh` | NEW — onboarding |
+| `scripts/check-stale-memories.sh` | NEW — CI check |
+| `docs/plans/*.md` (2) | NEW — design + plan |
+| `CLAUDE.md` | REWRITE — 650→85 lines |
+| `.gitignore` | EDIT — selective .serena/ |
+
+---
+
+## Mar 9, 2026 — Seed fixes, profile NaN fix, backfill script, Groq chunking strategy
+
+### Bug Fixes
+
+- **seed_demo_data.py**: Fixed 4 bugs — OHLCV column casing (lowercase → uppercase for `insert_ohlcv`), `insert_forecast_run` missing `horizon_months` arg, `insert_forecast_series` needs `run_date` + Prophet-style column rename, `.local` TLD rejected by Pydantic EmailStr (changed to `.com`)
+- **auth/endpoints/helpers.py**: Profile edit crash — Parquet returns `float('nan')` for null string columns; added `_str_or_none()` guard and `isinstance(raw_perms, str)` check before `json.loads()`
+- **E2E credential mismatch**: Updated 6 E2E files to use seeded demo credentials (`@demo.com`) instead of `@example.com`
+- **E2E flaky tests**: Agent switcher retry with `force: true`, Enter-key test focus wait, forecast test rewrite for pre-populated dropdown
+
+### New Features
+
+- **`scripts/backfill_all.py`**: Full truncate + refetch pipeline — OHLCV, company info, dividends, analysis, quarterly results, Prophet forecast. Supports `--tickers`, `--period`, `--no-truncate`, `--skip-forecast`
+- **`StockRepository.delete_ticker_data()`**: Copy-on-write bulk truncation across all 9 Iceberg tables
+- **E2E profile save test**: New test verifying profile name edit saves without error
+
+### Groq Rate-Limit Chunking Strategy (3 layers)
+
+1. **`backend/token_budget.py`** (NEW): Sliding-window deque tracker for TPM/RPM/TPD/RPD per Groq model. 80% threshold for preemptive routing. Thread-safe via per-model locks. Hardcoded free-tier limits for 6 models
+2. **`backend/message_compressor.py`** (NEW): Three-stage compression — system prompt condensing on iteration 2+ (~40% of original), history truncation (last 3 turns), tool result truncation (2K chars). Progressive fallback for tight budgets
+3. **`backend/llm_fallback.py`** (REWRITE): Three-tier model routing — `llama-4-scout-17b` (30K TPM router) → `gpt-oss-120b` (8K TPM responder) → Anthropic Claude (fallback). Budget-checked before each call, cascades on exhaustion or 429
+
+**Config additions**: `GROQ_ROUTER_MODEL`, `GROQ_RESPONDER_MODEL`, `MAX_HISTORY_TURNS`, `MAX_TOOL_RESULT_CHARS` in `backend/config.py`
+
+**Design doc**: `docs/design/groq-chunking-strategy.md`
+
+### Files changed: 16 modified, 4 new
+
+| File | Change |
+|------|--------|
+| `backend/token_budget.py` | NEW — rate tracker |
+| `backend/message_compressor.py` | NEW — message compression |
+| `backend/llm_fallback.py` | REWRITE — three-tier router |
+| `docs/design/groq-chunking-strategy.md` | NEW — design doc |
+| `scripts/backfill_all.py` | NEW — backfill pipeline |
+| `backend/config.py` | Added 4 settings |
+| `backend/agents/config.py` | Added `router_model` field |
+| `backend/agents/base.py` | Default token_budget/compressor attrs |
+| `backend/agents/general_agent.py` | Wired router + budget |
+| `backend/agents/stock_agent.py` | Wired router + budget |
+| `backend/agents/loop.py` | Pass `iteration=` to invoke |
+| `backend/agents/stream.py` | Pass `iteration=` to invoke |
+| `backend/main.py` | Shared TokenBudget + Compressor |
+| `auth/endpoints/helpers.py` | NaN guard |
+| `scripts/seed_demo_data.py` | 4 bug fixes |
+| `stocks/repository.py` | `delete_ticker_data()` |
+| `tests/backend/test_llm_fallback.py` | Updated for new API |
+| E2E files (6) | Credential + flaky fixes |
+
+**Tests**: 155 backend pass, 50 E2E pass. Zero new dependencies.
+
+---
+
+## Mar 8, 2026 — E2E test stabilization
+
+Ran full Playwright E2E suite against live services and fixed all failures. 10 root causes identified and resolved:
+
+- **React 19 `fill()` incompatibility**: `pressSequentially()` for controlled textarea inputs
+- **dbc 2.0.4 `data-testid` crash**: Wrapped dbc components in `html.Div` for test attributes
+- **Dash debug menu overlay**: `{ force: true }` on pagination clicks
+- **Mock NDJSON field name**: `response` not `content`
+- **Agent selector**: Button group, not dropdown — `getByRole("button")`
+- **Transient 500s**: Login retry loop (3 attempts) in `apiLogin()`
+- **Dash reloader**: Test `outputDir` moved to `/tmp/` to avoid file-watcher restarts
+
+**Result**: 49 tests passing (48 clean + 1 flaky), 0 hard failures. Exceeds the 43-test target.
+
+---
+
+## Mar 7, 2026 — Error overlay + Playwright E2E framework
+
+### Error Overlay
+
+Reusable error banner for dashboard refresh failures (`dashboard/components/error_overlay.py`). Fixed-position red banner with `dbc.Alert(duration=8000)` auto-dismiss. Wired to 3 refresh callbacks (home, analysis, forecast).
+
+### Playwright E2E Framework
+
+Full `e2e/` project at project root — Playwright 1.50+, TypeScript, Page Object Model.
+
+| Component | Details |
+|-----------|---------|
+| Projects | 6: setup, auth, frontend, dashboard, admin, errors |
+| Spec files | 14 across `tests/{auth,frontend,dashboard,errors}/` |
+| POMs | 10 classes in `pages/{frontend,dashboard}/` |
+| Fixtures | Auth setup (storageState), JWT token fixture for Dash |
+| Dash helpers | `waitForDashCallback`, `waitForPlotlyChart`, `waitForDashLoading` |
+| CI | `.github/workflows/e2e.yml` — chromium-only, caches browsers |
+
+Added `data-testid` attributes to 16 frontend and 11 dashboard components.
+
+---
+
+## Mar 7, 2026 — 5-Epic feature sprint
+
+### Epic 1: Admin Password Reset
+
+New superuser-only endpoint `POST /users/{user_id}/reset-password` with dashboard modal integration. Pattern-match "Reset Pwd" button on each row of the admin users table. Audit-logged as `ADMIN_PASSWORD_RESET`.
+
+### Epic 2: Smart Data Freshness Gates
+
+- **Analysis**: Iceberg `analysis_date == today` check — skips re-analysis if already done today
+- **Forecast**: 7-day cooldown — skips if `run_date` within last 7 days
+- Both gates are non-blocking (wrapped in try/except, fall through on error)
+
+### Epic 3: Virtualenv Relocation
+
+Moved Python virtualenv from `backend/demoenv` (inside project tree) to `~/.ai-agent-ui/venv` (outside). Prevents linter tools from rewriting site-packages. `setup.sh` auto-migrates with symlink for backwards compat. Updated: `run.sh`, hooks, CI, `pyproject.toml`, `.flake8`, all docs.
+
+### Epic 4: Per-User Ticker Linking
+
+New `auth.user_tickers` Iceberg table linking users to their tracked tickers.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/users/me/tickers` | GET | List user's linked tickers |
+| `/users/me/tickers` | POST | Link a ticker (validated) |
+| `/users/me/tickers/{ticker}` | DELETE | Unlink a ticker |
+
+Auto-linking: stock tools (`fetch_stock_data`, `analyse_stock_price`, `forecast_stock`) auto-link tickers to the requesting user via thread-local tracking. Default ticker (RELIANCE.NS) linked on user creation.
+
+Dashboard home page now filters stock cards by user's linked tickers (dropdown still shows all).
+
+### Epic 5: Ticker Marketplace
+
+New dashboard page at `/marketplace` listing all available tickers from the central registry. Users can Add/Remove tickers from their watchlist with pattern-match buttons. Search filtering, market indicators, and company names displayed.
+
+### Tests (+19 new → 255 total)
+
+---
+
+## Mar 7, 2026 — RSI/MACD tooltips + input validation hardening
+
+### Feature: Dashboard Tooltips
+
+Added educational info-icon tooltips for RSI and MACD indicators across the dashboard (screener, comparison table, filter labels, chart panel titles). Generalised the existing Sharpe tooltip system into a reusable `label_with_tooltip()` pattern.
+
+### Security: Input Validation
+
+Full OWASP-style audit identified 18 input validation gaps. All fixed:
+
+| Priority | Fix | Files |
+|----------|-----|-------|
+| P0 | `ChatRequest.message` max 10k chars, `agent_id` regex | `backend/models.py` |
+| P0 | `search_web` / `search_market_news` query validation | `search_tool.py`, `agent_tool.py` |
+| P1 | Ticker regex on all 8 stock tools + 50-ticker batch limit | `stock_data_tool.py`, `forecasting_tool.py`, `price_analysis_tool.py` |
+| P1 | `role` field: `Literal["general", "superuser"]` | `auth/models/request.py` |
+| P2 | `max_length` on all auth string fields | `auth/models/request.py` |
+
+### Bug Fixes
+
+- Fixed duplicate DOM IDs preventing RSI tooltip from rendering on screener
+- Added `captureevents=True` to Plotly annotations for hover to work
+- Replaced `<`/`>` in tooltip text with Unicode `≤`/`≥`
+
+### Tests (+28 new → 236 total)
+
+---
+
 ## Mar 4, 2026 — Home page load latency optimisation
 
 ### Performance

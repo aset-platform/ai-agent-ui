@@ -33,7 +33,7 @@ class TokenResponse(BaseModel):
 
 
 class UserContext(BaseModel):
-    """Decoded JWT payload injected by the :func:`~auth.dependencies.get_current_user` dependency.
+    """Decoded JWT payload from get_current_user.
 
     Attributes:
         user_id: UUID string of the authenticated user.
@@ -59,7 +59,8 @@ class UserResponse(BaseModel):
         updated_at: ISO-8601 UTC last-modified timestamp, or ``None``.
         last_login_at: ISO-8601 UTC most-recent login, or ``None``.
         avatar_url: URL of the user's profile picture, or ``None``.
-        page_permissions: Per-page access grants for non-superuser accounts, or ``None``.
+        page_permissions: Per-page access grants for
+            non-superuser accounts, or ``None``.
     """
 
     user_id: str

@@ -1,4 +1,6 @@
-"""Admin modal and password-change Dash callbacks for the AI Stock Analysis Dashboard.
+"""Admin modal and password-change Dash callbacks.
+
+Callbacks for the AI Stock Analysis Dashboard.
 
 Registers callbacks for the Add/Edit user modal, user create/update/toggle
 actions, and the Change Password modal accessible from the NAVBAR.
@@ -17,13 +19,18 @@ from typing import Any, Dict, List, Optional
 import dash_bootstrap_components as dbc
 from dash import ALL, Input, Output, State, ctx, html, no_update
 
-from dashboard.callbacks.auth_utils import _api_call, _resolve_token, _validate_token
+from dashboard.callbacks.auth_utils import (
+    _api_call,
+    _resolve_token,
+    _validate_token,
+)
 from dashboard.callbacks.utils import _check_input_safety, _is_valid_email
 
 # Module-level logger — kept at module scope as required by the logging API.
 _logger = logging.getLogger(__name__)
 
-# Module-level configuration constant — prefixed with _ to signal non-public use.
+# Module-level configuration constant — prefixed with _
+# to signal non-public use.
 _BACKEND_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8181")
 
 
@@ -161,9 +168,13 @@ def register(app) -> None:
             )
 
         # ── Edit user ─────────────────────────────────────────────────────
-        if isinstance(triggered, dict) and triggered.get("type") == "edit-user-btn":
+        if (
+            isinstance(triggered, dict)
+            and triggered.get("type") == "edit-user-btn"
+        ):
             # triggered_value is None when Dash fires due to DOM injection
-            # (pattern-match re-fires when Edit buttons are added to the layout)
+            # (pattern-match re-fires when Edit buttons
+            # are added to the layout)
             # rather than an actual user click.  Skip in that case.
             if not triggered_value:
                 return (
@@ -213,7 +224,9 @@ def register(app) -> None:
                 perms_style = {}
                 perms_value = [k for k, v in perms.items() if v]
             # Build current avatar preview.
-            avatar_url = user.get("avatar_url") or user.get("profile_picture_url")
+            avatar_url = user.get("avatar_url") or user.get(
+                "profile_picture_url"
+            )
             if avatar_url:
                 full_url = (
                     _BACKEND_URL + avatar_url
@@ -353,7 +366,12 @@ def register(app) -> None:
 
         if mode == "add":
             if not (password and password.strip()):
-                return True, no_update, "Password is required for new users.", no_update
+                return (
+                    True,
+                    no_update,
+                    "Password is required for new users.",
+                    no_update,
+                )
             payload: Dict[str, Any] = {
                 "full_name": full_name.strip(),
                 "email": email.strip(),
@@ -385,7 +403,9 @@ def register(app) -> None:
                     "insights": "insights" in perms_checked,
                     "admin": "admin" in perms_checked,
                 }
-            resp = _api_call("patch", "/users/" + user_id, token, json_body=updates)
+            resp = _api_call(
+                "patch", "/users/" + user_id, token, json_body=updates
+            )
 
         if resp is None:
             return True, no_update, "Could not reach backend.", no_update
@@ -395,7 +415,12 @@ def register(app) -> None:
         if resp.status_code == 409:
             return True, no_update, "Email already in use.", no_update
         if not resp.ok:
-            return True, no_update, "Error " + str(resp.status_code) + ".", no_update
+            return (
+                True,
+                no_update,
+                "Error " + str(resp.status_code) + ".",
+                no_update,
+            )
 
         # Upload avatar if one was provided.
         if avatar_contents and saved_user_id and token:
@@ -480,7 +505,10 @@ def register(app) -> None:
             action = "deactivated"
         else:
             resp = _api_call(
-                "patch", "/users/" + user_id, token, json_body={"is_active": True}
+                "patch",
+                "/users/" + user_id,
+                token,
+                json_body={"is_active": True},
             )
             action = "reactivated"
 
@@ -564,7 +592,10 @@ def register(app) -> None:
         )
         if resp1 is None or not resp1.ok:
             detail = "" if resp1 is None else resp1.json().get("detail", "")
-            return True, "Request failed: " + (detail or "backend unreachable") + "."
+            return (
+                True,
+                "Request failed: " + (detail or "backend unreachable") + ".",
+            )
 
         reset_token = resp1.json().get("reset_token", "")
         if not reset_token:
@@ -579,6 +610,186 @@ def register(app) -> None:
         )
         if resp2 is None or not resp2.ok:
             detail = "" if resp2 is None else resp2.json().get("detail", "")
-            return True, "Confirm failed: " + (detail or "backend unreachable") + "."
+            return (
+                True,
+                "Confirm failed: " + (detail or "backend unreachable") + ".",
+            )
 
         return False, ""
+
+    # ── Admin Reset Password modal ─────────────────────────────
+    @app.callback(
+        Output("admin-reset-pw-modal", "is_open"),
+        Output("admin-reset-pw-store", "data"),
+        Output("admin-reset-pw-label", "children"),
+        Output("admin-reset-pw-error", "children"),
+        Output("admin-reset-pw-new", "value"),
+        Output("admin-reset-pw-confirm", "value"),
+        Input(
+            {"type": "reset-pw-btn", "index": ALL},
+            "n_clicks",
+        ),
+        Input("admin-reset-pw-cancel", "n_clicks"),
+        State("users-store", "data"),
+        prevent_initial_call=True,
+    )
+    def open_admin_reset_pw_modal(
+        reset_clicks_list: List[Optional[int]],
+        cancel_clicks: Optional[int],
+        users_data: Optional[List[Dict[str, Any]]],
+    ):
+        """Open or close the admin password-reset modal.
+
+        Triggered by per-row "Reset Pwd" buttons or the
+        Cancel button inside the modal.
+
+        Args:
+            reset_clicks_list: Pattern-match n_clicks list.
+            cancel_clicks: Cancel button n_clicks.
+            users_data: Cached user list from users-store.
+
+        Returns:
+            Tuple of modal open, store data, label, error,
+            and cleared input fields.
+        """
+        triggered = ctx.triggered_id
+
+        if triggered == "admin-reset-pw-cancel":
+            return False, None, "", "", "", ""
+
+        if (
+            isinstance(triggered, dict)
+            and triggered.get("type") == "reset-pw-btn"
+        ):
+            if not any(reset_clicks_list):
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                )
+            uid = triggered["index"]
+            user = next(
+                (u for u in (users_data or []) if u.get("user_id") == uid),
+                None,
+            )
+            label = "Reset password for: {}".format(
+                user.get("email", uid) if user else uid
+            )
+            return True, uid, label, "", "", ""
+
+        return (
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+            no_update,
+        )
+
+    @app.callback(
+        Output(
+            "admin-reset-pw-modal",
+            "is_open",
+            allow_duplicate=True,
+        ),
+        Output(
+            "admin-reset-pw-error",
+            "children",
+            allow_duplicate=True,
+        ),
+        Output(
+            "users-action-status",
+            "children",
+            allow_duplicate=True,
+        ),
+        Input("admin-reset-pw-save", "n_clicks"),
+        State("admin-reset-pw-store", "data"),
+        State("admin-reset-pw-new", "value"),
+        State("admin-reset-pw-confirm", "value"),
+        State("auth-token-store", "data"),
+        State("url", "search"),
+        prevent_initial_call=True,
+    )
+    def save_admin_reset_pw(
+        n_clicks: Optional[int],
+        target_user_id: Optional[str],
+        new_pw: Optional[str],
+        confirm_pw: Optional[str],
+        stored_token: Optional[str],
+        url_search: Optional[str],
+    ):
+        """Apply a new password for the target user.
+
+        Validates locally, then calls
+        ``POST /users/{user_id}/reset-password``.
+
+        Args:
+            n_clicks: Save button click count.
+            target_user_id: UUID from the store.
+            new_pw: New password value.
+            confirm_pw: Confirmation password value.
+            stored_token: JWT from auth-token-store.
+            url_search: URL query string for fallback.
+
+        Returns:
+            Tuple of (modal open, error, status alert).
+        """
+        if not n_clicks:
+            return no_update, no_update, no_update
+        if not target_user_id:
+            return True, "No user selected.", no_update
+        if not (new_pw and new_pw.strip()):
+            return True, "New password is required.", no_update
+        if new_pw != confirm_pw:
+            return True, "Passwords do not match.", no_update
+        if len(new_pw) < 8:
+            return (
+                True,
+                "Password must be at least 8 characters.",
+                no_update,
+            )
+        if not any(c.isdigit() for c in new_pw):
+            return (
+                True,
+                "Password must contain at least one digit.",
+                no_update,
+            )
+
+        token = _resolve_token(stored_token, url_search)
+        url = "/users/{}/reset-password".format(target_user_id)
+        resp = _api_call(
+            "post",
+            url,
+            token,
+            json_body={"new_password": new_pw},
+        )
+
+        if resp is None:
+            return (
+                True,
+                "Could not reach backend.",
+                no_update,
+            )
+        if not resp.ok:
+            detail = ""
+            try:
+                detail = resp.json().get("detail", "")
+            except Exception:
+                pass
+            return (
+                True,
+                detail or "Error {}.".format(resp.status_code),
+                no_update,
+            )
+
+        alert = dbc.Alert(
+            "Password reset successfully.",
+            color="success",
+            dismissable=True,
+            duration=4000,
+            className="py-2",
+        )
+        return False, "", alert

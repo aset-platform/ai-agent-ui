@@ -52,6 +52,7 @@ export function NavigationMenu({
       <button
         onClick={() => setMenuOpen((v) => !v)}
         title="Open navigation"
+        data-testid="nav-menu-toggle"
         className="w-11 h-11 rounded-xl bg-white border border-gray-200 shadow-md flex items-center justify-center text-gray-500 hover:text-indigo-600 hover:border-indigo-300 hover:shadow-lg transition-all"
       >
         <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -70,6 +71,7 @@ export function NavigationMenu({
               {idx > 0 && <div className="border-t border-gray-100" />}
               <button
                 onClick={() => onSwitchView(item.view)}
+                data-testid={`nav-item-${item.view}`}
                 className={`w-full flex items-center gap-2.5 px-4 py-3 text-sm transition-colors text-left ${
                   currentView === item.view
                     ? "bg-indigo-50 text-indigo-600 font-medium"

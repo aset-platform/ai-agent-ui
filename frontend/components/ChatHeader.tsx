@@ -12,6 +12,7 @@ import { useRouter } from "next/navigation";
 import { clearTokens } from "@/lib/auth";
 import { AGENTS, type View } from "@/lib/constants";
 import type { UserProfile } from "@/hooks/useEditProfile";
+import { BACKEND_URL } from "@/lib/config";
 
 interface ChatHeaderProps {
   view: View;
@@ -23,9 +24,6 @@ interface ChatHeaderProps {
   onEditProfile: () => void;
   onChangePassword: () => void;
 }
-
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8181";
 
 export function ChatHeader({
   view,
@@ -104,7 +102,7 @@ export function ChatHeader({
         />
 
         {view === "chat" ? (
-          <div className="flex items-center gap-1 ml-4 bg-gray-100 rounded-lg p-0.5">
+          <div className="flex items-center gap-1 ml-4 bg-gray-100 rounded-lg p-0.5" data-testid="agent-selector">
             {AGENTS.map((a) => (
               <button
                 key={a.id}
@@ -132,6 +130,7 @@ export function ChatHeader({
           <button
             onClick={onClearMessages}
             title="Clear chat"
+            data-testid="clear-messages-button"
             className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-red-500 transition-colors px-3 py-1.5 rounded-lg hover:bg-red-50"
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -150,6 +149,7 @@ export function ChatHeader({
             onClick={() => setDropdownOpen((v) => !v)}
             className="flex items-center gap-2 px-2 py-1 rounded-xl hover:bg-gray-100 transition-colors"
             title="Account"
+            data-testid="profile-avatar"
           >
             {AvatarEl}
             {profile && (

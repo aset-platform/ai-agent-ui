@@ -1,23 +1,61 @@
-"""Groq-first / Anthropic-fallback LLM wrapper.
+"""N-tier Groq/Anthropic LLM cascade with budget-aware routing.
 
-Provides :class:`FallbackLLM`, a duck-typed LLM that tries Groq first
-and falls back to Anthropic on rate-limit or connection errors.  When
-``GROQ_API_KEY`` is not set, Groq is skipped entirely and Anthropic is
-used as the sole provider.
+Provides :class:`FallbackLLM`, a duck-typed LLM that routes
+requests through an ordered list of Groq models, cascading on
+budget exhaustion or API errors, with Anthropic as the final
+paid fallback.
+
+Tier order (default)::
+
+    1. llama-3.3-70b-versatile   (12K TPM, parallel tools)
+    2. kimi-k2-instruct          (10K TPM, parallel tools)
+    3. gpt-oss-120b              (8K TPM, quality)
+    4. llama-4-scout-17b         (30K TPM, fast)
+    5. claude-sonnet-4-6         (paid, unlimited)
+
+When ``GROQ_API_KEY`` is not set, all Groq tiers are skipped
+and requests go directly to Anthropic.
+
+Typical usage::
+
+    from token_budget import TokenBudget
+    from message_compressor import MessageCompressor
+    from llm_fallback import FallbackLLM
+
+    budget = TokenBudget()
+    compressor = MessageCompressor()
+    llm = FallbackLLM(
+        groq_models=[
+            "llama-3.3-70b-versatile",
+            "moonshotai/kimi-k2-instruct",
+            "openai/gpt-oss-120b",
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+        ],
+        anthropic_model="claude-sonnet-4-6",
+        temperature=0.0,
+        agent_id="stock",
+        token_budget=budget,
+        compressor=compressor,
+    )
 """
 
 import logging
 import os
-from typing import Any, List, Optional
+from typing import Any, List
 
 from langchain_anthropic import ChatAnthropic
+from message_compressor import MessageCompressor
+from token_budget import TokenBudget
 
-# Module-level logger; kept here as logging.getLogger is the standard pattern.
 _logger = logging.getLogger(__name__)
 
 # Groq imports are optional — only needed when GROQ_API_KEY is set.
 try:
-    from groq import APIConnectionError, RateLimitError
+    from groq import (
+        APIConnectionError,
+        APIStatusError,
+        RateLimitError,
+    )
     from langchain_groq import ChatGroq
 
     _GROQ_AVAILABLE = True
@@ -26,115 +64,211 @@ except ImportError:
 
 
 class FallbackLLM:
-    """Groq-first chat model that falls back to Anthropic on transient errors.
+    """N-tier LLM cascade: Groq models → Anthropic.
 
-    When ``GROQ_API_KEY`` is not set (or the ``groq`` package is not
-    installed), Groq is skipped entirely and all requests go directly to
-    Anthropic.
-
-    Implements the duck-typed subset of
-    :class:`~langchain_core.language_models.BaseChatModel` used by
-    :class:`~agents.base.BaseAgent`: :meth:`bind_tools` and :meth:`invoke`.
+    Each Groq model is tried in order.  If a model's budget is
+    exhausted, progressive compression is attempted.  On API
+    errors (429, 413, connection), the next tier is tried.
+    Anthropic is the final fallback.
 
     Attributes:
-        _groq_llm: Raw :class:`~langchain_groq.ChatGroq` instance, or
-            ``None`` when Groq is unavailable.
+        _groq_tiers: Ordered list of ``(name, raw_llm, bound_llm)``
+            tuples for each Groq model.
         _anthropic_llm: Raw ChatAnthropic instance.
-        _groq_bound: Groq LLM with tools bound via :meth:`bind_tools`.
-        _anthropic_bound: Anthropic LLM with tools bound via
-            :meth:`bind_tools`.
-        _agent_id: Agent identifier used in warning log messages.
+        _anthropic_bound: Tools-bound ChatAnthropic instance.
+        _budget: Shared :class:`TokenBudget` tracker.
+        _compressor: Shared :class:`MessageCompressor`.
+        _agent_id: Agent identifier for log messages.
     """
 
     def __init__(
         self,
-        groq_model: str,
+        groq_models: List[str],
         anthropic_model: str,
         temperature: float,
         agent_id: str,
+        token_budget: TokenBudget,
+        compressor: MessageCompressor,
     ) -> None:
-        """Construct both inner LLMs.
-
-        Groq is only instantiated when ``GROQ_API_KEY`` is present in the
-        environment.  Otherwise, all calls go directly to Anthropic.
+        """Construct Groq + Anthropic LLM instances.
 
         Args:
-            groq_model: Model name for ChatGroq.
-            anthropic_model: Model name for ChatAnthropic.
-            temperature: Sampling temperature shared by both inner LLMs.
-            agent_id: Agent identifier for log messages.
+            groq_models: Ordered list of Groq model names,
+                tried from first to last.
+            anthropic_model: Anthropic model name (final
+                fallback).
+            temperature: Sampling temperature for all LLMs.
+            agent_id: Agent identifier for logs.
+            token_budget: Shared sliding-window budget tracker.
+            compressor: Shared message compressor.
         """
-        self._groq_llm: Optional[Any] = None
-        self._groq_bound: Optional[Any] = None
+        self._agent_id = agent_id
+        self._budget = token_budget
+        self._compressor = compressor
+
+        # Groq tiers: [(model_name, raw_llm, bound_llm), ...]
+        self._groq_tiers: List[tuple] = []
 
         groq_key = os.environ.get("GROQ_API_KEY", "").strip()
         if _GROQ_AVAILABLE and groq_key:
-            self._groq_llm = ChatGroq(
-                model=groq_model,
-                temperature=temperature,
+            for model in groq_models:
+                llm = ChatGroq(
+                    model=model,
+                    temperature=temperature,
+                    max_retries=0,
+                )
+                self._groq_tiers.append((model, llm, llm))
+            _logger.info(
+                "FallbackLLM: Groq enabled — %d tiers: " "%s (agent=%s)",
+                len(self._groq_tiers),
+                [t[0] for t in self._groq_tiers],
+                agent_id,
             )
-            self._groq_bound = self._groq_llm
-            _logger.info("FallbackLLM: Groq enabled (agent=%s)", agent_id)
         else:
             _logger.info(
-                "FallbackLLM: Groq unavailable (no GROQ_API_KEY) — "
-                "using Anthropic only (agent=%s)",
+                "FallbackLLM: Groq unavailable "
+                "(no GROQ_API_KEY) — Anthropic only "
+                "(agent=%s)",
                 agent_id,
             )
 
+        # Anthropic is always available.
         self._anthropic_llm = ChatAnthropic(
-            model=anthropic_model, temperature=temperature
+            model=anthropic_model,
+            temperature=temperature,
         )
         self._anthropic_bound: Any = self._anthropic_llm
-        self._agent_id = agent_id
 
     def bind_tools(self, tools: List[Any], **kwargs: Any) -> "FallbackLLM":
-        """Bind tools to both inner LLMs and return *self*.
-
-        :class:`~agents.base.BaseAgent` assigns the return value of
-        ``llm.bind_tools(tools)`` to ``self.llm_with_tools``.  Returning
-        ``self`` ensures that the same :class:`FallbackLLM` instance is used
-        for invocation, preserving the fallback behaviour.
+        """Bind tools to all inner LLMs and return *self*.
 
         Args:
             tools: LangChain tool objects to bind.
             **kwargs: Extra keyword arguments forwarded to
-                the inner ``bind_tools`` calls.
+                each inner ``bind_tools`` call.
 
         Returns:
-            This :class:`FallbackLLM` instance with both inner LLMs re-bound.
+            This :class:`FallbackLLM` instance.
         """
-        if self._groq_llm is not None:
-            self._groq_bound = self._groq_llm.bind_tools(tools, **kwargs)
+        for i, (name, raw, _bound) in enumerate(self._groq_tiers):
+            bound = raw.bind_tools(tools, **kwargs)
+            self._groq_tiers[i] = (name, raw, bound)
+
         self._anthropic_bound = self._anthropic_llm.bind_tools(tools, **kwargs)
         return self
 
-    def invoke(self, messages: List[Any], **kwargs: Any) -> Any:
-        """Invoke Groq; fall back to Anthropic on rate-limit or connection errors.
+    def invoke(
+        self,
+        messages: List[Any],
+        *,
+        iteration: int = 1,
+        **kwargs: Any,
+    ) -> Any:
+        """Route to the best available model with compression.
 
-        When Groq is not configured, Anthropic is called directly without
-        any fallback attempt.
+        Decision flow:
+
+        1. Compress messages (default 3 stages).
+        2. Estimate tokens.
+        3. For each Groq tier in order: if default compression
+           exceeds budget, apply progressive compression
+           targeting 70 %% of the model's TPM.  Invoke if
+           affordable; on API error, cascade to next tier.
+        4. Anthropic as final fallback.
 
         Args:
-            messages: Ordered list of LangChain
-                :class:`~langchain_core.messages.BaseMessage` objects.
+            messages: Ordered list of LangChain BaseMessage
+                objects.
+            iteration: Current agentic loop iteration
+                (1-based).
             **kwargs: Extra keyword arguments forwarded to
                 the inner ``invoke`` call.
 
         Returns:
-            An :class:`~langchain_core.messages.AIMessage` from whichever
-            provider responded successfully.
+            An AIMessage from whichever provider responded.
 
         Raises:
-            Exception: Re-raised if both Groq and Anthropic fail.
+            Exception: Re-raised if all providers fail.
         """
-        if self._groq_bound is not None:
-            try:
-                return self._groq_bound.invoke(messages, **kwargs)
-            except (RateLimitError, APIConnectionError) as exc:
-                _logger.warning(
-                    "Groq failed (%s), falling back to Anthropic — agent=%s",
-                    exc,
+        # Step 1: Compress messages (default 3 stages).
+        compressed = self._compressor.compress(
+            messages,
+            iteration,
+        )
+
+        # Step 2: Estimate tokens.
+        est = self._budget.estimate_tokens(compressed)
+
+        # Step 3: Try each Groq tier in order.
+        for model_name, _raw, bound_llm in self._groq_tiers:
+            cur_compressed = compressed
+            cur_est = est
+
+            # If default compression exceeds budget, try
+            # progressive compression targeting 70% of TPM.
+            if not self._budget.can_afford(model_name, cur_est):
+                tpm = self._budget.get_tpm(model_name)
+                if tpm is not None:
+                    target = int(tpm * 0.70)
+                    cur_compressed = self._compressor.compress(
+                        messages,
+                        iteration,
+                        target_tokens=target,
+                    )
+                    cur_est = self._budget.estimate_tokens(cur_compressed)
+                    _logger.info(
+                        "Progressive compress for %s: "
+                        "%d → %d tokens (agent=%s)",
+                        model_name,
+                        est,
+                        cur_est,
+                        self._agent_id,
+                    )
+
+            if not self._budget.can_afford(model_name, cur_est):
+                _logger.info(
+                    "Skip %s: budget exhausted " "(est=%d, agent=%s)",
+                    model_name,
+                    cur_est,
                     self._agent_id,
                 )
-        return self._anthropic_bound.invoke(messages, **kwargs)
+                continue
+
+            try:
+                result = bound_llm.invoke(cur_compressed, **kwargs)
+                self._budget.record(model_name, cur_est)
+                _logger.info(
+                    "Route → %s | iter=%d " "tokens≈%d (agent=%s)",
+                    model_name,
+                    iteration,
+                    cur_est,
+                    self._agent_id,
+                )
+                return result
+            except Exception as exc:
+                if _GROQ_AVAILABLE and isinstance(
+                    exc,
+                    (
+                        RateLimitError,
+                        APIConnectionError,
+                        APIStatusError,
+                    ),
+                ):
+                    _logger.warning(
+                        "Groq %s failed (%s), " "cascading — agent=%s",
+                        model_name,
+                        exc,
+                        self._agent_id,
+                    )
+                    continue
+                raise
+
+        # Step 4: Anthropic fallback.
+        _logger.warning(
+            "All Groq tiers exhausted → Anthropic | "
+            "iter=%d tokens≈%d (agent=%s)",
+            iteration,
+            est,
+            self._agent_id,
+        )
+        return self._anthropic_bound.invoke(compressed, **kwargs)

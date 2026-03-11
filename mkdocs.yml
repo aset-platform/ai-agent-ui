@@ -58,5 +58,6 @@ nav:
       - Overview: frontend/overview.md
   - Development:
       - How to Run: dev/how-to-run.md
+      - E2E Testing: dev/e2e-testing.md
       - Decisions: dev/decisions.md
       - Changelog: dev/changelog.md

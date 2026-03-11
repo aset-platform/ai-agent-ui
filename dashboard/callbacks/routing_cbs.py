@@ -15,7 +15,7 @@ import logging
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs
 
-from dash import Input, Output, State, no_update
+from dash import Input, Output, no_update
 
 # Module-level logger; kept at module scope as a conventional singleton.
 logger = logging.getLogger(__name__)
@@ -28,6 +28,7 @@ _PAGE_NAMES = {
     "/forecast": " → Forecast",
     "/compare": " → Compare Stocks",
     "/insights": " → Insights",
+    "/marketplace": " → Marketplace",
     "/admin/users": " → Admin",
 }
 
@@ -45,7 +46,7 @@ def register(app) -> None:
         prevent_initial_call=False,
     )
     def store_token_from_url(search: Optional[str]) -> Optional[str]:
-        """Persist a JWT access token from the URL query string to localStorage.
+        """Persist a JWT from the URL query string to localStorage.
 
         When the Next.js frontend embeds the dashboard in an ``<iframe>`` it
         appends ``?token=<jwt>`` to the URL.  This callback intercepts the
@@ -95,7 +96,9 @@ def register(app) -> None:
         resolved = pathname or "/"
         page_name = _PAGE_NAMES.get(resolved, "")
         logger.debug(
-            "Navbar page name updated to %r for pathname %r.", page_name, resolved
+            "Navbar page name updated to %r for pathname %r.",
+            page_name,
+            resolved,
         )
         return page_name
 
@@ -105,14 +108,17 @@ def register(app) -> None:
         Input("user-profile-store", "data"),
     )
     def update_nav_visibility(profile: Optional[Dict[str, Any]]):
-        """Show or hide Insights and Admin nav links based on user role/permissions.
+        """Show or hide Insights and Admin nav links.
+
+        Based on user role/permissions.
 
         Superusers always see both links.  General users see a link only when
         the corresponding ``page_permissions`` key is ``True``.  While the
         profile is loading (``None``) both links are hidden.
 
         Args:
-            profile: User profile dict from ``user-profile-store``, or ``None``.
+            profile: User profile dict from
+                ``user-profile-store``, or ``None``.
 
         Returns:
             Tuple of (insights style dict, admin style dict).
@@ -129,4 +135,6 @@ def register(app) -> None:
         insights_ok = role == "superuser" or bool(perms.get("insights"))
         admin_ok = role == "superuser" or bool(perms.get("admin"))
 
-        return (_show if insights_ok else _hide), (_show if admin_ok else _hide)
+        return (_show if insights_ok else _hide), (
+            _show if admin_ok else _hide
+        )

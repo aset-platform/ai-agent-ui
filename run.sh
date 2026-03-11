@@ -14,9 +14,19 @@
 #   dashboard  Plotly Dash dashboard    http://127.0.0.1:8050
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="/tmp/ai-agent-ui-logs"
-PYTHON="${SCRIPT_DIR}/backend/demoenv/bin/python"
-MKDOCS="${SCRIPT_DIR}/backend/demoenv/bin/mkdocs"
+LOG_DIR="${HOME}/.ai-agent-ui/logs"
+_VENV_HOME="${AI_AGENT_UI_HOME:-${HOME}/.ai-agent-ui}/venv"
+# Backwards compat: fall back to old project-local venv
+if [[ -x "${_VENV_HOME}/bin/python" ]]; then
+    PYTHON="${_VENV_HOME}/bin/python"
+    MKDOCS="${_VENV_HOME}/bin/mkdocs"
+elif [[ -x "${SCRIPT_DIR}/backend/demoenv/bin/python" ]]; then
+    PYTHON="${SCRIPT_DIR}/backend/demoenv/bin/python"
+    MKDOCS="${SCRIPT_DIR}/backend/demoenv/bin/mkdocs"
+else
+    PYTHON="${_VENV_HOME}/bin/python"
+    MKDOCS="${_VENV_HOME}/bin/mkdocs"
+fi
 NPM="$(command -v npm 2>/dev/null || echo 'npm')"
 
 BACKEND_PORT=8181
@@ -114,12 +124,25 @@ _print_table() {
     echo ""
 }
 
+# ── Auto-migrate data from project root to ~/.ai-agent-ui ─────────────────────
+
+_maybe_migrate_data() {
+    local old_catalog="${SCRIPT_DIR}/data/iceberg/catalog.db"
+    local new_catalog="${HOME}/.ai-agent-ui/data/iceberg/catalog.db"
+    if [[ -f "$old_catalog" ]] && [[ ! -f "$new_catalog" ]]; then
+        echo -e "${Y}  Migrating data from project root to ~/.ai-agent-ui …${N}"
+        "$PYTHON" scripts/migrate_data_home.py --apply
+        echo -e "${G}  Data migration complete.${N}"
+        echo ""
+    fi
+}
+
 # ── First-time auth initialisation ────────────────────────────────────────────
 
 # Run Iceberg table creation + admin seed on first start (idempotent guard:
 # if data/iceberg/catalog.db already exists, the function returns immediately).
 _init_auth() {
-    local catalog="${SCRIPT_DIR}/data/iceberg/catalog.db"
+    local catalog="${HOME}/.ai-agent-ui/data/iceberg/catalog.db"
     if [[ -f "$catalog" ]]; then
         return 0
     fi
@@ -166,6 +189,12 @@ _init_stocks() {
     else
         echo -e "${G}  stocks Iceberg tables ready.${N}"
     fi
+
+    # Seed demo data on first run (idempotent — skips if data exists)
+    if [[ "${SKIP_SEED:-}" != "1" ]]; then
+        (cd "$SCRIPT_DIR" && "$PYTHON" scripts/seed_demo_data.py \
+              >> "${LOG_DIR}/seed_demo.log" 2>&1) || true
+    fi
 }
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -193,6 +222,9 @@ do_start() {
         echo -e "${Y}  WARNING: GROQ_API_KEY not set — backend will start but chat will fail${N}"
         echo ""
     fi
+
+    # Auto-migrate data from project root to ~/.ai-agent-ui (one-time)
+    _maybe_migrate_data
 
     # First-time auth DB initialisation (no-op if already initialised)
     _init_auth

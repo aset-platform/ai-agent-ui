@@ -17,22 +17,29 @@ Typical usage::
 import json
 import logging
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
 import pandas as pd
 import tools._stock_shared as _ss
 import yfinance as yf
 from langchain_core.tools import tool
-from tools._stock_registry import _check_existing_data, _load_registry, _update_registry
-from tools._stock_shared import (
+from tools._stock_registry import (
+    _check_existing_data,
+    _load_registry,
+    _update_registry,
+)
+from tools._stock_shared import _get_repo  # noqa: F401 patched by tests
+from tools._stock_shared import (  # noqa: F401
     _currency_symbol,
-    _get_repo,
     _load_currency,
     _parquet_path,
     _require_repo,
 )
+from validation import (
+    validate_ticker,
+    validate_ticker_batch,
+)
 
-# Module-level logger — kept at module scope intentionally (not inside a class).
+# Module-level logger (not inside a class).
 _logger = logging.getLogger(__name__)
 
 # Re-export constants so existing monkeypatch calls still work.
@@ -67,8 +74,18 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
         >>> "AAPL" in result
         True
     """
+    err = validate_ticker(ticker)
+    if err:
+        return f"Error: {err}"
     ticker = ticker.upper().strip()
-    _logger.info("fetch_stock_data | ticker=%s | period=%s", ticker, period)
+    from tools._ticker_linker import auto_link_ticker
+
+    auto_link_ticker(ticker)
+    _logger.info(
+        "fetch_stock_data | ticker=%s | period=%s",
+        ticker,
+        period,
+    )
 
     try:
         existing = _check_existing_data(ticker)
@@ -81,16 +98,20 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
                 return (
                     f"Error: No data returned for '{ticker}'. "
                     "Please check the ticker symbol and try again. "
-                    "Examples: AAPL (Apple), TSLA (Tesla), RELIANCE.NS (Reliance India)."
+                    "Examples: AAPL (Apple), TSLA (Tesla),"
+                    " RELIANCE.NS (Reliance India)."
                 )
             df.index = pd.to_datetime(df.index).tz_localize(None)
             df.to_parquet(file_path, engine="pyarrow", index=True)
             _update_registry(ticker, df, file_path)
             repo = _require_repo()
             repo.insert_ohlcv(ticker, df)
+            d_min = df.index.min().date()
+            d_max = df.index.max().date()
             msg = (
-                f"Full fetch completed for {ticker}: {len(df)} rows saved. "
-                f"Date range: {df.index.min().date()} to {df.index.max().date()}."
+                f"Full fetch completed for {ticker}: "
+                f"{len(df)} rows saved. "
+                f"Date range: {d_min} to {d_max}."
             )
             _logger.info(msg)
             return msg
@@ -102,7 +123,9 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
             data_end = datetime.strptime(dr_end_str, "%Y-%m-%d").date()
         else:
             # Fallback: parse last_fetch_date if date_range is absent
-            data_end = datetime.strptime(existing["last_fetch_date"], "%Y-%m-%d").date()
+            data_end = datetime.strptime(
+                existing["last_fetch_date"], "%Y-%m-%d"
+            ).date()
 
         today = date.today()
         # Start one day after the last data point to avoid
@@ -111,14 +134,17 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
 
         if fetch_start > today:
             msg = (
-                f"Data is already up to date for {ticker} " f"(last data: {data_end})."
+                f"Data is already up to date for {ticker} "
+                f"(last data: {data_end})."
             )
             _logger.info(msg)
             return msg
 
         # Omit `end` so yfinance fetches up to the current moment
         # (including today's intraday data when the market is open).
-        new_df = yf.Ticker(ticker).history(start=str(fetch_start), auto_adjust=False)
+        new_df = yf.Ticker(ticker).history(
+            start=str(fetch_start), auto_adjust=False
+        )
 
         if new_df.empty:
             msg = (
@@ -131,7 +157,7 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
 
         new_df.index = pd.to_datetime(new_df.index).tz_localize(None)
         repo = _require_repo()
-        inserted = repo.insert_ohlcv(ticker, new_df)
+        repo.insert_ohlcv(ticker, new_df)
 
         # Read full OHLCV from Iceberg to rebuild local backup parquet
         ice_df = repo.get_ohlcv(ticker)
@@ -166,7 +192,9 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
         return msg
 
     except Exception as e:
-        _logger.error("fetch_stock_data failed for %s: %s", ticker, e, exc_info=True)
+        _logger.error(
+            "fetch_stock_data failed for %s: %s", ticker, e, exc_info=True
+        )
         return f"Error fetching data for '{ticker}': {e}"
 
 
@@ -189,7 +217,13 @@ def get_stock_info(ticker: str) -> str:
         >>> "Apple" in result
         True
     """
+    err = validate_ticker(ticker)
+    if err:
+        return f"Error: {err}"
     ticker = ticker.upper().strip()
+    from tools._ticker_linker import auto_link_ticker
+
+    auto_link_ticker(ticker)
     _logger.info("get_stock_info | ticker=%s", ticker)
 
     try:
@@ -229,7 +263,9 @@ def get_stock_info(ticker: str) -> str:
         return json.dumps(result, indent=2)
 
     except Exception as e:
-        _logger.error("get_stock_info failed for %s: %s", ticker, e, exc_info=True)
+        _logger.error(
+            "get_stock_info failed for %s: %s", ticker, e, exc_info=True
+        )
         return f"Error fetching info for '{ticker}': {e}"
 
 
@@ -248,6 +284,9 @@ def load_stock_data(ticker: str) -> str:
         >>> "rows" in result
         True
     """
+    err = validate_ticker(ticker)
+    if err:
+        return f"Error: {err}"
     ticker = ticker.upper().strip()
     _logger.info("load_stock_data | ticker=%s", ticker)
 
@@ -262,13 +301,19 @@ def load_stock_data(ticker: str) -> str:
         df["date"] = pd.to_datetime(df["date"])
         missing = int(df.isnull().sum().sum())
         cols = [c for c in df.columns if c not in ("ticker", "fetched_at")]
+        d_min = df["date"].min().date()
+        d_max = df["date"].max().date()
         return (
-            f"Loaded {ticker}: {len(df)} rows x {len(cols)} columns. "
-            f"Date range: {df['date'].min().date()} to {df['date'].max().date()}. "
-            f"Columns: {cols}. Missing values: {missing}."
+            f"Loaded {ticker}: {len(df)} rows x "
+            f"{len(cols)} columns. "
+            f"Date range: {d_min} to {d_max}. "
+            f"Columns: {cols}. "
+            f"Missing values: {missing}."
         )
     except Exception as e:
-        _logger.error("load_stock_data failed for %s: %s", ticker, e, exc_info=True)
+        _logger.error(
+            "load_stock_data failed for %s: %s", ticker, e, exc_info=True
+        )
         return f"Error loading data for '{ticker}': {e}"
 
 
@@ -288,8 +333,14 @@ def fetch_multiple_stocks(tickers: str, period: str = "10y") -> str:
         >>> "AAPL" in result
         True
     """
+    err = validate_ticker_batch(tickers)
+    if err:
+        return f"Error: {err}"
     ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
-    _logger.info("fetch_multiple_stocks | tickers=%s", ticker_list)
+    _logger.info(
+        "fetch_multiple_stocks | tickers=%s",
+        ticker_list,
+    )
     results = []
     full_count = delta_count = skip_count = error_count = 0
     for ticker in ticker_list:
@@ -306,7 +357,9 @@ def fetch_multiple_stocks(tickers: str, period: str = "10y") -> str:
     lines = [
         f"Batch fetch complete for {len(ticker_list)} tickers:",
         *results,
-        f"\nSummary: {full_count} full, {delta_count} delta, {skip_count} skipped, {error_count} error(s).",
+        f"\nSummary: {full_count} full, "
+        f"{delta_count} delta, {skip_count} skipped, "
+        f"{error_count} error(s).",
     ]
     return "\n".join(lines)
 
@@ -326,8 +379,17 @@ def get_dividend_history(ticker: str) -> str:
         >>> isinstance(result, str)
         True
     """
+    err = validate_ticker(ticker)
+    if err:
+        return f"Error: {err}"
     ticker = ticker.upper().strip()
-    _logger.info("get_dividend_history | ticker=%s", ticker)
+    from tools._ticker_linker import auto_link_ticker
+
+    auto_link_ticker(ticker)
+    _logger.info(
+        "get_dividend_history | ticker=%s",
+        ticker,
+    )
     _ss._DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -342,10 +404,16 @@ def get_dividend_history(ticker: str) -> str:
         repo = _require_repo()
         repo.insert_dividends(ticker, df, currency=_load_currency(ticker))
         curr_sym = _currency_symbol(_load_currency(ticker))
+        d_min = df["date"].min().date()
+        d_max = df["date"].max().date()
+        last_div = df["dividend"].iloc[-1]
+        last_dt = df["date"].iloc[-1].date()
         msg = (
-            f"Dividend history for {ticker}: {len(df)} payments. "
-            f"Date range: {df['date'].min().date()} to {df['date'].max().date()}. "
-            f"Most recent: {curr_sym}{df['dividend'].iloc[-1]:.4f} on {df['date'].iloc[-1].date()}. "
+            f"Dividend history for {ticker}: "
+            f"{len(df)} payments. "
+            f"Date range: {d_min} to {d_max}. "
+            f"Most recent: {curr_sym}{last_div:.4f} "
+            f"on {last_dt}. "
             f"Saved to {out_path}."
         )
         _logger.info(msg)
@@ -358,12 +426,232 @@ def get_dividend_history(ticker: str) -> str:
         return f"Error fetching dividend history for '{ticker}': {e}"
 
 
+# Mapping from yfinance row labels to schema columns
+_INCOME_MAP = {
+    "Total Revenue": "revenue",
+    "Net Income": "net_income",
+    "Gross Profit": "gross_profit",
+    "Operating Income": "operating_income",
+    "EBITDA": "ebitda",
+    "Basic EPS": "eps_basic",
+    "Diluted EPS": "eps_diluted",
+}
+
+_BALANCE_MAP = {
+    "Total Assets": "total_assets",
+    "Total Liabilities Net Minority Interest": ("total_liabilities"),
+    "Stockholders Equity": "total_equity",
+    "Total Debt": "total_debt",
+    "Cash And Cash Equivalents": "cash_and_equivalents",
+}
+
+_CASHFLOW_MAP = {
+    "Operating Cash Flow": "operating_cashflow",
+    "Capital Expenditure": "capex",
+    "Free Cash Flow": "free_cashflow",
+}
+
+
+def _extract_statement(
+    stmt_df: pd.DataFrame,
+    metric_map: dict,
+    statement_type: str,
+    ticker: str,
+) -> list[dict]:
+    """Extract quarterly rows from a yfinance statement.
+
+    Skips quarters where every mapped metric is null (e.g.
+    partially reported balance sheets for some Indian stocks).
+
+
+    Args:
+        stmt_df: Raw yfinance statement (rows=metrics,
+            cols=quarter-end dates).
+        metric_map: Label-to-column mapping.
+        statement_type: ``"income"``, ``"balance"``, or
+            ``"cashflow"``.
+        ticker: Uppercase ticker symbol.
+
+    Returns:
+        List of row dicts ready for DataFrame construction.
+    """
+    if stmt_df is None or stmt_df.empty:
+        return []
+    rows = []
+    metric_cols = list(metric_map.values())
+    all_cols = (
+        list(_INCOME_MAP.values())
+        + list(_BALANCE_MAP.values())
+        + list(_CASHFLOW_MAP.values())
+    )
+    for col_date in stmt_df.columns:
+        qe = pd.Timestamp(col_date).date()
+        row = {
+            "ticker": ticker,
+            "quarter_end": qe,
+            "fiscal_year": qe.year,
+            "fiscal_quarter": (f"Q{(qe.month - 1) // 3 + 1}"),
+            "statement_type": statement_type,
+        }
+        # Initialise all metric cols to None
+        for c in all_cols:
+            row.setdefault(c, None)
+        for label, col_name in metric_map.items():
+            try:
+                val = stmt_df.loc[label, col_date]
+                row[col_name] = float(val) if pd.notna(val) else None
+            except (KeyError, ValueError, TypeError):
+                row[col_name] = None
+        # Skip rows where ALL mapped metrics are None
+        if all(row[c] is None for c in metric_cols):
+            _logger.debug(
+                "Skipping all-null %s row for %s %s",
+                statement_type,
+                ticker,
+                qe,
+            )
+            continue
+        rows.append(row)
+    return rows
+
+
+@tool
+def fetch_quarterly_results(ticker: str) -> str:
+    """Fetch quarterly financial statements from Yahoo Finance.
+
+    Retrieves quarterly income statement, balance sheet, and
+    cash flow data and persists to the Iceberg
+    ``stocks.quarterly_results`` table. Data is cached for 7 days.
+
+    Args:
+        ticker: Stock ticker symbol, e.g. ``"AAPL"``.
+
+    Returns:
+        Summary string describing fetched quarters.
+
+    Example:
+        >>> result = fetch_quarterly_results.invoke(
+        ...     {"ticker": "AAPL"}
+        ... )
+        >>> "AAPL" in result
+        True
+    """
+    err = validate_ticker(ticker)
+    if err:
+        return f"Error: {err}"
+    ticker = ticker.upper().strip()
+    from tools._ticker_linker import auto_link_ticker
+
+    auto_link_ticker(ticker)
+    _logger.info(
+        "fetch_quarterly_results | ticker=%s",
+        ticker,
+    )
+
+    try:
+        repo = _require_repo()
+
+        # Check freshness (7-day cache)
+        cached = repo.get_quarterly_results_if_fresh(ticker, days=7)
+        if cached is not None:
+            n = len(cached)
+            return (
+                f"Quarterly results for {ticker} are "
+                f"up-to-date ({n} records, fetched "
+                f"within last 7 days)."
+            )
+
+        yt = yf.Ticker(ticker)
+        all_rows: list[dict] = []
+        gaps: list[str] = []
+
+        # Income Statement
+        inc_rows = _extract_statement(
+            yt.quarterly_income_stmt,
+            _INCOME_MAP,
+            "income",
+            ticker,
+        )
+        all_rows.extend(inc_rows)
+        if not inc_rows:
+            gaps.append("income (no data)")
+
+        # Balance Sheet
+        bs_rows = _extract_statement(
+            yt.quarterly_balance_sheet,
+            _BALANCE_MAP,
+            "balance",
+            ticker,
+        )
+        all_rows.extend(bs_rows)
+        if not bs_rows:
+            gaps.append("balance_sheet (no data)")
+
+        # Cash Flow
+        cf_rows = _extract_statement(
+            yt.quarterly_cashflow,
+            _CASHFLOW_MAP,
+            "cashflow",
+            ticker,
+        )
+        all_rows.extend(cf_rows)
+        if not cf_rows:
+            # Fallback: try annual cashflow
+            annual_cf = _extract_statement(
+                yt.cashflow,
+                _CASHFLOW_MAP,
+                "cashflow",
+                ticker,
+            )
+            if annual_cf:
+                for r in annual_cf:
+                    r["fiscal_quarter"] = "FY"
+                all_rows.extend(annual_cf)
+                gaps.append(
+                    "cashflow (annual fallback, " f"{len(annual_cf)} years)"
+                )
+            else:
+                gaps.append("cashflow (no data)")
+
+        if not all_rows:
+            return f"No quarterly financial data found " f"for {ticker}."
+
+        df = pd.DataFrame(all_rows)
+        repo.insert_quarterly_results(ticker, df)
+
+        counts = df.groupby("statement_type").size().to_dict()
+        parts = [f"{st}: {n}q" for st, n in sorted(counts.items())]
+        msg = (
+            f"Fetched quarterly results for {ticker} "
+            f"— {', '.join(parts)}. "
+            f"Total {len(df)} records saved."
+        )
+        if gaps:
+            msg += f" Gaps: {', '.join(gaps)}."
+            _logger.warning(
+                "Quarterly data gaps for %s: %s",
+                ticker,
+                ", ".join(gaps),
+            )
+        _logger.info(msg)
+        return msg
+
+    except Exception as e:
+        _logger.error(
+            "fetch_quarterly_results failed for %s: %s",
+            ticker,
+            e,
+            exc_info=True,
+        )
+        return f"Error fetching quarterly results " f"for '{ticker}': {e}"
+
+
 @tool
 def list_available_stocks() -> str:
     """List all stocks currently stored in the Iceberg registry.
 
     Returns:
-        A formatted table string, or a message indicating the registry is empty.
+        A formatted table string, or an empty-registry message.
 
     Example:
         >>> result = list_available_stocks.invoke({})
@@ -373,9 +661,15 @@ def list_available_stocks() -> str:
     _logger.info("list_available_stocks called")
     registry = _load_registry()
     if not registry:
-        return "No stocks in the registry yet. Use fetch_stock_data to download and store stock data."
+        return (
+            "No stocks in the registry yet. "
+            "Use fetch_stock_data to download "
+            "and store stock data."
+        )
     lines = [
-        f"{'Ticker':<15} {'Rows':>6}  {'Start':>12}  {'End':>12}  {'Last Fetch':>12}",
+        f"{'Ticker':<15} {'Rows':>6}  "
+        f"{'Start':>12}  {'End':>12}  "
+        f"{'Last Fetch':>12}",
         "-" * 65,
     ]
     for entry in registry.values():

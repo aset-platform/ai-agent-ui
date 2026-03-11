@@ -30,13 +30,14 @@ def forecast_layout() -> html.Div:
 
     return html.Div(
         [
-            # ── Controls ──────────────────────────────────────────────────────
+            # ── Controls ─────────────────────────────────────────────────
             dbc.Row(
                 [
                     dbc.Col(
                         [
                             html.Label(
-                                "Ticker", className="text-muted small fw-semibold"
+                                "Ticker",
+                                className="text-muted small fw-semibold",
                             ),
                             dcc.Dropdown(
                                 id="forecast-ticker-dropdown",
@@ -82,25 +83,34 @@ def forecast_layout() -> html.Div:
                         className="mb-3",
                     ),
                 ],
-                className="bg-light rounded p-3 mb-4 align-items-end border",
-            ),
-            # ── Status (inline with button via dcc.Loading) ────────────────
-            # ── Forecast chart ────────────────────────────────────────────────
-            dcc.Loading(
-                id="loading-forecast",
-                type="circle",
-                color="#4f46e5",
-                children=dcc.Graph(
-                    id="forecast-chart",
-                    config={"displayModeBar": True},
-                    style={"height": "550px"},
+                className=(
+                    "bg-light rounded p-3" " mb-4 align-items-end border"
                 ),
             ),
-            # ── Price target cards ────────────────────────────────────────────
+            # ── Status (inline with button via dcc.Loading) ────────────────
+            # ── Forecast chart ─────────────────────────────────────────────
+            html.Div(
+                dcc.Loading(
+                    id="loading-forecast",
+                    type="circle",
+                    color="#4f46e5",
+                    children=dcc.Graph(
+                        id="forecast-chart",
+                        config={"displayModeBar": True},
+                        style={"height": "550px"},
+                    ),
+                ),
+                **{"data-testid": ("forecast-chart-container")},
+            ),
+            # ── Price target cards ─────────────────────────────────────────
             html.Div(id="forecast-target-cards", className="mt-4"),
-            # ── Accuracy row ──────────────────────────────────────────────────
-            html.Div(id="forecast-accuracy-row", className="mt-3"),
-            # ── Hidden stores ─────────────────────────────────────────────────
+            # ── Accuracy row ─────────────────────────────────────────────
+            html.Div(
+                id="forecast-accuracy-row",
+                className="mt-3",
+                **{"data-testid": ("forecast-accuracy-row")},
+            ),
+            # ── Hidden stores ──────────────────────────────────────────────
             dcc.Store(id="forecast-refresh-store", data=0),
             dcc.Store(id="accuracy-store", data=None),
         ]

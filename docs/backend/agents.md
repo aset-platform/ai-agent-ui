@@ -1,6 +1,6 @@
 # Agents
 
-The agent framework lives in `backend/agents/`. It provides a base class with the full agentic loop, a registry for lookup and routing, and a concrete implementation backed by Groq.
+The agent framework lives in `backend/agents/`. It provides a base class with the full agentic loop, a registry for lookup and routing, and concrete implementations backed by an N-tier Groq/Anthropic LLM cascade.
 
 ---
 
@@ -8,28 +8,34 @@ The agent framework lives in `backend/agents/`. It provides a base class with th
 
 | File | Purpose |
 |------|---------|
-| `agents/base.py` | `AgentConfig` dataclass + `BaseAgent` ABC (owns the agentic loop) |
+| `agents/base.py` | `BaseAgent` ABC (owns the agentic loop) |
+| `agents/config.py` | `AgentConfig` dataclass + `MAX_ITERATIONS` constant |
+| `agents/loop.py` | Agentic loop logic (extracted from base) |
+| `agents/stream.py` | NDJSON streaming support |
 | `agents/registry.py` | `AgentRegistry` — maps agent IDs to agent instances |
 | `agents/general_agent.py` | `GeneralAgent` concrete class + `create_general_agent` factory |
+| `agents/stock_agent.py` | `StockAgent` concrete class + `create_stock_agent` factory |
 | `agents/__init__.py` | Empty (marks directory as a Python package) |
 
 ---
 
 ## AgentConfig
 
-`AgentConfig` is a plain dataclass defined in `agents/base.py`. It carries every piece of configuration an agent needs and is passed to the agent's constructor.
+`AgentConfig` is a plain dataclass defined in `agents/config.py`. It carries every piece of configuration an agent needs and is passed to the agent's constructor.
 
 ```python
 @dataclass
 class AgentConfig:
-    agent_id: str         # Unique ID for routing, e.g. "general"
-    name: str             # Human-readable name, e.g. "General Agent"
-    description: str      # One sentence exposed via GET /agents
-    model: str            # LLM model identifier, e.g. "openai/gpt-oss-120b"
-    temperature: float    # Sampling temperature (default 0.0)
-    system_prompt: str    # Optional system message (default "")
-    tool_names: list[str] # Tools this agent may call (default [])
+    agent_id: str                    # Unique ID for routing, e.g. "general"
+    name: str                        # Human-readable name
+    description: str                 # One sentence exposed via GET /agents
+    groq_model_tiers: List[str]      # Ordered Groq model names (tried first→last)
+    temperature: float               # Sampling temperature (default 0.0)
+    system_prompt: str               # Optional system message (default "")
+    tool_names: list[str]            # Tools this agent may call (default [])
 ```
+
+The `groq_model_tiers` list defines the Groq model cascade order. Each model is tried in order; on budget exhaustion or API error, the next tier is attempted. Anthropic Claude Sonnet 4.6 is always the final fallback (hardcoded in `FallbackLLM`).
 
 ---
 
@@ -181,79 +187,65 @@ result = agent.run(req.message, req.history)
 
 ## GeneralAgent
 
-`GeneralAgent` is defined in `agents/general_agent.py`. It is the only concrete agent currently registered.
+`GeneralAgent` is defined in `agents/general_agent.py`. It overrides `_build_llm()` to supply `FallbackLLM` with the N-tier Groq cascade and Anthropic fallback.
 
 ```python
 class GeneralAgent(BaseAgent):
-    def _build_llm(self) -> ChatGroq:
-        return ChatGroq(
-            model=self.config.model,
-            temperature=self.config.temperature
+    def _build_llm(self) -> FallbackLLM:
+        return FallbackLLM(
+            groq_models=self.config.groq_model_tiers,
+            anthropic_model="claude-sonnet-4-6",
+            temperature=self.config.temperature,
+            agent_id=self.config.agent_id,
+            token_budget=self.token_budget,
+            compressor=self.compressor,
         )
 ```
 
-That is the entire class. All loop logic is inherited from `BaseAgent`.
+All loop logic is inherited from `BaseAgent`.
 
 ### Factory Function — `create_general_agent()`
 
 ```python
-def create_general_agent(tool_registry: ToolRegistry) -> GeneralAgent:
+def create_general_agent(tool_registry, token_budget=None, compressor=None):
+    settings = get_settings()
     config = AgentConfig(
         agent_id="general",
         name="General Agent",
         description="A general-purpose agent that can answer questions and search the web.",
-        model="openai/gpt-oss-120b",
+        groq_model_tiers=_parse_tiers(settings.groq_model_tiers),
         temperature=0.0,
         tool_names=["get_current_time", "search_web"],
     )
-    return GeneralAgent(config=config, tool_registry=tool_registry)
+    agent = GeneralAgent(config=config, tool_registry=tool_registry)
+    agent.token_budget = token_budget or TokenBudget()
+    agent.compressor = compressor or MessageCompressor(...)
+    return agent
 ```
 
-The factory is the only place where the model name and tool list are defined for this agent. To change either, edit this function.
+The factory reads the tier order from `settings.groq_model_tiers` (a comma-separated env var) and injects shared `TokenBudget` and `MessageCompressor` instances.
 
 ---
 
-## Switching to Claude Sonnet 4.6
+## StockAgent
 
-`GeneralAgent` currently uses Groq as a temporary workaround. Switching back to Claude requires three changes in `agents/general_agent.py`:
+`StockAgent` is defined in `agents/stock_agent.py`. Identical structure to `GeneralAgent` but with a detailed system prompt and 9 stock analysis tools. Uses the same `FallbackLLM` cascade.
 
-**1. Change the import:**
-```python
-# Before
-from langchain_groq import ChatGroq
+---
 
-# After
-from langchain_anthropic import ChatAnthropic
+## N-tier LLM Cascade (FallbackLLM)
+
+Both agents use `FallbackLLM` from `backend/llm_fallback.py`, which cascades through Groq models before falling back to Anthropic:
+
+```
+Tier 1: llama-3.3-70b-versatile   (12K TPM, reliable tool-calling)
+Tier 2: kimi-k2-instruct          (10K TPM, parallel tools)
+Tier 3: gpt-oss-120b              (8K TPM, quality)
+Tier 4: llama-4-scout-17b         (30K TPM, fast)
+Tier 5: claude-sonnet-4-6         (paid, unlimited — Anthropic fallback)
 ```
 
-**2. Change `_build_llm()`:**
-```python
-# Before
-return ChatGroq(model=self.config.model, temperature=self.config.temperature)
-
-# After
-return ChatAnthropic(model=self.config.model, temperature=self.config.temperature)
-```
-
-**3. Change the model name in `create_general_agent()`:**
-```python
-# Before
-model="openai/gpt-oss-120b",
-
-# After
-model="claude-sonnet-4-6",
-```
-
-**4. Update environment variable:**
-```bash
-# Before
-export GROQ_API_KEY=...
-
-# After
-export ANTHROPIC_API_KEY=...
-```
-
-No other files need to change.
+For each tier, `FallbackLLM` checks the token budget, applies progressive compression if needed (targeting 70% of the model's TPM), and cascades on `RateLimitError`, `APIConnectionError`, or `APIStatusError` (413). When `GROQ_API_KEY` is not set, all Groq tiers are skipped and requests go directly to Anthropic.
 
 ---
 
@@ -263,20 +255,29 @@ To add a new agent type (e.g. a code-review agent with a different system prompt
 
 ```python
 # agents/code_agent.py
-from langchain_groq import ChatGroq
 from agents.base import AgentConfig, BaseAgent
+from config import get_settings
+from llm_fallback import FallbackLLM
 from tools.registry import ToolRegistry
 
 class CodeAgent(BaseAgent):
-    def _build_llm(self):
-        return ChatGroq(model=self.config.model, temperature=self.config.temperature)
+    def _build_llm(self) -> FallbackLLM:
+        return FallbackLLM(
+            groq_models=self.config.groq_model_tiers,
+            anthropic_model="claude-sonnet-4-6",
+            temperature=self.config.temperature,
+            agent_id=self.config.agent_id,
+            token_budget=self.token_budget,
+            compressor=self.compressor,
+        )
 
 def create_code_agent(tool_registry: ToolRegistry) -> CodeAgent:
+    settings = get_settings()
     config = AgentConfig(
         agent_id="code",
         name="Code Agent",
         description="Specialised agent for code review and debugging.",
-        model="openai/gpt-oss-120b",
+        groq_model_tiers=_parse_tiers(settings.groq_model_tiers),
         system_prompt="You are an expert software engineer...",
         tool_names=["search_web"],
     )

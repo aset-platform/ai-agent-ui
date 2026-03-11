@@ -28,12 +28,23 @@ Both packages are listed in ``backend/requirements.txt``.
 
 import logging
 import secrets
-import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 from urllib.parse import urlencode
 
 import httpx
 import jwt
+from jwt import PyJWKClient
+
+from auth.token_store import (
+    InMemoryTokenStore,
+    TokenStore,
+)
+
+_logger = logging.getLogger(__name__)
+
+# Google JWKS endpoint for RS256 signature verification.
+_GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
+_jwks_client = PyJWKClient(_GOOGLE_JWKS_URL)
 
 # TTL for state tokens — 10 minutes.
 _STATE_TTL_SECONDS = 600
@@ -62,7 +73,11 @@ class OAuthService:
     _FB_TOKEN_URL = "https://graph.facebook.com/v18.0/oauth/access_token"
     _FB_ME_URL = "https://graph.facebook.com/me"
 
-    def __init__(self, settings: Any) -> None:
+    def __init__(
+        self,
+        settings: Any,
+        state_store: TokenStore | None = None,
+    ) -> None:
         """Initialise the service with application settings.
 
         Args:
@@ -70,9 +85,13 @@ class OAuthService:
                 ``google_client_id``, ``google_client_secret``,
                 ``facebook_app_id``, ``facebook_app_secret``, and
                 ``oauth_redirect_uri``.
+            state_store: Pluggable store for OAuth state tokens.
+                Defaults to :class:`InMemoryTokenStore`.
         """
         self._settings = settings
-        self._state_store: Dict[str, Dict[str, Any]] = {}
+        self._state_store: TokenStore = (
+            state_store or InMemoryTokenStore()
+        )
         self._logger = logging.getLogger(__name__)
 
     # ------------------------------------------------------------------
@@ -80,21 +99,7 @@ class OAuthService:
     # ------------------------------------------------------------------
 
     def _cleanup_expired_states(self) -> None:
-        """Remove all state entries whose TTL has elapsed.
-
-        Called lazily on every :meth:`generate_authorize_url` invocation
-        so the dict never grows unboundedly.
-        """
-        now = time.time()
-        expired = [
-            k for k, v in self._state_store.items() if v["expires"] < now
-        ]
-        for k in expired:
-            del self._state_store[k]
-        if expired:
-            self._logger.debug(
-                "Pruned %d expired OAuth state token(s).", len(expired)
-            )
+        """No-op — TTL expiry is handled by the store backend."""
 
     def generate_authorize_url(
         self, provider: str, code_challenge: str
@@ -124,10 +129,11 @@ class OAuthService:
         self._cleanup_expired_states()
 
         state = secrets.token_urlsafe(24)
-        self._state_store[state] = {
-            "provider": provider,
-            "expires": time.time() + _STATE_TTL_SECONDS,
-        }
+        # Store provider as the value; TTL handles expiry.
+        self._state_store.add(
+            f"oauth_state:{state}:{provider}",
+            _STATE_TTL_SECONDS,
+        )
 
         if provider == "google":
             params = {
@@ -181,20 +187,17 @@ class OAuthService:
             >>> svc = OAuthService(get_settings())  # doctest: +SKIP
             >>> valid = svc.validate_state("some-state", "google")
         """
-        entry = self._state_store.pop(state, None)
-        if entry is None:
-            self._logger.warning("OAuth state not found: state=%s", state)
-            return False
-        if time.time() > entry["expires"]:
-            self._logger.warning("OAuth state expired: state=%s", state)
-            return False
-        if entry["provider"] != provider:
+        key = f"oauth_state:{state}:{provider}"
+        if not self._state_store.contains(key):
             self._logger.warning(
-                "OAuth state provider mismatch: expected=%s got=%s",
-                entry["provider"],
+                "OAuth state not found or expired:"
+                " state=%s provider=%s",
+                state,
                 provider,
             )
             return False
+        # Single-use: remove after validation.
+        self._state_store.remove(key)
         return True
 
     # ------------------------------------------------------------------
@@ -246,12 +249,21 @@ class OAuthService:
                 "Google token response did not include an id_token."
             )
 
-        # Decode without signature verification — trust HTTPS + Google's TLS.
-        payload = jwt.decode(
-            id_token_str,
-            options={"verify_signature": False},
-            algorithms=["RS256"],
-        )
+        # Verify signature via Google's JWKS endpoint.
+        try:
+            signing_key = _jwks_client.get_signing_key_from_jwt(
+                id_token_str,
+            )
+            payload = jwt.decode(
+                id_token_str,
+                signing_key.key,
+                algorithms=["RS256"],
+                audience=self._settings.google_client_id,
+            )
+        except jwt.ExpiredSignatureError:
+            raise ValueError("Google ID token has expired.")
+        except jwt.InvalidTokenError as exc:
+            raise ValueError(f"Invalid Google ID token: {exc}")
 
         self._logger.info(
             "Google SSO exchange: sub=%s email=%s",
@@ -271,7 +283,7 @@ class OAuthService:
     # ------------------------------------------------------------------
 
     def exchange_facebook_code(self, code: str) -> Dict[str, Any]:
-        """Exchange a Facebook authorization code for user identity information.
+        """Exchange a Facebook code for user info.
 
         Two HTTP calls are made:
         1. Exchange the code for an access token at the Facebook token URL.

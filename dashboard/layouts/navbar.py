@@ -14,7 +14,9 @@ NAVBAR = dbc.Navbar(
         [
             dbc.NavbarBrand(
                 [
-                    html.Span("Stock Analysis Dashboard", className="fw-semibold"),
+                    html.Span(
+                        "Stock Analysis Dashboard", className="fw-semibold"
+                    ),
                     html.Span(
                         id="navbar-page-name",
                         className="text-muted fw-normal ms-1",
@@ -26,22 +28,37 @@ NAVBAR = dbc.Navbar(
             dbc.Nav(
                 [
                     dbc.NavItem(
-                        dbc.NavLink("Home", href="/", className="nav-link-custom")
-                    ),
-                    dbc.NavItem(
                         dbc.NavLink(
-                            "Analysis", href="/analysis", className="nav-link-custom"
+                            "Home", href="/", className="nav-link-custom"
                         )
                     ),
                     dbc.NavItem(
                         dbc.NavLink(
-                            "Insights", href="/insights", className="nav-link-custom"
+                            "Analysis",
+                            href="/analysis",
+                            className="nav-link-custom",
+                        )
+                    ),
+                    dbc.NavItem(
+                        dbc.NavLink(
+                            "Insights",
+                            href="/insights",
+                            className="nav-link-custom",
                         ),
                         id="nav-item-insights",
                     ),
                     dbc.NavItem(
                         dbc.NavLink(
-                            "Admin", href="/admin/users", className="nav-link-custom"
+                            "Marketplace",
+                            href="/marketplace",
+                            className="nav-link-custom",
+                        ),
+                    ),
+                    dbc.NavItem(
+                        dbc.NavLink(
+                            "Admin",
+                            href="/admin/users",
+                            className="nav-link-custom",
                         ),
                         id="nav-item-admin",
                     ),

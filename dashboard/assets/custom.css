@@ -363,6 +363,78 @@ body {
   animation: refreshFadeOut 1s ease-out 7s forwards;
 }
 
+/* ── Sortable column headers ─────────────────────────────── */
+
+.sort-header-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.sort-header-btn:hover {
+  color: var(--accent);
+}
+
+.sort-header-btn.sort-active {
+  color: var(--accent);
+}
+
+.sort-arrow {
+  font-size: 0.65rem;
+  opacity: 0.35;
+  line-height: 1;
+}
+
+.sort-arrow.sort-active {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* ── Column info icon (tooltip target) ───────────────────── */
+
+.col-info-icon {
+  font-size: 0.65rem;
+  cursor: help;
+  opacity: 0.5;
+  margin-left: 0.15em;
+}
+
+.col-info-icon:hover {
+  opacity: 1;
+}
+
+/* ── Error overlay banner ────────────────────────────────── */
+
+.error-overlay-wrapper {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 9999;
+  animation: errorSlideDown 0.3s ease-out;
+}
+
+.error-overlay-banner {
+  border-radius: 0 !important;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+@keyframes errorSlideDown {
+  from { transform: translateY(-100%); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+
 /* ── Page heading ────────────────────────────────────────── */
 
 h2.fw-bold {

@@ -13,7 +13,7 @@ Usage::
 import json
 import logging
 import sys
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -22,12 +22,18 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 _logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).parent.parent
-_DATA_METADATA = _PROJECT_ROOT / "data" / "metadata"
-_DATA_RAW = _PROJECT_ROOT / "data" / "raw"
 
-# Ensure project root on sys.path
+# Ensure backend/ on sys.path for paths module
+_backend_dir = str(_PROJECT_ROOT / "backend")
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+from paths import METADATA_DIR, RAW_DIR  # noqa: E402
+
+_DATA_METADATA = METADATA_DIR
+_DATA_RAW = RAW_DIR
 
 
 def _backfill_registry() -> int:
@@ -52,7 +58,9 @@ def _backfill_registry() -> int:
 
     for ticker, entry in registry.items():
         if ticker in existing:
-            _logger.debug("Registry: %s already in Iceberg — skipping.", ticker)
+            _logger.debug(
+                "Registry: %s already in Iceberg — skipping.", ticker
+            )
             continue
         try:
             dr = entry.get("date_range", {})
@@ -65,10 +73,18 @@ def _backfill_registry() -> int:
                 ),
                 total_rows=int(entry.get("total_rows", 0)),
                 date_range_start=(
-                    date.fromisoformat(start_str) if start_str else date.today()
+                    date.fromisoformat(start_str)
+                    if start_str
+                    else date.today()
                 ),
-                date_range_end=date.fromisoformat(end_str) if end_str else date.today(),
-                market="india" if ticker.upper().endswith((".NS", ".BO")) else "us",
+                date_range_end=(
+                    date.fromisoformat(end_str) if end_str else date.today()
+                ),
+                market=(
+                    "india"
+                    if ticker.upper().endswith((".NS", ".BO"))
+                    else "us"
+                ),
             )
             inserted += 1
             _logger.info("Registry: inserted %s", ticker)
@@ -98,14 +114,18 @@ def _backfill_company_info() -> int:
         ticker = info_path.stem.replace("_info", "").upper()
         existing = repo.get_latest_company_info(ticker)
         if existing is not None:
-            _logger.debug("Company info: %s already in Iceberg — skipping.", ticker)
+            _logger.debug(
+                "Company info: %s already in Iceberg — skipping.", ticker
+            )
             continue
         try:
             with open(info_path) as fh:
                 info = json.load(fh)
-            # Map flat JSON keys to yfinance-style keys for insert_company_info()
+            # Map flat JSON keys to yfinance-style
+            # keys for insert_company_info()
             mapped = {
-                "company_name": info.get("company_name") or info.get("name", ""),
+                "company_name": info.get("company_name")
+                or info.get("name", ""),
                 "sector": info.get("sector"),
                 "industry": info.get("industry"),
                 "marketCap": info.get("market_cap"),
@@ -119,7 +139,9 @@ def _backfill_company_info() -> int:
             inserted += 1
             _logger.info("Company info: inserted %s", ticker)
         except Exception as exc:
-            _logger.warning("Company info: failed to insert %s: %s", ticker, exc)
+            _logger.warning(
+                "Company info: failed to insert %s: %s", ticker, exc
+            )
 
     return inserted
 
@@ -149,7 +171,9 @@ def _backfill_ohlcv() -> int:
         existing = repo.get_ohlcv(ticker)
         if not existing.empty:
             _logger.debug(
-                "OHLCV: %s already has %d rows — skipping.", ticker, len(existing)
+                "OHLCV: %s already has %d rows — skipping.",
+                ticker,
+                len(existing),
             )
             continue
         try:
@@ -173,7 +197,8 @@ def main() -> None:
     ohlcv_count = _backfill_ohlcv()
 
     _logger.info(
-        "Backfill complete: %d registry, %d company info, %d OHLCV tickers inserted.",
+        "Backfill complete: %d registry, %d company"
+        " info, %d OHLCV tickers inserted.",
         reg_count,
         info_count,
         ohlcv_count,

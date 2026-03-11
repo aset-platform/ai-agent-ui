@@ -407,6 +407,24 @@ def _build_analysis_fig(
             orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
         ),
     )
+    # Add hover-tooltips to RSI / MACD subplot titles.
+    # make_subplots stores subplot_titles as annotations.
+    _panel_tips = {
+        "RSI (14)": (
+            "Momentum oscillator (0\u2013100). "
+            "\u226570 overbought, \u226430 oversold."
+        ),
+        "MACD": (
+            "Trend momentum indicator. Bullish"
+            " when MACD \u2265 signal line."
+        ),
+    }
+    for ann in fig.layout.annotations:
+        tip = _panel_tips.get(ann.text)
+        if tip:
+            ann.hovertext = tip
+            ann.captureevents = True
+
     fig.update_xaxes(gridcolor="#e5e7eb")
     fig.update_yaxes(
         gridcolor="#e5e7eb",
@@ -416,7 +434,16 @@ def _build_analysis_fig(
         secondary_y=False,
     )
     fig.update_yaxes(
-        gridcolor="#e5e7eb", title_text="RSI", row=2, col=1, range=[0, 100]
+        gridcolor="#e5e7eb",
+        title_text="RSI",
+        row=2,
+        col=1,
+        range=[0, 100],
     )
-    fig.update_yaxes(gridcolor="#e5e7eb", title_text="MACD", row=3, col=1)
+    fig.update_yaxes(
+        gridcolor="#e5e7eb",
+        title_text="MACD",
+        row=3,
+        col=1,
+    )
     return fig

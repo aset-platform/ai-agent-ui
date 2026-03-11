@@ -62,7 +62,11 @@ def verify_password(plain: str, hashed: str) -> bool:
 def validate_password_strength(password: str) -> None:
     """Raise HTTP 400 if *password* does not meet minimum requirements.
 
-    Requirements: at least 8 characters and at least one digit.
+    Requirements:
+    - At least 8 characters.
+    - At least one digit.
+    - At least one uppercase letter.
+    - At least one special character.
 
     Args:
         password: The plaintext password to validate.
@@ -71,19 +75,35 @@ def validate_password_strength(password: str) -> None:
         HTTPException: 400 if the password is too weak.
 
     Example:
-        >>> validate_password_strength("abc123def")  # passes
+        >>> validate_password_strength("Abc123!x")  # passes
         >>> validate_password_strength("abcdefgh")  # doctest: +SKIP
         Traceback (most recent call last):
             ...
         fastapi.HTTPException: 400
     """
     if len(password) < 8:
-        logger.debug("Password validation failed: fewer than 8 characters.")
+        logger.debug("Password validation failed: fewer than 8 chars.")
         raise HTTPException(
-            status_code=400, detail="Password must be at least 8 characters."
+            status_code=400,
+            detail="Password must be at least 8 characters.",
         )
     if not any(c.isdigit() for c in password):
-        logger.debug("Password validation failed: no digit present.")
+        logger.debug("Password validation failed: no digit.")
         raise HTTPException(
-            status_code=400, detail="Password must contain at least one digit."
+            status_code=400,
+            detail="Password must contain at least one digit.",
+        )
+    if not any(c.isupper() for c in password):
+        logger.debug("Password validation failed: no uppercase.")
+        raise HTTPException(
+            status_code=400,
+            detail=("Password must contain at least one" " uppercase letter."),
+        )
+    if not any(not c.isalnum() for c in password):
+        logger.debug("Password validation failed: no special char.")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Password must contain at least one" " special character."
+            ),
         )

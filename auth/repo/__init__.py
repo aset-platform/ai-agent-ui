@@ -10,11 +10,12 @@ from here or from :mod:`auth.repository` (the backward-compatible shim)::
 
 import logging
 
-from auth.repo.repository import IcebergUserRepository
+from auth.repo.repository import IcebergUserRepository  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
-# Module-level export list — kept here as required by Python packaging conventions.
+# Module-level export list — kept here as required
+# by Python packaging conventions.
 _all_exports = ["IcebergUserRepository"]
 
 __all__ = _all_exports

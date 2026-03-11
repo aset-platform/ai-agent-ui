@@ -276,9 +276,19 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 4: Create virtualenv
 # ══════════════════════════════════════════════════════════════════════════════
-step "4/11" "Creating Python virtualenv (backend/demoenv)"
+step "4/11" "Creating Python virtualenv (~/.ai-agent-ui/venv)"
 
-VENV_DIR="$SCRIPT_DIR/backend/demoenv"
+VENV_DIR="${APP_DATA_HOME:-$HOME/.ai-agent-ui}/venv"
+
+# Migrate: if old venv exists at backend/demoenv but new one does not,
+# move it and leave a symlink for backwards compatibility.
+OLD_VENV_DIR="$SCRIPT_DIR/backend/demoenv"
+if [[ -d "$OLD_VENV_DIR" ]] && [[ ! -L "$OLD_VENV_DIR" ]] && [[ ! -d "$VENV_DIR" ]]; then
+    info "Migrating virtualenv from backend/demoenv → $VENV_DIR"
+    mv "$OLD_VENV_DIR" "$VENV_DIR"
+    ln -s "$VENV_DIR" "$OLD_VENV_DIR"
+    ok "Virtualenv migrated (symlink left at backend/demoenv)"
+fi
 VENV_PYTHON="$VENV_DIR/bin/python"
 
 if [[ -f "$VENV_PYTHON" ]]; then
@@ -360,23 +370,23 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 step "8/11" "Creating project directories"
 
+APP_DATA_HOME="${HOME}/.ai-agent-ui"
 DIRS=(
-    "data/iceberg"
-    "data/iceberg/warehouse"
-    "data/raw"
-    "data/forecasts"
-    "data/cache"
-    "data/avatars"
-    "data/metadata"
-    "data/processed"
-    "logs"
-    "backend/logs"
-    "charts/analysis"
-    "charts/forecasts"
+    "${APP_DATA_HOME}/data/iceberg"
+    "${APP_DATA_HOME}/data/iceberg/warehouse"
+    "${APP_DATA_HOME}/data/raw"
+    "${APP_DATA_HOME}/data/forecasts"
+    "${APP_DATA_HOME}/data/cache"
+    "${APP_DATA_HOME}/data/avatars"
+    "${APP_DATA_HOME}/data/metadata"
+    "${APP_DATA_HOME}/data/processed"
+    "${APP_DATA_HOME}/logs"
+    "${APP_DATA_HOME}/charts/analysis"
+    "${APP_DATA_HOME}/charts/forecasts"
 )
 
 for d in "${DIRS[@]}"; do
-    mkdir -p "$SCRIPT_DIR/$d"
+    mkdir -p "$d"
 done
 
 ok "All directories created"
@@ -602,10 +612,10 @@ else
 catalog:
   local:
     type: sql
-    uri: sqlite:///data/iceberg/catalog.db
-    warehouse: file://${SCRIPT_DIR}/data/iceberg/warehouse
+    uri: sqlite:///${HOME}/.ai-agent-ui/data/iceberg/catalog.db
+    warehouse: file:///${HOME}/.ai-agent-ui/data/iceberg/warehouse
 ICEEOF
-    ok ".pyiceberg.yaml created (warehouse: ${SCRIPT_DIR}/data/iceberg/warehouse)"
+    ok ".pyiceberg.yaml created (warehouse: ${HOME}/.ai-agent-ui/data/iceberg/warehouse)"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -661,6 +671,18 @@ else
     info "No admin credentials provided — skipping admin seed"
 fi
 
+# ── Seed demo data ────────────────────────────────────────────────────────────
+if [[ "${SKIP_SEED:-}" != "1" ]]; then
+    info "Seeding demo data (5 tickers + 2 users)..."
+    if (cd "$SCRIPT_DIR" && "$VENV_PYTHON" scripts/seed_demo_data.py 2>&1); then
+        ok "Demo data seeded (admin@demo.local / Admin123!, test@demo.local / Test1234!)"
+    else
+        warn "scripts/seed_demo_data.py had issues (data may already exist)"
+    fi
+else
+    info "SKIP_SEED=1 — skipping demo data seed"
+fi
+
 # ── Git hooks ─────────────────────────────────────────────────────────────────
 info "Installing git hooks..."
 HOOKS_DIR="$SCRIPT_DIR/.git/hooks"
@@ -703,7 +725,7 @@ _check "Frontend node_modules" "[[ -d '$FRONTEND_DIR/node_modules' ]]"
 _check "backend/.env (symlink)" "[[ -L '$BACKEND_ENV_LINK' ]] && [[ -f '$BACKEND_ENV_REAL' ]]"
 _check "frontend/.env.local (symlink)" "[[ -L '$FRONTEND_ENV_LINK' ]] && [[ -f '$FRONTEND_ENV_REAL' ]]"
 _check ".pyiceberg.yaml" "[[ -f '$PYICEBERG_YAML' ]]"
-_check "Iceberg catalog" "[[ -f '$SCRIPT_DIR/data/iceberg/catalog.db' ]]"
+_check "Iceberg catalog" "[[ -f '$HOME/.ai-agent-ui/data/iceberg/catalog.db' ]]"
 _check "Git pre-commit hook" "[[ -x '$HOOKS_DIR/pre-commit' ]]"
 _check "Git pre-push hook" "[[ -x '$HOOKS_DIR/pre-push' ]]"
 

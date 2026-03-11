@@ -28,14 +28,21 @@ def _import_callbacks():
 
     with (
         patch.dict(os.environ, {"JWT_SECRET_KEY": "test-secret"}),
-        patch("pyiceberg.catalog.load_catalog", side_effect=RuntimeError("no catalog in tests")),
+        patch(
+            "pyiceberg.catalog.load_catalog",
+            side_effect=RuntimeError("no catalog in tests"),
+        ),
     ):
         import importlib.util
         from pathlib import Path
 
         spec = importlib.util.spec_from_file_location(
             "dashboard.callbacks",
-            str(Path(__file__).parent.parent.parent / "dashboard" / "callbacks.py"),
+            str(
+                Path(__file__).parent.parent.parent
+                / "dashboard"
+                / "callbacks.py"
+            ),
         )
         mod = importlib.util.module_from_spec(spec)
         try:
@@ -56,25 +63,38 @@ class TestGetMarket:
 
     @pytest.fixture(autouse=True)
     def _mod(self):
-        from pathlib import Path
         import importlib.util
+        from pathlib import Path
 
         source = (
-            Path(__file__).parent.parent.parent / "dashboard" / "callbacks" / "utils.py"
+            Path(__file__).parent.parent.parent
+            / "dashboard"
+            / "callbacks"
+            / "utils.py"
         ).read_text(encoding="utf-8")
 
         # Extract and exec just the _get_market function
         import ast
+
         tree = ast.parse(source)
         fn_node = next(
-            (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_get_market"),
+            (
+                n
+                for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "_get_market"
+            ),
             None,
         )
         if fn_node is None:
             pytest.skip("_get_market not found in callbacks/utils.py")
 
         exec_globals = {}
-        exec(compile(ast.Module(body=[fn_node], type_ignores=[]), "<string>", "exec"), exec_globals)
+        exec(
+            compile(
+                ast.Module(body=[fn_node], type_ignores=[]), "<string>", "exec"
+            ),
+            exec_globals,
+        )
         self._get_market = exec_globals["_get_market"]
 
     def test_nse_ticker_is_india(self):
@@ -119,7 +139,12 @@ class TestValidateToken:
 
         tree = ast.parse(source)
         fn_node = next(
-            (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_validate_token"),
+            (
+                n
+                for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef)
+                and n.name == "_validate_token"
+            ),
             None,
         )
         if fn_node is None:
@@ -142,6 +167,7 @@ class TestValidateToken:
 
     def _make_token(self, payload: dict, secret: str = "test-secret") -> str:
         from jose import jwt
+
         return jwt.encode(payload, secret, algorithm="HS256")
 
     def test_none_returns_none(self, _fn):
@@ -153,36 +179,59 @@ class TestValidateToken:
             assert _fn("") is None
 
     def test_valid_access_token(self, _fn):
-        exp = int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp())
-        token = self._make_token({"sub": "user123", "type": "access", "exp": exp})
+        exp = int(
+            (datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()
+        )
+        token = self._make_token(
+            {"sub": "user123", "type": "access", "exp": exp}
+        )
         with patch.dict(os.environ, {"JWT_SECRET_KEY": "test-secret"}):
             payload = _fn(token)
         assert payload is not None
         assert payload["sub"] == "user123"
 
     def test_expired_token_returns_none(self, _fn):
-        exp = int((datetime.now(timezone.utc) - timedelta(hours=1)).timestamp())
-        token = self._make_token({"sub": "user123", "type": "access", "exp": exp})
+        exp = int(
+            (datetime.now(timezone.utc) - timedelta(hours=1)).timestamp()
+        )
+        token = self._make_token(
+            {"sub": "user123", "type": "access", "exp": exp}
+        )
         with patch.dict(os.environ, {"JWT_SECRET_KEY": "test-secret"}):
             assert _fn(token) is None
 
     def test_refresh_token_returns_none(self, _fn):
         """Token of type 'refresh' must be rejected."""
-        exp = int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp())
-        token = self._make_token({"sub": "user123", "type": "refresh", "exp": exp})
+        exp = int(
+            (datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()
+        )
+        token = self._make_token(
+            {"sub": "user123", "type": "refresh", "exp": exp}
+        )
         with patch.dict(os.environ, {"JWT_SECRET_KEY": "test-secret"}):
             assert _fn(token) is None
 
     def test_wrong_secret_returns_none(self, _fn):
-        exp = int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp())
-        token = self._make_token({"sub": "user123", "type": "access", "exp": exp}, secret="other-secret")
+        exp = int(
+            (datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()
+        )
+        token = self._make_token(
+            {"sub": "user123", "type": "access", "exp": exp},
+            secret="other-secret",
+        )
         with patch.dict(os.environ, {"JWT_SECRET_KEY": "test-secret"}):
             assert _fn(token) is None
 
     def test_missing_jwt_secret_returns_none(self, _fn):
-        exp = int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp())
-        token = self._make_token({"sub": "user123", "type": "access", "exp": exp})
-        env_without_secret = {k: v for k, v in os.environ.items() if k != "JWT_SECRET_KEY"}
+        exp = int(
+            (datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()
+        )
+        token = self._make_token(
+            {"sub": "user123", "type": "access", "exp": exp}
+        )
+        env_without_secret = {
+            k: v for k, v in os.environ.items() if k != "JWT_SECRET_KEY"
+        }
         with patch.dict(os.environ, env_without_secret, clear=True):
             assert _fn(token) is None
 
@@ -235,32 +284,40 @@ class TestOhlcvAdjCloseNanFallback:
 
     def test_adj_close_uses_close_when_all_nan(self):
         """When adj_close is all NaN, Adj Close column should use close values."""
+        from unittest.mock import MagicMock, patch
+
         import numpy as np
         import pandas as pd
-        from unittest.mock import MagicMock, patch
 
         dates = pd.date_range("2020-01-01", periods=50, freq="B")
         rng = np.random.default_rng(42)
         close = 100 + rng.standard_normal(50).cumsum()
-        iceberg_df = pd.DataFrame({
-            "ticker": ["AAPL"] * 50,
-            "date": dates.date,
-            "open": close * 0.99,
-            "high": close * 1.01,
-            "low": close * 0.98,
-            "close": close,
-            "adj_close": [float("nan")] * 50,
-            "volume": rng.integers(1_000_000, 5_000_000, 50),
-        })
+        iceberg_df = pd.DataFrame(
+            {
+                "ticker": ["AAPL"] * 50,
+                "date": dates.date,
+                "open": close * 0.99,
+                "high": close * 1.01,
+                "low": close * 0.98,
+                "close": close,
+                "adj_close": [float("nan")] * 50,
+                "volume": rng.integers(1_000_000, 5_000_000, 50),
+            }
+        )
 
         mock_repo = MagicMock()
         mock_repo.get_ohlcv.return_value = iceberg_df
 
-        with patch("dashboard.callbacks.iceberg._get_iceberg_repo", return_value=mock_repo):
+        with patch(
+            "dashboard.callbacks.iceberg._get_iceberg_repo",
+            return_value=mock_repo,
+        ):
             import dashboard.callbacks.iceberg as _ice
+
             _ice._OHLCV_CACHE.clear()
 
             from dashboard.callbacks.data_loaders import _load_raw
+
             result = _load_raw("AAPL")
 
         assert result is not None
@@ -270,33 +327,41 @@ class TestOhlcvAdjCloseNanFallback:
 
     def test_adj_close_used_when_valid(self):
         """When adj_close has real data, Adj Close should use those values."""
+        from unittest.mock import MagicMock, patch
+
         import numpy as np
         import pandas as pd
-        from unittest.mock import MagicMock, patch
 
         dates = pd.date_range("2020-01-01", periods=50, freq="B")
         rng = np.random.default_rng(42)
         close = 100 + rng.standard_normal(50).cumsum()
         adj_close = close * 0.95  # Different from close
-        iceberg_df = pd.DataFrame({
-            "ticker": ["AAPL"] * 50,
-            "date": dates.date,
-            "open": close * 0.99,
-            "high": close * 1.01,
-            "low": close * 0.98,
-            "close": close,
-            "adj_close": adj_close,
-            "volume": rng.integers(1_000_000, 5_000_000, 50),
-        })
+        iceberg_df = pd.DataFrame(
+            {
+                "ticker": ["AAPL"] * 50,
+                "date": dates.date,
+                "open": close * 0.99,
+                "high": close * 1.01,
+                "low": close * 0.98,
+                "close": close,
+                "adj_close": adj_close,
+                "volume": rng.integers(1_000_000, 5_000_000, 50),
+            }
+        )
 
         mock_repo = MagicMock()
         mock_repo.get_ohlcv.return_value = iceberg_df
 
-        with patch("dashboard.callbacks.iceberg._get_iceberg_repo", return_value=mock_repo):
+        with patch(
+            "dashboard.callbacks.iceberg._get_iceberg_repo",
+            return_value=mock_repo,
+        ):
             import dashboard.callbacks.iceberg as _ice
+
             _ice._OHLCV_CACHE.clear()
 
             from dashboard.callbacks.data_loaders import _load_raw
+
             result = _load_raw("AAPL")
 
         assert result is not None
@@ -308,34 +373,42 @@ class TestLoadRawFromIceberg:
 
     def test_returns_dataframe_from_iceberg(self):
         """_load_raw must return a DataFrame with OHLCV columns from Iceberg."""
+        from unittest.mock import MagicMock, patch
+
         import numpy as np
         import pandas as pd
-        from unittest.mock import MagicMock, patch
 
         # Build Iceberg-shaped OHLCV data
         dates = pd.date_range("2020-01-01", periods=50, freq="B")
         rng = np.random.default_rng(42)
         close = 100 + rng.standard_normal(50).cumsum()
-        iceberg_df = pd.DataFrame({
-            "ticker": ["AAPL"] * 50,
-            "date": dates.date,
-            "open": close * 0.99,
-            "high": close * 1.01,
-            "low": close * 0.98,
-            "close": close,
-            "adj_close": close,
-            "volume": rng.integers(1_000_000, 5_000_000, 50),
-        })
+        iceberg_df = pd.DataFrame(
+            {
+                "ticker": ["AAPL"] * 50,
+                "date": dates.date,
+                "open": close * 0.99,
+                "high": close * 1.01,
+                "low": close * 0.98,
+                "close": close,
+                "adj_close": close,
+                "volume": rng.integers(1_000_000, 5_000_000, 50),
+            }
+        )
 
         mock_repo = MagicMock()
         mock_repo.get_ohlcv.return_value = iceberg_df
 
-        with patch("dashboard.callbacks.iceberg._get_iceberg_repo", return_value=mock_repo):
+        with patch(
+            "dashboard.callbacks.iceberg._get_iceberg_repo",
+            return_value=mock_repo,
+        ):
             # Clear cache for test isolation
             import dashboard.callbacks.iceberg as _ice
+
             _ice._OHLCV_CACHE.clear()
 
             from dashboard.callbacks.data_loaders import _load_raw
+
             result = _load_raw("AAPL")
 
         assert result is not None
@@ -345,17 +418,23 @@ class TestLoadRawFromIceberg:
 
     def test_returns_none_when_no_data(self):
         """_load_raw must return None when Iceberg has no OHLCV data."""
-        import pandas as pd
         from unittest.mock import MagicMock, patch
+
+        import pandas as pd
 
         mock_repo = MagicMock()
         mock_repo.get_ohlcv.return_value = pd.DataFrame()
 
-        with patch("dashboard.callbacks.iceberg._get_iceberg_repo", return_value=mock_repo):
+        with patch(
+            "dashboard.callbacks.iceberg._get_iceberg_repo",
+            return_value=mock_repo,
+        ):
             import dashboard.callbacks.iceberg as _ice
+
             _ice._OHLCV_CACHE.clear()
 
             from dashboard.callbacks.data_loaders import _load_raw
+
             result = _load_raw("NOSUCH")
 
         assert result is None
@@ -366,28 +445,36 @@ class TestLoadForecastFromIceberg:
 
     def test_returns_forecast_from_iceberg(self):
         """_load_forecast must return a DataFrame with ds/yhat columns."""
-        import pandas as pd
         from unittest.mock import MagicMock, patch
 
+        import pandas as pd
+
         dates = pd.date_range("2026-01-01", periods=60, freq="B")
-        iceberg_df = pd.DataFrame({
-            "ticker": ["AAPL"] * 60,
-            "horizon_months": [9] * 60,
-            "run_date": [pd.Timestamp("2025-12-31").date()] * 60,
-            "forecast_date": dates.date,
-            "predicted_price": [150.0 + i * 0.5 for i in range(60)],
-            "lower_bound": [145.0 + i * 0.5 for i in range(60)],
-            "upper_bound": [155.0 + i * 0.5 for i in range(60)],
-        })
+        iceberg_df = pd.DataFrame(
+            {
+                "ticker": ["AAPL"] * 60,
+                "horizon_months": [9] * 60,
+                "run_date": [pd.Timestamp("2025-12-31").date()] * 60,
+                "forecast_date": dates.date,
+                "predicted_price": [150.0 + i * 0.5 for i in range(60)],
+                "lower_bound": [145.0 + i * 0.5 for i in range(60)],
+                "upper_bound": [155.0 + i * 0.5 for i in range(60)],
+            }
+        )
 
         mock_repo = MagicMock()
         mock_repo.get_latest_forecast_series.return_value = iceberg_df
 
-        with patch("dashboard.callbacks.iceberg._get_iceberg_repo", return_value=mock_repo):
+        with patch(
+            "dashboard.callbacks.iceberg._get_iceberg_repo",
+            return_value=mock_repo,
+        ):
             import dashboard.callbacks.iceberg as _ice
+
             _ice._FORECAST_CACHE.clear()
 
             from dashboard.callbacks.data_loaders import _load_forecast
+
             result = _load_forecast("AAPL", 9)
 
         assert result is not None
@@ -397,17 +484,23 @@ class TestLoadForecastFromIceberg:
 
     def test_returns_none_when_no_forecast(self):
         """_load_forecast must return None when Iceberg has no forecast."""
-        import pandas as pd
         from unittest.mock import MagicMock, patch
+
+        import pandas as pd
 
         mock_repo = MagicMock()
         mock_repo.get_latest_forecast_series.return_value = pd.DataFrame()
 
-        with patch("dashboard.callbacks.iceberg._get_iceberg_repo", return_value=mock_repo):
+        with patch(
+            "dashboard.callbacks.iceberg._get_iceberg_repo",
+            return_value=mock_repo,
+        ):
             import dashboard.callbacks.iceberg as _ice
+
             _ice._FORECAST_CACHE.clear()
 
             from dashboard.callbacks.data_loaders import _load_forecast
+
             result = _load_forecast("NOSUCH", 9)
 
         assert result is None

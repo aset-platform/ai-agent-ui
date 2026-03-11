@@ -20,8 +20,13 @@ from typing import Dict, Iterator, List
 
 import agents.loop as _loop
 import agents.stream as _stream
-from agents.config import MAX_ITERATIONS, AgentConfig
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from agents.config import AgentConfig
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 from tools.registry import ToolRegistry
 
 
@@ -35,12 +40,16 @@ class BaseAgent(ABC):
     Attributes:
         config: The :class:`~agents.config.AgentConfig` for this agent.
         tool_registry: The shared :class:`~tools.registry.ToolRegistry`.
+        token_budget: Shared :class:`~token_budget.TokenBudget` tracker.
+        compressor: Shared :class:`~message_compressor.MessageCompressor`.
         logger: Logger named ``agent.<agent_id>``.
         llm: The raw (unbound) LLM instance.
         llm_with_tools: The LLM with tools bound.
     """
 
-    def __init__(self, config: AgentConfig, tool_registry: ToolRegistry) -> None:
+    def __init__(
+        self, config: AgentConfig, tool_registry: ToolRegistry
+    ) -> None:
         """Initialise the agent and bind tools to the LLM.
 
         Args:
@@ -51,6 +60,18 @@ class BaseAgent(ABC):
         self.config = config
         self.tool_registry = tool_registry
         self.logger = logging.getLogger(f"agent.{config.agent_id}")
+
+        # Defaults — overridden by factory functions before use,
+        # but must exist before _setup() calls _build_llm().
+        if not hasattr(self, "token_budget"):
+            from token_budget import TokenBudget
+
+            self.token_budget = TokenBudget()
+        if not hasattr(self, "compressor"):
+            from message_compressor import MessageCompressor
+
+            self.compressor = MessageCompressor()
+
         self._setup()
 
     def _setup(self) -> None:
@@ -73,14 +94,14 @@ class BaseAgent(ABC):
 
         Returns:
             An uninvoked LangChain chat model instance (or duck-typed
-            equivalent with ``bind_tools`` and ``invoke`` methods).
+            equivalent with ``bind_tools``/``invoke`` methods).
         """
         ...
 
     def _build_messages(
         self, user_input: str, history: List[Dict]
     ) -> List[BaseMessage]:
-        """Convert raw conversation history and user input into LangChain messages.
+        """Convert raw history and user input into LangChain messages.
 
         Args:
             user_input: The latest message from the user.
@@ -88,7 +109,7 @@ class BaseAgent(ABC):
                 ``[{"role": "user"|"assistant", "content": "..."}]``.
 
         Returns:
-            An ordered list of :class:`~langchain_core.messages.BaseMessage` objects.
+            Ordered list of BaseMessage objects.
         """
         messages: List[BaseMessage] = []
         if self.config.system_prompt:
@@ -114,11 +135,13 @@ class BaseAgent(ABC):
             The final natural-language response.
 
         Raises:
-            Exception: Any exception raised by the LLM or tools is re-raised.
+            Exception: Any LLM or tool exception is re-raised.
         """
         return _loop.run(self, user_input, history)
 
-    def stream(self, user_input: str, history: List[Dict] = []) -> Iterator[str]:
+    def stream(
+        self, user_input: str, history: List[Dict] = []
+    ) -> Iterator[str]:
         """Execute the agentic loop, yielding NDJSON status events.
 
         Args:
@@ -129,6 +152,6 @@ class BaseAgent(ABC):
             JSON-encoded event strings, each terminated with ``\\n``.
 
         Raises:
-            Exception: Any exception is re-raised after yielding an error event.
+            Exception: Re-raised after yielding an error event.
         """
         return _stream.stream(self, user_input, history)

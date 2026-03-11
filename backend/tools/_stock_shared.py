@@ -1,4 +1,4 @@
-"""Shared path constants, Iceberg repo singleton, and small helpers for stock tools.
+"""Shared path constants, Iceberg repo singleton, and helpers.
 
 All sub-modules (``_stock_registry``, ``_stock_fetch``) access these values as
 module attributes (``import tools._stock_shared as _ss; _ss._DATA_RAW``) so
@@ -18,27 +18,32 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Optional
 
-# Module-level logger; kept at module scope intentionally for shared utility use.
+from paths import (
+    ICEBERG_CATALOG_URI,
+    ICEBERG_WAREHOUSE_URI,
+    PROCESSED_DIR,
+    PROJECT_ROOT,
+    RAW_DIR,
+)
+
+# Module-level logger for shared utility use.
 _logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).parent.parent.parent
-_DATA_RAW = _PROJECT_ROOT / "data" / "raw"
-_DATA_PROCESSED = _PROJECT_ROOT / "data" / "processed"
+_PROJECT_ROOT = PROJECT_ROOT
+_DATA_RAW = RAW_DIR
+_DATA_PROCESSED = PROCESSED_DIR
 
 # Ensure PyIceberg can find the catalog regardless of CWD.
-# The backend process runs from backend/ but .pyiceberg.yaml lives at
-# the project root with a relative SQLite URI.  PyIceberg's _ENV_CONFIG
-# singleton reads env vars once at import time, so these must be set
-# BEFORE any pyiceberg import.
+# PyIceberg's _ENV_CONFIG singleton reads env vars once at import
+# time, so these must be set BEFORE any pyiceberg import.
 os.environ.setdefault(
     "PYICEBERG_CATALOG__LOCAL__URI",
-    f"sqlite:///{_PROJECT_ROOT.resolve()}/data/iceberg/catalog.db",
+    ICEBERG_CATALOG_URI,
 )
 os.environ.setdefault(
     "PYICEBERG_CATALOG__LOCAL__WAREHOUSE",
-    f"file:///{_PROJECT_ROOT.resolve()}/data/iceberg/warehouse",
+    ICEBERG_WAREHOUSE_URI,
 )
 
 _STOCK_REPO = None
@@ -66,9 +71,12 @@ def _get_repo():
         _root = str(_ss._PROJECT_ROOT)
         if _root not in sys.path:
             sys.path.insert(0, _root)
+        from stocks.cached_repository import CachedRepository  # noqa: PLC0415
         from stocks.repository import StockRepository  # noqa: PLC0415
 
-        _ss._STOCK_REPO = StockRepository()
+        _ss._STOCK_REPO = CachedRepository(
+            StockRepository(),
+        )
         _logger.debug("StockRepository initialised")
     except Exception as _e:
         _logger.warning("StockRepository unavailable: %s", _e)
@@ -92,7 +100,8 @@ def _require_repo():
     repo = _get_repo()
     if repo is None:
         raise RuntimeError(
-            "StockRepository is unavailable — Iceberg catalog may not be initialised. "
+            "StockRepository is unavailable — Iceberg "
+            "catalog may not be initialised. "
             "Run 'python stocks/create_tables.py' first."
         )
     return repo
@@ -114,4 +123,4 @@ def _parquet_path(ticker: str) -> Path:
 
 # Fix #6: delegate to shared helpers module to eliminate duplication.
 # Fix #5: TTL cache is implemented in _helpers._load_currency.
-from tools._helpers import _currency_symbol, _load_currency  # noqa: F401
+from tools._helpers import _currency_symbol, _load_currency  # noqa: F401,E402

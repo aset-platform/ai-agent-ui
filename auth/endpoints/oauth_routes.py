@@ -6,21 +6,26 @@ Functions
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 import auth.endpoints.helpers as _helpers
 from auth.dependencies import get_auth_service
+from auth.endpoints.auth_routes import _set_refresh_cookie
 from auth.models import (
     OAuthAuthorizeResponse,
     OAuthCallbackRequest,
     OAuthProvider,
     TokenResponse,
 )
+from auth.rate_limit import limiter
 from auth.service import AuthService
 
-# Module-level logger; cannot be moved into a class as this module uses plain functions.
+# Module-level logger; cannot be moved into a class
+# as this module uses plain functions.
 _logger = logging.getLogger(__name__)
 
 
@@ -30,7 +35,6 @@ def register(router: APIRouter) -> None:
     Args:
         router: The :class:`~fastapi.APIRouter` to attach routes to.
     """
-    from datetime import datetime
 
     @router.get("/auth/oauth/providers", tags=["oauth"])
     def list_oauth_providers() -> Dict[str, List[str]]:
@@ -55,7 +59,9 @@ def register(router: APIRouter) -> None:
         response_model=OAuthAuthorizeResponse,
         tags=["oauth"],
     )
-    def oauth_authorize(provider: str, code_challenge: str) -> OAuthAuthorizeResponse:
+    def oauth_authorize(
+        provider: str, code_challenge: str
+    ) -> OAuthAuthorizeResponse:
         """Generate a provider consent URL and a server-side CSRF state token.
 
         Args:
@@ -63,7 +69,8 @@ def register(router: APIRouter) -> None:
             code_challenge: PKCE challenge (base64url SHA-256 of the verifier).
 
         Returns:
-            :class:`~auth.models.OAuthAuthorizeResponse` with ``state`` and ``authorize_url``.
+            :class:`~auth.models.OAuthAuthorizeResponse`
+            with ``state`` and ``authorize_url``.
 
         Raises:
             HTTPException: 400 if *provider* is not supported.
@@ -79,9 +86,17 @@ def register(router: APIRouter) -> None:
         from config import get_settings
 
         settings = get_settings()
-        if provider_enum == OAuthProvider.google and not settings.google_client_id:
-            raise HTTPException(status_code=503, detail="Google SSO is not configured.")
-        if provider_enum == OAuthProvider.facebook and not settings.facebook_app_id:
+        if (
+            provider_enum == OAuthProvider.google
+            and not settings.google_client_id
+        ):
+            raise HTTPException(
+                status_code=503, detail="Google SSO is not configured."
+            )
+        if (
+            provider_enum == OAuthProvider.facebook
+            and not settings.facebook_app_id
+        ):
             raise HTTPException(
                 status_code=503, detail="Facebook SSO is not configured."
             )
@@ -95,8 +110,12 @@ def register(router: APIRouter) -> None:
         _logger.info("OAuth authorize: provider=%s", provider)
         return OAuthAuthorizeResponse(state=state, authorize_url=authorize_url)
 
-    @router.post("/auth/oauth/callback", response_model=TokenResponse, tags=["oauth"])
+    @router.post(
+        "/auth/oauth/callback", response_model=TokenResponse, tags=["oauth"]
+    )
+    @limiter.limit("30/minute")
     def oauth_callback(
+        request: Request,
         body: OAuthCallbackRequest,
         service: AuthService = Depends(get_auth_service),
     ) -> TokenResponse:
@@ -116,7 +135,9 @@ def register(router: APIRouter) -> None:
         oauth_svc = _helpers._get_oauth_svc()
         repo = _helpers._get_repo()
         if not oauth_svc.validate_state(body.state, body.provider.value):
-            _logger.warning("Invalid OAuth state token: provider=%s", body.provider)
+            _logger.warning(
+                "Invalid OAuth state token: provider=%s", body.provider
+            )
             raise HTTPException(
                 status_code=400, detail="Invalid or expired OAuth state token."
             )
@@ -129,10 +150,13 @@ def register(router: APIRouter) -> None:
                 user_info = oauth_svc.exchange_facebook_code(body.code)
         except Exception as exc:
             _logger.error(
-                "OAuth code exchange failed: provider=%s error=%s", body.provider, exc
+                "OAuth code exchange failed: provider=%s error=%s",
+                body.provider,
+                exc,
             )
             raise HTTPException(
-                status_code=400, detail="OAuth token exchange failed: {}".format(exc)
+                status_code=400,
+                detail="OAuth token exchange failed. Please try again.",
             )
         user = repo.get_or_create_by_oauth(
             provider=user_info["provider"],
@@ -142,19 +166,39 @@ def register(router: APIRouter) -> None:
             picture_url=user_info.get("picture"),
         )
         if not user.get("is_active", False):
-            raise HTTPException(status_code=403, detail="Account is deactivated.")
-        repo.update(user["user_id"], {"last_login_at": datetime.utcnow()})
-        access = service.create_access_token(
-            user_id=user["user_id"], email=user["email"], role=user["role"]
+            raise HTTPException(
+                status_code=403, detail="Account is deactivated."
+            )
+        repo.update(
+            user["user_id"], {"last_login_at": datetime.now(timezone.utc)}
         )
-        refresh = service.create_refresh_token(user_id=user["user_id"])
+        access = service.create_access_token(
+            user_id=user["user_id"],
+            email=user["email"],
+            role=user["role"],
+        )
+        refresh = service.create_refresh_token(
+            user_id=user["user_id"],
+        )
         repo.append_audit_event(
             "OAUTH_LOGIN",
             actor_user_id=user["user_id"],
             target_user_id=user["user_id"],
-            metadata={"provider": body.provider.value, "email": user["email"]},
+            metadata={
+                "provider": body.provider.value,
+                "email": user["email"],
+            },
         )
         _logger.info(
-            "OAuth login: user_id=%s provider=%s", user["user_id"], body.provider
+            "OAuth login: user_id=%s provider=%s",
+            user["user_id"],
+            body.provider,
         )
-        return TokenResponse(access_token=access, refresh_token=refresh)
+        resp = JSONResponse(
+            content=TokenResponse(
+                access_token=access,
+                refresh_token=refresh,
+            ).model_dump(),
+        )
+        _set_refresh_cookie(resp, refresh)
+        return resp

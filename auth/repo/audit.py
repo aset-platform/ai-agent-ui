@@ -1,4 +1,4 @@
-"""Audit log append and query operations for the ``auth.audit_log`` Iceberg table.
+"""Audit log append and query operations for auth.
 
 Functions
 ---------
@@ -17,7 +17,8 @@ import pyarrow as pa
 from auth.repo.catalog import audit_table
 from auth.repo.schemas import _AUDIT_PA_SCHEMA, _from_ts, _now_utc, _to_ts
 
-# Module-level logger; kept at module scope intentionally (not a mutable data global).
+# Module-level logger; kept at module scope intentionally
+# (not a mutable data global).
 logger = logging.getLogger(__name__)
 
 
@@ -46,7 +47,9 @@ def append_audit_event(
         "event_timestamp": _to_ts(_now_utc()),
         "metadata": json.dumps(metadata) if metadata else None,
     }
-    arrow_table = pa.table({k: [v] for k, v in row.items()}, schema=_AUDIT_PA_SCHEMA)
+    arrow_table = pa.table(
+        {k: [v] for k, v in row.items()}, schema=_AUDIT_PA_SCHEMA
+    )
     audit_table(cat).append(arrow_table)
     logger.debug(
         "Audit event type=%s actor=%s target=%s",

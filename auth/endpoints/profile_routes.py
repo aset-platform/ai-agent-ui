@@ -7,7 +7,7 @@ Functions
 
 import logging
 import os
-from typing import Dict, Optional
+from typing import Dict
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
@@ -19,13 +19,19 @@ from auth.models import ProfileUpdateRequest, UserContext, UserResponse
 logger = logging.getLogger(__name__)
 
 # Module-level path constant — prefixed with _ to signal internal use.
-# Kept at module level because it is derived from the file-system layout and
-# must be available before any class or function is instantiated.
-_AVATARS_DIR: str = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "data",
-    "avatars",
+# Centralised in backend/paths.py; imported here for consistency.
+import sys as _sys  # noqa: E402
+
+_project_root = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
+_backend_dir = os.path.join(_project_root, "backend")
+if _backend_dir not in _sys.path:
+    _sys.path.insert(0, _backend_dir)
+
+from paths import AVATARS_DIR as _AVATARS_DIR_PATH  # noqa: E402
+
+_AVATARS_DIR: str = str(_AVATARS_DIR_PATH)
 _MAX_AVATAR_BYTES: int = 10 * 1024 * 1024  # 10 MB
 
 
@@ -37,7 +43,9 @@ def register(router: APIRouter) -> None:
     """
 
     @router.get("/auth/me", response_model=UserResponse, tags=["profile"])
-    def get_me(current_user: UserContext = Depends(get_current_user)) -> UserResponse:
+    def get_me(
+        current_user: UserContext = Depends(get_current_user),
+    ) -> UserResponse:
         """Return the authenticated user's own profile.
 
         Args:
@@ -90,7 +98,7 @@ def register(router: APIRouter) -> None:
     @router.post("/auth/upload-avatar", tags=["profile"])
     async def upload_avatar(
         file: UploadFile = File(...),
-        target_user_id: Optional[str] = Query(default=None, alias="user_id"),
+        target_user_id: str | None = Query(default=None, alias="user_id"),
         current_user: UserContext = Depends(get_current_user),
     ) -> Dict[str, str]:
         """Upload a profile avatar image (≤10 MB, image/* only).
@@ -125,24 +133,51 @@ def register(router: APIRouter) -> None:
         ct_lower = (file.content_type or "").lower()
         fn_lower = (file.filename or "").lower()
         if ct_lower in _unsupported or any(
-            fn_lower.endswith(s) for s in (".heic", ".heif", ".tiff", ".tif", ".bmp")
+            fn_lower.endswith(s)
+            for s in (".heic", ".heif", ".tiff", ".tif", ".bmp")
         ):
             raise HTTPException(
                 status_code=415,
-                detail="Unsupported image format. Please upload JPEG, PNG, GIF, or WebP.",
+                detail=(
+                    "Unsupported image format."
+                    " Please upload JPEG, PNG,"
+                    " GIF, or WebP."
+                ),
             )
         data = await file.read()
         if len(data) > _MAX_AVATAR_BYTES:
             raise HTTPException(
                 status_code=413, detail="Avatar file exceeds 10 MB limit."
             )
-        ext = (file.filename or "jpg").rsplit(".", 1)[-1].lower()
-        os.makedirs(_AVATARS_DIR, exist_ok=True)
-        dest = os.path.join(_AVATARS_DIR, "{}.{}".format(resolved_id, ext))
-        with open(dest, "wb") as fh:
-            fh.write(data)
+        _ALLOWED_EXTS = {"jpg", "jpeg", "png", "gif", "webp"}
+        raw_ext = (
+            (file.filename or "jpg").rsplit(".", 1)[-1].lower()
+        )
+        ext = raw_ext if raw_ext in _ALLOWED_EXTS else "jpg"
+        # Sanitise resolved_id — reject path separators.
+        if "/" in resolved_id or ".." in resolved_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid user ID.",
+            )
+        import pathlib
+
+        _avatars_path = pathlib.Path(_AVATARS_DIR)
+        _avatars_path.mkdir(parents=True, exist_ok=True)
+        dest = _avatars_path / f"{resolved_id}.{ext}"
+        # Ensure resolved path stays inside avatars dir.
+        if not dest.resolve().is_relative_to(
+            _avatars_path.resolve()
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid file path.",
+            )
+        dest.write_bytes(data)
         avatar_url = "/avatars/{}.{}".format(resolved_id, ext)
         repo = _helpers._get_repo()
         repo.update(resolved_id, {"profile_picture_url": avatar_url})
-        logger.info("Avatar uploaded for user_id=%s url=%s", resolved_id, avatar_url)
+        logger.info(
+            "Avatar uploaded for user_id=%s url=%s", resolved_id, avatar_url
+        )
         return {"avatar_url": avatar_url}

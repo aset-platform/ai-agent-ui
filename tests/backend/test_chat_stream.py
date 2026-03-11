@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from starlette.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -69,7 +68,9 @@ class TestChatStream:
         )
         if r.status_code == 200:
             ct = r.headers.get("content-type", "")
-            assert "ndjson" in ct or "json" in ct, f"Unexpected content-type: {ct}"
+            assert (
+                "ndjson" in ct or "json" in ct
+            ), f"Unexpected content-type: {ct}"
 
     def test_stream_emits_valid_json_lines(self, client):
         """Each non-empty line in the response must be valid JSON."""
@@ -101,6 +102,8 @@ class TestChatStream:
         assert r.status_code == 200, r.text
         lines = [l.strip() for l in r.text.splitlines() if l.strip()]
         types = {json.loads(l).get("type") for l in lines}
-        assert types & {"final", "error", "warning"}, (
-            f"No terminal event in stream. Event types seen: {types}"
-        )
+        assert types & {
+            "final",
+            "error",
+            "warning",
+        }, f"No terminal event in stream. Event types seen: {types}"

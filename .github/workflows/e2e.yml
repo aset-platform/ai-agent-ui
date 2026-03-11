@@ -1,0 +1,102 @@
+name: E2E Tests
+
+on:
+  pull_request:
+    branches: [dev, qa, release, main]
+  workflow_dispatch:
+
+env:
+  BACKEND_URL: http://127.0.0.1:8181
+  FRONTEND_URL: http://localhost:3000
+  DASHBOARD_URL: http://127.0.0.1:8050
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      TEST_USER_EMAIL: ${{ secrets.TEST_USER_EMAIL }}
+      TEST_USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
+      TEST_ADMIN_EMAIL: ${{ secrets.TEST_ADMIN_EMAIL }}
+      TEST_ADMIN_PASSWORD: ${{ secrets.TEST_ADMIN_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ── Cache Playwright browsers (~200-400 MB) ──────
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
+          restore-keys: pw-${{ runner.os }}-
+
+      # ── Install E2E dependencies ─────────────────────
+      - name: Install E2E deps
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      # ── Install Python deps ──────────────────────────
+      - name: Install Python deps
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements.txt
+
+      # ── Initialise databases ─────────────────────────
+      - name: Init databases
+        run: |
+          source .venv/bin/activate
+          python auth/create_tables.py
+          python auth/migrate_users_table.py
+          python stocks/create_tables.py
+
+      # ── Start services ───────────────────────────────
+      - name: Start services
+        run: |
+          source .venv/bin/activate
+          ./run.sh start &
+          # Wait for backend
+          timeout 90 bash -c \
+            'until curl -sf $BACKEND_URL/agents; do sleep 2; done'
+          # Wait for frontend
+          timeout 60 bash -c \
+            'until curl -sf $FRONTEND_URL; do sleep 2; done'
+          # Wait for dashboard
+          timeout 60 bash -c \
+            'until curl -sf $DASHBOARD_URL; do sleep 2; done'
+
+      # ── Run E2E tests ───────────────────────────────
+      - name: Run Playwright tests
+        working-directory: e2e
+        run: npx playwright test --reporter=html
+
+      # ── Upload HTML report (always) ─────────────────
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report
+          retention-days: 14
+
+      # ── Upload traces on failure ────────────────────
+      - name: Upload traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: e2e/test-results
+          retention-days: 7

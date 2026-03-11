@@ -28,6 +28,7 @@ Iceberg is the **single source of truth** for all stock data. All backend tool f
 | `stocks.analysis_summary` | stocks | Append-only snapshots | (ticker, analysis_date) |
 | `stocks.forecast_runs` | stocks | Append-only | (ticker, horizon_months, run_date) |
 | `stocks.forecasts` | stocks | Replace per run | (ticker, horizon_months, run_date) |
+| `auth.user_tickers` | auth | Upsert (copy-on-write) | (user_id, ticker) |
 
 ---
 
@@ -42,7 +43,7 @@ Tables are created automatically by `run.sh start` via `_init_stocks()`:
 To create tables manually:
 
 ```bash
-cd ai-agent-ui && source backend/demoenv/bin/activate
+cd ai-agent-ui && source ~/.ai-agent-ui/venv/bin/activate
 python stocks/create_tables.py
 ```
 
@@ -53,7 +54,7 @@ python stocks/create_tables.py
 After the tables are created, run the backfill script once to seed all historical flat-file data:
 
 ```bash
-cd ai-agent-ui && source backend/demoenv/bin/activate
+cd ai-agent-ui && source ~/.ai-agent-ui/venv/bin/activate
 python stocks/backfill.py
 ```
 

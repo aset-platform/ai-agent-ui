@@ -12,7 +12,6 @@ Usage::
 
 import logging
 import time
-from typing import Optional
 
 # Module-level logger; kept at module scope as a conventional singleton.
 _logger = logging.getLogger(__name__)
@@ -79,8 +78,8 @@ def _load_currency(ticker: str, metadata_dir=None) -> str:
         repo = _get_repo()
         if repo is not None:
             code = repo.get_currency(ticker)
-    except Exception:
-        pass
+    except Exception as exc:
+        _logger.warning("Currency lookup failed for %s: %s", ticker, exc)
 
     _CURRENCY_CACHE[ticker] = (code, now + _CACHE_TTL_SECONDS)
     return code

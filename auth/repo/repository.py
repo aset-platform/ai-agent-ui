@@ -15,15 +15,22 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+import pyarrow as pa
+
 import auth.repo.audit as _audit
 import auth.repo.oauth as _oauth
 import auth.repo.user_reads as _reads
 import auth.repo.user_writes as _writes
-from auth.repo.catalog import get_catalog
+from auth.repo.catalog import get_catalog, user_tickers_table
+from auth.repo.schemas import (
+    _USER_TICKERS_PA_SCHEMA,
+    _now_utc,
+    _to_ts,
+)
 
 
 class IcebergUserRepository:
-    """CRUD repository for the ``auth.users`` and ``auth.audit_log`` Iceberg tables.
+    """CRUD repository for auth Iceberg tables.
 
     Attributes:
         _catalog: Lazily loaded Iceberg catalog instance.
@@ -91,7 +98,9 @@ class IcebergUserRepository:
         """Append a new user row.
 
         Args:
-            user_data: Dict with ``email``, ``hashed_password``, ``full_name``, ``role``.
+            user_data: Dict with ``email``,
+                ``hashed_password``, ``full_name``,
+                ``role``.
 
         Returns:
             The full stored user dict.
@@ -134,7 +143,9 @@ class IcebergUserRepository:
         Returns:
             A user dict if found, otherwise ``None``.
         """
-        return _oauth.get_by_oauth_sub(self._get_catalog(), provider, oauth_sub)
+        return _oauth.get_by_oauth_sub(
+            self._get_catalog(), provider, oauth_sub
+        )
 
     def get_or_create_by_oauth(
         self,
@@ -157,7 +168,12 @@ class IcebergUserRepository:
             The full user dict after upsert.
         """
         return _oauth.get_or_create_by_oauth(
-            self._get_catalog(), provider, oauth_sub, email, full_name, picture_url
+            self._get_catalog(),
+            provider,
+            oauth_sub,
+            email,
+            full_name,
+            picture_url,
         )
 
     # ------------------------------------------------------------------
@@ -180,7 +196,11 @@ class IcebergUserRepository:
             metadata: Optional extra context dict.
         """
         _audit.append_audit_event(
-            self._get_catalog(), event_type, actor_user_id, target_user_id, metadata
+            self._get_catalog(),
+            event_type,
+            actor_user_id,
+            target_user_id,
+            metadata,
         )
 
     def list_audit_events(self) -> List[Dict[str, Any]]:
@@ -190,3 +210,163 @@ class IcebergUserRepository:
             A list of audit event dicts.
         """
         return _audit.list_audit_events(self._get_catalog())
+
+    # ------------------------------------------------------------------
+    # User-ticker linking
+    # ------------------------------------------------------------------
+
+    def get_user_tickers(self, user_id: str) -> list[str]:
+        """Return sorted ticker symbols linked to a user.
+
+        Args:
+            user_id: UUID string of the user.
+
+        Returns:
+            A sorted list of ticker strings, or an empty
+            list if the table does not exist or has no
+            matching rows.
+        """
+        try:
+            tbl = user_tickers_table(self._get_catalog())
+            df = tbl.scan().to_arrow().to_pandas()
+            matched = df.loc[df["user_id"] == user_id, "ticker"]
+            return sorted(matched.tolist())
+        except Exception:
+            self._logger.debug(
+                "user_tickers table unavailable for " "user_id=%s",
+                user_id,
+            )
+            return []
+
+    def link_ticker(
+        self,
+        user_id: str,
+        ticker: str,
+        source: str = "manual",
+    ) -> bool:
+        """Link a ticker symbol to a user.
+
+        If the same ``(user_id, ticker)`` pair already
+        exists the call is a no-op and returns ``False``.
+
+        Args:
+            user_id: UUID string of the user.
+            ticker: Uppercase ticker symbol.
+            source: How the link was created
+                (e.g. ``"manual"``, ``"chat"``).
+
+        Returns:
+            ``True`` if a new row was appended,
+            ``False`` if the link already existed.
+
+        Raises:
+            RuntimeError: If the ``user_tickers`` table
+                does not exist in the catalog.
+        """
+        cat = self._get_catalog()
+        try:
+            tbl = user_tickers_table(cat)
+        except Exception as exc:
+            raise RuntimeError(
+                "user_tickers table not found. "
+                "Run: python auth/create_tables.py"
+            ) from exc
+
+        # Check for existing link
+        try:
+            df = tbl.scan().to_arrow().to_pandas()
+            exists = (
+                (df["user_id"] == user_id) & (df["ticker"] == ticker)
+            ).any()
+            if exists:
+                return False
+        except Exception:
+            pass
+
+        row = {
+            "user_id": user_id,
+            "ticker": ticker,
+            "linked_at": _to_ts(_now_utc()),
+            "source": source,
+        }
+        arrow_table = pa.table(
+            {k: [v] for k, v in row.items()},
+            schema=_USER_TICKERS_PA_SCHEMA,
+        )
+        tbl.append(arrow_table)
+        self._logger.info(
+            "Linked ticker=%s to user_id=%s " "source=%s",
+            ticker,
+            user_id,
+            source,
+        )
+        return True
+
+    def unlink_ticker(self, user_id: str, ticker: str) -> bool:
+        """Remove a user-ticker link (copy-on-write).
+
+        Args:
+            user_id: UUID string of the user.
+            ticker: Uppercase ticker symbol to unlink.
+
+        Returns:
+            ``True`` if the link was removed,
+            ``False`` if no matching link was found.
+
+        Raises:
+            RuntimeError: If the ``user_tickers`` table
+                does not exist in the catalog.
+        """
+        cat = self._get_catalog()
+        try:
+            tbl = user_tickers_table(cat)
+        except Exception as exc:
+            raise RuntimeError(
+                "user_tickers table not found. "
+                "Run: python auth/create_tables.py"
+            ) from exc
+
+        df = tbl.scan().to_arrow().to_pandas()
+
+        mask = (df["user_id"] == user_id) & (df["ticker"] == ticker)
+        if not mask.any():
+            return False
+
+        filtered = df[~mask]
+        new_arrow = pa.Table.from_pandas(
+            filtered,
+            schema=_USER_TICKERS_PA_SCHEMA,
+            preserve_index=False,
+        )
+        tbl.overwrite(new_arrow)
+        self._logger.info(
+            "Unlinked ticker=%s from user_id=%s",
+            ticker,
+            user_id,
+        )
+        return True
+
+    def get_all_user_tickers(
+        self,
+    ) -> dict[str, list[str]]:
+        """Return all user-ticker mappings.
+
+        Used by admin and dashboard views to display
+        which tickers each user is tracking.
+
+        Returns:
+            A dict mapping ``user_id`` to a sorted list
+            of ticker strings. Empty dict if the table
+            does not exist.
+        """
+        try:
+            tbl = user_tickers_table(self._get_catalog())
+            df = tbl.scan().to_arrow().to_pandas()
+        except Exception:
+            self._logger.debug("user_tickers table unavailable.")
+            return {}
+
+        result: dict[str, list[str]] = {}
+        for uid, group in df.groupby("user_id"):
+            result[uid] = sorted(group["ticker"].tolist())
+        return result

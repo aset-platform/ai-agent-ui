@@ -14,6 +14,16 @@ class Settings(BaseSettings):
     log_level: str = "DEBUG"
     log_to_file: bool = True
     agent_timeout_seconds: int = 900
+    # N-tier Groq model cascade (comma-separated)
+    groq_model_tiers: str = (
+        "llama-3.3-70b-versatile,"
+        "moonshotai/kimi-k2-instruct,"
+        "openai/gpt-oss-120b,"
+        "meta-llama/llama-4-scout-17b-16e-instruct"
+    )
+    # Message compression settings
+    max_history_turns: int = 3
+    max_tool_result_chars: int = 2000
     # OAuth / SSO settings
     google_client_id: str = ""
     google_client_secret: str = ""
@@ -24,11 +34,14 @@ class Settings(BaseSettings):
 
 | Field | Env Var | Default | Description |
 |-------|---------|---------|-------------|
-| `groq_api_key` | `GROQ_API_KEY` | `""` | API key for the Groq LLM provider |
-| `anthropic_api_key` | `ANTHROPIC_API_KEY` | `""` | API key for Claude (unused while on Groq) |
+| `groq_api_key` | `GROQ_API_KEY` | `""` | API key for the Groq LLM provider (optional — enables Groq tiers) |
+| `anthropic_api_key` | `ANTHROPIC_API_KEY` | `""` | API key for Anthropic Claude (required — final fallback) |
 | `serpapi_api_key` | `SERPAPI_API_KEY` | `""` | API key for SerpAPI web search |
+| `groq_model_tiers` | `GROQ_MODEL_TIERS` | *(4 models, see above)* | Comma-separated ordered list of Groq model names tried first→last before Anthropic fallback |
+| `max_history_turns` | `MAX_HISTORY_TURNS` | `3` | Max conversation turns kept after compression |
+| `max_tool_result_chars` | `MAX_TOOL_RESULT_CHARS` | `2000` | Max characters per tool result after compression |
 | `log_level` | `LOG_LEVEL` | `"DEBUG"` | Minimum log severity (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`) |
-| `log_to_file` | `LOG_TO_FILE` | `True` | Write logs to a rotating file under `backend/logs/` |
+| `log_to_file` | `LOG_TO_FILE` | `True` | Write logs to a rotating file under `~/.ai-agent-ui/logs/` |
 | `agent_timeout_seconds` | `AGENT_TIMEOUT_SECONDS` | `900` | Maximum seconds the agentic loop may run; HTTP 504 / stream timeout event on expiry |
 | `google_client_id` | `GOOGLE_CLIENT_ID` | `""` | Google OAuth client identifier |
 | `google_client_secret` | `GOOGLE_CLIENT_SECRET` | `""` | Google OAuth client secret |
@@ -57,11 +70,17 @@ Real environment variables (exported in the shell) always take precedence over `
 Create `backend/.env` (never commit this file):
 
 ```dotenv
+ANTHROPIC_API_KEY=sk-ant-...
 GROQ_API_KEY=gsk_...
 SERPAPI_API_KEY=abc123...
 LOG_LEVEL=INFO
 LOG_TO_FILE=true
 AGENT_TIMEOUT_SECONDS=900
+# Groq model tiers (comma-separated, tried in order)
+GROQ_MODEL_TIERS=llama-3.3-70b-versatile,moonshotai/kimi-k2-instruct,openai/gpt-oss-120b,meta-llama/llama-4-scout-17b-16e-instruct
+# Message compression
+MAX_HISTORY_TURNS=3
+MAX_TOOL_RESULT_CHARS=2000
 # OAuth / SSO
 GOOGLE_CLIENT_ID=your-google-client-id
 GOOGLE_CLIENT_SECRET=your-google-client-secret

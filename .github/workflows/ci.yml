@@ -26,14 +26,14 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          python -m venv backend/demoenv
-          source backend/demoenv/bin/activate
+          python -m venv .venv
+          source .venv/bin/activate
           pip install --upgrade pip
           pip install -r backend/requirements.txt
 
       - name: MkDocs build
         run: |
-          source backend/demoenv/bin/activate
+          source .venv/bin/activate
           mkdocs build --config-file mkdocs.yml --site-dir /tmp/site --quiet
 
       - name: Set up Node.js
@@ -72,14 +72,14 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          python -m venv backend/demoenv
-          source backend/demoenv/bin/activate
+          python -m venv .venv
+          source .venv/bin/activate
           pip install --upgrade pip
           pip install -r backend/requirements.txt
 
       - name: MkDocs build
         run: |
-          source backend/demoenv/bin/activate
+          source .venv/bin/activate
           mkdocs build --config-file mkdocs.yml --site-dir /tmp/site --quiet
 
       - name: Set up Node.js
@@ -104,7 +104,7 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
         run: |
-          source backend/demoenv/bin/activate
+          source .venv/bin/activate
           cd backend
           uvicorn main:app --port 8181 &
           sleep 5
@@ -130,14 +130,14 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          python -m venv backend/demoenv
-          source backend/demoenv/bin/activate
+          python -m venv .venv
+          source .venv/bin/activate
           pip install --upgrade pip
           pip install -r backend/requirements.txt
 
       - name: MkDocs build
         run: |
-          source backend/demoenv/bin/activate
+          source .venv/bin/activate
           mkdocs build --config-file mkdocs.yml --site-dir /tmp/site --quiet
 
       - name: Set up Node.js
@@ -162,7 +162,7 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
         run: |
-          source backend/demoenv/bin/activate
+          source .venv/bin/activate
           cd backend
           uvicorn main:app --port 8181 &
           sleep 5
@@ -194,14 +194,14 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          python -m venv backend/demoenv
-          source backend/demoenv/bin/activate
+          python -m venv .venv
+          source .venv/bin/activate
           pip install --upgrade pip
           pip install -r backend/requirements.txt
 
       - name: MkDocs build
         run: |
-          source backend/demoenv/bin/activate
+          source .venv/bin/activate
           mkdocs build --config-file mkdocs.yml --site-dir /tmp/site --quiet
 
       - name: Set up Node.js

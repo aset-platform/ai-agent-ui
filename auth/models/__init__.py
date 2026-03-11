@@ -8,7 +8,8 @@ are re-exported from this package so callers can continue using::
 
 import logging
 
-from auth.models.request import (
+from auth.models.request import (  # noqa: F401
+    AdminPasswordResetBody,
     LoginRequest,
     LogoutRequest,
     OAuthCallbackRequest,
@@ -20,7 +21,7 @@ from auth.models.request import (
     UserCreateRequest,
     UserUpdateRequest,
 )
-from auth.models.response import (
+from auth.models.response import (  # noqa: F401
     OAuthAuthorizeResponse,
     TokenResponse,
     UserContext,
@@ -29,8 +30,10 @@ from auth.models.response import (
 
 logger = logging.getLogger(__name__)
 
-# Module-level export list — kept at module scope as required by Python's import machinery.
+# Module-level export list — kept at module scope
+# as required by Python's import machinery.
 _all_exports = [
+    "AdminPasswordResetBody",
     "LoginRequest",
     "LogoutRequest",
     "OAuthCallbackRequest",

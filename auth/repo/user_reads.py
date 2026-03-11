@@ -13,7 +13,8 @@ from typing import Any, Dict, List, Optional
 from auth.repo.catalog import scan_all_users, users_table
 from auth.repo.schemas import _row_to_dict
 
-# Module-level logger; kept here as a module-level constant (immutable binding).
+# Module-level logger; kept here as a module-level
+# constant (immutable binding).
 _logger = logging.getLogger(__name__)
 
 
@@ -41,7 +42,9 @@ def get_by_email(cat, email: str) -> Optional[Dict[str, Any]]:
         return _row_to_dict(rows[0])
     except Exception as exc:
         _logger.error(
-            "get_by_email predicate scan failed, falling back to full scan: %s", exc
+            "get_by_email predicate scan failed,"
+            " falling back to full scan: %s",
+            exc,
         )
         for row in scan_all_users(cat):
             if row.get("email") == email:
@@ -70,7 +73,8 @@ def get_by_id(cat, user_id: str) -> Optional[Dict[str, Any]]:
         return _row_to_dict(rows[0])
     except Exception as exc:
         _logger.error(
-            "get_by_id predicate scan failed, falling back to full scan: %s", exc
+            "get_by_id predicate scan failed, falling back to full scan: %s",
+            exc,
         )
         for row in scan_all_users(cat):
             if row.get("user_id") == user_id:

@@ -26,11 +26,17 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 _logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).parent.parent
-_DATA_RAW = _PROJECT_ROOT / "data" / "raw"
 
-# Ensure project root on sys.path
+# Ensure backend/ on sys.path for paths module
+_backend_dir = str(_PROJECT_ROOT / "backend")
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+from paths import RAW_DIR  # noqa: E402
+
+_DATA_RAW = RAW_DIR
 
 
 def _backfill_from_parquet() -> int:

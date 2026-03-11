@@ -139,7 +139,7 @@ For existing deployments (before this feature was added):
 
 ```bash
 cd ai-agent-ui
-source backend/demoenv/bin/activate
+source ~/.ai-agent-ui/venv/bin/activate
 python auth/migrate_users_table.py
 ```
 

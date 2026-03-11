@@ -7,8 +7,8 @@ Re-exports the public API for convenience::
 
 import logging
 
-from agents.base import BaseAgent
-from agents.config import MAX_ITERATIONS, AgentConfig
+from agents.base import BaseAgent  # noqa: F401
+from agents.config import MAX_ITERATIONS, AgentConfig  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

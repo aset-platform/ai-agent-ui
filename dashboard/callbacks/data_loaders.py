@@ -34,7 +34,8 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 # ---------------------------------------------------------------------------
-# Indicator cache — 5-min TTL to avoid recomputing on every overlay/range change
+# Indicator cache — 5-min TTL to avoid recomputing on
+# every overlay/range change
 # ---------------------------------------------------------------------------
 _INDICATOR_CACHE: dict = {}  # {ticker: (df_with_indicators, expiry_monotonic)}
 _INDICATOR_TTL = 300  # seconds
