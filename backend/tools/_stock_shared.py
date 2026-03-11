@@ -71,9 +71,12 @@ def _get_repo():
         _root = str(_ss._PROJECT_ROOT)
         if _root not in sys.path:
             sys.path.insert(0, _root)
+        from stocks.cached_repository import CachedRepository  # noqa: PLC0415
         from stocks.repository import StockRepository  # noqa: PLC0415
 
-        _ss._STOCK_REPO = StockRepository()
+        _ss._STOCK_REPO = CachedRepository(
+            StockRepository(),
+        )
         _logger.debug("StockRepository initialised")
     except Exception as _e:
         _logger.warning("StockRepository unavailable: %s", _e)

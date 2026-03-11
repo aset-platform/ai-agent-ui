@@ -2,6 +2,111 @@
 
 ---
 
+# Session: Mar 11, 2026 — Sprint Phase 3 + Dashboard fixes
+
+## Summary
+Completed Phase 3 of the sprint plan: Redis token store
+with in-memory fallback, API versioning (`/v1/` prefix),
+and frontend config centralization. Fixed all E2E failures
+including Dashboard callback race conditions that caused
+blank pages and "Authentication required" errors.
+
+### Phase 3 — Redis token store + API versioning
+
+| # | Story | Details |
+|---|-------|---------|
+| 1.3 | Redis token store | `TokenStore` protocol with `InMemoryTokenStore` / `RedisTokenStore`; JWT deny-list + OAuth state now use pluggable store with TTL auto-expiry |
+| 2.2 | API versioning | Dual-mount routes at `/` (backward compat) and `/v1/`; plain handler functions with `_register_core_routes()` |
+| 2.2b | Frontend config | Centralized `frontend/lib/config.ts` replaces 18 duplicate URL declarations across 9 files |
+
+### Bug fixes
+
+| # | Fix | Details |
+|---|-----|---------|
+| 1 | Rate limits | Increased to 30/15min login, 10/hr register, 30/min OAuth — E2E tests were cascading 429s |
+| 2 | Login 429 UI | Frontend shows distinct "Too many attempts" message on 429 |
+| 3 | E2E resilience | `apiLogin` + `auth.setup.ts` retry on 429/5xx; admin test waits for `#page-content` |
+| 4 | Dashboard race conditions | `display_page` `State("auth-token-store")` → `Input()` so it re-fires after token extraction; 6 chart callbacks gain `State("url", "search")` + `_resolve_token()` fallback |
+
+### Files changed (key)
+- `auth/token_store.py` (new), `auth/service.py`,
+  `auth/tokens.py`, `auth/dependencies.py`,
+  `auth/oauth_service.py`
+- `backend/routes.py`, `backend/main.py`, `backend/config.py`
+- `frontend/lib/config.ts` (new), 9 frontend files updated
+- `dashboard/app_layout.py`,
+  `dashboard/callbacks/analysis_cbs.py`,
+  `dashboard/callbacks/forecast_cbs.py`,
+  `dashboard/callbacks/home_cbs.py`
+- `e2e/setup/auth.setup.ts`, `e2e/utils/api.helper.ts`,
+  `e2e/tests/dashboard/admin.spec.ts`,
+  `e2e/tests/errors/network-error.spec.ts`
+
+### Test results
+- **Unit tests**: 324 passed, 2 skipped
+- **E2E (single worker)**: 50/50 passed
+- **E2E (2 workers)**: 46+ passed, flaky dashboard
+  failures from single-threaded Dash server contention
+
+### Branch
+- `feature/phase3-sprint` (6 commits, ready for PR)
+
+### Known issues resolved
+- Refresh token deny-list no longer in-memory-only — uses
+  `TokenStore` protocol with TTL (Redis or in-memory)
+- Dashboard blank page on admin RBAC — callback race fixed
+- Dashboard "Authentication required" — chart callbacks
+  now resolve token from URL when store not yet populated
+
+---
+
+# Session: Mar 11, 2026 — Sprint execution (Phases 1–2)
+
+## Summary
+Executed the sprint plan: 6 stories across 2 phases (Phase 1
+parallel, Phase 2 sequential). Security hardening committed
+first, then Phase 1 layered on top, then Phase 2. All tests
+pass (306 total, 0 failures).
+
+### Phase 1 — Rate limiting, JWKS, caching, algo opts
+
+| # | Story | Details |
+|---|-------|---------|
+| 1.1 | Rate limiting | slowapi on login (5/15min), password-reset (3/hr), OAuth (10/min) |
+| 1.4 | JWKS verification | PyJWKClient replaces `verify_signature=False` on Google OAuth |
+| 3.1 | Iceberg caching | Column projection via `selected_fields` + CachedRepository (TTLCache) |
+| 3.2 | Algo optimizations | TokenBudget O(1) running totals, compressor early-exit, single-pass loop boundary |
+
+### Phase 2 — Decomposition + HttpOnly cookies
+
+| # | Story | Details |
+|---|-------|---------|
+| 2.1 | ChatServer decomp | Extracted `bootstrap.py` + `routes.py`; main.py ~490→~110 LOC |
+| 1.2 | HttpOnly cookies | Refresh token in HttpOnly cookie; localStorage holds access only |
+
+### Files changed (key)
+- `auth/rate_limit.py` (new), `auth/endpoints/auth_routes.py`,
+  `auth/endpoints/oauth_routes.py`, `auth/oauth_service.py`
+- `stocks/repository.py`, `stocks/cached_repository.py` (new)
+- `backend/bootstrap.py` (new), `backend/routes.py` (new),
+  `backend/main.py`, `backend/token_budget.py`,
+  `backend/message_compressor.py`, `backend/config.py`
+- `frontend/lib/auth.ts`, `frontend/lib/apiFetch.ts`,
+  `frontend/app/login/page.tsx`,
+  `frontend/app/auth/oauth/callback/page.tsx`
+- 6 new test files (23 tests added)
+
+### Branches
+- `feature/security-hardening` → `feature/phase1-sprint`
+  → `feature/phase2-sprint` (all pushed to origin)
+
+### Remaining (Phase 3)
+- Story 1.3 — Redis deny list + OAuth state
+- Story 2.2 — API versioning
+- PRs to `dev`, then promote dev → qa → release → main
+
+---
+
 # Session: Mar 10, 2026 — N-tier Groq LLM cascade
 
 ## Summary

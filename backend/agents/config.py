@@ -10,7 +10,6 @@ Classes
 """
 
 from dataclasses import dataclass, field
-from typing import List
 
 MAX_ITERATIONS: int = 15
 
@@ -34,9 +33,9 @@ class AgentConfig:
     agent_id: str
     name: str
     description: str
-    groq_model_tiers: List[str] = field(
+    groq_model_tiers: list[str] = field(
         default_factory=list,
     )
     temperature: float = 0.0
     system_prompt: str = ""
-    tool_names: list = field(default_factory=list)
+    tool_names: list[str] = field(default_factory=list)

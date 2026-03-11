@@ -170,16 +170,18 @@ sequenceDiagram
     FE->>BE: POST /auth/login
     BE->>DB: lookup user, verify bcrypt hash
     DB-->>BE: user record
-    BE-->>FE: {access_token, refresh_token}
-    FE->>FE: setTokens() → localStorage
+    BE-->>FE: {access_token} + HttpOnly refresh cookie
+    FE->>FE: setTokens(access) → localStorage
     FE->>U: redirect to /
 
     Note over FE,BE: All subsequent API calls include Authorization: Bearer <token>
+    Note over BE: Refresh token in HttpOnly cookie (not localStorage)
 
     FE->>FE: token expires (60 min)
-    FE->>BE: POST /auth/refresh {refresh_token}
-    BE-->>FE: new {access_token, refresh_token}
-    FE->>FE: setTokens() — old refresh token revoked
+    FE->>BE: POST /auth/refresh (cookie sent automatically)
+    BE->>BE: Revoke old refresh via TokenStore (Redis or in-memory)
+    BE-->>FE: new {access_token} + new HttpOnly cookie
+    FE->>FE: setTokens(access) — rotation complete
 ```
 
 ---
@@ -494,6 +496,24 @@ Pre-commit auto-fixes code style and updates meta-files on every commit (require
 ### First run
 `./run.sh start` automatically runs table creation, schema migrations, and superuser seeding when `~/.ai-agent-ui/data/iceberg/catalog.db` does not yet exist. If upgrading from a project-local data layout, `run.sh` auto-migrates data to `~/.ai-agent-ui/` on first start. Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `backend/.env` before the first start.
 
+### Token Store (Redis optional)
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `REDIS_URL` | `""` (in-memory) | `redis://host:6379/0` for persistent deny-list + OAuth state |
+
+When `REDIS_URL` is empty, the backend uses an in-memory `TokenStore` with TTL-based expiry. Set a Redis URL for production deployments where token revocation must survive restarts.
+
+### API Versioning
+
+All core endpoints are dual-mounted at `/` (legacy) and `/v1/`:
+
+```
+POST /chat/stream   ←→   POST /v1/chat/stream
+GET  /health         ←→   GET  /v1/health
+GET  /agents         ←→   GET  /v1/agents
+```
+
 ### SSO / OAuth2 (Google + Facebook PKCE)
 
 | Variable | Notes |
@@ -514,7 +534,7 @@ The `e2e/` directory contains a Playwright test suite covering all 3 app surface
 cd e2e && npm install               # first time only
 npx playwright install chromium     # first time only
 
-npm test                            # run all 49 tests (headless)
+npm test                            # run all 50 tests (headless)
 npx playwright test --headed        # watch tests in a visible browser
 npx playwright test --ui            # interactive UI mode (best for exploration)
 npx playwright test --project=frontend-chromium   # frontend only
@@ -530,7 +550,7 @@ npx playwright test --project=dashboard-chromium  # dashboard only
 | Dashboard analysis + forecast | 8 | Tabs, charts, refresh, accuracy |
 | Dashboard marketplace + admin | 6 | Add/remove tickers, user table, RBAC |
 | Error handling | 5 | Network errors, auth expiry, 500s |
-| **Total** | **49** | |
+| **Total** | **50** | |
 
 CI runs automatically on PRs via `.github/workflows/e2e.yml` (chromium-only, caches browsers).
 
@@ -541,7 +561,8 @@ CI runs automatically on PRs via `.github/workflows/e2e.yml` (chromium-only, cac
 | Issue | Notes |
 |-------|-------|
 | **`SERPAPI_API_KEY` required for web search** | Free tier (100/month) at serpapi.com |
-| **Refresh token deny-list is in-memory** | Cleared on backend restart — revoked tokens become valid again until natural expiry (7 days) |
+| **Token store is in-memory by default** | Set `REDIS_URL` for persistent deny-list across restarts; without Redis, revoked tokens valid until natural expiry (7 days) |
 | **Facebook SSO** | Code complete; credentials are placeholders — button hidden until real credentials added |
 | **yfinance >= 1.2 dropped `Adj Close`** | Iceberg `stocks.ohlcv` stores `adj_close` as NaN; all consumers fall back to `Close` automatically |
 | **Quarterly cashflow unavailable for some Indian stocks** | yfinance returns empty quarterly cashflow for tickers like RELIANCE.NS; tool falls back to annual cashflow (marked `fiscal_quarter="FY"`) |
+| **Dashboard E2E flaky under parallel workers** | Single-threaded Dash server cannot handle concurrent browser connections; run with `--workers=1` for 50/50 pass rate |

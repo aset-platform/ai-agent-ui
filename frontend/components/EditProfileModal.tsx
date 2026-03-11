@@ -10,10 +10,10 @@ import { useState, useRef, useEffect, useCallback, type ChangeEvent } from "reac
 import Image from "next/image";
 import type { UserProfile } from "@/hooks/useEditProfile";
 
+import { BACKEND_URL } from "@/lib/config";
+
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 const UNSUPPORTED_TYPES = ["image/heic", "image/heif", "image/tiff", "image/bmp"];
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8181";
 
 interface EditProfileModalProps {
   isOpen: boolean;

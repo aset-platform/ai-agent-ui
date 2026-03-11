@@ -137,3 +137,80 @@ class TestOverwriteTableRetry:
             repo._overwrite_table("stocks.registry", pa.table({}))
 
         assert mock_table.overwrite.call_count == 2
+
+
+class TestDirtyTableRefresh:
+    """Tests for read-after-write snapshot refresh."""
+
+    def _make_repo(self):
+        from stocks.repository import StockRepository
+
+        repo = StockRepository()
+        repo._catalog = MagicMock()
+        return repo
+
+    def test_commit_marks_table_dirty(self):
+        """Successful commit adds identifier to _dirty_tables."""
+        repo = self._make_repo()
+        mock_table = MagicMock()
+
+        with patch.object(repo, "_load_table", return_value=mock_table):
+            repo._retry_commit("stocks.ohlcv", "append", pa.table({}))
+
+        assert "stocks.ohlcv" in repo._dirty_tables
+
+    def test_scan_ticker_refreshes_dirty_table(self):
+        """_scan_ticker calls tbl.refresh() for dirty tables."""
+        repo = self._make_repo()
+        repo._dirty_tables.add("stocks.ohlcv")
+        mock_table = MagicMock()
+        mock_table.scan.return_value.to_pandas.return_value = MagicMock()
+
+        with patch.object(repo, "_load_table", return_value=mock_table):
+            repo._scan_ticker("stocks.ohlcv", "AAPL")
+
+        mock_table.refresh.assert_called_once()
+        assert "stocks.ohlcv" not in repo._dirty_tables
+
+    def test_scan_ticker_skips_refresh_clean_table(self):
+        """_scan_ticker does NOT call refresh for clean tables."""
+        repo = self._make_repo()
+        mock_table = MagicMock()
+        mock_table.scan.return_value.to_pandas.return_value = MagicMock()
+
+        with patch.object(repo, "_load_table", return_value=mock_table):
+            repo._scan_ticker("stocks.ohlcv", "AAPL")
+
+        mock_table.refresh.assert_not_called()
+
+    def test_table_to_df_refreshes_dirty_table(self):
+        """_table_to_df calls tbl.refresh() for dirty tables."""
+        repo = self._make_repo()
+        repo._dirty_tables.add("stocks.registry")
+        mock_table = MagicMock()
+        mock_table.scan.return_value.to_pandas.return_value = MagicMock()
+
+        with patch.object(repo, "_load_table", return_value=mock_table):
+            repo._table_to_df("stocks.registry")
+
+        mock_table.refresh.assert_called_once()
+        assert "stocks.registry" not in repo._dirty_tables
+
+    @patch("stocks.repository.time.sleep")
+    def test_failed_commit_does_not_dirty(self, mock_sleep):
+        """Failed commit (all retries exhausted) leaves table clean."""
+        repo = self._make_repo()
+        mock_table = MagicMock()
+        mock_table.append.side_effect = CommitFailedException("fail")
+
+        with (
+            patch.object(
+                repo,
+                "_load_table",
+                return_value=mock_table,
+            ),
+            pytest.raises(CommitFailedException),
+        ):
+            repo._retry_commit("stocks.ohlcv", "append", pa.table({}))
+
+        assert "stocks.ohlcv" not in repo._dirty_tables

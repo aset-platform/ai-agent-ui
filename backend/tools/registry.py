@@ -24,7 +24,6 @@ Typical usage::
 """
 
 import logging
-from typing import Optional
 
 from langchain_core.tools import BaseTool
 
@@ -64,7 +63,7 @@ class ToolRegistry:
         self._tools[tool.name] = tool
         logger.debug("Registered tool: %s", tool.name)
 
-    def get(self, name: str) -> Optional[BaseTool]:
+    def get(self, name: str) -> BaseTool | None:
         """Look up a single tool by name.
 
         Args:

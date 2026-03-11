@@ -15,20 +15,25 @@ interface LoginResult {
   refresh_token: string;
 }
 
-/** Log in via API and return the JWT pair (retries on 5xx). */
+/** Log in via API and return the JWT pair (retries on 5xx/429). */
 export async function apiLogin(
   request: APIRequestContext,
   email: string,
   password: string,
 ): Promise<LoginResult> {
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     const res = await request.post(
       `${BACKEND}/auth/login`,
       { data: { email, password } },
     );
     if (res.ok()) return res.json();
-    if (res.status() >= 500 && attempt < 2) {
-      await new Promise((r) => setTimeout(r, 1_000));
+    // Retry on rate-limit (429) or server errors (5xx).
+    if (
+      (res.status() === 429 || res.status() >= 500) &&
+      attempt < 4
+    ) {
+      const wait = res.status() === 429 ? 3_000 : 1_000;
+      await new Promise((r) => setTimeout(r, wait));
       continue;
     }
     throw new Error(

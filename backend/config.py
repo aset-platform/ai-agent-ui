@@ -14,7 +14,7 @@ Typical usage::
     from config import get_settings
 
     settings = get_settings()
-    print(settings.log_level)   # "DEBUG"
+    assert settings.log_level == "DEBUG"
 """
 
 from functools import lru_cache
@@ -103,6 +103,18 @@ class Settings(BaseSettings):
     facebook_app_id: str = ""
     facebook_app_secret: str = ""
     oauth_redirect_uri: str = "http://localhost:3000/auth/oauth/callback"
+
+    # Rate limiting (slowapi format: "N/period").
+    rate_limit_login: str = "30/15minutes"
+    rate_limit_register: str = "10/hour"
+    rate_limit_oauth: str = "30/minute"
+
+    # Google JWKS verification cache TTL in seconds.
+    google_jwks_cache_ttl: int = 3600
+
+    # Redis URL for token deny-list and OAuth state.
+    # Empty = in-memory fallback (single-instance dev).
+    redis_url: str = ""
 
     # Read from .env in the working directory; silently skip if absent.
     # Real environment variables always take precedence over .env values.

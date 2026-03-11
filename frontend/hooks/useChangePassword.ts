@@ -8,9 +8,7 @@
 
 import { useState } from "react";
 import { apiFetch } from "@/lib/apiFetch";
-
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8181";
+import { BACKEND_URL } from "@/lib/config";
 
 interface UseChangePasswordResult {
   isOpen: boolean;

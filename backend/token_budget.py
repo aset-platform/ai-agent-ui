@@ -96,16 +96,25 @@ _ESTIMATE_MARGIN = 1.20
 
 @dataclass
 class _ModelState:
-    """Per-model sliding-window state (internal)."""
+    """Per-model sliding-window state (internal).
+
+    Each deque is paired with a running total so that
+    :meth:`TokenBudget._window_total` can return O(1)
+    instead of summing the deque on every call.
+    """
 
     minute_tokens: deque = field(
         default_factory=deque,
     )
+    minute_tokens_total: int = 0
     minute_requests: deque = field(
         default_factory=deque,
     )
+    minute_requests_total: int = 0
     day_tokens: deque = field(default_factory=deque)
+    day_tokens_total: int = 0
     day_requests: deque = field(default_factory=deque)
+    day_requests_total: int = 0
     lock: threading.Lock = field(
         default_factory=threading.Lock,
     )
@@ -129,7 +138,10 @@ class TokenBudget:
             **_DEFAULT_LIMITS,
             **(limits or {}),
         }
-        self._state: Dict[str, _ModelState] = {}
+        # Pre-allocate state for all known models.
+        self._state: Dict[str, _ModelState] = {
+            model: _ModelState() for model in self._limits
+        }
 
     def get_tpm(self, model: str) -> int | None:
         """Return the TPM limit for *model*, or ``None``.
@@ -201,26 +213,34 @@ class TokenBudget:
         state = self._get_state(model)
         with state.lock:
             now = time.monotonic()
-            tpm_used = self._window_total(
+            tpm_used, exp = self._window_total(
                 state.minute_tokens,
                 _MINUTE,
                 now,
+                state.minute_tokens_total,
             )
-            rpm_used = self._window_total(
+            state.minute_tokens_total = tpm_used
+            rpm_used, exp = self._window_total(
                 state.minute_requests,
                 _MINUTE,
                 now,
+                state.minute_requests_total,
             )
-            tpd_used = self._window_total(
+            state.minute_requests_total = rpm_used
+            tpd_used, exp = self._window_total(
                 state.day_tokens,
                 _DAY,
                 now,
+                state.day_tokens_total,
             )
-            rpd_used = self._window_total(
+            state.day_tokens_total = tpd_used
+            rpd_used, exp = self._window_total(
                 state.day_requests,
                 _DAY,
                 now,
+                state.day_requests_total,
             )
+            state.day_requests_total = rpd_used
 
         if tpm_used + estimated_tokens > lim.tpm * _THRESHOLD:
             return False
@@ -243,9 +263,13 @@ class TokenBudget:
         now = time.monotonic()
         with state.lock:
             state.minute_tokens.append((now, tokens_used))
+            state.minute_tokens_total += tokens_used
             state.minute_requests.append((now, 1))
+            state.minute_requests_total += 1
             state.day_tokens.append((now, tokens_used))
+            state.day_tokens_total += tokens_used
             state.day_requests.append((now, 1))
+            state.day_requests_total += 1
 
     def best_available(
         self,
@@ -282,26 +306,34 @@ class TokenBudget:
         for model, lim in self._limits.items():
             state = self._get_state(model)
             with state.lock:
-                tpm = self._window_total(
+                tpm, _ = self._window_total(
                     state.minute_tokens,
                     _MINUTE,
                     now,
+                    state.minute_tokens_total,
                 )
-                rpm = self._window_total(
+                state.minute_tokens_total = tpm
+                rpm, _ = self._window_total(
                     state.minute_requests,
                     _MINUTE,
                     now,
+                    state.minute_requests_total,
                 )
-                tpd = self._window_total(
+                state.minute_requests_total = rpm
+                tpd, _ = self._window_total(
                     state.day_tokens,
                     _DAY,
                     now,
+                    state.day_tokens_total,
                 )
-                rpd = self._window_total(
+                state.day_tokens_total = tpd
+                rpd, _ = self._window_total(
                     state.day_requests,
                     _DAY,
                     now,
+                    state.day_requests_total,
                 )
+                state.day_requests_total = rpd
             result[model] = {
                 "tpm": f"{tpm}/{lim.tpm}",
                 "rpm": f"{rpm}/{lim.rpm}",
@@ -325,20 +357,25 @@ class TokenBudget:
         log: deque,
         window_seconds: int,
         now: float,
-    ) -> int:
-        """Sum values within the sliding window.
+        running_total: int = 0,
+    ) -> tuple[int, int]:
+        """Prune expired entries and return the running total.
 
-        Prunes expired entries from the left of *log*.
+        Returns the updated running total in O(k) where k is
+        the number of expired entries (amortised O(1)).
 
         Args:
             log: Deque of ``(timestamp, count)`` tuples.
             window_seconds: Window size in seconds.
             now: Current monotonic time.
+            running_total: Pre-computed running sum.
 
         Returns:
-            Total count within the window.
+            ``(current_total, expired_amount)`` tuple.
         """
         cutoff = now - window_seconds
+        expired = 0
         while log and log[0][0] < cutoff:
-            log.popleft()
-        return sum(count for _, count in log)
+            _, count = log.popleft()
+            expired += count
+        return running_total - expired, expired

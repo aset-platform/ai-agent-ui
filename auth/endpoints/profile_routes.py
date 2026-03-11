@@ -7,7 +7,7 @@ Functions
 
 import logging
 import os
-from typing import Dict, Optional
+from typing import Dict
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
@@ -98,7 +98,7 @@ def register(router: APIRouter) -> None:
     @router.post("/auth/upload-avatar", tags=["profile"])
     async def upload_avatar(
         file: UploadFile = File(...),
-        target_user_id: Optional[str] = Query(default=None, alias="user_id"),
+        target_user_id: str | None = Query(default=None, alias="user_id"),
         current_user: UserContext = Depends(get_current_user),
     ) -> Dict[str, str]:
         """Upload a profile avatar image (≤10 MB, image/* only).
@@ -149,11 +149,31 @@ def register(router: APIRouter) -> None:
             raise HTTPException(
                 status_code=413, detail="Avatar file exceeds 10 MB limit."
             )
-        ext = (file.filename or "jpg").rsplit(".", 1)[-1].lower()
-        os.makedirs(_AVATARS_DIR, exist_ok=True)
-        dest = os.path.join(_AVATARS_DIR, "{}.{}".format(resolved_id, ext))
-        with open(dest, "wb") as fh:
-            fh.write(data)
+        _ALLOWED_EXTS = {"jpg", "jpeg", "png", "gif", "webp"}
+        raw_ext = (
+            (file.filename or "jpg").rsplit(".", 1)[-1].lower()
+        )
+        ext = raw_ext if raw_ext in _ALLOWED_EXTS else "jpg"
+        # Sanitise resolved_id — reject path separators.
+        if "/" in resolved_id or ".." in resolved_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid user ID.",
+            )
+        import pathlib
+
+        _avatars_path = pathlib.Path(_AVATARS_DIR)
+        _avatars_path.mkdir(parents=True, exist_ok=True)
+        dest = _avatars_path / f"{resolved_id}.{ext}"
+        # Ensure resolved path stays inside avatars dir.
+        if not dest.resolve().is_relative_to(
+            _avatars_path.resolve()
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid file path.",
+            )
+        dest.write_bytes(data)
         avatar_url = "/avatars/{}.{}".format(resolved_id, ext)
         repo = _helpers._get_repo()
         repo.update(resolved_id, {"profile_picture_url": avatar_url})

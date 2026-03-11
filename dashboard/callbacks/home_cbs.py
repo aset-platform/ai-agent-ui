@@ -20,6 +20,7 @@ from dash import ALL, MATCH, Input, Output, State, ctx, html, no_update
 
 from dashboard.callbacks.auth_utils import (
     _api_call,
+    _resolve_token,
     _validate_token,
 )
 from dashboard.callbacks.data_loaders import (
@@ -65,9 +66,14 @@ def register(app) -> None:
             Input("url", "pathname"),
             Input("home-card-refresh-trigger", "data"),
         ],
-        State("auth-token-store", "data"),
+        [
+            State("auth-token-store", "data"),
+            State("url", "search"),
+        ],
     )
-    def refresh_stock_cards(n_intervals, pathname, refresh_trigger, token):
+    def refresh_stock_cards(
+        n_intervals, pathname, refresh_trigger, token, search
+    ):
         """Load stock data and store raw dicts for rendering.
 
         Fires on page load, interval tick, or after a
@@ -82,11 +88,13 @@ def register(app) -> None:
             refresh_trigger: Incremented when a card
                 refresh completes.
             token: JWT access token from localStorage.
+            search: URL query string for token fallback.
 
         Returns:
             Tuple of (list of raw card data dicts,
             dropdown options list).
         """
+        token = _resolve_token(token, search)
         t0 = _time.monotonic()
         registry = _load_reg_cb()
         if not registry:

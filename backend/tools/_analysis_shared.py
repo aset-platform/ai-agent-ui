@@ -1,6 +1,5 @@
 import logging
 from datetime import date
-from typing import Optional
 
 import pandas as pd
 from paths import CACHE_DIR, CHARTS_ANALYSIS_DIR
@@ -16,7 +15,7 @@ _CHARTS_ANALYSIS = CHARTS_ANALYSIS_DIR
 _CACHE_DIR = CACHE_DIR
 
 
-def _load_cache(ticker: str, key: str) -> Optional[str]:
+def _load_cache(ticker: str, key: str) -> str | None:
     """Return cached result text for today if it exists, otherwise ``None``.
 
     Args:
@@ -51,7 +50,7 @@ def _save_cache(ticker: str, key: str, result: str) -> None:
 from tools._helpers import _currency_symbol, _load_currency  # noqa: F401,E402
 
 
-def _load_parquet(ticker: str) -> Optional[pd.DataFrame]:
+def _load_parquet(ticker: str) -> pd.DataFrame | None:
     """Load OHLCV data for a ticker from Iceberg.
 
     Returns a DataFrame with a DatetimeIndex and columns ``Open``, ``High``,

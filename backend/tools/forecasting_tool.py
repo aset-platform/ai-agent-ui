@@ -49,15 +49,17 @@ _require_repo = _sh._require_repo
 def forecast_stock(ticker: str, months: int = 9) -> str:
     """Forecast the stock price using Meta Prophet and generate a chart.
 
-    Loads locally stored OHLCV data, trains a Prophet model with yearly
-    and weekly seasonality and US market holidays, generates a price
-    forecast for the requested horizon, evaluates accuracy via 12-month
-    in-sample backtesting, and saves both the forecast (parquet) and an
-    interactive Plotly chart.
+    **IMPORTANT**: OHLCV data must already exist in Iceberg before calling
+    this tool.  Call ``fetch_stock_data`` for the ticker in a **prior step**
+    and wait for it to complete.  Do NOT call both tools in the same step.
+
+    Trains a Prophet model with yearly and weekly seasonality and US
+    market holidays, generates a price forecast for the requested
+    horizon, evaluates accuracy via 12-month in-sample backtesting,
+    and saves both the forecast (parquet) and an interactive Plotly chart.
 
     Args:
-        ticker: Stock ticker symbol, e.g. ``"AAPL"``. Data must already be
-            fetched via :func:`fetch_stock_data` before calling this tool.
+        ticker: Stock ticker symbol, e.g. ``"AAPL"``.
         months: Forecast horizon in months. Targets are shown at 3, 6, and
             9 months (whichever fall within the horizon). Defaults to ``9``.
 
@@ -125,15 +127,18 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
                             f"Use the dashboard to view "
                             f"current forecast results."
                         )
-    except Exception:
-        pass  # non-critical; fall through to forecast
+    except Exception as exc:
+        _logger.debug("Cooldown check skipped for %s: %s", ticker, exc)
 
     try:
         df = _sh._load_parquet(ticker)
         if df is None:
             return (
-                f"No local data found for '{ticker}'. "
-                "Please run fetch_stock_data first."
+                f"No OHLCV data found for '{ticker}'. "
+                "You MUST call fetch_stock_data for "
+                "this ticker first, then call "
+                "forecast_stock again in the next "
+                "step."
             )
 
         prophet_df = _prepare_data_for_prophet(df)

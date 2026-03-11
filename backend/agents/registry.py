@@ -26,7 +26,6 @@ Typical usage::
 """
 
 import logging
-from typing import Optional
 
 from agents.base import BaseAgent
 
@@ -70,7 +69,7 @@ class AgentRegistry:
             agent.config.name,
         )
 
-    def get(self, agent_id: str) -> Optional[BaseAgent]:
+    def get(self, agent_id: str) -> BaseAgent | None:
         """Look up a single agent by its ID.
 
         Logs a ``WARNING`` when the requested ID is not found so operators

@@ -46,8 +46,11 @@ _analyse_price_movement = _analyse_price_movement  # noqa: F811 — re-export
 def analyse_stock_price(ticker: str) -> str:
     """Perform full technical price analysis on a stock and generate a chart.
 
-    Loads locally stored OHLCV data (written by :func:`fetch_stock_data`),
-    calculates technical indicators (SMA 50/200, EMA 20, RSI 14, MACD,
+    **IMPORTANT**: OHLCV data must already exist in Iceberg before calling
+    this tool.  Call ``fetch_stock_data`` for the ticker in a **prior step**
+    and wait for it to complete.  Do NOT call both tools in the same step.
+
+    Calculates technical indicators (SMA 50/200, EMA 20, RSI 14, MACD,
     Bollinger Bands, ATR 14), analyses bull/bear phases, max drawdown,
     support/resistance levels, annualised volatility, and Sharpe ratio.
 
@@ -55,16 +58,11 @@ def analyse_stock_price(ticker: str) -> str:
     in dark theme to ``charts/analysis/{TICKER}_analysis.html``.
 
     Args:
-        ticker: Stock ticker symbol, e.g. ``"AAPL"``. Data must already be
-            fetched via :func:`fetch_stock_data` before calling this tool.
+        ticker: Stock ticker symbol, e.g. ``"AAPL"``.
 
     Returns:
         A formatted multi-section string report with all key metrics and
         the chart file path, or an error string if data is unavailable.
-
-    Raises:
-        Exception: Caught internally; returns an error string rather than
-            propagating so the LangChain agent can handle it gracefully.
 
     Example:
         >>> result = analyse_stock_price.invoke({"ticker": "AAPL"})
@@ -116,15 +114,18 @@ def analyse_stock_price(ticker: str) -> str:
                             f"or the dashboard to view "
                             f"results."
                         )
-    except Exception:
-        pass  # non-critical; fall through to full analysis
+    except Exception as exc:
+        _logger.debug("Freshness check skipped for %s: %s", ticker, exc)
 
     try:
         df = _sh._load_parquet(ticker)
         if df is None:
             return (
-                f"No local data found for '{ticker}'. "
-                "Please run fetch_stock_data first."
+                f"No OHLCV data found for '{ticker}'. "
+                "You MUST call fetch_stock_data for "
+                "this ticker first, then call "
+                "analyse_stock_price again in the "
+                "next step."
             )
 
         df = _calculate_technical_indicators(df)

@@ -4,6 +4,94 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 11, 2026 — Sprint Phase 3 + Dashboard fixes
+
+### Redis Token Store (Story 1.3)
+
+Introduced a pluggable `TokenStore` protocol (`auth/token_store.py`) with two implementations:
+
+- **`InMemoryTokenStore`** — dict-based with lazy TTL expiry (default)
+- **`RedisTokenStore`** — uses `SETEX` for auto-expiry; lazy `import redis`
+
+Factory: `create_token_store(redis_url, prefix)` — empty URL returns in-memory; connection failure falls back gracefully.
+
+The JWT deny-list and OAuth state store now use `TokenStore` instead of raw `Set[str]` / `Dict`. Entries auto-expire via TTL matching token lifetime.
+
+### API Versioning (Story 2.2)
+
+Dual-mount of core routes at `/` (backward compat) and `/v1/`:
+
+| Endpoint | Legacy | Versioned |
+|----------|--------|-----------|
+| Chat stream | `POST /chat/stream` | `POST /v1/chat/stream` |
+| Health | `GET /health` | `GET /v1/health` |
+| Agents | `GET /agents` | `GET /v1/agents` |
+
+### Frontend Config Centralization
+
+New `frontend/lib/config.ts` exports `BACKEND_URL`, `DASHBOARD_URL`, `DOCS_URL`. Replaced 18 duplicate `process.env.NEXT_PUBLIC_*` declarations across 9 frontend files.
+
+### Dashboard Callback Race Conditions
+
+Fixed two E2E failures caused by Dash callback timing:
+
+1. **Admin RBAC blank page**: `display_page` used `State("auth-token-store")` — changed to `Input()` so it re-fires after `store_token_from_url` persists the JWT
+2. **Analysis "Authentication required"**: Chart callbacks (`update_analysis_chart`, `update_compare`, etc.) only read `auth-token-store` State. Added `State("url", "search")` + `_resolve_token()` fallback to 6 callbacks
+
+### Rate Limit Tuning
+
+Increased from 5/15min → 30/15min (login), 3/hr → 10/hr (register), 10/min → 30/min (OAuth). Added 429 retry logic to E2E `apiLogin` and `auth.setup.ts`. Frontend login page shows distinct rate-limit message.
+
+### Files changed: 7 new, 20+ modified
+
+| File | Change |
+|------|--------|
+| `auth/token_store.py` | NEW — TokenStore protocol + implementations |
+| `frontend/lib/config.ts` | NEW — centralized URL config |
+| `auth/service.py` | REWRITE — uses TokenStore |
+| `auth/tokens.py` | REWRITE — uses TokenStore |
+| `auth/dependencies.py` | Creates store via factory |
+| `auth/oauth_service.py` | OAuth state via TokenStore |
+| `backend/routes.py` | Dual-mount /v1/ |
+| `dashboard/app_layout.py` | Input trigger fix |
+| `dashboard/callbacks/analysis_cbs.py` | URL token fallback |
+| `dashboard/callbacks/forecast_cbs.py` | URL token fallback |
+| `dashboard/callbacks/home_cbs.py` | URL token fallback |
+
+**Tests**: 324 unit + 50 E2E pass. 16 new token store tests.
+
+---
+
+## Mar 11, 2026 — Sprint execution (Phases 1–2)
+
+### Security Hardening
+
+| # | Fix | Details |
+|---|-----|---------|
+| 1 | CORS | Whitelisted origins replace `allow_origins=["*"]` |
+| 2 | Security headers | X-Content-Type-Options, X-Frame-Options, Referrer-Policy |
+| 3 | Avatar traversal | Ext allowlist + `resolve().is_relative_to()` |
+| 4 | Password reset | `secrets.token_urlsafe(32)` replaces `uuid4()` |
+| 5 | PEP 604 | `Optional[X]` → `X \| None` in 6 files |
+
+### Phase 1 — Rate limiting, JWKS, caching, algo opts
+
+| # | Story | Details |
+|---|-------|---------|
+| 1.1 | Rate limiting | slowapi on login, password-reset, OAuth |
+| 1.4 | JWKS verification | PyJWKClient for Google OAuth |
+| 3.1 | Iceberg caching | Column projection + CachedRepository |
+| 3.2 | Algo optimizations | TokenBudget O(1) totals, compressor early-exit |
+
+### Phase 2 — Decomposition + HttpOnly cookies
+
+| # | Story | Details |
+|---|-------|---------|
+| 2.1 | ChatServer decomp | Extracted `bootstrap.py` + `routes.py` |
+| 1.2 | HttpOnly cookies | Refresh token in HttpOnly cookie |
+
+---
+
 ## Mar 10, 2026 — N-tier Groq LLM cascade
 
 ### LLM Architecture Refactor

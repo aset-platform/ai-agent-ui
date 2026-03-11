@@ -147,6 +147,7 @@ class StockRepository:
     def __init__(self) -> None:
         """Initialise the repository without loading the catalog yet."""
         self._catalog = None
+        self._dirty_tables: set[str] = set()
 
     # ------------------------------------------------------------------
     # Catalog access
@@ -186,29 +187,48 @@ class StockRepository:
         """
         try:
             tbl = self._load_table(identifier)
+            if identifier in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(identifier)
             return tbl.scan().to_pandas()
         except Exception as exc:
             _logger.warning("Could not read table %s: %s", identifier, exc)
             return pd.DataFrame()
 
-    def _scan_ticker(self, identifier: str, ticker: str) -> pd.DataFrame:
+    def _scan_ticker(
+        self,
+        identifier: str,
+        ticker: str,
+        selected_fields: list[str] | None = None,
+    ) -> pd.DataFrame:
         """Scan a table filtered to a single ticker using predicate push-down.
 
         Attempts a server-side ``EqualTo("ticker", ticker)`` predicate first;
         falls back to a full table scan with Python-level filtering on failure.
 
         Args:
-            identifier: Fully-qualified table name (e.g. ``"stocks.ohlcv"``).
+            identifier: Fully-qualified table name
+                (e.g. ``"stocks.ohlcv"``).
             ticker: Stock ticker symbol (already uppercased).
+            selected_fields: Optional list of column names to
+                project.  ``None`` selects all columns.
 
         Returns:
-            DataFrame containing only rows for *ticker*, or an empty DataFrame.
+            DataFrame containing only rows for *ticker*,
+            or an empty DataFrame.
         """
         try:
             from pyiceberg.expressions import EqualTo
 
             tbl = self._load_table(identifier)
-            return tbl.scan(row_filter=EqualTo("ticker", ticker)).to_pandas()
+            if identifier in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(identifier)
+            scan_kwargs = {"row_filter": EqualTo("ticker", ticker)}
+            if selected_fields:
+                scan_kwargs["selected_fields"] = selected_fields
+            scan = tbl.scan(**scan_kwargs)
+            return scan.to_pandas()
         except Exception as exc:
             _logger.warning(
                 "Predicate push-down failed for %s"
@@ -220,7 +240,11 @@ class StockRepository:
             df = self._table_to_df(identifier)
             if df.empty:
                 return df
-            return df[df["ticker"] == ticker].copy()
+            filtered = df[df["ticker"] == ticker].copy()
+            if selected_fields:
+                cols = [c for c in selected_fields if c in filtered.columns]
+                return filtered[cols]
+            return filtered
 
     def _scan_two_filters(
         self,
@@ -248,6 +272,9 @@ class StockRepository:
             from pyiceberg.expressions import And, EqualTo
 
             tbl = self._load_table(identifier)
+            if identifier in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(identifier)
             return tbl.scan(
                 row_filter=And(EqualTo(col1, val1), EqualTo(col2, val2))
             ).to_pandas()
@@ -279,6 +306,9 @@ class StockRepository:
             on read failure; the table object is always returned.
         """
         tbl = self._load_table(identifier)
+        if identifier in self._dirty_tables:
+            tbl.refresh()
+            self._dirty_tables.discard(identifier)
         try:
             df = tbl.scan().to_pandas()
         except Exception as exc:
@@ -313,6 +343,7 @@ class StockRepository:
             tbl = self._load_table(identifier)
             try:
                 getattr(tbl, operation)(*args)
+                self._dirty_tables.add(identifier)
                 return
             except CommitFailedException as exc:
                 last_exc = exc
@@ -558,13 +589,15 @@ class StockRepository:
         """Return the ISO currency code for *ticker*
         from the latest company info.
 
-        Falls back to ``"USD"`` if no company info snapshot exists.
+        Falls back to ``"USD"`` if no company info snapshot
+        exists.
 
         Args:
             ticker: Stock ticker symbol.
 
         Returns:
-            ISO currency code string, e.g. ``"USD"`` or ``"INR"``.
+            ISO currency code string, e.g. ``"USD"``
+            or ``"INR"``.
         """
         info = self.get_latest_company_info(ticker)
         if info is None:
@@ -887,7 +920,11 @@ class StockRepository:
         Returns:
             :class:`datetime.date` or ``None`` if no data exists.
         """
-        df = self._scan_ticker(_OHLCV, ticker.upper())
+        df = self._scan_ticker(
+            _OHLCV,
+            ticker.upper(),
+            selected_fields=["ticker", "date"],
+        )
         if df.empty:
             return None
         latest = pd.to_datetime(df["date"]).max()
@@ -1312,11 +1349,19 @@ class StockRepository:
         Returns:
             Dict of analysis fields, or ``None`` if no record exists.
         """
-        df = self._scan_ticker(_ANALYSIS_SUMMARY, ticker.upper())
+        df = self._scan_ticker(
+            _ANALYSIS_SUMMARY,
+            ticker.upper(),
+        )
         if df.empty:
             return None
         return (
-            df.sort_values("analysis_date", ascending=False).iloc[0].to_dict()
+            df.sort_values(
+                "analysis_date",
+                ascending=False,
+            )
+            .iloc[0]
+            .to_dict()
         )
 
     def get_all_latest_analysis_summary(

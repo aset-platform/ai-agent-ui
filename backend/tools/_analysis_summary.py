@@ -6,7 +6,6 @@ Functions
 """
 
 import logging
-from typing import Optional
 
 import pandas as pd
 
@@ -46,13 +45,13 @@ def _generate_summary_stats(df: pd.DataFrame, ticker: str) -> dict:
     total_return_pct = float((close.iloc[-1] / close.iloc[0] - 1) * 100)
     current_price = float(close.iloc[-1])
 
-    sma50: Optional[float] = (
+    sma50: float | None = (
         float(df["SMA_50"].iloc[-1]) if "SMA_50" in df.columns else None
     )
-    sma200: Optional[float] = (
+    sma200: float | None = (
         float(df["SMA_200"].iloc[-1]) if "SMA_200" in df.columns else None
     )
-    rsi: Optional[float] = (
+    rsi: float | None = (
         float(df["RSI_14"].iloc[-1]) if "RSI_14" in df.columns else None
     )
 
@@ -65,10 +64,10 @@ def _generate_summary_stats(df: pd.DataFrame, ticker: str) -> dict:
     else:
         rsi_signal = "N/A"
 
-    macd_val: Optional[float] = (
+    macd_val: float | None = (
         float(df["MACD"].iloc[-1]) if "MACD" in df.columns else None
     )
-    macd_sig: Optional[float] = (
+    macd_sig: float | None = (
         float(df["MACD_Signal"].iloc[-1])
         if "MACD_Signal" in df.columns
         else None

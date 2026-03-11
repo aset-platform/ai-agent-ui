@@ -68,7 +68,11 @@ export async function apiFetch(
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(input, { ...init, headers });
+  const response = await fetch(input, {
+    ...init,
+    headers,
+    credentials: "include",
+  });
 
   // The server rejected our token — clear storage and redirect.
   if (response.status === 401) {

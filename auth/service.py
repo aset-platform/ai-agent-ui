@@ -1,43 +1,38 @@
-"""Authentication service — thin façade over auth.password and auth.tokens.
+"""Authentication service — thin facade over auth.password and auth.tokens.
 
-:class:`AuthService` holds the only stateful piece: the JWT deny-list,
-which is persisted to a JSON file so that revocations survive restarts.
-All cryptographic operations are delegated to :mod:`auth.password` and
-:mod:`auth.tokens`.
+:class:`AuthService` delegates cryptographic operations to
+:mod:`auth.password` and :mod:`auth.tokens`.  Token revocation is
+backed by a pluggable :class:`~auth.token_store.TokenStore` (Redis
+or in-memory).
 
 Usage::
 
+    from auth.token_store import InMemoryTokenStore
+
+    store = InMemoryTokenStore()
     service = AuthService(
         secret_key="your-32-char-random-secret",
         access_expire_minutes=60,
         refresh_expire_days=7,
-    )
-    hashed = service.hash_password("my-secret-password")
-    access = service.create_access_token(
-        user_id="...", email="...", role="general",
+        token_store=store,
     )
 """
 
-import json
 import logging
-import os
-from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict
 
 import auth.password as _pw
 import auth.tokens as _tk
+from auth.token_store import (
+    InMemoryTokenStore,
+    TokenStore,
+)
 
-# Module-level logger; mutable only in the sense that logging configuration
-# may change at runtime, but the reference itself is fixed after import.
 _logger = logging.getLogger(__name__)
 
 
-_DENY_LIST_DIR = Path(os.environ.get("DATA_DIR", "data"))
-_DENY_LIST_FILE = _DENY_LIST_DIR / "auth_deny_list.json"
-
-
 class AuthService:
-    """Stateful auth façade for JWT lifecycle and passwords.
+    """Stateful auth facade for JWT lifecycle and passwords.
 
     One instance should be created per process and reused across
     all requests.
@@ -46,7 +41,7 @@ class AuthService:
         _secret_key: HMAC secret for signing/verifying JWTs.
         _access_expire_minutes: Access token lifetime (minutes).
         _refresh_expire_days: Refresh token lifetime (days).
-        _deny_list: Set of revoked refresh-token JTI strings.
+        _store: Pluggable deny-list backend.
     """
 
     def __init__(
@@ -54,13 +49,16 @@ class AuthService:
         secret_key: str,
         access_expire_minutes: int = 60,
         refresh_expire_days: int = 7,
+        token_store: TokenStore | None = None,
     ) -> None:
-        """Initialise the service with signing credentials and TTLs.
+        """Initialise the service with signing credentials.
 
         Args:
             secret_key: HMAC-SHA256 secret (>= 32 characters).
-            access_expire_minutes: Access token lifetime in minutes.
-            refresh_expire_days: Refresh token lifetime in days.
+            access_expire_minutes: Access token lifetime.
+            refresh_expire_days: Refresh token lifetime.
+            token_store: Pluggable deny-list backend.  Defaults
+                to :class:`InMemoryTokenStore` if ``None``.
 
         Raises:
             ValueError: If *secret_key* is shorter than 32 chars.
@@ -75,50 +73,21 @@ class AuthService:
         self._secret_key = secret_key
         self._access_expire_minutes = access_expire_minutes
         self._refresh_expire_days = refresh_expire_days
-        self._deny_list: Set[str] = self._load_deny_list()
+        self._store: TokenStore = (
+            token_store or InMemoryTokenStore()
+        )
         self._logger = logging.getLogger(__name__)
         self._logger.info(
             "AuthService initialised (access_ttl=%dm,"
-            " refresh_ttl=%dd, revoked=%d).",
+            " refresh_ttl=%dd, store=%s).",
             access_expire_minutes,
             refresh_expire_days,
-            len(self._deny_list),
+            type(self._store).__name__,
         )
 
-    @staticmethod
-    def _load_deny_list() -> Set[str]:
-        """Load persisted deny-list from disk.
-
-        Returns:
-            Set of revoked JTI strings, or empty set if the
-            file does not exist or is unreadable.
-        """
-        try:
-            if _DENY_LIST_FILE.exists():
-                data = json.loads(_DENY_LIST_FILE.read_text(encoding="utf-8"))
-                if isinstance(data, list):
-                    return set(data)
-        except Exception:
-            _logger.warning(
-                "Could not load deny-list from %s;"
-                " starting with empty set.",
-                _DENY_LIST_FILE,
-            )
-        return set()
-
-    def _save_deny_list(self) -> None:
-        """Persist the current deny-list to disk."""
-        try:
-            _DENY_LIST_DIR.mkdir(parents=True, exist_ok=True)
-            _DENY_LIST_FILE.write_text(
-                json.dumps(sorted(self._deny_list)),
-                encoding="utf-8",
-            )
-        except Exception:
-            self._logger.warning(
-                "Could not persist deny-list to %s.",
-                _DENY_LIST_FILE,
-            )
+    # ----------------------------------------------------------
+    # Password helpers
+    # ----------------------------------------------------------
 
     def hash_password(self, plain: str) -> str:
         """Delegate to :func:`auth.password.hash_password`.
@@ -155,7 +124,13 @@ class AuthService:
         """
         _pw.validate_password_strength(password)
 
-    def create_access_token(self, user_id: str, email: str, role: str) -> str:
+    # ----------------------------------------------------------
+    # Token creation
+    # ----------------------------------------------------------
+
+    def create_access_token(
+        self, user_id: str, email: str, role: str,
+    ) -> str:
         """Delegate to :func:`auth.tokens.create_access_token`.
 
         Args:
@@ -167,7 +142,11 @@ class AuthService:
             A signed JWT string.
         """
         return _tk.create_access_token(
-            user_id, email, role, self._secret_key, self._access_expire_minutes
+            user_id,
+            email,
+            role,
+            self._secret_key,
+            self._access_expire_minutes,
         )
 
     def create_refresh_token(self, user_id: str) -> str:
@@ -180,17 +159,26 @@ class AuthService:
             A signed JWT string.
         """
         return _tk.create_refresh_token(
-            user_id, self._secret_key, self._refresh_expire_days
+            user_id,
+            self._secret_key,
+            self._refresh_expire_days,
         )
 
+    # ----------------------------------------------------------
+    # Token validation / revocation
+    # ----------------------------------------------------------
+
     def decode_token(
-        self, token: str, expected_type: Optional[str] = None
+        self,
+        token: str,
+        expected_type: str | None = None,
     ) -> Dict[str, Any]:
-        """Delegate to :func:`auth.tokens.decode_token`.
+        """Decode and validate a JWT.
 
         Args:
             token: The raw JWT string.
-            expected_type: If provided, the decoded ``type`` claim must match.
+            expected_type: If provided, the decoded ``type``
+                claim must match.
 
         Returns:
             The decoded payload dict.
@@ -199,22 +187,27 @@ class AuthService:
             HTTPException: 401 on any validation failure.
         """
         return _tk.decode_token(
-            token, self._secret_key, self._deny_list, expected_type
+            token,
+            self._secret_key,
+            self._store,
+            expected_type,
         )
 
     def revoke_refresh_token(self, token: str) -> None:
-        """Revoke a refresh token and persist the deny-list.
+        """Revoke a refresh token via the token store.
 
         Args:
             token: The raw refresh JWT string to revoke.
         """
-        prev = len(self._deny_list)
-        _tk.revoke_refresh_token(token, self._secret_key, self._deny_list)
-        if len(self._deny_list) > prev:
-            self._save_deny_list()
+        _tk.revoke_refresh_token(
+            token,
+            self._secret_key,
+            self._store,
+            self._refresh_expire_days,
+        )
 
     def is_token_revoked(self, token: str) -> bool:
-        """Delegate to :func:`auth.tokens.is_token_revoked`.
+        """Check whether a token's JTI is revoked.
 
         Args:
             token: The raw JWT string to check.
@@ -222,4 +215,6 @@ class AuthService:
         Returns:
             ``True`` if the token has been revoked.
         """
-        return _tk.is_token_revoked(token, self._secret_key, self._deny_list)
+        return _tk.is_token_revoked(
+            token, self._secret_key, self._store,
+        )

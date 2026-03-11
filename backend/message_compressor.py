@@ -89,6 +89,19 @@ class MessageCompressor:
         Returns:
             A new list of BaseMessage objects.
         """
+        # Early exit: skip compression if well under budget.
+        if target_tokens is not None:
+            from token_budget import TokenBudget
+
+            est = TokenBudget.estimate_tokens(messages)
+            if est < target_tokens * 0.5:
+                _logger.debug(
+                    "Compression skipped: %d tokens " "< 50%% of %d budget",
+                    est,
+                    target_tokens,
+                )
+                return list(messages)
+
         result = list(messages)
 
         # Stage 1: condense system prompt on iteration 2+
@@ -245,46 +258,39 @@ class MessageCompressor:
     ) -> int:
         """Find index of the HumanMessage starting the current request.
 
-        Scans from the end looking for the last HumanMessage that
-        is followed by loop artifacts (AIMessage with tool_calls
-        or ToolMessage).
+        Builds a single-pass index of message types, then uses
+        the index to locate the boundary without multiple scans.
 
         Returns:
             Index of the boundary HumanMessage, or 0.
         """
-        # Walk backward to find the last HumanMessage.
-        last_human_idx = -1
-        for i in range(len(messages) - 1, -1, -1):
-            if isinstance(messages[i], HumanMessage):
-                last_human_idx = i
-                break
+        # Single-pass: collect indices by type.
+        human_idxs: List[int] = []
+        tool_idxs: List[int] = []
+        for i, msg in enumerate(messages):
+            if isinstance(msg, HumanMessage):
+                human_idxs.append(i)
+            elif isinstance(msg, ToolMessage):
+                tool_idxs.append(i)
 
-        if last_human_idx <= 0:
+        if not human_idxs or human_idxs[-1] <= 0:
             return 0
 
-        # Check if there's any ToolMessage after this human.
-        has_tool_after = any(
-            isinstance(messages[j], ToolMessage)
-            for j in range(last_human_idx + 1, len(messages))
-        )
+        last_human = human_idxs[-1]
 
-        # If tool messages exist after the last human, this is
-        # the agentic loop's starting human message.
+        # Check if any ToolMessage exists after last human.
+        has_tool_after = any(t > last_human for t in tool_idxs)
         if has_tool_after:
-            return last_human_idx
+            return last_human
 
-        # Otherwise, check the second-to-last human message.
-        for i in range(last_human_idx - 1, -1, -1):
-            if isinstance(messages[i], HumanMessage):
-                has_tool = any(
-                    isinstance(messages[j], ToolMessage)
-                    for j in range(i + 1, len(messages))
-                )
-                if has_tool:
-                    return i
-                return last_human_idx
+        # Check second-to-last human message.
+        if len(human_idxs) >= 2:
+            prev_human = human_idxs[-2]
+            has_tool = any(t > prev_human for t in tool_idxs)
+            if has_tool:
+                return prev_human
 
-        return last_human_idx
+        return last_human
 
     # ------------------------------------------------------------------
     # Stage 3 — tool result truncation

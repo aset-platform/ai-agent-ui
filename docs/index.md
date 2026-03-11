@@ -107,6 +107,7 @@ ai-agent-ui/
 - [Configuration](backend/config.md) — environment variables, Settings model
 - [Logging](backend/logging.md) — structured logging, rotating file handler
 - [Frontend Overview](frontend/overview.md) — UI, state, API calls
+- [OAuth & SSO](backend/oauth.md) — PKCE flow, Google + Facebook
 - [How to Run](dev/how-to-run.md) — full setup instructions
 - [Decisions](dev/decisions.md) — why things are built the way they are
 - [Changelog](dev/changelog.md) — session-by-session history

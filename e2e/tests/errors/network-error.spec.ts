@@ -39,22 +39,36 @@ test.describe("Network error handling", () => {
   test("dashboard refresh failure → error overlay", async ({
     page,
   }) => {
-    // Get a token first via API
+    // Get a token first via API (with retry on 429)
     const BACKEND =
       process.env.BACKEND_URL || "http://127.0.0.1:8181";
-    const loginRes = await page.request.post(
-      `${BACKEND}/auth/login`,
-      {
-        data: {
-          email:
-            process.env.TEST_USER_EMAIL || "test@demo.com",
-          password:
-            process.env.TEST_USER_PASSWORD ||
-            "Test1234!",
+    let access_token = "";
+    for (let i = 0; i < 5; i++) {
+      const loginRes = await page.request.post(
+        `${BACKEND}/auth/login`,
+        {
+          data: {
+            email:
+              process.env.TEST_USER_EMAIL ||
+              "test@demo.com",
+            password:
+              process.env.TEST_USER_PASSWORD ||
+              "Test1234!",
+          },
         },
-      },
-    );
-    const { access_token } = await loginRes.json();
+      );
+      if (loginRes.ok()) {
+        ({ access_token } = await loginRes.json());
+        break;
+      }
+      if (loginRes.status() === 429 && i < 4) {
+        await new Promise((r) => setTimeout(r, 3_000));
+        continue;
+      }
+      throw new Error(
+        `Login failed: ${loginRes.status()}`,
+      );
+    }
 
     const DASHBOARD =
       process.env.DASHBOARD_URL || "http://127.0.0.1:8050";

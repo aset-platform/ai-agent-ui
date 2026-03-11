@@ -74,7 +74,9 @@ def _analyse_price_movement(df: pd.DataFrame) -> dict:
     max_dd_duration = int(groups.max())
 
     recent = df.tail(252)
-    support_levels = sorted(recent["Low"].nsmallest(3).round(2).tolist())
+    support_levels = sorted(
+        recent["Low"].nsmallest(3).round(2).tolist()
+    )
     resistance_levels = sorted(
         recent["High"].nlargest(3).round(2).tolist(), reverse=True
     )

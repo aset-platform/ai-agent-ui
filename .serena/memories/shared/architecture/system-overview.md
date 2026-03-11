@@ -12,8 +12,14 @@
 ## Core Patterns
 
 - **`ChatServer`** (`backend/main.py`) — owns `ToolRegistry`,
-  `AgentRegistry`, FastAPI app. All state in this class, no
-  module-level mutable globals.
+  `AgentRegistry`, FastAPI app, bounded `ThreadPoolExecutor(10)`.
+  All state in this class, no module-level mutable globals.
+  `GET /health` endpoint returns `{"status": "ok"}`.
+- **API versioning**: Routes dual-mounted at `/` (legacy) and `/v1/`
+  via `_register_core_routes(router)` in `backend/routes.py`.
+- **Token store**: `auth/token_store.py` — `TokenStore` protocol
+  with `InMemoryTokenStore` / `RedisTokenStore`. Factory:
+  `create_token_store(redis_url)`. Used for JWT deny-list + OAuth state.
 - **`BaseAgent`** (`backend/agents/base.py`) — ABC with agentic loop
   (`MAX_ITERATIONS=15`) + streaming. Subclasses only override
   `_build_llm()`.

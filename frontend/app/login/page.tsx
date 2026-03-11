@@ -9,9 +9,7 @@ import {
   generateCodeVerifier,
   storeOAuthSession,
 } from "@/lib/oauth";
-
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8181";
+import { BACKEND_URL } from "@/lib/config";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -103,13 +101,18 @@ export default function LoginPage() {
       const res = await fetch(`${BACKEND_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email, password }),
         signal: controller.signal,
       });
 
       if (!res.ok) {
-        // Never reveal whether the email or password was wrong.
-        setError("Invalid email or password.");
+        if (res.status === 429) {
+          setError("Too many login attempts. Please try again later.");
+        } else {
+          // Never reveal whether the email or password was wrong.
+          setError("Invalid email or password.");
+        }
         return;
       }
 
@@ -117,7 +120,8 @@ export default function LoginPage() {
         access_token: string;
         refresh_token: string;
       };
-      setTokens(data.access_token, data.refresh_token);
+      // Refresh token is now in HttpOnly cookie.
+      setTokens(data.access_token);
       router.replace("/");
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;

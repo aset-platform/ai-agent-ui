@@ -6,7 +6,12 @@
   `os.environ` for `auth/dependencies.py`.
 - bcrypt 5.x direct (`hashpw`/`checkpw`).
 - OAuth PKCE with `code_verifier` in sessionStorage.
-- Refresh token deny-list is in-memory (cleared on restart).
+- Refresh token deny-list uses `TokenStore` protocol
+  (`auth/token_store.py`): `InMemoryTokenStore` (default) or
+  `RedisTokenStore` (set `REDIS_URL`). TTL-based auto-expiry.
+- OAuth state also uses `TokenStore` (key: `oauth_state:{state}:{provider}`).
+- Refresh token in HttpOnly cookie (not localStorage);
+  access token in localStorage.
 
 ## Security Rules
 

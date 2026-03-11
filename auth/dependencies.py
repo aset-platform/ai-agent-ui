@@ -35,13 +35,13 @@ Usage in a FastAPI route::
 import logging
 import os
 from functools import lru_cache
-from typing import Optional
 
 from fastapi import Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
 
 from auth.models import UserContext
 from auth.service import AuthService
+from auth.token_store import create_token_store
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +69,19 @@ def _get_service() -> AuthService:
         True
     """
     secret = os.environ.get("JWT_SECRET_KEY", "")
-    access_mins = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
-    refresh_days = int(os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+    access_mins = int(
+        os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"),
+    )
+    refresh_days = int(
+        os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "7"),
+    )
+    redis_url = os.environ.get("REDIS_URL", "")
+    store = create_token_store(redis_url)
     return AuthService(
         secret_key=secret,
         access_expire_minutes=access_mins,
         refresh_expire_days=refresh_days,
+        token_store=store,
     )
 
 
@@ -127,9 +134,9 @@ def get_current_user(
     """
     payload = service.decode_token(token, expected_type="access")
 
-    user_id: Optional[str] = payload.get("sub")
-    email: Optional[str] = payload.get("email")
-    role: Optional[str] = payload.get("role")
+    user_id: str | None = payload.get("sub")
+    email: str | None = payload.get("email")
+    role: str | None = payload.get("role")
 
     if not user_id or not role:
         raise HTTPException(status_code=401, detail="Malformed token payload")

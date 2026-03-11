@@ -5,6 +5,7 @@
  * Assistant messages are left-aligned with rendered Markdown.
  */
 
+import React from "react";
 import { MarkdownContent } from "./MarkdownContent";
 import { formatTime } from "@/lib/constants";
 import type { Message } from "@/lib/constants";
@@ -14,7 +15,7 @@ interface MessageBubbleProps {
   onInternalLink: (href: string) => void;
 }
 
-export function MessageBubble({ message: msg, onInternalLink }: MessageBubbleProps) {
+export const MessageBubble = React.memo(function MessageBubble({ message: msg, onInternalLink }: MessageBubbleProps) {
   return (
     <div className={`flex items-end gap-2.5 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`} data-testid={msg.role === "user" ? "user-message" : "assistant-message"}>
       {msg.role === "assistant" ? (
@@ -45,4 +46,4 @@ export function MessageBubble({ message: msg, onInternalLink }: MessageBubblePro
       </div>
     </div>
   );
-}
+});

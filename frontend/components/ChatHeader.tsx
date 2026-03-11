@@ -12,6 +12,7 @@ import { useRouter } from "next/navigation";
 import { clearTokens } from "@/lib/auth";
 import { AGENTS, type View } from "@/lib/constants";
 import type { UserProfile } from "@/hooks/useEditProfile";
+import { BACKEND_URL } from "@/lib/config";
 
 interface ChatHeaderProps {
   view: View;
@@ -23,9 +24,6 @@ interface ChatHeaderProps {
   onEditProfile: () => void;
   onChangePassword: () => void;
 }
-
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8181";
 
 export function ChatHeader({
   view,
