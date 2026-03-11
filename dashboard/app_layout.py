@@ -147,7 +147,7 @@ def build_layout(app: dash.Dash) -> None:
         Output("page-content", "children"),
         Input("url", "pathname"),
         Input("url", "search"),
-        State("auth-token-store", "data"),
+        Input("auth-token-store", "data"),
         State("user-profile-store", "data"),
     )
     def display_page(

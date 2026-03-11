@@ -34,6 +34,11 @@ test.describe("Dashboard admin", () => {
   }) => {
     // Navigate with a general user token (not admin)
     await page.goto(`/admin/users?token=${userToken}`);
+    // Wait for Dash to fully render (container appears)
+    await page.waitForSelector("#page-content", {
+      state: "attached",
+      timeout: 15_000,
+    });
     await page.waitForTimeout(3_000);
     // Should show access denied or redirect
     const forbidden = page.locator("text=access denied").or(
@@ -44,7 +49,7 @@ test.describe("Dashboard admin", () => {
       page.locator("text=sign in"),
     );
     await expect(forbidden.first()).toBeVisible({
-      timeout: 10_000,
+      timeout: 15_000,
     });
   });
 });

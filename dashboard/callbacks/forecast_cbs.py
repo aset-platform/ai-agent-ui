@@ -19,6 +19,7 @@ from dash import Input, Output, State, html, no_update
 
 from dashboard.callbacks.auth_utils import (
     _fetch_user_tickers,
+    _resolve_token,
     _unauth_notice,
     _validate_token,
 )
@@ -85,17 +86,20 @@ def register(app) -> None:
         Output("forecast-ticker-dropdown", "options"),
         Input("url", "pathname"),
         State("auth-token-store", "data"),
+        State("url", "search"),
     )
-    def filter_forecast_dropdown(pathname, token):
+    def filter_forecast_dropdown(pathname, token, search):
         """Update forecast dropdown to user tickers.
 
         Args:
             pathname: Current URL path.
             token: JWT access token.
+            search: URL query string for token fallback.
 
         Returns:
             List of dropdown option dicts.
         """
+        token = _resolve_token(token, search)
         registry = _load_reg_cb()
         all_tickers = sorted(registry.keys())
         ut = _fetch_user_tickers(token)
@@ -116,13 +120,17 @@ def register(app) -> None:
             Input("forecast-horizon-radio", "value"),
             Input("forecast-refresh-store", "data"),
         ],
-        State("auth-token-store", "data"),
+        [
+            State("auth-token-store", "data"),
+            State("url", "search"),
+        ],
     )
     def update_forecast_chart(
         ticker: Optional[str],
         horizon: Optional[str],
         refresh_trigger,
         token: Optional[str],
+        search: Optional[str] = None,
     ):
         """Reload and render the forecast chart when inputs change.
 
@@ -132,11 +140,13 @@ def register(app) -> None:
             refresh_trigger: Counter incremented by the Run New Analysis
                 callback to force a chart refresh.
             token: JWT access token from the auth-token-store.
+            search: URL query string for token fallback.
 
         Returns:
             Tuple of (forecast figure, target-cards component,
             accuracy-row component).
         """
+        token = _resolve_token(token, search)
         if _validate_token(token) is None:
             return _empty_fig("Authentication required."), _unauth_notice(), []
 
