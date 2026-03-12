@@ -111,9 +111,7 @@ class TestRegistryCached:
 
     def test_caches_on_second_call(self):
         """Second call returns cached data, no repo hit."""
-        from dashboard.callbacks.iceberg import (
-            _get_registry_cached,
-        )
+        from dashboard.callbacks.iceberg import _get_registry_cached
 
         repo = MagicMock()
         repo.get_all_registry.return_value = {"AAPL": {}}
@@ -128,9 +126,7 @@ class TestRegistryCached:
     def test_refreshes_after_ttl(self):
         """Cache expires and fetches again."""
         from dashboard.callbacks import iceberg
-        from dashboard.callbacks.iceberg import (
-            _get_registry_cached,
-        )
+        from dashboard.callbacks.iceberg import _get_registry_cached
 
         repo = MagicMock()
         repo.get_all_registry.return_value = {"AAPL": {}}
@@ -164,9 +160,7 @@ class TestForecastRunsCached:
 
     def test_caches_on_second_call(self):
         """Second call returns cached data."""
-        from dashboard.callbacks.iceberg import (
-            _get_forecast_runs_cached,
-        )
+        from dashboard.callbacks.iceberg import _get_forecast_runs_cached
 
         df = pd.DataFrame({"ticker": ["AAPL"], "sentiment": ["Bullish"]})
         repo = MagicMock()
@@ -182,9 +176,7 @@ class TestForecastRunsCached:
     def test_refreshes_after_ttl(self):
         """Cache expires and fetches again."""
         from dashboard.callbacks import iceberg
-        from dashboard.callbacks.iceberg import (
-            _get_forecast_runs_cached,
-        )
+        from dashboard.callbacks.iceberg import _get_forecast_runs_cached
 
         df1 = pd.DataFrame({"ticker": ["AAPL"], "sentiment": ["Bullish"]})
         df2 = pd.DataFrame(
@@ -265,7 +257,9 @@ class TestRefreshStockCardsBatch:
         # call the inner logic directly by extracting it.
         # We call the module-level function via the
         # callback decorator trick.
-        home_cbs.register(app)
+        from dashboard.callbacks.refresh_state import RefreshManager
+
+        home_cbs.register(app, RefreshManager())
 
         # Direct test: replicate what the callback does
         registry = mock_reg()
@@ -286,9 +280,7 @@ class TestClearCachesIncludesNewCaches:
     def test_clears_all_new_caches(self):
         """Both new caches are invalidated."""
         from dashboard.callbacks import iceberg
-        from dashboard.callbacks.iceberg import (
-            clear_caches,
-        )
+        from dashboard.callbacks.iceberg import clear_caches
 
         iceberg._REGISTRY_CACHE.update({"data": {"AAPL": {}}, "expiry": 9e9})
         iceberg._FORECAST_RUNS_CACHE.update(

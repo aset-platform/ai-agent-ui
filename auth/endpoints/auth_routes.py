@@ -404,12 +404,10 @@ def register(router: APIRouter) -> None:
         Returns:
             A dict with ``status``, ``backend``, and ``ok`` keys.
         """
-        store = service._store
-        backend = type(store).__name__
-        ok = store.ping()
-        status = "healthy" if ok else "degraded"
+        health = service.store_health()
+        ok = health["ok"]
         return {
-            "status": status,
-            "backend": backend,
+            "status": "healthy" if ok else "degraded",
+            "backend": health["backend"],
             "ok": ok,
         }

@@ -10,8 +10,9 @@ Example::
     register(app)
 """
 
+from __future__ import annotations
+
 import logging
-from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Optional
 from urllib.parse import parse_qs
 
@@ -38,22 +39,20 @@ from dashboard.callbacks.data_loaders import (
     _load_reg_cb,
 )
 from dashboard.callbacks.iceberg import clear_caches
+from dashboard.callbacks.refresh_state import RefreshManager
 from dashboard.components.error_overlay import make_error_banner
 from dashboard.services.stock_refresh import run_full_refresh
 
-# Module-level logger — intentionally module-scoped
+# Module-level logger (immutable singleton — not mutable state).
 _logger = logging.getLogger(__name__)
 
-# Background refresh infrastructure (mirrors home_cbs.py)
-_executor = ThreadPoolExecutor(max_workers=2)
-_forecast_future: dict[str, Future] = {}
 
-
-def register(app) -> None:
+def register(app, mgr: RefreshManager) -> None:
     """Register forecast-page callbacks with *app*.
 
     Args:
         app: The :class:`~dash.Dash` application instance.
+        mgr: Thread-safe refresh manager for background jobs.
     """
 
     @app.callback(
@@ -263,17 +262,18 @@ def register(app) -> None:
         horizon_months = int(horizon) if horizon else 9
         ticker = ticker.upper().strip()
 
-        existing = _forecast_future.get(ticker)
-        if existing and not existing.done():
+        if not mgr.submit_if_idle(
+            ticker,
+            run_full_refresh,
+            ticker,
+            horizon_months,
+        ):
             return no_update
 
         _logger.info(
             "Forecast refresh submitted for %s (%dm)",
             ticker,
             horizon_months,
-        )
-        _forecast_future[ticker] = _executor.submit(
-            run_full_refresh, ticker, horizon_months
         )
 
         return html.Span(
@@ -321,11 +321,7 @@ def register(app) -> None:
         Returns:
             Tuple of (status, counter, accuracy, overlay).
         """
-        for ticker, fut in list(_forecast_future.items()):
-            if not fut.done():
-                continue
-
-            _forecast_future.pop(ticker, None)
+        for ticker, fut in mgr.harvest_done():
             clear_caches(ticker)
             _clear_indicator_cache(ticker)
 
