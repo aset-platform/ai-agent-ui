@@ -41,12 +41,25 @@ def _get_repo() -> IcebergUserRepository:
 def _get_oauth_svc() -> OAuthService:
     """Return the application-wide :class:`~auth.oauth_service.OAuthService`.
 
+    The state store backend is determined by ``REDIS_URL``: when set,
+    OAuth state tokens are stored in Redis (shared across processes);
+    otherwise an in-memory store is used.
+
     Returns:
         The cached :class:`~auth.oauth_service.OAuthService` instance.
     """
+    import os
+
     from config import get_settings
 
-    return OAuthService(get_settings())
+    from auth.token_store import create_token_store
+
+    redis_url = os.environ.get("REDIS_URL", "")
+    state_store = create_token_store(
+        redis_url,
+        prefix="auth:oauth_state:",
+    )
+    return OAuthService(get_settings(), state_store=state_store)
 
 
 def _user_to_response(user: Dict[str, Any]) -> UserResponse:

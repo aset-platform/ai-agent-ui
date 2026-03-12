@@ -48,6 +48,10 @@ class TokenStore(Protocol):
         """
         ...  # pragma: no cover
 
+    def ping(self) -> bool:
+        """Return ``True`` if the backend is reachable."""
+        ...  # pragma: no cover
+
 
 # ---------------------------------------------------------------
 # In-memory implementation
@@ -99,12 +103,14 @@ class InMemoryTokenStore:
         """
         self._store.pop(key, None)
 
+    def ping(self) -> bool:
+        """Return ``True`` — in-memory store is always available."""
+        return True
+
     def _prune(self) -> None:
         """Remove entries whose TTL has elapsed."""
         now = time.time()
-        expired = [
-            k for k, v in self._store.items() if v < now
-        ]
+        expired = [k for k, v in self._store.items() if v < now]
         for k in expired:
             del self._store[k]
 
@@ -115,10 +121,19 @@ class InMemoryTokenStore:
 
 
 class RedisTokenStore:
-    """Redis-backed token store.
+    """Redis-backed token store with operation-level resilience.
 
     Uses ``SETEX`` for automatic TTL expiry.  All operations are
     synchronous (blocking) to match the rest of the auth stack.
+
+    If Redis becomes unreachable after initial connection, each
+    operation degrades gracefully:
+
+    - ``add`` — logs a warning (revoked token may remain usable
+      until its JWT ``exp`` claim expires naturally).
+    - ``contains`` — returns ``False`` (fail-open; a revoked token
+      may be accepted temporarily).
+    - ``remove`` — logs a warning (key will expire via TTL).
 
     Attributes:
         _client: A ``redis.Redis`` instance.
@@ -144,6 +159,8 @@ class RedisTokenStore:
             redis_url,
             decode_responses=True,
             socket_connect_timeout=3,
+            socket_timeout=2,
+            retry_on_timeout=True,
         )
         self._prefix = prefix
         _logger.info(
@@ -159,21 +176,42 @@ class RedisTokenStore:
             key: Opaque string.
             ttl_seconds: Seconds until expiry.
         """
-        self._client.setex(
-            f"{self._prefix}{key}",
-            ttl_seconds,
-            "1",
-        )
+        try:
+            self._client.setex(
+                f"{self._prefix}{key}",
+                ttl_seconds,
+                "1",
+            )
+        except self._redis.RedisError:
+            _logger.warning(
+                "Redis write failed for key=%s; token"
+                " revocation may be delayed.",
+                key,
+                exc_info=True,
+            )
 
     def contains(self, key: str) -> bool:
         """Return ``True`` if *key* exists in Redis.
 
+        Returns ``False`` on connection failure (fail-open).
+
         Args:
             key: The key to look up.
         """
-        return bool(
-            self._client.exists(f"{self._prefix}{key}")
-        )
+        try:
+            return bool(
+                self._client.exists(
+                    f"{self._prefix}{key}",
+                )
+            )
+        except self._redis.RedisError:
+            _logger.warning(
+                "Redis read failed for key=%s; treating"
+                " as not-found (fail-open).",
+                key,
+                exc_info=True,
+            )
+            return False
 
     def remove(self, key: str) -> None:
         """Delete *key* from Redis.
@@ -181,7 +219,22 @@ class RedisTokenStore:
         Args:
             key: The key to remove.
         """
-        self._client.delete(f"{self._prefix}{key}")
+        try:
+            self._client.delete(f"{self._prefix}{key}")
+        except self._redis.RedisError:
+            _logger.warning(
+                "Redis delete failed for key=%s;"
+                " entry will expire via TTL.",
+                key,
+                exc_info=True,
+            )
+
+    def ping(self) -> bool:
+        """Return ``True`` if Redis responds to PING."""
+        try:
+            return bool(self._client.ping())
+        except self._redis.RedisError:
+            return False
 
 
 # ---------------------------------------------------------------

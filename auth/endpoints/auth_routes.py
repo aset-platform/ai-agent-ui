@@ -394,3 +394,22 @@ def register(router: APIRouter) -> None:
             "Password reset completed for user_id=%s", current_user.user_id
         )
         return {"detail": "Password updated successfully"}
+
+    @router.get("/auth/health", tags=["auth"])
+    def auth_health(
+        service: AuthService = Depends(get_auth_service),
+    ) -> Dict[str, object]:
+        """Return token-store health status.
+
+        Returns:
+            A dict with ``status``, ``backend``, and ``ok`` keys.
+        """
+        store = service._store
+        backend = type(store).__name__
+        ok = store.ping()
+        status = "healthy" if ok else "degraded"
+        return {
+            "status": status,
+            "backend": backend,
+            "ok": ok,
+        }

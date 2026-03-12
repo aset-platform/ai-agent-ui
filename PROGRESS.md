@@ -2,6 +2,69 @@
 
 ---
 
+# Session: Mar 12, 2026 — Redis Token Store Production (ASETPLTFRM-9)
+
+## Summary
+Deployed RedisTokenStore for production use. Added operation-level
+resilience, health check endpoint, OAuth state on Redis, AOF
+persistence, and full integration tests with fakeredis. Updated
+setup.sh (Redis install + AOF config) and run.sh (Redis
+start/stop lifecycle). All 4 subtasks and parent story Done.
+
+### Changes
+
+| Area | Change |
+|------|--------|
+| Token store | Operation-level resilience — `add`/`contains`/`remove` catch `RedisError`, degrade gracefully |
+| Health check | `ping()` on TokenStore protocol + `GET /auth/health` endpoint |
+| OAuth state | `_get_oauth_svc()` now uses Redis (prefix `auth:oauth_state:`) |
+| Persistence | AOF enabled (`appendfsync everysec`) — deny-list survives restarts |
+| setup.sh | New Step 11/12: Redis install + start + AOF config + verification |
+| run.sh | `_redis_start()`/`_redis_stop()` with retry loop; Redis in status table |
+| Dependencies | `redis==7.3.0`, `fakeredis==2.34.1`, `sortedcontainers==2.4.0` |
+| Tests | 25 tests: 7 integration (fakeredis), 3 resilience, 2 ping, 13 existing |
+| Config | `REDIS_URL=redis://localhost:6379/0` in backend.env |
+
+### Test Results
+- Python: 350 passed, 0 failed
+- Token store: 25/25 passed
+
+### Sprint 1 Status
+- Done: ASETPLTFRM-23 (1pt), 24 (2pt), 17 (3pt), 48, 49, **9 (5pt)**
+- To Do: ASETPLTFRM-11 (8pt)
+- Velocity: 11/19 pts (58%), 6/7 stories
+
+---
+
+# Session: Mar 12, 2026 — E2E Reliability + Iceberg Safety
+
+## Summary
+Fixed all E2E dashboard refresh timeouts (ASETPLTFRM-48) and
+auth rate-limit 429s (ASETPLTFRM-49). Converted Iceberg writes
+to scoped delete+append. PR #81 raised to dev.
+
+### Changes
+
+| Area | Change |
+|------|--------|
+| Freshness gates | `run_full_refresh` skips OHLCV if <1d old, Prophet if <7d old |
+| Background refresh | analysis_cbs + forecast_cbs → ThreadPoolExecutor + 2s polling |
+| E2E auth caching | Read JWT from storageState files, eliminates 16 login calls |
+| E2E test hardening | RELIANCE.NS → AAPL, test.slow(), toContainText assertions |
+| Iceberg safety | 5 full-table overwrites → scoped delete+append |
+| Auth rate limits | RATE_LIMIT_LOGIN env var (configurable, default 30/15min) |
+
+### Test Results
+- Python: 337 passed, 0 failed
+- E2E: 48 passed, 0 failed, 2 flaky
+
+### Sprint 1 Status
+- Done: ASETPLTFRM-23 (1pt), 24 (2pt), 17 (3pt), 48, 49
+- To Do: ASETPLTFRM-9 (5pt), ASETPLTFRM-11 (8pt)
+- Velocity: 6/19 pts (32%), 5/7 stories
+
+---
+
 # Session: Mar 11, 2026 — Sprint Phase 3 + Dashboard fixes
 
 ## Summary

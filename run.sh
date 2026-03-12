@@ -2,12 +2,13 @@
 # run.sh — Start, stop, and monitor all AI Agent UI services.
 #
 # Usage:
-#   ./run.sh start    — start backend, frontend, docs, dashboard
+#   ./run.sh start    — start redis, backend, frontend, docs, dashboard
 #   ./run.sh stop     — stop all running services
 #   ./run.sh status   — show PID and URL for each service
 #   ./run.sh restart  — stop then start
 #
 # Services:
+#   redis      Token deny-list store    redis://127.0.0.1:6379
 #   backend    FastAPI + agentic loop   http://127.0.0.1:8181
 #   frontend   Next.js dev server       http://localhost:3000
 #   docs       MkDocs material site     http://127.0.0.1:8000
@@ -36,6 +37,7 @@ BACKEND_PORT=8181
 FRONTEND_PORT=3000
 DOCS_PORT=8000
 DASHBOARD_PORT=8050
+REDIS_PORT=6379
 
 # ANSI colours (disabled when not writing to a terminal)
 if [[ -t 1 ]]; then
@@ -94,12 +96,67 @@ _launch() {
     disown "$!" 2>/dev/null || true
 }
 
+# ── Redis helpers ─────────────────────────────────────────────────────────────
+
+_redis_running() { redis-cli -p "$REDIS_PORT" ping &>/dev/null 2>&1; }
+
+_redis_start() {
+    if _redis_running; then
+        echo -e "  ${G}Redis already running on port ${REDIS_PORT}${N}"
+        return 0
+    fi
+    if ! command -v redis-server &>/dev/null; then
+        echo -e "  ${Y}redis-server not found — token store will use in-memory fallback${N}"
+        return 0
+    fi
+    echo "  Starting Redis…"
+    local os_name
+    os_name="$(uname -s)"
+    if [[ "$os_name" == "Darwin" ]] && command -v brew &>/dev/null; then
+        brew services start redis &>/dev/null
+    elif command -v systemctl &>/dev/null; then
+        sudo systemctl start redis-server 2>/dev/null || \
+            sudo systemctl start redis 2>/dev/null || true
+    else
+        redis-server --port "$REDIS_PORT" --daemonize yes \
+            --logfile "${LOG_DIR}/redis.log" 2>/dev/null
+    fi
+    # Wait up to 5 seconds for Redis to accept connections.
+    local attempt=0
+    while ! _redis_running && (( attempt < 10 )); do
+        sleep 0.5
+        (( attempt++ ))
+    done
+    if _redis_running; then
+        echo -e "  ${G}Redis started on port ${REDIS_PORT}${N}"
+    else
+        echo -e "  ${Y}Redis failed to start — token store will use in-memory fallback${N}"
+    fi
+}
+
+_redis_stop() {
+    if ! _redis_running; then return 0; fi
+    echo "  Stopping Redis…"
+    local os_name
+    os_name="$(uname -s)"
+    if [[ "$os_name" == "Darwin" ]] && command -v brew &>/dev/null; then
+        brew services stop redis &>/dev/null
+    elif command -v systemctl &>/dev/null; then
+        sudo systemctl stop redis-server 2>/dev/null || \
+            sudo systemctl stop redis 2>/dev/null || true
+    else
+        redis-cli -p "$REDIS_PORT" shutdown nosave 2>/dev/null || true
+    fi
+    echo -e "  ${G}Redis stopped${N}"
+}
+
 # ── Status table ──────────────────────────────────────────────────────────────
 
 _print_table() {
-    local names=(backend   frontend   docs      dashboard)
-    local ports=($BACKEND_PORT $FRONTEND_PORT $DOCS_PORT $DASHBOARD_PORT)
+    local names=(redis     backend   frontend   docs      dashboard)
+    local ports=($REDIS_PORT $BACKEND_PORT $FRONTEND_PORT $DOCS_PORT $DASHBOARD_PORT)
     local urls=(
+        "redis://127.0.0.1:${REDIS_PORT}"
         "http://127.0.0.1:${BACKEND_PORT}"
         "http://localhost:${FRONTEND_PORT}"
         "http://127.0.0.1:${DOCS_PORT}"
@@ -226,6 +283,9 @@ do_start() {
         echo ""
     fi
 
+    # Start Redis (token deny-list + OAuth state store)
+    _redis_start
+
     # Auto-migrate data from project root to ~/.ai-agent-ui (one-time)
     _maybe_migrate_data
 
@@ -285,6 +345,7 @@ do_stop() {
     _kill_port "$FRONTEND_PORT"  "frontend"
     _kill_port "$DOCS_PORT"      "docs"
     _kill_port "$DASHBOARD_PORT" "dashboard"
+    _redis_stop
     echo ""
     echo -e "${G}All services stopped.${N}"
 }
@@ -305,12 +366,13 @@ case "${1:-help}" in
     *)
         echo -e "${B}Usage:${N} $(basename "$0") {start|stop|status|restart}"
         echo ""
-        echo "  start    Start all four services in the background"
+        echo "  start    Start all five services in the background"
         echo "  stop     Stop all running services"
         echo "  status   Show PID and URL for each service"
         echo "  restart  Stop then start"
         echo ""
         echo "  Services:"
+        printf "    %-12s  %s\n" "redis"     "Token store (deny-list) →  redis://127.0.0.1:${REDIS_PORT}"
         printf "    %-12s  %s\n" "backend"   "FastAPI + agentic loop  →  http://127.0.0.1:${BACKEND_PORT}"
         printf "    %-12s  %s\n" "frontend"  "Next.js dev server      →  http://localhost:${FRONTEND_PORT}"
         printf "    %-12s  %s\n" "docs"      "MkDocs material site    →  http://127.0.0.1:${DOCS_PORT}"
