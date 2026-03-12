@@ -10,9 +10,10 @@ Example::
     register(app)
 """
 
+from __future__ import annotations
+
 import logging
 import math
-from concurrent.futures import Future, ThreadPoolExecutor
 from urllib.parse import parse_qs
 
 import dash_bootstrap_components as dbc
@@ -26,13 +27,8 @@ from dashboard.callbacks.auth_utils import (
     _unauth_notice,
     _validate_token,
 )
-from dashboard.callbacks.card_builders import (
-    _build_stats_cards,
-)
-from dashboard.callbacks.chart_builders import (
-    _build_analysis_fig,
-    _empty_fig,
-)
+from dashboard.callbacks.card_builders import _build_stats_cards
+from dashboard.callbacks.chart_builders import _build_analysis_fig, _empty_fig
 from dashboard.callbacks.data_loaders import (
     _add_indicators_cached,
     _clear_indicator_cache,
@@ -42,29 +38,21 @@ from dashboard.callbacks.data_loaders import (
     _load_reg_cb,
 )
 from dashboard.callbacks.iceberg import clear_caches
-from dashboard.callbacks.sort_helpers import (
-    MACD_TOOLTIP,
-    RSI_TOOLTIP,
-)
+from dashboard.callbacks.refresh_state import RefreshManager
+from dashboard.callbacks.sort_helpers import MACD_TOOLTIP, RSI_TOOLTIP
 from dashboard.components.error_overlay import make_error_banner
-from dashboard.services.stock_refresh import (
-    run_full_refresh,
-)
+from dashboard.services.stock_refresh import run_full_refresh
 
-# Module-level logger; mutable but intentionally
-# module-scoped for callback registration.
+# Module-level logger (immutable singleton — not mutable state).
 _logger = logging.getLogger(__name__)
 
-# Background refresh infrastructure (mirrors home_cbs.py)
-_executor = ThreadPoolExecutor(max_workers=2)
-_analysis_future: dict[str, Future] = {}
 
-
-def register(app) -> None:
+def register(app, mgr: RefreshManager) -> None:
     """Register analysis-page callbacks with *app*.
 
     Args:
         app: The :class:`~dash.Dash` application instance.
+        mgr: Thread-safe refresh manager for background jobs.
     """
 
     @app.callback(
@@ -270,14 +258,10 @@ def register(app) -> None:
 
         ticker = ticker.upper().strip()
 
-        existing = _analysis_future.get(ticker)
-        if existing and not existing.done():
+        if not mgr.submit_if_idle(ticker, run_full_refresh, ticker, 9):
             return no_update
 
         _logger.info("Analysis refresh submitted for %s", ticker)
-        _analysis_future[ticker] = _executor.submit(
-            run_full_refresh, ticker, 9
-        )
 
         return html.Span(
             className="card-refresh-spinner",
@@ -319,11 +303,7 @@ def register(app) -> None:
         Returns:
             Tuple of (status icon, counter, overlay).
         """
-        for ticker, fut in list(_analysis_future.items()):
-            if not fut.done():
-                continue
-
-            _analysis_future.pop(ticker, None)
+        for ticker, fut in mgr.harvest_done():
             clear_caches(ticker)
             _clear_indicator_cache(ticker)
 

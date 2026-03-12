@@ -9,7 +9,7 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 | Service | Stack | Port | Purpose |
 |---------|-------|------|---------|
 | **Frontend** | Next.js 16 + React 19 + Tailwind 4 | `3000` | Chat UI + SPA shell (login, chat, docs, dashboard, admin) |
-| **Backend** | FastAPI + LangChain + N-tier Groq/Anthropic | `8181` | Agentic loop + REST API + Auth endpoints |
+| **Backend** | FastAPI + LangChain + N-tier Groq/Anthropic | `8181` | Agentic loop + REST/WebSocket API + Auth endpoints |
 | **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard (Home / Analysis / Forecast / Compare / Marketplace / 7 Insights tabs) + Admin UI |
 | **Docs** | MkDocs Material | `8000` | Project documentation |
 
@@ -75,7 +75,7 @@ graph TD
     end
 
     subgraph Backend["Backend — :8181"]
-        API["FastAPI<br/>POST /chat/stream<br/>GET /agents<br/>POST /auth/login<br/>GET /users …"]
+        API["FastAPI<br/>POST /chat/stream<br/>WS /ws/chat<br/>GET /agents<br/>POST /auth/login<br/>GET /users …"]
         CS["ChatServer"]
         AR["AgentRegistry"]
         TR["ToolRegistry"]
@@ -105,7 +105,7 @@ graph TD
 
     Login -->|"POST /auth/login"| AUTH
     AUTH --> ICE --> IC
-    UI -->|"POST /chat/stream<br/>Bearer token"| API
+    UI -->|"WS /ws/chat · POST /chat/stream<br/>Bearer token"| API
     API --> CS --> AR
     AR --> GA & SA
     GA --> T1 & T2
@@ -122,7 +122,44 @@ graph TD
 
 ## Agentic Loop
 
-Every message goes through an LLM-driven tool-calling loop before a response is returned, streamed live to the browser via NDJSON.
+Every message goes through an LLM-driven tool-calling loop before a response is returned. The frontend prefers a persistent **WebSocket** connection (`/ws/chat`) for lower latency and server-initiated events. If the WebSocket is unavailable, it falls back to **HTTP NDJSON** streaming (`POST /chat/stream`).
+
+### WebSocket (primary)
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant FE as Frontend
+    participant BE as FastAPI /ws/chat
+    participant LLM as FallbackLLM<br/>Groq → Anthropic
+    participant T as Tool(s)
+
+    FE->>BE: WebSocket upgrade
+    FE->>BE: {"type":"auth","token":"<jwt>"}
+    BE-->>FE: {"type":"auth_ok"}
+
+    U->>FE: sends message
+    FE->>BE: {"type":"chat","message":"...","agent_id":"..."}
+    BE->>LLM: invoke(messages + tools)
+
+    loop Agentic Loop (max 15 iterations)
+        LLM-->>BE: AIMessage {tool_calls: [...]}
+        BE-->>FE: {"type":"tool_start", ...}
+        BE->>T: ToolRegistry.invoke(name, args)
+        T-->>BE: ToolMessage result
+        BE-->>FE: {"type":"tool_done", ...}
+        BE->>LLM: invoke(messages + tool results)
+    end
+
+    LLM-->>BE: AIMessage {content: "final answer"}
+    BE-->>FE: {"type":"final","response":"..."}
+    FE-->>U: renders markdown response
+
+    Note over FE,BE: Ping/pong keepalive every 30s
+    Note over FE,BE: Reconnect with exponential backoff on close
+```
+
+### HTTP NDJSON (fallback)
 
 ```mermaid
 sequenceDiagram
@@ -286,12 +323,14 @@ ai-agent-ui/
 │   ├── hooks/                # Custom React hooks
 │   │   ├── useAuthGuard.ts   # Redirect to /login if no valid token
 │   │   ├── useChatHistory.ts # Per-agent history + debounced localStorage
-│   │   ├── useSendMessage.ts # Streaming fetch + AbortController
+│   │   ├── useWebSocket.ts   # WS connection state machine + reconnect
+│   │   ├── useSendMessage.ts # WS-preferred streaming + HTTP fallback
 │   │   ├── useEditProfile.ts # PATCH /auth/me + avatar upload
 │   │   └── useChangePassword.ts
 │   ├── lib/
 │   │   ├── auth.ts           # JWT token helpers
 │   │   ├── apiFetch.ts       # Authenticated fetch wrapper (auto-refresh)
+│   │   ├── config.ts         # Service URLs (BACKEND_URL, WS_URL, etc.)
 │   │   ├── constants.ts      # AGENTS list, NAV_ITEMS, View type
 │   │   └── oauth.ts          # PKCE helpers + sessionStorage helpers
 │   ├── .env.local            # Gitignored — copy from .env.local.example
@@ -304,6 +343,7 @@ ai-agent-ui/
 │   ├── llm_fallback.py       # FallbackLLM — N-tier Groq cascade + Anthropic fallback
 │   ├── token_budget.py       # Sliding-window TPM/RPM budget tracker
 │   ├── message_compressor.py # 3-stage message compression
+│   ├── ws.py                 # WebSocket /ws/chat endpoint (auth + streaming)
 │   ├── agents/
 │   │   ├── base.py           # BaseAgent ABC
 │   │   ├── config.py         # AgentConfig dataclass
@@ -325,24 +365,6 @@ ai-agent-ui/
 ├── stocks/                   # Iceberg persistence — single source of truth
 │   ├── create_tables.py      # Idempotent init of 9 tables (called by run.sh)
 │   ├── repository.py         # StockRepository — CRUD + batch reads for all 9 tables
-│   ├── backfill_metadata.py  # One-time JSON → Iceberg migration
-│   └── backfill_adj_close.py # One-time adj_close backfill from parquet
-│
-├── stocks/                   # Iceberg persistence — single source of truth
-│   ├── create_tables.py      # Idempotent init of 8 tables (called by run.sh)
-│   ├── repository.py         # StockRepository — CRUD + batch reads for all 8 tables
-│   ├── backfill_metadata.py  # One-time JSON → Iceberg migration
-│   └── backfill_adj_close.py # One-time adj_close backfill from parquet
-│
-├── stocks/                   # Iceberg persistence — single source of truth
-│   ├── create_tables.py      # Idempotent init of 8 tables (called by run.sh)
-│   ├── repository.py         # StockRepository — CRUD + batch reads for all 8 tables
-│   ├── backfill_metadata.py  # One-time JSON → Iceberg migration
-│   └── backfill_adj_close.py # One-time adj_close backfill from parquet
-│
-├── stocks/                   # Iceberg persistence — single source of truth
-│   ├── create_tables.py      # Idempotent init of 8 tables (called by run.sh)
-│   ├── repository.py         # StockRepository — CRUD + batch reads for all 8 tables
 │   ├── backfill_metadata.py  # One-time JSON → Iceberg migration
 │   └── backfill_adj_close.py # One-time adj_close backfill from parquet
 │
@@ -480,6 +502,7 @@ All backend variables live in `backend/.env` (gitignored).
 | `LOG_TO_FILE` | No | `true` | Write logs to `~/.ai-agent-ui/logs/agent.log` |
 | `NEXT_PUBLIC_BACKEND_URL` | No | `http://127.0.0.1:8181` | `frontend/.env.local` |
 | `NEXT_PUBLIC_DASHBOARD_URL` | No | `http://127.0.0.1:8050` | `frontend/.env.local` |
+| `NEXT_PUBLIC_WS_URL` | No | *(derived from BACKEND_URL)* | WebSocket URL — `frontend/.env.local` |
 | `NEXT_PUBLIC_DOCS_URL` | No | `http://127.0.0.1:8000` | `frontend/.env.local` |
 
 ---

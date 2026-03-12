@@ -4,30 +4,19 @@
  * Uses Playwright's route() to simulate failures.
  */
 
-import fs from "fs";
-import path from "path";
-
 import { test, expect } from "@playwright/test";
 
-/** Read cached JWT from the setup-produced storageState. */
-function readCachedToken(): string {
-  const fp = path.join(
-    __dirname,
-    "..",
-    "..",
-    ".auth",
-    "general-user.json",
-  );
-  const data = JSON.parse(fs.readFileSync(fp, "utf8"));
-  return data.origins[0].localStorage.find(
-    (e: { name: string }) =>
-      e.name === "auth_access_token",
-  ).value;
-}
+import { readCachedToken } from "../../utils/auth.helper";
 
 test.describe("Network error handling", () => {
   test("backend 500 → chat shows error", async ({ page }) => {
-    // Mock the streaming endpoint to return 500
+    // Intercept WebSocket and close it immediately so the
+    // frontend falls back to HTTP streaming.
+    await page.routeWebSocket("**/ws/chat", (ws) => {
+      ws.close();
+    });
+
+    // Mock the HTTP streaming endpoint to return 500
     await page.route("**/chat/stream", (route) =>
       route.fulfill({
         status: 500,
@@ -41,7 +30,7 @@ test.describe("Network error handling", () => {
       page.getByTestId("chat-message-input"),
     ).toBeVisible({ timeout: 15_000 });
 
-    // Send a message
+    // Send a message — will use HTTP fallback (WS blocked)
     await page.getByTestId("chat-message-input").fill("test");
     await page.getByTestId("chat-send-button").click();
 

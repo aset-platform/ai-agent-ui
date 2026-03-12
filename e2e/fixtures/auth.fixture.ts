@@ -10,35 +10,9 @@
  * by the setup project — NO extra ``/auth/login`` API calls.
  */
 
-import fs from "fs";
-import path from "path";
-
 import { test as base } from "@playwright/test";
 
-const AUTH_DIR = path.join(__dirname, "..", ".auth");
-
-/**
- * Read a cached JWT from a storageState JSON file.
- *
- * The setup project writes localStorage entries with
- * ``auth_access_token`` — this function extracts that
- * value without making any API calls.
- */
-function readCachedToken(filename: string): string {
-  const filepath = path.join(AUTH_DIR, filename);
-  const data = JSON.parse(fs.readFileSync(filepath, "utf8"));
-  const origin = data.origins?.[0];
-  const entry = origin?.localStorage?.find(
-    (e: { name: string; value: string }) =>
-      e.name === "auth_access_token",
-  );
-  if (!entry?.value) {
-    throw new Error(
-      `No auth_access_token in ${filename}`,
-    );
-  }
-  return entry.value;
-}
+import { readCachedToken } from "../utils/auth.helper";
 
 type AuthFixtures = {
   userToken: string;

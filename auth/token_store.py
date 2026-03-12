@@ -15,6 +15,7 @@ returns the appropriate implementation.
 
 import logging
 import time
+from functools import lru_cache
 from typing import Protocol
 
 _logger = logging.getLogger(__name__)
@@ -144,6 +145,8 @@ class RedisTokenStore:
         self,
         redis_url: str,
         prefix: str = "auth:deny:",
+        *,
+        client: object | None = None,
     ) -> None:
         """Connect to Redis.
 
@@ -151,22 +154,28 @@ class RedisTokenStore:
             redis_url: Redis connection URL
                 (e.g. ``redis://localhost:6379/0``).
             prefix: Key prefix for namespacing.
+            client: Optional pre-built ``redis.Redis`` client.
+                When provided, *redis_url* is ignored and the
+                given client is reused (shared connection pool).
         """
         import redis as _redis_mod
 
         self._redis = _redis_mod
-        self._client = _redis_mod.from_url(
-            redis_url,
-            decode_responses=True,
-            socket_connect_timeout=3,
-            socket_timeout=2,
-            retry_on_timeout=True,
-        )
+        if client is not None:
+            self._client = client
+        else:
+            self._client = _redis_mod.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_connect_timeout=3,
+                socket_timeout=2,
+                retry_on_timeout=True,
+            )
         self._prefix = prefix
         _logger.info(
-            "RedisTokenStore connected: url=%s prefix=%s",
-            redis_url,
+            "RedisTokenStore: prefix=%s shared=%s",
             prefix,
+            client is not None,
         )
 
     def add(self, key: str, ttl_seconds: int) -> None:
@@ -242,13 +251,53 @@ class RedisTokenStore:
 # ---------------------------------------------------------------
 
 
+@lru_cache(maxsize=1)
+def get_redis_client(redis_url: str):
+    """Return a shared ``redis.Redis`` client for *redis_url*.
+
+    The result is cached so that all callers (deny-list store,
+    OAuth state store, etc.) reuse a single connection pool.
+
+    Args:
+        redis_url: Redis connection URL.
+
+    Returns:
+        A ``redis.Redis`` instance, or ``None`` on failure.
+    """
+    import redis as _redis_mod
+
+    try:
+        client = _redis_mod.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_connect_timeout=3,
+            socket_timeout=2,
+            retry_on_timeout=True,
+        )
+        client.ping()
+        _logger.info(
+            "Shared Redis client connected: %s",
+            redis_url,
+        )
+        return client
+    except Exception:
+        _logger.warning(
+            "Redis connection failed (%s); stores will"
+            " fall back to in-memory.",
+            redis_url,
+            exc_info=True,
+        )
+        return None
+
+
 def create_token_store(
     redis_url: str = "",
     prefix: str = "auth:deny:",
 ) -> TokenStore:
     """Create the appropriate token store backend.
 
-    If *redis_url* is non-empty, returns a :class:`RedisTokenStore`;
+    If *redis_url* is non-empty, returns a :class:`RedisTokenStore`
+    backed by the shared connection from :func:`get_redis_client`;
     otherwise returns an :class:`InMemoryTokenStore`.
 
     Args:
@@ -259,15 +308,13 @@ def create_token_store(
         A :class:`TokenStore`-compatible instance.
     """
     if redis_url:
-        try:
-            store = RedisTokenStore(redis_url, prefix)
-            _logger.info("Using Redis token store.")
-            return store
-        except Exception:
-            _logger.warning(
-                "Redis connection failed; falling back to"
-                " in-memory token store.",
-                exc_info=True,
+        client = get_redis_client(redis_url)
+        if client is not None:
+            store = RedisTokenStore(redis_url, prefix, client=client)
+            _logger.info(
+                "Using Redis token store (prefix=%s).",
+                prefix,
             )
+            return store
     _logger.info("Using in-memory token store.")
     return InMemoryTokenStore()

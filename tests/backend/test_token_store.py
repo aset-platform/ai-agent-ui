@@ -232,6 +232,109 @@ class TestRedisIntegration:
 # ---------------------------------------------------------------
 
 
+# ---------------------------------------------------------------
+# AuthService.store_health()
+# ---------------------------------------------------------------
+
+
+# ---------------------------------------------------------------
+# Shared Redis client
+# ---------------------------------------------------------------
+
+
+class TestSharedRedisClient:
+    """Verify create_token_store shares a single connection."""
+
+    def test_two_stores_share_client(self):
+        """Two stores from same URL reuse one Redis client."""
+        mock_client = MagicMock()
+        mock_redis_mod = MagicMock()
+        mock_redis_mod.from_url.return_value = mock_client
+        mock_client.ping.return_value = True
+
+        from auth.token_store import get_redis_client
+
+        get_redis_client.cache_clear()
+
+        with patch.dict(
+            sys.modules,
+            {"redis": mock_redis_mod},
+        ):
+            deny = create_token_store(
+                "redis://localhost:6379/0",
+                prefix="auth:deny:",
+            )
+            oauth = create_token_store(
+                "redis://localhost:6379/0",
+                prefix="auth:oauth_state:",
+            )
+
+        get_redis_client.cache_clear()
+
+        # Both stores reference the same underlying client.
+        assert deny._client is oauth._client
+        # from_url called only once (shared pool).
+        mock_redis_mod.from_url.assert_called_once()
+
+    def test_different_prefixes_isolated(self):
+        """Shared client still isolates keys by prefix."""
+        server = fakeredis.FakeServer()
+        client = fakeredis.FakeRedis(
+            server=server,
+            decode_responses=True,
+        )
+
+        deny = RedisTokenStore.__new__(RedisTokenStore)
+        import redis as _r
+
+        deny._redis = _r
+        deny._client = client
+        deny._prefix = "auth:deny:"
+
+        oauth = RedisTokenStore.__new__(RedisTokenStore)
+        oauth._redis = _r
+        oauth._client = client
+        oauth._prefix = "auth:oauth_state:"
+
+        deny.add("jti-1", 300)
+        oauth.add("state-1", 300)
+
+        assert deny.contains("jti-1")
+        assert not deny.contains("state-1")
+        assert oauth.contains("state-1")
+        assert not oauth.contains("jti-1")
+
+
+class TestStoreHealth:
+    """Unit tests for the public store_health() method."""
+
+    def test_returns_backend_and_ok(self):
+        from auth.service import AuthService
+
+        svc = AuthService(
+            secret_key="x" * 32,
+            token_store=InMemoryTokenStore(),
+        )
+        result = svc.store_health()
+        assert result == {
+            "backend": "InMemoryTokenStore",
+            "ok": True,
+        }
+
+    def test_degraded_when_ping_fails(self):
+        from auth.service import AuthService
+
+        store = InMemoryTokenStore()
+        store.ping = lambda: False  # type: ignore[assignment]
+        svc = AuthService(
+            secret_key="x" * 32,
+            token_store=store,
+        )
+        result = svc.store_health()
+        assert result["ok"] is False
+        assert result["backend"] == "InMemoryTokenStore"
+
+
 class TestCreateTokenStore:
     """Tests for the create_token_store factory."""
 

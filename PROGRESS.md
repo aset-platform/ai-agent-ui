@@ -2,6 +2,80 @@
 
 ---
 
+# Session: Mar 12, 2026 — PR #82 Review Fixes (ASETPLTFRM-50-54)
+
+## Summary
+Addressed 5 stories from PR #82 code review: auth health
+API encapsulation, thread-safe Dash RefreshManager, shared
+Redis connection pool, E2E helper deduplication, and flaky
+E2E test fixes. All 5 tickets implemented and commented in
+Jira. PR #84 raised to dev.
+
+### Changes
+
+| Area | Change |
+|------|--------|
+| `auth/service.py` | Public `store_health()` method |
+| `auth/endpoints/auth_routes.py` | `/auth/health` uses public API |
+| `auth/token_store.py` | `get_redis_client()` cached factory, shared pool |
+| `dashboard/callbacks/refresh_state.py` (NEW) | Thread-safe `RefreshManager` with Lock |
+| `dashboard/callbacks/analysis_cbs.py` | Removed globals, uses `RefreshManager` |
+| `dashboard/callbacks/forecast_cbs.py` | Removed globals, uses `RefreshManager` |
+| `dashboard/callbacks/home_cbs.py` | Removed globals, uses `RefreshManager` |
+| `dashboard/callbacks/registration.py` | Creates 3 `RefreshManager` instances |
+| `e2e/utils/auth.helper.ts` (NEW) | Shared `readCachedToken()` |
+| `e2e/fixtures/auth.fixture.ts` | Imports from shared helper |
+| `e2e/tests/auth/login.spec.ts` | Rate-limit retry loop (3 attempts) |
+| `e2e/tests/errors/network-error.spec.ts` | `page.routeWebSocket()` WS bypass |
+| `tests/backend/test_auth_api.py` | `TestAuthHealth` + fixed E501 |
+| `tests/backend/test_token_store.py` | `TestStoreHealth`, `TestSharedRedisClient` |
+| `tests/dashboard/test_refresh_state.py` (NEW) | 9 tests for RefreshManager |
+
+### Test Results
+- Python: 66 relevant tests pass (auth API, token store, refresh, home perf)
+- E2E: 49/50 passed (1 pre-existing forecast timeout)
+
+---
+
+# Session: Mar 12, 2026 — WebSocket Streaming (ASETPLTFRM-11)
+
+## Summary
+Implemented persistent WebSocket `/ws/chat` endpoint for real-time
+agent streaming. Auth-first protocol (token in first message, not
+URL query param). Frontend state machine hook with exponential
+backoff reconnect. HTTP NDJSON fallback preserved — zero breaking
+changes. All subtasks and parent story Done. PR #83 merged to dev.
+
+### Changes
+
+| Area | Change |
+|------|--------|
+| `backend/ws.py` (NEW) | WebSocket endpoint: auth, ping/pong, chat streaming, concurrent guard |
+| `backend/config.py` | Added `ws_auth_timeout_seconds`, `ws_ping_interval_seconds` |
+| `backend/routes.py` | Wired `register_ws_routes()` before static mount |
+| `frontend/hooks/useWebSocket.ts` (NEW) | Connection state machine: DISCONNECTED → CONNECTING → AUTHENTICATING → READY |
+| `frontend/hooks/useSendMessage.ts` | WS-preferred streaming with HTTP fallback; shared `handleEvent()` |
+| `frontend/app/page.tsx` | Integrated `useWebSocket` hook, passed to `useSendMessage` |
+| `frontend/lib/config.ts` | Added `WS_URL` (derived from `BACKEND_URL`) |
+| `tests/backend/test_ws.py` (NEW) | 6 tests: auth_ok, bad_token, wrong_first_msg, ping_pong, unknown_agent, reauth |
+| `frontend/tests/useWebSocket.test.ts` (NEW) | 4 tests: connect+auth, reconnect backoff, event routing, sendChat |
+
+### Protocol
+- Close codes: 4001 (auth failed), 4002 (auth timeout), 4003 (invalid message)
+- Keepalive: ping/pong every 30s
+- Re-auth supported mid-session for token refresh
+- Concurrent streaming rejected with error event
+
+### Test Results
+- Python: 355 passed, 0 failed (6 new WS tests)
+- Frontend: 22 passed, 0 failed (4 new WS tests)
+
+### Sprint 1 Status (Complete)
+- Done: ASETPLTFRM-23 (1pt), 24 (2pt), 17 (3pt), 48, 49, 9 (5pt), **11 (8pt)**
+- Velocity: 19/19 pts (100%), 7/7 stories
+
+---
+
 # Session: Mar 12, 2026 — Redis Token Store Production (ASETPLTFRM-9)
 
 ## Summary

@@ -10,10 +10,11 @@ Example::
     register(app)
 """
 
+from __future__ import annotations
+
 import logging
 import math
 import time as _time
-from concurrent.futures import Future, ThreadPoolExecutor
 
 import dash_bootstrap_components as dbc
 from dash import ALL, MATCH, Input, Output, State, ctx, html, no_update
@@ -34,26 +35,21 @@ from dashboard.callbacks.iceberg import (
     _get_iceberg_repo,
     clear_caches,
 )
-from dashboard.callbacks.utils import (
-    _currency_symbol,
-    _get_market,
-)
+from dashboard.callbacks.refresh_state import RefreshManager
+from dashboard.callbacks.utils import _currency_symbol, _get_market
 from dashboard.components.error_overlay import make_error_banner
 from dashboard.services.stock_refresh import run_full_refresh
 
-# Module-level logger
+# Module-level logger (immutable singleton — not mutable state).
 _logger = logging.getLogger(__name__)
 
-# Background refresh infrastructure
-_executor = ThreadPoolExecutor(max_workers=4)
-_refresh_futures: dict[str, Future] = {}
 
-
-def register(app) -> None:
+def register(app, mgr: RefreshManager) -> None:
     """Register home-page callbacks with *app*.
 
     Args:
         app: The :class:`~dash.Dash` application instance.
+        mgr: Thread-safe refresh manager for background jobs.
     """
 
     @app.callback(
@@ -525,14 +521,10 @@ def register(app) -> None:
         ticker = ctx.triggered_id["index"]
 
         # Prevent duplicate in-flight jobs
-        existing = _refresh_futures.get(ticker)
-        if existing and not existing.done():
+        if not mgr.submit_if_idle(ticker, run_full_refresh, ticker, 9):
             return no_update, no_update
 
         _logger.info("Card refresh submitted for %s", ticker)
-        _refresh_futures[ticker] = _executor.submit(
-            run_full_refresh, ticker, 9
-        )
 
         spinner = html.Span(
             className="card-refresh-spinner",
@@ -572,7 +564,7 @@ def register(app) -> None:
         """Poll background refresh futures every 2 s.
 
         For each visible card, checks if a future exists
-        in ``_refresh_futures``.  Completed futures are
+        in the refresh manager.  Completed futures are
         harvested: success shows a green check, failure
         shows a red cross.  Caches are cleared and the
         trigger store is incremented to reload card data.
@@ -596,7 +588,7 @@ def register(app) -> None:
 
         for sid in status_ids:
             ticker = sid["index"]
-            fut = _refresh_futures.get(ticker)
+            fut = mgr.get(ticker)
 
             if fut is None or not fut.done():
                 statuses.append(no_update)
@@ -655,7 +647,7 @@ def register(app) -> None:
             disabled_flags.append(False)
             clear_caches(ticker)
             _clear_indicator_cache(ticker)
-            _refresh_futures.pop(ticker, None)
+            mgr.pop(ticker)
 
         trigger = (current_trigger or 0) + 1 if any_completed else no_update
         overlay = (
