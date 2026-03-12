@@ -113,5 +113,11 @@ def forecast_layout() -> html.Div:
             # ── Hidden stores ──────────────────────────────────────────────
             dcc.Store(id="forecast-refresh-store", data=0),
             dcc.Store(id="accuracy-store", data=None),
+            # Background refresh poller (2 s)
+            dcc.Interval(
+                id="forecast-refresh-poll",
+                interval=2000,
+                n_intervals=0,
+            ),
         ]
     )

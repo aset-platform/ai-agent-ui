@@ -4,7 +4,26 @@
  * Uses Playwright's route() to simulate failures.
  */
 
+import fs from "fs";
+import path from "path";
+
 import { test, expect } from "@playwright/test";
+
+/** Read cached JWT from the setup-produced storageState. */
+function readCachedToken(): string {
+  const fp = path.join(
+    __dirname,
+    "..",
+    "..",
+    ".auth",
+    "general-user.json",
+  );
+  const data = JSON.parse(fs.readFileSync(fp, "utf8"));
+  return data.origins[0].localStorage.find(
+    (e: { name: string }) =>
+      e.name === "auth_access_token",
+  ).value;
+}
 
 test.describe("Network error handling", () => {
   test("backend 500 → chat shows error", async ({ page }) => {
@@ -39,36 +58,8 @@ test.describe("Network error handling", () => {
   test("dashboard refresh failure → error overlay", async ({
     page,
   }) => {
-    // Get a token first via API (with retry on 429)
-    const BACKEND =
-      process.env.BACKEND_URL || "http://127.0.0.1:8181";
-    let access_token = "";
-    for (let i = 0; i < 5; i++) {
-      const loginRes = await page.request.post(
-        `${BACKEND}/auth/login`,
-        {
-          data: {
-            email:
-              process.env.TEST_USER_EMAIL ||
-              "test@demo.com",
-            password:
-              process.env.TEST_USER_PASSWORD ||
-              "Test1234!",
-          },
-        },
-      );
-      if (loginRes.ok()) {
-        ({ access_token } = await loginRes.json());
-        break;
-      }
-      if (loginRes.status() === 429 && i < 4) {
-        await new Promise((r) => setTimeout(r, 3_000));
-        continue;
-      }
-      throw new Error(
-        `Login failed: ${loginRes.status()}`,
-      );
-    }
+    test.slow(); // 3x timeout — background refresh
+    const access_token = readCachedToken();
 
     const DASHBOARD =
       process.env.DASHBOARD_URL || "http://127.0.0.1:8050";
@@ -80,8 +71,10 @@ test.describe("Network error handling", () => {
     const refreshBtn = page.locator("#analysis-refresh-btn");
     await expect(refreshBtn).toBeVisible({ timeout: 15_000 });
 
-    // Select a ticker first (refresh without ticker shows warning, not error)
-    const dropdown = page.locator("#analysis-ticker-dropdown");
+    // Select a ticker first
+    const dropdown = page.locator(
+      "#analysis-ticker-dropdown",
+    );
     await dropdown.click();
     const option = page
       .locator('[role="option"]')
@@ -91,9 +84,13 @@ test.describe("Network error handling", () => {
     }
 
     await refreshBtn.click();
-    // The refresh status or error overlay should populate
-    const status = page.locator("#analysis-refresh-status");
-    await expect(status).not.toBeEmpty({ timeout: 90_000 });
+    // Poll callback writes ✓ or ✗ when done.
+    const status = page.locator(
+      "#analysis-refresh-status",
+    );
+    await expect(status).toContainText(/[✓✗]/, {
+      timeout: 120_000,
+    });
   });
 
   test("network offline → graceful handling", async ({

@@ -5,19 +5,40 @@
  * return a valid JWT for the general user and superuser
  * respectively.  Dashboard tests use these to append
  * ``?token=`` to Dash URLs.
+ *
+ * Tokens are read from the storageState JSON files produced
+ * by the setup project — NO extra ``/auth/login`` API calls.
  */
 
-import { test as base } from "@playwright/test";
-import { apiLogin } from "../utils/api.helper";
+import fs from "fs";
+import path from "path";
 
-const USER_EMAIL =
-  process.env.TEST_USER_EMAIL || "test@demo.com";
-const USER_PASSWORD =
-  process.env.TEST_USER_PASSWORD || "Test1234!";
-const ADMIN_EMAIL =
-  process.env.TEST_ADMIN_EMAIL || "admin@demo.com";
-const ADMIN_PASSWORD =
-  process.env.TEST_ADMIN_PASSWORD || "Admin123!";
+import { test as base } from "@playwright/test";
+
+const AUTH_DIR = path.join(__dirname, "..", ".auth");
+
+/**
+ * Read a cached JWT from a storageState JSON file.
+ *
+ * The setup project writes localStorage entries with
+ * ``auth_access_token`` — this function extracts that
+ * value without making any API calls.
+ */
+function readCachedToken(filename: string): string {
+  const filepath = path.join(AUTH_DIR, filename);
+  const data = JSON.parse(fs.readFileSync(filepath, "utf8"));
+  const origin = data.origins?.[0];
+  const entry = origin?.localStorage?.find(
+    (e: { name: string; value: string }) =>
+      e.name === "auth_access_token",
+  );
+  if (!entry?.value) {
+    throw new Error(
+      `No auth_access_token in ${filename}`,
+    );
+  }
+  return entry.value;
+}
 
 type AuthFixtures = {
   userToken: string;
@@ -35,22 +56,14 @@ type AuthFixtures = {
  *     });
  */
 export const test = base.extend<AuthFixtures>({
-  userToken: async ({ request }, use) => {
-    const { access_token } = await apiLogin(
-      request,
-      USER_EMAIL,
-      USER_PASSWORD,
-    );
-    await use(access_token);
+  userToken: async ({}, use) => {
+    const token = readCachedToken("general-user.json");
+    await use(token);
   },
 
-  adminToken: async ({ request }, use) => {
-    const { access_token } = await apiLogin(
-      request,
-      ADMIN_EMAIL,
-      ADMIN_PASSWORD,
-    );
-    await use(access_token);
+  adminToken: async ({}, use) => {
+    const token = readCachedToken("superuser.json");
+    await use(token);
   },
 });
 

@@ -21,7 +21,7 @@ from auth.models import (
     OAuthProvider,
     TokenResponse,
 )
-from auth.rate_limit import limiter
+from auth.rate_limit import limiter, oauth_limit
 from auth.service import AuthService
 
 # Module-level logger; cannot be moved into a class
@@ -113,7 +113,7 @@ def register(router: APIRouter) -> None:
     @router.post(
         "/auth/oauth/callback", response_model=TokenResponse, tags=["oauth"]
     )
-    @limiter.limit("30/minute")
+    @limiter.limit(oauth_limit)
     def oauth_callback(
         request: Request,
         body: OAuthCallbackRequest,
