@@ -12,6 +12,11 @@ export const BACKEND_URL =
 export const DASHBOARD_URL =
   process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050";
 
+/** WebSocket URL derived from BACKEND_URL (http→ws, https→wss). */
+export const WS_URL =
+  process.env.NEXT_PUBLIC_WS_URL ??
+  BACKEND_URL.replace(/^http/, "ws");
+
 /** Docs base URL (no trailing slash). */
 export const DOCS_URL =
   process.env.NEXT_PUBLIC_DOCS_URL ?? "http://127.0.0.1:8000";

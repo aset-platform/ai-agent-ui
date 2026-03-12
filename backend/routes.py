@@ -185,8 +185,7 @@ def create_app(
                         {
                             "type": "timeout",
                             "message": (
-                                "Agent timed out"
-                                f" after {timeout}s"
+                                "Agent timed out" f" after {timeout}s"
                             ),
                         }
                     ) + "\n"
@@ -205,8 +204,7 @@ def create_app(
                             {
                                 "type": "timeout",
                                 "message": (
-                                    "Agent timed out"
-                                    f" after {timeout}s"
+                                    "Agent timed out" f" after {timeout}s"
                                 ),
                             }
                         ) + "\n"
@@ -270,6 +268,11 @@ def create_app(
     # Auth + user management routers.
     app.include_router(create_auth_router())
     app.include_router(get_ticker_router())
+
+    # WebSocket streaming endpoint.
+    from ws import register_ws_routes
+
+    register_ws_routes(app, agent_registry, executor, settings)
 
     # Serve uploaded avatars.
     from paths import AVATARS_DIR, ensure_dirs

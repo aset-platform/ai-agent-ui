@@ -14,6 +14,7 @@ import { AGENTS, type View } from "@/lib/constants";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useChatHistory } from "@/hooks/useChatHistory";
 import { useSendMessage } from "@/hooks/useSendMessage";
+import { useWebSocket } from "@/hooks/useWebSocket";
 import { useEditProfile, type UserProfile } from "@/hooks/useEditProfile";
 import { useChangePassword } from "@/hooks/useChangePassword";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -45,6 +46,7 @@ export default function ChatPage() {
   const menuRef = useRef<HTMLDivElement>(null);
 
   const { messages, setMessages } = useChatHistory(agentId);
+  const ws = useWebSocket();
 
   const { sendMessage, handleKeyDown, handleInput } = useSendMessage({
     agentId,
@@ -55,6 +57,7 @@ export default function ChatPage() {
     input,
     setInput,
     textareaRef,
+    ws,
   });
 
   const editProfile = useEditProfile();
