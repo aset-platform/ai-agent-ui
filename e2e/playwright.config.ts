@@ -98,7 +98,7 @@ export default defineConfig({
 
   webServer: {
     command: `cd ${process.env.PROJECT_ROOT || ".."} && ./run.sh start`,
-    url: `${BACKEND_URL}/agents`,
+    url: `${BACKEND_URL}/v1/agents`,
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,
     stdout: "pipe",
