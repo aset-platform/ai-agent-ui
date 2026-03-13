@@ -22,13 +22,15 @@ Typical usage::
     print(collector.get_stats())
 """
 
+from __future__ import annotations
+
 import logging
 import threading
 import time
 import uuid
 from collections import deque
 from datetime import date, datetime, timezone
-from typing import Any, Dict
+from typing import Any
 
 _logger = logging.getLogger(__name__)
 
@@ -37,6 +39,16 @@ _MAX_EVENTS = 1_000
 
 # Window for per-minute request rate tracking.
 _MINUTE = 60
+
+# Health assessment window — 5 minutes.
+_HEALTH_WINDOW = 300
+
+# Thresholds for tier health classification.
+_DEGRADED_FAILURES = 1  # ≥1 failure → degraded
+_DOWN_FAILURES = 4  # ≥4 failures → down
+
+# Latency sliding window size per model.
+_LATENCY_WINDOW = 100
 
 # Batch size for Iceberg writes.
 _FLUSH_INTERVAL = 30  # seconds
@@ -69,17 +81,24 @@ class ObservabilityCollector:
                 events are tracked in-memory only.
         """
         self._lock = threading.Lock()
-        self._requests_by_model: Dict[str, int] = {}
+        self._requests_by_model: dict[str, int] = {}
         self._cascade_count: int = 0
         self._compression_count: int = 0
         self._cascade_log: deque = deque(
             maxlen=_MAX_EVENTS,
         )
-        self._requests_minute: Dict[str, deque] = {}
+        self._requests_minute: dict[str, deque] = {}
         self._repo = repo
-        self._pricing: Dict[tuple, dict] = {}
+        self._pricing: dict[tuple, dict] = {}
         self._pending_events: list[dict] = []
         self._flush_timer: threading.Timer | None = None
+
+        # Per-tier health tracking.
+        self._failures_by_model: dict[str, deque] = {}
+        self._successes_by_model: dict[str, deque] = {}
+        self._cascades_by_model: dict[str, int] = {}
+        self._latency_by_model: dict[str, deque] = {}
+        self._disabled_tiers: set[str] = set()
 
         if repo is not None:
             self._load_pricing()
@@ -204,15 +223,31 @@ class ObservabilityCollector:
             completion_tokens: Output token count.
             latency_ms: Request duration in ms.
         """
+        now = time.monotonic()
         with self._lock:
             self._requests_by_model[model] = (
                 self._requests_by_model.get(model, 0) + 1
             )
             if model not in self._requests_minute:
                 self._requests_minute[model] = deque()
-            self._requests_minute[model].append(
-                time.monotonic(),
-            )
+            self._requests_minute[model].append(now)
+
+            # Track success for health assessment.
+            if model not in self._successes_by_model:
+                self._successes_by_model[model] = deque(
+                    maxlen=_LATENCY_WINDOW,
+                )
+            self._successes_by_model[model].append(now)
+
+            # Track latency.
+            if latency_ms is not None:
+                if model not in self._latency_by_model:
+                    self._latency_by_model[model] = deque(
+                        maxlen=_LATENCY_WINDOW,
+                    )
+                self._latency_by_model[model].append(
+                    (now, latency_ms),
+                )
 
         if self._repo is not None:
             in_r, out_r, cost = self._estimate_cost(
@@ -262,6 +297,7 @@ class ObservabilityCollector:
             tier_index: Tier index of skipped model.
             user_id: User who triggered the request.
         """
+        now = time.monotonic()
         with self._lock:
             self._cascade_count += 1
             self._cascade_log.append(
@@ -271,6 +307,24 @@ class ObservabilityCollector:
                     "to_model": to_model,
                     "reason": reason,
                 }
+            )
+
+            # Track per-model cascade count.
+            self._cascades_by_model[from_model] = (
+                self._cascades_by_model.get(
+                    from_model,
+                    0,
+                )
+                + 1
+            )
+
+            # Track failure timestamp for health.
+            if from_model not in self._failures_by_model:
+                self._failures_by_model[from_model] = deque(
+                    maxlen=_LATENCY_WINDOW
+                )
+            self._failures_by_model[from_model].append(
+                now,
             )
 
         if self._repo is not None:
@@ -392,10 +446,192 @@ class ObservabilityCollector:
                 )
 
     # ----------------------------------------------------------
+    # Tier health
+    # ----------------------------------------------------------
+
+    def disable_tier(self, model: str) -> None:
+        """Mark a tier as manually disabled.
+
+        Args:
+            model: Groq model identifier.
+        """
+        with self._lock:
+            self._disabled_tiers.add(model)
+        _logger.info("Tier disabled: %s", model)
+
+    def enable_tier(self, model: str) -> None:
+        """Re-enable a manually disabled tier.
+
+        Args:
+            model: Groq model identifier.
+        """
+        with self._lock:
+            self._disabled_tiers.discard(model)
+        _logger.info("Tier enabled: %s", model)
+
+    def is_tier_disabled(self, model: str) -> bool:
+        """Check if a tier is manually disabled.
+
+        Args:
+            model: Groq model identifier.
+
+        Returns:
+            ``True`` if the tier is manually disabled.
+        """
+        with self._lock:
+            return model in self._disabled_tiers
+
+    def _classify_health(
+        self,
+        model: str,
+        now: float,
+    ) -> str:
+        """Classify a tier's health status.
+
+        Uses a sliding window of failures in the last
+        :data:`_HEALTH_WINDOW` seconds.
+
+        Args:
+            model: Model identifier.
+            now: Current monotonic time.
+
+        Returns:
+            ``"disabled"``, ``"down"``, ``"degraded"``,
+            or ``"healthy"``.
+        """
+        if model in self._disabled_tiers:
+            return "disabled"
+
+        cutoff = now - _HEALTH_WINDOW
+        failures = self._failures_by_model.get(model)
+        recent_failures = 0
+        if failures:
+            recent_failures = sum(1 for t in failures if t >= cutoff)
+
+        if recent_failures >= _DOWN_FAILURES:
+            return "down"
+        if recent_failures >= _DEGRADED_FAILURES:
+            return "degraded"
+        return "healthy"
+
+    def _model_latency_stats(
+        self,
+        model: str,
+        now: float,
+    ) -> dict[str, int | None]:
+        """Compute latency stats for a model.
+
+        Args:
+            model: Model identifier.
+            now: Current monotonic time.
+
+        Returns:
+            Dict with ``avg_ms`` and ``p95_ms``.
+        """
+        dq = self._latency_by_model.get(model)
+        if not dq:
+            return {"avg_ms": None, "p95_ms": None}
+        cutoff = now - _HEALTH_WINDOW
+        recent = [ms for t, ms in dq if t >= cutoff]
+        if not recent:
+            # Fall back to all stored latencies.
+            recent = [ms for _, ms in dq]
+        if not recent:
+            return {"avg_ms": None, "p95_ms": None}
+        recent.sort()
+        avg = int(sum(recent) / len(recent))
+        p95_idx = int(len(recent) * 0.95)
+        p95 = recent[min(p95_idx, len(recent) - 1)]
+        return {"avg_ms": avg, "p95_ms": p95}
+
+    def get_tier_health(
+        self,
+        tier_models: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Return per-tier health status.
+
+        Args:
+            tier_models: Ordered list of configured tier
+                model names. If ``None``, returns health for
+                all models that have recorded activity.
+
+        Returns:
+            Dict with ``tiers`` list and ``summary``.
+        """
+        now = time.monotonic()
+        with self._lock:
+            models = tier_models or list(
+                set(
+                    list(self._requests_by_model.keys())
+                    + list(self._cascades_by_model.keys())
+                )
+                - {"_lifetime"}
+            )
+            tiers = []
+            for model in models:
+                status = self._classify_health(
+                    model,
+                    now,
+                )
+                latency = self._model_latency_stats(
+                    model,
+                    now,
+                )
+                # Count recent failures.
+                cutoff = now - _HEALTH_WINDOW
+                failures = self._failures_by_model.get(
+                    model,
+                )
+                recent_f = 0
+                if failures:
+                    recent_f = sum(1 for t in failures if t >= cutoff)
+
+                # Count recent successes.
+                successes = self._successes_by_model.get(
+                    model,
+                )
+                recent_s = 0
+                if successes:
+                    recent_s = sum(1 for t in successes if t >= cutoff)
+
+                tiers.append(
+                    {
+                        "model": model,
+                        "status": status,
+                        "failures_5m": recent_f,
+                        "successes_5m": recent_s,
+                        "cascade_count": (
+                            self._cascades_by_model.get(
+                                model,
+                                0,
+                            )
+                        ),
+                        "latency": latency,
+                    }
+                )
+
+            # Summary counts.
+            healthy = sum(1 for t in tiers if t["status"] == "healthy")
+            degraded = sum(1 for t in tiers if t["status"] == "degraded")
+            down = sum(1 for t in tiers if t["status"] == "down")
+            disabled = sum(1 for t in tiers if t["status"] == "disabled")
+
+        return {
+            "tiers": tiers,
+            "summary": {
+                "total": len(tiers),
+                "healthy": healthy,
+                "degraded": degraded,
+                "down": down,
+                "disabled": disabled,
+            },
+        }
+
+    # ----------------------------------------------------------
     # Stats
     # ----------------------------------------------------------
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Return current observability metrics.
 
         Returns:
@@ -407,7 +643,7 @@ class ObservabilityCollector:
         now = time.monotonic()
         with self._lock:
             total = sum(self._requests_by_model.values())
-            rpm: Dict[str, int] = {}
+            rpm: dict[str, int] = {}
             cutoff = now - _MINUTE
             for model, dq in self._requests_minute.items():
                 while dq and dq[0] < cutoff:

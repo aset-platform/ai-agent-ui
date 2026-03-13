@@ -75,7 +75,7 @@ graph TD
     end
 
     subgraph Backend["Backend — :8181"]
-        API["FastAPI<br/>POST /chat/stream<br/>WS /ws/chat<br/>GET /agents<br/>POST /auth/login<br/>GET /users …"]
+        API["FastAPI<br/>POST /v1/chat/stream<br/>WS /ws/chat<br/>GET /v1/agents<br/>POST /v1/auth/login<br/>GET /v1/admin/tier-health"]
         CS["ChatServer"]
         AR["AgentRegistry"]
         TR["ToolRegistry"]
@@ -170,7 +170,7 @@ sequenceDiagram
     participant T as Tool(s)
 
     U->>FE: sends message
-    FE->>BE: POST /chat/stream {message, history, agent_id}
+    FE->>BE: POST /v1/chat/stream {message, history, agent_id}
     Note over FE,BE: Authorization: Bearer <access_token>
     BE->>LLM: invoke(messages + tools)
 
@@ -319,14 +319,16 @@ ai-agent-ui/
 │   │   ├── NavigationMenu.tsx # FAB + popup nav (RBAC-filtered)
 │   │   ├── IFrameView.tsx    # Dashboard/Docs iframe wrapper
 │   │   ├── EditProfileModal.tsx
-│   │   └── ChangePasswordModal.tsx
+│   │   ├── ChangePasswordModal.tsx
+│   │   └── SessionManagementModal.tsx
 │   ├── hooks/                # Custom React hooks
 │   │   ├── useAuthGuard.ts   # Redirect to /login if no valid token
 │   │   ├── useChatHistory.ts # Per-agent history + debounced localStorage
 │   │   ├── useWebSocket.ts   # WS connection state machine + reconnect
 │   │   ├── useSendMessage.ts # WS-preferred streaming + HTTP fallback
 │   │   ├── useEditProfile.ts # PATCH /auth/me + avatar upload
-│   │   └── useChangePassword.ts
+│   │   ├── useChangePassword.ts
+│   │   └── useSessionManagement.ts  # List + revoke active sessions
 │   ├── lib/
 │   │   ├── auth.ts           # JWT token helpers
 │   │   ├── apiFetch.ts       # Authenticated fetch wrapper (auto-refresh)
@@ -343,6 +345,8 @@ ai-agent-ui/
 │   ├── llm_fallback.py       # FallbackLLM — N-tier Groq cascade + Anthropic fallback
 │   ├── token_budget.py       # Sliding-window TPM/RPM budget tracker
 │   ├── message_compressor.py # 3-stage message compression
+│   ├── observability.py      # Thread-safe metrics + tier health monitoring
+│   ├── routes.py             # Route registration (/v1/ prefix) + admin endpoints
 │   ├── ws.py                 # WebSocket /ws/chat endpoint (auth + streaming)
 │   ├── agents/
 │   │   ├── base.py           # BaseAgent ABC
@@ -376,6 +380,7 @@ ai-agent-ui/
 │   │   ├── analysis.py       # Technical analysis chart layout
 │   │   ├── insights_tabs.py  # Screener/Targets/Dividends/Risk/Sectors/Correlation/Quarterly
 │   │   ├── admin.py          # User management + audit log layout
+│   │   ├── observability.py  # LLM tier health + budget + cascade log
 │   │   ├── marketplace.py   # Ticker marketplace — browse & add tickers
 │   │   └── navbar.py         # Global navbar
 │   ├── callbacks/            # Interactive callbacks (package)
@@ -386,6 +391,8 @@ ai-agent-ui/
 │   │   ├── insights_cbs.py   # All Insights tab callbacks
 │   │   ├── admin_cbs.py      # User table callbacks
 │   │   ├── admin_cbs2.py     # Add/Edit/Deactivate user modals
+│   │   ├── observability_cbs.py # LLM metrics fetch + health card rendering
+│   │   ├── auth_utils.py    # JWT validation + _api_call helper
 │   │   ├── marketplace_cbs.py # Marketplace add/remove ticker callbacks
 │   │   ├── iceberg.py        # Iceberg repo singleton + 8 TTL-cached helpers
 │   │   └── utils.py          # Shared utilities (currency, market label)
@@ -394,7 +401,7 @@ ai-agent-ui/
 ├── e2e/                      # Playwright E2E tests
 │   ├── playwright.config.ts  # 6 projects (setup, auth, frontend, dashboard, admin, errors)
 │   ├── pages/                # Page Object Models (10 classes)
-│   ├── tests/                # 14 spec files, 49 tests
+│   ├── tests/                # 14+ spec files, ~91 tests
 │   ├── fixtures/             # Auth token fixtures for Dash
 │   └── utils/                # Selectors, wait helpers, API helpers
 │
@@ -500,6 +507,9 @@ All backend variables live in `backend/.env` (gitignored).
 | `REFRESH_TOKEN_EXPIRE_DAYS` | No | `7` | JWT refresh token TTL |
 | `LOG_LEVEL` | No | `DEBUG` | Minimum log severity |
 | `LOG_TO_FILE` | No | `true` | Write logs to `~/.ai-agent-ui/logs/agent.log` |
+| `REDIS_URL` | No | `""` | Redis URL for persistent token store (empty = in-memory) |
+| `WS_AUTH_TIMEOUT_SECONDS` | No | `10` | Seconds to wait for WebSocket auth message |
+| `WS_PING_INTERVAL_SECONDS` | No | `30` | WebSocket keepalive ping interval |
 | `NEXT_PUBLIC_BACKEND_URL` | No | `http://127.0.0.1:8181` | `frontend/.env.local` |
 | `NEXT_PUBLIC_DASHBOARD_URL` | No | `http://127.0.0.1:8050` | `frontend/.env.local` |
 | `NEXT_PUBLIC_WS_URL` | No | *(derived from BACKEND_URL)* | WebSocket URL — `frontend/.env.local` |
@@ -547,12 +557,17 @@ When `REDIS_URL` is empty, the backend uses an in-memory `TokenStore` with TTL-b
 
 ### API Versioning
 
-All core endpoints are dual-mounted at `/` (legacy) and `/v1/`:
+All API endpoints are served exclusively under the `/v1/` prefix. WebSocket and static file mounts remain at root:
 
 ```
-POST /chat/stream   ←→   POST /v1/chat/stream
-GET  /health         ←→   GET  /v1/health
-GET  /agents         ←→   GET  /v1/agents
+POST /v1/chat/stream         # NDJSON streaming
+POST /v1/chat                # Synchronous chat
+GET  /v1/health              # Health check
+GET  /v1/agents              # List agents
+GET  /v1/auth/*              # Auth endpoints
+GET  /v1/admin/tier-health   # LLM tier health (superuser)
+WS   /ws/chat                # WebSocket (not versioned)
+GET  /avatars/*              # Static files (not versioned)
 ```
 
 ### SSO / OAuth2 (Google + Facebook PKCE)
@@ -575,7 +590,7 @@ The `e2e/` directory contains a Playwright test suite covering all 3 app surface
 cd e2e && npm install               # first time only
 npx playwright install chromium     # first time only
 
-npm test                            # run all 50 tests (headless)
+npm test                            # run all ~91 tests (headless)
 npx playwright test --headed        # watch tests in a visible browser
 npx playwright test --ui            # interactive UI mode (best for exploration)
 npx playwright test --project=frontend-chromium   # frontend only
@@ -591,7 +606,8 @@ npx playwright test --project=dashboard-chromium  # dashboard only
 | Dashboard analysis + forecast | 8 | Tabs, charts, refresh, accuracy |
 | Dashboard marketplace + admin | 6 | Add/remove tickers, user table, RBAC |
 | Error handling | 5 | Network errors, auth expiry, 500s |
-| **Total** | **50** | |
+| Dashboard admin (deep) | 3 | LLM observability tier health, budget, cascade |
+| **Total** | **~91** | |
 
 CI runs automatically on PRs via `.github/workflows/e2e.yml` (chromium-only, caches browsers).
 

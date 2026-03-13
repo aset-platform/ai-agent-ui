@@ -32,6 +32,8 @@ Dependencies
 Both packages are listed in ``backend/requirements.txt``.
 """
 
+from __future__ import annotations
+
 import logging
 import secrets
 import time

@@ -9,10 +9,11 @@ Example::
     from dashboard.callbacks.utils import _get_market, _check_input_safety
 """
 
+from __future__ import annotations
+
 import logging
 import re
 import time as _time
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ def _is_valid_email(value: str) -> bool:
 
 def _check_input_safety(
     value: str, field: str, max_len: int = 200
-) -> Optional[str]:
+) -> str | None:
     """Return an error string if *value* is unsafe, else ``None``.
 
     Checks performed (in order): max length, HTML characters, null bytes,

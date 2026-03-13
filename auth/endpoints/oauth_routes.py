@@ -5,6 +5,8 @@ Functions
 - :func:`register` — attach OAuth routes to the router
 """
 
+from __future__ import annotations
+
 import logging
 from datetime import datetime, timezone
 from typing import Dict, List

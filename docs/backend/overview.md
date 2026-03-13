@@ -12,6 +12,7 @@ main.py              Entry point. ChatServer class owns all state.
  ├── logging_config.py setup_logging() — console + rotating file
  ├── llm_fallback.py  FallbackLLM — N-tier Groq cascade + Anthropic fallback
  ├── token_budget.py  Sliding-window TPM/RPM budget tracker
+ ├── observability.py Thread-safe metrics + tier health monitoring
  ├── message_compressor.py  3-stage message compression
  ├── tools/
  │    ├── registry.py   ToolRegistry — maps names → BaseTool instances
@@ -173,3 +174,59 @@ This gives each handler access to `self.agent_registry` and `self.tool_registry`
    self.agent_registry.register(my_agent)
    ```
 4. Clients can then target it by sending `"agent_id": "my-agent-id"` in the request body.
+
+---
+
+## Observability & Tier Health
+
+The `ObservabilityCollector` in `observability.py` provides thread-safe metrics collection for the N-tier LLM cascade:
+
+### Metrics tracked
+
+| Metric | Description |
+|--------|-------------|
+| Requests | Total requests per model (success + failure) |
+| Cascades | How often each model triggered a cascade to the next tier |
+| Latency | Per-request latency with avg and p95 stats (sliding window of 100 values) |
+| Failures | Timestamped failure events per model (5-minute sliding window) |
+
+### Health classification
+
+Each Groq tier is classified based on recent failures within a 5-minute window:
+
+| Status | Condition | Dashboard color |
+|--------|-----------|-----------------|
+| `healthy` | 0 failures | Green |
+| `degraded` | 1–3 failures | Yellow |
+| `down` | 4+ failures | Red |
+| `disabled` | Manually disabled via admin API | Grey |
+
+### Admin endpoints
+
+- `GET /v1/admin/tier-health` — returns per-tier health, latency stats, and a summary
+- `POST /v1/admin/tier-health/{model}/toggle` — enable/disable a tier (superuser only)
+
+### Dashboard integration
+
+The LLM Observability tab in the Dash admin panel shows:
+
+- **Health cards** — color-coded status per tier with cascade count and latency
+- **Budget cards** — TPM/RPM usage per active model
+- **Cascade log** — recent cascade events with timestamps
+
+---
+
+## API Versioning
+
+All API routes are mounted under the `/v1/` prefix. WebSocket (`/ws/chat`) and static file mounts (`/avatars/`) remain at root.
+
+```
+/v1/chat           POST    Chat endpoint
+/v1/chat/stream    POST    NDJSON streaming endpoint
+/v1/agents         GET     List agents
+/v1/health         GET     Health check
+/v1/auth/*                 Auth endpoints (login, register, etc.)
+/v1/admin/*                Admin endpoints (superuser only)
+/ws/chat                   WebSocket streaming (not versioned)
+/avatars/*                 Static avatar files (not versioned)
+```

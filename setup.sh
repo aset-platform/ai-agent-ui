@@ -201,7 +201,7 @@ if [[ "$OS" == "linux" ]]; then
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 3: Ensure Python 3.9
+# Step 3: Ensure Python 3.12
 # ══════════════════════════════════════════════════════════════════════════════
 step "3/12" "Ensuring Python 3.12 is available"
 
@@ -515,6 +515,19 @@ OAUTH_REDIRECT_URI=http://localhost:3000/auth/oauth/callback
 # Token deny-list + OAuth state store. Empty = in-memory fallback.
 REDIS_URL=redis://localhost:6379/0
 
+# ── Data Retention ────────────────────────────────────────────────────
+# Days to keep data (0 = keep forever). Dry-run by default.
+RETENTION_ENABLED=False
+RETENTION_DRY_RUN=True
+RETENTION_LLM_USAGE_DAYS=90
+RETENTION_ANALYSIS_SUMMARY_DAYS=365
+RETENTION_FORECAST_RUNS_DAYS=180
+RETENTION_COMPANY_INFO_DAYS=365
+
+# ── WebSocket ────────────────────────────────────────────────────────
+WS_AUTH_TIMEOUT_SECONDS=10
+WS_PING_INTERVAL_SECONDS=30
+
 # ── Logging / Runtime ─────────────────────────────────────────────────
 LOG_LEVEL=INFO
 LOG_TO_FILE=True
@@ -803,6 +816,7 @@ _check "Key packages (fastapi)" "'$VENV_PYTHON' -c 'import fastapi'"
 _check "Key packages (langchain)" "'$VENV_PYTHON' -c 'import langchain'"
 _check "Key packages (pyiceberg)" "'$VENV_PYTHON' -c 'import pyiceberg'"
 _check "Key packages (dash)" "'$VENV_PYTHON' -c 'import dash'"
+_check "Key packages (slowapi)" "'$VENV_PYTHON' -c 'import slowapi'"
 _check "Frontend node_modules" "[[ -d '$FRONTEND_DIR/node_modules' ]]"
 _check "backend/.env (symlink)" "[[ -L '$BACKEND_ENV_LINK' ]] && [[ -f '$BACKEND_ENV_REAL' ]]"
 _check "frontend/.env.local (symlink)" "[[ -L '$FRONTEND_ENV_LINK' ]] && [[ -f '$FRONTEND_ENV_REAL' ]]"

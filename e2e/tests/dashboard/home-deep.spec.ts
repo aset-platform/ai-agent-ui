@@ -83,4 +83,64 @@ test.describe("Dashboard home deep", () => {
     );
     expect(hasOverflow).toBe(false);
   });
+
+  test("page-size selector has all options", async ({
+    page,
+  }) => {
+    const pageSize = page.locator("#home-page-size");
+    await expect(pageSize).toBeVisible({
+      timeout: 15_000,
+    });
+    const options = pageSize.locator("option");
+    const count = await options.count();
+    expect(count).toBe(4); // 12, 24, 48, 96
+  });
+
+  test("page-size change updates card count", async ({
+    page,
+  }) => {
+    await expect(homePage.stockCards.first()).toBeVisible(
+      { timeout: 30_000 },
+    );
+    const pageSize = page.locator("#home-page-size");
+    await pageSize.selectOption("24");
+    await page.waitForTimeout(2_000);
+    // Count text should be visible
+    const countText = page.locator("#home-count-text");
+    await expect(countText).toBeVisible();
+    const text = await countText.innerText();
+    expect(text).toContain("of");
+  });
+
+  test("count text shows correct range", async ({
+    page,
+  }) => {
+    await expect(homePage.stockCards.first()).toBeVisible(
+      { timeout: 30_000 },
+    );
+    const countText = page.locator("#home-count-text");
+    await expect(countText).toBeVisible();
+    const text = await countText.innerText();
+    // Format: "Showing 1–12 of N"
+    expect(text).toMatch(/Showing \d+.+\d+ of \d+/);
+  });
+
+  test("market filter buttons toggle active state", async ({
+    page,
+  }) => {
+    const indiaBtn = page.locator("#filter-india-btn");
+    const usBtn = page.locator("#filter-us-btn");
+    await expect(indiaBtn).toBeVisible({ timeout: 15_000 });
+    await expect(usBtn).toBeVisible();
+
+    // Click US, verify it gets primary class
+    await usBtn.click();
+    await page.waitForTimeout(2_000);
+    await expect(usBtn).toHaveClass(/btn-primary/);
+
+    // Click India back
+    await indiaBtn.click();
+    await page.waitForTimeout(2_000);
+    await expect(indiaBtn).toHaveClass(/btn-primary/);
+  });
 });

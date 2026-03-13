@@ -19,6 +19,8 @@ New columns added
   each SSO login.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 
@@ -79,7 +81,9 @@ def migrate() -> None:
     if added:
         _logger.info("Migration complete — added columns: %s", added)
     else:
-        _logger.info("Migration complete — no changes needed (all columns present).")
+        _logger.info(
+            "Migration complete — no changes needed (all columns present)."
+        )
 
 
 if __name__ == "__main__":

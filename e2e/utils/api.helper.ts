@@ -7,8 +7,9 @@
 
 import { type APIRequestContext } from "@playwright/test";
 
-const BACKEND =
+const BACKEND_HOST =
   process.env.BACKEND_URL || "http://127.0.0.1:8181";
+const BACKEND = `${BACKEND_HOST}/v1`;
 
 interface LoginResult {
   access_token: string;

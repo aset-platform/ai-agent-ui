@@ -52,6 +52,21 @@ def _parse_usage(val: str) -> tuple:
     return int(parts[0]), int(parts[1])
 
 
+_HEALTH_COLORS = {
+    "healthy": "success",
+    "degraded": "warning",
+    "down": "danger",
+    "disabled": "secondary",
+}
+
+_HEALTH_ICONS = {
+    "healthy": "●",
+    "degraded": "▲",
+    "down": "✕",
+    "disabled": "⊘",
+}
+
+
 def _short_model(name: str) -> str:
     """Shorten a model name for display.
 
@@ -133,6 +148,88 @@ def _build_tier_card(model: str, data: dict) -> dbc.Col:
     )
 
 
+def _build_health_card(tier: dict) -> dbc.Col:
+    """Build a single tier health status card.
+
+    Args:
+        tier: Dict with ``model``, ``status``,
+            ``failures_5m``, ``successes_5m``,
+            ``cascade_count``, ``latency``.
+
+    Returns:
+        A :class:`~dbc.Col` wrapping the card.
+    """
+    model = tier.get("model", "unknown")
+    status = tier.get("status", "healthy")
+    color = _HEALTH_COLORS.get(status, "secondary")
+    icon = _HEALTH_ICONS.get(status, "?")
+    lat = tier.get("latency", {})
+    avg_ms = lat.get("avg_ms")
+    p95_ms = lat.get("p95_ms")
+
+    lat_text = "—"
+    if avg_ms is not None:
+        lat_text = f"avg {avg_ms}ms"
+        if p95_ms is not None:
+            lat_text += f" / p95 {p95_ms}ms"
+
+    body_children = [
+        html.Div(
+            [
+                html.Span(
+                    icon,
+                    className=f"text-{color} me-2",
+                    style={"fontSize": "1.2rem"},
+                ),
+                html.Span(
+                    _short_model(model),
+                    className="fw-semibold",
+                ),
+            ],
+            className="mb-2",
+        ),
+        dbc.Badge(
+            status.upper(),
+            color=color,
+            className="mb-2",
+        ),
+        html.Div(
+            [
+                html.Small(
+                    f"Failures (5m): " f"{tier.get('failures_5m', 0)}",
+                    className="text-muted d-block",
+                ),
+                html.Small(
+                    f"Successes (5m): " f"{tier.get('successes_5m', 0)}",
+                    className="text-muted d-block",
+                ),
+                html.Small(
+                    f"Cascades: " f"{tier.get('cascade_count', 0)}",
+                    className="text-muted d-block",
+                ),
+                html.Small(
+                    f"Latency: {lat_text}",
+                    className="text-muted d-block",
+                ),
+            ],
+        ),
+    ]
+
+    return dbc.Col(
+        dbc.Card(
+            dbc.CardBody(body_children),
+            className="shadow-sm",
+            style={
+                "borderLeft": f"4px solid var(--bs-{color})",
+            },
+        ),
+        xs=12,
+        sm=6,
+        lg=3,
+        className="mb-3",
+    )
+
+
 def register(app) -> None:
     """Register observability callbacks with *app*.
 
@@ -143,6 +240,7 @@ def register(app) -> None:
     @app.callback(
         Output("obs-metrics-store", "data"),
         Output("obs-prev-metrics-store", "data"),
+        Output("obs-health-store", "data"),
         Input("obs-interval", "n_intervals"),
         State("auth-token-store", "data"),
         State("url", "search"),
@@ -168,9 +266,19 @@ def register(app) -> None:
         resp = _api_call("get", "/admin/metrics", token)
         if resp is None or not resp.ok:
             if prev_data is None:
-                return None, None
-            return no_update, no_update
+                return None, None, None
+            return no_update, no_update, no_update
         data = resp.json()
+
+        # Fetch tier health in parallel.
+        health_data = None
+        health_resp = _api_call(
+            "get",
+            "/admin/tier-health",
+            token,
+        )
+        if health_resp and health_resp.ok:
+            health_data = health_resp.json()
 
         # Compare without volatile timestamp field.
         def _stable(d):
@@ -180,8 +288,12 @@ def register(app) -> None:
             return json.dumps(c, sort_keys=True)
 
         if _stable(data) == _stable(prev_data):
-            return no_update, no_update
-        return data, data
+            return (
+                no_update,
+                no_update,
+                health_data or no_update,
+            )
+        return data, data, health_data
 
     @app.callback(
         Output("obs-summary-row", "children"),
@@ -357,4 +469,67 @@ def register(app) -> None:
             responsive=True,
             size="sm",
             className="small",
+        )
+
+    @app.callback(
+        Output("obs-health-cards", "children"),
+        Input("obs-health-store", "data"),
+        prevent_initial_call=True,
+    )
+    def render_health_cards(data):
+        """Render per-tier health status cards.
+
+        Args:
+            data: Tier health store data.
+
+        Returns:
+            Row of health cards with status badges.
+        """
+        if not data:
+            return html.P(
+                "No tier health data.",
+                className="text-muted",
+            )
+        tiers = data.get("health", {}).get(
+            "tiers",
+            [],
+        )
+        if not tiers:
+            return html.P(
+                "No tiers configured.",
+                className="text-muted",
+            )
+        summary = data.get("health", {}).get(
+            "summary",
+            {},
+        )
+        summary_row = dbc.Row(
+            [
+                dbc.Col(
+                    dbc.Badge(
+                        f"{summary.get('healthy', 0)}" " Healthy",
+                        color="success",
+                        className="me-2 px-3 py-2",
+                    ),
+                ),
+                dbc.Col(
+                    dbc.Badge(
+                        f"{summary.get('degraded', 0)}" " Degraded",
+                        color="warning",
+                        className="me-2 px-3 py-2",
+                    ),
+                ),
+                dbc.Col(
+                    dbc.Badge(
+                        f"{summary.get('down', 0)}" " Down",
+                        color="danger",
+                        className="me-2 px-3 py-2",
+                    ),
+                ),
+            ],
+            className="mb-3",
+        )
+        cards = [_build_health_card(t) for t in tiers]
+        return html.Div(
+            [summary_row, dbc.Row(cards)],
         )

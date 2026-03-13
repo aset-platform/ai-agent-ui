@@ -1,19 +1,22 @@
 # API Reference
 
-The backend exposes three HTTP endpoints. All are defined in `backend/main.py` and registered as bound methods of `ChatServer`.
+All API endpoints are served under the `/v1/` prefix. WebSocket and static-file mounts remain at root.
 
-Base URL (development): `http://127.0.0.1:8181`
+Base URL (development): `http://127.0.0.1:8181/v1`
+
+!!! warning "Root endpoints removed"
+    As of Mar 13, 2026 (ASETPLTFRM-20), root-mounted API routes (`/chat`, `/agents`, `/health`) have been removed. All API traffic must go through `/v1/`. WebSocket stays at `/ws/chat`; static files (e.g. `/avatars/`) stay at root.
 
 ---
 
-## POST /chat
+## POST /v1/chat
 
 Send a message to an agent and receive a complete response.
 
 ### Request
 
 ```http
-POST /chat
+POST /v1/chat
 Content-Type: application/json
 ```
 
@@ -92,18 +95,18 @@ Returned when an unhandled exception occurs inside the agentic loop.
 
 ---
 
-## POST /chat/stream
+## POST /v1/chat/stream
 
 Send a message to an agent and receive a live NDJSON stream of status events as the agentic loop progresses.  The frontend uses this endpoint so users see progress in real time rather than waiting in silence.
 
 ### Request
 
 ```http
-POST /chat/stream
+POST /v1/chat/stream
 Content-Type: application/json
 ```
 
-The request body is identical to `POST /chat`.
+The request body is identical to `POST /v1/chat`.
 
 ### Response — 200 OK (NDJSON stream)
 
@@ -139,11 +142,11 @@ The stream always ends with either a `final`, `error`, or `timeout` event, then 
 
 ### Response — 404 Not Found
 
-Same as `POST /chat`.
+Same as `POST /v1/chat`.
 
 !!! tip "Consuming the stream (JavaScript)"
     ```javascript
-    const res = await fetch(`${backendUrl}/chat/stream`, {
+    const res = await fetch(`${backendUrl}/v1/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, history, agent_id }),
@@ -168,14 +171,14 @@ Same as `POST /chat`.
 
 ---
 
-## GET /agents
+## GET /v1/agents
 
 List all registered agents.
 
 ### Request
 
 ```http
-GET /agents
+GET /v1/agents
 ```
 
 No request body or parameters.
@@ -198,7 +201,7 @@ Each agent object contains:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | `string` | Agent ID used in `POST /chat` `agent_id` field |
+| `id` | `string` | Agent ID used in `POST /v1/chat` `agent_id` field |
 | `name` | `string` | Human-readable display name |
 | `description` | `string` | One-sentence description of the agent's purpose |
 
@@ -239,21 +242,112 @@ The backend converts each history entry to a LangChain `HumanMessage` or `AIMess
 Using curl:
 
 ```bash
-# POST /chat (synchronous)
-curl -s -X POST http://127.0.0.1:8181/chat \
+# POST /v1/chat (synchronous)
+curl -s -X POST http://127.0.0.1:8181/v1/chat \
   -H "Content-Type: application/json" \
   -d '{"message": "What time is it?", "history": []}' | python3 -m json.tool
 
-# POST /chat/stream (NDJSON — prints events as they arrive)
-curl -N -s -X POST http://127.0.0.1:8181/chat/stream \
+# POST /v1/chat/stream (NDJSON — prints events as they arrive)
+curl -N -s -X POST http://127.0.0.1:8181/v1/chat/stream \
   -H "Content-Type: application/json" \
   -d '{"message": "What time is it?", "history": []}'
 
-# GET /agents
-curl -s http://127.0.0.1:8181/agents | python3 -m json.tool
+# GET /v1/agents
+curl -s http://127.0.0.1:8181/v1/agents | python3 -m json.tool
+
+# GET /v1/health
+curl -s http://127.0.0.1:8181/v1/health | python3 -m json.tool
 ```
 
 FastAPI also generates interactive docs automatically:
 
 - **Swagger UI**: [http://127.0.0.1:8181/docs](http://127.0.0.1:8181/docs)
 - **ReDoc**: [http://127.0.0.1:8181/redoc](http://127.0.0.1:8181/redoc)
+
+---
+
+## Admin Endpoints (superuser only)
+
+All admin endpoints require a valid JWT with `role: superuser` in the `Authorization: Bearer` header.
+
+### GET /v1/admin/tier-health
+
+Returns health status for each configured Groq LLM tier.
+
+```json
+{
+  "tiers": [
+    {
+      "model": "llama-3.3-70b-versatile",
+      "health": "healthy",
+      "requests": 42,
+      "successes": 42,
+      "cascades": 0,
+      "avg_latency_ms": 320.5,
+      "p95_latency_ms": 580.0
+    },
+    {
+      "model": "moonshotai/kimi-k2-instruct",
+      "health": "degraded",
+      "requests": 10,
+      "successes": 7,
+      "cascades": 3,
+      "avg_latency_ms": 450.2,
+      "p95_latency_ms": 890.0
+    }
+  ],
+  "summary": {
+    "total": 4,
+    "healthy": 2,
+    "degraded": 1,
+    "down": 0,
+    "disabled": 1
+  }
+}
+```
+
+**Health classification** (5-minute sliding window):
+
+| Status | Condition |
+|--------|-----------|
+| `healthy` | 0 failures in window |
+| `degraded` | 1–3 failures in window |
+| `down` | 4+ failures in window |
+| `disabled` | Manually disabled via toggle |
+
+### POST /v1/admin/tier-health/{model}/toggle
+
+Enable or disable a specific Groq model tier. Disabled tiers are skipped during the cascade.
+
+```bash
+curl -X POST http://127.0.0.1:8181/v1/admin/tier-health/llama-3.3-70b-versatile/toggle \
+  -H "Authorization: Bearer <superuser-jwt>"
+```
+
+```json
+{
+  "model": "llama-3.3-70b-versatile",
+  "disabled": true
+}
+```
+
+---
+
+## WebSocket — /ws/chat
+
+The WebSocket endpoint remains at root (not under `/v1/`).
+
+```
+ws://127.0.0.1:8181/ws/chat
+```
+
+**Protocol:**
+
+1. Client connects to `/ws/chat`
+2. Client sends `{"type": "auth", "token": "<JWT>"}` within 10 s
+3. Server replies `{"type": "auth_ok"}`
+4. Client sends `{"type": "chat", "message": "...", "agent_id": "..."}` to stream
+5. Server pushes `thinking`, `tool_start`, `tool_done`, `final`, `error`, `timeout` events
+6. `ping` / `pong` keepalive supported at any time
+
+**Close codes:** 4001 (auth failed), 4002 (auth timeout), 4003 (invalid format)

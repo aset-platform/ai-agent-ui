@@ -55,7 +55,7 @@ class TestChatStream:
     def test_stream_responds_200(self, client):
         """/chat/stream must return 200 (endpoint is open — no auth guard)."""
         r = client.post(
-            "/chat/stream",
+            "/v1/chat/stream",
             json={"message": "ping", "agent_id": "general"},
         )
         assert r.status_code == 200, r.text
@@ -63,7 +63,7 @@ class TestChatStream:
     def test_stream_content_type_is_ndjson(self, client):
         """Response content-type must indicate NDJSON."""
         r = client.post(
-            "/chat/stream",
+            "/v1/chat/stream",
             json={"message": "ping", "agent_id": "general"},
         )
         if r.status_code == 200:
@@ -75,7 +75,7 @@ class TestChatStream:
     def test_stream_emits_valid_json_lines(self, client):
         """Each non-empty line in the response must be valid JSON."""
         r = client.post(
-            "/chat/stream",
+            "/v1/chat/stream",
             json={"message": "What time is it?", "agent_id": "general"},
         )
         assert r.status_code == 200, r.text
@@ -88,7 +88,7 @@ class TestChatStream:
     def test_stream_unknown_agent_returns_404(self, client):
         """Unknown agent_id must return 404."""
         r = client.post(
-            "/chat/stream",
+            "/v1/chat/stream",
             json={"message": "hello", "agent_id": "nonexistent_agent_xyz"},
         )
         assert r.status_code == 404, r.text
@@ -96,7 +96,7 @@ class TestChatStream:
     def test_stream_final_event_present(self, client):
         """The stream must terminate with a 'final' or 'error' event."""
         r = client.post(
-            "/chat/stream",
+            "/v1/chat/stream",
             json={"message": "ping", "agent_id": "general"},
         )
         assert r.status_code == 200, r.text

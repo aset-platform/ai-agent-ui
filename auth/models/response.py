@@ -11,7 +11,7 @@ Models
 - :class:`OAuthAuthorizeResponse`
 """
 
-from typing import Dict, Optional
+from __future__ import annotations
 
 from pydantic import BaseModel
 
@@ -68,11 +68,11 @@ class UserResponse(BaseModel):
     full_name: str
     role: str
     is_active: bool
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
-    last_login_at: Optional[str] = None
-    avatar_url: Optional[str] = None
-    page_permissions: Optional[Dict[str, bool]] = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    last_login_at: str | None = None
+    avatar_url: str | None = None
+    page_permissions: dict[str, bool] | None = None
 
 
 class OAuthAuthorizeResponse(BaseModel):

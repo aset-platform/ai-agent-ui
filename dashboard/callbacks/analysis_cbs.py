@@ -55,6 +55,45 @@ def register(app, mgr: RefreshManager) -> None:
         mgr: Thread-safe refresh manager for background jobs.
     """
 
+    # ── Lazy tab rendering ──────────────────────────────
+    @app.callback(
+        Output("analysis-tab-content", "children"),
+        Input("analysis-page-tabs", "active_tab"),
+    )
+    def render_active_tab(active_tab):
+        """Render tab content lazily on first activation.
+
+        Only builds the layout for the selected tab,
+        deferring heavy component creation until
+        the user actually clicks the tab.
+
+        Args:
+            active_tab: The ``tab_id`` of the active tab.
+
+        Returns:
+            Layout component for the selected tab.
+        """
+        from dashboard.layouts.analysis import (  # noqa
+            analysis_layout,
+        )
+
+        if active_tab == "forecast-tab":
+            from dashboard.layouts.forecast import (  # noqa
+                forecast_layout,
+            )
+
+            return forecast_layout()
+
+        if active_tab == "compare-tab":
+            from dashboard.layouts.compare import (  # noqa
+                compare_layout,
+            )
+
+            return compare_layout()
+
+        # Default: analysis-tab
+        return analysis_layout()
+
     @app.callback(
         Output("analysis-ticker-dropdown", "value"),
         [Input("url", "search"), Input("url", "pathname")],

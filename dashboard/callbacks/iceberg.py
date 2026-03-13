@@ -15,12 +15,13 @@ Example::
     df = _get_ohlcv_cached(repo, "AAPL")
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import sys
 import time as _time
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 
@@ -69,7 +70,7 @@ _DIVIDENDS_CACHE: dict = {}  # {ticker: (df, expiry_monotonic)}
 _QUARTERLY_CACHE: dict = {"data": None, "expiry": 0.0}
 
 
-def _get_iceberg_repo() -> Optional[object]:
+def _get_iceberg_repo() -> object | None:
     """Return the module-level StockRepository singleton.
 
     Re-initialised after ``_DASH_REPO_TTL`` seconds so the dashboard can
@@ -158,7 +159,7 @@ def _get_forecast_runs_cached(
 # ------------------------------------------------------------------
 
 
-def _get_ohlcv_cached(repo: object, ticker: str) -> Optional[pd.DataFrame]:
+def _get_ohlcv_cached(repo: object, ticker: str) -> pd.DataFrame | None:
     """Return OHLCV data for *ticker* from Iceberg.
 
     Cached for ``_SHARED_TTL`` seconds.
@@ -220,7 +221,7 @@ def _get_forecast_cached(
     repo: object,
     ticker: str,
     horizon_months: int,
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """Return the latest forecast series for *ticker* from Iceberg.
 
     Cached for ``_SHARED_TTL`` seconds.  The returned DataFrame has columns
@@ -269,7 +270,7 @@ def _get_forecast_cached(
 def _get_dividends_cached(
     repo: object,
     ticker: str,
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """Return dividend history for *ticker*, cached for ``_SHARED_TTL`` s.
 
     Args:

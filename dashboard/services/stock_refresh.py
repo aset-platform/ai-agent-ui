@@ -2,7 +2,7 @@
 
 Runs the same 6-step pipeline that the Stock Agent uses:
 
-1. **Full OHLCV re-fetch** — fetches the entire date range
+1. **Full OHLCV re-fetch** -- fetches the entire date range
    from yfinance (not a delta) so that any gaps in the middle
    of the data are filled.  Iceberg deduplication on
    ``(ticker, date)`` ensures existing rows are not duplicated.
@@ -28,6 +28,8 @@ Usage::
     if result.success:
         print("Accuracy:", result.accuracy)
 """
+
+from __future__ import annotations
 
 import glob as _glob
 import logging

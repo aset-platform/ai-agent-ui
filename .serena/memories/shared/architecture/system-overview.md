@@ -14,9 +14,11 @@
 - **`ChatServer`** (`backend/main.py`) — owns `ToolRegistry`,
   `AgentRegistry`, FastAPI app, bounded `ThreadPoolExecutor(10)`.
   All state in this class, no module-level mutable globals.
-  `GET /health` endpoint returns `{"status": "ok"}`.
-- **API versioning**: Routes dual-mounted at `/` (legacy) and `/v1/`
-  via `_register_core_routes(router)` in `backend/routes.py`.
+- **API versioning**: All API routes under `/v1/` prefix only
+  (root routes removed Mar 13, 2026 — ASETPLTFRM-20).
+  WebSocket stays at `/ws/chat`; static files at `/avatars/`.
+  Frontend uses `API_URL` (`BACKEND_URL/v1`) for all API calls;
+  `BACKEND_URL` only for static assets and WS derivation.
 - **Token store**: `auth/token_store.py` — `TokenStore` protocol
   with `InMemoryTokenStore` / `RedisTokenStore`. Factory:
   `create_token_store(redis_url)`. Used for JWT deny-list + OAuth state.
@@ -28,11 +30,20 @@
   groq_model_tiers` list, parsed from `GROQ_MODEL_TIERS` CSV env var.
   Default: llama-3.3-70b → kimi-k2 → gpt-oss-120b → scout-17b →
   claude-sonnet-4-6.
+- **Observability**: `backend/observability.py` — `ObservabilityCollector`
+  tracks per-tier health (healthy/degraded/down/disabled), latency
+  (avg + p95), cascade counts. Admin endpoints:
+  `GET /v1/admin/tier-health`, `POST /v1/admin/tier-health/{model}/toggle`.
+  Dashboard shows health cards with color-coded status.
 - **Budget tracking**: `backend/token_budget.py` — sliding-window
   TPM/RPM per Groq model. `backend/message_compressor.py` — 3-stage
   compression (system prompt, history, tool results).
-- **Streaming**: `POST /chat/stream` returns NDJSON events:
+- **Streaming**: `POST /v1/chat/stream` returns NDJSON events:
   `thinking`, `tool_start`, `tool_done`, `warning`, `final`, `error`.
+- **WebSocket**: `backend/ws.py` — `/ws/chat` endpoint with
+  auth-first protocol. Frontend `useWebSocket` hook manages
+  DISCONNECTED→CONNECTING→AUTHENTICATING→READY state machine.
+  `useSendMessage` prefers WS, falls back to HTTP NDJSON.
 - **Same-day cache**:
   `~/.ai-agent-ui/data/cache/{TICKER}_{key}_{YYYY-MM-DD}.txt`.
 - **Centralised paths**: `backend/paths.py` — single source of truth
@@ -62,7 +73,8 @@ Paths centralised in `backend/paths.py`.
 
 ## Key Directories
 
-- `backend/` — agents, tools, config, llm_fallback, token_budget
+- `backend/` — agents, tools, config, llm_fallback, token_budget,
+  observability, routes, ws
 - `auth/` — JWT + RBAC + OAuth PKCE + user-ticker linking
 - `stocks/` — Iceberg persistence (9 tables, single source of truth)
 - `frontend/` — SPA (Next.js)

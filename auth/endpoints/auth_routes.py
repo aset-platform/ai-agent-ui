@@ -5,6 +5,8 @@ Functions
 - :func:`register` — attach auth routes to the router
 """
 
+from __future__ import annotations
+
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone

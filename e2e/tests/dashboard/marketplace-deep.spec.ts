@@ -89,4 +89,86 @@ test.describe("Dashboard marketplace deep", () => {
     );
     expect(hasOverflow).toBe(false);
   });
+
+  test("page-size selector is visible with options", async ({
+    page,
+  }) => {
+    await expect(marketplacePage.grid).toBeVisible({
+      timeout: 30_000,
+    });
+    const pageSize = page.locator("#marketplace-page-size");
+    await expect(pageSize).toBeVisible();
+    const options = pageSize.locator("option");
+    const count = await options.count();
+    expect(count).toBeGreaterThanOrEqual(3);
+  });
+
+  test("count text shows record range", async ({
+    page,
+  }) => {
+    await expect(marketplacePage.grid).toBeVisible({
+      timeout: 30_000,
+    });
+    const countText = page.locator(
+      "#marketplace-count-text",
+    );
+    await expect(countText).toBeVisible();
+    const text = await countText.innerText();
+    expect(text).toMatch(/\d+/);
+  });
+
+  test("table has sortable column headers", async ({
+    page,
+  }) => {
+    await expect(marketplacePage.grid).toBeVisible({
+      timeout: 30_000,
+    });
+    const sortBtns = page.locator(".sort-header-btn");
+    const count = await sortBtns.count();
+    expect(count).toBeGreaterThanOrEqual(3);
+  });
+
+  test("sort header click reorders table", async ({
+    page,
+  }) => {
+    await expect(marketplacePage.grid).toBeVisible({
+      timeout: 30_000,
+    });
+    const sortBtn = page
+      .locator(".sort-header-btn")
+      .first();
+    if ((await sortBtn.count()) > 0) {
+      await sortBtn.click();
+      await page.waitForTimeout(2_000);
+      // Sort arrow should show active state
+      const arrow = sortBtn.locator(".sort-active");
+      await expect(arrow).toBeVisible();
+    }
+  });
+
+  test("pagination shows correct page count", async ({
+    page,
+  }) => {
+    await expect(marketplacePage.grid).toBeVisible({
+      timeout: 30_000,
+    });
+    const pagination = page.locator(
+      "#marketplace-pagination",
+    );
+    await expect(pagination).toBeVisible();
+    // Should have at least page 1
+    const pageLinks = pagination.locator(".page-link");
+    const count = await pageLinks.count();
+    expect(count).toBeGreaterThanOrEqual(1);
+  });
+
+  test("alert container exists for feedback", async ({
+    page,
+  }) => {
+    // Alert container should exist (may be empty)
+    const alert = page.locator("#marketplace-alert");
+    await expect(alert).toBeAttached({
+      timeout: 15_000,
+    });
+  });
 });

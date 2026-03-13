@@ -13,6 +13,8 @@ Factory
 returns the appropriate implementation.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 from functools import lru_cache

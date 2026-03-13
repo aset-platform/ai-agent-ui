@@ -2,6 +2,89 @@
 
 ---
 
+# Session: Mar 13, 2026 (cont. 2) — ASETPLTFRM-13, 20
+
+## Summary
+Tier health monitoring and full API v1 cutover.
+
+### ASETPLTFRM-13 — Groq tier health monitoring
+- Per-tier health classification: healthy/degraded/down/disabled
+  (5-min sliding window, thresholds: 1 failure = degraded, 4 = down).
+- Latency stats (avg + p95) from sliding window of recent values.
+- Admin endpoints: `GET /v1/admin/tier-health`,
+  `POST /v1/admin/tier-health/{model}/toggle`.
+- Dashboard health cards with color-coded status indicators.
+- 12 backend tests (`test_tier_health.py`), 6 dashboard tests
+  (`test_tier_health_cards.py`), 3 E2E tests.
+
+### ASETPLTFRM-20 — API v1 cutover
+- Removed root-mounted duplicate routes; all API under `/v1/`.
+- Frontend: added `API_URL` constant (`BACKEND_URL/v1`), updated
+  9 files to use `API_URL` for API calls, kept `BACKEND_URL` for
+  static assets (avatars) and WS URL derivation.
+- Dashboard: split `_BACKEND_URL` → `_BACKEND_HOST` + API URL.
+- WebSocket stays at `/ws/chat` (not versioned).
+- Rewrote `test_api_versioning.py` (8 tests), updated
+  `test_chat_stream.py` to use `/v1/` paths.
+- Python 3.9 compat: `from __future__ import annotations` in 7
+  backend files.
+
+### Documentation updates
+- `backend/api.md` — all endpoints under `/v1/`, admin tier-health
+  endpoints, WebSocket protocol, updated curl examples.
+- `backend/overview.md` — observability module, tier health section,
+  API versioning route table.
+- `backend/config.md` — WebSocket + Redis settings.
+- `dashboard/overview.md` — LLM observability tab, health cards,
+  `_api_call` host/API URL split.
+- `frontend/overview.md` — `API_URL` constant, URL usage guide,
+  new hooks/components in file tree.
+- `dev/changelog.md` — Mar 13 entry for ASETPLTFRM-13 and 20.
+- `README.md` — `/v1/` only routes, tier health admin endpoint,
+  observability files, session management components, E2E counts,
+  WebSocket/Redis env vars.
+
+---
+
+# Session: Mar 13, 2026 (cont.) — ASETPLTFRM-18, 19, 58
+
+## Summary
+Bug fixes, lazy loading, forecast charts, and E2E expansion.
+
+### ASETPLTFRM-18 — Lazy tab loading (analysis page)
+- Tabs render via callback on `active_tab`; no children at init.
+- `suppress_callback_exceptions=True` enabled.
+- Bug fix: moved `analysis-refresh-store` + poll interval
+  outside tab content so they persist across tab switches.
+
+### ASETPLTFRM-19 — Forecast chart types
+- Horizon radio (3/6/9 months), view radio (standard,
+  decomposition, multi_horizon).
+- 14 new unit tests (`test_lazy_loading.py`,
+  `test_forecast_charts.py`).
+
+### Bug fixes
+- **Compare chart broken**: `analysis-refresh-store` destroyed
+  on tab switch — moved to `analysis_tabs_layout()`.
+- **Pagination reset to page 1**: phantom sort-store writes
+  from pattern-matching callbacks firing on table re-render.
+  Fixed with `if not any(n_clicks_list): return no_update`
+  guard in `sort_helpers.py`.
+- **Python 3.9 compat**: added `from __future__ import
+  annotations` to 10 dashboard files using `X | None` syntax.
+
+### ASETPLTFRM-58 — E2E test coverage (+42 tests)
+- New: `pagination.spec.ts` (10 tests) — cross-page validation.
+- Updated 6 specs: home (+4), insights (+10), marketplace (+6),
+  forecast (+6), analysis (+7), admin (+7).
+- Total E2E: ~91 tests.
+
+### Jira updates
+- ASETPLTFRM-18, 19 updated with implementation details.
+- ASETPLTFRM-58 updated with full E2E coverage breakdown.
+
+---
+
 # Session: Mar 13, 2026 — ASETPLTFRM-7, 10, 12
 
 ## Summary

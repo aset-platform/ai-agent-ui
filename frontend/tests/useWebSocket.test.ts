@@ -70,6 +70,7 @@ vi.mock("@/lib/auth", () => ({
 vi.mock("@/lib/config", () => ({
   WS_URL: "ws://localhost:8181",
   BACKEND_URL: "http://localhost:8181",
+  API_URL: "http://localhost:8181/v1",
 }));
 
 vi.stubGlobal("WebSocket", MockWebSocket);

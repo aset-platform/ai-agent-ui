@@ -28,7 +28,7 @@ import { NavigationMenu } from "@/components/NavigationMenu";
 import { EditProfileModal } from "@/components/EditProfileModal";
 import { ChangePasswordModal } from "@/components/ChangePasswordModal";
 import { SessionManagementModal } from "@/components/SessionManagementModal";
-import { BACKEND_URL, DASHBOARD_URL, DOCS_URL } from "@/lib/config";
+import { API_URL, DASHBOARD_URL, DOCS_URL } from "@/lib/config";
 import { getSessionIdFromToken } from "@/lib/auth";
 
 export default function ChatPage() {
@@ -72,7 +72,7 @@ export default function ChatPage() {
   // Fetch user profile on mount — Fix #17: AbortController cancels if unmounted
   useEffect(() => {
     const controller = new AbortController();
-    apiFetch(`${BACKEND_URL}/auth/me`, { signal: controller.signal })
+    apiFetch(`${API_URL}/auth/me`, { signal: controller.signal })
       .then((res) => res.ok ? res.json() : null)
       .then((data: UserProfile | null) => { if (data) setProfile(data); })
       .catch((err: unknown) => {

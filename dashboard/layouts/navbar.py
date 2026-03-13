@@ -73,9 +73,7 @@ NAVBAR = dbc.Navbar(
                             className="theme-toggle-btn ms-2",
                             title="Toggle dark mode",
                         ),
-                        className=(
-                            "d-flex align-items-center"
-                        ),
+                        className=("d-flex align-items-center"),
                     ),
                 ],
                 navbar=True,

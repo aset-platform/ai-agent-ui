@@ -5,6 +5,8 @@ Functions
 - :func:`register` — attach user CRUD routes to the router
 """
 
+from __future__ import annotations
+
 import json as _json
 import logging
 from typing import Any, Dict, List

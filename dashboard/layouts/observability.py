@@ -38,15 +38,25 @@ def observability_layout() -> html.Div:
                 id="obs-prev-metrics-store",
                 data=None,
             ),
+            dcc.Store(
+                id="obs-health-store",
+                data=None,
+            ),
             # ── Summary row ────────────────────────
             html.Div(
                 id="obs-summary-row",
                 className="mb-3",
             ),
-            # ── Tier status cards ──────────────────
+            # ── Tier health status ─────────────────
+            html.H5(
+                "Tier Health Status",
+                className="text-muted mb-3",
+            ),
+            html.Div(id="obs-health-cards"),
+            # ── Model budget status ────────────────
             html.H5(
                 "Model Budget Status",
-                className="text-muted mb-3",
+                className="text-muted mb-3 mt-4",
             ),
             html.Div(id="obs-tier-cards"),
             # ── Cascade event log ──────────────────

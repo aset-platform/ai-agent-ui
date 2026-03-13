@@ -25,7 +25,7 @@ import {
   getStoredProvider,
   getStoredVerifier,
 } from "@/lib/oauth";
-import { BACKEND_URL } from "@/lib/config";
+import { API_URL } from "@/lib/config";
 
 function OAuthCallbackInner() {
   const router = useRouter();
@@ -65,7 +65,7 @@ function OAuthCallbackInner() {
     // Exchange the code for our own JWT pair.
     (async () => {
       try {
-        const res = await fetch(`${BACKEND_URL}/auth/oauth/callback`, {
+        const res = await fetch(`${API_URL}/auth/oauth/callback`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",

@@ -97,4 +97,101 @@ test.describe("Dashboard analysis deep", () => {
       timeout: 15_000,
     });
   });
+
+  test("lazy loading: tab content div exists", async ({
+    page,
+  }) => {
+    const tabContent = page.locator(
+      "#analysis-tab-content",
+    );
+    await expect(tabContent).toBeVisible({
+      timeout: 15_000,
+    });
+  });
+
+  test("lazy loading: switching tabs swaps content", async ({
+    page,
+  }) => {
+    // Default tab is analysis — has ticker dropdown
+    await expect(
+      page.locator("#analysis-ticker-dropdown"),
+    ).toBeVisible({ timeout: 15_000 });
+
+    // Switch to forecast tab
+    await analysisPage.clickTab("Forecast");
+    await expect(
+      page.locator("#forecast-ticker-dropdown"),
+    ).toBeVisible({ timeout: 15_000 });
+
+    // Switch to compare tab
+    await analysisPage.clickTab("Compare Stocks");
+    await expect(
+      page.locator("#compare-ticker-dropdown"),
+    ).toBeVisible({ timeout: 15_000 });
+
+    // Switch back to analysis
+    await analysisPage.clickTab("Price Analysis");
+    await expect(
+      page.locator("#analysis-ticker-dropdown"),
+    ).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("date range slider is interactive", async ({
+    page,
+  }) => {
+    const slider = page.locator("#date-range-slider");
+    await expect(slider).toBeVisible({
+      timeout: 15_000,
+    });
+  });
+
+  test("overlay toggles are visible", async ({ page }) => {
+    const toggles = page.locator("#overlay-toggles");
+    await expect(toggles).toBeVisible({
+      timeout: 15_000,
+    });
+    // Should have 6 toggle options
+    const switches = toggles.locator(
+      "input[type=checkbox]",
+    );
+    const count = await switches.count();
+    expect(count).toBe(6);
+  });
+
+  test("compare tab shows multi-select dropdown", async ({
+    page,
+  }) => {
+    await analysisPage.clickTab("Compare Stocks");
+    const dropdown = page.locator(
+      "#compare-ticker-dropdown",
+    );
+    await expect(dropdown).toBeVisible({
+      timeout: 15_000,
+    });
+  });
+
+  test("compare chart containers exist", async ({
+    page,
+  }) => {
+    await analysisPage.clickTab("Compare Stocks");
+    // Performance chart
+    await expect(
+      page.locator("#compare-perf-chart"),
+    ).toBeAttached({ timeout: 15_000 });
+    // Metrics container
+    await expect(
+      page.locator("#compare-metrics-container"),
+    ).toBeAttached();
+    // Heatmap
+    await expect(
+      page.locator("#compare-heatmap"),
+    ).toBeAttached();
+  });
+
+  test("analysis stats row exists", async ({ page }) => {
+    const statsRow = page.locator("#analysis-stats-row");
+    await expect(statsRow).toBeAttached({
+      timeout: 15_000,
+    });
+  });
 });

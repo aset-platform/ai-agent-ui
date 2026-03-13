@@ -4,6 +4,46 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 13, 2026 — Tier Health Monitoring + API v1 Cutover
+
+### ASETPLTFRM-13 — Groq Tier Health Monitoring
+
+Added per-tier health monitoring to the N-tier Groq/Anthropic LLM cascade:
+
+- **Health classification**: healthy (0 failures in 5-min window), degraded (1–3), down (4+), disabled (manual)
+- **Latency stats**: avg + p95 from sliding window of 100 recent values
+- **Cascade tracking**: per-model cascade count and failure timestamps
+- **Admin endpoints**: `GET /v1/admin/tier-health`, `POST /v1/admin/tier-health/{model}/toggle` (superuser only)
+- **Dashboard health cards**: color-coded status (green/yellow/red/grey) with cascade count and latency
+
+Files: `backend/observability.py` (major), `backend/routes.py`, `dashboard/layouts/observability.py`, `dashboard/callbacks/observability_cbs.py`
+
+Tests: 12 backend (`test_tier_health.py`), 6 dashboard (`test_tier_health_cards.py`), 3 E2E (`admin-deep.spec.ts`)
+
+### ASETPLTFRM-20 — API v1 Full Cutover
+
+Removed root-mounted duplicate API routes. All API traffic now goes through `/v1/` prefix only:
+
+- **Backend**: removed root_router mount in `routes.py`; auth, ticker, and admin routers mounted with `prefix="/v1"`
+- **Frontend**: added `API_URL` constant (`${BACKEND_URL}/v1`) in `lib/config.ts`; 9 files updated to use `API_URL` for API calls; `BACKEND_URL` kept for static assets (avatars) and WS URL derivation
+- **Dashboard**: split `_BACKEND_URL` → `_BACKEND_HOST` + `_BACKEND_URL` (host/v1) in `auth_utils.py` and `admin_cbs2.py`
+- **WebSocket**: stays at `/ws/chat` (not versioned)
+- **Static files**: `/avatars/*` stays at root (not versioned)
+
+| Before | After |
+|--------|-------|
+| `POST /chat` + `POST /v1/chat` | `POST /v1/chat` only |
+| `GET /health` + `GET /v1/health` | `GET /v1/health` only |
+| `GET /agents` + `GET /v1/agents` | `GET /v1/agents` only |
+
+Tests: rewrote `test_api_versioning.py` (8 tests), updated `test_chat_stream.py` to `/v1/` paths
+
+### Python 3.9 Compatibility
+
+Added `from __future__ import annotations` to 7 backend files using PEP 604 `X | None` syntax: `observability.py`, `validation.py`, `token_budget.py`, `llm_fallback.py`, `models.py`, `tools/_ticker_linker.py`, `ws.py`
+
+---
+
 ## Mar 11, 2026 — Sprint Phase 3 + Dashboard fixes
 
 ### Redis Token Store (Story 1.3)

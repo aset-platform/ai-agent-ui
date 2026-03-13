@@ -8,7 +8,7 @@
 
 import { useState, useCallback } from "react";
 import { apiFetch } from "@/lib/apiFetch";
-import { BACKEND_URL } from "@/lib/config";
+import { API_URL } from "@/lib/config";
 
 export interface SessionInfo {
   session_id: string;
@@ -47,7 +47,7 @@ export function useSessionManagement():
     setError("");
     try {
       const res = await apiFetch(
-        `${BACKEND_URL}/auth/sessions`,
+        `${API_URL}/auth/sessions`,
       );
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -85,7 +85,7 @@ export function useSessionManagement():
       setError("");
       try {
         const res = await apiFetch(
-          `${BACKEND_URL}/auth/sessions/${sessionId}`,
+          `${API_URL}/auth/sessions/${sessionId}`,
           { method: "DELETE" },
         );
         if (!res.ok) {
@@ -115,7 +115,7 @@ export function useSessionManagement():
     setError("");
     try {
       const res = await apiFetch(
-        `${BACKEND_URL}/auth/sessions/revoke-all`,
+        `${API_URL}/auth/sessions/revoke-all`,
         { method: "POST" },
       );
       if (!res.ok) {

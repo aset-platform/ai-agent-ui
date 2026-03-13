@@ -46,6 +46,8 @@ Usage::
     df = repo.get_ohlcv("AAPL")
 """
 
+from __future__ import annotations
+
 import logging
 import math
 import time
@@ -318,6 +320,154 @@ class StockRepository:
             df = pd.DataFrame()
         return tbl, df
 
+    def _scan_ticker_date_range(
+        self,
+        identifier: str,
+        ticker: str,
+        date_col: str = "date",
+        start: date | None = None,
+        end: date | None = None,
+        selected_fields: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """Scan with ticker + date range predicates at Iceberg level.
+
+        Pushes both ticker equality and date range bounds into the
+        Iceberg scan so partition pruning and file-level min/max
+        statistics can skip irrelevant data files.
+
+        Falls back to ``_scan_ticker`` + pandas filtering on error.
+
+        Args:
+            identifier: Fully-qualified table name.
+            ticker: Stock ticker symbol (already uppercased).
+            date_col: Name of the date column to filter on.
+            start: Inclusive start date (``None`` = no lower bound).
+            end: Inclusive end date (``None`` = no upper bound).
+            selected_fields: Optional column projection list.
+
+        Returns:
+            Filtered DataFrame sorted by *date_col* ascending.
+        """
+        try:
+            from pyiceberg.expressions import (
+                And,
+                EqualTo,
+                GreaterThanOrEqual,
+                LessThanOrEqual,
+            )
+
+            tbl = self._load_table(identifier)
+            if identifier in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(identifier)
+
+            row_filter = EqualTo("ticker", ticker)
+            if start is not None:
+                row_filter = And(
+                    row_filter,
+                    GreaterThanOrEqual(date_col, start),
+                )
+            if end is not None:
+                row_filter = And(
+                    row_filter,
+                    LessThanOrEqual(date_col, end),
+                )
+
+            scan_kwargs: dict[str, Any] = {
+                "row_filter": row_filter,
+            }
+            if selected_fields:
+                scan_kwargs["selected_fields"] = selected_fields
+            return tbl.scan(**scan_kwargs).to_pandas()
+        except Exception as exc:
+            _logger.warning(
+                "Iceberg date-range scan failed for %s "
+                "ticker=%s (%s); falling back.",
+                identifier,
+                ticker,
+                exc,
+            )
+            df = self._scan_ticker(
+                identifier,
+                ticker,
+                selected_fields,
+            )
+            if df.empty:
+                return df
+            if start is not None:
+                df = df[pd.to_datetime(df[date_col]).dt.date >= start]
+            if end is not None:
+                df = df[pd.to_datetime(df[date_col]).dt.date <= end]
+            return df
+
+    def _scan_date_range(
+        self,
+        identifier: str,
+        date_col: str,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> pd.DataFrame:
+        """Scan with date range predicates only (no ticker).
+
+        Pushes date bounds into the Iceberg scan for
+        partition pruning on date-partitioned tables
+        like ``llm_usage``.
+
+        Falls back to full scan + pandas filtering on
+        error.
+
+        Args:
+            identifier: Fully-qualified table name.
+            date_col: Date column name.
+            start: Inclusive start date.
+            end: Inclusive end date.
+
+        Returns:
+            Filtered DataFrame.
+        """
+        try:
+            from pyiceberg.expressions import (
+                And,
+                GreaterThanOrEqual,
+                LessThanOrEqual,
+            )
+
+            tbl = self._load_table(identifier)
+            if identifier in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(identifier)
+
+            filters = []
+            if start is not None:
+                filters.append(GreaterThanOrEqual(date_col, start))
+            if end is not None:
+                filters.append(LessThanOrEqual(date_col, end))
+
+            if len(filters) == 2:
+                row_filter = And(filters[0], filters[1])
+            elif len(filters) == 1:
+                row_filter = filters[0]
+            else:
+                return tbl.scan().to_pandas()
+
+            return tbl.scan(
+                row_filter=row_filter,
+            ).to_pandas()
+        except Exception as exc:
+            _logger.warning(
+                "Iceberg date-range scan failed for " "%s (%s); falling back.",
+                identifier,
+                exc,
+            )
+            df = self._table_to_df(identifier)
+            if df.empty:
+                return df
+            if start is not None:
+                df = df[df[date_col] >= start]
+            if end is not None:
+                df = df[df[date_col] <= end]
+            return df
+
     # ------------------------------------------------------------------
     # Retry helpers for Iceberg OCC
     # ------------------------------------------------------------------
@@ -410,6 +560,34 @@ class StockRepository:
             "delete",
             delete_filter=delete_filter,
         )
+
+    # ------------------------------------------------------------------
+    # Public wrappers for retention / admin callers
+    # ------------------------------------------------------------------
+
+    def load_table(self, identifier: str):
+        """Load an Iceberg table (public API).
+
+        Args:
+            identifier: e.g. ``"stocks.ohlcv"``.
+
+        Returns:
+            The loaded Iceberg table object.
+        """
+        return self._load_table(identifier)
+
+    def delete_rows(
+        self,
+        identifier: str,
+        delete_filter,
+    ) -> None:
+        """Delete rows matching *delete_filter* (public API).
+
+        Args:
+            identifier: Fully-qualified table name.
+            delete_filter: PyIceberg expression.
+        """
+        self._delete_rows(identifier, delete_filter)
 
     # ------------------------------------------------------------------
     # Registry
@@ -916,6 +1094,10 @@ class StockRepository:
     ) -> pd.DataFrame:
         """Return OHLCV data for *ticker*, optionally filtered by date range.
 
+        Uses Iceberg-level date predicates for partition pruning
+        and file-level statistics filtering when *start*/*end* are
+        provided.
+
         Args:
             ticker: Stock ticker symbol.
             start: Inclusive start date (``None`` = no lower bound).
@@ -925,13 +1107,18 @@ class StockRepository:
             DataFrame sorted by date ascending with columns:
             ticker, date, open, high, low, close, adj_close, volume.
         """
-        df = self._scan_ticker(_OHLCV, ticker.upper())
+        if start or end:
+            df = self._scan_ticker_date_range(
+                _OHLCV,
+                ticker.upper(),
+                date_col="date",
+                start=start,
+                end=end,
+            )
+        else:
+            df = self._scan_ticker(_OHLCV, ticker.upper())
         if df.empty:
             return df
-        if start:
-            df = df[pd.to_datetime(df["date"]).dt.date >= start]
-        if end:
-            df = df[pd.to_datetime(df["date"]).dt.date <= end]
         return df.sort_values("date").reset_index(drop=True)
 
     def get_latest_ohlcv_date(self, ticker: str) -> Optional[date]:
@@ -1270,6 +1457,9 @@ class StockRepository:
     ) -> pd.DataFrame:
         """Return technical indicator rows for *ticker*.
 
+        Uses Iceberg-level date predicates for efficient
+        partition pruning when date bounds are provided.
+
         Args:
             ticker: Stock ticker symbol.
             start: Inclusive start date.
@@ -1278,13 +1468,21 @@ class StockRepository:
         Returns:
             DataFrame sorted by date ascending.
         """
-        df = self._scan_ticker(_TECHNICAL_INDICATORS, ticker.upper())
+        if start or end:
+            df = self._scan_ticker_date_range(
+                _TECHNICAL_INDICATORS,
+                ticker.upper(),
+                date_col="date",
+                start=start,
+                end=end,
+            )
+        else:
+            df = self._scan_ticker(
+                _TECHNICAL_INDICATORS,
+                ticker.upper(),
+            )
         if df.empty:
             return df
-        if start:
-            df = df[pd.to_datetime(df["date"]).dt.date >= start]
-        if end:
-            df = df[pd.to_datetime(df["date"]).dt.date <= end]
         return df.sort_values("date").reset_index(drop=True)
 
     # ------------------------------------------------------------------
@@ -2243,6 +2441,10 @@ class StockRepository:
     ) -> pd.DataFrame:
         """Return usage rows within a date range.
 
+        Uses Iceberg-level date predicates on the
+        ``request_date`` partition column for efficient
+        partition pruning.
+
         Args:
             start: Start date (inclusive).
             end: End date (inclusive).
@@ -2250,8 +2452,10 @@ class StockRepository:
         Returns:
             DataFrame of matching usage rows.
         """
-        df = self._table_to_df(self._LLM_USAGE)
-        if df.empty:
-            return df
-        mask = (df["request_date"] >= start) & (df["request_date"] <= end)
-        return df[mask].reset_index(drop=True)
+        df = self._scan_date_range(
+            self._LLM_USAGE,
+            date_col="request_date",
+            start=start,
+            end=end,
+        )
+        return df.reset_index(drop=True) if not df.empty else df

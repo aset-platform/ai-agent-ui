@@ -9,7 +9,7 @@ import {
   generateCodeVerifier,
   storeOAuthSession,
 } from "@/lib/oauth";
-import { BACKEND_URL } from "@/lib/config";
+import { API_URL } from "@/lib/config";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -31,7 +31,7 @@ export default function LoginPage() {
     }
     // Fix #15: AbortController so the fetch is cancelled if the component unmounts
     const controller = new AbortController();
-    fetch(`${BACKEND_URL}/auth/oauth/providers`, { signal: controller.signal })
+    fetch(`${API_URL}/auth/oauth/providers`, { signal: controller.signal })
       .then((r) => r.json())
       .then((data: { providers?: string[] }) => {
         setOauthProviders(
@@ -58,7 +58,7 @@ export default function LoginPage() {
 
       // 2. Fetch the provider's authorize URL from the backend.
       const res = await fetch(
-        `${BACKEND_URL}/auth/oauth/${provider}/authorize?code_challenge=${encodeURIComponent(challenge)}`
+        `${API_URL}/auth/oauth/${provider}/authorize?code_challenge=${encodeURIComponent(challenge)}`
       );
 
       if (!res.ok) {
@@ -98,7 +98,7 @@ export default function LoginPage() {
     loginAbortRef.current = controller;
 
     try {
-      const res = await fetch(`${BACKEND_URL}/auth/login`, {
+      const res = await fetch(`${API_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",

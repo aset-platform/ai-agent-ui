@@ -111,4 +111,147 @@ test.describe("Dashboard admin deep", () => {
       timeout: 15_000,
     });
   });
+
+  test("users pagination is visible", async ({ page }) => {
+    await expect(adminPage.userTable).toBeVisible({
+      timeout: 30_000,
+    });
+    const pagination = page.locator("#users-pagination");
+    await expect(pagination).toBeVisible();
+  });
+
+  test("users page-size selector works", async ({
+    page,
+  }) => {
+    await expect(adminPage.userTable).toBeVisible({
+      timeout: 30_000,
+    });
+    const pageSize = page.locator("#users-page-size");
+    await expect(pageSize).toBeVisible();
+    const options = pageSize.locator("option");
+    const count = await options.count();
+    expect(count).toBeGreaterThanOrEqual(3);
+  });
+
+  test("users search input filters table", async ({
+    page,
+  }) => {
+    await expect(adminPage.userTable).toBeVisible({
+      timeout: 30_000,
+    });
+    const search = page.locator("#users-search");
+    await expect(search).toBeVisible();
+    await search.fill("test");
+    await page.waitForTimeout(2_000);
+    // Table should still be visible (filtered)
+    await expect(adminPage.userTable).toBeVisible();
+  });
+
+  test("users table has sortable headers", async ({
+    page,
+  }) => {
+    await expect(adminPage.userTable).toBeVisible({
+      timeout: 30_000,
+    });
+    const sortBtns = adminPage.userTable.locator(
+      ".sort-header-btn",
+    );
+    const count = await sortBtns.count();
+    expect(count).toBeGreaterThanOrEqual(3);
+  });
+
+  test("users count text shows record info", async ({
+    page,
+  }) => {
+    await expect(adminPage.userTable).toBeVisible({
+      timeout: 30_000,
+    });
+    const countText = page.locator("#users-count-text");
+    await expect(countText).toBeVisible();
+    const text = await countText.innerText();
+    expect(text).toMatch(/\d+/);
+  });
+
+  test("audit log tab loads with table", async ({
+    page,
+  }) => {
+    const auditTab = page.getByRole("tab", {
+      name: /audit log/i,
+    });
+    await auditTab.click();
+    await page.waitForTimeout(3_000);
+    // Audit table container should be visible
+    const auditContainer = page.locator(
+      "#audit-log-container",
+    );
+    await expect(auditContainer).toBeVisible({
+      timeout: 30_000,
+    });
+  });
+
+  test("audit log has search and pagination", async ({
+    page,
+  }) => {
+    const auditTab = page.getByRole("tab", {
+      name: /audit log/i,
+    });
+    await auditTab.click();
+    await page.waitForTimeout(3_000);
+    // Search
+    const search = page.locator("#audit-search");
+    await expect(search).toBeVisible({
+      timeout: 15_000,
+    });
+    // Pagination
+    const pagination = page.locator("#audit-pagination");
+    await expect(pagination).toBeVisible();
+  });
+
+  test("LLM observability tab shows tier health cards", async ({
+    page,
+  }) => {
+    const obsTab = page.getByRole("tab", {
+      name: /llm observability/i,
+    });
+    await expect(obsTab).toBeVisible({
+      timeout: 15_000,
+    });
+    await obsTab.click();
+    await page.waitForTimeout(3_000);
+    // Health cards container should be visible
+    const healthCards = page.locator("#obs-health-cards");
+    await expect(healthCards).toBeAttached({
+      timeout: 30_000,
+    });
+  });
+
+  test("LLM observability tab shows tier budget cards", async ({
+    page,
+  }) => {
+    const obsTab = page.getByRole("tab", {
+      name: /llm observability/i,
+    });
+    await obsTab.click();
+    await page.waitForTimeout(3_000);
+    const tierCards = page.locator("#obs-tier-cards");
+    await expect(tierCards).toBeAttached({
+      timeout: 30_000,
+    });
+  });
+
+  test("LLM observability tab shows cascade table", async ({
+    page,
+  }) => {
+    const obsTab = page.getByRole("tab", {
+      name: /llm observability/i,
+    });
+    await obsTab.click();
+    await page.waitForTimeout(3_000);
+    const cascadeTable = page.locator(
+      "#obs-cascade-table",
+    );
+    await expect(cascadeTable).toBeAttached({
+      timeout: 30_000,
+    });
+  });
 });
