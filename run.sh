@@ -325,7 +325,6 @@ do_start() {
         --workers 1 \
         --threads 4 \
         --timeout 120 \
-        --preload \
         --access-logfile -
 
     echo ""

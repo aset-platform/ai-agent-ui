@@ -11,7 +11,7 @@ from urllib.parse import parse_qs
 
 import dash
 import dash_bootstrap_components as dbc
-from dash import Input, Output, State, dcc, html
+from dash import ClientsideFunction, Input, Output, State, dcc, html
 
 from dashboard.callbacks import (
     _admin_forbidden,
@@ -54,6 +54,11 @@ def build_layout(app: dash.Dash) -> None:
             dcc.Store(id="nav-ticker-store", data=None),
             dcc.Store(id="auth-token-store", storage_type="local"),
             dcc.Store(id="user-profile-store", storage_type="session"),
+            dcc.Store(
+                id="theme-store",
+                storage_type="local",
+                data="light",
+            ),
             error_overlay_container(),
             NAVBAR,
             html.Div(
@@ -222,3 +227,16 @@ def build_layout(app: dash.Dash) -> None:
                 return _admin_forbidden()
             return admin_users_layout()
         return home_layout()
+
+    # ── Theme toggle (clientside) ───────────────────────────
+    app.clientside_callback(
+        ClientsideFunction(
+            namespace="clientside", function_name="toggleTheme"
+        ),
+        Output("theme-store", "data"),
+        Output("theme-toggle-btn", "children"),
+        Input("theme-toggle-btn", "n_clicks"),
+        State("theme-store", "data"),
+        State("url", "search"),
+        prevent_initial_call=False,
+    )

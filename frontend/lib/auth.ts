@@ -75,6 +75,7 @@ interface JwtPayload {
   role?: string;
   exp?: number;
   type?: string;
+  jti?: string;
 }
 
 /**
@@ -124,6 +125,16 @@ export function getUserIdFromToken(): string | null {
   const token = getAccessToken();
   if (!token) return null;
   return decodePayload(token)?.sub ?? null;
+}
+
+/**
+ * Extract the JTI (session ID) from the stored access token.
+ * Returns null if no valid token is present.
+ */
+export function getSessionIdFromToken(): string | null {
+  const token = getAccessToken();
+  if (!token) return null;
+  return decodePayload(token)?.jti ?? null;
 }
 
 // ---------------------------------------------------------------------------

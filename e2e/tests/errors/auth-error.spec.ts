@@ -47,4 +47,26 @@ test.describe("Auth error handling", () => {
       timeout: 10_000,
     });
   });
+
+  test("dashboard sign-in button redirects to login", async ({
+    page,
+  }) => {
+    const DASHBOARD =
+      process.env.DASHBOARD_URL || "http://127.0.0.1:8050";
+    await page.goto(
+      `${DASHBOARD}/?token=expired.jwt.token`,
+    );
+    await page.waitForTimeout(3_000);
+
+    // Click the "Sign in" button on the auth overlay
+    const signInBtn = page
+      .locator("a, button")
+      .filter({ hasText: /sign in/i })
+      .first();
+    await expect(signInBtn).toBeVisible({ timeout: 10_000 });
+    await signInBtn.click();
+
+    // Should navigate to the login page
+    await page.waitForURL(/\/login/, { timeout: 15_000 });
+  });
 });

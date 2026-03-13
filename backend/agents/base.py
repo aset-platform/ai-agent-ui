@@ -48,29 +48,42 @@ class BaseAgent(ABC):
     """
 
     def __init__(
-        self, config: AgentConfig, tool_registry: ToolRegistry
+        self,
+        config: AgentConfig,
+        tool_registry: ToolRegistry,
+        token_budget=None,
+        compressor=None,
+        obs_collector=None,
     ) -> None:
         """Initialise the agent and bind tools to the LLM.
 
         Args:
             config: Configuration bundle for this agent.
-            tool_registry: Registry from which the agent's allowed tools
-                are fetched by name.
+            tool_registry: Registry from which the agent's
+                allowed tools are fetched by name.
+            token_budget: Shared
+                :class:`~token_budget.TokenBudget`.
+            compressor: Shared
+                :class:`~message_compressor.MessageCompressor`.
+            obs_collector: Optional
+                :class:`~observability.ObservabilityCollector`.
         """
         self.config = config
         self.tool_registry = tool_registry
         self.logger = logging.getLogger(f"agent.{config.agent_id}")
 
-        # Defaults — overridden by factory functions before use,
-        # but must exist before _setup() calls _build_llm().
-        if not hasattr(self, "token_budget"):
+        # Set dependencies BEFORE _setup() calls _build_llm().
+        if token_budget is None:
             from token_budget import TokenBudget
 
-            self.token_budget = TokenBudget()
-        if not hasattr(self, "compressor"):
+            token_budget = TokenBudget()
+        if compressor is None:
             from message_compressor import MessageCompressor
 
-            self.compressor = MessageCompressor()
+            compressor = MessageCompressor()
+        self.token_budget = token_budget
+        self.compressor = compressor
+        self.obs_collector = obs_collector
 
         self._setup()
 

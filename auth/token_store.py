@@ -53,6 +53,32 @@ class TokenStore(Protocol):
         """Return ``True`` if the backend is reachable."""
         ...  # pragma: no cover
 
+    def add_json(self, key: str, value: str, ttl_seconds: int) -> None:
+        """Store *key* with a string *value* and TTL.
+
+        Args:
+            key: Opaque string key.
+            value: String value (typically JSON).
+            ttl_seconds: Seconds until automatic expiry.
+        """
+        ...  # pragma: no cover
+
+    def get_json(self, key: str) -> str | None:
+        """Return the string value for *key*, or ``None``.
+
+        Args:
+            key: The key to look up.
+        """
+        ...  # pragma: no cover
+
+    def keys_by_prefix(self, prefix: str) -> list[str]:
+        """Return all keys matching *prefix*.
+
+        Args:
+            prefix: Key prefix to match.
+        """
+        ...  # pragma: no cover
+
 
 # ---------------------------------------------------------------
 # In-memory implementation
@@ -67,10 +93,12 @@ class InMemoryTokenStore:
 
     Attributes:
         _store: Mapping of key → expiry timestamp (epoch seconds).
+        _values: Mapping of key → string value for add_json.
     """
 
     def __init__(self) -> None:
         self._store: dict[str, float] = {}
+        self._values: dict[str, str] = {}
 
     def add(self, key: str, ttl_seconds: int) -> None:
         """Store *key* with a time-to-live.
@@ -93,6 +121,7 @@ class InMemoryTokenStore:
             return False
         if time.time() > expires:
             del self._store[key]
+            self._values.pop(key, None)
             return False
         return True
 
@@ -103,10 +132,42 @@ class InMemoryTokenStore:
             key: The key to remove.
         """
         self._store.pop(key, None)
+        self._values.pop(key, None)
 
     def ping(self) -> bool:
         """Return ``True`` — in-memory store is always available."""
         return True
+
+    def add_json(self, key: str, value: str, ttl_seconds: int) -> None:
+        """Store *key* with a string *value* and TTL.
+
+        Args:
+            key: Opaque string key.
+            value: String value (typically JSON).
+            ttl_seconds: Seconds until automatic expiry.
+        """
+        self._store[key] = time.time() + ttl_seconds
+        self._values[key] = value
+        self._prune()
+
+    def get_json(self, key: str) -> str | None:
+        """Return the string value for *key*, or ``None``.
+
+        Args:
+            key: The key to look up.
+        """
+        if not self.contains(key):
+            return None
+        return self._values.get(key)
+
+    def keys_by_prefix(self, prefix: str) -> list[str]:
+        """Return all non-expired keys matching *prefix*.
+
+        Args:
+            prefix: Key prefix to match.
+        """
+        self._prune()
+        return [k for k in self._store if k.startswith(prefix)]
 
     def _prune(self) -> None:
         """Remove entries whose TTL has elapsed."""
@@ -114,6 +175,7 @@ class InMemoryTokenStore:
         expired = [k for k, v in self._store.items() if v < now]
         for k in expired:
             del self._store[k]
+            self._values.pop(k, None)
 
 
 # ---------------------------------------------------------------
@@ -244,6 +306,63 @@ class RedisTokenStore:
             return bool(self._client.ping())
         except self._redis.RedisError:
             return False
+
+    def add_json(self, key: str, value: str, ttl_seconds: int) -> None:
+        """Store *key* with a string *value* and TTL.
+
+        Args:
+            key: Opaque string key.
+            value: String value (typically JSON).
+            ttl_seconds: Seconds until automatic expiry.
+        """
+        try:
+            self._client.setex(
+                f"{self._prefix}{key}",
+                ttl_seconds,
+                value,
+            )
+        except self._redis.RedisError:
+            _logger.warning(
+                "Redis write failed for key=%s",
+                key,
+                exc_info=True,
+            )
+
+    def get_json(self, key: str) -> str | None:
+        """Return the string value for *key*, or ``None``.
+
+        Args:
+            key: The key to look up.
+        """
+        try:
+            val = self._client.get(f"{self._prefix}{key}")
+            return val if isinstance(val, str) else None
+        except self._redis.RedisError:
+            _logger.warning(
+                "Redis read failed for key=%s",
+                key,
+                exc_info=True,
+            )
+            return None
+
+    def keys_by_prefix(self, prefix: str) -> list[str]:
+        """Return all keys matching *prefix*.
+
+        Args:
+            prefix: Key prefix to match.
+        """
+        full = f"{self._prefix}{prefix}"
+        try:
+            raw = self._client.keys(f"{full}*")
+            pfx_len = len(self._prefix)
+            return [k[pfx_len:] for k in raw]
+        except self._redis.RedisError:
+            _logger.warning(
+                "Redis keys scan failed for prefix=%s",
+                prefix,
+                exc_info=True,
+            )
+            return []
 
 
 # ---------------------------------------------------------------

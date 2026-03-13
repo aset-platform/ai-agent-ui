@@ -1985,3 +1985,273 @@ class StockRepository:
                 )
                 deleted[table_id] = 0
         return deleted
+
+    # ------------------------------------------------------------------
+    # LLM Pricing
+    # ------------------------------------------------------------------
+
+    _LLM_PRICING = "stocks.llm_pricing"
+
+    def get_current_pricing(self) -> pd.DataFrame:
+        """Return all current LLM pricing rates.
+
+        Current rates have ``effective_to IS NULL``.
+
+        Returns:
+            DataFrame of active pricing rows.
+        """
+        df = self._table_to_df(self._LLM_PRICING)
+        if df.empty:
+            return df
+        return df[df["effective_to"].isna()].reset_index(
+            drop=True,
+        )
+
+    def get_all_pricing(self) -> pd.DataFrame:
+        """Return full pricing history (all rows).
+
+        Returns:
+            DataFrame of all pricing rows.
+        """
+        return self._table_to_df(self._LLM_PRICING)
+
+    def add_pricing(
+        self,
+        provider: str,
+        model: str,
+        input_cost: float,
+        output_cost: float,
+        effective_from: date,
+        updated_by: str | None = None,
+    ) -> str:
+        """Add a new pricing rate row.
+
+        Does NOT close existing rates — call
+        :meth:`update_pricing` for rate changes.
+
+        Args:
+            provider: ``"groq"`` or ``"anthropic"``.
+            model: Full model name.
+            input_cost: $/1M input tokens.
+            output_cost: $/1M output tokens.
+            effective_from: Start date of rate.
+            updated_by: Admin user ID (optional).
+
+        Returns:
+            The generated ``pricing_id``.
+        """
+        pid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).replace(
+            tzinfo=None,
+        )
+        tbl = pa.table(
+            {
+                "pricing_id": pa.array([pid], type=pa.string()),
+                "provider": pa.array([provider], type=pa.string()),
+                "model": pa.array([model], type=pa.string()),
+                "input_cost_per_1m": pa.array([input_cost], type=pa.float64()),
+                "output_cost_per_1m": pa.array(
+                    [output_cost], type=pa.float64()
+                ),
+                "effective_from": pa.array([effective_from], type=pa.date32()),
+                "effective_to": pa.array([None], type=pa.date32()),
+                "currency": pa.array(["USD"], type=pa.string()),
+                "updated_by": pa.array([updated_by], type=pa.string()),
+                "created_at": pa.array([now], type=pa.timestamp("us")),
+            }
+        )
+        self._append_rows(self._LLM_PRICING, tbl)
+        return pid
+
+    def update_pricing(
+        self,
+        provider: str,
+        model: str,
+        input_cost: float,
+        output_cost: float,
+        effective_from: date,
+        updated_by: str | None = None,
+    ) -> str:
+        """Update pricing by closing the current rate and
+        adding a new one.
+
+        Sets ``effective_to`` on the existing current rate
+        to ``effective_from - 1 day``, then appends a new
+        row.
+
+        Args:
+            provider: ``"groq"`` or ``"anthropic"``.
+            model: Full model name.
+            input_cost: New $/1M input tokens.
+            output_cost: New $/1M output tokens.
+            effective_from: Start date of new rate.
+            updated_by: Admin user ID (optional).
+
+        Returns:
+            The new ``pricing_id``.
+        """
+        # Close existing current rate via
+        # copy-on-write (small table).
+        df = self._table_to_df(self._LLM_PRICING)
+        if not df.empty:
+            mask = (
+                (df["provider"] == provider)
+                & (df["model"] == model)
+                & (df["effective_to"].isna())
+            )
+            close_date = effective_from - timedelta(
+                days=1,
+            )
+            df.loc[mask, "effective_to"] = close_date
+            tbl = pa.Table.from_pandas(df, preserve_index=False)
+            self._overwrite_table(self._LLM_PRICING, tbl)
+        return self.add_pricing(
+            provider,
+            model,
+            input_cost,
+            output_cost,
+            effective_from,
+            updated_by,
+        )
+
+    # ------------------------------------------------------------------
+    # LLM Usage
+    # ------------------------------------------------------------------
+
+    _LLM_USAGE = "stocks.llm_usage"
+
+    def append_llm_usage(self, events: list[dict]) -> None:
+        """Append LLM usage event rows.
+
+        Args:
+            events: List of dicts matching the
+                ``llm_usage`` schema fields.
+        """
+        if not events:
+            return
+        arrays = {
+            "usage_id": pa.array(
+                [e.get("usage_id", str(uuid.uuid4())) for e in events],
+                type=pa.string(),
+            ),
+            "request_date": pa.array(
+                [e["request_date"] for e in events],
+                type=pa.date32(),
+            ),
+            "timestamp": pa.array(
+                [e["timestamp"] for e in events],
+                type=pa.timestamp("us"),
+            ),
+            "user_id": pa.array(
+                [e.get("user_id") for e in events],
+                type=pa.string(),
+            ),
+            "agent_id": pa.array(
+                [e["agent_id"] for e in events],
+                type=pa.string(),
+            ),
+            "model": pa.array(
+                [e["model"] for e in events],
+                type=pa.string(),
+            ),
+            "provider": pa.array(
+                [e["provider"] for e in events],
+                type=pa.string(),
+            ),
+            "tier_index": pa.array(
+                [e.get("tier_index", 0) for e in events],
+                type=pa.int32(),
+            ),
+            "event_type": pa.array(
+                [e["event_type"] for e in events],
+                type=pa.string(),
+            ),
+            "cascade_reason": pa.array(
+                [e.get("cascade_reason") for e in events],
+                type=pa.string(),
+            ),
+            "cascade_from_model": pa.array(
+                [e.get("cascade_from_model") for e in events],
+                type=pa.string(),
+            ),
+            "prompt_tokens": pa.array(
+                [e.get("prompt_tokens") for e in events],
+                type=pa.int32(),
+            ),
+            "completion_tokens": pa.array(
+                [e.get("completion_tokens") for e in events],
+                type=pa.int32(),
+            ),
+            "total_tokens": pa.array(
+                [e.get("total_tokens") for e in events],
+                type=pa.int32(),
+            ),
+            "input_cost_per_1m": pa.array(
+                [e.get("input_cost_per_1m") for e in events],
+                type=pa.float64(),
+            ),
+            "output_cost_per_1m": pa.array(
+                [e.get("output_cost_per_1m") for e in events],
+                type=pa.float64(),
+            ),
+            "estimated_cost_usd": pa.array(
+                [e.get("estimated_cost_usd") for e in events],
+                type=pa.float64(),
+            ),
+            "latency_ms": pa.array(
+                [e.get("latency_ms") for e in events],
+                type=pa.int32(),
+            ),
+            "success": pa.array(
+                [e.get("success", True) for e in events],
+                type=pa.bool_(),
+            ),
+            "error_code": pa.array(
+                [e.get("error_code") for e in events],
+                type=pa.string(),
+            ),
+        }
+        self._append_rows(self._LLM_USAGE, pa.table(arrays))
+
+    def get_usage_totals(self) -> dict:
+        """Return lifetime aggregate totals from
+        ``llm_usage``.
+
+        Returns:
+            Dict with ``requests_total``,
+            ``cascade_count``, ``compression_count``.
+        """
+        df = self._table_to_df(self._LLM_USAGE)
+        if df.empty:
+            return {
+                "requests_total": 0,
+                "cascade_count": 0,
+                "compression_count": 0,
+            }
+        return {
+            "requests_total": int((df["event_type"] == "request").sum()),
+            "cascade_count": int((df["event_type"] == "cascade").sum()),
+            "compression_count": int(
+                (df["event_type"] == "compression").sum()
+            ),
+        }
+
+    def get_usage_by_date_range(
+        self,
+        start: date,
+        end: date,
+    ) -> pd.DataFrame:
+        """Return usage rows within a date range.
+
+        Args:
+            start: Start date (inclusive).
+            end: End date (inclusive).
+
+        Returns:
+            DataFrame of matching usage rows.
+        """
+        df = self._table_to_df(self._LLM_USAGE)
+        if df.empty:
+            return df
+        mask = (df["request_date"] >= start) & (df["request_date"] <= end)
+        return df[mask].reset_index(drop=True)

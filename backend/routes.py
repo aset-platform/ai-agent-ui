@@ -16,7 +16,7 @@ import queue
 import threading
 import time
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -34,6 +34,8 @@ def create_app(
     agent_registry,
     executor,
     settings,
+    token_budget=None,
+    obs_collector=None,
 ):
     """Build and return the configured FastAPI application.
 
@@ -43,6 +45,10 @@ def create_app(
         executor: :class:`~concurrent.futures.ThreadPoolExecutor`
             for agent execution.
         settings: :class:`~config.Settings` instance.
+        token_budget: Optional shared
+            :class:`~token_budget.TokenBudget`.
+        obs_collector: Optional
+            :class:`~observability.ObservabilityCollector`.
 
     Returns:
         A fully configured :class:`~fastapi.FastAPI` instance.
@@ -228,6 +234,25 @@ def create_app(
         }
 
     # ---------------------------------------------------------------
+    # Admin observability endpoint (superuser only)
+    # ---------------------------------------------------------------
+
+    async def _admin_metrics(
+        current_user=None,
+    ):
+        """GET /admin/metrics — LLM observability data."""
+        result: dict = {"timestamp": time.time()}
+        if token_budget is not None:
+            result["models"] = token_budget.get_status()
+        else:
+            result["models"] = {}
+        if obs_collector is not None:
+            result["cascade_stats"] = obs_collector.get_stats()
+        else:
+            result["cascade_stats"] = {}
+        return result
+
+    # ---------------------------------------------------------------
     # Mount at root (backward compat) and /v1 (versioned)
     # ---------------------------------------------------------------
 
@@ -268,6 +293,18 @@ def create_app(
     # Auth + user management routers.
     app.include_router(create_auth_router())
     app.include_router(get_ticker_router())
+
+    # Admin observability (superuser only).
+    from auth.dependencies import superuser_only
+
+    admin_router = APIRouter()
+    admin_router.add_api_route(
+        "/admin/metrics",
+        _admin_metrics,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    app.include_router(admin_router)
 
     # WebSocket streaming endpoint.
     from ws import register_ws_routes

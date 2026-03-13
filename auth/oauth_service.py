@@ -17,17 +17,24 @@ OAuth ``state`` tokens live in an in-memory ``dict`` keyed by the token
 string.  Each entry carries a TTL (10 minutes).  Expired entries are pruned
 lazily on every :meth:`OAuthService.generate_authorize_url` call.
 
+JWKS key rotation
+-----------------
+Google's JWKS keys are cached with a configurable TTL
+(``google_jwks_cache_ttl`` in settings, default 3600s).  On signature
+validation failure the cache is invalidated and the key is re-fetched
+once before raising an error.
+
 Dependencies
 ------------
 - ``httpx`` — synchronous HTTP client for token-exchange requests.
-- ``PyJWT`` — decode Google's ``id_token`` without signature verification
-  (we trust the TLS connection; full JWKS validation is a future hardening).
+- ``PyJWT`` — decode and verify Google's ``id_token`` via JWKS.
 
 Both packages are listed in ``backend/requirements.txt``.
 """
 
 import logging
 import secrets
+import time
 from typing import Any, Dict, Tuple
 from urllib.parse import urlencode
 
@@ -44,10 +51,92 @@ _logger = logging.getLogger(__name__)
 
 # Google JWKS endpoint for RS256 signature verification.
 _GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
-_jwks_client = PyJWKClient(_GOOGLE_JWKS_URL)
 
 # TTL for state tokens — 10 minutes.
 _STATE_TTL_SECONDS = 600
+
+
+class CachedJWKSClient:
+    """JWKS client with TTL-based caching and stale-key retry.
+
+    Wraps :class:`jwt.PyJWKClient` and adds:
+    - Time-based cache invalidation (configurable TTL).
+    - Automatic retry on signature mismatch: if a cached key
+      fails verification the cache is flushed and a fresh key
+      is fetched before raising.
+
+    Args:
+        jwks_url: The JWKS endpoint URL.
+        cache_ttl: Cache lifetime in seconds (default 3600).
+    """
+
+    def __init__(self, jwks_url: str, cache_ttl: int = 3600) -> None:
+        """Initialise with JWKS URL and cache TTL."""
+        self._jwks_url = jwks_url
+        self._cache_ttl = cache_ttl
+        self._client = PyJWKClient(jwks_url)
+        self._cached_at: float = 0.0
+
+    @property
+    def cache_ttl(self) -> int:
+        """Return configured cache TTL in seconds."""
+        return self._cache_ttl
+
+    def _is_cache_stale(self) -> bool:
+        """Return True if cache has exceeded its TTL."""
+        return time.monotonic() - self._cached_at > self._cache_ttl
+
+    def _refresh(self) -> None:
+        """Force-refresh by creating a new PyJWKClient."""
+        _logger.info("Refreshing JWKS cache from %s", self._jwks_url)
+        self._client = PyJWKClient(self._jwks_url)
+        self._cached_at = time.monotonic()
+
+    def get_signing_key_from_jwt(self, token: str) -> Any:
+        """Fetch the signing key for *token*, refreshing on TTL.
+
+        If the cache has exceeded its TTL the JWKS endpoint is
+        re-fetched before looking up the key.
+
+        Args:
+            token: The encoded JWT whose ``kid`` header selects
+                the appropriate key.
+
+        Returns:
+            The matching :class:`jwt.PyJWK` signing key.
+        """
+        if self._is_cache_stale():
+            self._refresh()
+        else:
+            self._cached_at = self._cached_at or (time.monotonic())
+        return self._client.get_signing_key_from_jwt(token)
+
+    def get_signing_key_with_retry(self, token: str) -> Any:
+        """Fetch the signing key, retrying once on failure.
+
+        On the first :class:`jwt.PyJWKClientError` the cache is
+        flushed and the key is fetched again.  This handles the
+        case where Google has rotated keys but our cache still
+        holds the old set.
+
+        Args:
+            token: The encoded JWT.
+
+        Returns:
+            The matching signing key.
+
+        Raises:
+            jwt.PyJWKClientError: If the key cannot be found
+                even after a cache refresh.
+        """
+        try:
+            return self.get_signing_key_from_jwt(token)
+        except Exception:
+            _logger.warning(
+                "JWKS key lookup failed; refreshing cache" " and retrying"
+            )
+            self._refresh()
+            return self._client.get_signing_key_from_jwt(token)
 
 
 class OAuthService:
@@ -77,6 +166,7 @@ class OAuthService:
         self,
         settings: Any,
         state_store: TokenStore | None = None,
+        jwks_client: CachedJWKSClient | None = None,
     ) -> None:
         """Initialise the service with application settings.
 
@@ -87,10 +177,16 @@ class OAuthService:
                 ``oauth_redirect_uri``.
             state_store: Pluggable store for OAuth state tokens.
                 Defaults to :class:`InMemoryTokenStore`.
+            jwks_client: JWKS client for Google ID token
+                verification.  Defaults to a
+                :class:`CachedJWKSClient` using the configured
+                ``google_jwks_cache_ttl``.
         """
         self._settings = settings
-        self._state_store: TokenStore = (
-            state_store or InMemoryTokenStore()
+        self._state_store: TokenStore = state_store or InMemoryTokenStore()
+        ttl = getattr(settings, "google_jwks_cache_ttl", 3600)
+        self._jwks_client: CachedJWKSClient = jwks_client or CachedJWKSClient(
+            _GOOGLE_JWKS_URL, ttl
         )
         self._logger = logging.getLogger(__name__)
 
@@ -190,8 +286,7 @@ class OAuthService:
         key = f"oauth_state:{state}:{provider}"
         if not self._state_store.contains(key):
             self._logger.warning(
-                "OAuth state not found or expired:"
-                " state=%s provider=%s",
+                "OAuth state not found or expired:" " state=%s provider=%s",
                 state,
                 provider,
             )
@@ -204,12 +299,14 @@ class OAuthService:
     # Google token exchange
     # ------------------------------------------------------------------
 
-    def exchange_google_code(self, code: str, code_verifier: str) -> Dict[str, Any]:
-        """Exchange a Google authorization code for user identity information.
+    def exchange_google_code(
+        self, code: str, code_verifier: str
+    ) -> Dict[str, Any]:
+        """Exchange a Google authorization code for user info.
 
-        Sends the code + PKCE verifier to Google's token endpoint.
-        Decodes the returned ``id_token`` without signature verification
-        (trust is established via HTTPS).
+        Sends the code + PKCE verifier to Google's token endpoint
+        and verifies the returned ``id_token`` via JWKS (RS256).
+        Stale keys are automatically retried once.
 
         Args:
             code: The authorization code received from Google's redirect.
@@ -250,8 +347,10 @@ class OAuthService:
             )
 
         # Verify signature via Google's JWKS endpoint.
+        # Uses retry: if the cached key fails (rotation),
+        # the cache is flushed and the key is re-fetched.
         try:
-            signing_key = _jwks_client.get_signing_key_from_jwt(
+            signing_key = self._jwks_client.get_signing_key_with_retry(
                 id_token_str,
             )
             payload = jwt.decode(

@@ -98,11 +98,18 @@ def _build_users_table(
                     )
                 ),
                 html.Td(
-                    created, style={"fontSize": "0.8rem", "color": "#6b7280"}
+                    created,
+                    style={
+                        "fontSize": "0.8rem",
+                        "color": "var(--text-secondary)",
+                    },
                 ),
                 html.Td(
                     last_login,
-                    style={"fontSize": "0.8rem", "color": "#6b7280"},
+                    style={
+                        "fontSize": "0.8rem",
+                        "color": "var(--text-secondary)",
+                    },
                 ),
                 html.Td(
                     [
@@ -215,7 +222,7 @@ def _build_audit_table(
                         ts,
                         style={
                             "fontSize": "0.78rem",
-                            "color": "#6b7280",
+                            "color": "var(--text-secondary)",
                             "whiteSpace": "nowrap",
                         },
                     ),
@@ -243,7 +250,10 @@ def _build_audit_table(
                     ),
                     html.Td(
                         metadata,
-                        style={"fontSize": "0.78rem", "color": "#6b7280"},
+                        style={
+                            "fontSize": "0.78rem",
+                            "color": "var(--text-secondary)",
+                        },
                     ),
                 ]
             )
