@@ -29,6 +29,21 @@ Tier health monitoring and full API v1 cutover.
 - Python 3.9 compat: `from __future__ import annotations` in 7
   backend files.
 
+### Documentation updates
+- `backend/api.md` — all endpoints under `/v1/`, admin tier-health
+  endpoints, WebSocket protocol, updated curl examples.
+- `backend/overview.md` — observability module, tier health section,
+  API versioning route table.
+- `backend/config.md` — WebSocket + Redis settings.
+- `dashboard/overview.md` — LLM observability tab, health cards,
+  `_api_call` host/API URL split.
+- `frontend/overview.md` — `API_URL` constant, URL usage guide,
+  new hooks/components in file tree.
+- `dev/changelog.md` — Mar 13 entry for ASETPLTFRM-13 and 20.
+- `README.md` — `/v1/` only routes, tier health admin endpoint,
+  observability files, session management components, E2E counts,
+  WebSocket/Redis env vars.
+
 ---
 
 # Session: Mar 13, 2026 (cont.) — ASETPLTFRM-18, 19, 58
