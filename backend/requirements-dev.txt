@@ -1,0 +1,5 @@
+# Dev/test-only dependencies — NOT shipped to production.
+# Install with: pip install -r requirements-dev.txt
+-r requirements.txt
+fakeredis==2.34.1
+sortedcontainers==2.4.0

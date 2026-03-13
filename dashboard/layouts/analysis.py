@@ -187,6 +187,12 @@ def analysis_layout() -> html.Div:
             html.Div(id="analysis-stats-row", className="mt-4"),
             # ── Hidden stores ─────────────────────────────────────
             dcc.Store(id="analysis-refresh-store", data=0),
+            # Background refresh poller (2 s)
+            dcc.Interval(
+                id="analysis-refresh-poll",
+                interval=2000,
+                n_intervals=0,
+            ),
         ]
     )
 

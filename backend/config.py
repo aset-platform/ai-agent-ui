@@ -104,6 +104,10 @@ class Settings(BaseSettings):
     facebook_app_secret: str = ""
     oauth_redirect_uri: str = "http://localhost:3000/auth/oauth/callback"
 
+    # WebSocket settings.
+    ws_auth_timeout_seconds: int = 10
+    ws_ping_interval_seconds: int = 30
+
     # Rate limiting (slowapi format: "N/period").
     rate_limit_login: str = "30/15minutes"
     rate_limit_register: str = "10/hour"

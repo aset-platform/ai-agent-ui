@@ -26,7 +26,24 @@ test.describe("Login page", () => {
   });
 
   test("valid credentials → redirect to chat", async ({ page }) => {
-    await loginPage.loginAndWaitForChat(VALID_EMAIL, VALID_PASSWORD);
+    test.slow(); // rate-limit retries may need extra time
+
+    // Retry login up to 3 times in case of 429 rate limiting
+    // from prior test runs within the 15-min window.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await loginPage.login(VALID_EMAIL, VALID_PASSWORD);
+      try {
+        await page.waitForURL("/", { timeout: 15_000 });
+        break;
+      } catch {
+        // Likely 429 — wait for rate limit to ease, then retry
+        if (attempt < 2) {
+          await page.waitForTimeout(3_000);
+          await loginPage.goto();
+        }
+      }
+    }
+
     expect(page.url()).toContain("/");
     expect(page.url()).not.toContain("/login");
   });

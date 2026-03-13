@@ -1,8 +1,8 @@
-"""Unit tests for adj_close backfill: repository method + backfill script.
+"""Unit tests for adj_close backfill: repository method + script.
 
-Tests cover :meth:`StockRepository.update_ohlcv_adj_close` (copy-on-write
-update of the adj_close column) and the one-time backfill script
-``stocks/backfill_adj_close.py``.
+Tests cover :meth:`StockRepository.update_ohlcv_adj_close`
+(scoped delete-and-append of the adj_close column) and the
+one-time backfill script ``stocks/backfill_adj_close.py``.
 
 All Iceberg / parquet I/O is mocked — the suite runs offline.
 """
@@ -132,20 +132,22 @@ class TestUpdateOhlcvAdjClose:
         adj_map = {dates[0]: 99.0, dates[5]: 88.0}
 
         repo = StockRepository()
-        mock_table = MagicMock()
 
         with (
             patch.object(
                 repo,
-                "_load_table_and_scan",
-                return_value=(mock_table, full_df),
+                "_scan_ticker",
+                return_value=full_df,
             ),
-            patch.object(repo, "_overwrite_table") as mock_ow,
+            patch.object(repo, "_delete_rows"),
+            patch.object(repo, "_append_rows") as mock_ap,
         ):
-            updated = repo.update_ohlcv_adj_close("AAPL", adj_map)
+            updated = repo.update_ohlcv_adj_close(
+                "AAPL", adj_map
+            )
 
         assert updated == 2
-        mock_ow.assert_called_once()
+        mock_ap.assert_called_once()
 
     def test_empty_map_returns_zero(self):
         """An empty adj_close_map must return 0 without touching Iceberg."""
@@ -167,80 +169,85 @@ class TestUpdateOhlcvAdjClose:
         adj_map = {date(1999, 1, 1): 50.0}
 
         repo = StockRepository()
-        mock_table = MagicMock()
 
         with (
             patch.object(
                 repo,
-                "_load_table_and_scan",
-                return_value=(mock_table, full_df),
+                "_scan_ticker",
+                return_value=full_df,
             ),
-            patch.object(repo, "_overwrite_table") as mock_ow,
+            patch.object(repo, "_delete_rows") as mock_del,
         ):
-            result = repo.update_ohlcv_adj_close("AAPL", adj_map)
+            result = repo.update_ohlcv_adj_close(
+                "AAPL", adj_map
+            )
 
         assert result == 0
-        mock_ow.assert_not_called()
+        mock_del.assert_not_called()
 
     def test_only_updates_target_ticker(self):
-        """Rows for other tickers must not be modified."""
+        """Only AAPL rows are deleted+appended; MSFT untouched."""
         from stocks.repository import StockRepository
 
         full_df = _make_multi_ticker_ohlcv()
-        # MSFT already has adj_close; pick an AAPL date
-        aapl_dates = full_df.loc[full_df["ticker"] == "AAPL", "date"].tolist()
+        aapl_df = full_df[full_df["ticker"] == "AAPL"].copy()
+        aapl_dates = aapl_df["date"].tolist()
         adj_map = {aapl_dates[0]: 42.0}
 
         repo = StockRepository()
-        mock_table = MagicMock()
 
         with (
             patch.object(
                 repo,
-                "_load_table_and_scan",
-                return_value=(mock_table, full_df),
+                "_scan_ticker",
+                return_value=aapl_df,
             ),
-            patch.object(repo, "_overwrite_table") as mock_ow,
+            patch.object(repo, "_delete_rows") as mock_del,
+            patch.object(repo, "_append_rows") as mock_ap,
         ):
-            updated = repo.update_ohlcv_adj_close("AAPL", adj_map)
+            updated = repo.update_ohlcv_adj_close(
+                "AAPL", adj_map
+            )
 
         assert updated == 1
-        mock_ow.assert_called_once()
+        mock_del.assert_called_once()
+        mock_ap.assert_called_once()
 
-        # Inspect the Arrow table passed to _overwrite_table
-        arrow_arg = mock_ow.call_args[0][1]
+        # Arrow table passed to _append_rows has AAPL only
+        arrow_arg = mock_ap.call_args[0][1]
         written_df = arrow_arg.to_pandas()
-
-        # MSFT rows should be unchanged (still 20 rows)
-        msft = written_df[written_df["ticker"] == "MSFT"]
-        assert len(msft) == 20
+        assert set(written_df["ticker"].unique()) == {"AAPL"}
+        assert len(written_df) == len(aapl_df)
 
     def test_empty_table_returns_zero(self):
-        """When the OHLCV table is completely empty, return 0."""
+        """When no OHLCV rows exist for the ticker, return 0."""
         from stocks.repository import StockRepository
 
         repo = StockRepository()
-        mock_table = MagicMock()
 
         with (
             patch.object(
                 repo,
-                "_load_table_and_scan",
-                return_value=(mock_table, pd.DataFrame()),
+                "_scan_ticker",
+                return_value=pd.DataFrame(),
             ),
-            patch.object(repo, "_overwrite_table") as mock_ow,
+            patch.object(repo, "_delete_rows") as mock_del,
         ):
             adj_map = {date(2020, 1, 1): 100.0}
-            result = repo.update_ohlcv_adj_close("AAPL", adj_map)
+            result = repo.update_ohlcv_adj_close(
+                "AAPL", adj_map
+            )
 
         assert result == 0
-        mock_ow.assert_not_called()
+        mock_del.assert_not_called()
 
     def test_nan_and_inf_values_skipped(self):
-        """NaN and inf values in adj_close_map are skipped via _safe_float."""
+        """NaN/inf in adj_close_map are skipped via _safe_float."""
         from stocks.repository import StockRepository
 
-        full_df = _make_iceberg_ohlcv(5, "AAPL", adj_close_nan=True)
+        full_df = _make_iceberg_ohlcv(
+            5, "AAPL", adj_close_nan=True
+        )
         dates = full_df["date"].tolist()
         adj_map = {
             dates[0]: float("nan"),
@@ -249,35 +256,47 @@ class TestUpdateOhlcvAdjClose:
         }
 
         repo = StockRepository()
-        mock_table = MagicMock()
 
-        with patch.object(
-            repo,
-            "_load_table_and_scan",
-            return_value=(mock_table, full_df),
+        with (
+            patch.object(
+                repo,
+                "_scan_ticker",
+                return_value=full_df,
+            ),
+            patch.object(repo, "_delete_rows"),
+            patch.object(repo, "_append_rows"),
         ):
-            updated = repo.update_ohlcv_adj_close("AAPL", adj_map)
+            updated = repo.update_ohlcv_adj_close(
+                "AAPL", adj_map
+            )
 
-        # Only dates[2] should be updated (nan/inf are rejected)
+        # Only dates[2] should update (nan/inf rejected)
         assert updated == 1
 
     def test_case_insensitive_ticker(self):
         """Ticker should be uppercased internally."""
         from stocks.repository import StockRepository
 
-        full_df = _make_iceberg_ohlcv(5, "AAPL", adj_close_nan=True)
+        full_df = _make_iceberg_ohlcv(
+            5, "AAPL", adj_close_nan=True
+        )
         dates = full_df["date"].tolist()
         adj_map = {dates[0]: 42.0}
 
         repo = StockRepository()
-        mock_table = MagicMock()
 
-        with patch.object(
-            repo,
-            "_load_table_and_scan",
-            return_value=(mock_table, full_df),
+        with (
+            patch.object(
+                repo,
+                "_scan_ticker",
+                return_value=full_df,
+            ),
+            patch.object(repo, "_delete_rows"),
+            patch.object(repo, "_append_rows"),
         ):
-            updated = repo.update_ohlcv_adj_close("aapl", adj_map)
+            updated = repo.update_ohlcv_adj_close(
+                "aapl", adj_map
+            )
 
         assert updated == 1
 

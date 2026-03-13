@@ -20,6 +20,7 @@ from dashboard.callbacks.home_cbs import register as _reg_home
 from dashboard.callbacks.insights_cbs import register as _reg_insights
 from dashboard.callbacks.marketplace_cbs import register as _reg_marketplace
 from dashboard.callbacks.profile_cbs import register as _reg_profile
+from dashboard.callbacks.refresh_state import RefreshManager
 from dashboard.callbacks.routing_cbs import register as _reg_routing
 
 # Module-level logger; kept here as a module-level
@@ -30,16 +31,13 @@ _logger = logging.getLogger(__name__)
 def register_callbacks(app) -> None:
     """Register all Dash callbacks with *app*.
 
+    Creates :class:`RefreshManager` instances for the three
+    callback modules that run background stock refreshes,
+    keeping mutable state off the module scope.
+
     Args:
-        app: The :class:`~dash.Dash` application instance created in
-            ``dashboard/app.py``.
-
-    Returns:
-        None
-
-    Raises:
-        Exception: Propagates any exception raised by individual
-            feature-area ``register(app)`` functions.
+        app: The :class:`~dash.Dash` application instance
+            created in ``dashboard/app.py``.
     """
     _logger.debug("Registering routing callbacks.")
     _reg_routing(app)
@@ -47,14 +45,17 @@ def register_callbacks(app) -> None:
     _logger.debug("Registering profile callbacks.")
     _reg_profile(app)
 
+    home_mgr = RefreshManager(max_workers=4)
     _logger.debug("Registering home callbacks.")
-    _reg_home(app)
+    _reg_home(app, home_mgr)
 
+    analysis_mgr = RefreshManager(max_workers=2)
     _logger.debug("Registering analysis callbacks.")
-    _reg_analysis(app)
+    _reg_analysis(app, analysis_mgr)
 
+    forecast_mgr = RefreshManager(max_workers=2)
     _logger.debug("Registering forecast callbacks.")
-    _reg_forecast(app)
+    _reg_forecast(app, forecast_mgr)
 
     _logger.debug("Registering admin callbacks.")
     _reg_admin(app)

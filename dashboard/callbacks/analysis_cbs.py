@@ -10,9 +10,10 @@ Example::
     register(app)
 """
 
+from __future__ import annotations
+
 import logging
 import math
-from typing import Optional
 from urllib.parse import parse_qs
 
 import dash_bootstrap_components as dbc
@@ -26,13 +27,8 @@ from dashboard.callbacks.auth_utils import (
     _unauth_notice,
     _validate_token,
 )
-from dashboard.callbacks.card_builders import (
-    _build_stats_cards,
-)
-from dashboard.callbacks.chart_builders import (
-    _build_analysis_fig,
-    _empty_fig,
-)
+from dashboard.callbacks.card_builders import _build_stats_cards
+from dashboard.callbacks.chart_builders import _build_analysis_fig, _empty_fig
 from dashboard.callbacks.data_loaders import (
     _add_indicators_cached,
     _clear_indicator_cache,
@@ -42,25 +38,21 @@ from dashboard.callbacks.data_loaders import (
     _load_reg_cb,
 )
 from dashboard.callbacks.iceberg import clear_caches
-from dashboard.callbacks.sort_helpers import (
-    MACD_TOOLTIP,
-    RSI_TOOLTIP,
-)
+from dashboard.callbacks.refresh_state import RefreshManager
+from dashboard.callbacks.sort_helpers import MACD_TOOLTIP, RSI_TOOLTIP
 from dashboard.components.error_overlay import make_error_banner
-from dashboard.services.stock_refresh import (
-    run_full_refresh,
-)
+from dashboard.services.stock_refresh import run_full_refresh
 
-# Module-level logger; mutable but intentionally
-# module-scoped for callback registration.
+# Module-level logger (immutable singleton — not mutable state).
 _logger = logging.getLogger(__name__)
 
 
-def register(app) -> None:
+def register(app, mgr: RefreshManager) -> None:
     """Register analysis-page callbacks with *app*.
 
     Args:
         app: The :class:`~dash.Dash` application instance.
+        mgr: Thread-safe refresh manager for background jobs.
     """
 
     @app.callback(
@@ -226,8 +218,63 @@ def register(app) -> None:
         return fig, stats
 
     @app.callback(
+        Output("analysis-refresh-status", "children"),
+        Input("analysis-refresh-btn", "n_clicks"),
         [
-            Output("analysis-refresh-status", "children"),
+            State("analysis-ticker-dropdown", "value"),
+            State("auth-token-store", "data"),
+        ],
+        prevent_initial_call=True,
+    )
+    def start_analysis_refresh(
+        n_clicks: int | None,
+        ticker: str | None,
+        token: str | None,
+    ):
+        """Submit analysis refresh to background thread.
+
+        Returns a spinner immediately; the poll callback
+        harvests the result when the future completes.
+
+        Args:
+            n_clicks: Button click counter.
+            ticker: Selected ticker symbol.
+            token: JWT access token.
+
+        Returns:
+            Status span (spinner or validation error).
+        """
+        if not n_clicks:
+            return no_update
+
+        if _validate_token(token) is None:
+            return _unauth_notice()
+
+        if not ticker:
+            return html.Span(
+                "\u2717 Select a ticker",
+                className=("refresh-status-icon text-warning"),
+            )
+
+        ticker = ticker.upper().strip()
+
+        if not mgr.submit_if_idle(ticker, run_full_refresh, ticker, 9):
+            return no_update
+
+        _logger.info("Analysis refresh submitted for %s", ticker)
+
+        return html.Span(
+            className="card-refresh-spinner",
+            title=f"Refreshing {ticker}\u2026",
+        )
+
+    @app.callback(
+        [
+            Output(
+                "analysis-refresh-status",
+                "children",
+                allow_duplicate=True,
+            ),
             Output("analysis-refresh-store", "data"),
             Output(
                 "error-overlay-container",
@@ -235,80 +282,79 @@ def register(app) -> None:
                 allow_duplicate=True,
             ),
         ],
-        Input("analysis-refresh-btn", "n_clicks"),
-        [
-            State("analysis-ticker-dropdown", "value"),
-            State("analysis-refresh-store", "data"),
-            State("auth-token-store", "data"),
-        ],
+        Input("analysis-refresh-poll", "n_intervals"),
+        State("analysis-refresh-store", "data"),
         prevent_initial_call=True,
     )
-    def run_analysis_refresh(
-        n_clicks: Optional[int],
-        ticker: Optional[str],
-        current_refresh: Optional[int],
-        token: Optional[str],
+    def poll_analysis_refresh(
+        n_intervals: int,
+        current_refresh: int | None,
     ):
-        """Run the full refresh pipeline for analysis.
+        """Poll the background analysis refresh future.
+
+        Checks every 2 s whether the submitted future has
+        completed.  When done, clears caches and updates
+        the status icon and refresh store.
 
         Args:
-            n_clicks: Button click counter.
-            ticker: Selected ticker symbol.
-            current_refresh: Current store counter.
-            token: JWT access token.
+            n_intervals: Interval tick counter.
+            current_refresh: Current refresh store value.
 
         Returns:
             Tuple of (status icon, counter, overlay).
         """
-        if not n_clicks:
-            return no_update, no_update, no_update
+        for ticker, fut in mgr.harvest_done():
+            clear_caches(ticker)
+            _clear_indicator_cache(ticker)
 
-        if _validate_token(token) is None:
-            return _unauth_notice(), no_update, no_update
+            try:
+                result = fut.result()
+            except Exception as exc:
+                _logger.error(
+                    "Analysis refresh exception: %s",
+                    exc,
+                )
+                return (
+                    html.Span(
+                        "\u2717",
+                        className=("refresh-status-icon" " text-danger"),
+                        title=str(exc)[:200],
+                    ),
+                    no_update,
+                    make_error_banner(
+                        "Refresh failed \u2014 " + str(exc)[:150]
+                    ),
+                )
 
-        if not ticker:
+            if result.success:
+                return (
+                    html.Span(
+                        "\u2713",
+                        className=("refresh-status-icon" " text-success"),
+                        title=("Refresh complete" f" for {ticker}"),
+                    ),
+                    (current_refresh or 0) + 1,
+                    no_update,
+                )
+
+            error_msg = result.error or "Unknown error"
+            _logger.error(
+                "run_analysis_refresh failed: %s",
+                error_msg,
+            )
             return (
                 html.Span(
-                    "\u2717 Select a ticker",
-                    className=("refresh-status-icon" " text-warning"),
+                    "\u2717",
+                    className=("refresh-status-icon text-danger"),
+                    title=error_msg[:200],
                 ),
                 no_update,
-                no_update,
-            )
-
-        ticker = ticker.upper().strip()
-        result = run_full_refresh(ticker, 9)
-
-        clear_caches(ticker)
-        _clear_indicator_cache(ticker)
-
-        if result.success:
-            return (
-                html.Span(
-                    "\u2713",
-                    className=("refresh-status-icon" " text-success"),
-                    title=(f"Refresh complete for {ticker}"),
+                make_error_banner(
+                    f"Refresh failed for {ticker}" f" \u2014 {error_msg[:150]}"
                 ),
-                (current_refresh or 0) + 1,
-                no_update,
             )
 
-        error_msg = result.error or "Unknown error"
-        _logger.error(
-            "run_analysis_refresh failed: %s",
-            error_msg,
-        )
-        return (
-            html.Span(
-                "\u2717",
-                className=("refresh-status-icon text-danger"),
-                title=error_msg[:200],
-            ),
-            no_update,
-            make_error_banner(
-                f"Refresh failed for {ticker}" f" \u2014 {error_msg[:150]}"
-            ),
-        )
+        return no_update, no_update, no_update
 
     @app.callback(
         [

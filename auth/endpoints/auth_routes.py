@@ -25,7 +25,7 @@ from auth.models import (
     TokenResponse,
     UserContext,
 )
-from auth.rate_limit import limiter
+from auth.rate_limit import limiter, login_limit, register_limit
 from auth.service import AuthService
 
 # Module-level logger; mutable but intentionally
@@ -79,7 +79,7 @@ def register(router: APIRouter) -> None:
     """
 
     @router.post("/auth/login", response_model=TokenResponse, tags=["auth"])
-    @limiter.limit("30/15minutes")
+    @limiter.limit(login_limit)
     def login(
         request: Request,
         body: LoginRequest,
@@ -283,7 +283,7 @@ def register(router: APIRouter) -> None:
         return resp
 
     @router.post("/auth/password-reset/request", tags=["auth"])
-    @limiter.limit("10/hour")
+    @limiter.limit(register_limit)
     def password_reset_request(
         request: Request,
         body: PasswordResetRequestBody,
@@ -394,3 +394,20 @@ def register(router: APIRouter) -> None:
             "Password reset completed for user_id=%s", current_user.user_id
         )
         return {"detail": "Password updated successfully"}
+
+    @router.get("/auth/health", tags=["auth"])
+    def auth_health(
+        service: AuthService = Depends(get_auth_service),
+    ) -> Dict[str, object]:
+        """Return token-store health status.
+
+        Returns:
+            A dict with ``status``, ``backend``, and ``ok`` keys.
+        """
+        health = service.store_health()
+        ok = health["ok"]
+        return {
+            "status": "healthy" if ok else "degraded",
+            "backend": health["backend"],
+            "ok": ok,
+        }
