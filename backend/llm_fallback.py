@@ -41,6 +41,7 @@ Typical usage::
 
 import logging
 import os
+import time
 from typing import Any, List
 
 from langchain_anthropic import ChatAnthropic
@@ -138,6 +139,7 @@ class FallbackLLM:
             )
 
         # Anthropic is always available.
+        self._anthropic_model = anthropic_model
         self._anthropic_llm = ChatAnthropic(
             model=anthropic_model,
             temperature=temperature,
@@ -205,7 +207,14 @@ class FallbackLLM:
         est = self._budget.estimate_tokens(compressed)
 
         # Step 3: Try each Groq tier in order.
-        for model_name, _raw, bound_llm in self._groq_tiers:
+        from tools._ticker_linker import (
+            get_current_user,
+        )
+
+        _user = get_current_user()
+        for idx, (model_name, _raw, bound_llm) in enumerate(
+            self._groq_tiers,
+        ):
             cur_compressed = compressed
             cur_est = est
 
@@ -222,7 +231,10 @@ class FallbackLLM:
                     )
                     cur_est = self._budget.estimate_tokens(cur_compressed)
                     if self._obs:
-                        self._obs.record_compression()
+                        self._obs.record_compression(
+                            agent_id=self._agent_id,
+                            user_id=_user,
+                        )
                     _logger.info(
                         "Progressive compress for %s: "
                         "%d → %d tokens (agent=%s)",
@@ -237,6 +249,10 @@ class FallbackLLM:
                     self._obs.record_cascade(
                         model_name,
                         "budget_exhausted",
+                        provider="groq",
+                        agent_id=self._agent_id,
+                        tier_index=idx,
+                        user_id=_user,
                     )
                 _logger.info(
                     "Skip %s: budget exhausted " "(est=%d, agent=%s)",
@@ -246,11 +262,30 @@ class FallbackLLM:
                 )
                 continue
 
+            _t0 = time.monotonic()
             try:
                 result = bound_llm.invoke(cur_compressed, **kwargs)
+                _ms = int(
+                    (time.monotonic() - _t0) * 1000,
+                )
                 self._budget.record(model_name, cur_est)
+                # Extract token usage from response.
+                _pt = _ct = None
+                _umeta = getattr(result, "usage_metadata", None)
+                if _umeta:
+                    _pt = _umeta.get("input_tokens")
+                    _ct = _umeta.get("output_tokens")
                 if self._obs:
-                    self._obs.record_request(model_name)
+                    self._obs.record_request(
+                        model_name,
+                        provider="groq",
+                        agent_id=self._agent_id,
+                        tier_index=idx,
+                        user_id=_user,
+                        prompt_tokens=_pt,
+                        completion_tokens=_ct,
+                        latency_ms=_ms,
+                    )
                 _logger.info(
                     "Route → %s | iter=%d " "tokens≈%d (agent=%s)",
                     model_name,
@@ -272,6 +307,10 @@ class FallbackLLM:
                         self._obs.record_cascade(
                             model_name,
                             "api_error",
+                            provider="groq",
+                            agent_id=self._agent_id,
+                            tier_index=idx,
+                            user_id=_user,
                         )
                     _logger.warning(
                         "Groq %s failed (%s), " "cascading — agent=%s",
@@ -283,8 +322,25 @@ class FallbackLLM:
                 raise
 
         # Step 4: Anthropic fallback.
+        _t0 = time.monotonic()
+        result = self._anthropic_bound.invoke(compressed, **kwargs)
+        _ms = int((time.monotonic() - _t0) * 1000)
+        _pt = _ct = None
+        _umeta = getattr(result, "usage_metadata", None)
+        if _umeta:
+            _pt = _umeta.get("input_tokens")
+            _ct = _umeta.get("output_tokens")
         if self._obs:
-            self._obs.record_request("anthropic")
+            self._obs.record_request(
+                self._anthropic_model,
+                provider="anthropic",
+                agent_id=self._agent_id,
+                tier_index=len(self._groq_tiers),
+                user_id=_user,
+                prompt_tokens=_pt,
+                completion_tokens=_ct,
+                latency_ms=_ms,
+            )
         _logger.warning(
             "All Groq tiers exhausted → Anthropic | "
             "iter=%d tokens≈%d (agent=%s)",
@@ -292,4 +348,4 @@ class FallbackLLM:
             est,
             self._agent_id,
         )
-        return self._anthropic_bound.invoke(compressed, **kwargs)
+        return result

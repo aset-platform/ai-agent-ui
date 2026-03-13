@@ -1,8 +1,8 @@
 """One-time Iceberg table initialisation for the stocks namespace.
 
-Creates all 9 Iceberg tables in the ``stocks`` namespace using the shared
-SQLite catalog (``data/iceberg/catalog.db``).  The script is idempotent —
-if tables already exist it exits without error.
+Creates all 11 Iceberg tables in the ``stocks`` namespace using the
+shared SQLite catalog (``data/iceberg/catalog.db``).  The script is
+idempotent — if tables already exist it exits without error.
 
 Usage::
 
@@ -25,6 +25,8 @@ Tables created
 - ``stocks.forecast_runs``
 - ``stocks.forecasts``
 - ``stocks.quarterly_results``
+- ``stocks.llm_pricing``
+- ``stocks.llm_usage``
 """
 
 import logging
@@ -49,6 +51,7 @@ from pyiceberg.partitioning import PartitionField, PartitionSpec  # noqa: E402
 from pyiceberg.schema import Schema  # noqa: E402
 from pyiceberg.transforms import IdentityTransform  # noqa: E402
 from pyiceberg.types import (  # noqa: E402
+    BooleanType,
     DateType,
     DoubleType,
     IntegerType,
@@ -72,6 +75,8 @@ _ANALYSIS_SUMMARY_TABLE = f"{_NAMESPACE}.analysis_summary"
 _FORECAST_RUNS_TABLE = f"{_NAMESPACE}.forecast_runs"
 _FORECASTS_TABLE = f"{_NAMESPACE}.forecasts"
 _QUARTERLY_RESULTS_TABLE = f"{_NAMESPACE}.quarterly_results"
+_LLM_PRICING_TABLE = f"{_NAMESPACE}.llm_pricing"
+_LLM_USAGE_TABLE = f"{_NAMESPACE}.llm_usage"
 
 
 def _get_catalog() -> SqlCatalog:
@@ -949,6 +954,254 @@ def _quarterly_results_schema() -> Schema:
     )
 
 
+def _llm_pricing_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.llm_pricing``.
+
+    Returns:
+        Schema: LLM model pricing rate card with
+            effective date ranges for historical
+            billing accuracy.
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="pricing_id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=2,
+            name="provider",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=3,
+            name="model",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=4,
+            name="input_cost_per_1m",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=5,
+            name="output_cost_per_1m",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=6,
+            name="effective_from",
+            field_type=DateType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=7,
+            name="effective_to",
+            field_type=DateType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=8,
+            name="currency",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=9,
+            name="updated_by",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=10,
+            name="created_at",
+            field_type=TimestampType(),
+            required=False,
+        ),
+    )
+
+
+def _llm_usage_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.llm_usage``.
+
+    Returns:
+        Schema: Per-request LLM event log with
+            snapshotted pricing for audit-proof
+            billing; partitioned by request_date.
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="usage_id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=2,
+            name="request_date",
+            field_type=DateType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=3,
+            name="timestamp",
+            field_type=TimestampType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=4,
+            name="user_id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=5,
+            name="agent_id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=6,
+            name="model",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=7,
+            name="provider",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=8,
+            name="tier_index",
+            field_type=IntegerType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=9,
+            name="event_type",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=10,
+            name="cascade_reason",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=11,
+            name="cascade_from_model",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=12,
+            name="prompt_tokens",
+            field_type=IntegerType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=13,
+            name="completion_tokens",
+            field_type=IntegerType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=14,
+            name="total_tokens",
+            field_type=IntegerType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=15,
+            name="input_cost_per_1m",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=16,
+            name="output_cost_per_1m",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=17,
+            name="estimated_cost_usd",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=18,
+            name="latency_ms",
+            field_type=IntegerType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=19,
+            name="success",
+            field_type=BooleanType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=20,
+            name="error_code",
+            field_type=StringType(),
+            required=False,
+        ),
+    )
+
+
+def _provider_partition_spec(schema: Schema) -> PartitionSpec:
+    """Return a partition spec by ``provider``.
+
+    Args:
+        schema: Schema containing a ``provider`` field.
+
+    Returns:
+        PartitionSpec: Identity partition on provider.
+    """
+    provider_fid = schema.find_field("provider").field_id
+    return PartitionSpec(
+        PartitionField(
+            source_id=provider_fid,
+            field_id=1000,
+            transform=IdentityTransform(),
+            name="provider",
+        )
+    )
+
+
+def _request_date_partition_spec(
+    schema: Schema,
+) -> PartitionSpec:
+    """Return a partition spec by ``request_date``.
+
+    Args:
+        schema: Schema containing a ``request_date``
+            field.
+
+    Returns:
+        PartitionSpec: Identity partition on
+            request_date.
+    """
+    date_fid = schema.find_field("request_date").field_id
+    return PartitionSpec(
+        PartitionField(
+            source_id=date_fid,
+            field_id=1000,
+            transform=IdentityTransform(),
+            name="request_date",
+        )
+    )
+
+
 def _ticker_partition_spec(schema: Schema) -> PartitionSpec:
     """Return a partition spec that partitions by the ``ticker`` field.
 
@@ -1024,7 +1277,7 @@ def _create_table(
 
 
 def create_tables() -> None:
-    """Create all 9 ``stocks`` Iceberg tables.
+    """Create all 11 ``stocks`` Iceberg tables.
 
     This function is idempotent — calling it on an already-initialised
     catalog simply logs and returns.  Creates the ``stocks`` namespace
@@ -1097,6 +1350,24 @@ def create_tables() -> None:
         _FORECASTS_TABLE,
         forecasts_schema,
         _ticker_horizon_partition_spec(forecasts_schema),
+    )
+
+    # LLM pricing (partitioned by provider)
+    pricing_schema = _llm_pricing_schema()
+    _create_table(
+        catalog,
+        _LLM_PRICING_TABLE,
+        pricing_schema,
+        _provider_partition_spec(pricing_schema),
+    )
+
+    # LLM usage (partitioned by request_date)
+    usage_schema = _llm_usage_schema()
+    _create_table(
+        catalog,
+        _LLM_USAGE_TABLE,
+        usage_schema,
+        _request_date_partition_spec(usage_schema),
     )
 
     _logger.info("Stocks Iceberg table initialisation complete.")

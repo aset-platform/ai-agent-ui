@@ -64,7 +64,13 @@ class ChatServer:
             max_history_turns=settings.max_history_turns,
             max_tool_result_chars=(settings.max_tool_result_chars),
         )
-        self.obs_collector = ObservabilityCollector()
+        # Observability with Iceberg persistence.
+        from tools._stock_shared import _get_repo
+
+        _obs_repo = _get_repo()
+        self.obs_collector = ObservabilityCollector(
+            repo=_obs_repo,
+        )
 
         setup_tools(self.tool_registry)
         setup_agents(
