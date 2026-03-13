@@ -185,6 +185,7 @@ dashboard/
 │   ├── analysis.py      # Technical analysis chart layout + ticker cache
 │   ├── insights_tabs.py # Screener/Targets/Dividends/Risk/Sectors/Correlation tabs
 │   ├── admin.py         # User management + audit log layout
+│   ├── observability.py # LLM tier health + budget + cascade log layout
 │   └── navbar.py        # Global navbar
 ├── callbacks/           # Interactive callbacks (package)
 │   ├── data_loaders.py  # Iceberg reads, TTL indicator cache
@@ -194,6 +195,8 @@ dashboard/
 │   ├── insights_cbs.py  # All Insights tab callbacks
 │   ├── admin_cbs.py     # User table callbacks
 │   ├── admin_cbs2.py    # Add/Edit/Deactivate user modals
+│   ├── observability_cbs.py # LLM metrics fetch + health card rendering
+│   ├── auth_utils.py    # JWT validation + _api_call helper
 │   ├── iceberg.py       # Iceberg repo singleton + TTL cached helpers
 │   └── utils.py         # Shared utilities (currency, market label)
 └── assets/
@@ -299,19 +302,31 @@ Available from the **Change Password** button in the NAVBAR on any page. Two-ste
 
 Password must be ≥ 8 characters and contain at least one digit. The modal shows inline error messages for validation failures and API errors.
 
+### LLM Observability — `/admin/observability`
+
+The Observability tab (accessible from the admin navbar) displays real-time health and performance metrics for the N-tier Groq LLM cascade:
+
+| Section | Data source | Description |
+|---------|-------------|-------------|
+| **Tier Health Cards** | `GET /v1/admin/tier-health` | Color-coded status per model (green=healthy, yellow=degraded, red=down, grey=disabled) with cascade count and latency stats |
+| **Budget Cards** | `GET /v1/admin/metrics` | TPM/RPM usage bars per active Groq model |
+| **Cascade Log** | `GET /v1/admin/metrics` | Recent cascade events with timestamps and trigger reasons |
+
+Health cards auto-refresh every 30 seconds via `dcc.Interval`.
+
 ### `_api_call` helper
 
 All admin callbacks use `_api_call(method, path, token, json_body)` to make authenticated HTTP requests to the FastAPI backend:
 
 ```python
 def _api_call(method, path, token, json_body=None):
-    url = f"{BACKEND_URL}{path}"
+    url = f"{_BACKEND_URL}{path}"   # _BACKEND_URL = f"{host}/v1"
     headers = {"Authorization": f"Bearer {token}"}
     resp = requests.request(method, url, json=json_body, headers=headers, timeout=10)
     return resp
 ```
 
-`BACKEND_URL` defaults to `http://127.0.0.1:8181` and can be overridden via the `BACKEND_URL` environment variable.
+`_BACKEND_HOST` defaults to `http://127.0.0.1:8181` (overridden via `BACKEND_URL` env var). API calls use `_BACKEND_URL` (`{host}/v1`); avatar URLs use `_BACKEND_HOST` directly (static files are not versioned).
 
 ### Environment loading
 
