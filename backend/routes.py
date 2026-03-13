@@ -297,11 +297,43 @@ def create_app(
     # Admin observability (superuser only).
     from auth.dependencies import superuser_only
 
+    async def _admin_retention(
+        dry_run: bool = True,
+    ):
+        """POST /admin/retention — run data retention cleanup.
+
+        Args:
+            dry_run: If True (default), report only.
+        """
+        from stocks.retention import RetentionManager
+
+        mgr = RetentionManager()
+        results = mgr.run_cleanup(dry_run=dry_run)
+        return {
+            "results": [
+                {
+                    "table": r.table_id,
+                    "cutoff_date": str(r.cutoff_date),
+                    "rows_before": r.rows_before,
+                    "rows_deleted": r.rows_deleted,
+                    "dry_run": r.dry_run,
+                    "error": r.error,
+                }
+                for r in results
+            ],
+        }
+
     admin_router = APIRouter()
     admin_router.add_api_route(
         "/admin/metrics",
         _admin_metrics,
         methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/retention",
+        _admin_retention,
+        methods=["POST"],
         dependencies=[Depends(superuser_only)],
     )
     app.include_router(admin_router)

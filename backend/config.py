@@ -120,6 +120,15 @@ class Settings(BaseSettings):
     # Empty = in-memory fallback (single-instance dev).
     redis_url: str = ""
 
+    # Data retention policies (days to keep; 0 = keep forever).
+    # Applies to append-only tables that grow unboundedly.
+    retention_llm_usage_days: int = 90
+    retention_analysis_summary_days: int = 365
+    retention_forecast_runs_days: int = 180
+    retention_company_info_days: int = 365
+    retention_enabled: bool = False
+    retention_dry_run: bool = True
+
     # Read from .env in the working directory; silently skip if absent.
     # Real environment variables always take precedence over .env values.
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
