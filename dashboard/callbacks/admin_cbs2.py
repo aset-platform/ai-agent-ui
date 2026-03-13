@@ -241,7 +241,7 @@ def register(app) -> None:
                         "borderRadius": "50%",
                         "objectFit": "cover",
                         "objectPosition": "top",
-                        "border": "1px solid #dee2e6",
+                        "border": "1px solid var(--border)",
                     },
                 )
             else:

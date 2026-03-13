@@ -63,7 +63,7 @@ export default defineConfig({
     {
       name: "dashboard-chromium",
       testDir: "./tests/dashboard",
-      testIgnore: /admin\.spec\.ts/,
+      testIgnore: /admin.*\.spec\.ts/,
       use: {
         ...devices["Desktop Chrome"],
         baseURL: DASHBOARD_URL,
@@ -75,7 +75,7 @@ export default defineConfig({
     {
       name: "admin-chromium",
       testDir: "./tests/dashboard",
-      testMatch: /admin\.spec\.ts/,
+      testMatch: /admin.*\.spec\.ts/,
       use: {
         ...devices["Desktop Chrome"],
         baseURL: DASHBOARD_URL,

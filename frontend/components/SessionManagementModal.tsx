@@ -92,7 +92,8 @@ function DeviceIcon({
   type: "desktop" | "mobile" | "tablet" | "unknown";
 }) {
   const cls =
-    "w-5 h-5 shrink-0 text-gray-400 group-hover:text-gray-500" +
+    "w-5 h-5 shrink-0 text-gray-400 dark:text-gray-500" +
+    " group-hover:text-gray-500 dark:group-hover:text-gray-400" +
     " transition-colors";
 
   if (type === "mobile") {
@@ -201,23 +202,24 @@ export function SessionManagementModal({
     >
       <div
         className={
-          "bg-white rounded-2xl shadow-xl w-full max-w-lg" +
-          " mx-4 flex flex-col max-h-[80vh]"
+          "bg-white dark:bg-gray-800 rounded-2xl shadow-xl" +
+          " w-full max-w-lg mx-4 flex flex-col max-h-[80vh]" +
+          " transition-colors"
         }
         data-testid="session-management-modal"
       >
-        {/* ── Header ─────────────────────────────────── */}
+        {/* -- Header ----------------------------------- */}
         <div
           className={
             "flex items-center justify-between px-6 pt-5" +
-            " pb-4 border-b border-gray-100"
+            " pb-4 border-b border-gray-100 dark:border-gray-700"
           }
         >
           <div>
-            <h2 className="text-base font-semibold text-gray-900">
+            <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
               Active Sessions
             </h2>
-            <p className="text-xs text-gray-400 mt-0.5">
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
               {sessions.length}{" "}
               {sessions.length === 1 ? "session" : "sessions"}{" "}
               active
@@ -231,8 +233,10 @@ export function SessionManagementModal({
                 disabled={revokingAll}
                 className={
                   "text-xs font-medium px-3 py-1.5 rounded-lg" +
-                  " text-red-600 border border-red-200" +
-                  " hover:bg-red-50 transition-colors" +
+                  " text-red-600 dark:text-red-400" +
+                  " border border-red-200 dark:border-red-800" +
+                  " hover:bg-red-50 dark:hover:bg-red-900/20" +
+                  " transition-colors" +
                   " disabled:opacity-50 disabled:cursor-not-allowed"
                 }
               >
@@ -243,8 +247,10 @@ export function SessionManagementModal({
               onClick={onClose}
               className={
                 "w-8 h-8 flex items-center justify-center" +
-                " rounded-lg text-gray-400 hover:text-gray-600" +
-                " hover:bg-gray-100 transition-colors"
+                " rounded-lg text-gray-400 dark:text-gray-500" +
+                " hover:text-gray-600 dark:hover:text-gray-300" +
+                " hover:bg-gray-100 dark:hover:bg-gray-700" +
+                " transition-colors"
               }
               aria-label="Close"
             >
@@ -265,13 +271,13 @@ export function SessionManagementModal({
           </div>
         </div>
 
-        {/* ── Error ──────────────────────────────────── */}
+        {/* -- Error ------------------------------------ */}
         {error && (
           <div className="px-6 pt-3">
             <p
               className={
-                "text-sm text-red-500 bg-red-50 rounded-lg" +
-                " px-3 py-2"
+                "text-sm text-red-500 bg-red-50" +
+                " dark:bg-red-900/20 rounded-lg px-3 py-2"
               }
             >
               {error}
@@ -279,23 +285,24 @@ export function SessionManagementModal({
           </div>
         )}
 
-        {/* ── Body ───────────────────────────────────── */}
+        {/* -- Body ------------------------------------- */}
         <div className="flex-1 overflow-y-auto px-6 py-4">
           {loading ? (
             <div className="flex items-center justify-center py-12">
               <div
                 className={
                   "w-6 h-6 border-2 border-indigo-200" +
+                  " dark:border-indigo-800" +
                   " border-t-indigo-600 rounded-full animate-spin"
                 }
               />
-              <span className="ml-3 text-sm text-gray-400">
+              <span className="ml-3 text-sm text-gray-400 dark:text-gray-500">
                 Loading sessions…
               </span>
             </div>
           ) : sorted.length === 0 ? (
             <div className="text-center py-12">
-              <p className="text-sm text-gray-400">
+              <p className="text-sm text-gray-400 dark:text-gray-500">
                 No active sessions found.
               </p>
             </div>
@@ -315,9 +322,9 @@ export function SessionManagementModal({
                       "group relative rounded-xl border" +
                       " px-4 py-3.5 transition-colors" +
                       (isCurrent
-                        ? " border-emerald-200 bg-emerald-50/50"
-                        : " border-gray-150 bg-gray-50/50" +
-                          " hover:bg-gray-50")
+                        ? " border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-900/20"
+                        : " border-gray-150 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50" +
+                          " hover:bg-gray-50 dark:hover:bg-gray-700/50")
                     }
                   >
                     <div className="flex items-start gap-3">
@@ -327,9 +334,9 @@ export function SessionManagementModal({
                           "mt-0.5 w-9 h-9 rounded-lg flex" +
                           " items-center justify-center" +
                           (isCurrent
-                            ? " bg-emerald-100"
-                            : " bg-gray-100" +
-                              " group-hover:bg-gray-200/70")
+                            ? " bg-emerald-100 dark:bg-emerald-900/40"
+                            : " bg-gray-100 dark:bg-gray-700" +
+                              " group-hover:bg-gray-200/70 dark:group-hover:bg-gray-600/50")
                         }
                       >
                         <DeviceIcon type={device.icon} />
@@ -341,7 +348,7 @@ export function SessionManagementModal({
                           <span
                             className={
                               "text-sm font-medium" +
-                              " text-gray-800"
+                              " text-gray-800 dark:text-gray-200"
                             }
                           >
                             {device.label}
@@ -351,9 +358,9 @@ export function SessionManagementModal({
                               className={
                                 "text-[10px] font-semibold" +
                                 " uppercase tracking-wider" +
-                                " text-emerald-700" +
-                                " bg-emerald-100 px-1.5" +
-                                " py-0.5 rounded"
+                                " text-emerald-700 dark:text-emerald-400" +
+                                " bg-emerald-100 dark:bg-emerald-900/40" +
+                                " px-1.5 py-0.5 rounded"
                               }
                             >
                               Current
@@ -363,7 +370,7 @@ export function SessionManagementModal({
                         <div
                           className={
                             "flex items-center gap-3 mt-1" +
-                            " text-xs text-gray-400"
+                            " text-xs text-gray-400 dark:text-gray-500"
                           }
                         >
                           <span
@@ -388,10 +395,15 @@ export function SessionManagementModal({
                           className={
                             "text-xs font-medium px-3 py-1.5" +
                             " rounded-lg text-gray-500" +
+                            " dark:text-gray-400" +
                             " border border-gray-200" +
+                            " dark:border-gray-600" +
                             " hover:text-red-600" +
+                            " dark:hover:text-red-400" +
                             " hover:border-red-200" +
+                            " dark:hover:border-red-800" +
                             " hover:bg-red-50" +
+                            " dark:hover:bg-red-900/20" +
                             " transition-colors" +
                             " disabled:opacity-50" +
                             " disabled:cursor-not-allowed"
@@ -408,18 +420,20 @@ export function SessionManagementModal({
           )}
         </div>
 
-        {/* ── Footer ─────────────────────────────────── */}
+        {/* -- Footer ----------------------------------- */}
         <div
           className={
-            "px-6 py-3 border-t border-gray-100 flex" +
-            " justify-end"
+            "px-6 py-3 border-t border-gray-100" +
+            " dark:border-gray-700 flex justify-end"
           }
         >
           <button
             onClick={onClose}
             className={
-              "px-4 py-2 text-sm text-gray-600 border" +
-              " border-gray-300 rounded-lg hover:bg-gray-50"
+              "px-4 py-2 text-sm text-gray-600" +
+              " dark:text-gray-400 border border-gray-300" +
+              " dark:border-gray-600 rounded-lg" +
+              " hover:bg-gray-50 dark:hover:bg-gray-700"
             }
           >
             Close

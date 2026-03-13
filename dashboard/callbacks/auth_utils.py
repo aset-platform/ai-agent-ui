@@ -91,8 +91,8 @@ def _unauth_notice() -> html.Div:
                 ),
             ],
             style={
-                "background": "#fff",
-                "border": "1px solid #e5e7eb",
+                "background": "var(--card-bg)",
+                "border": "1px solid var(--border)",
                 "borderRadius": "1rem",
                 "padding": "2.5rem",
                 "maxWidth": "360px",
@@ -134,8 +134,8 @@ def _admin_forbidden() -> html.Div:
                 ),
             ],
             style={
-                "background": "#fff",
-                "border": "1px solid #e5e7eb",
+                "background": "var(--card-bg)",
+                "border": "1px solid var(--border)",
                 "borderRadius": "1rem",
                 "padding": "2.5rem",
                 "maxWidth": "360px",

@@ -114,8 +114,8 @@ export function EditProfileModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm mx-4 p-6" data-testid="edit-profile-modal">
-        <h2 className="text-base font-semibold text-gray-900 mb-4">Edit Profile</h2>
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-sm mx-4 p-6 transition-colors" data-testid="edit-profile-modal">
+        <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">Edit Profile</h2>
 
         {/* Current avatar preview */}
         <div className="flex justify-center mb-4">
@@ -126,7 +126,7 @@ export function EditProfileModal({
               width={64}
               height={64}
               onError={() => setPreviewErr(true)}
-              className="w-16 h-16 rounded-full object-cover object-top border border-gray-200 shadow-sm"
+              className="w-16 h-16 rounded-full object-cover object-top border border-gray-200 dark:border-gray-600 shadow-sm"
               unoptimized
             />
           ) : (
@@ -141,18 +141,18 @@ export function EditProfileModal({
         )}
 
         <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Full Name</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg px-3 py-2 text-sm text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             placeholder="Your display name"
           />
         </div>
 
         <div className="mb-5">
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
             Avatar (optional, max 10 MB)
           </label>
           <input
@@ -160,11 +160,11 @@ export function EditProfileModal({
             type="file"
             accept="image/jpeg,image/png,image/gif,image/webp"
             onChange={handleFileChange}
-            className="block w-full text-sm text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+            className="block w-full text-sm text-gray-500 dark:text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 dark:file:bg-indigo-900/30 file:text-indigo-700 dark:file:text-indigo-400 hover:file:bg-indigo-100 dark:hover:file:bg-indigo-900/50"
           />
           {fileError && <p className="mt-1 text-xs text-red-500">{fileError}</p>}
           {avatarFile && !fileError && (
-            <p className="mt-1 text-xs text-gray-500">{avatarFile.name}</p>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{avatarFile.name}</p>
           )}
         </div>
 
@@ -172,7 +172,7 @@ export function EditProfileModal({
           <button
             onClick={onClose}
             disabled={saving}
-            className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+            className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
           >
             Cancel
           </button>

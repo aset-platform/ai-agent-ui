@@ -18,6 +18,7 @@ import { useWebSocket } from "@/hooks/useWebSocket";
 import { useEditProfile, type UserProfile } from "@/hooks/useEditProfile";
 import { useChangePassword } from "@/hooks/useChangePassword";
 import { useSessionManagement } from "@/hooks/useSessionManagement";
+import { useTheme } from "@/hooks/useTheme";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ChatHeader } from "@/components/ChatHeader";
 import { ChatInput } from "@/components/ChatInput";
@@ -63,6 +64,7 @@ export default function ChatPage() {
     ws,
   });
 
+  const theme = useTheme();
   const editProfile = useEditProfile();
   const changePassword = useChangePassword();
   const sessionMgmt = useSessionManagement();
@@ -117,9 +119,11 @@ export default function ChatPage() {
   const handleInternalLink = (href: string) => {
     if (href.startsWith(DASHBOARD_URL)) {
       const token = getAccessToken();
-      const dashUrl = token
-        ? `${href}${href.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`
-        : href;
+      const sep = href.includes("?") ? "&" : "?";
+      const params = token
+        ? `token=${encodeURIComponent(token)}&theme=${theme.resolvedTheme}`
+        : `theme=${theme.resolvedTheme}`;
+      const dashUrl = `${href}${sep}${params}`;
       setView("dashboard");
       setIframeUrl(dashUrl);
       setIframeLoading(true);
@@ -143,8 +147,9 @@ export default function ChatPage() {
     const token = getAccessToken();
     if (!token) return base;
     const sep = base.includes("?") ? "&" : "?";
-    return `${base}${sep}token=${encodeURIComponent(token)}`;
-  }, [view, iframeUrl]);
+    const params = `token=${encodeURIComponent(token)}&theme=${theme.resolvedTheme}`;
+    return `${base}${sep}${params}`;
+  }, [view, iframeUrl, theme.resolvedTheme]);
 
   // Fix #8: memoize — avoids O(n) AGENTS.find() scan on every keystroke
   const agentHint = useMemo(
@@ -168,7 +173,7 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50 font-sans">
+    <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-950 font-sans transition-colors">
       <ChatHeader
         view={view}
         agentId={agentId}
@@ -184,15 +189,15 @@ export default function ChatPage() {
 
       {view === "chat" ? (
         <>
-          <main className="flex-1 overflow-y-auto px-3 md:px-4 py-4 md:py-6 space-y-4 md:space-y-6">
+          <main className="flex-1 overflow-y-auto px-3 md:px-4 py-4 md:py-6 space-y-4 md:space-y-6 transition-colors">
             {messages.length === 0 && !loading && (
               <div className="flex flex-col items-center justify-center h-full text-center gap-4 pb-24">
                 <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-2xl shadow-lg">
                   ✦
                 </div>
                 <div>
-                  <p className="text-gray-700 font-medium text-lg">How can I help you today?</p>
-                  <p className="text-gray-400 text-sm mt-1">
+                  <p className="text-gray-700 dark:text-gray-200 font-medium text-lg">How can I help you today?</p>
+                  <p className="text-gray-400 dark:text-gray-500 text-sm mt-1">
                     {agentHint}
                   </p>
                 </div>
@@ -213,7 +218,7 @@ export default function ChatPage() {
                 <div className="w-8 h-8 shrink-0 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold">
                   ✦
                 </div>
-                <div className="bg-white border border-gray-100 rounded-2xl rounded-bl-sm shadow-sm">
+                <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl rounded-bl-sm shadow-sm">
                   <StatusBadge text={statusLine || "Thinking..."} />
                 </div>
               </div>
@@ -249,6 +254,8 @@ export default function ChatPage() {
         currentView={view}
         onSwitchView={switchView}
         profile={profile}
+        resolvedTheme={theme.resolvedTheme}
+        onToggleTheme={theme.toggle}
       />
 
       <EditProfileModal
