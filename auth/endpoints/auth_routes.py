@@ -122,6 +122,12 @@ def register(router: APIRouter) -> None:
         refresh = service.create_refresh_token(
             user_id=user["user_id"],
         )
+        service.register_session(
+            user_id=user["user_id"],
+            refresh_token=refresh,
+            ip_address=request.client.host if request.client else "",
+            user_agent=request.headers.get("user-agent", ""),
+        )
         _logger.info(
             "User logged in: user_id=%s",
             user["user_id"],

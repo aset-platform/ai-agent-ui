@@ -189,6 +189,12 @@ def register(router: APIRouter) -> None:
                 "email": user["email"],
             },
         )
+        service.register_session(
+            user_id=user["user_id"],
+            refresh_token=refresh,
+            ip_address=request.client.host if request.client else "",
+            user_agent=request.headers.get("user-agent", ""),
+        )
         _logger.info(
             "OAuth login: user_id=%s provider=%s",
             user["user_id"],
