@@ -47,7 +47,7 @@ export function IFrameView({ src, title, loading, error, onLoad, onError }: IFra
         title={title}
         onLoad={onLoad}
         onError={onError}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-top-navigation"
         referrerPolicy="no-referrer"
       />
     </div>
