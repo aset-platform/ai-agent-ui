@@ -163,11 +163,18 @@ def _load_dividends(
     return None
 
 
+_MIN_INDICATOR_ROWS = 50  # SMA_50 needs >=50 rows; shorter → NaN-only
+
+
 def _add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Calculate technical indicators and return an enriched DataFrame copy.
 
     Adds SMA_50, SMA_200, EMA_20, RSI_14, MACD, MACD_Signal, MACD_Hist,
     BB_Upper, BB_Middle, BB_Lower, and ATR_14 columns.
+
+    If *df* has fewer than :data:`_MIN_INDICATOR_ROWS` rows the
+    indicator columns are added as ``NaN`` to avoid ``IndexError``
+    from the ``ta`` library which requires minimum window sizes.
 
     Args:
         df: OHLCV DataFrame with ``Open``, ``High``, ``Low``, ``Close``
@@ -177,6 +184,22 @@ def _add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         Copy of *df* with all indicator columns appended.
     """
     df = df.copy()
+    if len(df) < _MIN_INDICATOR_ROWS:
+        for col in (
+            "SMA_50",
+            "SMA_200",
+            "EMA_20",
+            "RSI_14",
+            "MACD",
+            "MACD_Signal",
+            "MACD_Hist",
+            "BB_Upper",
+            "BB_Middle",
+            "BB_Lower",
+            "ATR_14",
+        ):
+            df[col] = float("nan")
+        return df
     close = df["Close"]
     df["SMA_50"] = ta.trend.SMAIndicator(
         close=close, window=50

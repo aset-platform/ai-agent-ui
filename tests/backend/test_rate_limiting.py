@@ -7,7 +7,10 @@ from slowapi.errors import RateLimitExceeded
 
 from auth.rate_limit import (
     limiter,
+    login_limit,
+    oauth_limit,
     rate_limit_exceeded_handler,
+    register_limit,
 )
 
 
@@ -61,3 +64,58 @@ def test_unlimited_endpoint_unaffected(client):
     for _ in range(10):
         resp = client.get("/test-unlimited")
         assert resp.status_code == 200
+
+
+# ------------------------------------------------------------------
+# Configurable limit callables (ASETPLTFRM-49)
+# ------------------------------------------------------------------
+
+
+def test_login_limit_reads_from_settings(monkeypatch):
+    """login_limit() returns the value from Settings."""
+    monkeypatch.setenv("RATE_LIMIT_LOGIN", "999/hour")
+    from config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        assert login_limit() == "999/hour"
+    finally:
+        monkeypatch.delenv("RATE_LIMIT_LOGIN", raising=False)
+        get_settings.cache_clear()
+
+
+def test_register_limit_reads_from_settings(monkeypatch):
+    """register_limit() returns the value from Settings."""
+    monkeypatch.setenv("RATE_LIMIT_REGISTER", "5/hour")
+    from config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        assert register_limit() == "5/hour"
+    finally:
+        monkeypatch.delenv("RATE_LIMIT_REGISTER", raising=False)
+        get_settings.cache_clear()
+
+
+def test_oauth_limit_reads_from_settings(monkeypatch):
+    """oauth_limit() returns the value from Settings."""
+    monkeypatch.setenv("RATE_LIMIT_OAUTH", "60/minute")
+    from config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        assert oauth_limit() == "60/minute"
+    finally:
+        monkeypatch.delenv("RATE_LIMIT_OAUTH", raising=False)
+        get_settings.cache_clear()
+
+
+def test_login_limit_default():
+    """Default login limit is 30/15minutes."""
+    from config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        assert login_limit() == "30/15minutes"
+    finally:
+        get_settings.cache_clear()

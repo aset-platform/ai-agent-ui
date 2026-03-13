@@ -180,6 +180,3 @@ class TestFullOhlcvRefreshAdjCloseFill:
 
         fill_map = repo.update_ohlcv_adj_close.call_args[0][1]
         assert len(fill_map) == 5
-
-
-# ============================================================

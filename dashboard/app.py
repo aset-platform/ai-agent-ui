@@ -61,4 +61,8 @@ if __name__ == "__main__":
     _logger.info(
         "Starting AI Stock Analysis Dashboard on http://127.0.0.1:8050"
     )
+    _logger.info(
+        "TIP: For production / E2E use gunicorn: "
+        'gunicorn "dashboard.app:server" --bind 0.0.0.0:8050 -w 2'
+    )
     _app.run(debug=True, port=8050)

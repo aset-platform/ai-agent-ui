@@ -134,7 +134,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 1: Detect OS
 # ══════════════════════════════════════════════════════════════════════════════
-step "1/11" "Detecting operating system"
+step "1/12" "Detecting operating system"
 
 OS="unknown"
 IS_WSL=0
@@ -162,7 +162,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 2: Check prerequisites
 # ══════════════════════════════════════════════════════════════════════════════
-step "2/11" "Checking prerequisites"
+step "2/12" "Checking prerequisites"
 
 # git
 if command -v git &>/dev/null; then
@@ -203,7 +203,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 3: Ensure Python 3.9
 # ══════════════════════════════════════════════════════════════════════════════
-step "3/11" "Ensuring Python 3.12 is available"
+step "3/12" "Ensuring Python 3.12 is available"
 
 PYTHON312=""
 
@@ -276,7 +276,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 4: Create virtualenv
 # ══════════════════════════════════════════════════════════════════════════════
-step "4/11" "Creating Python virtualenv (~/.ai-agent-ui/venv)"
+step "4/12" "Creating Python virtualenv (~/.ai-agent-ui/venv)"
 
 VENV_DIR="${APP_DATA_HOME:-$HOME/.ai-agent-ui}/venv"
 
@@ -310,7 +310,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 5: Install Python dependencies
 # ══════════════════════════════════════════════════════════════════════════════
-step "5/11" "Installing Python dependencies"
+step "5/12" "Installing Python dependencies"
 
 REQUIREMENTS="$SCRIPT_DIR/backend/requirements.txt"
 if [[ ! -f "$REQUIREMENTS" ]]; then
@@ -323,12 +323,18 @@ info "Upgrading pip..."
 info "Installing packages from requirements.txt (this may take a few minutes)..."
 "$VENV_PYTHON" -m pip install -r "$REQUIREMENTS" --quiet
 
+REQUIREMENTS_DEV="$SCRIPT_DIR/backend/requirements-dev.txt"
+if [[ -f "$REQUIREMENTS_DEV" ]]; then
+    info "Installing dev/test dependencies from requirements-dev.txt..."
+    "$VENV_PYTHON" -m pip install -r "$REQUIREMENTS_DEV" --quiet
+fi
+
 ok "Python dependencies installed"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 6: Check Node.js
 # ══════════════════════════════════════════════════════════════════════════════
-step "6/11" "Checking Node.js"
+step "6/12" "Checking Node.js"
 
 if command -v node &>/dev/null; then
     NODE_VERSION="$(node --version)"
@@ -353,7 +359,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 7: Install frontend dependencies
 # ══════════════════════════════════════════════════════════════════════════════
-step "7/11" "Installing frontend dependencies"
+step "7/12" "Installing frontend dependencies"
 
 FRONTEND_DIR="$SCRIPT_DIR/frontend"
 
@@ -368,7 +374,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 8: Create project directories
 # ══════════════════════════════════════════════════════════════════════════════
-step "8/11" "Creating project directories"
+step "8/12" "Creating project directories"
 
 APP_DATA_HOME="${HOME}/.ai-agent-ui"
 DIRS=(
@@ -394,7 +400,7 @@ ok "All directories created"
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 9: Prompt for API keys and secrets
 # ══════════════════════════════════════════════════════════════════════════════
-step "9/11" "Configuring API keys and secrets"
+step "9/12" "Configuring API keys and secrets"
 
 # Auto-generate JWT_SECRET_KEY
 JWT_SECRET_KEY="$("$VENV_PYTHON" -c "import secrets; print(secrets.token_hex(32))")"
@@ -458,7 +464,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 10: Generate config files
 # ══════════════════════════════════════════════════════════════════════════════
-step "10/11" "Generating config files"
+step "10/12" "Generating config files"
 
 # ── External env directory ────────────────────────────────────────────────────
 # Secrets live outside the repo so git checkout / merge never overwrites them.
@@ -504,6 +510,10 @@ FACEBOOK_APP_SECRET=${FACEBOOK_APP_SECRET:-}
 
 # ── OAuth ─────────────────────────────────────────────────────────────
 OAUTH_REDIRECT_URI=http://localhost:3000/auth/oauth/callback
+
+# ── Redis ─────────────────────────────────────────────────────────────
+# Token deny-list + OAuth state store. Empty = in-memory fallback.
+REDIS_URL=redis://localhost:6379/0
 
 # ── Logging / Runtime ─────────────────────────────────────────────────
 LOG_LEVEL=INFO
@@ -619,9 +629,81 @@ ICEEOF
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 11: Initialise Iceberg + seed admin + install hooks
+# Step 11: Install and configure Redis
 # ══════════════════════════════════════════════════════════════════════════════
-step "11/11" "Initialising database, git hooks, and running verification"
+step "11/12" "Installing Redis (token store backend)"
+
+REDIS_INSTALLED=0
+
+if command -v redis-server &>/dev/null; then
+    ok "Redis already installed ($(redis-server --version | grep -oE 'v=[0-9.]+'))"
+    REDIS_INSTALLED=1
+else
+    info "Redis not found — installing…"
+    if [[ "$OS" == "macos" ]]; then
+        if command -v brew &>/dev/null; then
+            brew install redis 2>/dev/null
+            ok "Redis installed via Homebrew"
+            REDIS_INSTALLED=1
+        else
+            warn "Homebrew not found — cannot install Redis automatically"
+            warn "Install manually: brew install redis"
+        fi
+    elif [[ "$OS" == "linux" ]]; then
+        if command -v apt-get &>/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq redis-server
+            ok "Redis installed via apt"
+            REDIS_INSTALLED=1
+        else
+            warn "apt-get not found — install Redis manually for your distro"
+        fi
+    fi
+fi
+
+# Start Redis as a background service if installed
+if [[ $REDIS_INSTALLED -eq 1 ]]; then
+    if redis-cli ping &>/dev/null 2>&1; then
+        ok "Redis is already running"
+    else
+        info "Starting Redis service…"
+        if [[ "$OS" == "macos" ]]; then
+            brew services start redis 2>/dev/null
+        else
+            sudo systemctl enable redis-server 2>/dev/null || true
+            sudo systemctl start redis-server 2>/dev/null || true
+        fi
+        # Wait up to 5 seconds for Redis to accept connections
+        _attempt=0
+        while ! redis-cli ping &>/dev/null 2>&1 && (( _attempt < 10 )); do
+            sleep 0.5
+            (( _attempt++ ))
+        done
+        if redis-cli ping &>/dev/null 2>&1; then
+            ok "Redis started and responding to PING"
+        else
+            warn "Redis installed but not responding — check 'redis-cli ping'"
+        fi
+    fi
+
+    # Configure AOF persistence for deny-list durability.
+    # Without AOF, revoked tokens could be lost on restart
+    # (RDB snapshots are too infrequent for a small key count).
+    _aof_status="$(redis-cli config get appendonly 2>/dev/null | tail -1)"
+    if [[ "$_aof_status" != "yes" ]]; then
+        info "Enabling AOF persistence for token deny-list durability…"
+        redis-cli config set appendonly yes &>/dev/null
+        redis-cli config set appendfsync everysec &>/dev/null
+        redis-cli config rewrite &>/dev/null
+        ok "AOF enabled (appendfsync=everysec) — deny-list survives restarts"
+    else
+        ok "AOF persistence already enabled"
+    fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 12: Initialise Iceberg + seed admin + install hooks
+# ══════════════════════════════════════════════════════════════════════════════
+step "12/12" "Initialising database, git hooks, and running verification"
 
 # Export env vars so init scripts can find them
 export JWT_SECRET_KEY
@@ -728,6 +810,9 @@ _check ".pyiceberg.yaml" "[[ -f '$PYICEBERG_YAML' ]]"
 _check "Iceberg catalog" "[[ -f '$HOME/.ai-agent-ui/data/iceberg/catalog.db' ]]"
 _check "Git pre-commit hook" "[[ -x '$HOOKS_DIR/pre-commit' ]]"
 _check "Git pre-push hook" "[[ -x '$HOOKS_DIR/pre-push' ]]"
+_check "Redis server" "command -v redis-server"
+_check "Redis responding" "redis-cli ping"
+_check "Redis AOF persistence" "[[ \$(redis-cli config get appendonly 2>/dev/null | tail -1) == 'yes' ]]"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

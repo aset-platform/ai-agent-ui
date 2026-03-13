@@ -2,6 +2,143 @@
 
 ---
 
+# Session: Mar 12, 2026 — PR #82 Review Fixes (ASETPLTFRM-50-54)
+
+## Summary
+Addressed 5 stories from PR #82 code review: auth health
+API encapsulation, thread-safe Dash RefreshManager, shared
+Redis connection pool, E2E helper deduplication, and flaky
+E2E test fixes. All 5 tickets implemented and commented in
+Jira. PR #84 raised to dev.
+
+### Changes
+
+| Area | Change |
+|------|--------|
+| `auth/service.py` | Public `store_health()` method |
+| `auth/endpoints/auth_routes.py` | `/auth/health` uses public API |
+| `auth/token_store.py` | `get_redis_client()` cached factory, shared pool |
+| `dashboard/callbacks/refresh_state.py` (NEW) | Thread-safe `RefreshManager` with Lock |
+| `dashboard/callbacks/analysis_cbs.py` | Removed globals, uses `RefreshManager` |
+| `dashboard/callbacks/forecast_cbs.py` | Removed globals, uses `RefreshManager` |
+| `dashboard/callbacks/home_cbs.py` | Removed globals, uses `RefreshManager` |
+| `dashboard/callbacks/registration.py` | Creates 3 `RefreshManager` instances |
+| `e2e/utils/auth.helper.ts` (NEW) | Shared `readCachedToken()` |
+| `e2e/fixtures/auth.fixture.ts` | Imports from shared helper |
+| `e2e/tests/auth/login.spec.ts` | Rate-limit retry loop (3 attempts) |
+| `e2e/tests/errors/network-error.spec.ts` | `page.routeWebSocket()` WS bypass |
+| `tests/backend/test_auth_api.py` | `TestAuthHealth` + fixed E501 |
+| `tests/backend/test_token_store.py` | `TestStoreHealth`, `TestSharedRedisClient` |
+| `tests/dashboard/test_refresh_state.py` (NEW) | 9 tests for RefreshManager |
+
+### Test Results
+- Python: 66 relevant tests pass (auth API, token store, refresh, home perf)
+- E2E: 49/50 passed (1 pre-existing forecast timeout)
+
+---
+
+# Session: Mar 12, 2026 — WebSocket Streaming (ASETPLTFRM-11)
+
+## Summary
+Implemented persistent WebSocket `/ws/chat` endpoint for real-time
+agent streaming. Auth-first protocol (token in first message, not
+URL query param). Frontend state machine hook with exponential
+backoff reconnect. HTTP NDJSON fallback preserved — zero breaking
+changes. All subtasks and parent story Done. PR #83 merged to dev.
+
+### Changes
+
+| Area | Change |
+|------|--------|
+| `backend/ws.py` (NEW) | WebSocket endpoint: auth, ping/pong, chat streaming, concurrent guard |
+| `backend/config.py` | Added `ws_auth_timeout_seconds`, `ws_ping_interval_seconds` |
+| `backend/routes.py` | Wired `register_ws_routes()` before static mount |
+| `frontend/hooks/useWebSocket.ts` (NEW) | Connection state machine: DISCONNECTED → CONNECTING → AUTHENTICATING → READY |
+| `frontend/hooks/useSendMessage.ts` | WS-preferred streaming with HTTP fallback; shared `handleEvent()` |
+| `frontend/app/page.tsx` | Integrated `useWebSocket` hook, passed to `useSendMessage` |
+| `frontend/lib/config.ts` | Added `WS_URL` (derived from `BACKEND_URL`) |
+| `tests/backend/test_ws.py` (NEW) | 6 tests: auth_ok, bad_token, wrong_first_msg, ping_pong, unknown_agent, reauth |
+| `frontend/tests/useWebSocket.test.ts` (NEW) | 4 tests: connect+auth, reconnect backoff, event routing, sendChat |
+
+### Protocol
+- Close codes: 4001 (auth failed), 4002 (auth timeout), 4003 (invalid message)
+- Keepalive: ping/pong every 30s
+- Re-auth supported mid-session for token refresh
+- Concurrent streaming rejected with error event
+
+### Test Results
+- Python: 355 passed, 0 failed (6 new WS tests)
+- Frontend: 22 passed, 0 failed (4 new WS tests)
+
+### Sprint 1 Status (Complete)
+- Done: ASETPLTFRM-23 (1pt), 24 (2pt), 17 (3pt), 48, 49, 9 (5pt), **11 (8pt)**
+- Velocity: 19/19 pts (100%), 7/7 stories
+
+---
+
+# Session: Mar 12, 2026 — Redis Token Store Production (ASETPLTFRM-9)
+
+## Summary
+Deployed RedisTokenStore for production use. Added operation-level
+resilience, health check endpoint, OAuth state on Redis, AOF
+persistence, and full integration tests with fakeredis. Updated
+setup.sh (Redis install + AOF config) and run.sh (Redis
+start/stop lifecycle). All 4 subtasks and parent story Done.
+
+### Changes
+
+| Area | Change |
+|------|--------|
+| Token store | Operation-level resilience — `add`/`contains`/`remove` catch `RedisError`, degrade gracefully |
+| Health check | `ping()` on TokenStore protocol + `GET /auth/health` endpoint |
+| OAuth state | `_get_oauth_svc()` now uses Redis (prefix `auth:oauth_state:`) |
+| Persistence | AOF enabled (`appendfsync everysec`) — deny-list survives restarts |
+| setup.sh | New Step 11/12: Redis install + start + AOF config + verification |
+| run.sh | `_redis_start()`/`_redis_stop()` with retry loop; Redis in status table |
+| Dependencies | `redis==7.3.0`, `fakeredis==2.34.1`, `sortedcontainers==2.4.0` |
+| Tests | 25 tests: 7 integration (fakeredis), 3 resilience, 2 ping, 13 existing |
+| Config | `REDIS_URL=redis://localhost:6379/0` in backend.env |
+
+### Test Results
+- Python: 350 passed, 0 failed
+- Token store: 25/25 passed
+
+### Sprint 1 Status
+- Done: ASETPLTFRM-23 (1pt), 24 (2pt), 17 (3pt), 48, 49, **9 (5pt)**
+- To Do: ASETPLTFRM-11 (8pt)
+- Velocity: 11/19 pts (58%), 6/7 stories
+
+---
+
+# Session: Mar 12, 2026 — E2E Reliability + Iceberg Safety
+
+## Summary
+Fixed all E2E dashboard refresh timeouts (ASETPLTFRM-48) and
+auth rate-limit 429s (ASETPLTFRM-49). Converted Iceberg writes
+to scoped delete+append. PR #81 raised to dev.
+
+### Changes
+
+| Area | Change |
+|------|--------|
+| Freshness gates | `run_full_refresh` skips OHLCV if <1d old, Prophet if <7d old |
+| Background refresh | analysis_cbs + forecast_cbs → ThreadPoolExecutor + 2s polling |
+| E2E auth caching | Read JWT from storageState files, eliminates 16 login calls |
+| E2E test hardening | RELIANCE.NS → AAPL, test.slow(), toContainText assertions |
+| Iceberg safety | 5 full-table overwrites → scoped delete+append |
+| Auth rate limits | RATE_LIMIT_LOGIN env var (configurable, default 30/15min) |
+
+### Test Results
+- Python: 337 passed, 0 failed
+- E2E: 48 passed, 0 failed, 2 flaky
+
+### Sprint 1 Status
+- Done: ASETPLTFRM-23 (1pt), 24 (2pt), 17 (3pt), 48, 49
+- To Do: ASETPLTFRM-9 (5pt), ASETPLTFRM-11 (8pt)
+- Velocity: 6/19 pts (32%), 5/7 stories
+
+---
+
 # Session: Mar 11, 2026 — Sprint Phase 3 + Dashboard fixes
 
 ## Summary
