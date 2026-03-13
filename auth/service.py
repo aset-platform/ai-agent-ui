@@ -23,10 +23,7 @@ from typing import Any, Dict
 
 import auth.password as _pw
 import auth.tokens as _tk
-from auth.token_store import (
-    InMemoryTokenStore,
-    TokenStore,
-)
+from auth.token_store import InMemoryTokenStore, TokenStore
 
 _logger = logging.getLogger(__name__)
 
@@ -73,9 +70,7 @@ class AuthService:
         self._secret_key = secret_key
         self._access_expire_minutes = access_expire_minutes
         self._refresh_expire_days = refresh_expire_days
-        self._store: TokenStore = (
-            token_store or InMemoryTokenStore()
-        )
+        self._store: TokenStore = token_store or InMemoryTokenStore()
         self._logger = logging.getLogger(__name__)
         self._logger.info(
             "AuthService initialised (access_ttl=%dm,"
@@ -84,6 +79,22 @@ class AuthService:
             refresh_expire_days,
             type(self._store).__name__,
         )
+
+    # ----------------------------------------------------------
+    # Store health
+    # ----------------------------------------------------------
+
+    def store_health(self) -> Dict[str, object]:
+        """Return token-store backend type and ping status.
+
+        Returns:
+            A dict with ``backend`` (class name) and ``ok``
+            (``True`` when the store is reachable) keys.
+        """
+        return {
+            "backend": type(self._store).__name__,
+            "ok": self._store.ping(),
+        }
 
     # ----------------------------------------------------------
     # Password helpers
@@ -129,7 +140,10 @@ class AuthService:
     # ----------------------------------------------------------
 
     def create_access_token(
-        self, user_id: str, email: str, role: str,
+        self,
+        user_id: str,
+        email: str,
+        role: str,
     ) -> str:
         """Delegate to :func:`auth.tokens.create_access_token`.
 
@@ -216,5 +230,7 @@ class AuthService:
             ``True`` if the token has been revoked.
         """
         return _tk.is_token_revoked(
-            token, self._secret_key, self._store,
+            token,
+            self._secret_key,
+            self._store,
         )

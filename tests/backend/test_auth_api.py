@@ -31,7 +31,7 @@ os.environ.setdefault(
 
 
 class _FakeRepo:
-    """Minimal in-memory stand-in for :class:`auth.repository.IcebergUserRepository`."""
+    """In-memory stand-in for IcebergUserRepository."""
 
     def __init__(self):
         self._users: Dict[str, Dict[str, Any]] = {}
@@ -172,12 +172,13 @@ def fake_repo():
 
 @pytest.fixture()
 def client(fake_repo):
-    """Return a TestClient with ``auth.endpoints.helpers._get_repo`` returning the fake repo."""
+    """TestClient with _get_repo patched to the fake."""
     import auth.dependencies as deps
 
     deps._get_service.cache_clear()
 
-    # _get_repo is an lru_cache singleton in auth.endpoints.helpers; patch it there
+    # _get_repo is an lru_cache singleton; patch at source
+
     with patch("auth.endpoints.helpers._get_repo", return_value=fake_repo):
         from auth.api import create_auth_router
 
@@ -454,3 +455,21 @@ class TestAdminPasswordReset:
             json={"new_password": "NewPass99!"},
         )
         assert r.status_code in (401, 403), r.text
+
+
+# -------------------------------------------------------------------
+# Health endpoint
+# -------------------------------------------------------------------
+
+
+class TestAuthHealth:
+    """Tests for ``GET /auth/health``."""
+
+    def test_health_returns_healthy(self, client):
+        """Default in-memory store reports healthy."""
+        r = client.get("/auth/health")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "healthy"
+        assert body["ok"] is True
+        assert body["backend"] == "InMemoryTokenStore"

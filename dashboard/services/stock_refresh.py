@@ -34,7 +34,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -228,9 +228,34 @@ def run_full_refresh(ticker: str, horizon_months: int = 9) -> RefreshResult:
     _clear_tool_cache(ticker)
 
     try:
-        # ── Step 1: Full OHLCV re-fetch (fills gaps) ─────────
-        fetch_msg = _full_ohlcv_refresh(ticker)
-        _record(result, "Fetch OHLCV", True, fetch_msg[:200])
+        # ── Step 1: OHLCV fetch (skip if today's data exists) ─
+        from tools._stock_shared import _require_repo
+
+        _repo = _require_repo()
+        _latest_date = _repo.get_latest_ohlcv_date(ticker)
+        _ohlcv_fresh = (
+            _latest_date is not None
+            and _latest_date >= date.today() - timedelta(days=1)
+        )
+        if _ohlcv_fresh:
+            fetch_msg = (
+                f"OHLCV for {ticker} already up-to-date "
+                f"(latest: {_latest_date}). Skipped."
+            )
+            _record(
+                result,
+                "Fetch OHLCV",
+                True,
+                fetch_msg,
+            )
+        else:
+            fetch_msg = _full_ohlcv_refresh(ticker)
+            _record(
+                result,
+                "Fetch OHLCV",
+                True,
+                fetch_msg[:200],
+            )
 
         # ── Step 2: Company info (non-critical) ──────────────
         try:
@@ -292,73 +317,135 @@ def run_full_refresh(ticker: str, horizon_months: int = 9) -> RefreshResult:
                 str(exc)[:120],
             )
 
-        # ── Step 6: Prophet forecast ─────────────────────────
-        from tools._forecast_accuracy import (
-            _calculate_forecast_accuracy,
-        )
-        from tools._forecast_model import (
-            _generate_forecast,
-            _prepare_data_for_prophet,
-            _train_prophet_model,
-        )
-        from tools._forecast_persist import _save_forecast
-        from tools._forecast_shared import _load_parquet
-
-        df = _load_parquet(ticker)
-        if df is None:
-            raise ValueError(f"No data loaded for {ticker} after fetch.")
-
-        prophet_df = _prepare_data_for_prophet(df)
-        model = _train_prophet_model(prophet_df)
-        forecast_df = _generate_forecast(model, prophet_df, horizon_months)
-        accuracy = _calculate_forecast_accuracy(model, prophet_df)
-        _save_forecast(forecast_df, ticker, horizon_months)
-
-        # Persist forecast run + series to Iceberg
-        from tools._forecast_accuracy import (
-            _generate_forecast_summary,
-        )
-        from tools._forecast_shared import _require_repo
-
-        current_price = float(prophet_df["y"].iloc[-1])
-        summary = _generate_forecast_summary(
-            forecast_df, current_price, ticker, horizon_months
-        )
-        repo = _require_repo()
-        _run_date = date.today()
-        _run_dict: dict = {
-            "run_date": _run_date,
-            "sentiment": summary.get("sentiment"),
-            "current_price_at_run": current_price,
-        }
-        for _m_key in ["3m", "6m", "9m"]:
-            _t = summary.get("targets", {}).get(_m_key)
-            if _t:
-                _run_dict[f"target_{_m_key}_date"] = _t.get("date")
-                _run_dict[f"target_{_m_key}_price"] = _t.get("price")
-                _run_dict[f"target_{_m_key}_pct_change"] = _t.get("pct_change")
-                _run_dict[f"target_{_m_key}_lower"] = _t.get("lower")
-                _run_dict[f"target_{_m_key}_upper"] = _t.get("upper")
-        if "error" not in accuracy:
-            _run_dict["mae"] = accuracy.get("MAE")
-            _run_dict["rmse"] = accuracy.get("RMSE")
-            _run_dict["mape"] = accuracy.get("MAPE_pct")
-        repo.insert_forecast_run(ticker, horizon_months, _run_dict)
-        repo.insert_forecast_series(
+        # ── Step 6: Prophet forecast (skip if <7 days old) ──
+        _fc_run = _repo.get_latest_forecast_run(
             ticker,
             horizon_months,
-            _run_date,
-            forecast_df,
         )
+        _fc_fresh = False
+        if _fc_run:
+            _rd = _fc_run.get("run_date")
+            if _rd is not None:
+                if hasattr(_rd, "date"):
+                    _rd = _rd.date()
+                _cutoff = date.today() - timedelta(days=7)
+                _fc_fresh = _rd >= _cutoff
 
-        _record(
-            result,
-            "Prophet forecast",
-            True,
-            "Forecast complete.",
-        )
-        result.accuracy = accuracy
-        result.success = True
+        if _fc_fresh:
+            fc_msg = (
+                f"Forecast for {ticker} ({horizon_months}m) "
+                f"already run on {_rd}. Skipped."
+            )
+            _record(
+                result,
+                "Prophet forecast",
+                True,
+                fc_msg,
+            )
+            _acc = {}
+            if _fc_run.get("mae") is not None:
+                _acc["MAE"] = _fc_run["mae"]
+            if _fc_run.get("rmse") is not None:
+                _acc["RMSE"] = _fc_run["rmse"]
+            if _fc_run.get("mape") is not None:
+                _acc["MAPE_pct"] = _fc_run["mape"]
+            result.accuracy = _acc or None
+            result.success = True
+        else:
+            from tools._forecast_accuracy import (
+                _calculate_forecast_accuracy,
+            )
+            from tools._forecast_model import (
+                _generate_forecast,
+                _prepare_data_for_prophet,
+                _train_prophet_model,
+            )
+            from tools._forecast_persist import (
+                _save_forecast,
+            )
+            from tools._forecast_shared import _load_parquet
+
+            df = _load_parquet(ticker)
+            if df is None:
+                raise ValueError(
+                    f"No data loaded for {ticker} " f"after fetch."
+                )
+
+            prophet_df = _prepare_data_for_prophet(df)
+            model = _train_prophet_model(prophet_df)
+            forecast_df = _generate_forecast(
+                model,
+                prophet_df,
+                horizon_months,
+            )
+            accuracy = _calculate_forecast_accuracy(
+                model,
+                prophet_df,
+            )
+            _save_forecast(
+                forecast_df,
+                ticker,
+                horizon_months,
+            )
+
+            # Persist forecast run + series to Iceberg
+            from tools._forecast_accuracy import (
+                _generate_forecast_summary,
+            )
+
+            current_price = float(prophet_df["y"].iloc[-1])
+            summary = _generate_forecast_summary(
+                forecast_df,
+                current_price,
+                ticker,
+                horizon_months,
+            )
+            _run_date = date.today()
+            _run_dict: dict = {
+                "run_date": _run_date,
+                "sentiment": summary.get("sentiment"),
+                "current_price_at_run": current_price,
+            }
+            for _m_key in ["3m", "6m", "9m"]:
+                _t = summary.get("targets", {}).get(
+                    _m_key,
+                )
+                if _t:
+                    _run_dict[f"target_{_m_key}_date"] = _t.get("date")
+                    _run_dict[f"target_{_m_key}_price"] = _t.get("price")
+                    _run_dict[f"target_{_m_key}_pct_change"] = _t.get(
+                        "pct_change"
+                    )
+                    _run_dict[f"target_{_m_key}_lower"] = _t.get("lower")
+                    _run_dict[f"target_{_m_key}_upper"] = _t.get("upper")
+            if "error" not in accuracy:
+                _run_dict["mae"] = accuracy.get("MAE")
+                _run_dict["rmse"] = accuracy.get(
+                    "RMSE",
+                )
+                _run_dict["mape"] = accuracy.get(
+                    "MAPE_pct",
+                )
+            _repo.insert_forecast_run(
+                ticker,
+                horizon_months,
+                _run_dict,
+            )
+            _repo.insert_forecast_series(
+                ticker,
+                horizon_months,
+                _run_date,
+                forecast_df,
+            )
+
+            _record(
+                result,
+                "Prophet forecast",
+                True,
+                "Forecast complete.",
+            )
+            result.accuracy = accuracy
+            result.success = True
 
     except Exception as exc:
         _logger.error(

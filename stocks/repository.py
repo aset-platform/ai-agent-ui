@@ -6,30 +6,32 @@ outside this module should interact with the tables directly.
 
 Write semantics
 ---------------
-- **registry** — upsert (copy-on-write): read full table, update or append
-  the row for ``ticker``, overwrite.
-- **company_info** — append-only snapshots; never updated or deleted.
-- **ohlcv** — append new rows; deduplication on ``(ticker, date)`` at
-  application level (existing rows are never re-inserted).
-- **dividends** — same as ohlcv: append, deduplicate
-  on ``(ticker, ex_date)``.
-- **technical_indicators** — upsert per ``(ticker, date)`` (copy-on-write for
-  the ticker partition; acceptable for typical
-  dataset sizes < 5 000 rows/ticker).
+- **registry** — upsert (copy-on-write): read full table, update
+  or append the row for ``ticker``, overwrite.  Acceptable for
+  this small (~30 row) table.
+- **company_info** — append-only snapshots; never updated/deleted.
+- **ohlcv** — append new rows; deduplication on ``(ticker, date)``
+  at application level.  ``update_ohlcv_adj_close`` uses scoped
+  delete-and-append (only the target ticker's rows are touched).
+- **dividends** — append, deduplicate on ``(ticker, ex_date)``.
+- **technical_indicators** — scoped delete-and-append per ticker.
 - **analysis_summary** — append-only snapshots.
-- **forecast_runs** — append-only per ``(ticker, horizon_months, run_date)``.
-- **forecasts** — append per ``(ticker, horizon_months, run_date)``; existing
-  series for the same run are dropped before re-inserting.
-- **quarterly_results** — upsert per ``(ticker, quarter_end, statement_type)``
-  (copy-on-write).
+- **forecast_runs** — append-only per
+  ``(ticker, horizon_months, run_date)``.
+- **forecasts** — scoped delete-and-append per
+  ``(ticker, horizon_months, run_date)``.
+- **quarterly_results** — scoped delete-and-append per ticker.
 
 PyIceberg quirks
 ----------------
-- ``table.append()`` requires a ``pa.Table`` (not a ``RecordBatch``).
-- ``TimestampType`` maps to ``pa.timestamp("us")`` — pass naive UTC datetimes.
-- Overwrite uses ``table.overwrite(df)`` which replaces *all* data; for
-  partitioned tables use ``table.dynamic_partition_overwrite(df)`` to replace
-  only the affected partition.
+- ``table.append()`` requires a ``pa.Table`` (not a
+  ``RecordBatch``).
+- ``TimestampType`` maps to ``pa.timestamp("us")`` — pass naive
+  UTC datetimes.
+- ``table.delete(delete_filter=expr)`` rewrites only affected
+  data files, leaving other rows untouched.
+- ``table.overwrite(df)`` replaces *all* data — only used for
+  the small registry table.
 
 Usage::
 
@@ -323,7 +325,7 @@ class StockRepository:
     _MAX_RETRIES = 3
     _BACKOFF_SECONDS = (0.5, 1.0, 2.0)
 
-    def _retry_commit(self, identifier, operation, *args):
+    def _retry_commit(self, identifier, operation, *args, **kwargs):
         """Retry an Iceberg write on CommitFailedException.
 
         Reloads the table object on each retry so the
@@ -331,8 +333,13 @@ class StockRepository:
 
         Args:
             identifier: Fully-qualified table name.
-            operation: ``"append"`` or ``"overwrite"``.
-            *args: Arguments forwarded to the table method.
+            operation: ``"append"``, ``"overwrite"``,
+                or ``"delete"``.
+            *args: Positional arguments forwarded to
+                the table method.
+            **kwargs: Keyword arguments forwarded to
+                the table method (e.g.
+                ``delete_filter``).
 
         Raises:
             CommitFailedException: If all retries are
@@ -342,7 +349,7 @@ class StockRepository:
         for attempt in range(self._MAX_RETRIES + 1):
             tbl = self._load_table(identifier)
             try:
-                getattr(tbl, operation)(*args)
+                getattr(tbl, operation)(*args, **kwargs)
                 self._dirty_tables.add(identifier)
                 return
             except CommitFailedException as exc:
@@ -385,6 +392,24 @@ class StockRepository:
             arrow_table: Full replacement data.
         """
         self._retry_commit(identifier, "overwrite", arrow_table)
+
+    def _delete_rows(self, identifier: str, delete_filter) -> None:
+        """Delete rows matching a filter expression.
+
+        Uses PyIceberg's row-level delete which rewrites
+        only affected data files, leaving other tickers'
+        data untouched.
+
+        Args:
+            identifier: Fully-qualified table name.
+            delete_filter: A PyIceberg expression
+                (e.g. ``EqualTo("ticker", "AAPL")``).
+        """
+        self._retry_commit(
+            identifier,
+            "delete",
+            delete_filter=delete_filter,
+        )
 
     # ------------------------------------------------------------------
     # Registry
@@ -931,16 +956,17 @@ class StockRepository:
         return latest.date() if pd.notna(latest) else None
 
     def update_ohlcv_adj_close(self, ticker: str, adj_close_map: dict) -> int:
-        """Update ``adj_close`` values for existing OHLCV rows for *ticker*.
+        """Update ``adj_close`` values for existing OHLCV rows.
 
-        Uses copy-on-write: reads the full OHLCV table, merges
-        ``adj_close`` values from *adj_close_map* for the given ticker,
-        then overwrites the table.  Rows for other tickers are untouched.
+        Scoped delete-and-append: reads only the target
+        ticker's rows, modifies ``adj_close``, deletes the
+        old rows for this ticker, and appends the updated
+        rows.  Other tickers' data is never touched.
 
         Args:
             ticker: Uppercase ticker symbol.
-            adj_close_map: Dict mapping :class:`datetime.date` objects
-                to ``adj_close`` float values.
+            adj_close_map: Dict mapping :class:`datetime.date`
+                objects to ``adj_close`` float values.
 
         Returns:
             Number of rows updated.
@@ -949,70 +975,84 @@ class StockRepository:
             return 0
 
         ticker = ticker.upper()
-        tbl, full_df = self._load_table_and_scan(_OHLCV)
-        if full_df.empty:
-            _logger.warning("OHLCV table is empty — nothing to update.")
+        ticker_df = self._scan_ticker(_OHLCV, ticker)
+        if ticker_df.empty:
+            _logger.warning(
+                "No OHLCV rows for %s — nothing to update.",
+                ticker,
+            )
             return 0
 
-        # Normalise date column so lookups use datetime.date objects
-        full_df["_date_key"] = pd.to_datetime(full_df["date"]).dt.date
+        # Normalise date column for lookups
+        ticker_df["_date_key"] = pd.to_datetime(ticker_df["date"]).dt.date
 
-        mask = full_df["ticker"] == ticker
         updated = 0
-        for idx in full_df.index[mask]:
-            d = full_df.at[idx, "_date_key"]
+        for idx in ticker_df.index:
+            d = ticker_df.at[idx, "_date_key"]
             if d in adj_close_map:
                 new_val = _safe_float(adj_close_map[d])
                 if new_val is not None:
-                    full_df.at[idx, "adj_close"] = new_val
+                    ticker_df.at[idx, "adj_close"] = new_val
                     updated += 1
 
-        full_df.drop(columns=["_date_key"], inplace=True)
+        ticker_df.drop(columns=["_date_key"], inplace=True)
 
         if updated == 0:
             _logger.debug("No adj_close updates needed for %s", ticker)
             return 0
 
-        # Rebuild Arrow table matching the OHLCV schema
+        # Rebuild Arrow table for this ticker only
         now = _now_utc()
         arrow_tbl = pa.table(
             {
-                "ticker": pa.array(full_df["ticker"].tolist(), pa.string()),
+                "ticker": pa.array(
+                    ticker_df["ticker"].tolist(),
+                    pa.string(),
+                ),
                 "date": pa.array(
-                    pd.to_datetime(full_df["date"]).dt.date.tolist(),
+                    pd.to_datetime(ticker_df["date"]).dt.date.tolist(),
                     pa.date32(),
                 ),
                 "open": pa.array(
-                    [_safe_float(v) for v in full_df["open"]],
+                    [_safe_float(v) for v in ticker_df["open"]],
                     pa.float64(),
                 ),
                 "high": pa.array(
-                    [_safe_float(v) for v in full_df["high"]],
+                    [_safe_float(v) for v in ticker_df["high"]],
                     pa.float64(),
                 ),
                 "low": pa.array(
-                    [_safe_float(v) for v in full_df["low"]],
+                    [_safe_float(v) for v in ticker_df["low"]],
                     pa.float64(),
                 ),
                 "close": pa.array(
-                    [_safe_float(v) for v in full_df["close"]],
+                    [_safe_float(v) for v in ticker_df["close"]],
                     pa.float64(),
                 ),
                 "adj_close": pa.array(
-                    [_safe_float(v) for v in full_df["adj_close"]],
+                    [_safe_float(v) for v in ticker_df["adj_close"]],
                     pa.float64(),
                 ),
                 "volume": pa.array(
-                    [_safe_int(v) for v in full_df["volume"]],
+                    [_safe_int(v) for v in ticker_df["volume"]],
                     pa.int64(),
                 ),
                 "fetched_at": pa.array(
-                    [now] * len(full_df), pa.timestamp("us")
+                    [now] * len(ticker_df),
+                    pa.timestamp("us"),
                 ),
             }
         )
-        self._overwrite_table(_OHLCV, arrow_tbl)
-        _logger.info("Updated %d adj_close rows for %s", updated, ticker)
+
+        from pyiceberg.expressions import EqualTo
+
+        self._delete_rows(_OHLCV, EqualTo("ticker", ticker))
+        self._append_rows(_OHLCV, arrow_tbl)
+        _logger.info(
+            "Updated %d adj_close rows for %s",
+            updated,
+            ticker,
+        )
         return updated
 
     # ------------------------------------------------------------------
@@ -1201,19 +1241,20 @@ class StockRepository:
             }
         )
 
-        # Fix #2: load table once; remove existing ticker rows then overwrite
-        tbl, existing = self._load_table_and_scan(_TECHNICAL_INDICATORS)
-        if not existing.empty:
-            existing = existing[existing["ticker"] != ticker]
-            rebuilt = pa.Table.from_pandas(
-                existing,
-                schema=arrow_tbl.schema,
-                preserve_index=False,
+        # Scoped delete-and-append: remove only this ticker's
+        # rows, then append fresh indicators.
+        from pyiceberg.expressions import EqualTo
+
+        try:
+            self._delete_rows(
+                _TECHNICAL_INDICATORS,
+                EqualTo("ticker", ticker),
             )
-            combined = pa.concat_tables([rebuilt, arrow_tbl])
-            self._overwrite_table(_TECHNICAL_INDICATORS, combined)
-        else:
-            self._append_rows(_TECHNICAL_INDICATORS, arrow_tbl)
+        except Exception:
+            # Table may be empty (no rows to delete) — safe
+            # to proceed with append.
+            pass
+        self._append_rows(_TECHNICAL_INDICATORS, arrow_tbl)
 
         _logger.debug(
             "Technical indicators upserted for %s (%d rows)",
@@ -1598,22 +1639,6 @@ class StockRepository:
 
         run_date = _to_date(run_date)
 
-        # Fix #2: load table once; filter existing in-memory
-        tbl, existing = self._load_table_and_scan(_FORECASTS)
-
-        if not existing.empty:
-            # Fix #10: compare date objects directly
-            run_date_vals = [_to_date(d) for d in existing["run_date"]]
-            mask = [
-                t == ticker and h == int(horizon_months) and d == run_date
-                for t, h, d in zip(
-                    existing["ticker"],
-                    existing["horizon_months"],
-                    run_date_vals,
-                )
-            ]
-            existing = existing[[not m for m in mask]]
-
         new_rows = {
             "ticker": [ticker] * len(forecast_df),
             "horizon_months": [int(horizon_months)] * len(forecast_df),
@@ -1635,23 +1660,36 @@ class StockRepository:
                     new_rows["forecast_date"], pa.date32()
                 ),
                 "predicted_price": pa.array(
-                    new_rows["predicted_price"], pa.float64()
+                    new_rows["predicted_price"],
+                    pa.float64(),
                 ),
                 "lower_bound": pa.array(new_rows["lower_bound"], pa.float64()),
                 "upper_bound": pa.array(new_rows["upper_bound"], pa.float64()),
             }
         )
 
-        if not existing.empty:
-            arrow_existing = pa.Table.from_pandas(
-                existing,
-                schema=arrow_new.schema,
-                preserve_index=False,
+        # Scoped delete-and-append: remove only matching
+        # (ticker, horizon, run_date) rows, then append.
+        from pyiceberg.expressions import And, EqualTo
+
+        try:
+            self._delete_rows(
+                _FORECASTS,
+                And(
+                    EqualTo("ticker", ticker),
+                    And(
+                        EqualTo(
+                            "horizon_months",
+                            int(horizon_months),
+                        ),
+                        EqualTo("run_date", run_date),
+                    ),
+                ),
             )
-            combined = pa.concat_tables([arrow_existing, arrow_new])
-            self._overwrite_table(_FORECASTS, combined)
-        else:
-            self._append_rows(_FORECASTS, arrow_new)
+        except Exception:
+            # Table may be empty — safe to proceed.
+            pass
+        self._append_rows(_FORECASTS, arrow_new)
 
         _logger.debug(
             "forecast_series inserted for %s %dm run %s (%d rows)",
@@ -1706,32 +1744,26 @@ class StockRepository:
                 the ``stocks.quarterly_results`` schema.
         """
         ticker = ticker.upper()
-        # Read ALL rows (copy-on-write: full table overwrite)
-        all_existing = self._table_to_df(_QUARTERLY_RESULTS)
-        if not all_existing.empty:
-            # Keep rows for OTHER tickers unchanged
-            other = all_existing[all_existing["ticker"] != ticker]
-            # For this ticker, keep rows not being replaced
-            same_ticker = all_existing[all_existing["ticker"] == ticker]
-            if not same_ticker.empty:
-                keys = set(
-                    zip(
-                        df["quarter_end"].astype(str),
-                        df["statement_type"],
-                    )
+        # Scoped read: only this ticker's existing rows
+        existing_ticker = self._scan_ticker(_QUARTERLY_RESULTS, ticker)
+        if not existing_ticker.empty:
+            # Keep rows not being replaced
+            keys = set(
+                zip(
+                    df["quarter_end"].astype(str),
+                    df["statement_type"],
                 )
-                mask = ~same_ticker.apply(
-                    lambda r: (
-                        str(r["quarter_end"]),
-                        r["statement_type"],
-                    )
-                    in keys,
-                    axis=1,
+            )
+            mask = ~existing_ticker.apply(
+                lambda r: (
+                    str(r["quarter_end"]),
+                    r["statement_type"],
                 )
-                kept = same_ticker[mask]
-            else:
-                kept = same_ticker
-            combined = pd.concat([other, kept, df], ignore_index=True)
+                in keys,
+                axis=1,
+            )
+            kept = existing_ticker[mask]
+            combined = pd.concat([kept, df], ignore_index=True)
         else:
             combined = df.copy()
 
@@ -1825,7 +1857,19 @@ class StockRepository:
                 ),
             }
         )
-        self._overwrite_table(_QUARTERLY_RESULTS, arrow)
+        # Scoped delete-and-append: remove only this
+        # ticker's rows, then append the combined result.
+        from pyiceberg.expressions import EqualTo
+
+        try:
+            self._delete_rows(
+                _QUARTERLY_RESULTS,
+                EqualTo("ticker", ticker),
+            )
+        except Exception:
+            # Table may be empty — safe to proceed.
+            pass
+        self._append_rows(_QUARTERLY_RESULTS, arrow)
         _logger.info(
             "quarterly_results upserted %d rows for %s",
             len(df),
@@ -1898,44 +1942,40 @@ class StockRepository:
     )
 
     def delete_ticker_data(self, ticker: str) -> Dict[str, int]:
-        """Remove all rows for *ticker* from every stocks table.
+        """Remove all rows for *ticker* from every table.
 
-        Uses copy-on-write: reads the full table, filters out
-        the ticker, then overwrites.
+        Uses scoped row-level delete via PyIceberg's
+        ``table.delete(delete_filter=...)``.  Only the
+        target ticker's rows are affected.
 
         Args:
             ticker: Uppercase ticker symbol.
 
         Returns:
-            Dict mapping table name to number of rows deleted.
+            Dict mapping table name to rows deleted.
         """
+        from pyiceberg.expressions import EqualTo
+
         ticker = ticker.upper()
         deleted: Dict[str, int] = {}
         for table_id in self._ALL_TICKER_TABLES:
             try:
-                tbl, df = self._load_table_and_scan(table_id)
-                if df.empty or "ticker" not in df.columns:
+                # Count rows before delete
+                before = len(self._scan_ticker(table_id, ticker))
+                if before == 0:
                     deleted[table_id] = 0
                     continue
-                before = len(df)
-                df = df[df["ticker"] != ticker]
-                removed = before - len(df)
-                if removed > 0:
-                    arrow_tbl = tbl.scan().to_arrow()
-                    schema = arrow_tbl.schema
-                    new_arrow = pa.Table.from_pandas(
-                        df,
-                        schema=schema,
-                        preserve_index=False,
-                    )
-                    self._overwrite_table(table_id, new_arrow)
-                    _logger.info(
-                        "Deleted %d rows for %s from %s",
-                        removed,
-                        ticker,
-                        table_id,
-                    )
-                deleted[table_id] = removed
+                self._delete_rows(
+                    table_id,
+                    EqualTo("ticker", ticker),
+                )
+                _logger.info(
+                    "Deleted %d rows for %s from %s",
+                    before,
+                    ticker,
+                    table_id,
+                )
+                deleted[table_id] = before
             except Exception as exc:
                 _logger.warning(
                     "Failed to delete %s from %s: %s",

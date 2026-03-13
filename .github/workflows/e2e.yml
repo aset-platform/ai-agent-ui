@@ -1,8 +1,11 @@
 name: E2E Tests
 
+# Disabled until CI environment is properly configured with
+# secrets, service startup, and Playwright browser caching.
+# Re-enable by uncommenting the triggers below.
 on:
-  pull_request:
-    branches: [dev, qa, release, main]
+  # pull_request:
+  #   branches: [dev, qa, release, main]
   workflow_dispatch:
 
 env:

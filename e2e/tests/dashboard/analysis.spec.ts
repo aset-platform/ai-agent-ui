@@ -21,7 +21,7 @@ test.describe("Dashboard analysis", () => {
   });
 
   test("select ticker → chart renders", async ({ page }) => {
-    await analysisPage.selectTicker("RELIANCE.NS");
+    await analysisPage.selectTicker("AAPL");
     // Wait for a Plotly chart to appear
     const chart = page.locator(".js-plotly-plot").first();
     await expect(chart).toBeVisible({ timeout: 15_000 });
@@ -45,11 +45,13 @@ test.describe("Dashboard analysis", () => {
   });
 
   test("refresh button shows success/error status", async () => {
-    await analysisPage.selectTicker("RELIANCE.NS");
+    test.slow(); // 3x timeout — refresh runs in background
+    await analysisPage.selectTicker("AAPL");
     await analysisPage.refreshBtn.click();
-    // Status should update within 60s (refresh is slow)
-    await expect(analysisPage.refreshStatus).not.toBeEmpty({
-      timeout: 60_000,
-    });
+    // Poll callback writes ✓ or ✗ when the background
+    // refresh future completes.
+    await expect(
+      analysisPage.refreshStatus,
+    ).toContainText(/[✓✗]/, { timeout: 120_000 });
   });
 });
