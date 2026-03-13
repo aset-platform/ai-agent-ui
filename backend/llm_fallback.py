@@ -45,6 +45,7 @@ from typing import Any, List
 
 from langchain_anthropic import ChatAnthropic
 from message_compressor import MessageCompressor
+from observability import ObservabilityCollector
 from token_budget import TokenBudget
 
 _logger = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ class FallbackLLM:
         agent_id: str,
         token_budget: TokenBudget,
         compressor: MessageCompressor,
+        obs_collector: ObservabilityCollector | None = None,
     ) -> None:
         """Construct Groq + Anthropic LLM instances.
 
@@ -101,10 +103,13 @@ class FallbackLLM:
             agent_id: Agent identifier for logs.
             token_budget: Shared sliding-window budget tracker.
             compressor: Shared message compressor.
+            obs_collector: Optional observability metrics
+                collector for cascade tracking.
         """
         self._agent_id = agent_id
         self._budget = token_budget
         self._compressor = compressor
+        self._obs = obs_collector
 
         # Groq tiers: [(model_name, raw_llm, bound_llm), ...]
         self._groq_tiers: List[tuple] = []
@@ -216,6 +221,8 @@ class FallbackLLM:
                         target_tokens=target,
                     )
                     cur_est = self._budget.estimate_tokens(cur_compressed)
+                    if self._obs:
+                        self._obs.record_compression()
                     _logger.info(
                         "Progressive compress for %s: "
                         "%d → %d tokens (agent=%s)",
@@ -226,6 +233,11 @@ class FallbackLLM:
                     )
 
             if not self._budget.can_afford(model_name, cur_est):
+                if self._obs:
+                    self._obs.record_cascade(
+                        model_name,
+                        "budget_exhausted",
+                    )
                 _logger.info(
                     "Skip %s: budget exhausted " "(est=%d, agent=%s)",
                     model_name,
@@ -237,6 +249,8 @@ class FallbackLLM:
             try:
                 result = bound_llm.invoke(cur_compressed, **kwargs)
                 self._budget.record(model_name, cur_est)
+                if self._obs:
+                    self._obs.record_request(model_name)
                 _logger.info(
                     "Route → %s | iter=%d " "tokens≈%d (agent=%s)",
                     model_name,
@@ -254,6 +268,11 @@ class FallbackLLM:
                         APIStatusError,
                     ),
                 ):
+                    if self._obs:
+                        self._obs.record_cascade(
+                            model_name,
+                            "api_error",
+                        )
                     _logger.warning(
                         "Groq %s failed (%s), " "cascading — agent=%s",
                         model_name,
@@ -264,6 +283,8 @@ class FallbackLLM:
                 raise
 
         # Step 4: Anthropic fallback.
+        if self._obs:
+            self._obs.record_request("anthropic")
         _logger.warning(
             "All Groq tiers exhausted → Anthropic | "
             "iter=%d tokens≈%d (agent=%s)",

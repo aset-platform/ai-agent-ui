@@ -115,6 +115,7 @@ class StockAgent(BaseAgent):
             agent_id=self.config.agent_id,
             token_budget=self.token_budget,
             compressor=self.compressor,
+            obs_collector=self.obs_collector,
         )
 
 
@@ -122,6 +123,7 @@ def create_stock_agent(
     tool_registry: ToolRegistry,
     token_budget: TokenBudget | None = None,
     compressor: MessageCompressor | None = None,
+    obs_collector=None,
 ) -> StockAgent:
     """Factory function that builds a :class:`StockAgent`.
 
@@ -131,6 +133,8 @@ def create_stock_agent(
             Created with defaults if ``None``.
         compressor: Shared :class:`MessageCompressor` instance.
             Created with defaults if ``None``.
+        obs_collector: Optional
+            :class:`~observability.ObservabilityCollector`.
 
     Returns:
         A ready-to-use :class:`StockAgent` instance.
@@ -162,10 +166,14 @@ def create_stock_agent(
             "search_market_news",
         ],
     )
-    agent = StockAgent(config=config, tool_registry=tool_registry)
+    agent = StockAgent(
+        config=config,
+        tool_registry=tool_registry,
+    )
     agent.token_budget = token_budget or TokenBudget()
     agent.compressor = compressor or MessageCompressor(
         max_history_turns=settings.max_history_turns,
         max_tool_result_chars=settings.max_tool_result_chars,
     )
+    agent.obs_collector = obs_collector
     return agent

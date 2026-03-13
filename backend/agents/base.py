@@ -71,6 +71,8 @@ class BaseAgent(ABC):
             from message_compressor import MessageCompressor
 
             self.compressor = MessageCompressor()
+        if not hasattr(self, "obs_collector"):
+            self.obs_collector = None
 
         self._setup()
 
