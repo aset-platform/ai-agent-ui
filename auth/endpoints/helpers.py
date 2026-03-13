@@ -8,6 +8,8 @@ Functions
 - :func:`_require_active_user` — raise HTTP 401 for missing/inactive users
 """
 
+from __future__ import annotations
+
 import json as _json
 import logging
 from datetime import datetime, timezone

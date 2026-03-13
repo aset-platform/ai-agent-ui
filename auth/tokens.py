@@ -16,6 +16,8 @@ Functions
 - :func:`is_token_revoked`
 """
 
+from __future__ import annotations
+
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone

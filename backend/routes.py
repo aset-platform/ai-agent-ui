@@ -338,6 +338,11 @@ def create_app(
     )
     app.include_router(admin_router)
 
+    # Bulk data import/export endpoints.
+    from bulk_data import create_bulk_router
+
+    app.include_router(create_bulk_router())
+
     # WebSocket streaming endpoint.
     from ws import register_ws_routes
 

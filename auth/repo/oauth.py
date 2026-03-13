@@ -6,6 +6,8 @@ Functions
 - :func:`get_or_create_by_oauth`
 """
 
+from __future__ import annotations
+
 import logging
 import secrets as _secrets
 from typing import Any, Dict, Optional

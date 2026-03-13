@@ -5,6 +5,8 @@ Functions
 - :func:`register` — attach admin routes to the router
 """
 
+from __future__ import annotations
+
 import logging
 from typing import Any, Dict, List
 

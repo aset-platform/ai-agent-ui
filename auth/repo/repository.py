@@ -11,6 +11,8 @@ Usage::
     user = repo.get_by_email("admin@example.com")
 """
 
+from __future__ import annotations
+
 import logging
 import os
 from typing import Any, Dict, List, Optional
