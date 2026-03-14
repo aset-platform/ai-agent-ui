@@ -200,7 +200,7 @@ dashboard/
 │   ├── iceberg.py       # Iceberg repo singleton + TTL cached helpers
 │   └── utils.py         # Shared utilities (currency, market label)
 └── assets/
-    └── custom.css       # Light theme styles (gray-50 bg, white cards, indigo accent)
+    └── custom.css       # Light + dark theme styles (CSS-variable palette, Dash 4 overrides)
 ```
 
 ### Data flow
@@ -219,7 +219,7 @@ stocks.dividends         ──► Dividend history              (_get_dividends
 
 ### Key design decisions
 
-**Light theme (FLATLY)** — the dashboard uses `dbc.themes.FLATLY` (Bootstrap 5, light). `custom.css` defines a CSS-variable palette (`--bg: #f9fafb`, `--card-bg: #ffffff`, `--accent: #4f46e5`) that matches the chat interface. All Plotly charts use `template="plotly_white"` with explicit `paper_bgcolor`/`plot_bgcolor`/`gridcolor` values for consistency.
+**Light + dark theme** — the dashboard uses `dbc.themes.FLATLY` (Bootstrap 5, light) as a base. `custom.css` defines a CSS-variable palette (`--bg`, `--card-bg`, `--accent`, etc.) with light defaults and `body.dark-mode` overrides (slate-900 bg, slate-800 cards, indigo-400 accent). A navbar toggle button switches themes. All Plotly charts use explicit `paper_bgcolor`/`plot_bgcolor`/`gridcolor` from callbacks that read the active theme. Dash 4 component overrides (`.dash-dropdown-value-count`, `.dash-dropdown-value`, `.dash-dropdown-option`, etc.) ensure correct colors in both modes.
 
 **Iframe embedding headers** — `app.py` registers a Flask `@server.after_request` hook that adds `X-Frame-Options: ALLOWALL` and `Content-Security-Policy: frame-ancestors *` to every response, allowing the dashboard to be embedded inside the Next.js SPA iframe from any origin.
 

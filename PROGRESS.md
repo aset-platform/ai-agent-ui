@@ -2,6 +2,27 @@
 
 ---
 
+# Session: Mar 14, 2026 — ASETPLTFRM-61
+
+## Summary
+Dark mode CSS bug fix for Compare Stocks dropdown badge.
+
+### ASETPLTFRM-61 — Fix: Dark mode "2 selected" badge font color
+- **Bug:** `.dash-dropdown-value-count` (Dash 4 class) used built-in
+  CSS vars (`--Dash-Text-Weak`, `--Dash-Fill-Interactive-Weak`) that
+  aren't overridden in dark mode, resulting in dark text on dark bg.
+- **Fix:** Added `body.dark-mode .dash-dropdown-value-count` rule in
+  `dashboard/assets/custom.css` — `color: var(--text-primary)`,
+  `background: var(--border)`.
+- Jira: created, Sprint 1, In Progress, 1 SP, assigned Abhay Singh.
+- **Status:** Fix applied, visually verified. Not yet committed.
+
+### Sprint 1 status check
+- 47 Done, 2 In Progress (ASETPLTFRM-60, ASETPLTFRM-27), + new -61.
+- Sprint ends 2026-03-18 (4 days remaining).
+
+---
+
 # Session: Mar 13, 2026 (cont. 2) — ASETPLTFRM-13, 20
 
 ## Summary

@@ -6,6 +6,7 @@
  */
 
 import { test, expect } from "../../fixtures/auth.fixture";
+import { waitForDashReady } from "../../utils/wait.helper";
 
 import { DashMarketplacePage } from "../../pages/dashboard/marketplace.page";
 
@@ -35,7 +36,7 @@ test.describe("Dashboard marketplace deep", () => {
     const search = marketplacePage.searchInput;
     if ((await search.count()) > 0) {
       await search.fill("AAPL");
-      await page.waitForTimeout(2_000);
+      await waitForDashReady(page);
       // Grid should still be visible (filtered)
       await expect(marketplacePage.grid).toBeVisible();
     }
@@ -48,7 +49,7 @@ test.describe("Dashboard marketplace deep", () => {
     if ((await addBtn.count()) > 0) {
       const textBefore = await addBtn.innerText();
       await addBtn.click();
-      await page.waitForTimeout(2_000);
+      await waitForDashReady(page);
       // Button text may change to "Remove" or show
       // a success indicator
       const textAfter = await addBtn.innerText();
@@ -64,7 +65,7 @@ test.describe("Dashboard marketplace deep", () => {
     await page.goto(
       `/marketplace?token=${userToken}&theme=dark`,
     );
-    await page.waitForTimeout(3_000);
+    await waitForDashReady(page);
     const hasDark = await page.evaluate(
       () =>
         document.body.classList.contains("dark-mode"),
@@ -139,7 +140,7 @@ test.describe("Dashboard marketplace deep", () => {
       .first();
     if ((await sortBtn.count()) > 0) {
       await sortBtn.click();
-      await page.waitForTimeout(2_000);
+      await waitForDashReady(page);
       // Sort arrow should show active state
       const arrow = sortBtn.locator(".sort-active");
       await expect(arrow).toBeVisible();

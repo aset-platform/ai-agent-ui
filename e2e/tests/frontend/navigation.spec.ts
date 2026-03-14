@@ -73,7 +73,7 @@ test.describe("Navigation", () => {
       name: /dashboard/i,
     });
     await dashBtn.first().click();
-    await page.waitForTimeout(2_000);
+    await page.waitForLoadState("networkidle");
 
     // Navigate back to chat
     const navBtn2 = page.getByRole("button", {
@@ -103,7 +103,7 @@ test.describe("Navigation", () => {
       name: /dashboard/i,
     });
     await dashBtn.first().click();
-    await page.waitForTimeout(2_000);
+    await page.waitForLoadState("networkidle");
 
     // Navigate back to chat
     const navBtn2 = page.getByRole("button", {

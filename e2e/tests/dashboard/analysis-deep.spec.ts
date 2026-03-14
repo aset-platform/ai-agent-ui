@@ -6,6 +6,7 @@
  */
 
 import { test, expect } from "../../fixtures/auth.fixture";
+import { waitForDashReady } from "../../utils/wait.helper";
 
 import { DashAnalysisPage } from "../../pages/dashboard/analysis.page";
 
@@ -71,7 +72,7 @@ test.describe("Dashboard analysis deep", () => {
     await page.goto(
       `/analysis?token=${userToken}&theme=dark`,
     );
-    await page.waitForTimeout(3_000);
+    await waitForDashReady(page);
     // Body should have dark-mode class
     const hasDark = await page.evaluate(
       () =>

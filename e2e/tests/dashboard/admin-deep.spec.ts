@@ -6,6 +6,7 @@
  */
 
 import { test, expect } from "../../fixtures/auth.fixture";
+import { waitForDashReady } from "../../utils/wait.helper";
 
 import { DashAdminPage } from "../../pages/dashboard/admin.page";
 
@@ -79,7 +80,7 @@ test.describe("Dashboard admin deep", () => {
     await page.goto(
       `/admin/users?token=${adminToken}&theme=dark`,
     );
-    await page.waitForTimeout(3_000);
+    await waitForDashReady(page);
     const hasDark = await page.evaluate(
       () =>
         document.body.classList.contains("dark-mode"),
@@ -101,7 +102,7 @@ test.describe("Dashboard admin deep", () => {
       state: "attached",
       timeout: 15_000,
     });
-    await page.waitForTimeout(3_000);
+    await waitForDashReady(page);
     const forbidden = page
       .locator("text=access denied")
       .or(page.locator("text=forbidden"))
@@ -142,7 +143,7 @@ test.describe("Dashboard admin deep", () => {
     const search = page.locator("#users-search");
     await expect(search).toBeVisible();
     await search.fill("test");
-    await page.waitForTimeout(2_000);
+    await waitForDashReady(page);
     // Table should still be visible (filtered)
     await expect(adminPage.userTable).toBeVisible();
   });
@@ -179,7 +180,7 @@ test.describe("Dashboard admin deep", () => {
       name: /audit log/i,
     });
     await auditTab.click();
-    await page.waitForTimeout(3_000);
+    await waitForDashReady(page);
     // Audit table container should be visible
     const auditContainer = page.locator(
       "#audit-log-container",
@@ -196,7 +197,7 @@ test.describe("Dashboard admin deep", () => {
       name: /audit log/i,
     });
     await auditTab.click();
-    await page.waitForTimeout(3_000);
+    await waitForDashReady(page);
     // Search
     const search = page.locator("#audit-search");
     await expect(search).toBeVisible({
@@ -217,7 +218,7 @@ test.describe("Dashboard admin deep", () => {
       timeout: 15_000,
     });
     await obsTab.click();
-    await page.waitForTimeout(3_000);
+    await waitForDashReady(page);
     // Health cards container should be visible
     const healthCards = page.locator("#obs-health-cards");
     await expect(healthCards).toBeAttached({
@@ -232,7 +233,7 @@ test.describe("Dashboard admin deep", () => {
       name: /llm observability/i,
     });
     await obsTab.click();
-    await page.waitForTimeout(3_000);
+    await waitForDashReady(page);
     const tierCards = page.locator("#obs-tier-cards");
     await expect(tierCards).toBeAttached({
       timeout: 30_000,
@@ -246,7 +247,7 @@ test.describe("Dashboard admin deep", () => {
       name: /llm observability/i,
     });
     await obsTab.click();
-    await page.waitForTimeout(3_000);
+    await waitForDashReady(page);
     const cascadeTable = page.locator(
       "#obs-cascade-table",
     );

@@ -4,6 +4,19 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 14, 2026 — Dark Mode CSS Fix
+
+### ASETPLTFRM-61 — Fix: Dark mode "2 selected" badge font color
+
+The multi-select dropdown on the Compare Stocks page showed dark, unreadable text for the "2 selected" count badge in dark mode.
+
+- **Root cause**: Dash 4's `.dash-dropdown-value-count` uses built-in CSS variables (`--Dash-Text-Weak`, `--Dash-Fill-Interactive-Weak`) that aren't overridden by the app's `body.dark-mode` token system
+- **Fix**: Added `body.dark-mode .dash-dropdown-value-count` rule in `dashboard/assets/custom.css` setting `color: var(--text-primary)` and `background: var(--border)`
+
+Files: `dashboard/assets/custom.css` (4 lines added)
+
+---
+
 ## Mar 13, 2026 — Tier Health Monitoring + API v1 Cutover
 
 ### ASETPLTFRM-13 — Groq Tier Health Monitoring

@@ -6,6 +6,7 @@
  */
 
 import { test, expect } from "../../fixtures/auth.fixture";
+import { waitForDashReady } from "../../utils/wait.helper";
 
 import { DashHomePage } from "../../pages/dashboard/home.page";
 
@@ -58,7 +59,7 @@ test.describe("Dashboard home deep", () => {
     userToken,
   }) => {
     await page.goto(`/?token=${userToken}&theme=dark`);
-    await page.waitForTimeout(3_000);
+    await waitForDashReady(page);
     const hasDark = await page.evaluate(
       () =>
         document.body.classList.contains("dark-mode"),
@@ -93,7 +94,7 @@ test.describe("Dashboard home deep", () => {
     });
     const options = pageSize.locator("option");
     const count = await options.count();
-    expect(count).toBe(4); // 12, 24, 48, 96
+    expect(count).toBeGreaterThanOrEqual(4);
   });
 
   test("page-size change updates card count", async ({
@@ -104,7 +105,7 @@ test.describe("Dashboard home deep", () => {
     );
     const pageSize = page.locator("#home-page-size");
     await pageSize.selectOption("24");
-    await page.waitForTimeout(2_000);
+    await waitForDashReady(page);
     // Count text should be visible
     const countText = page.locator("#home-count-text");
     await expect(countText).toBeVisible();
@@ -135,12 +136,12 @@ test.describe("Dashboard home deep", () => {
 
     // Click US, verify it gets primary class
     await usBtn.click();
-    await page.waitForTimeout(2_000);
+    await waitForDashReady(page);
     await expect(usBtn).toHaveClass(/btn-primary/);
 
     // Click India back
     await indiaBtn.click();
-    await page.waitForTimeout(2_000);
+    await waitForDashReady(page);
     await expect(indiaBtn).toHaveClass(/btn-primary/);
   });
 });

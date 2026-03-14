@@ -3,6 +3,7 @@
  */
 
 import { test, expect } from "../../fixtures/auth.fixture";
+import { waitForDashReady } from "../../utils/wait.helper";
 
 import { DashForecastPage } from "../../pages/dashboard/forecast.page";
 
@@ -86,7 +87,7 @@ test.describe("Dashboard forecast", () => {
       .locator("#forecast-view-radio")
       .getByText("Decomposition");
     await decompLabel.click();
-    await page.waitForTimeout(3_000);
+    await waitForDashReady(page);
     // Chart should still be visible (re-rendered)
     await expect(chart).toBeVisible();
   });
@@ -103,7 +104,7 @@ test.describe("Dashboard forecast", () => {
       .locator("#forecast-horizon-radio")
       .getByText("3 Months");
     await threeMonth.click();
-    await page.waitForTimeout(3_000);
+    await waitForDashReady(page);
     await expect(chart).toBeVisible();
   });
 

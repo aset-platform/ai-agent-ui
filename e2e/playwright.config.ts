@@ -13,7 +13,7 @@ export default defineConfig({
   expect: { timeout: 5_000 },
   globalTimeout: 1_800_000,
   retries: process.env.CI ? 2 : 1,
-  workers: process.env.CI ? 2 : 2,
+  workers: process.env.CI ? 3 : 3,
   forbidOnly: !!process.env.CI,
   reporter: [["html", { open: "never" }], ["list"]],
   /* Store test artifacts outside the project tree so the Dash

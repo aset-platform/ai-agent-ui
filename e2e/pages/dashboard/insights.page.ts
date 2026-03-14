@@ -6,6 +6,7 @@ import { type Locator, expect } from "@playwright/test";
 
 import { DASH } from "../../utils/selectors";
 import {
+  gotoDashPage,
   waitForDashLoading,
   waitForPlotlyChart,
 } from "../../utils/wait.helper";
@@ -42,15 +43,10 @@ export class DashInsightsPage extends BasePage {
 
   /** Navigate to insights page with JWT. */
   async gotoWithToken(token: string): Promise<void> {
-    await this.page.goto(`/insights?token=${token}`);
-    await waitForDashLoading(this.page);
-    // Retry once if Dash restarted mid-load
-    const err = this.page.locator("text=Callback error");
-    if ((await err.count()) > 0) {
-      await this.page.waitForTimeout(3_000);
-      await this.page.reload();
-      await waitForDashLoading(this.page);
-    }
+    await gotoDashPage(
+      this.page,
+      `/insights?token=${token}`,
+    );
   }
 
   /** Click a tab by its visible label text. */

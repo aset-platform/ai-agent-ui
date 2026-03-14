@@ -35,7 +35,6 @@ test.describe("Network error handling", () => {
     await page.getByTestId("chat-send-button").click();
 
     // Should show some error indication (status badge or message)
-    await page.waitForTimeout(3_000);
     const errorIndicator = page
       .locator("text=error")
       .or(page.getByTestId("status-badge"));
@@ -99,10 +98,9 @@ test.describe("Network error handling", () => {
     await page.getByTestId("chat-send-button").click();
 
     // Should handle gracefully (no unhandled crash)
-    await page.waitForTimeout(5_000);
-    // Page should still be responsive
+    // Page should still be responsive after error processing
     await expect(
       page.getByTestId("chat-message-input"),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 10_000 });
   });
 });

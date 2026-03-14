@@ -13,7 +13,11 @@
 import { type Page } from "@playwright/test";
 
 import { test, expect } from "../../fixtures/auth.fixture";
-import { waitForDashLoading } from "../../utils/wait.helper";
+import {
+  waitForDashLoading,
+  waitForDashReady,
+  gotoDashPage,
+} from "../../utils/wait.helper";
 
 // ── Helpers ────────────────────────────────────────────────
 
@@ -41,8 +45,7 @@ async function clickPage(
     .filter({ hasText: new RegExp(`^${pageNum}$`) });
   await pageLink.click({ force: true });
   await waitForDashLoading(page);
-  // Allow Dash callback chain to settle
-  await page.waitForTimeout(1_500);
+  await waitForDashReady(page);
 }
 
 /** Get the max page number visible in the pagination. */
@@ -74,7 +77,7 @@ async function navigateTo(
   // Retry once if Dash restarted mid-load
   const err = page.locator("text=Callback error");
   if ((await err.count()) > 0) {
-    await page.waitForTimeout(3_000);
+    await waitForDashReady(page);
     await page.reload();
     await waitForDashLoading(page);
   }
@@ -130,7 +133,7 @@ test.describe("Marketplace pagination", () => {
     const pageSize = page.locator("#marketplace-page-size");
     await pageSize.selectOption("25");
     await waitForDashLoading(page);
-    await page.waitForTimeout(1_500);
+    await waitForDashReady(page);
 
     expect(await getActivePage(page, pid)).toBe(1);
   });
@@ -160,7 +163,7 @@ test.describe("Marketplace pagination", () => {
     if ((await sortBtn.count()) > 0) {
       await sortBtn.click();
       await waitForDashLoading(page);
-      await page.waitForTimeout(1_500);
+      await waitForDashReady(page);
       expect(await getActivePage(page, pid)).toBe(1);
     }
   });
@@ -221,7 +224,7 @@ test.describe("Insights screener pagination", () => {
     if ((await sortBtn.count()) > 0) {
       await sortBtn.click();
       await waitForDashLoading(page);
-      await page.waitForTimeout(1_500);
+      await waitForDashReady(page);
       expect(await getActivePage(page, pid)).toBe(1);
     }
   });
@@ -277,7 +280,7 @@ test.describe("Admin users pagination", () => {
     const search = page.locator("#users-search");
     await search.fill("test");
     await waitForDashLoading(page);
-    await page.waitForTimeout(1_500);
+    await waitForDashReady(page);
 
     expect(await getActivePage(page, pid)).toBe(1);
   });
@@ -334,7 +337,7 @@ test.describe("Home pagination", () => {
     // Click US filter — should reset to page 1
     await page.locator("#filter-us-btn").click();
     await waitForDashLoading(page);
-    await page.waitForTimeout(1_500);
+    await waitForDashReady(page);
 
     expect(await getActivePage(page, pid)).toBe(1);
   });

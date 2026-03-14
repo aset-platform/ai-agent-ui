@@ -5,6 +5,7 @@
  */
 
 import { test, expect } from "../../fixtures/auth.fixture";
+import { waitForDashReady } from "../../utils/wait.helper";
 
 import {
   DashInsightsPage,
@@ -140,7 +141,7 @@ test.describe("Dashboard insights", () => {
     const pageSize = page.locator("#screener-page-size");
     await expect(pageSize).toBeVisible();
     await pageSize.selectOption("25");
-    await page.waitForTimeout(2_000);
+    await waitForDashReady(page);
     // Table should still be visible after size change
     await expect(
       page.locator("#screener-table-container table"),
@@ -155,7 +156,7 @@ test.describe("Dashboard insights", () => {
     ).toBeVisible({ timeout: 30_000 });
     const rsiFilter = page.locator("#screener-rsi-filter");
     await rsiFilter.selectOption("oversold");
-    await page.waitForTimeout(2_000);
+    await waitForDashReady(page);
     // Should show filtered results or empty message
     await expect(
       page.locator("#screener-table-container"),
