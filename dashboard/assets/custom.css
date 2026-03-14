@@ -699,6 +699,11 @@ body.dark-mode .dash-dropdown-value {
   color: var(--text-primary) !important;
 }
 
+body.dark-mode .dash-dropdown-value-count {
+  color: var(--text-primary) !important;
+  background: var(--border) !important;
+}
+
 body.dark-mode .dash-dropdown-trigger-icon {
   color: var(--text-secondary) !important;
 }
