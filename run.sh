@@ -50,8 +50,25 @@ mkdir -p "$LOG_DIR"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-# PIDs currently listening on a port (newline-separated)
-_pids_on_port() { lsof -ti:"$1" 2>/dev/null || true; }
+# Detect WSL environment
+_is_wsl() { grep -qi microsoft /proc/version 2>/dev/null; }
+
+# PIDs currently listening on a port (newline-separated).
+# Tries lsof (macOS / full Linux), then ss (WSL2 / minimal Linux),
+# then fuser as a last resort.
+_pids_on_port() {
+    local port="$1"
+    if command -v lsof &>/dev/null; then
+        lsof -ti:"$port" 2>/dev/null || true
+    elif command -v ss &>/dev/null; then
+        # ss -tlnp shows LISTEN sockets with process info
+        ss -tlnp "sport = :${port}" 2>/dev/null \
+            | grep -oP 'pid=\K[0-9]+' | sort -u || true
+    elif command -v fuser &>/dev/null; then
+        fuser "${port}/tcp" 2>/dev/null \
+            | tr -s ' ' '\n' | grep -E '^[0-9]+$' || true
+    fi
+}
 
 # Is anything listening on this port?
 _port_up() { [[ -n "$(_pids_on_port "$1")" ]]; }
@@ -114,10 +131,12 @@ _redis_start() {
     os_name="$(uname -s)"
     if [[ "$os_name" == "Darwin" ]] && command -v brew &>/dev/null; then
         brew services start redis &>/dev/null
-    elif command -v systemctl &>/dev/null; then
+    elif command -v systemctl &>/dev/null \
+         && systemctl is-system-running &>/dev/null 2>&1; then
         sudo systemctl start redis-server 2>/dev/null || \
             sudo systemctl start redis 2>/dev/null || true
     else
+        # No systemd (typical WSL2) — launch directly as daemon
         redis-server --port "$REDIS_PORT" --daemonize yes \
             --logfile "${LOG_DIR}/redis.log" 2>/dev/null
     fi
@@ -141,7 +160,8 @@ _redis_stop() {
     os_name="$(uname -s)"
     if [[ "$os_name" == "Darwin" ]] && command -v brew &>/dev/null; then
         brew services stop redis &>/dev/null
-    elif command -v systemctl &>/dev/null; then
+    elif command -v systemctl &>/dev/null \
+         && systemctl is-system-running &>/dev/null 2>&1; then
         sudo systemctl stop redis-server 2>/dev/null || \
             sudo systemctl stop redis 2>/dev/null || true
     else

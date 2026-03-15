@@ -57,6 +57,38 @@ warn() { echo -e "  ${Y}[WARN]${N} $1"; }
 fail() { echo -e "  ${R}[FAIL]${N} $1"; exit 1; }
 info() { echo -e "  ${C}[INFO]${N} $1"; }
 
+# Detect WSL environment
+_is_wsl() { grep -qi microsoft /proc/version 2>/dev/null; }
+
+# Create a symlink, falling back to a copy if symlinks are not supported
+# (e.g. WSL2 without Windows developer mode enabled).
+# Usage: _try_symlink <target> <link_path>
+_try_symlink() {
+    local target="$1" link_path="$2"
+    if ln -sf "$target" "$link_path" 2>/dev/null; then
+        return 0
+    fi
+    # Symlink failed — fall back to copying
+    warn "Symlinks not supported (enable Windows Developer Mode for WSL)"
+    cp -f "$target" "$link_path"
+    return 0
+}
+
+# Start a system service, handling the case where systemd is unavailable
+# (common in WSL2).  Falls back to direct daemon launch.
+# Usage: _start_redis_service
+_start_redis_service() {
+    if command -v systemctl &>/dev/null \
+       && systemctl is-system-running &>/dev/null 2>&1; then
+        sudo systemctl enable redis-server 2>/dev/null || true
+        sudo systemctl start redis-server 2>/dev/null || true
+    else
+        # No systemd (typical WSL2) — launch directly
+        redis-server --port 6379 --daemonize yes \
+            --logfile "${HOME}/.ai-agent-ui/logs/redis.log" 2>/dev/null
+    fi
+}
+
 prompt_required() {
     local var_name="$1" prompt_text="$2" value=""
     if [[ $NON_INTERACTIVE -eq 1 ]]; then
@@ -286,8 +318,8 @@ OLD_VENV_DIR="$SCRIPT_DIR/backend/demoenv"
 if [[ -d "$OLD_VENV_DIR" ]] && [[ ! -L "$OLD_VENV_DIR" ]] && [[ ! -d "$VENV_DIR" ]]; then
     info "Migrating virtualenv from backend/demoenv → $VENV_DIR"
     mv "$OLD_VENV_DIR" "$VENV_DIR"
-    ln -s "$VENV_DIR" "$OLD_VENV_DIR"
-    ok "Virtualenv migrated (symlink left at backend/demoenv)"
+    _try_symlink "$VENV_DIR" "$OLD_VENV_DIR"
+    ok "Virtualenv migrated (link left at backend/demoenv)"
 fi
 VENV_PYTHON="$VENV_DIR/bin/python"
 
@@ -565,19 +597,27 @@ else
     _write_backend_env
 fi
 
-# Create symlink: backend/.env → ~/.ai-agent-ui/backend.env
+# Create symlink (or copy): backend/.env → ~/.ai-agent-ui/backend.env
 if [[ -L "$BACKEND_ENV_LINK" ]]; then
     LINK_TARGET="$(readlink "$BACKEND_ENV_LINK")"
     if [[ "$LINK_TARGET" == "$BACKEND_ENV_REAL" ]]; then
         ok "backend/.env symlink OK"
     else
         rm "$BACKEND_ENV_LINK"
-        ln -s "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
-        ok "backend/.env symlink updated"
+        _try_symlink "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
+        ok "backend/.env link updated"
     fi
+elif [[ -f "$BACKEND_ENV_LINK" ]]; then
+    # A regular file exists (previous copy-fallback) — refresh it
+    cp -f "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
+    ok "backend/.env copy refreshed"
 else
-    ln -s "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
-    ok "backend/.env → ~/.ai-agent-ui/backend.env (symlink)"
+    _try_symlink "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
+    if [[ -L "$BACKEND_ENV_LINK" ]]; then
+        ok "backend/.env → ~/.ai-agent-ui/backend.env (symlink)"
+    else
+        ok "backend/.env → ~/.ai-agent-ui/backend.env (copy)"
+    fi
 fi
 
 # ── frontend/.env.local ──────────────────────────────────────────────────────
@@ -610,19 +650,26 @@ else
     ok "~/.ai-agent-ui/frontend.env.local already exists"
 fi
 
-# Create symlink: frontend/.env.local → ~/.ai-agent-ui/frontend.env.local
+# Create symlink (or copy): frontend/.env.local → ~/.ai-agent-ui/frontend.env.local
 if [[ -L "$FRONTEND_ENV_LINK" ]]; then
     LINK_TARGET="$(readlink "$FRONTEND_ENV_LINK")"
     if [[ "$LINK_TARGET" == "$FRONTEND_ENV_REAL" ]]; then
         ok "frontend/.env.local symlink OK"
     else
         rm "$FRONTEND_ENV_LINK"
-        ln -s "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
-        ok "frontend/.env.local symlink updated"
+        _try_symlink "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
+        ok "frontend/.env.local link updated"
     fi
+elif [[ -f "$FRONTEND_ENV_LINK" ]]; then
+    cp -f "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
+    ok "frontend/.env.local copy refreshed"
 else
-    ln -s "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
-    ok "frontend/.env.local → ~/.ai-agent-ui/frontend.env.local (symlink)"
+    _try_symlink "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
+    if [[ -L "$FRONTEND_ENV_LINK" ]]; then
+        ok "frontend/.env.local → ~/.ai-agent-ui/frontend.env.local (symlink)"
+    else
+        ok "frontend/.env.local → ~/.ai-agent-ui/frontend.env.local (copy)"
+    fi
 fi
 
 # ── .pyiceberg.yaml ──────────────────────────────────────────────────────────
@@ -682,8 +729,7 @@ if [[ $REDIS_INSTALLED -eq 1 ]]; then
         if [[ "$OS" == "macos" ]]; then
             brew services start redis 2>/dev/null
         else
-            sudo systemctl enable redis-server 2>/dev/null || true
-            sudo systemctl start redis-server 2>/dev/null || true
+            _start_redis_service
         fi
         # Wait up to 5 seconds for Redis to accept connections
         _attempt=0
@@ -706,7 +752,9 @@ if [[ $REDIS_INSTALLED -eq 1 ]]; then
         info "Enabling AOF persistence for token deny-list durability…"
         redis-cli config set appendonly yes &>/dev/null
         redis-cli config set appendfsync everysec &>/dev/null
-        redis-cli config rewrite &>/dev/null
+        # config rewrite fails if Redis was started without a config file
+        # (common on WSL2 with direct daemonize). This is non-fatal.
+        redis-cli config rewrite &>/dev/null || true
         ok "AOF enabled (appendfsync=everysec) — deny-list survives restarts"
     else
         ok "AOF persistence already enabled"
@@ -818,8 +866,9 @@ _check "Key packages (pyiceberg)" "'$VENV_PYTHON' -c 'import pyiceberg'"
 _check "Key packages (dash)" "'$VENV_PYTHON' -c 'import dash'"
 _check "Key packages (slowapi)" "'$VENV_PYTHON' -c 'import slowapi'"
 _check "Frontend node_modules" "[[ -d '$FRONTEND_DIR/node_modules' ]]"
-_check "backend/.env (symlink)" "[[ -L '$BACKEND_ENV_LINK' ]] && [[ -f '$BACKEND_ENV_REAL' ]]"
-_check "frontend/.env.local (symlink)" "[[ -L '$FRONTEND_ENV_LINK' ]] && [[ -f '$FRONTEND_ENV_REAL' ]]"
+# Symlink OR copy — both are valid (copy is the WSL2 fallback)
+_check "backend/.env (linked)" "([[ -L '$BACKEND_ENV_LINK' ]] || [[ -f '$BACKEND_ENV_LINK' ]]) && [[ -f '$BACKEND_ENV_REAL' ]]"
+_check "frontend/.env.local (linked)" "([[ -L '$FRONTEND_ENV_LINK' ]] || [[ -f '$FRONTEND_ENV_LINK' ]]) && [[ -f '$FRONTEND_ENV_REAL' ]]"
 _check ".pyiceberg.yaml" "[[ -f '$PYICEBERG_YAML' ]]"
 _check "Iceberg catalog" "[[ -f '$HOME/.ai-agent-ui/data/iceberg/catalog.db' ]]"
 _check "Git pre-commit hook" "[[ -x '$HOOKS_DIR/pre-commit' ]]"
@@ -863,3 +912,12 @@ echo "    ./run.sh start     Start all services"
 echo "    ./run.sh stop      Stop all services"
 echo "    ./run.sh status    Check service status"
 echo ""
+if [[ $IS_WSL -eq 1 ]]; then
+    echo -e "  ${B}WSL2 notes:${N}"
+    echo "    - If symlinks failed, env files were copied instead."
+    echo "      After editing ~/.ai-agent-ui/backend.env, re-run setup.sh"
+    echo "      or manually copy to backend/.env."
+    echo "    - Access services from Windows browser at http://localhost:<port>"
+    echo "    - To enable symlinks: Settings > Privacy > Developer Mode > ON"
+    echo ""
+fi
