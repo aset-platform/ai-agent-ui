@@ -72,12 +72,30 @@ class Settings(BaseSettings):
     log_to_file: bool = True
     agent_timeout_seconds: int = 900
 
+    # Environment profile: "dev" (default), "test" (free-only).
+    # "test" skips gpt-oss-120b and Anthropic entirely.
+    ai_agent_ui_env: str = "dev"
+
     # Groq model tiers — tried in order; cascade on budget
     # exhaustion or API error.  Comma-separated in env var.
     groq_model_tiers: str = (
         "llama-3.3-70b-versatile,"
         "moonshotai/kimi-k2-instruct,"
         "openai/gpt-oss-120b,"
+        "meta-llama/llama-4-scout-17b-16e-instruct"
+    )
+
+    # Synthesis tiers — used for final response (no tool calls).
+    # Reserves gpt-oss-120b for quality output.
+    synthesis_model_tiers: str = (
+        "openai/gpt-oss-120b,"
+        "moonshotai/kimi-k2-instruct"
+    )
+
+    # Test tiers — free models only, zero paid exposure.
+    test_model_tiers: str = (
+        "llama-3.3-70b-versatile,"
+        "moonshotai/kimi-k2-instruct,"
         "meta-llama/llama-4-scout-17b-16e-instruct"
     )
 

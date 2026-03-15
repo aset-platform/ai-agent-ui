@@ -89,6 +89,20 @@ def stream(
             messages.append(response)
 
             if not response.tool_calls:
+                # Final response — re-invoke with synthesis
+                # cascade if it differs from tool cascade.
+                if (
+                    agent.llm_synthesis
+                    is not agent.llm_with_tools
+                ):
+                    agent.logger.debug(
+                        "Switching to synthesis cascade"
+                    )
+                    response = agent.llm_synthesis.invoke(
+                        messages[:-1],
+                        iteration=iteration,
+                    )
+                    messages[-1] = response
                 break
 
             for tc in response.tool_calls:

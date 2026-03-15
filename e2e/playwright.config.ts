@@ -103,5 +103,9 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     stdout: "pipe",
     stderr: "pipe",
+    env: {
+      ...process.env,
+      AI_AGENT_UI_ENV: "test",
+    },
   },
 });

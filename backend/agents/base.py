@@ -88,13 +88,30 @@ class BaseAgent(ABC):
         self._setup()
 
     def _setup(self) -> None:
-        """Build the LLM and bind the agent's permitted tools to it.
+        """Build LLMs and bind the agent's permitted tools.
+
+        Creates two LLM instances:
+        - ``llm_with_tools`` — tool-calling cascade (used during
+          agentic loop iterations with tool calls).
+        - ``llm_synthesis`` — synthesis cascade (used for the
+          final response when no more tool calls).  Falls back to
+          ``llm_with_tools`` if not overridden.
 
         Called automatically by :meth:`__init__`.
         """
         self.llm = self._build_llm()
-        tools = self.tool_registry.get_tools(self.config.tool_names)
+        tools = self.tool_registry.get_tools(
+            self.config.tool_names,
+        )
         self.llm_with_tools = self.llm.bind_tools(tools)
+
+        # Synthesis LLM (optional override).
+        syn = self._build_synthesis_llm()
+        if syn is not None:
+            self.llm_synthesis = syn.bind_tools(tools)
+        else:
+            self.llm_synthesis = self.llm_with_tools
+
         self.logger.debug(
             "Agent '%s' setup complete. Bound tools: %s",
             self.config.agent_id,
@@ -103,13 +120,27 @@ class BaseAgent(ABC):
 
     @abstractmethod
     def _build_llm(self):
-        """Construct and return the provider-specific chat model.
+        """Construct the tool-calling LLM cascade.
 
         Returns:
-            An uninvoked LangChain chat model instance (or duck-typed
-            equivalent with ``bind_tools``/``invoke`` methods).
+            An uninvoked LangChain chat model instance
+            (or duck-typed equivalent with
+            ``bind_tools``/``invoke`` methods).
         """
         ...
+
+    def _build_synthesis_llm(self):
+        """Construct the synthesis LLM cascade (optional).
+
+        Override to use a different cascade for the final
+        response (e.g. quality-optimised models).  Returns
+        ``None`` by default, causing ``llm_synthesis`` to
+        fall back to ``llm_with_tools``.
+
+        Returns:
+            An LLM instance, or ``None``.
+        """
+        return None
 
     def _build_messages(
         self, user_input: str, history: List[Dict]

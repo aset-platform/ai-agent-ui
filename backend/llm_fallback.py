@@ -88,12 +88,13 @@ class FallbackLLM:
     def __init__(
         self,
         groq_models: List[str],
-        anthropic_model: str,
+        anthropic_model: str | None,
         temperature: float,
         agent_id: str,
         token_budget: TokenBudget,
         compressor: MessageCompressor,
         obs_collector: ObservabilityCollector | None = None,
+        cascade_profile: str = "tool",
     ) -> None:
         """Construct Groq + Anthropic LLM instances.
 
@@ -101,18 +102,22 @@ class FallbackLLM:
             groq_models: Ordered list of Groq model names,
                 tried from first to last.
             anthropic_model: Anthropic model name (final
-                fallback).
+                fallback).  ``None`` disables Anthropic
+                (used by test profile).
             temperature: Sampling temperature for all LLMs.
             agent_id: Agent identifier for logs.
             token_budget: Shared sliding-window budget tracker.
             compressor: Shared message compressor.
             obs_collector: Optional observability metrics
                 collector for cascade tracking.
+            cascade_profile: Profile name for observability
+                (``"tool"``, ``"synthesis"``, ``"test"``).
         """
         self._agent_id = agent_id
         self._budget = token_budget
         self._compressor = compressor
         self._obs = obs_collector
+        self._cascade_profile = cascade_profile
 
         # Groq tiers: [(model_name, raw_llm, bound_llm), ...]
         self._groq_tiers: List[tuple] = []
@@ -127,26 +132,33 @@ class FallbackLLM:
                 )
                 self._groq_tiers.append((model, llm, llm))
             _logger.info(
-                "FallbackLLM: Groq enabled — %d tiers: " "%s (agent=%s)",
+                "FallbackLLM [%s]: Groq %d tiers: "
+                "%s (agent=%s)",
+                cascade_profile,
                 len(self._groq_tiers),
                 [t[0] for t in self._groq_tiers],
                 agent_id,
             )
         else:
             _logger.info(
-                "FallbackLLM: Groq unavailable "
+                "FallbackLLM [%s]: Groq unavailable "
                 "(no GROQ_API_KEY) — Anthropic only "
                 "(agent=%s)",
+                cascade_profile,
                 agent_id,
             )
 
-        # Anthropic is always available.
+        # Anthropic fallback (None = disabled for test).
         self._anthropic_model = anthropic_model
-        self._anthropic_llm = ChatAnthropic(
-            model=anthropic_model,
-            temperature=temperature,
-        )
-        self._anthropic_bound: Any = self._anthropic_llm
+        if anthropic_model:
+            self._anthropic_llm = ChatAnthropic(
+                model=anthropic_model,
+                temperature=temperature,
+            )
+            self._anthropic_bound: Any = self._anthropic_llm
+        else:
+            self._anthropic_llm = None
+            self._anthropic_bound = None
 
     def bind_tools(self, tools: List[Any], **kwargs: Any) -> "FallbackLLM":
         """Bind tools to all inner LLMs and return *self*.
@@ -163,7 +175,10 @@ class FallbackLLM:
             bound = raw.bind_tools(tools, **kwargs)
             self._groq_tiers[i] = (name, raw, bound)
 
-        self._anthropic_bound = self._anthropic_llm.bind_tools(tools, **kwargs)
+        if self._anthropic_llm is not None:
+            self._anthropic_bound = (
+                self._anthropic_llm.bind_tools(tools, **kwargs)
+            )
         return self
 
     def invoke(
@@ -323,7 +338,20 @@ class FallbackLLM:
                     continue
                 raise
 
-        # Step 4: Anthropic fallback.
+        # Step 4: Anthropic fallback (disabled in test profile).
+        if self._anthropic_bound is None:
+            _logger.error(
+                "All Groq tiers exhausted and Anthropic "
+                "disabled [%s] (agent=%s)",
+                self._cascade_profile,
+                self._agent_id,
+            )
+            raise RuntimeError(
+                f"All free-tier models exhausted "
+                f"(profile={self._cascade_profile}). "
+                f"No paid fallback available."
+            )
+
         _t0 = time.monotonic()
         result = self._anthropic_bound.invoke(compressed, **kwargs)
         _ms = int((time.monotonic() - _t0) * 1000)
@@ -344,8 +372,9 @@ class FallbackLLM:
                 latency_ms=_ms,
             )
         _logger.warning(
-            "All Groq tiers exhausted → Anthropic | "
-            "iter=%d tokens≈%d (agent=%s)",
+            "All Groq tiers exhausted → Anthropic "
+            "[%s] | iter=%d tokens≈%d (agent=%s)",
+            self._cascade_profile,
             iteration,
             est,
             self._agent_id,
