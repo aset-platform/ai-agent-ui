@@ -4,6 +4,34 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 15, 2026 — WSL2 Compat, LLM Cascade Split, Report Template, Auto-Docs
+
+### PR #92 — WSL2 Compatibility + DevOps UX
+
+- **ASETPLTFRM-67** — Fix setup.sh prompt functions leaking captions into .env values. Added default superuser menu (`admin@demo.local / Admin123!`), numbered API key prompts `[1/6]`–`[6/6]`, `[set]` confirmation for secrets.
+- **ASETPLTFRM-68** — Crash-resume via `~/.ai-agent-ui/.setup_state` markers. `--repair` mode fixes only symlinks, env files, and git hooks. `--force` resets all state.
+- **ASETPLTFRM-69** — `run.sh`: 3-state status table (`● up` / `◐ listening` / `○ down`) with HTTP health probes. New `logs`, `doctor` commands. Post-launch health check with error context.
+- **ASETPLTFRM-70** — Cross-platform install guides: `docs/setup/macos.md`, `linux.md`, `windows.md` (full WSL2 walkthrough). MkDocs "Getting Started" nav section.
+
+Files: `setup.sh`, `run.sh`, `docs/setup/` (3 new), `mkdocs.yml`, `README.md`
+
+### PR #93 — LLM Cascade Split + Report Template
+
+- **ASETPLTFRM-66** — Split LLM cascade into 3 profiles: tool-calling (llama → kimi → scout), synthesis (gpt-oss-120b → kimi → Anthropic), test (free-only, no Anthropic). `AI_AGENT_UI_ENV=test` activates test profile. `BaseAgent` now has `llm_with_tools` + `llm_synthesis`.
+- **ASETPLTFRM-65** — New `report_builder.py`: parses tool output text via regex, renders 5 deterministic markdown sections (header, technicals, forecast, calendar, charts). LLM produces verdict only (~150–250 tokens vs ~800–1200). `StockAgent.format_response()` prepends template.
+- **ASETPLTFRM-71** (Bug) — Fix synthesis double-invoke (eliminated wasted LLM call per request). Cap news sub-agent to `max_iterations=2` (was 5+1=6 calls). Reinforce stock agent pipeline prompt. Result: 10 → 5 API calls per stock analysis (50% reduction).
+
+Files: `backend/config.py`, `llm_fallback.py`, `agents/base.py`, `agents/loop.py`, `agents/stream.py`, `agents/general_agent.py`, `agents/stock_agent.py`, `agents/report_builder.py` (new), `tools/agent_tool.py`, `e2e/playwright.config.ts`, `tests/conftest.py`, `run.sh`
+
+### PR #94 — Auto-Generated Docs + Drift Detection
+
+- **ASETPLTFRM-63** — `scripts/gen_api_docs.py` + `scripts/gen_config_docs.py` introspect FastAPI routes and Settings fields, generate markdown tables. Wired via `mkdocs-gen-files` plugin. Generated pages gitignored.
+- **ASETPLTFRM-64** — `scripts/docs_drift_check.py` compares code routes/config against hand-written `api.md`/`config.md`. Reports MISSING and STALE entries. `./run.sh docs-check` command.
+
+Files: `scripts/gen_api_docs.py` (new), `scripts/gen_config_docs.py` (new), `scripts/docs_drift_check.py` (new), `mkdocs.yml`, `run.sh`, `requirements.txt`, `.gitignore`
+
+---
+
 ## Mar 14, 2026 — Dark Mode CSS Fix
 
 ### ASETPLTFRM-61 — Fix: Dark mode "2 selected" badge font color
