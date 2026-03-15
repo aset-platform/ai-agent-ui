@@ -70,8 +70,54 @@ _pids_on_port() {
     fi
 }
 
-# Is anything listening on this port?
+# Is anything listening on this port? (PID-based)
 _port_up() { [[ -n "$(_pids_on_port "$1")" ]]; }
+
+# Health probe — is a service actually responding?
+# Returns 0 if responding, 1 otherwise.
+_probe_port() {
+    local port="$1"
+    if [[ "$port" == "$REDIS_PORT" ]]; then
+        redis-cli -p "$port" ping &>/dev/null 2>&1
+    else
+        curl -sf -o /dev/null --max-time 2 \
+            "http://127.0.0.1:${port}/" 2>/dev/null
+    fi
+}
+
+# Last N lines from a service log (default 5)
+_tail_log() {
+    local name="$1" lines="${2:-5}"
+    local logfile="${LOG_DIR}/${name}.log"
+    if [[ -f "$logfile" ]]; then
+        tail -n "$lines" "$logfile"
+    fi
+}
+
+# Suggest a fix based on error patterns in log
+_suggest_fix() {
+    local name="$1"
+    local logfile="${LOG_DIR}/${name}.log"
+    [[ -f "$logfile" ]] || return 0
+    local last100
+    last100="$(tail -n 100 "$logfile" 2>/dev/null)"
+
+    if echo "$last100" | grep -q "ModuleNotFoundError"; then
+        local mod
+        mod=$(echo "$last100" | grep -oP "No module named '\K[^']+")
+        echo "  Fix: source ~/.ai-agent-ui/venv/bin/activate && pip install $mod"
+    elif echo "$last100" | grep -q "Address already in use"; then
+        echo "  Fix: ./run.sh stop  (or kill the process on that port)"
+    elif echo "$last100" | grep -q "ENOSPC.*inotify"; then
+        echo "  Fix: echo fs.inotify.max_user_watches=524288 | sudo tee -a /etc/sysctl.conf && sudo sysctl -p"
+    elif echo "$last100" | grep -q "Too many levels of symbolic links"; then
+        echo "  Fix: ./setup.sh --repair"
+    elif echo "$last100" | grep -q "JWT_SECRET_KEY"; then
+        echo "  Fix: Add JWT_SECRET_KEY to ~/.ai-agent-ui/backend.env"
+    elif echo "$last100" | grep -q "ANTHROPIC_API_KEY"; then
+        echo "  Fix: Add ANTHROPIC_API_KEY to ~/.ai-agent-ui/backend.env"
+    fi
+}
 
 # Kill everything on a port: SIGTERM then SIGKILL if still alive
 _kill_port() {
@@ -172,33 +218,42 @@ _redis_stop() {
 
 # ── Status table ──────────────────────────────────────────────────────────────
 
+_SERVICE_NAMES=(redis     backend   frontend   docs      dashboard)
+_SERVICE_PORTS=($REDIS_PORT $BACKEND_PORT $FRONTEND_PORT $DOCS_PORT $DASHBOARD_PORT)
+_SERVICE_URLS=(
+    "redis://127.0.0.1:${REDIS_PORT}"
+    "http://127.0.0.1:${BACKEND_PORT}"
+    "http://localhost:${FRONTEND_PORT}"
+    "http://127.0.0.1:${DOCS_PORT}"
+    "http://127.0.0.1:${DASHBOARD_PORT}"
+)
+
 _print_table() {
-    local names=(redis     backend   frontend   docs      dashboard)
-    local ports=($REDIS_PORT $BACKEND_PORT $FRONTEND_PORT $DOCS_PORT $DASHBOARD_PORT)
-    local urls=(
-        "redis://127.0.0.1:${REDIS_PORT}"
-        "http://127.0.0.1:${BACKEND_PORT}"
-        "http://localhost:${FRONTEND_PORT}"
-        "http://127.0.0.1:${DOCS_PORT}"
-        "http://127.0.0.1:${DASHBOARD_PORT}"
-    )
-
     echo ""
-    printf "${B}  %-12s  %-8s  %-32s  %s${N}\n" "Service" "PID" "URL" "Status"
-    printf "  %s\n" "──────────────────────────────────────────────────────────────────"
+    printf "${B}  %-12s  %-8s  %-32s  %s${N}\n" \
+        "Service" "PID" "URL" "Status"
+    printf "  %s\n" \
+        "──────────────────────────────────────────────────────────"
 
-    for i in "${!names[@]}"; do
-        local pid state
-        pid=$(_pids_on_port "${ports[$i]}")
-        if [[ -n "$pid" ]]; then
-            # Trim to first PID if multiple (e.g. uvicorn workers)
+    for i in "${!_SERVICE_NAMES[@]}"; do
+        local pid state port
+        port="${_SERVICE_PORTS[$i]}"
+        pid=$(_pids_on_port "$port")
+        local responding=0
+        _probe_port "$port" && responding=1
+
+        if [[ -n "$pid" ]] && [[ $responding -eq 1 ]]; then
             pid=$(echo "$pid" | head -1)
             state="${G}● up${N}"
+        elif [[ $responding -eq 1 ]]; then
+            pid="—"
+            state="${Y}◐ listening${N}"
         else
             pid="—"
             state="${R}○ down${N}"
         fi
-        printf "  %-12s  %-8s  %-32s  " "${names[$i]}" "$pid" "${urls[$i]}"
+        printf "  %-12s  %-8s  %-32s  " \
+            "${_SERVICE_NAMES[$i]}" "$pid" "${_SERVICE_URLS[$i]}"
         echo -e "$state"
     done
     echo ""
@@ -352,6 +407,31 @@ do_start() {
     sleep 7
 
     _print_table
+
+    # Post-launch health check — show errors for failed services
+    local _any_fail=0
+    for i in "${!_SERVICE_NAMES[@]}"; do
+        local _sname="${_SERVICE_NAMES[$i]}"
+        local _sport="${_SERVICE_PORTS[$i]}"
+        if ! _probe_port "$_sport"; then
+            _any_fail=1
+            echo -e "  ${R}✗ ${_sname} (port ${_sport}) — not responding${N}"
+            local _last
+            _last="$(_tail_log "$_sname" 5)"
+            if [[ -n "$_last" ]]; then
+                echo "    Last log lines:"
+                echo "$_last" | sed 's/^/      /'
+            fi
+            _suggest_fix "$_sname"
+            echo ""
+        fi
+    done
+    if [[ $_any_fail -eq 0 ]]; then
+        echo -e "  ${G}All services responding.${N}"
+    else
+        echo -e "  ${Y}Some services failed. Run: ./run.sh doctor${N}"
+    fi
+    echo ""
     echo -e "  Logs:    ${C}${LOG_DIR}/${N}"
     echo -e "  Stop:    ${B}./run.sh stop${N}"
     echo -e "  Status:  ${B}./run.sh status${N}"
@@ -375,6 +455,204 @@ do_status() {
     echo ""
 }
 
+# ── Logs command ──────────────────────────────────────────────────────────────
+
+do_logs() {
+    local svc="${1:-}" flag="${2:-}"
+    local all_services="redis backend frontend docs dashboard"
+
+    # ./run.sh logs --errors
+    if [[ "$svc" == "--errors" ]]; then
+        echo -e "${B}Errors across all service logs:${N}"
+        echo ""
+        for s in $all_services; do
+            local lf="${LOG_DIR}/${s}.log"
+            [[ -f "$lf" ]] || continue
+            local errs
+            errs=$(grep -E "ERROR|CRITICAL|Traceback" \
+                "$lf" 2>/dev/null | tail -n 20)
+            if [[ -n "$errs" ]]; then
+                echo -e "  ${R}── $s ──${N}"
+                echo "$errs" | sed 's/^/    /'
+                echo ""
+            fi
+        done
+        return
+    fi
+
+    # ./run.sh logs <service>
+    if [[ -n "$svc" ]]; then
+        if ! echo "$all_services" | grep -qw "$svc"; then
+            echo -e "${R}Unknown service: $svc${N}"
+            echo "  Valid: $all_services"
+            return 1
+        fi
+        # ./run.sh logs <service> --errors
+        if [[ "$flag" == "--errors" ]]; then
+            grep -E "ERROR|CRITICAL|Traceback" \
+                "${LOG_DIR}/${svc}.log" 2>/dev/null \
+                | tail -n 30 || echo "  No errors found."
+        else
+            tail -n 50 "${LOG_DIR}/${svc}.log" 2>/dev/null \
+                || echo "  No log file: ${LOG_DIR}/${svc}.log"
+        fi
+        return
+    fi
+
+    # ./run.sh logs (all)
+    echo -e "${B}Last 50 lines from all service logs:${N}"
+    echo ""
+    for s in $all_services; do
+        local lf="${LOG_DIR}/${s}.log"
+        [[ -f "$lf" ]] || continue
+        echo -e "  ${C}── $s ──${N}"
+        tail -n 50 "$lf" | sed 's/^/    /'
+        echo ""
+    done
+}
+
+# ── Doctor command ────────────────────────────────────────────────────────────
+
+do_doctor() {
+    echo -e "${B}AI Agent UI — diagnostics${N}"
+    echo "──────────────────────────────────────────────────────────"
+
+    local _pass=0 _fail=0 _warn=0
+
+    _doc_pass() { echo -e "  ${G}[PASS]${N} $1"; _pass=$((_pass+1)); }
+    _doc_fail() { echo -e "  ${R}[FAIL]${N} $1"; _fail=$((_fail+1)); }
+    _doc_warn() { echo -e "  ${Y}[WARN]${N} $1"; _warn=$((_warn+1)); }
+
+    # 1. Python virtualenv
+    if [[ -f "$PYTHON" ]]; then
+        _doc_pass "Python virtualenv ($("$PYTHON" --version 2>&1))"
+    else
+        _doc_fail "Python virtualenv not found at $PYTHON"
+        echo "        Fix: ./setup.sh"
+    fi
+
+    # 2. backend/.env exists and readable
+    local _benv="${SCRIPT_DIR}/backend/.env"
+    if [[ -f "$_benv" ]] || [[ -L "$_benv" ]]; then
+        if [[ -r "$_benv" ]]; then
+            _doc_pass "backend/.env exists and readable"
+        else
+            _doc_fail "backend/.env exists but not readable"
+            echo "        Fix: ./setup.sh --repair"
+        fi
+    else
+        _doc_fail "backend/.env missing"
+        echo "        Fix: ./setup.sh --repair"
+    fi
+
+    # 3. Required env vars
+    if [[ -f "$_benv" ]]; then
+        set -a; source "$_benv" 2>/dev/null; set +a
+    fi
+    if [[ -n "${JWT_SECRET_KEY:-}" ]]; then
+        _doc_pass "JWT_SECRET_KEY is set"
+    else
+        _doc_fail "JWT_SECRET_KEY is empty"
+        echo "        Fix: Add to ~/.ai-agent-ui/backend.env"
+    fi
+    if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+        _doc_pass "ANTHROPIC_API_KEY is set"
+    else
+        _doc_fail "ANTHROPIC_API_KEY is empty"
+        echo "        Fix: Add to ~/.ai-agent-ui/backend.env"
+    fi
+
+    # 4. Node.js
+    if command -v node &>/dev/null; then
+        local _nv
+        _nv="$(node --version)"
+        local _nm="${_nv#v}"; _nm="${_nm%%.*}"
+        if [[ "$_nm" -ge 18 ]]; then
+            _doc_pass "Node.js $_nv"
+        else
+            _doc_fail "Node.js $_nv too old (need 18+)"
+        fi
+    else
+        _doc_fail "Node.js not installed"
+        echo "        Fix: Install from https://nodejs.org"
+    fi
+
+    # 5. node_modules
+    if [[ -d "${SCRIPT_DIR}/frontend/node_modules" ]]; then
+        _doc_pass "frontend/node_modules exists"
+    else
+        _doc_fail "frontend/node_modules missing"
+        echo "        Fix: cd frontend && npm ci"
+    fi
+
+    # 6. Redis
+    if _redis_running; then
+        _doc_pass "Redis responding"
+    elif command -v redis-server &>/dev/null; then
+        _doc_warn "Redis installed but not responding"
+        echo "        Fix: ./run.sh start  (or redis-server --daemonize yes)"
+    else
+        _doc_warn "redis-server not installed (in-memory fallback will be used)"
+    fi
+
+    # 7. Port checks
+    for i in "${!_SERVICE_NAMES[@]}"; do
+        local _sn="${_SERVICE_NAMES[$i]}"
+        local _sp="${_SERVICE_PORTS[$i]}"
+        local _pid
+        _pid=$(_pids_on_port "$_sp")
+        if [[ -n "$_pid" ]]; then
+            if _probe_port "$_sp"; then
+                _doc_pass "Port $_sp ($_sn) — responding (PID $(echo $_pid | head -1))"
+            else
+                _doc_warn "Port $_sp ($_sn) — PID $(echo $_pid | head -1) but not responding"
+            fi
+        elif _probe_port "$_sp"; then
+            _doc_pass "Port $_sp ($_sn) — responding"
+        fi
+        # Don't report "port free" — that's normal when services aren't running
+    done
+
+    # 8. Iceberg catalog
+    local _cat="$HOME/.ai-agent-ui/data/iceberg/catalog.db"
+    if [[ -f "$_cat" ]]; then
+        _doc_pass "Iceberg catalog exists"
+    else
+        _doc_fail "Iceberg catalog missing"
+        echo "        Fix: ./run.sh start  (auto-creates on first run)"
+    fi
+
+    # 9. Scan logs for errors
+    local _log_errs=0
+    for s in "${_SERVICE_NAMES[@]}"; do
+        local _lf="${LOG_DIR}/${s}.log"
+        [[ -f "$_lf" ]] || continue
+        local _last100
+        _last100="$(tail -n 100 "$_lf" 2>/dev/null)"
+        if echo "$_last100" | grep -qE "ERROR|CRITICAL|Traceback"; then
+            _log_errs=$((_log_errs + 1))
+            local _top_err
+            _top_err=$(echo "$_last100" \
+                | grep -E "ERROR|CRITICAL|Traceback" \
+                | tail -1)
+            _doc_warn "$s log has errors: $_top_err"
+            _suggest_fix "$s"
+        fi
+    done
+    if [[ $_log_errs -eq 0 ]]; then
+        _doc_pass "No recent errors in service logs"
+    fi
+
+    # Summary
+    echo ""
+    echo "──────────────────────────────────────────────────────────"
+    printf "  %s passed" "$_pass"
+    [[ $_fail -gt 0 ]] && printf ", ${R}%s failed${N}" "$_fail"
+    [[ $_warn -gt 0 ]] && printf ", ${Y}%s warnings${N}" "$_warn"
+    echo ""
+    echo ""
+}
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 case "${1:-help}" in
@@ -382,20 +660,30 @@ case "${1:-help}" in
     stop)    do_stop    ;;
     status)  do_status  ;;
     restart) do_stop; sleep 1; do_start ;;
+    logs)    do_logs "${2:-}" "${3:-}" ;;
+    doctor)  do_doctor  ;;
     *)
-        echo -e "${B}Usage:${N} $(basename "$0") {start|stop|status|restart}"
+        echo -e "${B}Usage:${N} $(basename "$0") {start|stop|status|restart|logs|doctor}"
         echo ""
-        echo "  start    Start all five services in the background"
+        echo "  start    Start all services in the background"
         echo "  stop     Stop all running services"
-        echo "  status   Show PID and URL for each service"
+        echo "  status   Show PID, URL, and health for each service"
         echo "  restart  Stop then start"
+        echo "  logs     Tail service logs"
+        echo "  doctor   Run diagnostic checks with fix suggestions"
+        echo ""
+        echo "  Logs usage:"
+        echo "    ./run.sh logs              All service logs (last 50 lines)"
+        echo "    ./run.sh logs backend      Single service log"
+        echo "    ./run.sh logs --errors     Errors across all logs"
+        echo "    ./run.sh logs backend --errors  Errors for one service"
         echo ""
         echo "  Services:"
-        printf "    %-12s  %s\n" "redis"     "Token store (deny-list) →  redis://127.0.0.1:${REDIS_PORT}"
-        printf "    %-12s  %s\n" "backend"   "FastAPI + agentic loop  →  http://127.0.0.1:${BACKEND_PORT}"
-        printf "    %-12s  %s\n" "frontend"  "Next.js dev server      →  http://localhost:${FRONTEND_PORT}"
-        printf "    %-12s  %s\n" "docs"      "MkDocs material site    →  http://127.0.0.1:${DOCS_PORT}"
-        printf "    %-12s  %s\n" "dashboard" "Plotly Dash dashboard   →  http://127.0.0.1:${DASHBOARD_PORT}"
+        printf "    %-12s  %s\n" "redis"     "Token store →  redis://127.0.0.1:${REDIS_PORT}"
+        printf "    %-12s  %s\n" "backend"   "FastAPI     →  http://127.0.0.1:${BACKEND_PORT}"
+        printf "    %-12s  %s\n" "frontend"  "Next.js     →  http://localhost:${FRONTEND_PORT}"
+        printf "    %-12s  %s\n" "docs"      "MkDocs      →  http://127.0.0.1:${DOCS_PORT}"
+        printf "    %-12s  %s\n" "dashboard" "Plotly Dash →  http://127.0.0.1:${DASHBOARD_PORT}"
         exit 1
         ;;
 esac
