@@ -41,6 +41,10 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Getting Started:
+      - macOS: setup/macos.md
+      - Linux: setup/linux.md
+      - Windows (WSL2): setup/windows.md
   - Backend:
       - Overview: backend/overview.md
       - API Reference: backend/api.md

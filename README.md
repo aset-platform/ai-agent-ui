@@ -24,7 +24,27 @@ cd ai-agent-ui
 ./run.sh start      # start all services
 ```
 
-`setup.sh` handles everything: Python 3.12 virtualenv, pip install, npm ci, directory creation, config files, `.pyiceberg.yaml`, Iceberg database init, admin seeding, and git hooks. Safe to re-run. For CI/Docker: `ANTHROPIC_API_KEY=sk-ant-... ./setup.sh --non-interactive`
+`setup.sh` handles everything: Python 3.12 virtualenv, pip install, npm ci, directory creation, config files, `.pyiceberg.yaml`, Iceberg database init, admin seeding, and git hooks. Safe to re-run — completed steps are skipped automatically.
+
+| Flag | Purpose |
+|------|---------|
+| `--non-interactive` | Read secrets from env vars (CI/Docker) |
+| `--force` | Reset state and re-run everything from scratch |
+| `--repair` | Fix only symlinks, env files, and git hooks |
+
+For CI/Docker: `ANTHROPIC_API_KEY=sk-ant-... ./setup.sh --non-interactive`
+
+### Platform-Specific Setup Guides
+
+Detailed step-by-step guides with prerequisites for each OS:
+
+| Platform | Guide | Key prerequisites |
+|----------|-------|-------------------|
+| **macOS** | [macOS Guide](http://127.0.0.1:8000/setup/macos/) | Xcode CLT, Homebrew, pyenv, Node.js, Redis |
+| **Linux** (Ubuntu/Debian) | [Linux Guide](http://127.0.0.1:8000/setup/linux/) | apt packages, pyenv, Node.js (nvm), Redis |
+| **Windows 11** | [Windows Guide](http://127.0.0.1:8000/setup/windows/) | WSL2 + Ubuntu, then follow Linux steps |
+
+> **Windows users**: This project runs inside WSL2 (Windows Subsystem for Linux). The Windows guide walks you through the complete WSL2 setup, then the Linux installation inside it. Services are accessible from your Windows browser at `http://localhost:<port>`.
 
 ### AI Tooling Setup (for developers using Claude Code + Serena)
 
@@ -34,7 +54,7 @@ cd ai-agent-ui
 
 This script checks prerequisites, validates shared Serena memories, creates local memory directories, and installs git hooks. Run after `setup.sh`.
 
-**Env files are stored externally** at `~/.ai-agent-ui/` so branch checkouts and merges never overwrite your secrets. `backend/.env` and `frontend/.env.local` are symlinks to the master copies. Edit the files at `~/.ai-agent-ui/` directly.
+**Env files are stored externally** at `~/.ai-agent-ui/` so branch checkouts and merges never overwrite your secrets. `backend/.env` and `frontend/.env.local` are symlinks (or copies on WSL2) to the master copies. Edit the files at `~/.ai-agent-ui/` directly.
 
 ## Quick Start (Manual)
 
