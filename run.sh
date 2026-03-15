@@ -75,13 +75,18 @@ _port_up() { [[ -n "$(_pids_on_port "$1")" ]]; }
 
 # Health probe — is a service actually responding?
 # Returns 0 if responding, 1 otherwise.
+# Uses -o /dev/null -w "%{http_code}" so any HTTP response
+# (including 404) counts as "responding".
 _probe_port() {
     local port="$1"
     if [[ "$port" == "$REDIS_PORT" ]]; then
         redis-cli -p "$port" ping &>/dev/null 2>&1
     else
-        curl -sf -o /dev/null --max-time 2 \
-            "http://127.0.0.1:${port}/" 2>/dev/null
+        local code
+        code=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 2 \
+            "http://127.0.0.1:${port}/" 2>/dev/null)
+        [[ -n "$code" ]] && [[ "$code" != "000" ]]
     fi
 }
 
