@@ -60,15 +60,40 @@ info() { echo -e "  ${C}[INFO]${N} $1"; }
 # Detect WSL environment
 _is_wsl() { grep -qi microsoft /proc/version 2>/dev/null; }
 
+# Remove broken, circular, or chained symlinks at a path.
+# Detects "too many levels of symbolic links" (ELOOP) and dangling links.
+# Usage: _clean_symlink <path>
+_clean_symlink() {
+    local path="$1"
+    # Nothing to clean if path doesn't exist at all (not even as a dangling link)
+    [[ -e "$path" ]] || [[ -L "$path" ]] || return 0
+
+    if [[ -L "$path" ]]; then
+        # Test if the symlink is resolvable (catches ELOOP + dangling)
+        if ! readlink -f "$path" &>/dev/null || [[ ! -e "$path" ]]; then
+            warn "Removing broken/circular symlink: $path"
+            rm -f "$path"
+        fi
+    fi
+}
+
 # Create a symlink, falling back to a copy if symlinks are not supported
 # (e.g. WSL2 without Windows developer mode enabled).
+# Automatically cleans broken/circular symlinks before creating.
 # Usage: _try_symlink <target> <link_path>
 _try_symlink() {
     local target="$1" link_path="$2"
+    # Clean any broken/circular symlinks first
+    _clean_symlink "$link_path"
     if ln -sf "$target" "$link_path" 2>/dev/null; then
-        return 0
+        # Verify the new symlink actually resolves (catch ELOOP early)
+        if [[ -e "$link_path" ]]; then
+            return 0
+        fi
+        # Symlink was created but doesn't resolve — remove and copy
+        rm -f "$link_path"
     fi
-    # Symlink failed — fall back to copying
+    # Symlink failed or unresolvable — fall back to copying
     warn "Symlinks not supported (enable Windows Developer Mode for WSL)"
     cp -f "$target" "$link_path"
     return 0
@@ -315,6 +340,7 @@ VENV_DIR="${APP_DATA_HOME:-$HOME/.ai-agent-ui}/venv"
 # Migrate: if old venv exists at backend/demoenv but new one does not,
 # move it and leave a symlink for backwards compatibility.
 OLD_VENV_DIR="$SCRIPT_DIR/backend/demoenv"
+_clean_symlink "$OLD_VENV_DIR"
 if [[ -d "$OLD_VENV_DIR" ]] && [[ ! -L "$OLD_VENV_DIR" ]] && [[ ! -d "$VENV_DIR" ]]; then
     info "Migrating virtualenv from backend/demoenv → $VENV_DIR"
     mv "$OLD_VENV_DIR" "$VENV_DIR"
@@ -598,6 +624,8 @@ else
 fi
 
 # Create symlink (or copy): backend/.env → ~/.ai-agent-ui/backend.env
+# Clean broken/circular symlinks before checking
+_clean_symlink "$BACKEND_ENV_LINK"
 if [[ -L "$BACKEND_ENV_LINK" ]]; then
     LINK_TARGET="$(readlink "$BACKEND_ENV_LINK")"
     if [[ "$LINK_TARGET" == "$BACKEND_ENV_REAL" ]]; then
@@ -651,6 +679,8 @@ else
 fi
 
 # Create symlink (or copy): frontend/.env.local → ~/.ai-agent-ui/frontend.env.local
+# Clean broken/circular symlinks before checking
+_clean_symlink "$FRONTEND_ENV_LINK"
 if [[ -L "$FRONTEND_ENV_LINK" ]]; then
     LINK_TARGET="$(readlink "$FRONTEND_ENV_LINK")"
     if [[ "$LINK_TARGET" == "$FRONTEND_ENV_REAL" ]]; then
