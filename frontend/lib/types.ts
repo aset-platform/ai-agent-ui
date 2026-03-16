@@ -174,3 +174,52 @@ export interface CompareResponse {
   correlation: number[][];
   metrics: CompareMetric[];
 }
+
+// ---------------------------------------------------------------
+// OHLCV & Indicators (Analysis page)
+// ---------------------------------------------------------------
+
+export interface OHLCVPoint {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface OHLCVResponse {
+  ticker: string;
+  data: OHLCVPoint[];
+}
+
+export interface IndicatorPoint {
+  date: string;
+  sma_50: number | null;
+  sma_200: number | null;
+  ema_20: number | null;
+  rsi_14: number | null;
+  macd: number | null;
+  macd_signal: number | null;
+  macd_hist: number | null;
+  bb_upper: number | null;
+  bb_lower: number | null;
+}
+
+export interface IndicatorsResponse {
+  ticker: string;
+  data: IndicatorPoint[];
+}
+
+export interface ForecastPoint {
+  date: string;
+  predicted: number;
+  lower: number;
+  upper: number;
+}
+
+export interface ForecastSeriesResponse {
+  ticker: string;
+  horizon_months: number;
+  data: ForecastPoint[];
+}

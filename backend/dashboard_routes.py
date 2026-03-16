@@ -18,10 +18,16 @@ from dashboard_models import (
     CompareMetric,
     CompareResponse,
     CompareSeriesItem,
+    ForecastPoint,
+    ForecastSeriesResponse,
     ForecastsResponse,
     ForecastTarget,
+    IndicatorPoint,
+    IndicatorsResponse,
     LLMUsageResponse,
     ModelUsage,
+    OHLCVPoint,
+    OHLCVResponse,
     RegistryResponse,
     RegistryTicker,
     SignalInfo,
@@ -533,6 +539,162 @@ def create_dashboard_router() -> APIRouter:
             series=series,
             correlation=corr_matrix,
             metrics=metrics,
+        )
+
+    # -------------------------------------------------------
+    # Chart endpoints (Analysis page)
+    # -------------------------------------------------------
+
+    @router.get(
+        "/chart/ohlcv",
+        response_model=OHLCVResponse,
+    )
+    async def get_chart_ohlcv(
+        ticker: str = Query(
+            ..., description="Ticker symbol",
+        ),
+        user: UserContext = Depends(get_current_user),
+    ):
+        """OHLCV time series for a single ticker."""
+        _logger.info(
+            "chart/ohlcv ticker=%s user=%s",
+            ticker, user.user_id,
+        )
+        stock_repo = _get_stock_repo()
+        df = stock_repo.get_ohlcv(ticker.upper())
+
+        if df.empty:
+            return OHLCVResponse(ticker=ticker.upper())
+
+        points: list[OHLCVPoint] = []
+        for _, row in df.iterrows():
+            points.append(
+                OHLCVPoint(
+                    date=str(row["date"]),
+                    open=float(row["open"]),
+                    high=float(row["high"]),
+                    low=float(row["low"]),
+                    close=float(row["close"]),
+                    volume=int(row["volume"]),
+                )
+            )
+
+        return OHLCVResponse(
+            ticker=ticker.upper(),
+            data=points,
+        )
+
+    @router.get(
+        "/chart/indicators",
+        response_model=IndicatorsResponse,
+    )
+    async def get_chart_indicators(
+        ticker: str = Query(
+            ..., description="Ticker symbol",
+        ),
+        user: UserContext = Depends(get_current_user),
+    ):
+        """Technical indicators time series."""
+        _logger.info(
+            "chart/indicators ticker=%s user=%s",
+            ticker, user.user_id,
+        )
+        stock_repo = _get_stock_repo()
+        df = stock_repo.get_technical_indicators(
+            ticker.upper(),
+        )
+
+        if df.empty:
+            return IndicatorsResponse(
+                ticker=ticker.upper(),
+            )
+
+        points: list[IndicatorPoint] = []
+        for _, row in df.iterrows():
+            points.append(
+                IndicatorPoint(
+                    date=str(row.get("date", "")),
+                    sma_50=_safe(row.get("sma_50")),
+                    sma_200=_safe(
+                        row.get("sma_200"),
+                    ),
+                    ema_20=_safe(row.get("ema_20")),
+                    rsi_14=_safe(row.get("rsi_14")),
+                    macd=_safe(row.get("macd")),
+                    macd_signal=_safe(
+                        row.get("macd_signal"),
+                    ),
+                    macd_hist=_safe(
+                        row.get("macd_hist"),
+                    ),
+                    bb_upper=_safe(
+                        row.get("bb_upper"),
+                    ),
+                    bb_lower=_safe(
+                        row.get("bb_lower"),
+                    ),
+                )
+            )
+
+        return IndicatorsResponse(
+            ticker=ticker.upper(),
+            data=points,
+        )
+
+    @router.get(
+        "/chart/forecast-series",
+        response_model=ForecastSeriesResponse,
+    )
+    async def get_chart_forecast_series(
+        ticker: str = Query(
+            ..., description="Ticker symbol",
+        ),
+        horizon: int = Query(
+            9,
+            description="Forecast horizon in months",
+        ),
+        user: UserContext = Depends(get_current_user),
+    ):
+        """Forecast time series with confidence bands."""
+        _logger.info(
+            "chart/forecast-series ticker=%s "
+            "horizon=%d user=%s",
+            ticker, horizon, user.user_id,
+        )
+        stock_repo = _get_stock_repo()
+        df = stock_repo.get_latest_forecast_series(
+            ticker.upper(), horizon,
+        )
+
+        if df.empty:
+            return ForecastSeriesResponse(
+                ticker=ticker.upper(),
+                horizon_months=horizon,
+            )
+
+        points: list[ForecastPoint] = []
+        for _, row in df.iterrows():
+            points.append(
+                ForecastPoint(
+                    date=str(
+                        row.get("forecast_date", "")
+                    ),
+                    predicted=float(
+                        row.get("predicted_price", 0)
+                    ),
+                    lower=float(
+                        row.get("lower_bound", 0)
+                    ),
+                    upper=float(
+                        row.get("upper_bound", 0)
+                    ),
+                )
+            )
+
+        return ForecastSeriesResponse(
+            ticker=ticker.upper(),
+            horizon_months=horizon,
+            data=points,
         )
 
     return router

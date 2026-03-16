@@ -176,3 +176,58 @@ class CompareResponse(BaseModel):
     metrics: list[CompareMetric] = Field(
         default_factory=list,
     )
+
+
+# ---------------------------------------------------------------
+# Chart endpoints (Analysis page)
+# ---------------------------------------------------------------
+
+class OHLCVPoint(BaseModel):
+    date: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+
+
+class OHLCVResponse(BaseModel):
+    ticker: str
+    data: list[OHLCVPoint] = Field(
+        default_factory=list,
+    )
+
+
+class IndicatorPoint(BaseModel):
+    date: str
+    sma_50: float | None = None
+    sma_200: float | None = None
+    ema_20: float | None = None
+    rsi_14: float | None = None
+    macd: float | None = None
+    macd_signal: float | None = None
+    macd_hist: float | None = None
+    bb_upper: float | None = None
+    bb_lower: float | None = None
+
+
+class IndicatorsResponse(BaseModel):
+    ticker: str
+    data: list[IndicatorPoint] = Field(
+        default_factory=list,
+    )
+
+
+class ForecastPoint(BaseModel):
+    date: str
+    predicted: float
+    lower: float
+    upper: float
+
+
+class ForecastSeriesResponse(BaseModel):
+    ticker: str
+    horizon_months: int
+    data: list[ForecastPoint] = Field(
+        default_factory=list,
+    )
