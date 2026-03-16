@@ -128,3 +128,18 @@ class ChatSessionDetail(ChatSessionSummary):
     messages: list[ChatMessage] = Field(
         default_factory=list,
     )
+
+
+class RegistryTicker(BaseModel):
+    ticker: str
+    company_name: str | None = None
+    market: str = "us"
+    currency: str = "USD"
+    current_price: float | None = None
+    last_fetch_date: str | None = None
+
+
+class RegistryResponse(BaseModel):
+    tickers: list[RegistryTicker] = Field(
+        default_factory=list,
+    )

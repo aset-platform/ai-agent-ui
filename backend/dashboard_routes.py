@@ -19,6 +19,8 @@ from dashboard_models import (
     ForecastTarget,
     LLMUsageResponse,
     ModelUsage,
+    RegistryResponse,
+    RegistryTicker,
     SignalInfo,
     TickerAnalysis,
     TickerForecast,
@@ -340,6 +342,60 @@ def create_dashboard_router() -> APIRouter:
             models=models,
             daily_trend=data.get("daily_trend", []),
         )
+
+    @router.get(
+        "/registry",
+        response_model=RegistryResponse,
+    )
+    async def get_registry(
+        user: UserContext = Depends(get_current_user),
+    ):
+        """All registered tickers with company info."""
+        stock_repo = _get_stock_repo()
+        registry = stock_repo.get_all_registry()
+
+        items: list[RegistryTicker] = []
+        for ticker, meta in registry.items():
+            info = (
+                stock_repo.get_dashboard_company_info(
+                    ticker,
+                )
+            )
+            mkt = "india" if (
+                ticker.endswith(".NS")
+                or ticker.endswith(".BO")
+            ) else "us"
+            ccy = "INR" if mkt == "india" else "USD"
+            company = None
+            price = None
+
+            if info:
+                company = info.get("company_name")
+                ccy = str(
+                    info.get("currency", ccy) or ccy
+                )
+                raw = info.get("current_price")
+                if raw is not None:
+                    try:
+                        price = round(float(raw), 2)
+                    except (ValueError, TypeError):
+                        pass
+
+            items.append(
+                RegistryTicker(
+                    ticker=ticker,
+                    company_name=company,
+                    market=mkt,
+                    currency=ccy,
+                    current_price=price,
+                    last_fetch_date=meta.get(
+                        "last_fetch_date", ""
+                    ) or None,
+                )
+            )
+
+        items.sort(key=lambda t: t.ticker)
+        return RegistryResponse(tickers=items)
 
     return router
 

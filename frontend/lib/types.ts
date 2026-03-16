@@ -108,6 +108,23 @@ export interface LLMUsageResponse {
 }
 
 // ---------------------------------------------------------------
+// Ticker Registry
+// ---------------------------------------------------------------
+
+export interface RegistryTicker {
+  ticker: string;
+  company_name: string | null;
+  market: string;
+  currency: string;
+  current_price: number | null;
+  last_fetch_date: string | null;
+}
+
+export interface RegistryResponse {
+  tickers: RegistryTicker[];
+}
+
+// ---------------------------------------------------------------
 // Chat Audit
 // ---------------------------------------------------------------
 
