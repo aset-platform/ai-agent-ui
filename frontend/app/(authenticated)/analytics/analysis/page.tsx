@@ -161,8 +161,15 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         close: ohlcv.data.map((d) => d.close),
         type: "candlestick",
         name: "OHLC",
-        increasing: { line: { color: "#10b981" } },
-        decreasing: { line: { color: "#ef4444" } },
+        increasing: {
+          line: { color: "#10b981", width: 2 },
+          fillcolor: "#10b981",
+        },
+        decreasing: {
+          line: { color: "#ef4444", width: 2 },
+          fillcolor: "#ef4444",
+        },
+        whiskerwidth: 0.8,
       },
       {
         x: dates,
@@ -431,6 +438,14 @@ function AnalysisTab({ ticker }: { ticker: string }) {
           layout={{
             xaxis: {
               rangeslider: { visible: false },
+              // Default to 6 months view for wider candles
+              autorange: false,
+              range: [
+                new Date(
+                  Date.now() - 180 * 86400000,
+                ).toISOString().slice(0, 10),
+                new Date().toISOString().slice(0, 10),
+              ],
               rangeselector: {
                 buttons: [
                   {
