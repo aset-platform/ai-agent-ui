@@ -157,6 +157,13 @@ function AnalysisTab({ ticker }: { ticker: string }) {
 
   const sym = tickerCurrency(ticker);
 
+  // Shared 6M default range for all charts
+  const defaultRange = useMemo(() => [
+    new Date(Date.now() - 180 * 86400000)
+      .toISOString().slice(0, 10),
+    new Date().toISOString().slice(0, 10),
+  ], []);
+
   // --- Price chart traces (candlestick + volume + SMAs + BB) ---
   const priceTraces = useMemo(() => {
     if (!ohlcv || !indicators) return [];
@@ -509,13 +516,12 @@ function AnalysisTab({ ticker }: { ticker: string }) {
             xaxis: {
               rangeslider: { visible: false },
               autorange: false,
-              range: [
-                new Date(
-                  Date.now() - 180 * 86400000,
-                ).toISOString().slice(0, 10),
-                new Date().toISOString().slice(0, 10),
-              ],
+              range: defaultRange,
               rangeselector: {
+                activecolor: "#6366f1",
+                bgcolor: "#f3f4f6",
+                bordercolor: "#d1d5db",
+                borderwidth: 1,
                 buttons: [
                   {
                     count: 3,
@@ -576,7 +582,14 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         </h3>
         <PlotlyChart
           data={rsiTraces}
-          layout={rsiLayout}
+          layout={{
+            ...rsiLayout,
+            xaxis: {
+              ...(rsiLayout as Record<string, unknown>).xaxis as object,
+              autorange: false,
+              range: defaultRange,
+            },
+          }}
           height={220}
         />
       </div>
@@ -597,7 +610,16 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         >
           MACD
         </h3>
-        <PlotlyChart data={macdTraces} height={220} />
+        <PlotlyChart
+          data={macdTraces}
+          layout={{
+            xaxis: {
+              autorange: false,
+              range: defaultRange,
+            },
+          }}
+          height={220}
+        />
       </div>
     </div>
   );
