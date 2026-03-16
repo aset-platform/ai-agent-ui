@@ -429,7 +429,47 @@ function AnalysisTab({ ticker }: { ticker: string }) {
           data={priceTraces}
           height={400}
           layout={{
-            xaxis: { rangeslider: { visible: false } },
+            xaxis: {
+              rangeslider: { visible: false },
+              rangeselector: {
+                buttons: [
+                  {
+                    count: 3,
+                    label: "3M",
+                    step: "month",
+                    stepmode: "backward",
+                  },
+                  {
+                    count: 6,
+                    label: "6M",
+                    step: "month",
+                    stepmode: "backward",
+                  },
+                  {
+                    count: 1,
+                    label: "1Y",
+                    step: "year",
+                    stepmode: "backward",
+                  },
+                  {
+                    count: 2,
+                    label: "2Y",
+                    step: "year",
+                    stepmode: "backward",
+                  },
+                  {
+                    count: 3,
+                    label: "3Y",
+                    step: "year",
+                    stepmode: "backward",
+                  },
+                  { step: "all", label: "Max" },
+                ],
+                font: { size: 11 },
+                x: 0,
+                y: 1.15,
+              },
+            },
           }}
         />
       </div>
