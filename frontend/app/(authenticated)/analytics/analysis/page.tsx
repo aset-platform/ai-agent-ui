@@ -279,7 +279,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
     ] as Plotly.Data[];
   }, [ohlcv, indicators, isDark, sym]);
 
-  // --- RSI chart traces ---
+  // --- RSI traces (assigned to yaxis3) ---
   const rsiTraces = useMemo(() => {
     if (!indicators) return [];
     const dates = indicators.data.map((d) => d.date);
@@ -290,49 +290,15 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         type: "scatter",
         mode: "lines",
         name: "RSI 14",
+        yaxis: "y3",
         line: { color: CHART_COLORS[1], width: 1.5 },
         hovertemplate:
-          "%{x}<br>RSI: %{y:.1f}<extra></extra>",
+          "RSI: %{y:.1f}<extra></extra>",
       },
     ] as Plotly.Data[];
   }, [indicators]);
 
-  const rsiLayout = useMemo(
-    () => ({
-      yaxis: { range: [0, 100] },
-      shapes: [
-        {
-          type: "line" as const,
-          x0: 0,
-          x1: 1,
-          xref: "paper" as const,
-          y0: 70,
-          y1: 70,
-          line: {
-            color: "#ef4444",
-            width: 1,
-            dash: "dot" as const,
-          },
-        },
-        {
-          type: "line" as const,
-          x0: 0,
-          x1: 1,
-          xref: "paper" as const,
-          y0: 30,
-          y1: 30,
-          line: {
-            color: "#10b981",
-            width: 1,
-            dash: "dot" as const,
-          },
-        },
-      ],
-    }),
-    [],
-  );
-
-  // --- MACD chart traces ---
+  // --- MACD traces (assigned to yaxis4) ---
   const macdTraces = useMemo(() => {
     if (!indicators) return [];
     const dates = indicators.data.map((d) => d.date);
@@ -346,6 +312,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         type: "scatter",
         mode: "lines",
         name: "MACD",
+        yaxis: "y4",
         line: { color: CHART_COLORS[0], width: 1.5 },
       },
       {
@@ -354,6 +321,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         type: "scatter",
         mode: "lines",
         name: "Signal",
+        yaxis: "y4",
         line: {
           color: CHART_COLORS[3],
           width: 1.5,
@@ -365,6 +333,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         y: hist,
         type: "bar",
         name: "Histogram",
+        yaxis: "y4",
         marker: {
           color: hist.map((v) =>
             v >= 0 ? "#10b981" : "#ef4444",
@@ -373,6 +342,16 @@ function AnalysisTab({ ticker }: { ticker: string }) {
       },
     ] as Plotly.Data[];
   }, [indicators]);
+
+  // --- Combined traces for unified chart ---
+  const allTraces = useMemo(
+    () => [
+      ...priceTraces,
+      ...rsiTraces,
+      ...macdTraces,
+    ],
+    [priceTraces, rsiTraces, macdTraces],
+  );
 
   // --- Stats ---
   const stats = useMemo(() => {
@@ -497,7 +476,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         />
       </div>
 
-      {/* Price chart */}
+      {/* Unified chart: Price + Volume + RSI + MACD (shared x-axis) */}
       <div
         className="
           rounded-xl border border-gray-200
@@ -505,17 +484,9 @@ function AnalysisTab({ ticker }: { ticker: string }) {
           dark:bg-gray-900 shadow-sm p-4
         "
       >
-        <h3
-          className="
-            text-sm font-semibold text-gray-900
-            dark:text-gray-100 mb-2
-          "
-        >
-          Price &amp; Moving Averages
-        </h3>
         <PlotlyChart
-          data={priceTraces}
-          height={640}
+          data={allTraces}
+          height={900}
           config={{ scrollZoom: true }}
           layout={{
             hovermode: "x unified",
@@ -524,21 +495,38 @@ function AnalysisTab({ ticker }: { ticker: string }) {
               orientation: "h",
               x: 0.5,
               xanchor: "center",
-              y: 1.08,
+              y: 1.05,
               font: { size: 11 },
             },
+            // Price (top 55%)
             yaxis: {
               side: "right",
-              domain: [0.18, 1],
+              domain: [0.45, 1],
               tickformat: ",.0f",
-              dtick: undefined,
-              nticks: 12,
+              nticks: 10,
             },
+            // Volume (10%)
             yaxis2: {
               side: "right",
-              domain: [0, 0.14],
+              domain: [0.36, 0.44],
               showgrid: false,
+              showticklabels: false,
             },
+            // RSI (15%)
+            yaxis3: {
+              side: "right",
+              domain: [0.18, 0.34],
+              range: [0, 100],
+              nticks: 5,
+              tickformat: ".0f",
+            },
+            // MACD (18%)
+            yaxis4: {
+              side: "right",
+              domain: [0, 0.16],
+              nticks: 5,
+            },
+            // Shared x-axis
             xaxis: {
               rangeslider: { visible: false },
               autorange: false,
@@ -549,102 +537,45 @@ function AnalysisTab({ ticker }: { ticker: string }) {
                 bordercolor: "#d1d5db",
                 borderwidth: 1,
                 buttons: [
-                  {
-                    count: 3,
-                    label: "3M",
-                    step: "month",
-                    stepmode: "backward",
-                  },
-                  {
-                    count: 6,
-                    label: "6M",
-                    step: "month",
-                    stepmode: "backward",
-                  },
-                  {
-                    count: 1,
-                    label: "1Y",
-                    step: "year",
-                    stepmode: "backward",
-                  },
-                  {
-                    count: 2,
-                    label: "2Y",
-                    step: "year",
-                    stepmode: "backward",
-                  },
-                  {
-                    count: 3,
-                    label: "3Y",
-                    step: "year",
-                    stepmode: "backward",
-                  },
+                  { count: 3, label: "3M", step: "month", stepmode: "backward" },
+                  { count: 6, label: "6M", step: "month", stepmode: "backward" },
+                  { count: 1, label: "1Y", step: "year", stepmode: "backward" },
+                  { count: 2, label: "2Y", step: "year", stepmode: "backward" },
+                  { count: 3, label: "3Y", step: "year", stepmode: "backward" },
                   { step: "all", label: "Max" },
                 ],
                 font: { size: 11 },
                 x: 0,
-                y: 1.08,
+                y: 1.05,
               },
             },
+            // RSI reference lines
+            shapes: [
+              {
+                type: "line",
+                x0: 0, x1: 1,
+                xref: "paper",
+                y0: 70, y1: 70,
+                yref: "y3",
+                line: { color: "#ef4444", width: 1, dash: "dot" },
+              },
+              {
+                type: "line",
+                x0: 0, x1: 1,
+                xref: "paper",
+                y0: 30, y1: 30,
+                yref: "y3",
+                line: { color: "#10b981", width: 1, dash: "dot" },
+              },
+            ],
+            // Annotations for subplot labels
+            annotations: [
+              { text: "Price", x: 0.01, y: 0.98, xref: "paper", yref: "paper", showarrow: false, font: { size: 11, color: "#9ca3af" } },
+              { text: "Volume", x: 0.01, y: 0.43, xref: "paper", yref: "paper", showarrow: false, font: { size: 10, color: "#9ca3af" } },
+              { text: "RSI (14)", x: 0.01, y: 0.33, xref: "paper", yref: "paper", showarrow: false, font: { size: 10, color: "#9ca3af" } },
+              { text: "MACD", x: 0.01, y: 0.15, xref: "paper", yref: "paper", showarrow: false, font: { size: 10, color: "#9ca3af" } },
+            ],
           }}
-        />
-      </div>
-
-      {/* RSI chart */}
-      <div
-        className="
-          rounded-xl border border-gray-200
-          dark:border-gray-700 bg-white
-          dark:bg-gray-900 shadow-sm p-4
-        "
-      >
-        <h3
-          className="
-            text-sm font-semibold text-gray-900
-            dark:text-gray-100 mb-2
-          "
-        >
-          RSI (14)
-        </h3>
-        <PlotlyChart
-          data={rsiTraces}
-          layout={{
-            ...rsiLayout,
-            xaxis: {
-              ...(rsiLayout as Record<string, unknown>).xaxis as object,
-              autorange: false,
-              range: defaultRange,
-            },
-          }}
-          height={220}
-        />
-      </div>
-
-      {/* MACD chart */}
-      <div
-        className="
-          rounded-xl border border-gray-200
-          dark:border-gray-700 bg-white
-          dark:bg-gray-900 shadow-sm p-4
-        "
-      >
-        <h3
-          className="
-            text-sm font-semibold text-gray-900
-            dark:text-gray-100 mb-2
-          "
-        >
-          MACD
-        </h3>
-        <PlotlyChart
-          data={macdTraces}
-          layout={{
-            xaxis: {
-              autorange: false,
-              range: defaultRange,
-            },
-          }}
-          height={220}
         />
       </div>
     </div>
