@@ -226,22 +226,43 @@ def create_dashboard_router() -> APIRouter:
 
         analyses: list[TickerAnalysis] = []
         for _, row in df.iterrows():
+            # Fetch numeric indicator values from
+            # technical_indicators (analysis_summary
+            # only stores signal text, not numbers).
+            ticker = str(row["ticker"])
+            ti = stock_repo.get_technical_indicators(
+                ticker,
+            )
+            ti_vals: dict = {}
+            if not ti.empty:
+                latest = ti.iloc[-1]
+                ti_vals = {
+                    "rsi_14": latest.get("rsi_14"),
+                    "macd": latest.get("macd"),
+                    "sma_50": latest.get("sma_50"),
+                    "sma_200": latest.get("sma_200"),
+                }
+
             signals: list[SignalInfo] = []
             _add_signal(
                 signals, row, "rsi_signal",
                 "RSI 14", "rsi_14",
+                ti_vals,
             )
             _add_signal(
                 signals, row, "macd_signal_text",
                 "MACD", "macd",
+                ti_vals,
             )
             _add_signal(
                 signals, row, "sma_50_signal",
                 "SMA 50", "sma_50",
+                ti_vals,
             )
             _add_signal(
                 signals, row, "sma_200_signal",
                 "SMA 200", "sma_200",
+                ti_vals,
             )
 
             analyses.append(
@@ -345,8 +366,14 @@ def _add_signal(
     signal_col: str,
     name: str,
     value_col: str,
+    ti_vals: dict | None = None,
 ) -> None:
-    """Extract a signal from an analysis row."""
+    """Extract a signal from an analysis row.
+
+    Numeric values come from ``ti_vals`` (technical
+    indicators) since analysis_summary only stores
+    signal text, not the raw indicator numbers.
+    """
     sig_text = row.get(signal_col)
     if not sig_text:
         return
@@ -366,9 +393,12 @@ def _add_signal(
     else:
         signal = "Neutral"
 
-    # Use numeric value if available, else
-    # show the signal text as the value
-    val = row.get(value_col)
+    # Numeric from technical_indicators first,
+    # then analysis_summary, then signal text.
+    val = (
+        (ti_vals or {}).get(value_col)
+        or row.get(value_col)
+    )
     try:
         display_val = str(round(float(val), 2))
     except (ValueError, TypeError):
