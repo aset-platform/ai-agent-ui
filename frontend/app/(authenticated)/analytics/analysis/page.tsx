@@ -37,6 +37,13 @@ type TabId = "analysis" | "forecast" | "compare";
 // Helpers
 // ---------------------------------------------------------------
 
+/** Currency symbol based on ticker suffix. */
+function tickerCurrency(ticker: string): string {
+  if (ticker.endsWith(".NS") || ticker.endsWith(".BO"))
+    return "₹";
+  return "$";
+}
+
 function StatCard({
   label,
   value,
@@ -148,29 +155,80 @@ function AnalysisTab({ ticker }: { ticker: string }) {
     };
   }, [ticker]);
 
-  // --- Price chart traces (candlestick + SMAs) ---
+  const sym = tickerCurrency(ticker);
+
+  // --- Price chart traces (candlestick + volume + SMAs + BB) ---
   const priceTraces = useMemo(() => {
     if (!ohlcv || !indicators) return [];
     const dates = ohlcv.data.map((d) => d.date);
+    const closes = ohlcv.data.map((d) => d.close);
+    const colors = ohlcv.data.map((d) =>
+      d.close >= d.open
+        ? "rgba(16,185,129,0.4)"
+        : "rgba(239,68,68,0.4)",
+    );
     return [
+      // Candlestick
       {
         x: dates,
         open: ohlcv.data.map((d) => d.open),
         high: ohlcv.data.map((d) => d.high),
         low: ohlcv.data.map((d) => d.low),
-        close: ohlcv.data.map((d) => d.close),
+        close: closes,
         type: "candlestick",
         name: "OHLC",
+        yaxis: "y",
         increasing: {
-          line: { color: "#10b981", width: 2 },
+          line: { color: "#10b981", width: 1.5 },
           fillcolor: "#10b981",
         },
         decreasing: {
-          line: { color: "#ef4444", width: 2 },
+          line: { color: "#ef4444", width: 1.5 },
           fillcolor: "#ef4444",
         },
         whiskerwidth: 0.8,
+        hoverinfo: "x+text",
+        text: ohlcv.data.map(
+          (d) =>
+            `O: ${sym}${d.open.toFixed(2)}<br>` +
+            `H: ${sym}${d.high.toFixed(2)}<br>` +
+            `L: ${sym}${d.low.toFixed(2)}<br>` +
+            `C: ${sym}${d.close.toFixed(2)}`,
+        ),
       },
+      // Volume bars (secondary y-axis)
+      {
+        x: dates,
+        y: ohlcv.data.map((d) => d.volume),
+        type: "bar",
+        name: "Volume",
+        yaxis: "y2",
+        marker: { color: colors },
+        hovertemplate:
+          "Vol: %{y:,.0f}<extra></extra>",
+      },
+      // Bollinger upper band
+      {
+        x: dates,
+        y: indicators.data.map((d) => d.bb_upper),
+        type: "scatter",
+        mode: "lines",
+        name: "BB Upper",
+        line: { color: "rgba(99,102,241,0.25)", width: 1 },
+        showlegend: false,
+      },
+      // Bollinger lower band (with fill to upper)
+      {
+        x: dates,
+        y: indicators.data.map((d) => d.bb_lower),
+        type: "scatter",
+        mode: "lines",
+        name: "Bollinger",
+        fill: "tonexty",
+        fillcolor: "rgba(99,102,241,0.06)",
+        line: { color: "rgba(99,102,241,0.25)", width: 1 },
+      },
+      // SMA 50
       {
         x: dates,
         y: indicators.data.map((d) => d.sma_50),
@@ -183,6 +241,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
           dash: "dot",
         },
       },
+      // SMA 200
       {
         x: dates,
         y: indicators.data.map((d) => d.sma_200),
@@ -380,11 +439,11 @@ function AnalysisTab({ ticker }: { ticker: string }) {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard
           label="Current Price"
-          value={`$${stats.last.close.toFixed(2)}`}
+          value={`${sym}${stats.last.close.toFixed(2)}`}
         />
         <StatCard
           label="Day Change"
-          value={`${stats.change >= 0 ? "+" : ""}${stats.change.toFixed(2)}`}
+          value={`${stats.change >= 0 ? "+" : ""}${sym}${Math.abs(stats.change).toFixed(2)}`}
           sub={`${stats.changePct >= 0 ? "+" : ""}${stats.changePct.toFixed(2)}%`}
           color={changeColor}
         />
@@ -434,11 +493,21 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         </h3>
         <PlotlyChart
           data={priceTraces}
-          height={400}
+          height={480}
+          config={{ scrollZoom: true }}
           layout={{
+            hovermode: "x unified",
+            yaxis: {
+              side: "right",
+              domain: [0.25, 1],
+            },
+            yaxis2: {
+              side: "right",
+              domain: [0, 0.2],
+              showgrid: false,
+            },
             xaxis: {
               rangeslider: { visible: false },
-              // Default to 6 months view for wider candles
               autorange: false,
               range: [
                 new Date(
@@ -645,7 +714,7 @@ function ForecastTab({ ticker }: { ticker: string }) {
   }
 
   const targets = summary?.targets ?? [];
-  const sym = "$";
+  const sym = tickerCurrency(ticker);
 
   return (
     <div className="space-y-6">
