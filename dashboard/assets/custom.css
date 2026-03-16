@@ -38,57 +38,14 @@ body {
   transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-/* ── Navigation ──────────────────────────────────────────── */
+/* ── Navigation (removed — Next.js shell handles nav) ────── */
 
-.navbar {
-  background-color: var(--card-bg) !important;
-  border-bottom: 1px solid var(--border);
-  transition: background-color 0.2s ease;
-}
+/* .navbar, .navbar-brand, .nav-link-custom rules removed:
+   the Dash app is now embedded headerless in an iframe. */
 
-.navbar-brand {
-  font-size: 1.1rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  color: var(--accent) !important;
-}
+/* ── Theme toggle button (removed — Next.js controls theme) ── */
 
-.nav-link-custom {
-  font-size: 0.9rem;
-  padding: 0.4rem 0.8rem !important;
-  border-radius: 4px;
-  color: var(--text-secondary) !important;
-  transition: background-color 0.2s ease, color 0.2s ease;
-}
-
-.nav-link-custom:hover {
-  background-color: var(--accent-light);
-  color: var(--accent) !important;
-}
-
-/* ── Theme toggle button ─────────────────────────────────── */
-
-.theme-toggle-btn {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.35rem 0.5rem;
-  cursor: pointer;
-  color: var(--text-secondary);
-  font-size: 1rem;
-  line-height: 1;
-  transition: color 0.2s ease, border-color 0.2s ease,
-              background-color 0.2s ease;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.theme-toggle-btn:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  background-color: var(--accent-light);
-}
+/* .theme-toggle-btn rules removed: toggle is in Next.js shell. */
 
 /* ── Stock cards (Home page) ─────────────────────────────── */
 
@@ -275,17 +232,13 @@ body {
 /* ── Responsive adjustments (tablet) ─────────────────────── */
 
 @media (max-width: 768px) {
-  .container-fluid.px-4 {
+  .container-fluid.px-3 {
     padding-left: 0.75rem !important;
     padding-right: 0.75rem !important;
   }
 
   .stock-card {
     border-radius: 6px;
-  }
-
-  .navbar-brand {
-    font-size: 0.95rem;
   }
 }
 

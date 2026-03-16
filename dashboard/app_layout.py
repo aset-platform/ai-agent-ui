@@ -22,7 +22,6 @@ from dashboard.components.error_overlay import (
     error_overlay_container,
 )
 from dashboard.layouts import (
-    NAVBAR,
     admin_users_layout,
     analysis_tabs_layout,
     compare_layout,
@@ -41,8 +40,8 @@ def build_layout(app: dash.Dash) -> None:
     """Attach the root layout and page-routing callback to *app*.
 
     Sets ``app.layout`` to a :class:`~dash.html.Div` containing global stores,
-    the navigation bar, the page-content container, the auto-refresh interval,
-    and the change-password modal.  Registers the ``display_page`` routing
+    the page-content container, the auto-refresh interval, and the
+    change-password modal.  Registers the ``display_page`` routing
     callback.
 
     Args:
@@ -60,10 +59,27 @@ def build_layout(app: dash.Dash) -> None:
                 data="light",
             ),
             error_overlay_container(),
-            NAVBAR,
+            # Hidden placeholders for navbar callback targets
+            # (navbar removed — Next.js shell handles nav).
+            html.Span(
+                id="navbar-page-name",
+                style={"display": "none"},
+            ),
+            html.Button(
+                id="theme-toggle-btn",
+                style={"display": "none"},
+            ),
+            html.Div(
+                id="nav-item-insights",
+                style={"display": "none"},
+            ),
+            html.Div(
+                id="nav-item-admin",
+                style={"display": "none"},
+            ),
             html.Div(
                 id="page-content",
-                className="container-fluid px-4 py-3",
+                className="container-fluid px-3 py-2",
                 style={"paddingBottom": "5rem"},
             ),
             dcc.Interval(
@@ -71,8 +87,9 @@ def build_layout(app: dash.Dash) -> None:
                 interval=30 * 60 * 1000,  # Fix #20: 30 min (was 5 min)
                 n_intervals=0,
             ),
-            # Change Password modal — triggered by the NAVBAR change-password
-            # button (admin_cbs2.toggle_change_password_modal).
+            # Change Password modal — triggered by the
+            # change-password button
+            # (admin_cbs2.toggle_change_password_modal).
             dbc.Modal(
                 id="change-password-modal",
                 is_open=False,

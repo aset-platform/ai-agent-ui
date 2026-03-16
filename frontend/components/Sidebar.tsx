@@ -15,6 +15,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import Link from "next/link";
 import Image from "next/image";
@@ -45,6 +46,13 @@ function canSeeItem(
     if (!profile) return false;
     if (profile.role === "superuser") return true;
     return profile.page_permissions?.admin === true;
+  }
+  if (item.requiresInsights) {
+    if (!profile) return false;
+    if (profile.role === "superuser") return true;
+    return (
+      profile.page_permissions?.insights === true
+    );
   }
   return true;
 }
@@ -134,6 +142,31 @@ function ChevronIcon({
   );
 }
 
+/** Chevron-down used for collapsible nav groups. */
+function GroupChevron({
+  open,
+}: {
+  open: boolean;
+}) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      className={[
+        "w-3 h-3 transition-transform duration-200",
+        open ? "rotate-0" : "-rotate-90",
+      ].join(" ")}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+}
+
 /** Close (X) icon for the mobile drawer header. */
 function CloseIcon() {
   return (
@@ -198,10 +231,22 @@ export function Sidebar({ profile }: SidebarProps) {
     }
   }, [mobileMenuOpen]);
 
+  const [dashboardOpen, setDashboardOpen] =
+    useState(true);
+
   const visibleItems = useMemo(
     () =>
       NAV_ITEMS.filter((item) =>
         canSeeItem(item, profile),
+      ).map((item) =>
+        item.children
+          ? {
+              ...item,
+              children: item.children.filter((c) =>
+                canSeeItem(c, profile),
+              ),
+            }
+          : item,
       ),
     [profile],
   );
@@ -254,6 +299,125 @@ export function Sidebar({ profile }: SidebarProps) {
           </span>
         )}
       </Link>
+    );
+  }
+
+  // ---- Collapsible nav group renderer ----
+
+  function renderNavGroup(
+    item: NavItem,
+    mobile: boolean,
+  ) {
+    const children = item.children ?? [];
+    const isAnyChildActive = children.some(
+      (c) => pathname === c.href,
+    );
+    const isParentExact = pathname === item.href;
+    const isActive =
+      isAnyChildActive || isParentExact;
+
+    // In collapsed desktop mode, render as a
+    // simple link (no expand/collapse).
+    if (!mobile && collapsed) {
+      return renderNavItem(item, false);
+    }
+
+    const parentClasses = [
+      "flex items-center gap-3 text-sm w-full",
+      "rounded-lg transition-colors cursor-pointer",
+      mobile ? "px-4 py-3" : "px-3 py-2.5",
+      isActive
+        ? [
+            "bg-indigo-50 dark:bg-indigo-900/30",
+            "text-indigo-600 dark:text-indigo-400",
+            "font-medium",
+          ].join(" ")
+        : [
+            "text-gray-600 dark:text-gray-400",
+            "hover:bg-gray-100",
+            "dark:hover:bg-gray-800",
+          ].join(" "),
+    ].join(" ");
+
+    return (
+      <div key={item.view + "-group"}>
+        <button
+          type="button"
+          className={parentClasses}
+          onClick={() =>
+            setDashboardOpen((prev) => !prev)
+          }
+          data-testid={`sidebar-group-${item.view}`}
+        >
+          <span className="shrink-0">
+            {item.icon}
+          </span>
+          <span className="truncate flex-1 text-left">
+            {item.label}
+          </span>
+          <GroupChevron open={dashboardOpen} />
+        </button>
+
+        <div
+          className={[
+            "overflow-hidden transition-all",
+            "duration-200 ease-in-out",
+            dashboardOpen
+              ? "max-h-60 opacity-100"
+              : "max-h-0 opacity-0",
+          ].join(" ")}
+        >
+          <div className="pl-4 space-y-0.5 mt-0.5">
+            {children.map((child) => {
+              const childActive =
+                pathname === child.href;
+              const childClasses = [
+                "flex items-center gap-3 text-sm",
+                "rounded-lg transition-colors",
+                mobile ? "px-4 py-2" : "px-3 py-2",
+                childActive
+                  ? [
+                      "bg-indigo-50",
+                      "dark:bg-indigo-900/30",
+                      "text-indigo-600",
+                      "dark:text-indigo-400",
+                      "font-medium",
+                      "border-l-2",
+                      "border-indigo-500",
+                    ].join(" ")
+                  : [
+                      "text-gray-500",
+                      "dark:text-gray-500",
+                      "hover:bg-gray-100",
+                      "dark:hover:bg-gray-800",
+                      "hover:text-gray-700",
+                      "dark:hover:text-gray-300",
+                    ].join(" "),
+              ].join(" ");
+
+              return (
+                <Link
+                  key={child.href}
+                  href={child.href}
+                  className={childClasses}
+                  data-testid={`sidebar-child-${child.label.toLowerCase().replace(/\s+/g, "-")}`}
+                  onClick={() => {
+                    if (mobile)
+                      setMobileMenuOpen(false);
+                  }}
+                >
+                  <span className="shrink-0">
+                    {child.icon}
+                  </span>
+                  <span className="truncate">
+                    {child.label}
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      </div>
     );
   }
 
@@ -359,7 +523,9 @@ export function Sidebar({ profile }: SidebarProps) {
         {/* Nav items */}
         <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
           {visibleItems.map((item) =>
-            renderNavItem(item, false),
+            item.children
+              ? renderNavGroup(item, false)
+              : renderNavItem(item, false),
           )}
         </nav>
 
@@ -472,7 +638,9 @@ export function Sidebar({ profile }: SidebarProps) {
             {/* Nav items */}
             <div className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
               {visibleItems.map((item) =>
-                renderNavItem(item, true),
+                item.children
+                  ? renderNavGroup(item, true)
+                  : renderNavItem(item, true),
               )}
             </div>
 

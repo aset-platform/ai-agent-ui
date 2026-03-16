@@ -41,7 +41,9 @@ export interface NavItem {
   href: string;
   label: string;
   superuserOnly?: boolean;
+  requiresInsights?: boolean;
   icon: ReactNode;
+  children?: NavItem[];
 }
 
 export const NAV_ITEMS: NavItem[] = [
@@ -67,6 +69,51 @@ export const NAV_ITEMS: NavItem[] = [
         <line x1="6" y1="20" x2="6" y2="14" />
       </svg>
     ),
+    children: [
+      {
+        view: "analytics",
+        href: "/analytics",
+        label: "Home",
+        icon: (
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+            <polyline points="9 22 9 12 15 12 15 22" />
+          </svg>
+        ),
+      },
+      {
+        view: "analytics",
+        href: "/analytics/analysis",
+        label: "Analysis",
+        icon: (
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+          </svg>
+        ),
+      },
+      {
+        view: "analytics",
+        href: "/analytics/insights",
+        label: "Insights",
+        requiresInsights: true,
+        icon: (
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+          </svg>
+        ),
+      },
+      {
+        view: "analytics",
+        href: "/analytics/marketplace",
+        label: "Link Ticker",
+        icon: (
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+          </svg>
+        ),
+      },
+    ],
   },
   {
     view: "docs",
