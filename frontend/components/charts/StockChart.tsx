@@ -14,6 +14,7 @@ import {
   useRef,
   useEffect,
   useCallback,
+  useState,
   type CSSProperties,
 } from "react";
 import {
@@ -92,9 +93,30 @@ export function StockChart({
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
 
-  // Use the prop as the primary source — it re-renders
-  // when the user toggles the theme via useTheme().
-  const actualDark = isDark;
+  // Track <html> dark class reactively via
+  // MutationObserver so the chart always matches.
+  const [domDark, setDomDark] = useState(() =>
+    typeof document !== "undefined"
+      ? document.documentElement.classList.contains(
+          "dark",
+        )
+      : false,
+  );
+  useEffect(() => {
+    const el = document.documentElement;
+    const update = () =>
+      setDomDark(el.classList.contains("dark"));
+    update();
+    const obs = new MutationObserver(update);
+    obs.observe(el, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    return () => obs.disconnect();
+  }, []);
+
+  // Use whichever source has resolved to dark.
+  const actualDark = isDark || domDark;
 
   const bg = actualDark ? "#111827" : "#ffffff";
   const text = actualDark ? "#9ca3af" : "#6b7280";
