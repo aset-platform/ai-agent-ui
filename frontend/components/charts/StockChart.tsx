@@ -232,7 +232,26 @@ export function StockChart({
   visibleIndicators = DEFAULT_INDICATORS,
   onCrosshairMove,
 }: StockChartProps) {
-  const vis = visibleIndicators;
+  // Store callback in ref so it never triggers
+  // chart rebuilds when the parent re-renders.
+  const crosshairCbRef = useRef(onCrosshairMove);
+  useEffect(() => {
+    crosshairCbRef.current = onCrosshairMove;
+  }, [onCrosshairMove]);
+
+  // Memoize visibility by individual keys to avoid
+  // object identity changes triggering rebuilds.
+  const vis = useMemo(
+    () => visibleIndicators,
+    [
+      visibleIndicators.sma50,
+      visibleIndicators.sma200,
+      visibleIndicators.bollinger,
+      visibleIndicators.volume,
+      visibleIndicators.rsi,
+      visibleIndicators.macd,
+    ],
+  );
 
   // Aggregate both OHLCV and indicators by interval
   const aggOhlcv = useMemo(
@@ -645,10 +664,10 @@ export function StockChart({
 
     // ── Crosshair → OHLC + overlay legend ───────
 
-    if (onCrosshairMove) {
+    if (crosshairCbRef.current) {
       chart.subscribeCrosshairMove((param) => {
         if (!param.time) {
-          onCrosshairMove(null);
+          crosshairCbRef.current?.(null);
           return;
         }
         const cd = param.seriesData.get(
@@ -685,7 +704,7 @@ export function StockChart({
           }
         }
 
-        onCrosshairMove({
+        crosshairCbRef.current?.({
           date: ts,
           open: cd.open,
           high: cd.high,
@@ -726,7 +745,7 @@ export function StockChart({
     } else {
       chart.timeScale().fitContent();
     }
-  }, [aggOhlcv, aggIndicators, actualDark, height, interval, bg, text, grid, vis, onCrosshairMove]);
+  }, [aggOhlcv, aggIndicators, actualDark, height, interval, bg, text, grid, vis]);
 
   // Build chart on mount / data change
   useEffect(() => {

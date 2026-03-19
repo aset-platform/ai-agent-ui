@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useSearchParams } from "next/navigation";
@@ -108,15 +109,55 @@ function AnalysisTab({ ticker }: { ticker: string }) {
   const [activeRange, setActiveRange] = useState("6M");
   const [chartInterval, setChartInterval] =
     useState<ChartInterval>("D");
-  const [crosshairData, setCrosshairData] = useState<{
-    date: string;
-    open: number;
-    high: number;
-    low: number;
-    close: number;
-    volume: number;
-    overlays?: { name: string; value: number; color: string }[];
-  } | null>(null);
+  // Chart height: computed once on mount, stable across
+  // re-renders to avoid triggering chart rebuilds.
+  const [chartHeight] = useState(() =>
+    typeof window !== "undefined"
+      ? Math.max(400, window.innerHeight - 180)
+      : 500,
+  );
+
+  // Use a ref for crosshair data to avoid re-renders
+  // on every mouse move. The OHLC legend updates via
+  // direct DOM mutation instead of React state.
+  const crosshairRef = useRef<HTMLDivElement>(null);
+  const handleCrosshair = useCallback(
+    (data: {
+      date: string;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      volume: number;
+      overlays?: {
+        name: string;
+        value: number;
+        color: string;
+      }[];
+    } | null) => {
+      const el = crosshairRef.current;
+      if (!el) return;
+      if (!data) return; // keep last values visible
+      const s = tickerCurrency(ticker);
+      let html =
+        `<span class="text-gray-500 dark:text-gray-400">${data.date}</span> ` +
+        `O <span class="text-gray-900 dark:text-white">${s}${data.open.toFixed(2)}</span> ` +
+        `H <span class="text-emerald-600 dark:text-emerald-400">${s}${data.high.toFixed(2)}</span> ` +
+        `L <span class="text-red-600 dark:text-red-400">${s}${data.low.toFixed(2)}</span> ` +
+        `C <span class="text-gray-900 dark:text-white">${s}${data.close.toFixed(2)}</span> ` +
+        `<span class="text-gray-500 dark:text-gray-400">Vol ${(data.volume / 1e6).toFixed(1)}M</span>`;
+      if (data.overlays) {
+        for (const ov of data.overlays) {
+          html +=
+            ` <span class="inline-block w-2 h-2 rounded-full mr-0.5" style="background:${ov.color}"></span>` +
+            `<span class="text-gray-500 dark:text-gray-400">${ov.name}</span> ` +
+            `<span class="text-gray-900 dark:text-white">${ov.value.toFixed(2)}</span>`;
+        }
+      }
+      el.innerHTML = html;
+    },
+    [ticker],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -157,7 +198,6 @@ function AnalysisTab({ ticker }: { ticker: string }) {
     };
   }, [ticker]);
 
-  const sym = tickerCurrency(ticker);
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
 
@@ -216,20 +256,20 @@ function AnalysisTab({ ticker }: { ticker: string }) {
     [],
   );
 
-  // Latest values for OHLC legend (fallback)
+  // Set initial OHLC legend from latest data point
   const latest = ohlcv?.data?.[ohlcv.data.length - 1];
-  const displayData = crosshairData ?? (
-    latest
-      ? {
-          date: latest.date,
-          open: latest.open,
-          high: latest.high,
-          low: latest.low,
-          close: latest.close,
-          volume: latest.volume,
-        }
-      : null
-  );
+  useEffect(() => {
+    if (latest) {
+      handleCrosshair({
+        date: latest.date,
+        open: latest.open,
+        high: latest.high,
+        low: latest.low,
+        close: latest.close,
+        volume: latest.volume,
+      });
+    }
+  }, [latest, handleCrosshair]);
 
   if (loading) {
     return (
@@ -245,60 +285,21 @@ function AnalysisTab({ ticker }: { ticker: string }) {
     );
   }
 
-  // Chart height: fill viewport minus header/tabs/controls
-  // AppHeader=56 + tabs=48 + chartHeader=40 + padding=24
-  const chartHeight =
-    typeof window !== "undefined"
-      ? Math.max(400, window.innerHeight - 180)
-      : 500;
-
   return (
     <div
       className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm overflow-hidden"
     >
       {/* Chart header: OHLC legend + controls */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-gray-100 dark:border-gray-800">
-        {/* OHLC legend (top-left) */}
+        {/* OHLC legend (top-left) — updated via ref, no re-renders */}
         <div className="flex items-center gap-3 text-xs font-mono">
           <span className="font-semibold text-gray-900 dark:text-gray-100">
             {ticker}
           </span>
-          {displayData && (
-            <>
-              <span className="text-gray-500 dark:text-gray-400">
-                {displayData.date}
-              </span>
-              <span className="text-gray-600 dark:text-gray-300">
-                O <span className="text-gray-900 dark:text-white">{sym}{displayData.open.toFixed(2)}</span>
-              </span>
-              <span className="text-gray-600 dark:text-gray-300">
-                H <span className="text-emerald-600 dark:text-emerald-400">{sym}{displayData.high.toFixed(2)}</span>
-              </span>
-              <span className="text-gray-600 dark:text-gray-300">
-                L <span className="text-red-600 dark:text-red-400">{sym}{displayData.low.toFixed(2)}</span>
-              </span>
-              <span className="text-gray-600 dark:text-gray-300">
-                C <span className="text-gray-900 dark:text-white">{sym}{displayData.close.toFixed(2)}</span>
-              </span>
-              <span className="text-gray-500 dark:text-gray-400">
-                Vol {(displayData.volume / 1e6).toFixed(1)}M
-              </span>
-              {displayData.overlays?.map((ov) => (
-                <span key={ov.name} className="ml-1">
-                  <span
-                    className="inline-block w-2 h-2 rounded-full mr-0.5"
-                    style={{ backgroundColor: ov.color }}
-                  />
-                  <span className="text-gray-500 dark:text-gray-400">
-                    {ov.name}
-                  </span>{" "}
-                  <span className="text-gray-900 dark:text-white">
-                    {ov.value.toFixed(2)}
-                  </span>
-                </span>
-              ))}
-            </>
-          )}
+          <span
+            ref={crosshairRef}
+            className="text-gray-600 dark:text-gray-300"
+          />
         </div>
 
         {/* Controls (right) */}
@@ -383,7 +384,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         height={chartHeight}
         interval={chartInterval}
         visibleIndicators={visibleIndicators}
-        onCrosshairMove={setCrosshairData}
+        onCrosshairMove={handleCrosshair}
       />
     </div>
   );
