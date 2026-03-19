@@ -269,6 +269,7 @@ export default function DashboardPage() {
       <ForecastChartWidget
         data={filteredForecasts}
         marketFilter={marketFilter}
+        selectedTicker={selectedTicker}
       />
 
       <AddStockModal

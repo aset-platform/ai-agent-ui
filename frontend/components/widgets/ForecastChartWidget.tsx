@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { DashboardData } from "@/hooks/useDashboardData";
 import type {
   ForecastsResponse,
@@ -15,6 +15,7 @@ import type { MarketFilter } from "@/app/(authenticated)/dashboard/page";
 interface ForecastChartWidgetProps {
   data: DashboardData<ForecastsResponse>;
   marketFilter?: MarketFilter;
+  selectedTicker?: string | null;
 }
 
 function horizonLabel(months: number): string {
@@ -505,9 +506,26 @@ function ForecastDetail({
 export function ForecastChartWidget({
   data,
   marketFilter,
+  selectedTicker,
 }: ForecastChartWidgetProps) {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const sym = marketFilter === "india" ? "₹" : "$";
+  const forecasts = data.value?.forecasts ?? [];
+
+  // Auto-select forecast matching selectedTicker
+  // (must be before early returns — Rules of Hooks)
+  useEffect(() => {
+    if (!selectedTicker || forecasts.length === 0)
+      return;
+    const matchIdx = forecasts.findIndex(
+      (f) =>
+        f.ticker.toUpperCase() ===
+        selectedTicker.toUpperCase(),
+    );
+    if (matchIdx >= 0) {
+      setSelectedIdx(matchIdx);
+    }
+  }, [selectedTicker, forecasts]);
 
   if (data.loading) {
     return <WidgetSkeleton className="h-64" />;
@@ -516,8 +534,6 @@ export function ForecastChartWidget({
   if (data.error) {
     return <WidgetError message={data.error} />;
   }
-
-  const forecasts = data.value?.forecasts ?? [];
 
   if (forecasts.length === 0) {
     return (
