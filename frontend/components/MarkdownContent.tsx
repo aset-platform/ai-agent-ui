@@ -8,18 +8,17 @@
 import { useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { DASHBOARD_URL, DOCS_URL } from "@/lib/config";
+import { DOCS_URL } from "@/lib/config";
 
 function preprocessContent(content: string): string {
-  const dashboardUrl = DASHBOARD_URL;
-
+  // Rewrite legacy Dash chart URLs to native Next.js routes
   content = content.replace(
     /\S+\/charts\/analysis\/([A-Z0-9._-]+)_analysis\.html/g,
-    (_, ticker) => `[View ${ticker} Analysis →](${dashboardUrl}/analysis?ticker=${ticker})`
+    (_, ticker) => `[View ${ticker} Analysis →](/analytics/analysis?ticker=${ticker})`
   );
   content = content.replace(
     /\S+\/charts\/forecasts\/([A-Z0-9._-]+)_forecast\.html/g,
-    (_, ticker) => `[View ${ticker} Forecast →](${dashboardUrl}/forecast?ticker=${ticker})`
+    (_, ticker) => `[View ${ticker} Forecast →](/analytics/analysis?ticker=${ticker})`
   );
   content = content.replace(/\S+\/data\/(raw|processed|forecasts|cache|metadata)\/\S+/g, "");
 
@@ -32,7 +31,6 @@ interface MarkdownContentProps {
 }
 
 export function MarkdownContent({ content, onInternalLink }: MarkdownContentProps) {
-  const dashboardBase = DASHBOARD_URL;
   const docsBase = DOCS_URL;
 
   // Fix #4: memoize preprocessing — avoids re-running regex on every streaming chunk
@@ -56,7 +54,7 @@ export function MarkdownContent({ content, onInternalLink }: MarkdownContentProp
           <blockquote className="border-l-4 border-indigo-300 dark:border-indigo-600 pl-3 italic text-gray-500 dark:text-gray-400 my-2">{children}</blockquote>
         ),
         a: ({ href, children }) => {
-          const isInternal = href && (href.startsWith(dashboardBase) || href.startsWith(docsBase));
+          const isInternal = href && (href.startsWith("/") || href.startsWith(docsBase));
           if (isInternal) {
             return (
               <button

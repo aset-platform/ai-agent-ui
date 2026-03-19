@@ -18,7 +18,7 @@ import { ChatInput } from "@/components/ChatInput";
 import { ChatPanelHeader } from "@/components/ChatPanelHeader";
 import { PastSessionsTab } from "@/components/PastSessionsTab";
 import { ResizeHandle } from "@/components/ResizeHandle";
-import { DASHBOARD_URL, DOCS_URL } from "@/lib/config";
+import { DOCS_URL } from "@/lib/config";
 
 const MIN_WIDTH = 320;
 const MAX_WIDTH_PCT = 0.8;
@@ -108,7 +108,6 @@ export function ChatPanel() {
       // In side-panel mode, internal links open in
       // a new tab since we can't switch iframe views
       if (
-        _href.startsWith(DASHBOARD_URL) ||
         _href.startsWith(DOCS_URL)
       ) {
         window.open(_href, "_blank");

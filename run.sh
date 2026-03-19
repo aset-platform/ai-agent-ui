@@ -2,7 +2,7 @@
 # run.sh — Start, stop, and monitor all AI Agent UI services.
 #
 # Usage:
-#   ./run.sh start    — start redis, backend, frontend, docs, dashboard
+#   ./run.sh start    — start redis, backend, frontend, docs
 #   ./run.sh stop     — stop all running services
 #   ./run.sh status   — show PID and URL for each service
 #   ./run.sh restart  — stop then start
@@ -12,7 +12,6 @@
 #   backend    FastAPI + agentic loop   http://127.0.0.1:8181
 #   frontend   Next.js dev server       http://localhost:3000
 #   docs       MkDocs material site     http://127.0.0.1:8000
-#   dashboard  Plotly Dash dashboard    http://127.0.0.1:8050
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="${HOME}/.ai-agent-ui/logs"
@@ -21,22 +20,21 @@ _VENV_HOME="${AI_AGENT_UI_HOME:-${HOME}/.ai-agent-ui}/venv"
 if [[ -x "${_VENV_HOME}/bin/python" ]]; then
     PYTHON="${_VENV_HOME}/bin/python"
     MKDOCS="${_VENV_HOME}/bin/mkdocs"
-    GUNICORN="${_VENV_HOME}/bin/gunicorn"
+
 elif [[ -x "${SCRIPT_DIR}/backend/demoenv/bin/python" ]]; then
     PYTHON="${SCRIPT_DIR}/backend/demoenv/bin/python"
     MKDOCS="${SCRIPT_DIR}/backend/demoenv/bin/mkdocs"
-    GUNICORN="${SCRIPT_DIR}/backend/demoenv/bin/gunicorn"
+
 else
     PYTHON="${_VENV_HOME}/bin/python"
     MKDOCS="${_VENV_HOME}/bin/mkdocs"
-    GUNICORN="${_VENV_HOME}/bin/gunicorn"
+
 fi
 NPM="$(command -v npm 2>/dev/null || echo 'npm')"
 
 BACKEND_PORT=8181
 FRONTEND_PORT=3000
 DOCS_PORT=8000
-DASHBOARD_PORT=8050
 REDIS_PORT=6379
 
 # ANSI colours (disabled when not writing to a terminal)
@@ -223,14 +221,13 @@ _redis_stop() {
 
 # ── Status table ──────────────────────────────────────────────────────────────
 
-_SERVICE_NAMES=(redis     backend   frontend   docs      dashboard)
-_SERVICE_PORTS=($REDIS_PORT $BACKEND_PORT $FRONTEND_PORT $DOCS_PORT $DASHBOARD_PORT)
+_SERVICE_NAMES=(redis     backend   frontend   docs)
+_SERVICE_PORTS=($REDIS_PORT $BACKEND_PORT $FRONTEND_PORT $DOCS_PORT)
 _SERVICE_URLS=(
     "redis://127.0.0.1:${REDIS_PORT}"
     "http://127.0.0.1:${BACKEND_PORT}"
     "http://localhost:${FRONTEND_PORT}"
     "http://127.0.0.1:${DOCS_PORT}"
-    "http://127.0.0.1:${DASHBOARD_PORT}"
 )
 
 _print_table() {
@@ -379,7 +376,6 @@ do_start() {
     _free_port "$BACKEND_PORT"
     _free_port "$FRONTEND_PORT"
     _free_port "$DOCS_PORT"
-    _free_port "$DASHBOARD_PORT"
 
     echo "  Launching backend…"
     _launch "backend" "${SCRIPT_DIR}/backend" \
@@ -392,20 +388,6 @@ do_start() {
     echo "  Launching docs…"
     _launch "docs" "${SCRIPT_DIR}" \
         "$MKDOCS" serve --dev-addr "127.0.0.1:${DOCS_PORT}"
-
-    echo "  Launching dashboard…"
-    # macOS Obj-C runtime aborts forked workers unless this is set.
-    # Harmless on Linux. Gunicorn gthread uses 1 process + 4 threads
-    # so parallel E2E requests are handled without blocking.
-    OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES \
-    _launch "dashboard" "${SCRIPT_DIR}" \
-        "$GUNICORN" "dashboard.app:server" \
-        --bind "127.0.0.1:${DASHBOARD_PORT}" \
-        --worker-class gthread \
-        --workers 1 \
-        --threads 4 \
-        --timeout 120 \
-        --access-logfile -
 
     echo ""
     echo "  Waiting for services to start…"
@@ -448,7 +430,6 @@ do_stop() {
     _kill_port "$BACKEND_PORT"   "backend"
     _kill_port "$FRONTEND_PORT"  "frontend"
     _kill_port "$DOCS_PORT"      "docs"
-    _kill_port "$DASHBOARD_PORT" "dashboard"
     _redis_stop
     echo ""
     echo -e "${G}All services stopped.${N}"
@@ -464,7 +445,7 @@ do_status() {
 
 do_logs() {
     local svc="${1:-}" flag="${2:-}"
-    local all_services="redis backend frontend docs dashboard"
+    local all_services="redis backend frontend docs"
 
     # ./run.sh logs --errors
     if [[ "$svc" == "--errors" ]]; then
@@ -690,7 +671,6 @@ case "${1:-help}" in
         printf "    %-12s  %s\n" "backend"   "FastAPI     →  http://127.0.0.1:${BACKEND_PORT}"
         printf "    %-12s  %s\n" "frontend"  "Next.js     →  http://localhost:${FRONTEND_PORT}"
         printf "    %-12s  %s\n" "docs"      "MkDocs      →  http://127.0.0.1:${DOCS_PORT}"
-        printf "    %-12s  %s\n" "dashboard" "Plotly Dash →  http://127.0.0.1:${DASHBOARD_PORT}"
         exit 1
         ;;
 esac
