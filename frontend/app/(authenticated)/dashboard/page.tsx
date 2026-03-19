@@ -210,6 +210,12 @@ export default function DashboardPage() {
           });
         }}
         onQuickAction={handleQuickAction}
+        portfolioTotals={portfolioData.totals}
+        portfolioHoldingsCount={
+          portfolioData.holdings.filter(
+            (h) => h.market === marketFilter,
+          ).length
+        }
       />
 
       {/* Asymmetric grid */}

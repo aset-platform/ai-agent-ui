@@ -13,6 +13,9 @@ interface HeroSectionProps {
   marketFilter: MarketFilter;
   onMarketFilterChange: (f: MarketFilter) => void;
   onQuickAction: (prompt: string) => void;
+  /** Portfolio totals per currency from usePortfolio. */
+  portfolioTotals?: Record<string, number>;
+  portfolioHoldingsCount?: number;
 }
 
 const quickActions = [
@@ -32,6 +35,8 @@ export function HeroSection({
   marketFilter,
   onMarketFilterChange,
   onQuickAction,
+  portfolioTotals = {},
+  portfolioHoldingsCount = 0,
 }: HeroSectionProps) {
   if (watchlist.loading) {
     return (
@@ -49,15 +54,19 @@ export function HeroSection({
     );
   }
 
+  // Portfolio value from portfolio holdings
+  const currSym = marketFilter === "india" ? "₹" : "$";
+  const portfolioCcy =
+    marketFilter === "india" ? "INR" : "USD";
+  const portfolioValue =
+    portfolioTotals[portfolioCcy] ?? 0;
+
+  // Daily change from watchlist (approximate — uses
+  // linked ticker price changes as proxy)
   const data = watchlist.value;
-  const portfolioValue = data?.portfolio_value ?? 0;
   const dailyChange = data?.daily_change ?? 0;
   const dailyChangePct = data?.daily_change_pct ?? 0;
-  const tickerCount = data?.tickers.length ?? 0;
   const positive = dailyChange >= 0;
-
-  // Currency symbol based on market filter
-  const currSym = marketFilter === "india" ? "₹" : "$";
 
   return (
     <div className="col-span-full">
@@ -212,7 +221,7 @@ export function HeroSection({
                   className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"
                   style={{ fontFamily: "'IBM Plex Mono', monospace" }}
                 >
-                  {tickerCount} Stock{tickerCount !== 1 && "s"}
+                  {portfolioHoldingsCount} Stock{portfolioHoldingsCount !== 1 && "s"}
                 </span>
                 <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">
                   <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />

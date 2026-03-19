@@ -309,7 +309,7 @@ export function WatchlistWidget({
       )}
 
       {/* Watchlist tab */}
-      {activeTab === "watchlist" && tickers.length === 0 ? (
+      {activeTab === "watchlist" && (tickers.length === 0 ? (
         <div className="px-5 py-10 text-center">
           <p className="text-sm text-gray-500 dark:text-gray-400">
             No stocks tracked for this market. Link a
@@ -534,7 +534,7 @@ export function WatchlistWidget({
           </div>
         )}
         </>
-      )}
+      ))}
     </div>
   );
 }
