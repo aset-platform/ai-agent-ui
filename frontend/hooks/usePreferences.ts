@@ -167,27 +167,30 @@ export function usePreferences(): [
       );
   }, []);
 
-  // Update a section
+  // Update a section — uses setTimeout(0) to defer
+  // the state update so it never fires during render.
   const updatePrefs = useCallback(
     (
       section: keyof UserPreferences,
       values: Record<string, unknown>,
     ) => {
-      setPrefs((prev) => {
-        const existing =
-          (prev[section] as Record<
-            string,
-            unknown
-          >) ?? {};
-        const updated = {
-          ...prev,
-          [section]: { ...existing, ...values },
-          last_login: new Date().toISOString(),
-        };
-        writeLocal(updated);
-        return updated;
-      });
-      syncToRedis();
+      setTimeout(() => {
+        setPrefs((prev) => {
+          const existing =
+            (prev[section] as Record<
+              string,
+              unknown
+            >) ?? {};
+          const updated = {
+            ...prev,
+            [section]: { ...existing, ...values },
+            last_login: new Date().toISOString(),
+          };
+          writeLocal(updated);
+          return updated;
+        });
+        syncToRedis();
+      }, 0);
     },
     [syncToRedis],
   );
