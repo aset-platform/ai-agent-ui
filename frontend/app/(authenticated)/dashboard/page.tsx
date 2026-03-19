@@ -6,7 +6,7 @@
  * filters all dashboard sections. Default: India.
  */
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { usePreferences } from "@/hooks/usePreferences";
 import type { UserProfile } from "@/hooks/useEditProfile";
 import type {
@@ -150,38 +150,38 @@ export default function DashboardPage() {
     [portfolioData.holdings, marketFilter],
   );
 
+  // Auto-select first PORTFOLIO ticker on load.
+  // Portfolio is the default tab, so its top ticker
+  // should drive signals + forecast widgets.
+  const portfolioInitDone = useRef(false);
   useEffect(() => {
-    // All available tickers (portfolio + watchlist)
     const portfolioTickers = filteredPortfolio.map(
       (h) => h.ticker,
     );
-    const watchlistTickers = (
-      filteredWatchlist.value?.tickers ?? []
-    ).map((t) => t.ticker);
-    const allTickers = [
-      ...new Set([
-        ...portfolioTickers,
-        ...watchlistTickers,
-      ]),
-    ];
 
+    // Once portfolio loads, always pick its first ticker
     if (
-      allTickers.length > 0 &&
-      (!selectedTicker ||
-        !allTickers.includes(selectedTicker))
+      portfolioTickers.length > 0 &&
+      !portfolioInitDone.current
     ) {
-      // Prefer first portfolio ticker, then watchlist
-      setSelectedTicker(
-        portfolioTickers[0] ??
-          watchlistTickers[0] ??
-          "",
-      );
+      setSelectedTicker(portfolioTickers[0]);
+      portfolioInitDone.current = true;
+      return;
     }
-  }, [
-    filteredPortfolio,
-    filteredWatchlist.value,
-    selectedTicker,
-  ]);
+
+    // Fallback: if no portfolio, use watchlist
+    if (
+      !selectedTicker &&
+      portfolioTickers.length === 0
+    ) {
+      const watchlistTickers = (
+        filteredWatchlist.value?.tickers ?? []
+      ).map((t) => t.ticker);
+      if (watchlistTickers.length > 0) {
+        setSelectedTicker(watchlistTickers[0]);
+      }
+    }
+  }, [filteredPortfolio, filteredWatchlist.value]);
 
   // Filter analysis to only the selected ticker
   const selectedAnalysis = useMemo<
