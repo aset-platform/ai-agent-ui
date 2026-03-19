@@ -149,7 +149,7 @@ _start_redis_service() {
         sudo systemctl start redis-server 2>/dev/null || true
     else
         # No systemd (typical WSL2) — launch directly
-        redis-server --port 6379 --daemonize yes \
+        redis-server --port "${REDIS_PORT:-6379}" --daemonize yes \
             --logfile "${HOME}/.ai-agent-ui/logs/redis.log" 2>/dev/null
     fi
 }

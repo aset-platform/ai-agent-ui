@@ -21,7 +21,6 @@ Typical usage::
 
 from agents.base import AgentConfig, BaseAgent
 from config import get_settings
-from llm_fallback import FallbackLLM
 from message_compressor import MessageCompressor
 from token_budget import TokenBudget
 from tools.registry import ToolRegistry
@@ -35,58 +34,11 @@ def _parse_tiers(csv: str) -> list[str]:
 class GeneralAgent(BaseAgent):
     """General-purpose agent with N-tier LLM cascade.
 
-    Inherits the agentic loop from :class:`~agents.base.BaseAgent`
-    and overrides :meth:`_build_llm` to supply FallbackLLM with
-    budget-aware cascading.  In test mode, Anthropic is disabled.
+    Inherits the agentic loop and LLM builders from
+    :class:`~agents.base.BaseAgent`.
     """
 
-    def _build_llm(self) -> FallbackLLM:
-        """Build tool-calling cascade.
-
-        In test mode (``AI_AGENT_UI_ENV=test``), uses only
-        free tiers with no Anthropic fallback.
-        """
-        settings = get_settings()
-        is_test = settings.ai_agent_ui_env == "test"
-        tiers = (
-            _parse_tiers(settings.test_model_tiers)
-            if is_test
-            else self.config.groq_model_tiers
-        )
-        return FallbackLLM(
-            groq_models=tiers,
-            anthropic_model=(
-                None if is_test else "claude-sonnet-4-6"
-            ),
-            temperature=self.config.temperature,
-            agent_id=self.config.agent_id,
-            token_budget=self.token_budget,
-            compressor=self.compressor,
-            obs_collector=self.obs_collector,
-            cascade_profile="test" if is_test else "tool",
-        )
-
-    def _build_synthesis_llm(self) -> FallbackLLM | None:
-        """Build synthesis cascade for final responses.
-
-        Reserves ``gpt-oss-120b`` for quality output.
-        Returns ``None`` in test mode (reuses tool cascade).
-        """
-        settings = get_settings()
-        if settings.ai_agent_ui_env == "test":
-            return None
-        return FallbackLLM(
-            groq_models=_parse_tiers(
-                settings.synthesis_model_tiers,
-            ),
-            anthropic_model="claude-sonnet-4-6",
-            temperature=self.config.temperature,
-            agent_id=self.config.agent_id,
-            token_budget=self.token_budget,
-            compressor=self.compressor,
-            obs_collector=self.obs_collector,
-            cascade_profile="synthesis",
-        )
+    pass
 
 
 def create_general_agent(

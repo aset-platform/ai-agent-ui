@@ -15,7 +15,7 @@ Typical usage::
 """
 
 import logging
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Dict, Iterator, List
 
 import agents.loop as _loop
@@ -118,29 +118,89 @@ class BaseAgent(ABC):
             self.config.tool_names,
         )
 
-    @abstractmethod
     def _build_llm(self):
         """Construct the tool-calling LLM cascade.
 
+        Default implementation builds a
+        :class:`~llm_fallback.FallbackLLM` with the
+        standard Groq cascade + Anthropic fallback.
+        Subclasses may override for custom behaviour.
+
         Returns:
-            An uninvoked LangChain chat model instance
-            (or duck-typed equivalent with
-            ``bind_tools``/``invoke`` methods).
+            An uninvoked LangChain chat model instance.
         """
-        ...
+        from config import get_settings
+        from llm_fallback import FallbackLLM
+
+        settings = get_settings()
+        is_test = (
+            settings.ai_agent_ui_env == "test"
+        )
+
+        def _parse(csv: str) -> list[str]:
+            return [
+                t.strip()
+                for t in csv.split(",")
+                if t.strip()
+            ]
+
+        tiers = (
+            _parse(settings.test_model_tiers)
+            if is_test
+            else self.config.groq_model_tiers
+        )
+        return FallbackLLM(
+            groq_models=tiers,
+            anthropic_model=(
+                None
+                if is_test
+                else "claude-sonnet-4-6"
+            ),
+            temperature=self.config.temperature,
+            agent_id=self.config.agent_id,
+            token_budget=self.token_budget,
+            compressor=self.compressor,
+            obs_collector=self.obs_collector,
+            cascade_profile=(
+                "test" if is_test else "tool"
+            ),
+        )
 
     def _build_synthesis_llm(self):
-        """Construct the synthesis LLM cascade (optional).
+        """Construct the synthesis LLM cascade.
 
-        Override to use a different cascade for the final
-        response (e.g. quality-optimised models).  Returns
-        ``None`` by default, causing ``llm_synthesis`` to
-        fall back to ``llm_with_tools``.
+        Returns a quality-optimised cascade for
+        final responses, or ``None`` in test mode.
 
         Returns:
             An LLM instance, or ``None``.
         """
-        return None
+        from config import get_settings
+        from llm_fallback import FallbackLLM
+
+        settings = get_settings()
+        if settings.ai_agent_ui_env == "test":
+            return None
+
+        def _parse(csv: str) -> list[str]:
+            return [
+                t.strip()
+                for t in csv.split(",")
+                if t.strip()
+            ]
+
+        return FallbackLLM(
+            groq_models=_parse(
+                settings.synthesis_model_tiers,
+            ),
+            anthropic_model="claude-sonnet-4-6",
+            temperature=self.config.temperature,
+            agent_id=self.config.agent_id,
+            token_budget=self.token_budget,
+            compressor=self.compressor,
+            obs_collector=self.obs_collector,
+            cascade_profile="synthesis",
+        )
 
     def _build_messages(
         self, user_input: str, history: List[Dict]

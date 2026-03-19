@@ -21,15 +21,45 @@ for _p in (str(_BACKEND), str(_PROJECT)):
 import os  # noqa: E402
 
 os.environ.setdefault("LOG_LEVEL", "WARNING")
-os.environ.setdefault("JWT_SECRET_KEY", "docgen-placeholder-key-not-real")
+os.environ.setdefault(
+    "JWT_SECRET_KEY",
+    "docgen-placeholder-key-not-real",
+)
 
 
-def _auth_label(deps: list) -> str:
-    """Map FastAPI dependency names to auth labels."""
-    names = [
-        getattr(d, "__name__", str(d))
-        for d in (deps or [])
-    ]
+def _auth_label(
+    router_deps: list,
+    route,
+) -> str:
+    """Detect auth level from both router and endpoint deps.
+
+    Checks router-level dependencies AND endpoint-level
+    dependencies via ``route.dependant.dependencies``
+    (the correct FastAPI introspection path).
+    """
+    names: list[str] = []
+
+    # Router-level deps
+    for d in router_deps or []:
+        names.append(
+            getattr(d, "__name__", str(d))
+        )
+
+    # Endpoint-level deps (FastAPI stores these in
+    # route.dependant.dependencies[].call)
+    dependant = getattr(route, "dependant", None)
+    if dependant:
+        for dep in getattr(
+            dependant, "dependencies", []
+        ):
+            call = getattr(dep, "call", None)
+            if call:
+                names.append(
+                    getattr(
+                        call, "__name__", str(call)
+                    )
+                )
+
     if any("superuser" in n for n in names):
         return "superuser"
     if any("current_user" in n for n in names):
@@ -37,9 +67,75 @@ def _auth_label(deps: list) -> str:
     return "public"
 
 
+def _build_app_lightweight():
+    """Build the FastAPI app with routes only.
+
+    Avoids full bootstrap (no Iceberg, no LLM init,
+    no ThreadPool, no Redis). Only registers routers
+    so route metadata can be introspected.
+    """
+    from fastapi import FastAPI
+
+    app = FastAPI(title="AI Agent API")
+
+    # Auth + user routes
+    try:
+        from auth.api import (
+            create_auth_router,
+            get_ticker_router,
+        )
+
+        app.include_router(
+            create_auth_router(), prefix="/v1",
+        )
+        app.include_router(
+            get_ticker_router(), prefix="/v1",
+        )
+    except Exception:
+        pass
+
+    # Dashboard + insights + audit routes
+    try:
+        from dashboard_routes import (
+            create_dashboard_router,
+        )
+
+        app.include_router(
+            create_dashboard_router(),
+            prefix="/v1",
+        )
+    except Exception:
+        pass
+
+    try:
+        from insights_routes import (
+            create_insights_router,
+        )
+
+        app.include_router(
+            create_insights_router(),
+            prefix="/v1",
+        )
+    except Exception:
+        pass
+
+    try:
+        from audit_routes import (
+            create_audit_router,
+        )
+
+        app.include_router(
+            create_audit_router(), prefix="/v1",
+        )
+    except Exception:
+        pass
+
+    return app
+
+
 def _generate() -> str:
     """Introspect FastAPI app and build markdown."""
-    from main import app
+    app = _build_app_lightweight()
 
     lines = [
         "# API Reference (Auto-Generated)",
@@ -58,7 +154,11 @@ def _generate() -> str:
         if not methods:
             continue
         path = getattr(route, "path", "")
-        if path in ("/openapi.json", "/docs", "/redoc"):
+        if path in (
+            "/openapi.json",
+            "/docs",
+            "/redoc",
+        ):
             continue
 
         # Determine group.
@@ -68,6 +168,10 @@ def _generate() -> str:
             group = "Auth"
         elif "/users/" in path:
             group = "Users"
+        elif "/dashboard/" in path:
+            group = "Dashboard"
+        elif "/insights/" in path:
+            group = "Insights"
         elif "/bulk" in path:
             group = "Bulk Data"
         elif "/ws/" in path:
@@ -77,15 +181,11 @@ def _generate() -> str:
 
         deps = getattr(route, "dependencies", [])
         dep_callables = [
-            d.dependency for d in deps
+            d.dependency
+            for d in deps
             if hasattr(d, "dependency")
         ]
-        # Also check endpoint-level dependencies.
-        endpoint = getattr(route, "endpoint", None)
-        ep_deps = getattr(
-            endpoint, "__dependencies__", []
-        )
-        all_deps = dep_callables + list(ep_deps)
+        auth = _auth_label(dep_callables, route)
 
         for method in sorted(methods):
             if method == "HEAD":
@@ -98,14 +198,21 @@ def _generate() -> str:
                 ),
                 "summary": getattr(
                     route, "summary", ""
-                ) or "",
-                "auth": _auth_label(all_deps),
+                )
+                or "",
+                "auth": auth,
             })
 
     # Render tables.
     order = [
-        "Core", "Auth", "Users", "Admin",
-        "Bulk Data", "WebSocket",
+        "Core",
+        "Auth",
+        "Users",
+        "Dashboard",
+        "Insights",
+        "Admin",
+        "Bulk Data",
+        "WebSocket",
     ]
     for grp in order:
         routes = groups.get(grp)
@@ -118,7 +225,9 @@ def _generate() -> str:
         lines.append(
             "|--------|------|------|-------------|"
         )
-        for r in sorted(routes, key=lambda x: x["path"]):
+        for r in sorted(
+            routes, key=lambda x: x["path"]
+        ):
             desc = r["summary"] or r["name"]
             lines.append(
                 f"| `{r['method']}` "
@@ -130,7 +239,9 @@ def _generate() -> str:
 
     # Count.
     total = sum(len(v) for v in groups.values())
-    lines.append(f"---\n\n*{total} endpoints total.*\n")
+    lines.append(
+        f"---\n\n*{total} endpoints total.*\n"
+    )
     return "\n".join(lines)
 
 
