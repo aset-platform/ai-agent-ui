@@ -1,6 +1,6 @@
 # AI Agent UI
 
-A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js. The backend runs an LLM in a tool-calling loop; the frontend is a single-page app that embeds the Docs and Dashboard in-context alongside the chat interface. JWT authentication and role-based access control protect all three surfaces.
+A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js. The backend runs an LLM in a tool-calling loop; the frontend is a single-page app with portfolio management, stock analysis (TradingView charts), and a chat side panel. JWT authentication and role-based access control protect all surfaces. Redis provides caching and session management.
 
 ---
 
@@ -8,9 +8,9 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 
 | Service | Stack | Port | Purpose |
 |---------|-------|------|---------|
-| **Frontend** | Next.js 16 + React 19 + Tailwind 4 | `3000` | Portfolio dashboard, native charts (react-plotly.js), collapsible sidebar, chat side panel, login |
-| **Backend** | FastAPI + LangChain + N-tier Groq/Anthropic | `8181` | Agentic loop + REST/WebSocket API + Auth endpoints |
-| **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Legacy Dash pages (Insights, Admin) — Home, Analysis, Compare, Link Ticker migrated to native Next.js |
+| **Frontend** | Next.js 16 + React 19 + Tailwind 4 + lightweight-charts v5 | `3000` | Portfolio dashboard, TradingView charts, collapsible sidebar, chat side panel |
+| **Backend** | FastAPI + LangChain + N-tier Groq/Anthropic | `8181` | Agentic loop + REST/WebSocket API + Auth + Redis cache |
+| **Redis** | Redis 7 | `6379` | Token deny-list, user preferences, API cache (write-through) |
 | **Docs** | MkDocs Material | `8000` | Project documentation |
 
 ---

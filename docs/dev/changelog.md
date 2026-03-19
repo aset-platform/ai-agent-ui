@@ -4,6 +4,62 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 18–19, 2026 — Performance, TradingView Charts, Portfolio Management, Dash Retirement
+
+### Added
+- **Redis write-through cache** (`backend/cache.py`) for all 22 API endpoints with invalidation map
+- **Cache warm-up** at startup: shared keys sync + per-ticker background thread + top N frequent users
+- **TradingView lightweight-charts v5** replacing Plotly for Analysis page (~45KB vs ~8MB)
+  - 4-pane chart: Candlestick + Volume + RSI + MACD with crosshair, zoom, dark mode
+  - D/W/M interval selector with candle aggregation
+  - Indicator toggles dropdown (SMA 50/200, Bollinger, Volume, RSI, MACD)
+  - OHLC legend in chart header (ref-based, zero re-renders)
+  - Bollinger Bands with distinct cyan lines
+- **SWR caching** on all pages (dashboard, analytics, marketplace, admin, insights)
+- **Aggregate endpoint** `GET /v1/dashboard/home` — 4 requests → 1
+- **Per-ticker refresh** pipeline: `POST /v1/dashboard/refresh/{ticker}` with 6-step background job
+- **User preferences** — localStorage + Redis sync with sliding 7-day TTL (`usePreferences` hook)
+- **Smart cache warming** — pre-warms top N active users' data at startup (`CACHE_WARM_TOP_USERS` config)
+- **Portfolio Management MVP** — append-only `portfolio_transactions` Iceberg table
+  - Add/edit/delete stocks (ticker from registry, qty, price, date)
+  - WatchlistWidget 2-tab layout (Portfolio | Watchlist)
+  - HeroSection shows portfolio value per currency with total P&L
+  - AddStockModal + EditStockModal
+- **Unit tests** for report_builder.py (16 test cases)
+- **Lightweight doc generation** — no full app bootstrap for mkdocs build
+
+### Changed
+- **Dash service retired** — removed from run.sh, config, navigation (4 services: redis, backend, frontend, docs)
+- `/insights` iframe → redirect to native `/analytics/insights`
+- Analysis page: tabs on left, searchable ticker dropdown on right, full-page chart
+- Hero card: "Welcome back, Abhay!" (gradient, first name), total P&L, navigation buttons
+- Quick action buttons navigate to pages (not chat)
+- Chat FAB removed — toggle moved to AppHeader (all screen sizes)
+- Next.js dev indicator disabled (`devIndicators: false`)
+- Compare metrics table: added RSI, MACD Signal, Sentiment, best performer badge
+- Forecast tab: horizon picker (3M/6M/9M), today marker, price target annotations
+- BaseAgent: extracted `_build_llm` + `_build_synthesis_llm` (removed 90 lines duplication)
+- gen_api_docs.py: proper endpoint-level auth detection via `route.dependant.dependencies`
+- setup.sh: Redis port uses `${REDIS_PORT:-6379}` variable
+- CORS: added PUT to allow_methods
+
+### Fixed
+- Chart flickering on indicator toggle (ref-based crosshair, memoized deps)
+- Dark mode sync on TradingView chart (reads DOM classList at build time)
+- Null-guard on price/change/OHLC fields across all pages
+- LLM request count discrepancy (Admin reads Iceberg, not ephemeral counter)
+- Forecast hooks before early returns (Rules of Hooks)
+- Portfolio tab isolated from Watchlist (no data mixing)
+- Portfolio top ticker auto-selected on load (SWR race fix)
+- Hero buttons force Analysis tab via URL ?tab= param
+- Tab switch auto-selects top ticker for signals widget
+- `usePreferences` setState deferred to avoid update-during-render
+
+Tickets: ASETPLTFRM-72, 73, 74, 75, 112, 113, 114, 115, 116, 117, 118 (11 tickets, 46 story points)
+Branch: feature/sprint2-planning
+
+---
+
 ## Mar 16, 2026 — Dashboard UI Overhaul + Dash-to-Next.js Migration
 
 ### Added

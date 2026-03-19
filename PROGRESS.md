@@ -2,6 +2,53 @@
 
 ---
 
+# Session: Mar 18–19, 2026 — Performance, Charts, Portfolio, Dash Retirement
+
+## Sprint 2 Complete (46 story points, 11 tickets — 100% delivered)
+
+### Performance (ASETPLTFRM-115)
+- Redis write-through cache for 22 endpoints with invalidation map
+- Cache warm-up at startup (shared + per-ticker + top N users)
+- SWR frontend caching (all pages converted from raw useEffect)
+- Aggregate `/dashboard/home` endpoint (4 requests → 1)
+- Iceberg N+1 queries eliminated, predicate push-down
+
+### Charts (ASETPLTFRM-115)
+- TradingView lightweight-charts v5 replacing broken Plotly candlestick
+- 4-pane: Candlestick + Volume + RSI + MACD with crosshair + zoom
+- D/W/M interval selector with candle aggregation
+- Indicator toggles, OHLC legend, Bollinger Bands
+- Dark/light mode sync via DOM classList read
+
+### Dash Migration (ASETPLTFRM-112, 113, 114)
+- Insights (7 tabs) + Admin (3 tabs) fully native in Next.js
+- Dash service retired from run.sh (4 services now)
+- iframe removed, DASHBOARD_URL removed
+- Chat FAB → AppHeader toggle
+
+### Portfolio Management (ASETPLTFRM-118)
+- Iceberg `portfolio_transactions` table (append-only)
+- CRUD: add/edit/delete stocks with searchable ticker dropdown
+- WatchlistWidget 2-tab (Portfolio | Watchlist)
+- HeroSection: portfolio value per currency, total P&L
+- Per-ticker refresh pipeline (6-step background job)
+
+### User Preferences (ASETPLTFRM-116, 117)
+- localStorage + Redis sync with sliding 7-day TTL
+- Chart settings, market filter, active tab persist
+- Smart cache warming for top N frequent users
+
+### Code Cleanup (ASETPLTFRM-72, 73, 74, 75)
+- Unit tests for report_builder.py (16 cases)
+- gen_api_docs.py: lightweight import + proper auth detection
+- Agent _build_llm dedup (BaseAgent), Redis port variable
+
+### Files: ~100 new/modified across frontend + backend + docs
+### Tickets: ASETPLTFRM-72-75, 112-118 (11 Done)
+### PRs: Pending (branch: feature/sprint2-planning)
+
+---
+
 # Session: Mar 16, 2026 — Dashboard UI Overhaul + Dash-to-Next.js Migration
 
 ## 2026-03-16 — Dashboard UI Overhaul + Dash-to-Next.js Migration
