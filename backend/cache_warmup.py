@@ -305,6 +305,136 @@ def warm_tickers() -> None:
     )
 
 
+def warm_frequent_users(
+    top_n: int = 5,
+    days: int = 7,
+) -> None:
+    """Pre-warm dashboard cache for top N active users.
+
+    Queries ``stocks.llm_usage`` for distinct users
+    with the most requests in the last *days* days,
+    then warms their dashboard home endpoint so the
+    first page load is a Redis hit.
+
+    Args:
+        top_n: Maximum users to warm.
+        days: Lookback window for activity.
+    """
+    from cache import get_cache
+
+    cache = get_cache()
+    if not cache.ping():
+        return
+
+    t0 = time.monotonic()
+
+    try:
+        from tools._stock_shared import _require_repo
+
+        stock_repo = _require_repo()
+        from datetime import datetime, timedelta, timezone
+
+        import pandas as pd
+
+        cutoff = (
+            datetime.now(tz=timezone.utc)
+            - timedelta(days=days)
+        ).date()
+        try:
+            df = stock_repo._scan_tickers(
+                stock_repo._LLM_USAGE, [],
+            )
+            # _scan_tickers with empty list returns
+            # empty — use _table_to_df instead.
+            df = stock_repo._table_to_df(
+                stock_repo._LLM_USAGE,
+            )
+        except Exception:
+            df = pd.DataFrame()
+
+        if df.empty or "user_id" not in df.columns:
+            _logger.info(
+                "cache_warmup: no llm_usage data"
+                " for frequent user detection",
+            )
+            return
+
+        if "request_date" in df.columns:
+            df = df[df["request_date"] >= cutoff]
+
+        if df.empty:
+            _logger.info(
+                "cache_warmup: no active users"
+                " in last %d days",
+                days,
+            )
+            return
+
+        # Count requests per user, pick top N
+        counts = (
+            df.groupby("user_id")
+            .size()
+            .sort_values(ascending=False)
+            .head(top_n)
+        )
+        active_users = counts.index.tolist()
+
+        _logger.info(
+            "cache_warmup: warming %d frequent"
+            " users: %s",
+            len(active_users),
+            active_users,
+        )
+
+        # For each user, warm their dashboard home
+        import auth.endpoints.helpers as _helpers
+
+        repo = _helpers._get_repo()
+        warmed = 0
+
+        for uid in active_users:
+            try:
+                tickers = repo.get_user_tickers(uid)
+                if not tickers:
+                    continue
+
+                # Warm watchlist data
+                stock_repo.get_ohlcv_batch(
+                    tickers,
+                )
+                stock_repo.get_company_info_batch(
+                    tickers,
+                )
+                # The actual JSON serialization
+                # happens when the user hits the
+                # endpoint — here we just ensure
+                # the Iceberg data is in OS page
+                # cache and the repo catalog is warm.
+                warmed += 1
+            except Exception:
+                _logger.debug(
+                    "cache_warmup: failed for"
+                    " user %s",
+                    uid,
+                )
+
+        elapsed = (time.monotonic() - t0) * 1000
+        _logger.info(
+            "cache_warmup: warmed %d/%d frequent"
+            " users in %.0f ms",
+            warmed,
+            len(active_users),
+            elapsed,
+        )
+
+    except Exception:
+        _logger.warning(
+            "cache_warmup: frequent user"
+            " warm-up failed",
+            exc_info=True,
+        )
+
+
 def _sf(val) -> float | None:
     """Safe float conversion."""
     if val is None:

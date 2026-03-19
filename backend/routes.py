@@ -61,13 +61,26 @@ def create_app(
             from cache_warmup import (
                 warm_shared,
                 warm_tickers,
+                warm_frequent_users,
             )
 
             warm_shared()
+
+            top_n = getattr(
+                settings,
+                "cache_warm_top_users",
+                5,
+            )
             threading.Thread(
                 target=warm_tickers,
                 daemon=True,
-                name="cache-warmup",
+                name="cache-warmup-tickers",
+            ).start()
+            threading.Thread(
+                target=warm_frequent_users,
+                args=(top_n,),
+                daemon=True,
+                name="cache-warmup-users",
             ).start()
         except Exception:
             _logger.warning(

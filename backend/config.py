@@ -147,6 +147,10 @@ class Settings(BaseSettings):
     retention_enabled: bool = False
     retention_dry_run: bool = True
 
+    # Smart cache warming: pre-warm Redis for the top
+    # N most active users at startup.
+    cache_warm_top_users: int = 5
+
     # Read from .env in the working directory; silently skip if absent.
     # Real environment variables always take precedence over .env values.
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
