@@ -57,6 +57,7 @@ def setup_agents(
     agent_registry,
     token_budget,
     compressor,
+    obs_collector=None,
 ):
     """Instantiate and register all agents.
 
@@ -72,11 +73,14 @@ def setup_agents(
             :class:`~token_budget.TokenBudget`.
         compressor: Shared
             :class:`~message_compressor.MessageCompressor`.
+        obs_collector: Optional
+            :class:`~observability.ObservabilityCollector`.
     """
     general = create_general_agent(
         tool_registry,
         token_budget=token_budget,
         compressor=compressor,
+        obs_collector=obs_collector,
     )
     agent_registry.register(general)
 
@@ -88,6 +92,7 @@ def setup_agents(
         tool_registry,
         token_budget=token_budget,
         compressor=compressor,
+        obs_collector=obs_collector,
     )
     agent_registry.register(stock)
 

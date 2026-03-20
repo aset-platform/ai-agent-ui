@@ -6,9 +6,11 @@ Functions
 - :func:`get_or_create_by_oauth`
 """
 
+from __future__ import annotations
+
 import logging
 import secrets as _secrets
-from typing import Any, Dict, Optional
+from typing import Any
 
 from auth.repo.catalog import scan_all_users
 from auth.repo.schemas import _now_utc
@@ -22,7 +24,7 @@ _logger = logging.getLogger(__name__)
 
 def get_by_oauth_sub(
     cat, provider: str, oauth_sub: str
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Fetch a user matched by OAuth provider + subject ID.
 
     Args:
@@ -48,8 +50,8 @@ def get_or_create_by_oauth(
     oauth_sub: str,
     email: str,
     full_name: str,
-    picture_url: Optional[str] = None,
-) -> Dict[str, Any]:
+    picture_url: str | None = None,
+) -> dict[str, Any]:
     """Return an existing user or create a new SSO-only account.
 
     Lookup order:
@@ -83,7 +85,7 @@ def get_or_create_by_oauth(
 
     by_email = get_by_email(cat, email)
     if by_email is not None:
-        email_updates: Dict[str, Any] = {
+        email_updates: dict[str, Any] = {
             "oauth_provider": provider,
             "oauth_sub": oauth_sub,
             "last_login_at": now,

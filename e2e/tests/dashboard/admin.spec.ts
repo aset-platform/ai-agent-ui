@@ -3,6 +3,7 @@
  */
 
 import { test, expect } from "../../fixtures/auth.fixture";
+import { waitForDashReady } from "../../utils/wait.helper";
 
 import { DashAdminPage } from "../../pages/dashboard/admin.page";
 
@@ -39,7 +40,7 @@ test.describe("Dashboard admin", () => {
       state: "attached",
       timeout: 15_000,
     });
-    await page.waitForTimeout(3_000);
+    await waitForDashReady(page);
     // Should show access denied or redirect
     const forbidden = page.locator("text=access denied").or(
       page.locator("text=forbidden"),

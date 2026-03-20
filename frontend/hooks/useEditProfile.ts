@@ -8,7 +8,7 @@
 
 import { useState } from "react";
 import { apiFetch } from "@/lib/apiFetch";
-import { BACKEND_URL } from "@/lib/config";
+import { API_URL } from "@/lib/config";
 
 export interface UserProfile {
   user_id: string;
@@ -53,7 +53,7 @@ export function useEditProfile(): UseEditProfileResult {
     setError("");
     try {
       // 1. Update display name via PATCH /auth/me
-      const patchRes = await apiFetch(`${BACKEND_URL}/auth/me`, {
+      const patchRes = await apiFetch(`${API_URL}/auth/me`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ full_name: fullName.trim() }),
@@ -69,7 +69,7 @@ export function useEditProfile(): UseEditProfileResult {
       if (avatarFile) {
         const formData = new FormData();
         formData.append("file", avatarFile, avatarFile.name);
-        const uploadRes = await apiFetch(`${BACKEND_URL}/auth/upload-avatar`, {
+        const uploadRes = await apiFetch(`${API_URL}/auth/upload-avatar`, {
           method: "POST",
           body: formData,
         });

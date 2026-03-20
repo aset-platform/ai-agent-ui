@@ -58,6 +58,10 @@ def stream(
     messages = agent._build_messages(user_input, history)
     iteration = 0
     response = None
+    _had_tool_calls = False
+    _use_synthesis = (
+        agent.llm_synthesis is not agent.llm_with_tools
+    )
 
     try:
         while True:
@@ -74,15 +78,29 @@ def stream(
                     MAX_ITERATIONS,
                 )
                 yield json.dumps(
-                    {"type": "warning", "message": warning_msg}
+                    {
+                        "type": "warning",
+                        "message": warning_msg,
+                    }
                 ) + "\n"
                 break
 
             yield json.dumps(
-                {"type": "thinking", "iteration": iteration}
+                {
+                    "type": "thinking",
+                    "iteration": iteration,
+                }
             ) + "\n"
 
-            response = agent.llm_with_tools.invoke(
+            # Use synthesis cascade after first tool round.
+            llm = agent.llm_with_tools
+            if _had_tool_calls and _use_synthesis:
+                llm = agent.llm_synthesis
+                agent.logger.debug(
+                    "Using synthesis cascade"
+                )
+
+            response = llm.invoke(
                 messages,
                 iteration=iteration,
             )
@@ -91,6 +109,7 @@ def stream(
             if not response.tool_calls:
                 break
 
+            _had_tool_calls = True
             for tc in response.tool_calls:
                 tool_name = tc["name"]
                 tool_args = tc.get("args", {})
@@ -104,7 +123,9 @@ def stream(
                     )
                     + "\n"
                 )
-                result = agent.tool_registry.invoke(tool_name, tool_args)
+                result = agent.tool_registry.invoke(
+                    tool_name, tool_args
+                )
                 yield (
                     json.dumps(
                         {
@@ -116,7 +137,10 @@ def stream(
                     + "\n"
                 )
                 messages.append(
-                    ToolMessage(content=result, tool_call_id=tc["id"])
+                    ToolMessage(
+                        content=result,
+                        tool_call_id=tc["id"],
+                    )
                 )
 
     except Exception as exc:
@@ -129,6 +153,13 @@ def stream(
         if response is not None
         else "No response"
     )
+
+    # Post-process with report template if available.
+    if hasattr(agent, "format_response"):
+        final_response = agent.format_response(
+            final_response, messages
+        )
+
     agent.logger.info(
         "Stream end | agent=%s | iterations=%d",
         agent.config.agent_id,

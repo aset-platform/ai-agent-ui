@@ -5,6 +5,10 @@
 backed by a pluggable :class:`~auth.token_store.TokenStore` (Redis
 or in-memory).
 
+Session management is layered on the same token store using
+``session:{user_id}:{jti}`` keys with JSON metadata (IP address,
+user-agent, timestamps).
+
 Usage::
 
     from auth.token_store import InMemoryTokenStore
@@ -18,8 +22,12 @@ Usage::
     )
 """
 
+from __future__ import annotations
+
+import json
 import logging
-from typing import Any, Dict
+from datetime import datetime, timezone
+from typing import Any, Dict, List
 
 import auth.password as _pw
 import auth.tokens as _tk
@@ -234,3 +242,147 @@ class AuthService:
             self._secret_key,
             self._store,
         )
+
+    # ----------------------------------------------------------
+    # Session management
+    # ----------------------------------------------------------
+
+    def _session_key(self, user_id: str, jti: str) -> str:
+        """Build the session store key.
+
+        Args:
+            user_id: UUID string.
+            jti: Refresh token JTI.
+
+        Returns:
+            The store key ``session:{user_id}:{jti}``.
+        """
+        return f"session:{user_id}:{jti}"
+
+    def register_session(
+        self,
+        user_id: str,
+        refresh_token: str,
+        ip_address: str = "",
+        user_agent: str = "",
+    ) -> None:
+        """Record a new session tied to a refresh token.
+
+        Args:
+            user_id: UUID string of the authenticated user.
+            refresh_token: The raw refresh JWT string.
+            ip_address: Client IP address.
+            user_agent: Client User-Agent header.
+        """
+        from jose import jwt as _jose_jwt
+
+        try:
+            payload = _jose_jwt.decode(
+                refresh_token,
+                self._secret_key,
+                algorithms=["HS256"],
+            )
+        except Exception:
+            return
+        jti = payload.get("jti", "")
+        if not jti:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        meta = json.dumps(
+            {
+                "session_id": jti,
+                "user_id": user_id,
+                "ip_address": ip_address,
+                "user_agent": user_agent,
+                "created_at": now,
+                "last_activity_at": now,
+            }
+        )
+        ttl = self._refresh_expire_days * 86400
+        key = self._session_key(user_id, jti)
+        self._store.add_json(key, meta, ttl)
+        self._logger.debug(
+            "Session registered: user_id=%s jti=%s",
+            user_id,
+            jti,
+        )
+
+    def list_sessions(self, user_id: str) -> List[Dict[str, Any]]:
+        """Return all active sessions for a user.
+
+        Args:
+            user_id: UUID string.
+
+        Returns:
+            A list of session metadata dicts.
+        """
+        prefix = f"session:{user_id}:"
+        keys = self._store.keys_by_prefix(prefix)
+        sessions: List[Dict[str, Any]] = []
+        for k in keys:
+            raw = self._store.get_json(k)
+            if raw:
+                try:
+                    sessions.append(json.loads(raw))
+                except json.JSONDecodeError:
+                    continue
+        return sessions
+
+    def revoke_session(self, user_id: str, session_id: str) -> bool:
+        """Revoke a single session by its session_id (JTI).
+
+        Adds the JTI to the deny-list and removes the
+        session metadata.
+
+        Args:
+            user_id: UUID string.
+            session_id: The JTI of the refresh token.
+
+        Returns:
+            ``True`` if the session was found and revoked.
+        """
+        key = self._session_key(user_id, session_id)
+        raw = self._store.get_json(key)
+        if not raw:
+            return False
+        ttl = self._refresh_expire_days * 86400
+        self._store.add(session_id, ttl)
+        self._store.remove(key)
+        self._logger.info(
+            "Session revoked: user_id=%s jti=%s",
+            user_id,
+            session_id,
+        )
+        return True
+
+    def revoke_all_sessions(self, user_id: str) -> int:
+        """Revoke all sessions for a user.
+
+        Args:
+            user_id: UUID string.
+
+        Returns:
+            Number of sessions revoked.
+        """
+        prefix = f"session:{user_id}:"
+        keys = self._store.keys_by_prefix(prefix)
+        count = 0
+        ttl = self._refresh_expire_days * 86400
+        for k in keys:
+            raw = self._store.get_json(k)
+            if raw:
+                try:
+                    meta = json.loads(raw)
+                    jti = meta.get("session_id", "")
+                    if jti:
+                        self._store.add(jti, ttl)
+                except json.JSONDecodeError:
+                    pass
+            self._store.remove(k)
+            count += 1
+        self._logger.info(
+            "All sessions revoked: user_id=%s count=%d",
+            user_id,
+            count,
+        )
+        return count

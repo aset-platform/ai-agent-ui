@@ -5,6 +5,8 @@ Functions
 - :func:`register` — attach user CRUD routes to the router
 """
 
+from __future__ import annotations
+
 import json as _json
 import logging
 from typing import Any, Dict, List
@@ -78,6 +80,20 @@ def register(router: APIRouter) -> None:
                     body.email
                 ),
             )
+        # Enforce max 5 active superusers on creation
+        if body.role == "superuser":
+            all_users = repo.list_all()
+            su_count = sum(
+                1
+                for u in all_users
+                if u.get("role") == "superuser"
+                and u.get("is_active")
+            )
+            if su_count >= 5:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Maximum 5 superusers are allowed.",
+                )
         hashed = service.hash_password(body.password)
         user = repo.create(
             {
@@ -165,17 +181,20 @@ def register(router: APIRouter) -> None:
                         updates["email"]
                     ),
                 )
-        # Enforce max 2 superusers
+        # Enforce max 5 active superusers
         if updates.get("role") == "superuser":
             all_users = repo.list_all()
             su_count = sum(
                 1
                 for u in all_users
-                if u.get("role") == "superuser" and u.get("user_id") != user_id
+                if u.get("role") == "superuser"
+                and u.get("is_active")
+                and u.get("user_id") != user_id
             )
-            if su_count >= 2:
+            if su_count >= 5:
                 raise HTTPException(
-                    status_code=400, detail="Maximum 2 superusers are allowed."
+                    status_code=400,
+                    detail="Maximum 5 superusers are allowed.",
                 )
         # Serialize page_permissions dict → JSON string for storage
         if "page_permissions" in updates and isinstance(

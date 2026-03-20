@@ -32,6 +32,24 @@ paid fallback. Configured via `GROQ_MODEL_TIERS` env var (comma-separated).
 - `MAX_HISTORY_TURNS` — default: 3
 - `MAX_TOOL_RESULT_CHARS` — default: 2000
 
+## Cascade Profiles (ASETPLTFRM-66)
+
+Three profiles, selected per-agent at startup:
+
+| Profile | Tiers | Anthropic | Use case |
+|---------|-------|-----------|----------|
+| tool | llama → kimi → scout | Yes (fallback) | Tool-calling iterations |
+| synthesis | gpt-oss-120b → kimi | Yes (fallback) | Final response (no tool calls) |
+| test | llama → kimi → scout | No (RuntimeError) | E2E + pytest |
+
+Detection: `AI_AGENT_UI_ENV=test` env var activates test profile.
+`BaseAgent` has `llm_with_tools` (tool cascade) + `llm_synthesis`
+(synthesis cascade). Loop tracks `_had_tool_calls` flag — after first
+tool iteration, subsequent calls route to synthesis cascade directly
+(no double-invoke waste).
+
+News sub-agent (`search_market_news`) capped at `max_iterations=2`.
+
 ## Routing Logic (per invoke call)
 1. Compress messages (3 stages)
 2. Estimate tokens
@@ -41,7 +59,7 @@ paid fallback. Configured via `GROQ_MODEL_TIERS` env var (comma-separated).
    - If still unaffordable, skip to next tier
    - Invoke; on `RateLimitError`/`APIStatusError`/`APIConnectionError`,
      cascade to next tier
-4. Anthropic as final fallback (no budget check)
+4. Anthropic as final fallback (no budget check; disabled in test profile)
 
 ## Key Design Decisions
 - `max_retries=0` on ChatGroq — disables Groq SDK internal retries

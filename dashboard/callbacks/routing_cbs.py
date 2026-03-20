@@ -11,8 +11,10 @@ Example::
     register(app)
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 from urllib.parse import parse_qs
 
 from dash import Input, Output, no_update
@@ -45,7 +47,7 @@ def register(app) -> None:
         Input("url", "search"),
         prevent_initial_call=False,
     )
-    def store_token_from_url(search: Optional[str]) -> Optional[str]:
+    def store_token_from_url(search: str | None) -> str | None:
         """Persist a JWT from the URL query string to localStorage.
 
         When the Next.js frontend embeds the dashboard in an ``<iframe>`` it
@@ -79,7 +81,7 @@ def register(app) -> None:
         Output("navbar-page-name", "children"),
         Input("url", "pathname"),
     )
-    def update_navbar_page_name(pathname: Optional[str]) -> str:
+    def update_navbar_page_name(pathname: str | None) -> str:
         """Update the page-name suffix in the navbar brand label.
 
         Reads the current URL pathname and returns the matching human-readable
@@ -107,7 +109,7 @@ def register(app) -> None:
         Output("nav-item-admin", "style"),
         Input("user-profile-store", "data"),
     )
-    def update_nav_visibility(profile: Optional[Dict[str, Any]]):
+    def update_nav_visibility(profile: dict[str, Any] | None):
         """Show or hide Insights and Admin nav links.
 
         Based on user role/permissions.
@@ -123,14 +125,14 @@ def register(app) -> None:
         Returns:
             Tuple of (insights style dict, admin style dict).
         """
-        _hide: Dict[str, str] = {"display": "none"}
-        _show: Dict[str, str] = {}
+        _hide: dict[str, str] = {"display": "none"}
+        _show: dict[str, str] = {}
 
         if not profile:
             return _hide, _hide
 
         role = profile.get("role", "general")
-        perms: Dict[str, Any] = profile.get("page_permissions") or {}
+        perms: dict[str, Any] = profile.get("page_permissions") or {}
 
         insights_ok = role == "superuser" or bool(perms.get("insights"))
         admin_ok = role == "superuser" or bool(perms.get("admin"))

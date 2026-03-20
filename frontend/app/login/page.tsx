@@ -9,7 +9,7 @@ import {
   generateCodeVerifier,
   storeOAuthSession,
 } from "@/lib/oauth";
-import { BACKEND_URL } from "@/lib/config";
+import { API_URL } from "@/lib/config";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -26,12 +26,12 @@ export default function LoginPage() {
   useEffect(() => {
     const token = getAccessToken();
     if (token && !isTokenExpired(token)) {
-      router.replace("/");
+      router.replace("/dashboard");
       return;
     }
     // Fix #15: AbortController so the fetch is cancelled if the component unmounts
     const controller = new AbortController();
-    fetch(`${BACKEND_URL}/auth/oauth/providers`, { signal: controller.signal })
+    fetch(`${API_URL}/auth/oauth/providers`, { signal: controller.signal })
       .then((r) => r.json())
       .then((data: { providers?: string[] }) => {
         setOauthProviders(
@@ -58,7 +58,7 @@ export default function LoginPage() {
 
       // 2. Fetch the provider's authorize URL from the backend.
       const res = await fetch(
-        `${BACKEND_URL}/auth/oauth/${provider}/authorize?code_challenge=${encodeURIComponent(challenge)}`
+        `${API_URL}/auth/oauth/${provider}/authorize?code_challenge=${encodeURIComponent(challenge)}`
       );
 
       if (!res.ok) {
@@ -98,7 +98,7 @@ export default function LoginPage() {
     loginAbortRef.current = controller;
 
     try {
-      const res = await fetch(`${BACKEND_URL}/auth/login`, {
+      const res = await fetch(`${API_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -122,7 +122,7 @@ export default function LoginPage() {
       };
       // Refresh token is now in HttpOnly cookie.
       setTokens(data.access_token);
-      router.replace("/");
+      router.replace("/dashboard");
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
       setError("Could not reach the server. Is the backend running?");
@@ -132,7 +132,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4 font-sans">
+    <div className="flex min-h-screen items-center justify-center bg-gray-50 dark:bg-gray-950 px-4 font-sans transition-colors">
       <div className="w-full max-w-sm">
         {/* Logo / brand */}
         <div className="flex flex-col items-center mb-8 gap-4">
@@ -144,17 +144,17 @@ export default function LoginPage() {
             className="h-16 w-auto drop-shadow-sm"
             priority
           />
-          <p className="text-sm text-gray-500">Sign in to continue</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Sign in to continue</p>
         </div>
 
         {/* Card */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 px-6 py-8">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 px-6 py-8 transition-colors">
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* Email */}
             <div>
               <label
                 htmlFor="email"
-                className="block text-sm font-medium text-gray-700 mb-1.5"
+                className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5"
               >
                 Email
               </label>
@@ -167,7 +167,7 @@ export default function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
                 data-testid="login-email-input"
-                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition"
+                className="w-full rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 px-4 py-2.5 text-sm text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:focus:ring-indigo-500 focus:border-transparent transition"
               />
             </div>
 
@@ -175,7 +175,7 @@ export default function LoginPage() {
             <div>
               <label
                 htmlFor="password"
-                className="block text-sm font-medium text-gray-700 mb-1.5"
+                className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5"
               >
                 Password
               </label>
@@ -188,16 +188,16 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 data-testid="login-password-input"
-                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition"
+                className="w-full rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 px-4 py-2.5 text-sm text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:focus:ring-indigo-500 focus:border-transparent transition"
               />
             </div>
 
             {/* Error message */}
             {error && (
-              <div className="flex items-start gap-2 rounded-xl bg-red-50 border border-red-100 px-4 py-3" data-testid="login-error-message">
+              <div className="flex items-start gap-2 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800 px-4 py-3" data-testid="login-error-message">
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
-                  className="w-4 h-4 text-red-500 shrink-0 mt-0.5"
+                  className="w-4 h-4 text-red-500 dark:text-red-400 shrink-0 mt-0.5"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -209,7 +209,7 @@ export default function LoginPage() {
                   <line x1="12" y1="8" x2="12" y2="12" />
                   <line x1="12" y1="16" x2="12.01" y2="16" />
                 </svg>
-                <p className="text-sm text-red-600">{error}</p>
+                <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
               </div>
             )}
 
@@ -218,7 +218,7 @@ export default function LoginPage() {
               type="submit"
               disabled={loading || !email || !password}
               data-testid="login-submit-button"
-              className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 disabled:cursor-not-allowed text-white font-medium py-2.5 text-sm transition-colors shadow-sm flex items-center justify-center gap-2"
+              className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 dark:disabled:bg-gray-700 disabled:cursor-not-allowed text-white font-medium py-2.5 text-sm transition-colors shadow-sm flex items-center justify-center gap-2"
             >
               {loading ? (
                 <>
@@ -236,9 +236,9 @@ export default function LoginPage() {
             <>
               {/* Divider */}
               <div className="flex items-center gap-3 my-5">
-                <hr className="flex-1 border-gray-200" />
-                <span className="text-xs text-gray-400">or continue with</span>
-                <hr className="flex-1 border-gray-200" />
+                <hr className="flex-1 border-gray-200 dark:border-gray-600" />
+                <span className="text-xs text-gray-400 dark:text-gray-500">or continue with</span>
+                <hr className="flex-1 border-gray-200 dark:border-gray-600" />
               </div>
 
               <div className="flex flex-col gap-2.5">
@@ -247,7 +247,7 @@ export default function LoginPage() {
                     onClick={() => handleOAuthLogin("google")}
                     disabled={!!oauthLoading}
                     data-testid="oauth-google-button"
-                    className="w-full flex items-center justify-center gap-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors shadow-sm"
+                    className="w-full flex items-center justify-center gap-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-60 disabled:cursor-not-allowed px-4 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-200 transition-colors shadow-sm"
                   >
                     {oauthLoading === "google" ? (
                       <span className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
@@ -285,7 +285,7 @@ export default function LoginPage() {
                   <button
                     onClick={() => handleOAuthLogin("facebook")}
                     disabled={!!oauthLoading}
-                    className="w-full flex items-center justify-center gap-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors shadow-sm"
+                    className="w-full flex items-center justify-center gap-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-60 disabled:cursor-not-allowed px-4 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-200 transition-colors shadow-sm"
                   >
                     {oauthLoading === "facebook" ? (
                       <span className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
@@ -308,7 +308,7 @@ export default function LoginPage() {
           )}
         </div>
 
-        <p className="text-center text-xs text-gray-400 mt-6">
+        <p className="text-center text-xs text-gray-400 dark:text-gray-500 mt-6">
           AI Agent UI · Powered by Claude
         </p>
       </div>

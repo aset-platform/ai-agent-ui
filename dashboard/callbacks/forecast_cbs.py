@@ -13,7 +13,6 @@ Example::
 from __future__ import annotations
 
 import logging
-from typing import Optional
 from urllib.parse import parse_qs
 
 import pandas as pd
@@ -31,7 +30,11 @@ from dashboard.callbacks.card_builders import (
     _generate_forecast_summary_cb,
 )
 from dashboard.callbacks.chart_builders import _empty_fig
-from dashboard.callbacks.chart_builders2 import _build_forecast_fig
+from dashboard.callbacks.chart_builders2 import (
+    _build_decomposition_fig,
+    _build_forecast_fig,
+    _build_multi_horizon_fig,
+)
 from dashboard.callbacks.data_loaders import (
     _clear_indicator_cache,
     _load_forecast,
@@ -45,6 +48,22 @@ from dashboard.services.stock_refresh import run_full_refresh
 
 # Module-level logger (immutable singleton — not mutable state).
 _logger = logging.getLogger(__name__)
+
+
+def _accuracy_note():
+    """Return the default accuracy-row placeholder.
+
+    Returns:
+        List with a single help paragraph.
+    """
+    return [
+        html.P(
+            "Model accuracy metrics are computed"
+            " when you click 'Refresh Data &"
+            " Run Analysis'.",
+            className="text-muted small",
+        ),
+    ]
 
 
 def register(app, mgr: RefreshManager) -> None:
@@ -61,9 +80,9 @@ def register(app, mgr: RefreshManager) -> None:
         State("nav-ticker-store", "data"),
     )
     def sync_forecast_ticker(
-        search: Optional[str],
-        pathname: Optional[str],
-        stored_ticker: Optional[str],
+        search: str | None,
+        pathname: str | None,
+        stored_ticker: str | None,
     ):
         """Pre-select the forecast dropdown when navigating from a stock card.
 
@@ -116,12 +135,19 @@ def register(app, mgr: RefreshManager) -> None:
     @app.callback(
         [
             Output("forecast-chart", "figure"),
-            Output("forecast-target-cards", "children"),
-            Output("forecast-accuracy-row", "children"),
+            Output(
+                "forecast-target-cards",
+                "children",
+            ),
+            Output(
+                "forecast-accuracy-row",
+                "children",
+            ),
         ],
         [
             Input("forecast-ticker-dropdown", "value"),
             Input("forecast-horizon-radio", "value"),
+            Input("forecast-view-radio", "value"),
             Input("forecast-refresh-store", "data"),
         ],
         [
@@ -130,42 +156,59 @@ def register(app, mgr: RefreshManager) -> None:
         ],
     )
     def update_forecast_chart(
-        ticker: Optional[str],
-        horizon: Optional[str],
+        ticker: str | None,
+        horizon: str | None,
+        view: str | None,
         refresh_trigger,
-        token: Optional[str],
-        search: Optional[str] = None,
+        token: str | None,
+        search: str | None = None,
     ):
-        """Reload and render the forecast chart when inputs change.
+        """Reload and render the forecast chart.
+
+        Supports three views: standard (default),
+        decomposition (trend + seasonality subplots),
+        and multi-horizon (3m/6m/9m overlay).
 
         Args:
             ticker: Selected ticker from the dropdown.
-            horizon: Forecast horizon string (``"3"``, ``"6"``, ``"9"``).
-            refresh_trigger: Counter incremented by the Run New Analysis
-                callback to force a chart refresh.
-            token: JWT access token from the auth-token-store.
+            horizon: Forecast horizon string.
+            view: Chart view type.
+            refresh_trigger: Counter from refresh store.
+            token: JWT access token.
             search: URL query string for token fallback.
 
         Returns:
-            Tuple of (forecast figure, target-cards component,
-            accuracy-row component).
+            Tuple of (figure, target-cards, accuracy-row).
         """
         token = _resolve_token(token, search)
         if _validate_token(token) is None:
-            return _empty_fig("Authentication required."), _unauth_notice(), []
+            return (
+                _empty_fig("Authentication required."),
+                _unauth_notice(),
+                [],
+            )
 
         if not ticker:
-            return _empty_fig("Select a ticker to begin."), [], []
+            return (
+                _empty_fig("Select a ticker to begin."),
+                [],
+                [],
+            )
 
         horizon_months = int(horizon) if horizon else 9
+        view = view or "standard"
 
         df_raw = _load_raw(ticker)
         if df_raw is None:
-            return _empty_fig(f"No price data for '{ticker}'."), [], []
+            return (
+                _empty_fig(
+                    f"No price data for '{ticker}'.",
+                ),
+                [],
+                [],
+            )
 
-        # Build prophet-format historical series
-        # yfinance >=1.2 dropped "Adj Close"; also Iceberg may store it as
-        # all-NaN.  Fall back to "Close" when the column is absent or empty.
+        # Build prophet-format historical series.
         if "Adj Close" in df_raw.columns and df_raw["Adj Close"].notna().any():
             price_col = "Adj Close"
         else:
@@ -173,7 +216,9 @@ def register(app, mgr: RefreshManager) -> None:
         prophet_df = (
             pd.DataFrame(
                 {
-                    "ds": pd.to_datetime(df_raw.index).tz_localize(None),
+                    "ds": pd.to_datetime(
+                        df_raw.index,
+                    ).tz_localize(None),
                     "y": df_raw[price_col].values,
                 }
             )
@@ -181,41 +226,107 @@ def register(app, mgr: RefreshManager) -> None:
             .sort_values("ds")
         )
         if prophet_df.empty:
-            return _empty_fig(f"No valid price data for '{ticker}'."), [], []
-        current_price = float(prophet_df["y"].iloc[-1])
+            return (
+                _empty_fig(
+                    f"No valid price data for" f" '{ticker}'.",
+                ),
+                [],
+                [],
+            )
+        current_price = float(
+            prophet_df["y"].iloc[-1],
+        )
 
-        forecast_df = _load_forecast(ticker, horizon_months)
+        # ── Multi-horizon view ───────────────────────
+        if view == "multi_horizon":
+            forecasts = {}
+            for h, label in (
+                (3, "3m"),
+                (6, "6m"),
+                (9, "9m"),
+            ):
+                fc = _load_forecast(ticker, h)
+                if fc is not None:
+                    cutoff = pd.Timestamp.now() + pd.DateOffset(months=h)
+                    forecasts[label] = fc[fc["ds"] <= cutoff].copy()
+            if not forecasts:
+                msg = (
+                    f"No forecast for '{ticker}'. "
+                    "Click 'Refresh Data & Run "
+                    "Analysis' to generate one."
+                )
+                return (
+                    _empty_fig(msg, height=550),
+                    [],
+                    [
+                        html.P(
+                            msg,
+                            className=("text-muted small"),
+                        ),
+                    ],
+                )
+            fig = _build_multi_horizon_fig(
+                prophet_df,
+                forecasts,
+                ticker,
+                current_price,
+            )
+            return fig, [], _accuracy_note()
+
+        # ── Load forecast for standard/decomposition ─
+        forecast_df = _load_forecast(
+            ticker,
+            horizon_months,
+        )
         if forecast_df is None:
             msg = (
                 f"No forecast found for '{ticker}'. "
-                "Click 'Refresh Data & Run Analysis' to generate one."
+                "Click 'Refresh Data & Run Analysis'"
+                " to generate one."
             )
             return (
                 _empty_fig(msg, height=550),
                 [],
-                [html.P(msg, className="text-muted small")],
+                [
+                    html.P(
+                        msg,
+                        className="text-muted small",
+                    ),
+                ],
             )
 
-        # Trim to requested horizon
         cutoff = pd.Timestamp.now() + pd.DateOffset(months=horizon_months)
         forecast_df = forecast_df[forecast_df["ds"] <= cutoff].copy()
 
+        # ── Decomposition view ───────────────────────
+        if view == "decomposition":
+            fig = _build_decomposition_fig(
+                prophet_df,
+                forecast_df,
+                ticker,
+            )
+            return fig, [], _accuracy_note()
+
+        # ── Standard view ────────────────────────────
         summary = _generate_forecast_summary_cb(
-            forecast_df, current_price, ticker, horizon_months
+            forecast_df,
+            current_price,
+            ticker,
+            horizon_months,
         )
         fig = _build_forecast_fig(
-            prophet_df, forecast_df, ticker, current_price, summary
+            prophet_df,
+            forecast_df,
+            ticker,
+            current_price,
+            summary,
         )
-
-        target_cards = _build_target_cards(summary, current_price, ticker)
-        accuracy_note = [
-            html.P(
-                "Model accuracy metrics are computed when you click "
-                "'Refresh Data & Run Analysis'.",
-                className="text-muted small",
-            )
-        ]
-        return fig, target_cards, accuracy_note
+        target_cards = _build_target_cards(
+            summary,
+            current_price,
+            ticker,
+        )
+        return fig, target_cards, _accuracy_note()
 
     @app.callback(
         Output("forecast-refresh-status", "children"),

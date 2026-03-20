@@ -5,7 +5,10 @@
 import { type Locator, expect } from "@playwright/test";
 
 import { DASH } from "../../utils/selectors";
-import { waitForDashLoading } from "../../utils/wait.helper";
+import {
+  gotoDashPage,
+  waitForDashLoading,
+} from "../../utils/wait.helper";
 import { BasePage } from "../base.page";
 
 export class DashAdminPage extends BasePage {
@@ -21,15 +24,10 @@ export class DashAdminPage extends BasePage {
 
   /** Navigate to admin page with superuser JWT. */
   async gotoWithToken(token: string): Promise<void> {
-    await this.page.goto(`/admin/users?token=${token}`);
-    await waitForDashLoading(this.page);
-    // Retry once if Dash restarted mid-load
-    const err = this.page.locator("text=Callback error");
-    if ((await err.count()) > 0) {
-      await this.page.waitForTimeout(3_000);
-      await this.page.reload();
-      await waitForDashLoading(this.page);
-    }
+    await gotoDashPage(
+      this.page,
+      `/admin/users?token=${token}`,
+    );
   }
 
   /** Get all rows in the user table. */

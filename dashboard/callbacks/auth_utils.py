@@ -8,9 +8,11 @@ Example::
     from dashboard.callbacks.auth_utils import _validate_token, _api_call
 """
 
+from __future__ import annotations
+
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 from urllib.parse import parse_qs
 
 from dash import html
@@ -22,10 +24,14 @@ _FRONTEND_LOGIN_URL = (
     os.environ.get("FRONTEND_URL", "http://localhost:3000") + "/login"
 )
 # Module-level configuration constant — kept module-level for shared access
-_BACKEND_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8181")
+_BACKEND_HOST = os.environ.get(
+    "BACKEND_URL",
+    "http://127.0.0.1:8181",
+)
+_BACKEND_URL = f"{_BACKEND_HOST}/v1"
 
 
-def _validate_token(token: Optional[str]) -> Optional[Dict[str, Any]]:
+def _validate_token(token: str | None) -> dict[str, Any] | None:
     """Decode and validate a JWT access token.
 
     Reads ``JWT_SECRET_KEY`` from the environment.  Returns the decoded
@@ -91,8 +97,8 @@ def _unauth_notice() -> html.Div:
                 ),
             ],
             style={
-                "background": "#fff",
-                "border": "1px solid #e5e7eb",
+                "background": "var(--card-bg)",
+                "border": "1px solid var(--border)",
                 "borderRadius": "1rem",
                 "padding": "2.5rem",
                 "maxWidth": "360px",
@@ -134,8 +140,8 @@ def _admin_forbidden() -> html.Div:
                 ),
             ],
             style={
-                "background": "#fff",
-                "border": "1px solid #e5e7eb",
+                "background": "var(--card-bg)",
+                "border": "1px solid var(--border)",
                 "borderRadius": "1rem",
                 "padding": "2.5rem",
                 "maxWidth": "360px",
@@ -152,9 +158,9 @@ def _admin_forbidden() -> html.Div:
 
 
 def _resolve_token(
-    stored_token: Optional[str],
-    url_search: Optional[str],
-) -> Optional[str]:
+    stored_token: str | None,
+    url_search: str | None,
+) -> str | None:
     """Return the best available JWT, preferring the URL query parameter.
 
     Args:
@@ -176,9 +182,9 @@ def _resolve_token(
 def _api_call(
     method: str,
     path: str,
-    token: Optional[str],
-    json_body: Optional[Dict[str, Any]] = None,
-) -> Optional[Any]:
+    token: str | None,
+    json_body: dict[str, Any] | None = None,
+) -> Any | None:
     """Make an authenticated HTTP request to the FastAPI backend.
 
     Args:
@@ -199,7 +205,7 @@ def _api_call(
 
         url = f"{_BACKEND_URL}{path}"
         headers = {"Authorization": f"Bearer {token}"}
-        kwargs: Dict[str, Any] = {"headers": headers, "timeout": 10}
+        kwargs: dict[str, Any] = {"headers": headers, "timeout": 10}
         if json_body is not None:
             kwargs["json"] = json_body
         fn = getattr(_req, method.lower())
@@ -210,7 +216,7 @@ def _api_call(
 
 
 def _fetch_user_tickers(
-    token: Optional[str],
+    token: str | None,
 ) -> set | None:
     """Fetch the authenticated user's linked tickers.
 

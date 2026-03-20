@@ -10,11 +10,12 @@ Example::
     from dashboard.callbacks.data_loaders import _load_raw, _add_indicators
 """
 
+from __future__ import annotations
+
 import logging
 import sys
 import time as _time
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 import ta
@@ -70,7 +71,7 @@ def _load_reg_cb() -> dict:
     return {}
 
 
-def _load_raw(ticker: str) -> Optional[pd.DataFrame]:
+def _load_raw(ticker: str) -> pd.DataFrame | None:
     """Load OHLCV data for a ticker from Iceberg.
 
     Args:
@@ -96,7 +97,7 @@ def _load_raw(ticker: str) -> Optional[pd.DataFrame]:
     return None
 
 
-def _load_forecast(ticker: str, horizon_months: int) -> Optional[pd.DataFrame]:
+def _load_forecast(ticker: str, horizon_months: int) -> pd.DataFrame | None:
     """Load the latest forecast series for a ticker from Iceberg.
 
     Prefers an exact match for *horizon_months*; falls back to longer
@@ -135,7 +136,7 @@ def _load_forecast(ticker: str, horizon_months: int) -> Optional[pd.DataFrame]:
 
 def _load_dividends(
     ticker: str,
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """Load dividend history for a ticker from Iceberg.
 
     Args:

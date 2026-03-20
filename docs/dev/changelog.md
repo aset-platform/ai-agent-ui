@@ -4,6 +4,220 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 20, 2026 — Portfolio Analytics, TradingView Migration, UX Polish
+
+### Added
+- **Portfolio Performance endpoint** `GET /v1/dashboard/portfolio/performance` — daily value + invested series with cash-flow-adjusted metrics (total return, annualized, max drawdown, Sharpe, best/worst day)
+- **Portfolio Forecast endpoint** `GET /v1/dashboard/portfolio/forecast` — weighted Prophet forecast aggregation with `total_invested` for explainable cards
+- **PortfolioChart.tsx** — TradingView chart: AreaSeries (market value) + LineSeries (invested, amber dashed) + HistogramSeries (daily P&L)
+- **PortfolioForecastChart.tsx** — TradingView chart: dual historical lines + forecast (dashed green) + confidence band + flat invested projection
+- **ForecastChart.tsx** — TradingView replacement for Plotly per-ticker forecast with confidence band + crosshair tooltip
+- **CompareChart.tsx** — TradingView replacement for Plotly normalized price comparison (one LineSeries per ticker)
+- **ConfirmDialog.tsx** — reusable confirmation modal with danger/warning variants, applied to 5 destructive flows (delete stock, unlink ticker, revoke session, revoke all, deactivate user)
+- **`_safe_float()` helper** — NaN-safe numeric conversion for Iceberg NULL values with OHLCV price fallback
+- **`useDomDark.ts` hook** — MutationObserver-based dark mode detection for all TradingView charts, fixes SSR hydration mismatch
+- **Per-ticker refresh buttons** on Portfolio Analysis, Portfolio Forecast, Stock Analysis tabs — triggers 6-step pipeline + polls + auto-refreshes charts
+- **100 new tests** across 8 files: portfolio CRUD (17), cache layer (11), WS basic (18), agents basic (20), portfolio analytics +6, ConfirmDialog (7), portfolio types (9), useDomDark (1)
+- 11 backend tests for portfolio analytics (cash-flow metrics, invested timeline, horizon fetch)
+
+### Changed
+- **Analysis page tabs**: renamed and reordered — Portfolio Analysis → Portfolio Forecast → Stock Analysis → Stock Forecast → Compare Stocks
+- **Tab style**: pill-style → underline-style (matching Insights/Admin pages)
+- **"Link Ticker" → "Link Stock"** across sidebar, header breadcrumb, and HeroSection
+- **HeroSection buttons**: "Portfolio Analysis" (primary), "Portfolio Forecast", "Link Stock"
+- **Correlation heatmap removed** from Compare Stocks page
+- **Plotly removed** from analysis and compare pages (only Insights page still uses Plotly)
+- Portfolio forecast endpoint always fetches 9M forecasts; client truncates for 3M/6M horizons
+
+### Fixed
+- **NaN handling**: Iceberg NULL → pandas NaN is truthy in Python — `val or 0` and `val <= 0` silently fail. Fixed with `_safe_float()` using `math.isnan()`
+- **Horizon picker empty**: `get_latest_forecast_series(ticker, 3)` filtered by non-existent `horizon_months=3` rows. Fixed: always query 9M
+- **Metrics inflated** (+501% total return): raw portfolio value includes capital contributions. Fixed: cash-flow-adjusted daily returns, invested-basis total return, gain% drawdown
+- **React hooks order**: `useRef`/`useCallback` placed after conditional returns violated Rules of Hooks
+- **OHLCV freshness gate**: `stock_refresh.py` gate changed from `latest >= today - 1 day` to `latest >= today` — was skipping fetches when yesterday's close existed
+- **Dark mode on charts**: TradingView charts rendered dark on light mode page due to SSR hydration mismatch — fixed with `useDomDark` MutationObserver hook
+- **report_builder.py crash**: `_extract(None)` passed None to `re.search()` — added None guard to `_extract`, `_parse_analysis`, `_parse_forecast`
+- **test_dashboard_routes.py**: Watchlist mock used wrong method names (`get_dashboard_ohlcv` → `get_ohlcv_batch`); LLM usage mock used wrong field (`total_cost_usd` → `total_cost`)
+- **test_audit_routes.py**: Missing JWT secret in test env + wrong auth dependency override (`_resolve_user`)
+- **Venv symlink**: `~/.ai-agent-ui/venv` → `backend/demoenv` — tests were running on conda Python 3.9 instead of project 3.12
+
+Tickets: ASETPLTFRM-124 (8 pts), ASETPLTFRM-125 (2 pts), ASETPLTFRM-126 (3 pts, Sprint 3)
+Branch: feature/sprint2-planning
+
+---
+
+## Mar 18–19, 2026 — Performance, TradingView Charts, Portfolio Management, Dash Retirement
+
+### Added
+- **Redis write-through cache** (`backend/cache.py`) for all 22 API endpoints with invalidation map
+- **Cache warm-up** at startup: shared keys sync + per-ticker background thread + top N frequent users
+- **TradingView lightweight-charts v5** replacing Plotly for Analysis page (~45KB vs ~8MB)
+  - 4-pane chart: Candlestick + Volume + RSI + MACD with crosshair, zoom, dark mode
+  - D/W/M interval selector with candle aggregation
+  - Indicator toggles dropdown (SMA 50/200, Bollinger, Volume, RSI, MACD)
+  - OHLC legend in chart header (ref-based, zero re-renders)
+  - Bollinger Bands with distinct cyan lines
+- **SWR caching** on all pages (dashboard, analytics, marketplace, admin, insights)
+- **Aggregate endpoint** `GET /v1/dashboard/home` — 4 requests → 1
+- **Per-ticker refresh** pipeline: `POST /v1/dashboard/refresh/{ticker}` with 6-step background job
+- **User preferences** — localStorage + Redis sync with sliding 7-day TTL (`usePreferences` hook)
+- **Smart cache warming** — pre-warms top N active users' data at startup (`CACHE_WARM_TOP_USERS` config)
+- **Portfolio Management MVP** — append-only `portfolio_transactions` Iceberg table
+  - Add/edit/delete stocks (ticker from registry, qty, price, date)
+  - WatchlistWidget 2-tab layout (Portfolio | Watchlist)
+  - HeroSection shows portfolio value per currency with total P&L
+  - AddStockModal + EditStockModal
+- **Unit tests** for report_builder.py (16 test cases)
+- **Lightweight doc generation** — no full app bootstrap for mkdocs build
+
+### Changed
+- **Dash service retired** — removed from run.sh, config, navigation (4 services: redis, backend, frontend, docs)
+- `/insights` iframe → redirect to native `/analytics/insights`
+- Analysis page: tabs on left, searchable ticker dropdown on right, full-page chart
+- Hero card: "Welcome back, Abhay!" (gradient, first name), total P&L, navigation buttons
+- Quick action buttons navigate to pages (not chat)
+- Chat FAB removed — toggle moved to AppHeader (all screen sizes)
+- Next.js dev indicator disabled (`devIndicators: false`)
+- Compare metrics table: added RSI, MACD Signal, Sentiment, best performer badge
+- Forecast tab: horizon picker (3M/6M/9M), today marker, price target annotations
+- BaseAgent: extracted `_build_llm` + `_build_synthesis_llm` (removed 90 lines duplication)
+- gen_api_docs.py: proper endpoint-level auth detection via `route.dependant.dependencies`
+- setup.sh: Redis port uses `${REDIS_PORT:-6379}` variable
+- CORS: added PUT to allow_methods
+
+### Fixed
+- Chart flickering on indicator toggle (ref-based crosshair, memoized deps)
+- Dark mode sync on TradingView chart (reads DOM classList at build time)
+- Null-guard on price/change/OHLC fields across all pages
+- LLM request count discrepancy (Admin reads Iceberg, not ephemeral counter)
+- Forecast hooks before early returns (Rules of Hooks)
+- Portfolio tab isolated from Watchlist (no data mixing)
+- Portfolio top ticker auto-selected on load (SWR race fix)
+- Hero buttons force Analysis tab via URL ?tab= param
+- Tab switch auto-selects top ticker for signals widget
+- `usePreferences` setState deferred to avoid update-during-render
+
+Tickets: ASETPLTFRM-72, 73, 74, 75, 112, 113, 114, 115, 116, 117, 118 (11 tickets, 46 story points)
+Branch: feature/sprint2-planning
+
+---
+
+## Mar 16, 2026 — Dashboard UI Overhaul + Dash-to-Next.js Migration
+
+### Added
+- Native portfolio dashboard with 7 widgets (hero, watchlist, analysis signals, LLM usage, forecast chart)
+- Collapsible sidebar navigation with Dashboard sub-pages
+- Chat side panel (FAB-triggered, resizable, past sessions)
+- react-plotly.js chart integration with dark/light theming
+- Native Link Ticker page (replaces Dash Marketplace)
+- Native Dashboard Home (stock cards, search/analyse)
+- Native Compare page (normalized price chart, correlation heatmap)
+- Native Analysis page (tabbed: candlestick+RSI+MACD, forecast, compare)
+- 6 dashboard API endpoints + 3 chart data endpoints
+- Chat audit log (Iceberg table + flush on logout)
+- India/US country filter with ₹/$ currency support
+- Breadcrumb titles in header (Dashboard → Home, etc.)
+
+### Changed
+- Post-login landing: chat → portfolio dashboard
+- Sidebar: floating grid button → persistent collapsible sidebar
+- Dashboard renamed to "Portfolio", Analytics renamed to "Dashboard"
+- Removed Insights from top-level nav (now under Dashboard group)
+- Removed Dash header (Next.js handles all navigation)
+
+### Fixed
+- SSR hydration mismatch from crypto.randomUUID()
+- Content clipped behind fixed sidebar (missing margin-left)
+- All stocks showing $ regardless of market
+- Analysis signals showing N/A (fetches from technical_indicators)
+- Iframe pages not filling viewport height
+
+Tickets: ASETPLTFRM-82 to 114 (33 tickets, 25 Done)
+Files: ~60 new/modified across frontend + backend
+
+---
+
+## Mar 15, 2026 — WSL2 Compat, LLM Cascade Split, Report Template, Auto-Docs
+
+### PR #92 — WSL2 Compatibility + DevOps UX
+
+- **ASETPLTFRM-67** — Fix setup.sh prompt functions leaking captions into .env values. Added default superuser menu (`admin@demo.local / Admin123!`), numbered API key prompts `[1/6]`–`[6/6]`, `[set]` confirmation for secrets.
+- **ASETPLTFRM-68** — Crash-resume via `~/.ai-agent-ui/.setup_state` markers. `--repair` mode fixes only symlinks, env files, and git hooks. `--force` resets all state.
+- **ASETPLTFRM-69** — `run.sh`: 3-state status table (`● up` / `◐ listening` / `○ down`) with HTTP health probes. New `logs`, `doctor` commands. Post-launch health check with error context.
+- **ASETPLTFRM-70** — Cross-platform install guides: `docs/setup/macos.md`, `linux.md`, `windows.md` (full WSL2 walkthrough). MkDocs "Getting Started" nav section.
+
+Files: `setup.sh`, `run.sh`, `docs/setup/` (3 new), `mkdocs.yml`, `README.md`
+
+### PR #93 — LLM Cascade Split + Report Template
+
+- **ASETPLTFRM-66** — Split LLM cascade into 3 profiles: tool-calling (llama → kimi → scout), synthesis (gpt-oss-120b → kimi → Anthropic), test (free-only, no Anthropic). `AI_AGENT_UI_ENV=test` activates test profile. `BaseAgent` now has `llm_with_tools` + `llm_synthesis`.
+- **ASETPLTFRM-65** — New `report_builder.py`: parses tool output text via regex, renders 5 deterministic markdown sections (header, technicals, forecast, calendar, charts). LLM produces verdict only (~150–250 tokens vs ~800–1200). `StockAgent.format_response()` prepends template.
+- **ASETPLTFRM-71** (Bug) — Fix synthesis double-invoke (eliminated wasted LLM call per request). Cap news sub-agent to `max_iterations=2` (was 5+1=6 calls). Reinforce stock agent pipeline prompt. Result: 10 → 5 API calls per stock analysis (50% reduction).
+
+Files: `backend/config.py`, `llm_fallback.py`, `agents/base.py`, `agents/loop.py`, `agents/stream.py`, `agents/general_agent.py`, `agents/stock_agent.py`, `agents/report_builder.py` (new), `tools/agent_tool.py`, `e2e/playwright.config.ts`, `tests/conftest.py`, `run.sh`
+
+### PR #94 — Auto-Generated Docs + Drift Detection
+
+- **ASETPLTFRM-63** — `scripts/gen_api_docs.py` + `scripts/gen_config_docs.py` introspect FastAPI routes and Settings fields, generate markdown tables. Wired via `mkdocs-gen-files` plugin. Generated pages gitignored.
+- **ASETPLTFRM-64** — `scripts/docs_drift_check.py` compares code routes/config against hand-written `api.md`/`config.md`. Reports MISSING and STALE entries. `./run.sh docs-check` command.
+
+Files: `scripts/gen_api_docs.py` (new), `scripts/gen_config_docs.py` (new), `scripts/docs_drift_check.py` (new), `mkdocs.yml`, `run.sh`, `requirements.txt`, `.gitignore`
+
+---
+
+## Mar 14, 2026 — Dark Mode CSS Fix
+
+### ASETPLTFRM-61 — Fix: Dark mode "2 selected" badge font color
+
+The multi-select dropdown on the Compare Stocks page showed dark, unreadable text for the "2 selected" count badge in dark mode.
+
+- **Root cause**: Dash 4's `.dash-dropdown-value-count` uses built-in CSS variables (`--Dash-Text-Weak`, `--Dash-Fill-Interactive-Weak`) that aren't overridden by the app's `body.dark-mode` token system
+- **Fix**: Added `body.dark-mode .dash-dropdown-value-count` rule in `dashboard/assets/custom.css` setting `color: var(--text-primary)` and `background: var(--border)`
+
+Files: `dashboard/assets/custom.css` (4 lines added)
+
+---
+
+## Mar 13, 2026 — Tier Health Monitoring + API v1 Cutover
+
+### ASETPLTFRM-13 — Groq Tier Health Monitoring
+
+Added per-tier health monitoring to the N-tier Groq/Anthropic LLM cascade:
+
+- **Health classification**: healthy (0 failures in 5-min window), degraded (1–3), down (4+), disabled (manual)
+- **Latency stats**: avg + p95 from sliding window of 100 recent values
+- **Cascade tracking**: per-model cascade count and failure timestamps
+- **Admin endpoints**: `GET /v1/admin/tier-health`, `POST /v1/admin/tier-health/{model}/toggle` (superuser only)
+- **Dashboard health cards**: color-coded status (green/yellow/red/grey) with cascade count and latency
+
+Files: `backend/observability.py` (major), `backend/routes.py`, `dashboard/layouts/observability.py`, `dashboard/callbacks/observability_cbs.py`
+
+Tests: 12 backend (`test_tier_health.py`), 6 dashboard (`test_tier_health_cards.py`), 3 E2E (`admin-deep.spec.ts`)
+
+### ASETPLTFRM-20 — API v1 Full Cutover
+
+Removed root-mounted duplicate API routes. All API traffic now goes through `/v1/` prefix only:
+
+- **Backend**: removed root_router mount in `routes.py`; auth, ticker, and admin routers mounted with `prefix="/v1"`
+- **Frontend**: added `API_URL` constant (`${BACKEND_URL}/v1`) in `lib/config.ts`; 9 files updated to use `API_URL` for API calls; `BACKEND_URL` kept for static assets (avatars) and WS URL derivation
+- **Dashboard**: split `_BACKEND_URL` → `_BACKEND_HOST` + `_BACKEND_URL` (host/v1) in `auth_utils.py` and `admin_cbs2.py`
+- **WebSocket**: stays at `/ws/chat` (not versioned)
+- **Static files**: `/avatars/*` stays at root (not versioned)
+
+| Before | After |
+|--------|-------|
+| `POST /chat` + `POST /v1/chat` | `POST /v1/chat` only |
+| `GET /health` + `GET /v1/health` | `GET /v1/health` only |
+| `GET /agents` + `GET /v1/agents` | `GET /v1/agents` only |
+
+Tests: rewrote `test_api_versioning.py` (8 tests), updated `test_chat_stream.py` to `/v1/` paths
+
+### Python 3.9 Compatibility
+
+Added `from __future__ import annotations` to 7 backend files using PEP 604 `X | None` syntax: `observability.py`, `validation.py`, `token_budget.py`, `llm_fallback.py`, `models.py`, `tools/_ticker_linker.py`, `ws.py`
+
+---
+
 ## Mar 11, 2026 — Sprint Phase 3 + Dashboard fixes
 
 ### Redis Token Store (Story 1.3)
