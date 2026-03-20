@@ -427,6 +427,561 @@ body {
   to   { transform: translateY(0);     opacity: 1; }
 }
 
+/* ── Refresh button group ────────────────────────────────── */
+
+.refresh-btn-group {
+  min-height: 31px;            /* match btn-sm height */
+  gap: 0.5rem;                 /* space between button and status box */
+}
+
+/* Icon-only circular refresh button */
+.refresh-icon-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  line-height: 1;
+  transition: transform 0.3s ease, box-shadow 0.2s ease;
+}
+
+.refresh-icon-btn:hover {
+  transform: rotate(90deg);
+  box-shadow: 0 2px 8px rgba(25, 135, 84, 0.3);
+}
+
+/* Fixed-width box that holds the spinner / status icon.
+   position:relative so the absolutely-positioned dcc.Loading
+   dots stay inside this box instead of overlapping the button. */
+.refresh-status-box {
+  position: relative;
+  min-width: 40px;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Shrink the dcc.Loading wrapper so it doesn't reserve 60px */
+.refresh-status-box ._dash-loading {
+  min-height: 0 !important;
+}
+
+.refresh-status-icon {
+  font-size: 1.25rem;
+  font-weight: 700;
+  animation: refreshFadeOut 1s ease-out 7s forwards;
+}
+
+@keyframes refreshFadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+/* ── Per-card refresh button (Home page) ─────────────────── */
+
+.card-refresh-wrapper {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* Compact 20×20 circular icon button */
+.card-refresh-icon-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  line-height: 1;
+  opacity: 0.5;
+  transition: opacity 0.2s ease, transform 0.3s ease;
+}
+
+.card-refresh-icon-btn:hover {
+  opacity: 1;
+  transform: rotate(90deg);
+}
+
+.card-refresh-icon-btn:disabled {
+  opacity: 0.3;
+  transform: none;
+}
+
+/* CSS-only 14×14 border spinner */
+.card-refresh-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #e5e7eb;
+  border-top-color: #198754;
+  border-radius: 50%;
+  animation: cardRefreshSpin 0.6s linear infinite;
+}
+
+@keyframes cardRefreshSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* Status icon — reuses refreshFadeOut from above */
+.card-refresh-status-icon {
+  font-size: 0.85rem;
+  font-weight: 700;
+  animation: refreshFadeOut 1s ease-out 7s forwards;
+}
+
+/* ── Sortable column headers ─────────────────────────────── */
+
+.sort-header-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.sort-header-btn:hover {
+  color: var(--accent);
+}
+
+.sort-header-btn.sort-active {
+  color: var(--accent);
+}
+
+.sort-arrow {
+  font-size: 0.65rem;
+  opacity: 0.35;
+  line-height: 1;
+}
+
+.sort-arrow.sort-active {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* ── Column info icon (tooltip target) ───────────────────── */
+
+.col-info-icon {
+  font-size: 0.65rem;
+  cursor: help;
+  opacity: 0.5;
+  margin-left: 0.15em;
+}
+
+.col-info-icon:hover {
+  opacity: 1;
+}
+
+/* ── Error overlay banner ────────────────────────────────── */
+
+.error-overlay-wrapper {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 9999;
+  animation: errorSlideDown 0.3s ease-out;
+}
+
+.error-overlay-banner {
+  border-radius: 0 !important;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+@keyframes errorSlideDown {
+  from { transform: translateY(-100%); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+
+/* ── Refresh button group ────────────────────────────────── */
+
+.refresh-btn-group {
+  min-height: 31px;            /* match btn-sm height */
+  gap: 0.5rem;                 /* space between button and status box */
+}
+
+/* Icon-only circular refresh button */
+.refresh-icon-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  line-height: 1;
+  transition: transform 0.3s ease, box-shadow 0.2s ease;
+}
+
+.refresh-icon-btn:hover {
+  transform: rotate(90deg);
+  box-shadow: 0 2px 8px rgba(25, 135, 84, 0.3);
+}
+
+/* Fixed-width box that holds the spinner / status icon.
+   position:relative so the absolutely-positioned dcc.Loading
+   dots stay inside this box instead of overlapping the button. */
+.refresh-status-box {
+  position: relative;
+  min-width: 40px;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Shrink the dcc.Loading wrapper so it doesn't reserve 60px */
+.refresh-status-box ._dash-loading {
+  min-height: 0 !important;
+}
+
+.refresh-status-icon {
+  font-size: 1.25rem;
+  font-weight: 700;
+  animation: refreshFadeOut 1s ease-out 7s forwards;
+}
+
+@keyframes refreshFadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+/* ── Per-card refresh button (Home page) ─────────────────── */
+
+.card-refresh-wrapper {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* Compact 20×20 circular icon button */
+.card-refresh-icon-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  line-height: 1;
+  opacity: 0.5;
+  transition: opacity 0.2s ease, transform 0.3s ease;
+}
+
+.card-refresh-icon-btn:hover {
+  opacity: 1;
+  transform: rotate(90deg);
+}
+
+.card-refresh-icon-btn:disabled {
+  opacity: 0.3;
+  transform: none;
+}
+
+/* CSS-only 14×14 border spinner */
+.card-refresh-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #e5e7eb;
+  border-top-color: #198754;
+  border-radius: 50%;
+  animation: cardRefreshSpin 0.6s linear infinite;
+}
+
+@keyframes cardRefreshSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* Status icon — reuses refreshFadeOut from above */
+.card-refresh-status-icon {
+  font-size: 0.85rem;
+  font-weight: 700;
+  animation: refreshFadeOut 1s ease-out 7s forwards;
+}
+
+/* ── Sortable column headers ─────────────────────────────── */
+
+.sort-header-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.sort-header-btn:hover {
+  color: var(--accent);
+}
+
+.sort-header-btn.sort-active {
+  color: var(--accent);
+}
+
+.sort-arrow {
+  font-size: 0.65rem;
+  opacity: 0.35;
+  line-height: 1;
+}
+
+.sort-arrow.sort-active {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* ── Column info icon (tooltip target) ───────────────────── */
+
+.col-info-icon {
+  font-size: 0.65rem;
+  cursor: help;
+  opacity: 0.5;
+  margin-left: 0.15em;
+}
+
+.col-info-icon:hover {
+  opacity: 1;
+}
+
+/* ── Error overlay banner ────────────────────────────────── */
+
+.error-overlay-wrapper {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 9999;
+  animation: errorSlideDown 0.3s ease-out;
+}
+
+.error-overlay-banner {
+  border-radius: 0 !important;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+@keyframes errorSlideDown {
+  from { transform: translateY(-100%); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+
+/* ── Refresh button group ────────────────────────────────── */
+
+.refresh-btn-group {
+  min-height: 31px;            /* match btn-sm height */
+  gap: 0.5rem;                 /* space between button and status box */
+}
+
+/* Icon-only circular refresh button */
+.refresh-icon-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  line-height: 1;
+  transition: transform 0.3s ease, box-shadow 0.2s ease;
+}
+
+.refresh-icon-btn:hover {
+  transform: rotate(90deg);
+  box-shadow: 0 2px 8px rgba(25, 135, 84, 0.3);
+}
+
+/* Fixed-width box that holds the spinner / status icon.
+   position:relative so the absolutely-positioned dcc.Loading
+   dots stay inside this box instead of overlapping the button. */
+.refresh-status-box {
+  position: relative;
+  min-width: 40px;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Shrink the dcc.Loading wrapper so it doesn't reserve 60px */
+.refresh-status-box ._dash-loading {
+  min-height: 0 !important;
+}
+
+.refresh-status-icon {
+  font-size: 1.25rem;
+  font-weight: 700;
+  animation: refreshFadeOut 1s ease-out 7s forwards;
+}
+
+@keyframes refreshFadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+/* ── Per-card refresh button (Home page) ─────────────────── */
+
+.card-refresh-wrapper {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* Compact 20×20 circular icon button */
+.card-refresh-icon-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  line-height: 1;
+  opacity: 0.5;
+  transition: opacity 0.2s ease, transform 0.3s ease;
+}
+
+.card-refresh-icon-btn:hover {
+  opacity: 1;
+  transform: rotate(90deg);
+}
+
+.card-refresh-icon-btn:disabled {
+  opacity: 0.3;
+  transform: none;
+}
+
+/* CSS-only 14×14 border spinner */
+.card-refresh-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #e5e7eb;
+  border-top-color: #198754;
+  border-radius: 50%;
+  animation: cardRefreshSpin 0.6s linear infinite;
+}
+
+@keyframes cardRefreshSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* Status icon — reuses refreshFadeOut from above */
+.card-refresh-status-icon {
+  font-size: 0.85rem;
+  font-weight: 700;
+  animation: refreshFadeOut 1s ease-out 7s forwards;
+}
+
+/* ── Sortable column headers ─────────────────────────────── */
+
+.sort-header-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.sort-header-btn:hover {
+  color: var(--accent);
+}
+
+.sort-header-btn.sort-active {
+  color: var(--accent);
+}
+
+.sort-arrow {
+  font-size: 0.65rem;
+  opacity: 0.35;
+  line-height: 1;
+}
+
+.sort-arrow.sort-active {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* ── Column info icon (tooltip target) ───────────────────── */
+
+.col-info-icon {
+  font-size: 0.65rem;
+  cursor: help;
+  opacity: 0.5;
+  margin-left: 0.15em;
+}
+
+.col-info-icon:hover {
+  opacity: 1;
+}
+
+/* ── Error overlay banner ────────────────────────────────── */
+
+.error-overlay-wrapper {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 9999;
+  animation: errorSlideDown 0.3s ease-out;
+}
+
+.error-overlay-banner {
+  border-radius: 0 !important;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+@keyframes errorSlideDown {
+  from { transform: translateY(-100%); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+
 /* ── Page heading ────────────────────────────────────────── */
 
 h2.fw-bold {

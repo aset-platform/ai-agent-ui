@@ -129,7 +129,8 @@ class BaseAgent(ABC):
         Subclasses may override for custom behaviour.
 
         Returns:
-            An uninvoked LangChain chat model instance.
+            An uninvoked LangChain chat model instance (or duck-typed
+            equivalent with ``bind_tools``/``invoke`` methods).
         """
         from config import get_settings
         from llm_fallback import FallbackLLM
