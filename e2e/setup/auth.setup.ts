@@ -12,8 +12,9 @@ import path from "path";
 import { test as setup, expect } from "@playwright/test";
 import { type APIRequestContext } from "@playwright/test";
 
-const BACKEND =
+const BACKEND_HOST =
   process.env.BACKEND_URL || "http://127.0.0.1:8181";
+const BACKEND = `${BACKEND_HOST}/v1`;
 const FRONTEND =
   process.env.FRONTEND_URL || "http://localhost:3000";
 const AUTH_DIR = path.join(__dirname, "..", ".auth");

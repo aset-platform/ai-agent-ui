@@ -15,7 +15,8 @@ NAVBAR = dbc.Navbar(
             dbc.NavbarBrand(
                 [
                     html.Span(
-                        "Stock Analysis Dashboard", className="fw-semibold"
+                        "Stock Analysis Dashboard",
+                        className="fw-semibold",
                     ),
                     html.Span(
                         id="navbar-page-name",
@@ -29,7 +30,9 @@ NAVBAR = dbc.Navbar(
                 [
                     dbc.NavItem(
                         dbc.NavLink(
-                            "Home", href="/", className="nav-link-custom"
+                            "Home",
+                            href="/",
+                            className="nav-link-custom",
                         )
                     ),
                     dbc.NavItem(
@@ -61,6 +64,16 @@ NAVBAR = dbc.Navbar(
                             className="nav-link-custom",
                         ),
                         id="nav-item-admin",
+                    ),
+                    # Dark mode toggle
+                    dbc.NavItem(
+                        html.Button(
+                            "☀️",
+                            id="theme-toggle-btn",
+                            className="theme-toggle-btn ms-2",
+                            title="Toggle dark mode",
+                        ),
+                        className=("d-flex align-items-center"),
                     ),
                 ],
                 navbar=True,

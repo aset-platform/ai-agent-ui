@@ -27,13 +27,16 @@ frontend/
 │   ├── IFrameView.tsx                         # Dashboard/Docs iframe wrapper
 │   ├── StatusBadge.tsx                        # Animated thinking/streaming badge
 │   ├── EditProfileModal.tsx                   # Avatar upload + full_name edit modal
-│   └── ChangePasswordModal.tsx               # Password reset modal
+│   ├── ChangePasswordModal.tsx               # Password reset modal
+│   └── SessionManagementModal.tsx            # Active session list + revoke
 ├── hooks/                                     # Custom React hooks
 │   ├── useAuthGuard.ts                        # Redirect to /login if no valid token
 │   ├── useChatHistory.ts                      # Per-agent history + debounced localStorage save
-│   ├── useSendMessage.ts                      # Streaming fetch with AbortController
+│   ├── useSendMessage.ts                      # WS-preferred streaming (HTTP NDJSON fallback)
+│   ├── useWebSocket.ts                        # WebSocket connection state machine
 │   ├── useEditProfile.ts                      # PATCH /auth/me + avatar upload
-│   └── useChangePassword.ts                   # Password-reset two-step flow
+│   ├── useChangePassword.ts                   # Password-reset two-step flow
+│   └── useSessionManagement.ts                # List + revoke active sessions
 ├── lib/
 │   ├── auth.ts                                # JWT token helpers (getAccessToken, setTokens, …)
 │   ├── oauth.ts                               # PKCE helpers + sessionStorage helpers for SSO
@@ -60,6 +63,23 @@ NEXT_PUBLIC_DOCS_URL=http://127.0.0.1:8000
 ```
 
 All three are used at runtime in the browser (they're embedded in the client bundle by Next.js). Fallback values are hard‑coded in the component for zero‑config local dev.
+
+### URL Constants (`lib/config.ts`)
+
+```typescript
+export const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8181";
+export const API_URL = `${BACKEND_URL}/v1`;
+export const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? BACKEND_URL.replace(/^http/, "ws");
+```
+
+| Constant | Usage |
+|----------|-------|
+| `BACKEND_URL` | Static assets (avatars), WebSocket URL derivation |
+| `API_URL` | All API calls via `apiFetch` (`/v1/chat`, `/v1/auth/*`, etc.) |
+| `WS_URL` | WebSocket connection (`/ws/chat`) |
+
+!!! warning "Use `API_URL` for API calls, `BACKEND_URL` only for static assets"
+    After the `/v1/` cutover (ASETPLTFRM-20), all API endpoints require the `/v1` prefix. Use `API_URL` (which includes `/v1`) for all `apiFetch` calls. Use `BACKEND_URL` only for avatar URLs and other non-API resources.
 
 ---
 
@@ -101,8 +121,10 @@ interface Message {
 | `useAuthGuard` | Redirect to `/login` if no valid token |
 | `useChatHistory(agentId)` | Per-agent `messages` array; debounced localStorage save |
 | `useSendMessage(...)` | `sendMessage`, `handleKeyDown`, `handleInput`; AbortController cleanup |
+| `useWebSocket()` | WS connection state machine (DISCONNECTED → CONNECTING → AUTHENTICATING → READY) |
 | `useEditProfile()` | `isOpen`, `saving`, `error`; `PATCH /auth/me` + avatar upload |
 | `useChangePassword()` | `isOpen`, `saving`, `error`; password-reset two-step flow |
+| `useSessionManagement()` | Session list, revoke, revoke-all; modal open/close state |
 
 ### Refs
 
@@ -118,7 +140,7 @@ const menuRef        = useRef<HTMLDivElement>(null);   // click‑outside detect
 // Profile fetch on mount — AbortController cancels if unmounted
 useEffect(() => {
   const controller = new AbortController();
-  apiFetch(`${BACKEND_URL}/auth/me`, { signal: controller.signal })
+  apiFetch(`${API_URL}/auth/me`, { signal: controller.signal })
     .then(res => res.ok ? res.json() : null)
     .then(data => { if (data) setProfile(data); })
     .catch(err => { if (err?.name !== "AbortError") { /* ignore */ } });

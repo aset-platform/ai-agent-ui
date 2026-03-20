@@ -3,6 +3,7 @@
  */
 
 import { test, expect } from "../../fixtures/auth.fixture";
+import { waitForDashReady } from "../../utils/wait.helper";
 
 import { DashMarketplacePage } from "../../pages/dashboard/marketplace.page";
 
@@ -35,7 +36,7 @@ test.describe("Dashboard marketplace", () => {
     ).last();
     if ((await nextBtn.count()) > 0) {
       await nextBtn.click({ force: true });
-      await page.waitForTimeout(2_000);
+      await waitForDashReady(page);
       // Grid should still be visible after page change
       await expect(marketplacePage.grid).toBeVisible();
     }

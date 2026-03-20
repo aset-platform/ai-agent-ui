@@ -17,7 +17,7 @@ interface ChatInputProps {
 
 export function ChatInput({ input, loading, textareaRef, onInput, onKeyDown, onSend }: ChatInputProps) {
   return (
-    <footer className="bg-white border-t border-gray-200 px-4 py-3 shrink-0">
+    <footer className="bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700 px-3 md:px-4 py-2 md:py-3 shrink-0 transition-colors">
       <div className="max-w-3xl mx-auto flex items-end gap-2">
         <textarea
           ref={textareaRef}
@@ -28,13 +28,13 @@ export function ChatInput({ input, loading, textareaRef, onInput, onKeyDown, onS
           onKeyDown={onKeyDown}
           disabled={loading}
           data-testid="chat-message-input"
-          className="flex-1 resize-none bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition disabled:opacity-50 max-h-40 overflow-y-auto"
+          className="flex-1 resize-none bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-3 md:px-4 py-2.5 text-sm text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:focus:ring-indigo-500 focus:border-transparent transition disabled:opacity-50 max-h-40 overflow-y-auto"
           style={{ height: "42px" }}
         />
         <button
           onClick={onSend}
           disabled={loading || !input.trim()}
-          className="shrink-0 w-10 h-10 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 disabled:cursor-not-allowed text-white flex items-center justify-center transition-colors shadow-sm"
+          className="shrink-0 w-11 h-11 md:w-10 md:h-10 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 dark:disabled:bg-gray-700 disabled:cursor-not-allowed text-white flex items-center justify-center transition-colors shadow-sm"
           title="Send"
           data-testid="chat-send-button"
         >
@@ -44,7 +44,7 @@ export function ChatInput({ input, loading, textareaRef, onInput, onKeyDown, onS
           </svg>
         </button>
       </div>
-      <p className="text-center text-[11px] text-gray-400 mt-2">
+      <p className="text-center text-[11px] text-gray-400 dark:text-gray-500 mt-1.5 md:mt-2 hidden md:block">
         Shift+Enter for new line · Enter to send
       </p>
     </footer>

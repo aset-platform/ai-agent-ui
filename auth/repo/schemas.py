@@ -16,10 +16,12 @@ Constants
 - :data:`_USER_TICKERS_PA_SCHEMA`
 """
 
+from __future__ import annotations
+
 import logging
 import math
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any
 
 import pyarrow as pa
 
@@ -103,7 +105,7 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _to_ts(dt: Optional[datetime]) -> Optional[datetime]:
+def _to_ts(dt: datetime | None) -> datetime | None:
     """Normalise a datetime to naive UTC for PyArrow storage.
 
     Args:
@@ -119,7 +121,7 @@ def _to_ts(dt: Optional[datetime]) -> Optional[datetime]:
     return dt
 
 
-def _from_ts(val: Any) -> Optional[datetime]:
+def _from_ts(val: Any) -> datetime | None:
     """Convert a raw PyArrow/pandas timestamp to an aware UTC datetime.
 
     Args:
@@ -141,7 +143,7 @@ def _from_ts(val: Any) -> Optional[datetime]:
     return None
 
 
-def _row_to_dict(row: Any) -> Dict[str, Any]:
+def _row_to_dict(row: Any) -> dict[str, Any]:
     """Convert an Iceberg scan row to a plain Python dict with aware datetimes.
 
     Args:
@@ -150,7 +152,7 @@ def _row_to_dict(row: Any) -> Dict[str, Any]:
     Returns:
         A plain :class:`dict` with Python-native values.
     """
-    d: Dict[str, Any] = dict(row)
+    d: dict[str, Any] = dict(row)
     for ts_col in _USER_TS_COLS:
         if ts_col in d:
             d[ts_col] = _from_ts(d[ts_col])

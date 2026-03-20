@@ -23,7 +23,15 @@ from typing import Any, Dict, List
 
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import ALL, Input, Output, State, callback_context, html
+from dash import (
+    ALL,
+    Input,
+    Output,
+    State,
+    callback_context,
+    html,
+    no_update,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -268,6 +276,16 @@ def register_sort_callback(app, table_id: str) -> None:
     )
     def _update_sort(n_clicks_list, current_state):
         """Update sort state on header click."""
+        # Guard: when the table re-renders (e.g. on
+        # page change), sort buttons are recreated with
+        # n_clicks=0.  Dash fires this callback because
+        # the pattern-matched components changed, but no
+        # button was actually clicked.  Return no_update
+        # to prevent a phantom sort-store write that
+        # would trigger the sort-reset callback and
+        # reset pagination to page 1.
+        if not any(n_clicks_list):
+            return no_update
         triggered = callback_context.triggered
         if not triggered:
             return current_state or {

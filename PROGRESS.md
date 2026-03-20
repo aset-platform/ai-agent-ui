@@ -2,6 +2,403 @@
 
 ---
 
+# Session: Mar 20, 2026 — Portfolio Analytics, TradingView Migration, UX Polish
+
+## Sprint 2 continuation on `feature/sprint2-planning`
+
+### Portfolio Performance & Forecast (ASETPLTFRM-124, 8 pts)
+
+**Backend** (`dashboard_routes.py`, `dashboard_models.py`):
+- `GET /v1/dashboard/portfolio/performance` — daily portfolio value + invested series
+  - Cash-flow-adjusted metrics: daily returns strip capital contributions
+  - Total return uses invested basis, max drawdown on gain% series
+  - `_safe_float()` helper for NaN-safe Iceberg NULL handling with OHLCV fallback
+- `GET /v1/dashboard/portfolio/forecast` — weighted Prophet forecast aggregation
+  - Always fetches 9M from Iceberg; client truncates for 3M/6M
+  - Returns `total_invested` for explainable summary cards
+- 5 Pydantic models: PortfolioDailyPoint (with `invested_value`), PortfolioMetrics, PortfolioPerformanceResponse, PortfolioForecastPoint, PortfolioForecastResponse (with `total_invested`)
+- Cache invalidation on portfolio add/edit/delete for perf + forecast keys
+
+**Frontend** — Analysis page 5 tabs:
+- Portfolio Analysis: TradingView `PortfolioChart.tsx` (AreaSeries value + LineSeries invested amber + HistogramSeries P&L), 6 metrics cards, crosshair tooltip with gain/loss %
+- Portfolio Forecast: TradingView `PortfolioForecastChart.tsx` (dual historical lines + forecast + confidence band), 4 explainable summary cards (Invested → Current Value with P&L → Predicted → Expected Return on cost), horizon picker 3M/6M/9M
+
+### TradingView Migration — Stock Forecast + Compare
+- `ForecastChart.tsx` — replaces Plotly for per-ticker forecast (historical + forecast + confidence band + crosshair)
+- `CompareChart.tsx` — replaces Plotly for normalized price comparison (one LineSeries per ticker, colored legend)
+- Correlation heatmap section removed from Compare Stocks
+- Plotly removed from analysis + compare pages (only Insights still uses Plotly)
+
+### ConfirmDialog (ASETPLTFRM-125, 2 pts)
+- Reusable `ConfirmDialog.tsx` with danger (red) / warning (amber) variants
+- Applied to 5 destructive flows: delete stock, unlink ticker, revoke session, revoke all, deactivate user
+- Escape key + backdrop click dismiss, auto-focus on confirm button
+
+### UX Polish
+- Tab labels: Portfolio Analysis, Portfolio Forecast, Stock Analysis, Stock Forecast, Compare Stocks
+- Tab order: Portfolio first, then Stock, then Compare
+- Tab style: underline (matching Insights/Admin pages)
+- Tab preference persistence for all new tab IDs
+- HeroSection buttons: "Portfolio Analysis", "Portfolio Forecast", "Link Stock"
+- "Link Ticker" → "Link Stock" everywhere (sidebar, header, hero)
+- Chart legends in headers (Market Value + Invested + Forecast indicators)
+- Invested line: amber dashed 2px (visible against all backgrounds)
+
+### Bug Fixes
+- NaN handling: Iceberg NULL → pandas NaN is truthy, breaks `or`/comparison fallbacks → `_safe_float()` with `math.isnan()`
+- Horizon picker empty: forecast endpoint filtered by `horizon_months` but only 9M rows exist → always fetch 9M
+- Metrics inflated (+501% return): raw value includes capital contributions → cash-flow-adjusted formulas
+- React hooks order: `useRef`/`useCallback` after conditional returns → moved before early returns
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `backend/dashboard_models.py` | +`invested_value`, +`total_invested` on portfolio models |
+| `backend/dashboard_routes.py` | +2 endpoints, +`_safe_float()`, cash-flow-adjusted metrics |
+| `auth/endpoints/ticker_routes.py` | +cache invalidation for perf/forecast |
+| `frontend/lib/types.ts` | +5 TypeScript interfaces |
+| `frontend/components/charts/PortfolioChart.tsx` | +invested LineSeries (amber), +gain/loss tooltip |
+| `frontend/components/charts/PortfolioForecastChart.tsx` | New — TradingView forecast chart |
+| `frontend/components/charts/ForecastChart.tsx` | New — TradingView per-ticker forecast |
+| `frontend/components/charts/CompareChart.tsx` | New — TradingView compare chart |
+| `frontend/components/ConfirmDialog.tsx` | New — reusable confirmation dialog |
+| `frontend/app/(authenticated)/analytics/analysis/page.tsx` | 5 tabs, TradingView everywhere, underline style |
+| `frontend/app/(authenticated)/analytics/compare/page.tsx` | TradingView, removed correlation |
+| `frontend/app/(authenticated)/dashboard/page.tsx` | ConfirmDialog for delete |
+| `frontend/app/(authenticated)/analytics/marketplace/page.tsx` | ConfirmDialog for unlink |
+| `frontend/components/SessionManagementModal.tsx` | ConfirmDialog for revoke |
+| `frontend/app/(authenticated)/admin/page.tsx` | ConfirmDialog for deactivate |
+| `frontend/components/widgets/HeroSection.tsx` | Updated labels + links |
+| `frontend/lib/constants.tsx` | "Link Stock" |
+| `frontend/components/AppHeader.tsx` | "Link Stock" |
+| `tests/backend/test_portfolio_analytics.py` | 11 tests |
+
+### Refresh Buttons & Data Pipeline
+- Per-ticker refresh on Portfolio Analysis tab (all holdings), Portfolio Forecast tab, Stock Analysis/Forecast (selected ticker)
+- Refresh triggers `POST /v1/dashboard/refresh/{ticker}` → polls `/status` → re-fetches chart data on success
+- Stock Analysis + Stock Forecast charts re-mount via `key={ticker-refreshKey}` on refresh success
+- **Freshness gate fix**: `stock_refresh.py` OHLCV gate changed from `latest >= today - 1 day` to `latest >= today` — was skipping fetches when yesterday's data existed
+
+### Dark Mode Fix
+- Created `useDomDark.ts` hook — MutationObserver on `<html>` classList to detect theme changes
+- Applied to all 4 new chart components (PortfolioChart, PortfolioForecastChart, ForecastChart, CompareChart)
+- Fixes SSR hydration mismatch where chart rendered dark on light mode page
+
+### Test Coverage Expansion (+100 new tests)
+- `test_portfolio_crud.py` — 17 tests: GET/POST/PUT/DELETE portfolio + preferences
+- `test_cache.py` — 11 tests: CacheService get/set/invalidate, NoOp fallback, Redis failure
+- `test_portfolio_analytics.py` — +6 tests: _safe_float NaN/None, cashflow-adjusted return, invested-basis total return
+- `test_ws_basic.py` — 18 tests: WS module exports, auth validation, protocol messages
+- `test_agents_basic.py` — 20 tests: config, registry CRUD, router keyword/ticker/blocked
+- `ConfirmDialog.test.tsx` — 7 tests: render, callbacks, variants
+- `types.portfolio.test.ts` — 9 tests: 5 new portfolio interfaces
+- `useDarkMode.test.ts` — 1 test: export smoke
+
+### Pre-existing Test Fixes
+- `report_builder.py` — `_extract(None)` crash fixed with None guard (CRITICAL)
+- `test_dashboard_routes.py` — Watchlist mock method names corrected (`get_ohlcv_batch` not `get_dashboard_ohlcv`)
+- `test_dashboard_routes.py` — LLM usage field name corrected (`"total_cost"` not `"total_cost_usd"`)
+- `test_audit_routes.py` — JWT secret + `_resolve_user` auth override added
+
+### Venv Fix
+- Created symlink `~/.ai-agent-ui/venv` → `backend/demoenv` (Python 3.12.9)
+- Tests now run correctly with `source ~/.ai-agent-ui/venv/bin/activate && python -m pytest`
+- Root cause: conda base (Python 3.9) was default; project venv at `backend/demoenv` was undocumented
+
+### Test Results (final)
+- Backend: 416 passed, 23 failed (pre-existing mock issues in test_stock_tools — ASETPLTFRM-126)
+- Frontend: 61 passed
+
+Tickets: ASETPLTFRM-124 (8 pts), ASETPLTFRM-125 (2 pts) — Done
+Created: ASETPLTFRM-126 (3 pts) — Fix test_stock_tools/test_chat_stream mocks (Sprint 3)
+Sprint 3: ASETPLTFRM-76–81, 126 moved, due Mar 26
+
+---
+
+# Session: Mar 18–19, 2026 — Performance, Charts, Portfolio, Dash Retirement
+
+## Sprint 2 Complete (46 story points, 11 tickets — 100% delivered)
+
+### Performance (ASETPLTFRM-115)
+- Redis write-through cache for 22 endpoints with invalidation map
+- Cache warm-up at startup (shared + per-ticker + top N users)
+- SWR frontend caching (all pages converted from raw useEffect)
+- Aggregate `/dashboard/home` endpoint (4 requests → 1)
+- Iceberg N+1 queries eliminated, predicate push-down
+
+### Charts (ASETPLTFRM-115)
+- TradingView lightweight-charts v5 replacing broken Plotly candlestick
+- 4-pane: Candlestick + Volume + RSI + MACD with crosshair + zoom
+- D/W/M interval selector with candle aggregation
+- Indicator toggles, OHLC legend, Bollinger Bands
+- Dark/light mode sync via DOM classList read
+
+### Dash Migration (ASETPLTFRM-112, 113, 114)
+- Insights (7 tabs) + Admin (3 tabs) fully native in Next.js
+- Dash service retired from run.sh (4 services now)
+- iframe removed, DASHBOARD_URL removed
+- Chat FAB → AppHeader toggle
+
+### Portfolio Management (ASETPLTFRM-118)
+- Iceberg `portfolio_transactions` table (append-only)
+- CRUD: add/edit/delete stocks with searchable ticker dropdown
+- WatchlistWidget 2-tab (Portfolio | Watchlist)
+- HeroSection: portfolio value per currency, total P&L
+- Per-ticker refresh pipeline (6-step background job)
+
+### User Preferences (ASETPLTFRM-116, 117)
+- localStorage + Redis sync with sliding 7-day TTL
+- Chart settings, market filter, active tab persist
+- Smart cache warming for top N frequent users
+
+### Code Cleanup (ASETPLTFRM-72, 73, 74, 75)
+- Unit tests for report_builder.py (16 cases)
+- gen_api_docs.py: lightweight import + proper auth detection
+- Agent _build_llm dedup (BaseAgent), Redis port variable
+
+### Files: ~100 new/modified across frontend + backend + docs
+### Tickets: ASETPLTFRM-72-75, 112-118 (11 Done)
+### PRs: Pending (branch: feature/sprint2-planning)
+
+---
+
+# Session: Mar 16, 2026 — Dashboard UI Overhaul + Dash-to-Next.js Migration
+
+## 2026-03-16 — Dashboard UI Overhaul + Dash-to-Next.js Migration
+
+### Sprint 1 Complete (ASETPLTFRM-82 to 106)
+- **Native portfolio dashboard** replacing chat-first landing page with widgets (watchlist, analysis signals, LLM usage donut, forecast chart)
+- **Collapsible sidebar navigation**: Portfolio, Dashboard (collapsible: Home, Analysis, Insights, Link Ticker), Docs, Admin
+- **Chat side panel**: FAB-triggered resizable drawer with past sessions, agent switcher, WebSocket streaming
+- **Global India/US country filter** with correct ₹/$ currency symbols across all widgets
+- **6 backend dashboard endpoints** + Iceberg chat_audit_log table
+- **14 backend + 22 frontend tests**
+- Removed Dash header, consolidated navigation to Next.js sidebar
+- Bug fixes: hydration mismatch, sidebar layout, iframe height, currency display, signal N/A values
+
+### Sprint 2 In Progress (ASETPLTFRM-107 to 114)
+- **react-plotly.js** chart wrapper with auto dark/light theming
+- **4 Dash pages migrated to native Next.js**: Home (stock cards), Link Ticker (paginated table), Compare (charts + heatmap), Analysis (tabbed: candlestick+RSI+MACD, forecast, compare)
+- **Unified chart**: candlestick + volume + RSI + MACD on shared x-axis with range selector (3M/6M/1Y/2Y/3Y/Max)
+- Remaining: Insights migration (8 SP), Admin migration (5 SP), Dash retirement (2 SP)
+
+### Files: ~60 new/modified across frontend + backend
+### Tickets: ASETPLTFRM-82 to 114 (25 Done, 5 In Progress/To Do)
+### PRs: Pending (branch: feature/sprint2-planning)
+
+---
+
+# Session: Mar 15, 2026 — WSL2 compat, LLM cascade, report template, auto-docs
+
+## Summary
+WSL2 installation fixes, DevOps UX overhaul (setup.sh + run.sh), LLM cascade split into tool/synthesis/test profiles, deterministic report template, auto-generated API/config docs, and drift detection CLI.
+
+### Completed tickets
+
+#### PR #92 — WSL2 compatibility + DevOps UX (merged)
+- **ASETPLTFRM-67** (3 SP) — Fix setup.sh prompt stdout leak, default superuser menu, numbered API key prompts
+- **ASETPLTFRM-68** (3 SP) — Crash-resume via .setup_state markers, --repair mode for symlinks/hooks/env
+- **ASETPLTFRM-69** (5 SP) — run.sh: reliable 3-state status (up/listening/down), logs command, doctor diagnostics
+- **ASETPLTFRM-70** (3 SP) — Cross-platform install guides: macOS, Linux, Windows 11 (WSL2 full walkthrough)
+
+#### PR #93 — LLM cascade + report template + bug fix (merged)
+- **ASETPLTFRM-66** (3 SP) — Split LLM cascade: tool (llama→kimi→scout), synthesis (gpt-oss→kimi→Anthropic), test (free-only)
+- **ASETPLTFRM-65** (3 SP) — Deterministic report_builder.py: 5 markdown sections parsed from tool output + LLM verdict-only
+- **ASETPLTFRM-71** (2 SP, Bug) — Fix synthesis double-invoke (save 1 API call), cap news agent to 2 iterations, reinforce pipeline prompt
+
+#### PR #94 — Auto-gen docs + drift checker (pending merge)
+- **ASETPLTFRM-63** (3 SP) — gen_api_docs.py + gen_config_docs.py via mkdocs-gen-files plugin
+- **ASETPLTFRM-64** (2 SP) — docs_drift_check.py + ./run.sh docs-check command
+
+### Key metrics
+- Sprint 1: 11 stories + 1 bug = 28 SP total, all implemented
+- Stock analysis API calls: 10 → 5 (50% reduction, verified TITAN.NS)
+- Token usage: ~28K → ~14.6K per analysis (48% reduction)
+- Report consistency: 100% deterministic (model-independent)
+
+---
+
+# Session: Mar 14, 2026 — ASETPLTFRM-60, 61, 62 + Sprint planning
+
+## Summary
+Dark mode fixes, MkDocs theme sync, Sprint 1 planning & brainstorming.
+
+### Completed tickets (merged in PR #90 and #91)
+
+#### ASETPLTFRM-60 — Superuser cap + E2E reliability (PR #90)
+- Superuser cap counts only active users.
+- Shared wait helpers in `e2e/utils/wait.helper.ts`.
+- Refactored all 6 page objects + 14 test files.
+
+#### ASETPLTFRM-61 — Dark mode "2 selected" badge fix (PR #90)
+- Added `body.dark-mode .dash-dropdown-value-count` in `custom.css`.
+
+#### ASETPLTFRM-27 — E2E test stabilization (PR #90)
+- Marked Done — all parallel worker flakiness resolved.
+
+#### ASETPLTFRM-62 — MkDocs dark mode sync (PR #91)
+- `mkdocs.yml` — added `custom_dir: docs/overrides`.
+- `docs/overrides/main.html` — reads `?theme=` URL param, sets
+  Material palette localStorage + `data-md-color-scheme`.
+- `frontend/app/page.tsx` — docs iframe appends theme param.
+- Key discovery: Material stores palette as
+  `{index, color: {scheme}}` in localStorage.
+
+### New Sprint 1 stories (brainstormed + created)
+
+| Key | Summary | SP | Epic |
+|-----|---------|---:|------|
+| ASETPLTFRM-63 | Auto-gen API + config docs (mkdocs-gen-files) | 3 | -4 |
+| ASETPLTFRM-64 | CLI docs drift detection (`./run.sh docs-check`) | 2 | -6 |
+| ASETPLTFRM-65 | Deterministic report template + LLM verdict-only | 3 | -2 |
+| ASETPLTFRM-66 | Split LLM cascade: tool/synthesis/test profiles | 3 | -2 |
+
+### Key design decisions
+- **Report builder**: Tools return structured dicts → Python template
+  renders sections 1-5 → separate small LLM call for verdict only
+  (~150-250 tokens vs ~800-1200 today). 80% token reduction.
+- **Cascade split**: Tool-calling uses llama/kimi/scout, synthesis
+  uses gpt-oss-120b exclusively, tests use free-tier-only cascade
+  (no gpt-oss, no Anthropic). Detected via `AI_AGENT_UI_ENV=test`.
+
+### Sprint 1 status
+- 51 Done, 4 To Do (63, 64, 65, 66). Sprint ends 2026-03-18.
+
+---
+
+# Session: Mar 13, 2026 (cont. 2) — ASETPLTFRM-13, 20
+
+## Summary
+Tier health monitoring and full API v1 cutover.
+
+### ASETPLTFRM-13 — Groq tier health monitoring
+- Per-tier health classification: healthy/degraded/down/disabled
+  (5-min sliding window, thresholds: 1 failure = degraded, 4 = down).
+- Latency stats (avg + p95) from sliding window of recent values.
+- Admin endpoints: `GET /v1/admin/tier-health`,
+  `POST /v1/admin/tier-health/{model}/toggle`.
+- Dashboard health cards with color-coded status indicators.
+- 12 backend tests (`test_tier_health.py`), 6 dashboard tests
+  (`test_tier_health_cards.py`), 3 E2E tests.
+
+### ASETPLTFRM-20 — API v1 cutover
+- Removed root-mounted duplicate routes; all API under `/v1/`.
+- Frontend: added `API_URL` constant (`BACKEND_URL/v1`), updated
+  9 files to use `API_URL` for API calls, kept `BACKEND_URL` for
+  static assets (avatars) and WS URL derivation.
+- Dashboard: split `_BACKEND_URL` → `_BACKEND_HOST` + API URL.
+- WebSocket stays at `/ws/chat` (not versioned).
+- Rewrote `test_api_versioning.py` (8 tests), updated
+  `test_chat_stream.py` to use `/v1/` paths.
+- Python 3.9 compat: `from __future__ import annotations` in 7
+  backend files.
+
+### Documentation updates
+- `backend/api.md` — all endpoints under `/v1/`, admin tier-health
+  endpoints, WebSocket protocol, updated curl examples.
+- `backend/overview.md` — observability module, tier health section,
+  API versioning route table.
+- `backend/config.md` — WebSocket + Redis settings.
+- `dashboard/overview.md` — LLM observability tab, health cards,
+  `_api_call` host/API URL split.
+- `frontend/overview.md` — `API_URL` constant, URL usage guide,
+  new hooks/components in file tree.
+- `dev/changelog.md` — Mar 13 entry for ASETPLTFRM-13 and 20.
+- `README.md` — `/v1/` only routes, tier health admin endpoint,
+  observability files, session management components, E2E counts,
+  WebSocket/Redis env vars.
+
+---
+
+# Session: Mar 13, 2026 (cont.) — ASETPLTFRM-18, 19, 58
+
+## Summary
+Bug fixes, lazy loading, forecast charts, and E2E expansion.
+
+### ASETPLTFRM-18 — Lazy tab loading (analysis page)
+- Tabs render via callback on `active_tab`; no children at init.
+- `suppress_callback_exceptions=True` enabled.
+- Bug fix: moved `analysis-refresh-store` + poll interval
+  outside tab content so they persist across tab switches.
+
+### ASETPLTFRM-19 — Forecast chart types
+- Horizon radio (3/6/9 months), view radio (standard,
+  decomposition, multi_horizon).
+- 14 new unit tests (`test_lazy_loading.py`,
+  `test_forecast_charts.py`).
+
+### Bug fixes
+- **Compare chart broken**: `analysis-refresh-store` destroyed
+  on tab switch — moved to `analysis_tabs_layout()`.
+- **Pagination reset to page 1**: phantom sort-store writes
+  from pattern-matching callbacks firing on table re-render.
+  Fixed with `if not any(n_clicks_list): return no_update`
+  guard in `sort_helpers.py`.
+- **Python 3.9 compat**: added `from __future__ import
+  annotations` to 10 dashboard files using `X | None` syntax.
+
+### ASETPLTFRM-58 — E2E test coverage (+42 tests)
+- New: `pagination.spec.ts` (10 tests) — cross-page validation.
+- Updated 6 specs: home (+4), insights (+10), marketplace (+6),
+  forecast (+6), analysis (+7), admin (+7).
+- Total E2E: ~91 tests.
+
+### Jira updates
+- ASETPLTFRM-18, 19 updated with implementation details.
+- ASETPLTFRM-58 updated with full E2E coverage breakdown.
+
+---
+
+# Session: Mar 13, 2026 — ASETPLTFRM-7, 10, 12
+
+## Summary
+Implemented three Jira stories on `feature/iframe-top-navigation`:
+
+### ASETPLTFRM-7 — JWKS key rotation + iframe sign-in fix
+- JWKS rotation endpoint, iframe top-navigation sign-in fix.
+
+### ASETPLTFRM-10 — Session management (backend + frontend)
+- Backend: `GET /auth/sessions`, `DELETE /auth/sessions/{id}`,
+  `POST /auth/sessions/revoke-all` with JTI-based tracking.
+- Frontend: `SessionManagementModal` with device parsing,
+  current-session highlight, revoke/revoke-all actions.
+- 12 backend tests, 22 frontend tests passing.
+
+### ASETPLTFRM-12 — LLM observability dashboard (8 pts)
+- `ObservabilityCollector` — thread-safe cascade/request/compression
+  metrics with sliding-window RPM tracking.
+- Wired into `FallbackLLM` at 5 instrumentation points.
+- `GET /admin/metrics` endpoint (superuser only).
+- Dash "LLM Observability" tab: auto-refresh tier cards with
+  TPM/RPM gauges, cascade summary badges, event log table.
+- 8 tests (6 collector unit + 2 endpoint).
+
+### Test results
+- 391 passed, 1 pre-existing failure, 7 skipped (no regressions).
+
+---
+
+# Session: Mar 13, 2026 — Sprint 1 Branch Promotions
+
+## Summary
+Promoted Sprint 1 deliverables (30/30 story points) through
+all branches: dev → qa → release → main. All conflicts
+resolved locally before pushing — zero conflicts on GitHub.
+
+### PRs
+| PR | Promotion | Status |
+|----|-----------|--------|
+| #85 | dev → qa | Merged |
+| #86 | qa → release | Merged |
+| #87 | release → main | Merged |
+
+### Result
+All 4 branches (dev, qa, release, main) are identical.
+Local promotion branches and stale remote refs cleaned up.
+
+---
+
 # Session: Mar 12, 2026 — PR #82 Review Fixes (ASETPLTFRM-50-54)
 
 ## Summary

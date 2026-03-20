@@ -25,6 +25,8 @@ Typical usage::
     registry.list_agents()            # [{"id": "general", "name": ..., ...}]
 """
 
+from __future__ import annotations
+
 import logging
 
 from agents.base import BaseAgent

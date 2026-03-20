@@ -17,39 +17,35 @@
   --accent-light:   #eef2ff;  /* indigo-50                  */
 }
 
+/* ── Dark mode design tokens ─────────────────────────────── */
+
+body.dark-mode {
+  --bg:             #0f172a;  /* slate-900 — page background */
+  --card-bg:        #1e293b;  /* slate-800 — card background */
+  --border:         #334155;  /* slate-700 — borders         */
+  --text-primary:   #f1f5f9;  /* slate-100 — main text       */
+  --text-secondary: #94a3b8;  /* slate-400 — muted text      */
+  --accent:         #818cf8;  /* indigo-400 (brighter)       */
+  --accent-hover:   #6366f1;  /* indigo-500                  */
+  --accent-light:   #312e81;  /* indigo-900                  */
+}
+
 /* ── Global ──────────────────────────────────────────────── */
 
 body {
   background-color: var(--bg);
   color: var(--text-primary);
-}
-
-/* ── Navigation ──────────────────────────────────────────── */
-
-.navbar {
-  background-color: var(--card-bg) !important;
-  border-bottom: 1px solid var(--border);
-}
-
-.navbar-brand {
-  font-size: 1.1rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  color: var(--accent) !important;
-}
-
-.nav-link-custom {
-  font-size: 0.9rem;
-  padding: 0.4rem 0.8rem !important;
-  border-radius: 4px;
-  color: var(--text-secondary) !important;
   transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-.nav-link-custom:hover {
-  background-color: var(--accent-light);
-  color: var(--accent) !important;
-}
+/* ── Navigation (removed — Next.js shell handles nav) ────── */
+
+/* .navbar, .navbar-brand, .nav-link-custom rules removed:
+   the Dash app is now embedded headerless in an iframe. */
+
+/* ── Theme toggle button (removed — Next.js controls theme) ── */
+
+/* .theme-toggle-btn rules removed: toggle is in Next.js shell. */
 
 /* ── Stock cards (Home page) ─────────────────────────────── */
 
@@ -180,7 +176,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   border-bottom: 1px solid var(--border);
-  background-color: #f9fafb;
+  background-color: var(--bg);
 }
 
 .table td {
@@ -236,7 +232,7 @@ body {
 /* ── Responsive adjustments (tablet) ─────────────────────── */
 
 @media (max-width: 768px) {
-  .container-fluid.px-4 {
+  .container-fluid.px-3 {
     padding-left: 0.75rem !important;
     padding-right: 0.75rem !important;
   }
@@ -244,10 +240,191 @@ body {
   .stock-card {
     border-radius: 6px;
   }
+}
 
-  .navbar-brand {
-    font-size: 0.95rem;
-  }
+/* ── Refresh button group ────────────────────────────────── */
+
+.refresh-btn-group {
+  min-height: 31px;            /* match btn-sm height */
+  gap: 0.5rem;                 /* space between button and status box */
+}
+
+/* Icon-only circular refresh button */
+.refresh-icon-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  line-height: 1;
+  transition: transform 0.3s ease, box-shadow 0.2s ease;
+}
+
+.refresh-icon-btn:hover {
+  transform: rotate(90deg);
+  box-shadow: 0 2px 8px rgba(25, 135, 84, 0.3);
+}
+
+/* Fixed-width box that holds the spinner / status icon.
+   position:relative so the absolutely-positioned dcc.Loading
+   dots stay inside this box instead of overlapping the button. */
+.refresh-status-box {
+  position: relative;
+  min-width: 40px;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Shrink the dcc.Loading wrapper so it doesn't reserve 60px */
+.refresh-status-box ._dash-loading {
+  min-height: 0 !important;
+}
+
+.refresh-status-icon {
+  font-size: 1.25rem;
+  font-weight: 700;
+  animation: refreshFadeOut 1s ease-out 7s forwards;
+}
+
+@keyframes refreshFadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+/* ── Per-card refresh button (Home page) ─────────────────── */
+
+.card-refresh-wrapper {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* Compact 20×20 circular icon button */
+.card-refresh-icon-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  line-height: 1;
+  opacity: 0.5;
+  transition: opacity 0.2s ease, transform 0.3s ease;
+}
+
+.card-refresh-icon-btn:hover {
+  opacity: 1;
+  transform: rotate(90deg);
+}
+
+.card-refresh-icon-btn:disabled {
+  opacity: 0.3;
+  transform: none;
+}
+
+/* CSS-only 14×14 border spinner */
+.card-refresh-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: #198754;
+  border-radius: 50%;
+  animation: cardRefreshSpin 0.6s linear infinite;
+}
+
+@keyframes cardRefreshSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* Status icon — reuses refreshFadeOut from above */
+.card-refresh-status-icon {
+  font-size: 0.85rem;
+  font-weight: 700;
+  animation: refreshFadeOut 1s ease-out 7s forwards;
+}
+
+/* ── Sortable column headers ─────────────────────────────── */
+
+.sort-header-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.sort-header-btn:hover {
+  color: var(--accent);
+}
+
+.sort-header-btn.sort-active {
+  color: var(--accent);
+}
+
+.sort-arrow {
+  font-size: 0.65rem;
+  opacity: 0.35;
+  line-height: 1;
+}
+
+.sort-arrow.sort-active {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* ── Column info icon (tooltip target) ───────────────────── */
+
+.col-info-icon {
+  font-size: 0.65rem;
+  cursor: help;
+  opacity: 0.5;
+  margin-left: 0.15em;
+}
+
+.col-info-icon:hover {
+  opacity: 1;
+}
+
+/* ── Error overlay banner ────────────────────────────────── */
+
+.error-overlay-wrapper {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 9999;
+  animation: errorSlideDown 0.3s ease-out;
+}
+
+.error-overlay-banner {
+  border-radius: 0 !important;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+@keyframes errorSlideDown {
+  from { transform: translateY(-100%); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
 }
 
 /* ── Refresh button group ────────────────────────────────── */
@@ -442,4 +619,489 @@ h2.fw-bold {
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+
+/* ── Dark mode — Bootstrap component overrides ───────────── */
+
+body.dark-mode .card,
+body.dark-mode .modal-content {
+  background-color: var(--card-bg);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+body.dark-mode .modal-header,
+body.dark-mode .modal-footer {
+  border-color: var(--border);
+}
+
+body.dark-mode .form-control,
+body.dark-mode .form-select {
+  background-color: var(--bg);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+body.dark-mode .form-control:focus,
+body.dark-mode .form-select:focus {
+  background-color: var(--bg);
+  border-color: var(--accent);
+  color: var(--text-primary);
+  box-shadow: 0 0 0 0.2rem rgba(129, 140, 248, 0.25);
+}
+
+body.dark-mode .form-control::placeholder {
+  color: var(--text-secondary);
+}
+
+body.dark-mode .btn-outline-secondary {
+  color: var(--text-secondary);
+  border-color: var(--border);
+}
+
+body.dark-mode .btn-outline-secondary:hover {
+  color: var(--text-primary);
+  background-color: var(--border);
+  border-color: var(--border);
+}
+
+body.dark-mode .text-muted {
+  color: var(--text-secondary) !important;
+}
+
+body.dark-mode .text-dark {
+  color: var(--text-primary) !important;
+}
+
+body.dark-mode .dropdown-menu {
+  background-color: var(--card-bg);
+  border-color: var(--border);
+}
+
+body.dark-mode .dropdown-item {
+  color: var(--text-primary);
+}
+
+body.dark-mode .dropdown-item:hover {
+  background-color: var(--accent-light);
+  color: var(--accent);
+}
+
+body.dark-mode .list-group-item {
+  background-color: var(--card-bg);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+body.dark-mode hr {
+  border-color: var(--border);
+}
+
+/* ── Dark mode — Bootstrap background utilities ──────────── */
+
+body.dark-mode .bg-light {
+  background-color: var(--card-bg) !important;
+}
+
+body.dark-mode .bg-white {
+  background-color: var(--card-bg) !important;
+}
+
+body.dark-mode .border {
+  border-color: var(--border) !important;
+}
+
+body.dark-mode .border-bottom {
+  border-color: var(--border) !important;
+}
+
+body.dark-mode .border-top {
+  border-color: var(--border) !important;
+}
+
+/* ── Dark mode — Slider input (spinbutton) ─────────────── */
+
+body.dark-mode .rc-slider-tooltip-inner {
+  background-color: var(--card-bg);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+body.dark-mode input[type="number"] {
+  background-color: var(--card-bg);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+body.dark-mode .dash-slider-mark {
+  color: var(--text-secondary) !important;
+}
+
+/* ── Dark mode — Bootstrap text/label utilities ──────────── */
+
+body.dark-mode label,
+body.dark-mode .form-label {
+  color: var(--text-primary);
+}
+
+body.dark-mode .small,
+body.dark-mode small {
+  color: var(--text-secondary);
+}
+
+body.dark-mode h1, body.dark-mode h2,
+body.dark-mode h3, body.dark-mode h4,
+body.dark-mode h5, body.dark-mode h6 {
+  color: var(--text-primary);
+}
+
+body.dark-mode p {
+  color: var(--text-primary);
+}
+
+/* ── Dark mode — Dash Dropdown (dcc.Dropdown) ────────────── */
+
+body.dark-mode .dash-dropdown {
+  background-color: var(--card-bg) !important;
+  border-color: var(--border) !important;
+  color: var(--text-primary) !important;
+}
+
+body.dark-mode .dash-dropdown .Select-control {
+  background-color: var(--card-bg) !important;
+  border-color: var(--border) !important;
+}
+
+body.dark-mode .dash-dropdown .Select-value-label,
+body.dark-mode .dash-dropdown .Select-placeholder {
+  color: var(--text-primary) !important;
+}
+
+body.dark-mode .dash-dropdown .Select-input > input {
+  color: var(--text-primary) !important;
+}
+
+body.dark-mode .dash-dropdown .Select-arrow {
+  border-color: var(--text-secondary) transparent transparent !important;
+}
+
+/* ── Dark mode — Dash 3.x Dropdown popover ───────────────── */
+
+body.dark-mode .dash-dropdown-content {
+  background-color: var(--card-bg) !important;
+  border-color: var(--border) !important;
+  color: var(--text-primary) !important;
+}
+
+body.dark-mode .dash-dropdown-search-container {
+  background-color: var(--bg) !important;
+  border-color: var(--border) !important;
+}
+
+body.dark-mode .dash-dropdown-search-container:focus-within {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 1px var(--accent) !important;
+}
+
+body.dark-mode .dash-dropdown-search {
+  color: var(--text-primary) !important;
+}
+
+body.dark-mode .dash-dropdown-search::placeholder {
+  color: var(--text-secondary) !important;
+}
+
+body.dark-mode .dash-dropdown-search-icon {
+  color: var(--text-secondary) !important;
+}
+
+body.dark-mode .dash-dropdown-option {
+  color: var(--text-primary) !important;
+}
+
+body.dark-mode .dash-dropdown-option:hover,
+body.dark-mode .dash-dropdown-option[data-highlighted] {
+  background-color: var(--accent-light) !important;
+  color: var(--accent) !important;
+}
+
+body.dark-mode .dash-dropdown-options {
+  background-color: var(--card-bg) !important;
+}
+
+body.dark-mode .dash-dropdown-placeholder {
+  color: var(--text-secondary) !important;
+}
+
+body.dark-mode .dash-dropdown-value {
+  color: var(--text-primary) !important;
+}
+
+body.dark-mode .dash-dropdown-value-count {
+  color: var(--text-primary) !important;
+  background: var(--border) !important;
+}
+
+body.dark-mode .dash-dropdown-trigger-icon {
+  color: var(--text-secondary) !important;
+}
+
+body.dark-mode .dash-dropdown-clear {
+  color: var(--text-secondary) !important;
+}
+
+body.dark-mode .dash-dropdown-clear:hover {
+  color: var(--text-primary) !important;
+}
+
+/* ── Dark mode — Bootstrap Tabs (dbc.Tabs) ───────────────── */
+
+body.dark-mode .nav-tabs {
+  border-color: var(--border);
+}
+
+body.dark-mode .nav-tabs .nav-link {
+  color: var(--text-secondary);
+}
+
+body.dark-mode .nav-tabs .nav-link:hover {
+  border-color: var(--border);
+  color: var(--accent);
+}
+
+body.dark-mode .nav-tabs .nav-link.active {
+  background-color: var(--card-bg);
+  border-color: var(--border) var(--border) var(--card-bg);
+  color: var(--accent);
+}
+
+/* ── Dark mode — Plotly chart SVG overrides ───────────────── */
+
+body.dark-mode .js-plotly-plot .svg-container > .main-svg:first-child {
+  background: var(--card-bg) !important;
+}
+
+body.dark-mode .js-plotly-plot .bg {
+  fill: var(--card-bg) !important;
+}
+
+body.dark-mode .js-plotly-plot .gridlayer line,
+body.dark-mode .js-plotly-plot .gridlayer path {
+  stroke: rgba(51, 65, 85, 0.45) !important;
+}
+
+body.dark-mode .js-plotly-plot .zerolinelayer line,
+body.dark-mode .js-plotly-plot .zerolinelayer path {
+  stroke: rgba(51, 65, 85, 0.6) !important;
+}
+
+body.dark-mode .js-plotly-plot .xtick text,
+body.dark-mode .js-plotly-plot .ytick text {
+  fill: var(--text-secondary) !important;
+}
+
+body.dark-mode .js-plotly-plot .gtitle {
+  fill: var(--text-primary) !important;
+}
+
+body.dark-mode .js-plotly-plot .g-xtitle text,
+body.dark-mode .js-plotly-plot .g-ytitle text {
+  fill: var(--text-secondary) !important;
+}
+
+body.dark-mode .js-plotly-plot .annotation-text {
+  fill: var(--text-secondary) !important;
+}
+
+body.dark-mode .js-plotly-plot .legendtext {
+  fill: var(--text-primary) !important;
+}
+
+body.dark-mode .js-plotly-plot .modebar-group {
+  background-color: rgba(30, 41, 59, 0.8) !important;
+}
+
+body.dark-mode .js-plotly-plot .modebar-btn path {
+  fill: var(--text-secondary) !important;
+}
+
+body.dark-mode .js-plotly-plot .modebar-btn:hover path {
+  fill: var(--accent) !important;
+}
+
+/* ── Dark mode — Plotly colorbar (heatmap scale) ─────── */
+
+body.dark-mode .js-plotly-plot .colorbar text {
+  fill: var(--text-secondary) !important;
+}
+
+/* ── Dark mode — Heatmap cell annotation labels ─────── */
+
+body.dark-mode .js-plotly-plot .heatmap-label text {
+  fill: var(--text-primary) !important;
+}
+
+/* ── Dark mode — Bootstrap alert overrides ───────────────── */
+
+body.dark-mode .alert-info {
+  background-color: rgba(129, 140, 248, 0.12);
+  border-color: rgba(129, 140, 248, 0.3);
+  color: #a5b4fc;
+}
+
+body.dark-mode .alert-warning {
+  background-color: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.3);
+  color: #fbbf24;
+}
+
+body.dark-mode .alert-danger {
+  background-color: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #f87171;
+}
+
+body.dark-mode .alert-success {
+  background-color: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #4ade80;
+}
+
+/* ── Dark mode — misc Bootstrap components ───────────────── */
+
+body.dark-mode .badge.bg-secondary {
+  background-color: var(--border) !important;
+}
+
+body.dark-mode .btn-outline-primary {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+body.dark-mode .btn-outline-primary:hover {
+  background-color: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+body.dark-mode .btn-outline-danger {
+  color: #f87171;
+  border-color: #f87171;
+}
+
+body.dark-mode .btn-outline-danger:hover {
+  background-color: rgba(239, 68, 68, 0.15);
+  border-color: #f87171;
+  color: #f87171;
+}
+
+body.dark-mode .btn-success {
+  background-color: #16a34a;
+  border-color: #16a34a;
+}
+
+body.dark-mode .input-group-text {
+  background-color: var(--border);
+  border-color: var(--border);
+  color: var(--text-secondary);
+}
+
+/* ── Dark mode — Scrollbar styling ───────────────────────── */
+
+/* ── Dark mode — Bootstrap 5 table CSS variables ─────────── */
+
+body.dark-mode .table {
+  --bs-table-bg: var(--card-bg);
+  --bs-table-color: var(--text-primary);
+  --bs-table-border-color: var(--border);
+  --bs-table-striped-bg: rgba(255, 255, 255, 0.03);
+  --bs-table-striped-color: var(--text-primary);
+  --bs-table-hover-bg: var(--accent-light);
+  --bs-table-hover-color: var(--text-primary);
+}
+
+/* ── Dark mode — Pagination (dbc.Pagination) ─────────────── */
+
+body.dark-mode .pagination .page-link {
+  background-color: var(--card-bg);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+body.dark-mode .pagination .page-link:hover {
+  background-color: var(--accent-light);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+body.dark-mode .pagination .page-item.active .page-link {
+  background-color: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+body.dark-mode .pagination .page-item.disabled .page-link {
+  background-color: var(--bg);
+  border-color: var(--border);
+  color: var(--text-secondary);
+}
+
+/* ── Dark mode — Button group (country filters) ──────────── */
+
+body.dark-mode .btn-group .btn-outline-secondary {
+  color: var(--text-secondary);
+  border-color: var(--border);
+  background-color: transparent;
+}
+
+body.dark-mode .btn-group .btn-outline-secondary:hover,
+body.dark-mode .btn-group .btn-outline-secondary.active,
+body.dark-mode .btn-group .btn-outline-secondary:active {
+  color: var(--text-primary);
+  background-color: var(--accent-light);
+  border-color: var(--accent);
+}
+
+/* ── Dark mode — dcc.Dropdown menu outer (VirtualizedSelect) */
+
+body.dark-mode .VirtualizedSelectOption {
+  background-color: var(--card-bg) !important;
+  color: var(--text-primary) !important;
+}
+
+body.dark-mode .VirtualizedSelectOption:hover,
+body.dark-mode .VirtualizedSelectFocusedOption {
+  background-color: var(--accent-light) !important;
+  color: var(--accent) !important;
+}
+
+body.dark-mode .Select-noresults {
+  background-color: var(--card-bg) !important;
+  color: var(--text-secondary) !important;
+}
+
+/* ── Dark mode — strong text inside tables ───────────────── */
+
+body.dark-mode .table strong {
+  color: var(--accent);
+}
+
+/* ── Dark mode — Scrollbar styling ───────────────────────── */
+
+body.dark-mode ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+body.dark-mode ::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+
+body.dark-mode ::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 4px;
+}
+
+body.dark-mode ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-secondary);
 }

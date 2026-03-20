@@ -4,19 +4,26 @@
  * Lets the user update their display name and optionally upload a new
  * avatar image (≤ 10 MB, enforced client-side before submitting).
  * The form pre-populates from the current profile whenever the modal opens.
+ *
+ * Includes a tab system: "Profile" (edit form) and "Activity Log"
+ * (past sessions / audit trail).
  */
 
 import { useState, useRef, useEffect, useCallback, type ChangeEvent } from "react";
 import Image from "next/image";
 import type { UserProfile } from "@/hooks/useEditProfile";
+import { PastSessionsTab } from "@/components/PastSessionsTab";
 
 import { BACKEND_URL } from "@/lib/config";
 
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 const UNSUPPORTED_TYPES = ["image/heic", "image/heif", "image/tiff", "image/bmp"];
 
+type ModalTab = "profile" | "audit";
+
 interface EditProfileModalProps {
   isOpen: boolean;
+  initialTab?: ModalTab;
   profile: UserProfile | null;
   saving: boolean;
   error: string;
@@ -26,12 +33,14 @@ interface EditProfileModalProps {
 
 export function EditProfileModal({
   isOpen,
+  initialTab = "profile",
   profile,
   saving,
   error,
   onClose,
   onSave,
 }: EditProfileModalProps) {
+  const [activeTab, setActiveTab] = useState<ModalTab>(initialTab);
   const [name, setName] = useState(profile?.full_name ?? "");
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState("");
@@ -39,10 +48,11 @@ export function EditProfileModal({
   const [previewErr, setPreviewErr] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Re-populate the form whenever the modal opens.
+  // Re-populate the form and reset tab whenever the modal opens.
   useEffect(() => {
     if (isOpen) {
       /* eslint-disable react-hooks/set-state-in-effect -- resetting form state on open is intentional */
+      setActiveTab(initialTab);
       setName(profile?.full_name ?? "");
       setAvatarFile(null);
       setPreviewSrc(null);
@@ -51,7 +61,7 @@ export function EditProfileModal({
       /* eslint-enable react-hooks/set-state-in-effect */
       if (fileRef.current) fileRef.current.value = "";
     }
-  }, [isOpen, profile?.full_name]);
+  }, [isOpen, initialTab, profile?.full_name]);
 
   // Fix #6: revoke object URL when it changes to free memory
   useEffect(() => {
@@ -114,76 +124,103 @@ export function EditProfileModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm mx-4 p-6" data-testid="edit-profile-modal">
-        <h2 className="text-base font-semibold text-gray-900 mb-4">Edit Profile</h2>
+      <div
+        className={`bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full mx-4 p-6 transition-colors ${activeTab === "audit" ? "max-w-2xl" : "max-w-sm"}`}
+        data-testid="edit-profile-modal"
+      >
+        {/* Tab bar */}
+        <div className="flex gap-1 mb-4 border-b border-gray-200 dark:border-gray-700">
+          <button
+            onClick={() => setActiveTab("profile")}
+            className={`px-3 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${activeTab === "profile" ? "border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400" : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
+          >
+            Profile
+          </button>
+          <button
+            onClick={() => setActiveTab("audit")}
+            className={`px-3 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${activeTab === "audit" ? "border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400" : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
+          >
+            Activity Log
+          </button>
+        </div>
 
-        {/* Current avatar preview */}
-        <div className="flex justify-center mb-4">
-          {displaySrc && !previewErr ? (
-            <Image
-              src={displaySrc}
-              alt=""
-              width={64}
-              height={64}
-              onError={() => setPreviewErr(true)}
-              className="w-16 h-16 rounded-full object-cover object-top border border-gray-200 shadow-sm"
-              unoptimized
-            />
-          ) : (
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-lg font-semibold shadow-sm">
-              {initials}
+        {activeTab === "profile" ? (
+          <>
+            <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">Edit Profile</h2>
+
+            {/* Current avatar preview */}
+            <div className="flex justify-center mb-4">
+              {displaySrc && !previewErr ? (
+                <Image
+                  src={displaySrc}
+                  alt=""
+                  width={64}
+                  height={64}
+                  onError={() => setPreviewErr(true)}
+                  className="w-16 h-16 rounded-full object-cover object-top border border-gray-200 dark:border-gray-600 shadow-sm"
+                  unoptimized
+                />
+              ) : (
+                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-lg font-semibold shadow-sm">
+                  {initials}
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {error && (
-          <p className="text-sm text-red-500 mb-3">{error}</p>
+            {error && (
+              <p className="text-sm text-red-500 mb-3">{error}</p>
+            )}
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Full Name</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg px-3 py-2 text-sm text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="Your display name"
+              />
+            </div>
+
+            <div className="mb-5">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Avatar (optional, max 10 MB)
+              </label>
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/jpeg,image/png,image/gif,image/webp"
+                onChange={handleFileChange}
+                className="block w-full text-sm text-gray-500 dark:text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 dark:file:bg-indigo-900/30 file:text-indigo-700 dark:file:text-indigo-400 hover:file:bg-indigo-100 dark:hover:file:bg-indigo-900/50"
+              />
+              {fileError && <p className="mt-1 text-xs text-red-500">{fileError}</p>}
+              {avatarFile && !fileError && (
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{avatarFile.name}</p>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={onClose}
+                disabled={saving}
+                className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving || !!fileError}
+                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {saving ? "Saving\u2026" : "Save"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="min-h-[300px]">
+            <PastSessionsTab showKeywordSearch />
+          </div>
         )}
-
-        <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            placeholder="Your display name"
-          />
-        </div>
-
-        <div className="mb-5">
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Avatar (optional, max 10 MB)
-          </label>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/jpeg,image/png,image/gif,image/webp"
-            onChange={handleFileChange}
-            className="block w-full text-sm text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
-          />
-          {fileError && <p className="mt-1 text-xs text-red-500">{fileError}</p>}
-          {avatarFile && !fileError && (
-            <p className="mt-1 text-xs text-gray-500">{avatarFile.name}</p>
-          )}
-        </div>
-
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            disabled={saving}
-            className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving || !!fileError}
-            className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
-        </div>
       </div>
     </div>
   );

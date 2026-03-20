@@ -32,6 +32,16 @@ export const FE = {
   // Modals
   editProfileModal: "edit-profile-modal",
   changePasswordModal: "change-password-modal",
+  sessionManagementModal: "session-management-modal",
+
+  // Session management
+  sessionCard: "session-card",
+  currentSessionBadge: "current-session-badge",
+  revokeSessionBtn: "revoke-session-btn",
+  revokeAllSessionsBtn: "revoke-all-sessions-btn",
+
+  // Theme
+  themeToggle: "theme-toggle",
 } as const;
 
 /* ── Dashboard (Plotly Dash) ─────────────────────────── */
@@ -69,7 +79,11 @@ export const DASH = {
   adminCreateBtn: "admin-create-user-btn",
   adminAuditLogBtn: "admin-audit-log-btn",
 
+  // Insights
+  insightsTabs: "insights-tabs",
+
   // Global
   errorOverlay: "error-overlay-container",
   navbarProfile: "navbar-profile-dropdown",
+  themeToggleBtn: "theme-toggle-btn",
 } as const;

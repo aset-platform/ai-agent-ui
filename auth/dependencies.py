@@ -32,6 +32,8 @@ Usage in a FastAPI route::
         return {"role": user.role}
 """
 
+from __future__ import annotations
+
 import logging
 import os
 from functools import lru_cache

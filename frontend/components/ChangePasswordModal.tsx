@@ -44,33 +44,33 @@ export function ChangePasswordModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       onClick={(e) => { if (e.target === e.currentTarget) handleClose(); }}
     >
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm mx-4 p-6" data-testid="change-password-modal">
-        <h2 className="text-base font-semibold text-gray-900 mb-4">Change Password</h2>
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-sm mx-4 p-6 transition-colors" data-testid="change-password-modal">
+        <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">Change Password</h2>
 
         {error && (
           <p className="text-sm text-red-500 mb-3">{error}</p>
         )}
 
         <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New Password</label>
           <input
             type="password"
             value={newPw}
             onChange={(e) => setNewPw(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg px-3 py-2 text-sm text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             placeholder="Min 8 chars, at least one digit"
           />
         </div>
 
         <div className="mb-5">
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
             Confirm New Password
           </label>
           <input
             type="password"
             value={confirmPw}
             onChange={(e) => setConfirmPw(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg px-3 py-2 text-sm text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             placeholder="Repeat new password"
           />
         </div>
@@ -79,7 +79,7 @@ export function ChangePasswordModal({
           <button
             onClick={handleClose}
             disabled={saving}
-            className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+            className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
           >
             Cancel
           </button>

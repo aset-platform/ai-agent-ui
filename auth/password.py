@@ -10,6 +10,8 @@ Functions
 - :func:`validate_password_strength`
 """
 
+from __future__ import annotations
+
 import logging
 
 import bcrypt

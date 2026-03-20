@@ -13,6 +13,8 @@ Typical flow::
     auto_link_ticker(ticker)
 """
 
+from __future__ import annotations
+
 import logging
 import threading
 

@@ -1,52 +1,51 @@
 # Iceberg Data Layer
 
-## Core Rules
+## Catalog
+- Type: SqlCatalog (SQLite-backed)
+- Namespace: `stocks`
+- Location: `~/.ai-agent-ui/warehouse/`
+- Repository: `stocks/repository.py` — `StockRepository` class
 
-- ALL stock data lives in Iceberg at
-  `~/.ai-agent-ui/data/iceberg/`.
-- `_require_repo()` raises `RuntimeError` if unavailable;
-  `_get_repo()` returns `None`.
-- **Copy-on-write upserts**: read full table -> mutate DataFrame ->
-  `table.overwrite()` (no native UPDATE in PyIceberg 0.11).
-- `_load_parquet()` reads from Iceberg, not flat files.
-- Dashboard uses `_get_ohlcv_cached` / `_get_forecast_cached`.
-- Single repo singleton via `_stock_shared.py`.
-- Writes MUST NOT be silenced — failures propagate to tool
-  exception handlers.
+## Tables (13)
 
-## Anti-Patterns
+### Stock Data (9)
+| Table | Partition | Description |
+|-------|-----------|-------------|
+| `stocks.registry` | none | 1 row per ticker — fetch metadata |
+| `stocks.company_info` | none | Append-only company fundamentals snapshots |
+| `stocks.ohlcv` | ticker | Daily OHLCV price data (partitioned) |
+| `stocks.dividends` | none | Dividend history |
+| `stocks.technical_indicators` | ticker | Pre-computed SMA, RSI, MACD, BB (partitioned) |
+| `stocks.analysis_summary` | none | Daily analysis snapshots (signals text only, not numeric) |
+| `stocks.forecast_runs` | none | Prophet forecast metadata + 3/6/9m targets |
+| `stocks.forecasts` | ticker, horizon | Full forecast time series with confidence bands |
+| `stocks.quarterly_results` | none | Quarterly financial statements |
 
-| Anti-Pattern | Correct Pattern |
-|---|---|
-| Flat file reads for stock data | Iceberg via `_load_parquet()` / `StockRepository` |
-| Duplicate repo singletons | Import from `_stock_shared.py` |
-| Silencing Iceberg write failures | Let errors propagate to tool handler |
+### LLM Observability (2)
+| Table | Partition | Description |
+|-------|-----------|-------------|
+| `stocks.llm_pricing` | provider | Model pricing rate card |
+| `stocks.llm_usage` | request_date | Per-request event log with cost |
 
-## Performance
+### Auth (via auth/repo)
+| Table | Description |
+|-------|-------------|
+| `auth.users` | User accounts |
+| `auth.audit_log` | Auth events |
+| `auth.user_tickers` | User-ticker links |
 
-- Copy-on-write is expensive: `table.overwrite()` reads + rewrites
-  the full table. Batch updates; minimize calls.
-- N+1 queries: Load all data in one call, not one query per
-  iteration.
-- Cache awareness: `~/.ai-agent-ui/data/cache/` provides same-day
-  caching. Clear only on refresh (`_clear_tool_cache()`).
+### Chat Audit (1, new)
+| Table | Partition | Description |
+|-------|-----------|-------------|
+| `stocks.chat_audit_log` | user_id | Chat session transcripts (flushed on logout) |
 
-## Concurrency & Retry (Mar 10, 2026)
+## Key Gotcha: analysis_summary vs technical_indicators
+- `analysis_summary` stores signal TEXT only (Bullish/Bearish/Neutral/Below/Above)
+- Numeric indicator values (RSI=46.3, MACD=-12.6) live in `technical_indicators`
+- Dashboard routes must fetch from BOTH tables to show name + value + signal
 
-- `_retry_commit(identifier, operation, *args)` retries Iceberg writes up to 3x with exponential backoff (0.5s, 1s, 2s) on `CommitFailedException`
-- `_append_rows` and `_overwrite_table` both delegate to `_retry_commit`
-- Table object is reloaded on each retry for fresh snapshot
-- All 8 write methods in `StockRepository` use these helpers — no direct `tbl.append()`/`tbl.overwrite()` calls remain
-- Needed because dashboard card refresh runs 4 concurrent pipelines via `ThreadPoolExecutor(max_workers=4)`
-
-## Inspection
-
-```python
-from stocks.repository import StockRepository
-repo = StockRepository()
-print(sorted(repo.get_all_registry().keys()))
-for t in sorted(repo.get_all_registry().keys()):
-    df = repo.get_ohlcv(t)
-    adj = df["adj_close"].notna().mean() * 100
-    print(f"{t}: {len(df)} rows, {adj:.1f}% adj_close")
-```
+## Query Patterns
+- Predicate push-down: `EqualTo("ticker", ticker)` for partitioned tables
+- Fallback: full scan + pandas filter if predicate fails
+- Dirty table tracking: `_dirty_tables` set, refresh after writes
+- Retry on CommitFailedException: 3 retries with exponential backoff

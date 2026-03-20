@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { apiFetch } from "@/lib/apiFetch";
 import { getUserIdFromToken } from "@/lib/auth";
-import { BACKEND_URL } from "@/lib/config";
+import { API_URL } from "@/lib/config";
 import type { Message } from "@/lib/constants";
 import { toolLabel } from "@/lib/constants";
 import type { UseWebSocketReturn, WsEvent } from "@/hooks/useWebSocket";
@@ -117,7 +117,7 @@ export function useSendMessage({
       abortControllerRef.current = controller;
 
       try {
-        const res = await apiFetch(`${BACKEND_URL}/chat/stream`, {
+        const res = await apiFetch(`${API_URL}/chat/stream`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

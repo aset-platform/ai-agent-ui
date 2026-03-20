@@ -3,12 +3,12 @@
 ## Running Tests
 
 ```bash
-python -m pytest tests/ -v             # all (273 tests)
-python -m pytest tests/backend/ -v     # backend
-python -m pytest tests/dashboard/ -v   # dashboard
-cd frontend && npx vitest run          # frontend (18 tests)
+python -m pytest tests/ -v             # all (~320 tests)
+python -m pytest tests/backend/ -v     # backend (~275 tests)
+python -m pytest tests/dashboard/ -v   # dashboard (~45 tests)
+cd frontend && npx vitest run          # frontend (22 tests)
 
-# E2E (Playwright — 49 tests, requires live services)
+# E2E (Playwright — ~91 tests, requires live services)
 cd e2e && npm test                     # all projects
 npx playwright test --project=frontend-chromium
 npx playwright test --project=dashboard-chromium
@@ -31,3 +31,24 @@ defer test writing to a later session.
 - Keep Playwright `outputDir` outside the project tree (`/tmp/`) to
   avoid triggering the Dash debug reloader.
 - Use `{ force: true }` for clicks blocked by Dash debug toolbar.
+- Single-threaded Dash server can't handle parallel browser
+  connections — use `--workers=1` for reliable E2E pass.
+
+## E2E Auth Token Caching
+
+Auth tokens are cached in storageState files
+(`.auth/general-user.json`, `superuser.json`) to eliminate redundant
+`/auth/login` calls per E2E run. Prevents 429 rate-limit errors.
+
+## Dashboard Test Import Issues
+
+Importing dashboard callback modules triggers the full callback chain
+via `__init__.py`. This can require packages like `holidays`.
+Replicate constants in test files instead of importing from callback
+modules.
+
+## See Also
+
+- `shared/debugging/test-isolation-gotchas` — Test ordering, WS testing,
+  patch bleed issues
+- `shared/debugging/mock-patching-gotchas` — Patching at source module

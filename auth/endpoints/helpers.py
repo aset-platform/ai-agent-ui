@@ -8,11 +8,13 @@ Functions
 - :func:`_require_active_user` — raise HTTP 401 for missing/inactive users
 """
 
+from __future__ import annotations
+
 import json as _json
 import logging
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import HTTPException
 
@@ -62,7 +64,7 @@ def _get_oauth_svc() -> OAuthService:
     return OAuthService(get_settings(), state_store=state_store)
 
 
-def _user_to_response(user: Dict[str, Any]) -> UserResponse:
+def _user_to_response(user: dict[str, Any]) -> UserResponse:
     """Convert a raw user dict to a UserResponse.
 
     Sensitive fields (``hashed_password``, ``password_reset_token``,
@@ -76,7 +78,7 @@ def _user_to_response(user: Dict[str, Any]) -> UserResponse:
         A :class:`~auth.models.UserResponse` safe to include in API responses.
     """
 
-    def _iso(dt: Optional[datetime]) -> Optional[str]:
+    def _iso(dt: datetime | None) -> str | None:
         """Convert datetime to ISO-8601 string, attaching UTC tz if naive."""
         if dt is None:
             return None
@@ -84,7 +86,7 @@ def _user_to_response(user: Dict[str, Any]) -> UserResponse:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.isoformat()
 
-    def _str_or_none(val: object) -> Optional[str]:
+    def _str_or_none(val: object) -> str | None:
         """Return *val* as a string, or ``None`` for NaN / non-str."""
         if val is None:
             return None
@@ -110,8 +112,8 @@ def _user_to_response(user: Dict[str, Any]) -> UserResponse:
 
 
 def _require_active_user(
-    user: Optional[Dict[str, Any]], email: str
-) -> Dict[str, Any]:
+    user: dict[str, Any] | None, email: str
+) -> dict[str, Any]:
     """Raise HTTP 401 if the user is not found or is deactivated.
 
     Args:
