@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<!-- Variant C: Hybrid — Hero + Scrollable Widget Stream -->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ASET Platform — Variant C: Hybrid Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ── Reset ── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{font-size:13px;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+body{font-family:'DM Sans',system-ui,sans-serif;overflow-x:hidden;transition:background .35s,color .35s}
+
+/* ── CSS Variables ── */
+:root{
+  --font-mono:'IBM Plex Mono',monospace;
+  --radius-card:14px;--radius-hero:20px;--radius-btn:10px;
+  --brand-fuchsia:#c026d3;--brand-violet:#7c3aed;
+  --indigo-500:#6366f1;--indigo-600:#4f46e5;
+  --green:#34d399;--red:#fb7185;--yellow:#fbbf24;--orange:#f97316;
+  --sidebar-w:220px;--sidebar-collapsed-w:62px;
+  --chat-w:380px;--header-h:56px;
+  --transition:all .3s cubic-bezier(.4,0,.2,1);
+}
+[data-theme="dark"]{
+  --bg:#09090b;--bg2:#0e0e11;--card:#141416;--card-border:#222225;
+  --elevated:#1c1c1f;--text:#e4e4e7;--text2:#71717a;--text3:#52525b;
+  --divider:#27272a;--hover:#1a1a1d;
+}
+[data-theme="light"]{
+  --bg:#fafafa;--bg2:#f4f4f5;--card:#ffffff;--card-border:#e4e4e7;
+  --elevated:#f4f4f5;--text:#18181b;--text2:#71717a;--text3:#a1a1aa;
+  --divider:#e4e4e7;--hover:#f0f0f2;
+}
+body{background:var(--bg);color:var(--text)}
+
+/* ── Utility ── */
+.mono{font-family:var(--font-mono)}
+.green{color:var(--green)}.red{color:var(--red)}.yellow{color:var(--yellow)}.orange{color:var(--orange)}
+.pill{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:100px;font-size:11px;font-weight:500;white-space:nowrap}
+.pill-green{background:rgba(52,211,153,.12);color:var(--green)}
+.pill-red{background:rgba(251,113,133,.12);color:var(--red)}
+.pill-yellow{background:rgba(251,191,36,.12);color:var(--yellow)}
+.pill-orange{background:rgba(249,115,22,.12);color:var(--orange)}
+.pill-muted{background:var(--elevated);color:var(--text2);border:1px solid var(--card-border)}
+
+/* ── Layout Shell ── */
+.app{display:flex;height:100vh;width:100vw;overflow:hidden}
+
+/* ── Header ── */
+.header{
+  position:fixed;top:0;left:0;right:0;height:var(--header-h);z-index:100;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 20px;background:var(--bg);border-bottom:1px solid var(--divider);
+  backdrop-filter:blur(12px);
+}
+.header-left{display:flex;align-items:center;gap:14px}
+.logo{display:flex;align-items:center;gap:8px;font-weight:700;font-size:16px;letter-spacing:-.3px}
+.logo-mark{
+  width:30px;height:30px;border-radius:8px;
+  background:linear-gradient(135deg,var(--brand-fuchsia),var(--brand-violet));
+  display:flex;align-items:center;justify-content:center;
+  color:#fff;font-weight:700;font-size:13px;font-family:var(--font-mono);
+}
+.header-right{display:flex;align-items:center;gap:10px}
+.header-btn{
+  width:36px;height:36px;border-radius:10px;border:1px solid var(--card-border);
+  background:var(--card);display:flex;align-items:center;justify-content:center;
+  cursor:pointer;color:var(--text2);transition:var(--transition);
+}
+.header-btn:hover{background:var(--elevated);color:var(--text)}
+.avatar{
+  width:32px;height:32px;border-radius:50%;
+  background:linear-gradient(135deg,var(--brand-fuchsia),var(--brand-violet));
+  display:flex;align-items:center;justify-content:center;
+  color:#fff;font-size:12px;font-weight:600;cursor:pointer;
+}
+
+/* ── Sidebar ── */
+.sidebar{
+  position:fixed;top:var(--header-h);left:0;bottom:0;
+  width:var(--sidebar-w);z-index:90;
+  background:var(--bg);border-right:1px solid var(--divider);
+  display:flex;flex-direction:column;padding:16px 10px;
+  transition:width .3s cubic-bezier(.4,0,.2,1);overflow:hidden;
+}
+.sidebar.collapsed{width:var(--sidebar-collapsed-w)}
+.sidebar.collapsed .nav-label,
+.sidebar.collapsed .sidebar-section-title,
+.sidebar.collapsed .collapse-label,
+.sidebar.collapsed .theme-label{display:none}
+.sidebar.collapsed .nav-item{justify-content:center;padding:0 8px}
+.sidebar.collapsed .nav-icon{margin:0}
+.sidebar-section-title{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);padding:8px 12px 6px;font-weight:600}
+.nav-list{list-style:none;display:flex;flex-direction:column;gap:2px;flex:1}
+.nav-item{
+  display:flex;align-items:center;gap:10px;padding:9px 12px;
+  border-radius:10px;cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;
+  transition:var(--transition);position:relative;white-space:nowrap;
+}
+.nav-item:hover{background:var(--hover);color:var(--text)}
+.nav-item.active{
+  background:linear-gradient(135deg,rgba(192,38,211,.12),rgba(124,58,237,.12));
+  color:var(--text);
+}
+.nav-item.active::before{
+  content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);
+  width:3px;height:20px;border-radius:0 3px 3px 0;
+  background:linear-gradient(180deg,var(--brand-fuchsia),var(--brand-violet));
+  transition:var(--transition);
+}
+.sidebar.collapsed .nav-item.active::before{display:none}
+.nav-icon{width:18px;height:18px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.sidebar-bottom{display:flex;flex-direction:column;gap:4px;border-top:1px solid var(--divider);padding-top:12px;margin-top:8px}
+.collapse-btn{
+  display:flex;align-items:center;gap:10px;padding:9px 12px;
+  border-radius:10px;cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;
+  transition:var(--transition);border:none;background:none;width:100%;text-align:left;white-space:nowrap;
+}
+.collapse-btn:hover{background:var(--hover);color:var(--text)}
+.sidebar.collapsed .collapse-btn{justify-content:center;padding:0 8px}
+.sidebar.collapsed .collapse-btn svg{transform:rotate(180deg)}
+.theme-toggle{
+  display:flex;align-items:center;gap:10px;padding:9px 12px;
+  border-radius:10px;cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;
+  transition:var(--transition);border:none;background:none;width:100%;text-align:left;white-space:nowrap;
+}
+.theme-toggle:hover{background:var(--hover);color:var(--text)}
+.sidebar.collapsed .theme-toggle{justify-content:center;padding:0 8px}
+
+/* ── Main Content ── */
+.main{
+  margin-left:var(--sidebar-w);margin-top:var(--header-h);
+  flex:1;overflow-y:auto;padding:24px 28px 80px;
+  transition:margin-left .3s cubic-bezier(.4,0,.2,1);
+}
+body.sidebar-collapsed .main{margin-left:var(--sidebar-collapsed-w)}
+body.chat-open .main{margin-right:var(--chat-w)}
+
+/* ── Hero Section ── */
+.hero{
+  position:relative;border-radius:var(--radius-hero);
+  padding:32px 36px;margin-bottom:24px;overflow:hidden;
+  background:var(--card);border:1px solid var(--card-border);
+}
+.hero-gradient{
+  position:absolute;inset:0;z-index:0;
+  background:
+    radial-gradient(ellipse 60% 80% at 15% 30%,rgba(192,38,211,.08) 0%,transparent 60%),
+    radial-gradient(ellipse 50% 70% at 85% 70%,rgba(124,58,237,.07) 0%,transparent 60%),
+    radial-gradient(ellipse 40% 50% at 50% 10%,rgba(99,102,241,.05) 0%,transparent 50%);
+}
+[data-theme="dark"] .hero-gradient{
+  background:
+    radial-gradient(ellipse 60% 80% at 15% 30%,rgba(192,38,211,.15) 0%,transparent 60%),
+    radial-gradient(ellipse 50% 70% at 85% 70%,rgba(124,58,237,.12) 0%,transparent 60%),
+    radial-gradient(ellipse 40% 50% at 50% 10%,rgba(99,102,241,.08) 0%,transparent 50%);
+}
+.hero-noise{
+  position:absolute;inset:0;z-index:1;opacity:.35;mix-blend-mode:overlay;pointer-events:none;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size:128px 128px;
+}
+.hero-content{position:relative;z-index:2}
+.hero-top{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;flex-wrap:wrap}
+.hero-greeting{text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.hero-greeting-text{font-size:20px;font-weight:600;letter-spacing:-.3px;line-height:1.2}
+.hero-greeting-sub{font-size:12px;color:var(--text2);font-weight:400;max-width:260px;line-height:1.5}
+.hero-greeting-time{font-family:var(--font-mono);font-size:11px;color:var(--text3);margin-top:2px;display:flex;align-items:center;gap:6px}
+.hero-greeting-time .dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse-dot 2s infinite}
+@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.4}}
+.hero-value-block{display:flex;flex-direction:column;gap:6px}
+.hero-label{font-size:12px;color:var(--text2);font-weight:500;text-transform:uppercase;letter-spacing:.8px}
+.hero-value{font-family:var(--font-mono);font-size:36px;font-weight:600;letter-spacing:-1px;line-height:1.1}
+.hero-change{display:inline-flex;align-items:center;gap:6px;margin-top:4px}
+.hero-stats{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.hero-stat-pill{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:6px 14px;border-radius:100px;font-size:12px;font-weight:500;
+  background:var(--elevated);border:1px solid var(--card-border);color:var(--text);
+}
+.hero-stat-pill .mono{font-weight:600}
+.hero-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:20px}
+.hero-btn{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:9px 18px;border-radius:var(--radius-btn);font-size:12px;font-weight:600;
+  border:1px solid var(--card-border);background:var(--card);color:var(--text);
+  cursor:pointer;transition:var(--transition);
+}
+.hero-btn:hover{background:var(--elevated);border-color:var(--text3)}
+.hero-btn.primary{
+  background:linear-gradient(135deg,var(--brand-fuchsia),var(--brand-violet));
+  border-color:transparent;color:#fff;
+}
+.hero-btn.primary:hover{opacity:.9;transform:translateY(-1px);box-shadow:0 4px 16px rgba(124,58,237,.3)}
+
+/* ── Asymmetric Grid ── */
+.grid-asym{
+  display:grid;grid-template-columns:1.1fr .9fr;gap:20px;margin-bottom:24px;
+}
+.grid-full{margin-bottom:24px}
+
+/* ── Card Base ── */
+.card{
+  background:var(--card);border:1px solid var(--card-border);
+  border-radius:var(--radius-card);overflow:hidden;transition:var(--transition);
+}
+.card-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:16px 20px 12px;
+}
+.card-title{font-size:14px;font-weight:600;letter-spacing:-.2px}
+.card-badge{font-size:10px;color:var(--text3);font-weight:500}
+.card-body{padding:0 20px 16px}
+
+/* ── Watchlist ── */
+.watchlist-row{
+  display:grid;grid-template-columns:8px 60px 1fr auto auto 60px;gap:10px;align-items:center;
+  padding:11px 0;border-bottom:1px solid var(--divider);
+}
+.watchlist-row:last-child{border-bottom:none}
+.watchlist-row:nth-child(even){background:rgba(128,128,128,.02)}
+.wl-dot{width:8px;height:8px;border-radius:50%}
+.wl-ticker{font-family:var(--font-mono);font-size:13px;font-weight:600;letter-spacing:.3px}
+.wl-name{font-size:12px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wl-price{font-family:var(--font-mono);font-size:13px;font-weight:500;text-align:right}
+.wl-change{text-align:right}
+.wl-spark{width:60px;height:24px}
+.wl-spark polyline{fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+
+/* ── Signals ── */
+.signal-row{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 0;border-bottom:1px solid var(--divider);gap:8px;
+}
+.signal-row:last-child{border-bottom:none}
+.signal-left{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.signal-name{font-size:12px;font-weight:600}
+.signal-value{font-family:var(--font-mono);font-size:11px;color:var(--text2)}
+.signal-badge{flex-shrink:0}
+
+/* ── LLM Usage ── */
+.llm-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
+.llm-stat{text-align:center}
+.llm-stat-value{font-family:var(--font-mono);font-size:18px;font-weight:600}
+.llm-stat-label{font-size:10px;color:var(--text2);margin-top:2px}
+.donut-wrap{display:flex;align-items:center;justify-content:center;gap:20px}
+.donut-legend{display:flex;flex-direction:column;gap:6px}
+.donut-legend-item{display:flex;align-items:center;gap:6px;font-size:11px}
+.donut-legend-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+
+/* ── Forecast Chart ── */
+.chart-card .card-body{padding:0 20px 20px}
+.chart-wrap{width:100%;height:200px}
+.chart-wrap svg{width:100%;height:100%}
+.chart-grid line{stroke:var(--divider);stroke-width:.5}
+.chart-axis text{font-family:var(--font-mono);font-size:9px;fill:var(--text3)}
+.chart-historical{fill:none;stroke:var(--indigo-500);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.chart-forecast{fill:none;stroke:var(--brand-violet);stroke-width:2;stroke-dasharray:6 4;stroke-linecap:round}
+.chart-band{fill:url(#bandGrad);opacity:.3}
+.chart-label{font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600}
+
+/* ── Chat FAB ── */
+.chat-fab{
+  position:fixed;bottom:28px;right:28px;z-index:200;
+  width:52px;height:52px;border-radius:50%;border:none;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 20px rgba(0,0,0,.25);transition:var(--transition);
+}
+[data-theme="dark"] .chat-fab{background:linear-gradient(135deg,var(--brand-fuchsia),var(--brand-violet))}
+[data-theme="light"] .chat-fab{background:#18181b}
+.chat-fab:hover{transform:scale(1.08)}
+.chat-fab svg{color:#fff;width:22px;height:22px}
+.chat-fab .fab-dot{
+  position:absolute;top:6px;right:6px;width:10px;height:10px;
+  background:var(--green);border-radius:50%;border:2px solid var(--bg);
+}
+@keyframes fabBounce{
+  0%,100%{transform:translateY(0)}
+  40%{transform:translateY(-8px)}
+  60%{transform:translateY(-3px)}
+}
+.chat-fab.entrance{animation:fabBounce .6s .8s ease both}
+
+/* ── Chat Panel ── */
+.chat-panel{
+  position:fixed;top:var(--header-h);right:0;bottom:0;
+  width:var(--chat-w);z-index:95;
+  background:var(--bg);border-left:1px solid var(--divider);
+  display:flex;flex-direction:column;
+  transform:translateX(100%);transition:transform .35s cubic-bezier(.4,0,.2,1);
+}
+.chat-panel.open{transform:translateX(0)}
+.chat-resize{
+  position:absolute;left:0;top:0;bottom:0;width:4px;cursor:col-resize;
+  background:linear-gradient(180deg,var(--brand-fuchsia),var(--brand-violet));opacity:0;transition:opacity .2s;
+}
+.chat-panel:hover .chat-resize{opacity:.4}
+.chat-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 16px 0;
+}
+.chat-header-title{font-size:15px;font-weight:600}
+.chat-close{
+  width:28px;height:28px;border-radius:8px;border:none;
+  background:var(--elevated);color:var(--text2);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;transition:var(--transition);
+}
+.chat-close:hover{background:var(--hover);color:var(--text)}
+.chat-tabs{display:flex;gap:2px;padding:10px 16px 0;background:transparent}
+.chat-tab{
+  flex:1;padding:8px 0;text-align:center;font-size:12px;font-weight:600;
+  border-radius:8px;cursor:pointer;color:var(--text2);transition:var(--transition);
+  border:none;background:none;
+}
+.chat-tab.active{
+  background:var(--elevated);color:var(--text);
+}
+.agent-switcher{
+  display:flex;gap:4px;padding:10px 16px;
+}
+.agent-pill{
+  padding:5px 14px;border-radius:100px;font-size:11px;font-weight:600;
+  border:1px solid var(--card-border);background:transparent;color:var(--text2);
+  cursor:pointer;transition:var(--transition);
+}
+.agent-pill.active{
+  background:linear-gradient(135deg,rgba(192,38,211,.15),rgba(124,58,237,.15));
+  border-color:rgba(124,58,237,.3);color:var(--text);
+}
+.chat-messages{flex:1;overflow-y:auto;padding:8px 16px;display:flex;flex-direction:column;gap:12px}
+.chat-msg{max-width:88%;display:flex;flex-direction:column;gap:4px}
+.chat-msg.user{align-self:flex-end}
+.chat-msg.assistant{align-self:flex-start}
+.chat-msg-bubble{
+  padding:10px 14px;border-radius:14px;font-size:12.5px;line-height:1.55;
+}
+.chat-msg.user .chat-msg-bubble{
+  background:linear-gradient(135deg,var(--brand-fuchsia),var(--brand-violet));color:#fff;
+  border-bottom-right-radius:4px;
+}
+.chat-msg.assistant .chat-msg-bubble{
+  background:var(--elevated);color:var(--text);
+  border-bottom-left-radius:4px;
+}
+.chat-msg-time{font-size:10px;color:var(--text3);padding:0 4px}
+.chat-msg.user .chat-msg-time{text-align:right}
+.chat-input-wrap{
+  padding:12px 16px;border-top:1px solid var(--divider);
+  display:flex;align-items:flex-end;gap:8px;
+}
+.chat-input{
+  flex:1;resize:none;border:1px solid var(--card-border);border-radius:12px;
+  padding:10px 14px;font-size:12.5px;font-family:'DM Sans',sans-serif;
+  background:var(--card);color:var(--text);outline:none;
+  min-height:40px;max-height:100px;transition:var(--transition);
+}
+.chat-input:focus{border-color:var(--brand-violet)}
+.chat-input::placeholder{color:var(--text3)}
+.chat-send{
+  width:36px;height:36px;border-radius:10px;border:none;
+  background:linear-gradient(135deg,var(--brand-fuchsia),var(--brand-violet));
+  color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:var(--transition);flex-shrink:0;
+}
+.chat-send:hover{opacity:.9;transform:translateY(-1px)}
+
+/* ── Past Sessions Tab ── */
+.past-sessions{flex:1;overflow-y:auto;padding:8px 16px;display:none;flex-direction:column;gap:8px}
+.past-sessions.visible{display:flex}
+.chat-messages.hidden{display:none}
+.chat-input-wrap.hidden{display:none}
+.session-card{
+  padding:12px 14px;border-radius:12px;background:var(--elevated);
+  border:1px solid var(--card-border);cursor:pointer;transition:var(--transition);
+}
+.session-card:hover{border-color:var(--text3)}
+.session-card-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+.session-card-date{font-size:11px;font-weight:600}
+.session-card-count{font-size:10px;color:var(--text3);font-family:var(--font-mono)}
+.session-card-preview{font-size:11.5px;color:var(--text2);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+
+/* ── Responsive helper ── */
+body.sidebar-collapsed .sidebar{width:var(--sidebar-collapsed-w)}
+body.chat-open .chat-fab{opacity:0;pointer-events:none}
+</style>
+</head>
+<body class="sidebar-collapsed-no">
+
+<!-- ── Header ── -->
+<header class="header">
+  <div class="header-left">
+    <div class="logo">
+      <div class="logo-mark">A</div>
+      <span>ASET</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <button class="header-btn" title="Notifications" aria-label="Notifications">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+    </button>
+    <button class="header-btn" onclick="toggleChat()" title="Chat" aria-label="Open chat">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    </button>
+    <div class="avatar" title="Abhay">AK</div>
+  </div>
+</header>
+
+<!-- ── Sidebar ── -->
+<nav class="sidebar" id="sidebar">
+  <div class="sidebar-section-title">Navigation</div>
+  <ul class="nav-list">
+    <li class="nav-item active" data-page="dashboard">
+      <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
+      <span class="nav-label">Dashboard</span>
+    </li>
+    <li class="nav-item" data-page="analytics">
+      <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>
+      <span class="nav-label">Analytics</span>
+    </li>
+    <li class="nav-item" data-page="docs">
+      <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+      <span class="nav-label">Docs</span>
+    </li>
+    <li class="nav-item" data-page="admin">
+      <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+      <span class="nav-label">Admin</span>
+    </li>
+    <li class="nav-item" data-page="insights">
+      <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></span>
+      <span class="nav-label">Insights</span>
+    </li>
+  </ul>
+  <div class="sidebar-bottom">
+    <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">
+      <span class="nav-icon" id="themeIcon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+      </span>
+      <span class="theme-label">Toggle Theme</span>
+    </button>
+    <button class="collapse-btn" onclick="toggleSidebar()" aria-label="Collapse sidebar">
+      <span class="nav-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
+      </span>
+      <span class="collapse-label">Collapse</span>
+    </button>
+  </div>
+</nav>
+
+<!-- ── Main Content ── -->
+<main class="main" id="mainContent">
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="hero-gradient"></div>
+    <div class="hero-noise"></div>
+    <div class="hero-content">
+      <div class="hero-top">
+        <div class="hero-value-block">
+          <span class="hero-label">Portfolio Value</span>
+          <span class="hero-value mono">$12,456.78</span>
+          <div class="hero-change">
+            <span class="pill pill-green">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
+              <span class="mono">+$285.34 (+2.34%)</span>
+            </span>
+            <span style="font-size:11px;color:var(--text3)">vs. yesterday</span>
+          </div>
+        </div>
+        <div class="hero-greeting">
+          <span class="hero-greeting-text">Welcome back, Abhay</span>
+          <span class="hero-greeting-sub">Your portfolio is up today. GOOGL leads with +2.11% and 3 forecasts are running.</span>
+          <span class="hero-greeting-time"><span class="dot"></span> All systems operational &middot; <span class="mono">Mar 16, 2026</span></span>
+        </div>
+      </div>
+      <div class="hero-stats">
+        <span class="hero-stat-pill"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> <span class="mono">5</span> Stocks</span>
+        <span class="hero-stat-pill"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg> <span class="mono">3</span> Forecasts</span>
+        <span class="hero-stat-pill"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> <span class="mono">2</span> Reports</span>
+        <span class="hero-stat-pill"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg> <span class="mono">98%</span> Uptime</span>
+      </div>
+      <div class="hero-actions">
+        <button class="hero-btn primary">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          Analyze
+        </button>
+        <button class="hero-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+          Forecast
+        </button>
+        <button class="hero-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+          Compare
+        </button>
+        <button class="hero-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          Link Ticker
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Asymmetric Grid -->
+  <div class="grid-asym">
+    <!-- Watchlist (left, tall) -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Watchlist</span>
+        <span class="card-badge">5 tickers</span>
+      </div>
+      <div class="card-body">
+        <div class="watchlist-row">
+          <span class="wl-dot" style="background:var(--green)"></span>
+          <span class="wl-ticker">AAPL</span>
+          <span class="wl-name">Apple Inc.</span>
+          <span class="wl-price mono">$198.45</span>
+          <span class="pill pill-green mono" style="font-size:10px">+1.19%</span>
+          <svg class="wl-spark" viewBox="0 0 60 24"><polyline points="2,18 10,14 18,16 26,10 34,12 42,8 50,6 58,9" style="stroke:var(--green)"/></svg>
+        </div>
+        <div class="watchlist-row">
+          <span class="wl-dot" style="background:var(--red)"></span>
+          <span class="wl-ticker">TSLA</span>
+          <span class="wl-name">Tesla Inc.</span>
+          <span class="wl-price mono">$245.67</span>
+          <span class="pill pill-red mono" style="font-size:10px">-1.65%</span>
+          <svg class="wl-spark" viewBox="0 0 60 24"><polyline points="2,6 10,8 18,10 26,14 34,12 42,18 50,16 58,19" style="stroke:var(--red)"/></svg>
+        </div>
+        <div class="watchlist-row">
+          <span class="wl-dot" style="background:var(--green)"></span>
+          <span class="wl-ticker">MSFT</span>
+          <span class="wl-name">Microsoft Corp.</span>
+          <span class="wl-price mono">$415.23</span>
+          <span class="pill pill-green mono" style="font-size:10px">+0.46%</span>
+          <svg class="wl-spark" viewBox="0 0 60 24"><polyline points="2,14 10,13 18,12 26,13 34,11 42,10 50,11 58,9" style="stroke:var(--green)"/></svg>
+        </div>
+        <div class="watchlist-row">
+          <span class="wl-dot" style="background:var(--green)"></span>
+          <span class="wl-ticker">GOOGL</span>
+          <span class="wl-name">Alphabet Inc.</span>
+          <span class="wl-price mono">$172.34</span>
+          <span class="pill pill-green mono" style="font-size:10px">+2.11%</span>
+          <svg class="wl-spark" viewBox="0 0 60 24"><polyline points="2,20 10,16 18,14 26,12 34,10 42,8 50,6 58,4" style="stroke:var(--green)"/></svg>
+        </div>
+        <div class="watchlist-row">
+          <span class="wl-dot" style="background:var(--red)"></span>
+          <span class="wl-ticker">NVDA</span>
+          <span class="wl-name">NVIDIA Corp.</span>
+          <span class="wl-price mono">$875.50</span>
+          <span class="pill pill-red mono" style="font-size:10px">-1.39%</span>
+          <svg class="wl-spark" viewBox="0 0 60 24"><polyline points="2,8 10,6 18,10 26,12 34,16 42,14 50,18 58,17" style="stroke:var(--red)"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right column: Signals + LLM stacked -->
+    <div style="display:flex;flex-direction:column;gap:20px">
+      <!-- Analysis Signals -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Analysis Signals</span>
+          <span class="card-badge">AAPL</span>
+        </div>
+        <div class="card-body">
+          <div class="signal-row">
+            <div class="signal-left">
+              <span class="signal-name">RSI 14</span>
+              <span class="signal-value">67.3</span>
+            </div>
+            <span class="pill pill-yellow signal-badge">Approaching Overbought</span>
+          </div>
+          <div class="signal-row">
+            <div class="signal-left">
+              <span class="signal-name">MACD</span>
+              <span class="signal-value">+0.45</span>
+            </div>
+            <span class="pill pill-green signal-badge">Bullish Crossover</span>
+          </div>
+          <div class="signal-row">
+            <div class="signal-left">
+              <span class="signal-name">SMA 50/200</span>
+              <span class="signal-value">Golden Cross</span>
+            </div>
+            <span class="pill pill-green signal-badge">Strong Bullish</span>
+          </div>
+          <div class="signal-row">
+            <div class="signal-left">
+              <span class="signal-name">Bollinger Bands</span>
+              <span class="signal-value">Upper Band Touch</span>
+            </div>
+            <span class="pill pill-orange signal-badge">Potential Reversal</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- LLM Usage -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">LLM Usage</span>
+          <span class="card-badge">This month</span>
+        </div>
+        <div class="card-body">
+          <div class="llm-stats">
+            <div class="llm-stat">
+              <div class="llm-stat-value mono">1,234</div>
+              <div class="llm-stat-label">Requests</div>
+            </div>
+            <div class="llm-stat">
+              <div class="llm-stat-value mono">$4.56</div>
+              <div class="llm-stat-label">Cost</div>
+            </div>
+            <div class="llm-stat">
+              <div class="llm-stat-value mono">245ms</div>
+              <div class="llm-stat-label">Avg Latency</div>
+            </div>
+          </div>
+          <div class="donut-wrap">
+            <svg width="80" height="80" viewBox="0 0 80 80">
+              <!-- 78% blue segment -->
+              <circle cx="40" cy="40" r="30" fill="none" stroke="var(--card-border)" stroke-width="10"/>
+              <circle cx="40" cy="40" r="30" fill="none" stroke="var(--indigo-500)" stroke-width="10"
+                stroke-dasharray="147.0 188.5" stroke-dashoffset="0" transform="rotate(-90 40 40)"
+                stroke-linecap="round"/>
+              <!-- 22% violet segment -->
+              <circle cx="40" cy="40" r="30" fill="none" stroke="var(--brand-violet)" stroke-width="10"
+                stroke-dasharray="41.5 188.5" stroke-dashoffset="-147.0" transform="rotate(-90 40 40)"
+                stroke-linecap="round"/>
+              <text x="40" y="42" text-anchor="middle" font-family="var(--font-mono)" font-size="11" font-weight="600" fill="var(--text)">1.2k</text>
+            </svg>
+            <div class="donut-legend">
+              <div class="donut-legend-item">
+                <span class="donut-legend-dot" style="background:var(--indigo-500)"></span>
+                <span>groq-llama <span class="mono" style="color:var(--text2)">78%</span></span>
+              </div>
+              <div class="donut-legend-item">
+                <span class="donut-legend-dot" style="background:var(--brand-violet)"></span>
+                <span>claude-sonnet <span class="mono" style="color:var(--text2)">22%</span></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Forecast Chart (full width) -->
+  <div class="card chart-card grid-full">
+    <div class="card-header">
+      <span class="card-title">AAPL — Prophet Forecast (6 months)</span>
+      <span class="card-badge">Updated 2h ago</span>
+    </div>
+    <div class="card-body">
+      <div class="chart-wrap">
+        <svg viewBox="0 0 800 200" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="bandGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="var(--brand-violet)" stop-opacity=".25"/>
+              <stop offset="100%" stop-color="var(--brand-violet)" stop-opacity=".02"/>
+            </linearGradient>
+          </defs>
+          <!-- Grid lines -->
+          <g class="chart-grid">
+            <line x1="60" y1="20" x2="780" y2="20"/>
+            <line x1="60" y1="56" x2="780" y2="56"/>
+            <line x1="60" y1="92" x2="780" y2="92"/>
+            <line x1="60" y1="128" x2="780" y2="128"/>
+            <line x1="60" y1="164" x2="780" y2="164"/>
+          </g>
+          <!-- Y-axis labels -->
+          <g class="chart-axis">
+            <text x="50" y="24" text-anchor="end">$220</text>
+            <text x="50" y="60" text-anchor="end">$210</text>
+            <text x="50" y="96" text-anchor="end">$200</text>
+            <text x="50" y="132" text-anchor="end">$190</text>
+            <text x="50" y="168" text-anchor="end">$180</text>
+          </g>
+          <!-- X-axis labels -->
+          <g class="chart-axis">
+            <text x="120" y="192">Oct</text>
+            <text x="240" y="192">Nov</text>
+            <text x="360" y="192">Dec</text>
+            <text x="480" y="192">Jan</text>
+            <text x="600" y="192">Feb</text>
+            <text x="720" y="192">Mar</text>
+          </g>
+          <!-- Confidence band -->
+          <path class="chart-band" d="M480,72 L540,65 600,58 660,50 720,44 780,38 780,120 720,108 660,100 600,96 540,92 480,88 Z"/>
+          <!-- Historical line -->
+          <polyline class="chart-historical" points="60,160 120,148 180,140 240,145 300,128 360,120 420,105 480,88"/>
+          <!-- Forecast line -->
+          <polyline class="chart-forecast" points="480,88 540,78 600,72 660,65 720,58 780,50"/>
+          <!-- Junction dot -->
+          <circle cx="480" cy="88" r="4" fill="var(--indigo-500)"/>
+          <!-- Legend -->
+          <line x1="580" y1="12" x2="600" y2="12" stroke="var(--indigo-500)" stroke-width="2"/>
+          <text x="605" y="15" class="chart-axis" style="font-size:10px">Historical</text>
+          <line x1="670" y1="12" x2="690" y2="12" stroke="var(--brand-violet)" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="695" y="15" class="chart-axis" style="font-size:10px">Forecast</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ── Chat FAB ── -->
+<button class="chat-fab entrance" onclick="toggleChat()" id="chatFab" aria-label="Open AI chat">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+  </svg>
+  <span class="fab-dot"></span>
+</button>
+
+<!-- ── Chat Panel ── -->
+<aside class="chat-panel" id="chatPanel">
+  <div class="chat-resize"></div>
+  <div class="chat-header">
+    <span class="chat-header-title">AI Assistant</span>
+    <button class="chat-close" onclick="toggleChat()" aria-label="Close chat">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <div class="chat-tabs">
+    <button class="chat-tab active" id="tabChat" onclick="switchTab('chat')">Chat</button>
+    <button class="chat-tab" id="tabSessions" onclick="switchTab('sessions')">Past Sessions</button>
+  </div>
+  <div class="agent-switcher" id="agentSwitcher">
+    <button class="agent-pill active">General</button>
+    <button class="agent-pill" onclick="this.parentElement.querySelector('.active').classList.remove('active');this.classList.add('active')">Stock Analysis</button>
+  </div>
+  <div class="chat-messages" id="chatMessages">
+    <div class="chat-msg user">
+      <div class="chat-msg-bubble">Analyze AAPL performance this quarter</div>
+      <div class="chat-msg-time">2:34 PM</div>
+    </div>
+    <div class="chat-msg assistant">
+      <div class="chat-msg-bubble">AAPL has shown strong momentum with RSI at 67.3, approaching overbought territory. The MACD confirms a bullish crossover at +0.45, and the SMA 50/200 golden cross suggests continued upside potential. Current price of $198.45 is near the upper Bollinger Band, so watch for a potential short-term pullback.</div>
+      <div class="chat-msg-time">2:34 PM</div>
+    </div>
+    <div class="chat-msg user">
+      <div class="chat-msg-bubble">What about the forecast?</div>
+      <div class="chat-msg-time">2:35 PM</div>
+    </div>
+    <div class="chat-msg assistant">
+      <div class="chat-msg-bubble">The Prophet model projects AAPL reaching approximately $215-220 over the next 6 months, with a confidence interval of $200-$240. Key catalysts include the upcoming earnings report and seasonal holiday demand.</div>
+      <div class="chat-msg-time">2:35 PM</div>
+    </div>
+  </div>
+  <div class="past-sessions" id="pastSessions">
+    <div class="session-card">
+      <div class="session-card-top">
+        <span class="session-card-date">Mar 15, 2026</span>
+        <span class="session-card-count">12 messages</span>
+      </div>
+      <div class="session-card-preview">Portfolio rebalancing discussion - moved 15% from TSLA to NVDA based on momentum analysis...</div>
+    </div>
+    <div class="session-card">
+      <div class="session-card-top">
+        <span class="session-card-date">Mar 14, 2026</span>
+        <span class="session-card-count">8 messages</span>
+      </div>
+      <div class="session-card-preview">GOOGL earnings analysis - revenue beat expectations by 4.2%, cloud segment grew 28% YoY...</div>
+    </div>
+    <div class="session-card">
+      <div class="session-card-top">
+        <span class="session-card-date">Mar 12, 2026</span>
+        <span class="session-card-count">15 messages</span>
+      </div>
+      <div class="session-card-preview">Sector rotation strategy - shifting from tech to healthcare based on macro indicators and Fed...</div>
+    </div>
+    <div class="session-card">
+      <div class="session-card-top">
+        <span class="session-card-date">Mar 10, 2026</span>
+        <span class="session-card-count">6 messages</span>
+      </div>
+      <div class="session-card-preview">MSFT Prophet forecast review - model accuracy at 94.2% for 30-day predictions...</div>
+    </div>
+    <div class="session-card">
+      <div class="session-card-top">
+        <span class="session-card-date">Mar 8, 2026</span>
+        <span class="session-card-count">20 messages</span>
+      </div>
+      <div class="session-card-preview">Full portfolio risk assessment - VaR analysis showed 2.3% daily risk, Sharpe ratio at 1.45...</div>
+    </div>
+  </div>
+  <div class="chat-input-wrap" id="chatInputWrap">
+    <textarea class="chat-input" placeholder="Ask the AI assistant..." rows="1"></textarea>
+    <button class="chat-send" aria-label="Send message">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+    </button>
+  </div>
+</aside>
+
+<script>
+(function(){
+  // ── State ──
+  let chatOpen = false;
+  let sidebarCollapsed = false;
+  let sidebarWasExpandedBeforeChat = true;
+
+  const sidebar = document.getElementById('sidebar');
+  const chatPanel = document.getElementById('chatPanel');
+  const mainContent = document.getElementById('mainContent');
+  const root = document.documentElement;
+
+  // ── Agent switcher ──
+  document.querySelectorAll('.agent-pill').forEach(function(pill){
+    pill.addEventListener('click', function(){
+      document.querySelectorAll('.agent-pill').forEach(function(p){p.classList.remove('active')});
+      pill.classList.add('active');
+    });
+  });
+
+  // ── Toggle Chat Panel ──
+  window.toggleChat = function(){
+    chatOpen = !chatOpen;
+    chatPanel.classList.toggle('open', chatOpen);
+    document.body.classList.toggle('chat-open', chatOpen);
+    if(chatOpen){
+      sidebarWasExpandedBeforeChat = !sidebarCollapsed;
+      if(!sidebarCollapsed) collapseSidebar(true);
+    } else {
+      if(sidebarWasExpandedBeforeChat) collapseSidebar(false);
+    }
+  };
+
+  // ── Toggle Sidebar ──
+  function collapseSidebar(collapse){
+    sidebarCollapsed = collapse;
+    sidebar.classList.toggle('collapsed', collapse);
+    document.body.classList.toggle('sidebar-collapsed', collapse);
+  }
+
+  window.toggleSidebar = function(){
+    collapseSidebar(!sidebarCollapsed);
+  };
+
+  // ── Toggle Theme ──
+  window.toggleTheme = function(){
+    var current = root.getAttribute('data-theme');
+    var next = current === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    var icon = document.getElementById('themeIcon');
+    if(next === 'dark'){
+      icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
+    } else {
+      icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+    }
+  };
+
+  // ── Tab Switching ──
+  window.switchTab = function(tab){
+    var tabChat = document.getElementById('tabChat');
+    var tabSessions = document.getElementById('tabSessions');
+    var messages = document.getElementById('chatMessages');
+    var sessions = document.getElementById('pastSessions');
+    var inputWrap = document.getElementById('chatInputWrap');
+    var agentSwitcher = document.getElementById('agentSwitcher');
+
+    if(tab === 'chat'){
+      tabChat.classList.add('active');
+      tabSessions.classList.remove('active');
+      messages.classList.remove('hidden');
+      sessions.classList.remove('visible');
+      inputWrap.classList.remove('hidden');
+      agentSwitcher.style.display = '';
+    } else {
+      tabChat.classList.remove('active');
+      tabSessions.classList.add('active');
+      messages.classList.add('hidden');
+      sessions.classList.add('visible');
+      inputWrap.classList.add('hidden');
+      agentSwitcher.style.display = 'none';
+    }
+  };
+
+  // ── Nav item click ──
+  document.querySelectorAll('.nav-item').forEach(function(item){
+    item.addEventListener('click', function(){
+      document.querySelectorAll('.nav-item').forEach(function(i){i.classList.remove('active')});
+      item.classList.add('active');
+    });
+  });
+})();
+</script>
+</body>
+</html>

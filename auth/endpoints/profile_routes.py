@@ -5,6 +5,8 @@ Functions
 - :func:`register` — attach profile routes to the router
 """
 
+from __future__ import annotations
+
 import logging
 import os
 from typing import Dict
@@ -150,9 +152,7 @@ def register(router: APIRouter) -> None:
                 status_code=413, detail="Avatar file exceeds 10 MB limit."
             )
         _ALLOWED_EXTS = {"jpg", "jpeg", "png", "gif", "webp"}
-        raw_ext = (
-            (file.filename or "jpg").rsplit(".", 1)[-1].lower()
-        )
+        raw_ext = (file.filename or "jpg").rsplit(".", 1)[-1].lower()
         ext = raw_ext if raw_ext in _ALLOWED_EXTS else "jpg"
         # Sanitise resolved_id — reject path separators.
         if "/" in resolved_id or ".." in resolved_id:
@@ -166,9 +166,7 @@ def register(router: APIRouter) -> None:
         _avatars_path.mkdir(parents=True, exist_ok=True)
         dest = _avatars_path / f"{resolved_id}.{ext}"
         # Ensure resolved path stays inside avatars dir.
-        if not dest.resolve().is_relative_to(
-            _avatars_path.resolve()
-        ):
+        if not dest.resolve().is_relative_to(_avatars_path.resolve()):
             raise HTTPException(
                 status_code=400,
                 detail="Invalid file path.",

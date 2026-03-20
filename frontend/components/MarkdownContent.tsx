@@ -8,18 +8,17 @@
 import { useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { DASHBOARD_URL, DOCS_URL } from "@/lib/config";
+import { DOCS_URL } from "@/lib/config";
 
 function preprocessContent(content: string): string {
-  const dashboardUrl = DASHBOARD_URL;
-
+  // Rewrite legacy Dash chart URLs to native Next.js routes
   content = content.replace(
     /\S+\/charts\/analysis\/([A-Z0-9._-]+)_analysis\.html/g,
-    (_, ticker) => `[View ${ticker} Analysis →](${dashboardUrl}/analysis?ticker=${ticker})`
+    (_, ticker) => `[View ${ticker} Analysis →](/analytics/analysis?ticker=${ticker})`
   );
   content = content.replace(
     /\S+\/charts\/forecasts\/([A-Z0-9._-]+)_forecast\.html/g,
-    (_, ticker) => `[View ${ticker} Forecast →](${dashboardUrl}/forecast?ticker=${ticker})`
+    (_, ticker) => `[View ${ticker} Forecast →](/analytics/analysis?ticker=${ticker})`
   );
   content = content.replace(/\S+\/data\/(raw|processed|forecasts|cache|metadata)\/\S+/g, "");
 
@@ -32,7 +31,6 @@ interface MarkdownContentProps {
 }
 
 export function MarkdownContent({ content, onInternalLink }: MarkdownContentProps) {
-  const dashboardBase = DASHBOARD_URL;
   const docsBase = DOCS_URL;
 
   // Fix #4: memoize preprocessing — avoids re-running regex on every streaming chunk
@@ -51,30 +49,30 @@ export function MarkdownContent({ content, onInternalLink }: MarkdownContentProp
         li: ({ children }) => <li className="leading-relaxed">{children}</li>,
         strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
         em:     ({ children }) => <em className="italic">{children}</em>,
-        hr: () => <hr className="border-gray-200 my-3" />,
+        hr: () => <hr className="border-gray-200 dark:border-gray-600 my-3" />,
         blockquote: ({ children }) => (
-          <blockquote className="border-l-4 border-indigo-300 pl-3 italic text-gray-500 my-2">{children}</blockquote>
+          <blockquote className="border-l-4 border-indigo-300 dark:border-indigo-600 pl-3 italic text-gray-500 dark:text-gray-400 my-2">{children}</blockquote>
         ),
         a: ({ href, children }) => {
-          const isInternal = href && (href.startsWith(dashboardBase) || href.startsWith(docsBase));
+          const isInternal = href && (href.startsWith("/") || href.startsWith(docsBase));
           if (isInternal) {
             return (
               <button
                 onClick={() => onInternalLink(href!)}
-                className="text-indigo-600 underline hover:text-indigo-800 cursor-pointer text-left"
+                className="text-indigo-600 dark:text-indigo-400 underline hover:text-indigo-800 dark:hover:text-indigo-300 cursor-pointer text-left"
               >
                 {children}
               </button>
             );
           }
           return (
-            <a href={href} target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline hover:text-indigo-800">
+            <a href={href} target="_blank" rel="noopener noreferrer" className="text-indigo-600 dark:text-indigo-400 underline hover:text-indigo-800 dark:hover:text-indigo-300">
               {children}
             </a>
           );
         },
         pre: ({ children }) => (
-          <pre className="bg-gray-900 text-gray-100 rounded-lg px-4 py-3 overflow-x-auto text-xs font-mono my-2">
+          <pre className="bg-gray-900 dark:bg-gray-950 text-gray-100 rounded-lg px-4 py-3 overflow-x-auto text-xs font-mono my-2">
             {children}
           </pre>
         ),
@@ -82,7 +80,7 @@ export function MarkdownContent({ content, onInternalLink }: MarkdownContentProp
           className ? (
             <code className="font-mono">{children}</code>
           ) : (
-            <code className="bg-gray-100 text-indigo-700 rounded px-1 py-0.5 text-[0.83em] font-mono">
+            <code className="bg-gray-100 dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 rounded px-1 py-0.5 text-[0.83em] font-mono">
               {children}
             </code>
           ),
@@ -91,14 +89,14 @@ export function MarkdownContent({ content, onInternalLink }: MarkdownContentProp
             <table className="min-w-full text-xs border-collapse">{children}</table>
           </div>
         ),
-        thead: ({ children }) => <thead className="bg-gray-50">{children}</thead>,
+        thead: ({ children }) => <thead className="bg-gray-50 dark:bg-gray-700">{children}</thead>,
         th: ({ children }) => (
-          <th className="border border-gray-200 px-3 py-1.5 font-semibold text-left text-gray-700">{children}</th>
+          <th className="border border-gray-200 dark:border-gray-600 px-3 py-1.5 font-semibold text-left text-gray-700 dark:text-gray-300">{children}</th>
         ),
         td: ({ children }) => (
-          <td className="border border-gray-200 px-3 py-1.5 text-gray-700">{children}</td>
+          <td className="border border-gray-200 dark:border-gray-600 px-3 py-1.5 text-gray-700 dark:text-gray-300">{children}</td>
         ),
-        tr: ({ children }) => <tr className="even:bg-gray-50">{children}</tr>,
+        tr: ({ children }) => <tr className="even:bg-gray-50 dark:even:bg-gray-700/50">{children}</tr>,
       }}
     >
       {processedContent}

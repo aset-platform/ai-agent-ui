@@ -11,9 +11,11 @@ Usage::
     user = repo.get_by_email("admin@example.com")
 """
 
+from __future__ import annotations
+
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pyarrow as pa
 
@@ -60,7 +62,7 @@ class IcebergUserRepository:
     # User reads
     # ------------------------------------------------------------------
 
-    def get_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+    def get_by_email(self, email: str) -> dict[str, Any] | None:
         """Fetch a single user by email.
 
         Args:
@@ -71,7 +73,7 @@ class IcebergUserRepository:
         """
         return _reads.get_by_email(self._get_catalog(), email)
 
-    def get_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+    def get_by_id(self, user_id: str) -> dict[str, Any] | None:
         """Fetch a single user by UUID.
 
         Args:
@@ -82,7 +84,7 @@ class IcebergUserRepository:
         """
         return _reads.get_by_id(self._get_catalog(), user_id)
 
-    def list_all(self) -> List[Dict[str, Any]]:
+    def list_all(self) -> list[dict[str, Any]]:
         """Return all users from the ``auth.users`` table.
 
         Returns:
@@ -94,7 +96,7 @@ class IcebergUserRepository:
     # User writes
     # ------------------------------------------------------------------
 
-    def create(self, user_data: Dict[str, Any]) -> Dict[str, Any]:
+    def create(self, user_data: dict[str, Any]) -> dict[str, Any]:
         """Append a new user row.
 
         Args:
@@ -107,7 +109,7 @@ class IcebergUserRepository:
         """
         return _writes.create(self._get_catalog(), user_data)
 
-    def update(self, user_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update(self, user_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update user fields (copy-on-write).
 
         Args:
@@ -133,7 +135,7 @@ class IcebergUserRepository:
 
     def get_by_oauth_sub(
         self, provider: str, oauth_sub: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Fetch a user by OAuth provider + subject ID.
 
         Args:
@@ -153,8 +155,8 @@ class IcebergUserRepository:
         oauth_sub: str,
         email: str,
         full_name: str,
-        picture_url: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        picture_url: str | None = None,
+    ) -> dict[str, Any]:
         """Return an existing user or create a new SSO-only account.
 
         Args:
@@ -185,7 +187,7 @@ class IcebergUserRepository:
         event_type: str,
         actor_user_id: str,
         target_user_id: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Append an immutable event row to the audit log.
 
@@ -203,7 +205,7 @@ class IcebergUserRepository:
             metadata,
         )
 
-    def list_audit_events(self) -> List[Dict[str, Any]]:
+    def list_audit_events(self) -> list[dict[str, Any]]:
         """Return all audit log events, sorted newest-first.
 
         Returns:

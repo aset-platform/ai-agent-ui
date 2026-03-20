@@ -6,7 +6,11 @@
  * Dash interactions — these helpers wait for DOM signals instead.
  */
 
-import { type Locator, type Page, expect } from "@playwright/test";
+import {
+  type Locator,
+  type Page,
+  expect,
+} from "@playwright/test";
 
 /**
  * Wait for a Dash callback result by watching a DOM element.
@@ -86,4 +90,56 @@ export async function waitForStoreValue(
     [storeId, expected],
     { timeout },
   );
+}
+
+/**
+ * Wait until **all** Dash callbacks have finished.
+ *
+ * Dash sets ``data-dash-is-loading="true"`` on every component
+ * that is currently being updated by a callback.  This helper
+ * polls the DOM until no such attribute remains, meaning the
+ * callback chain has fully settled.
+ *
+ * Use this instead of ``page.waitForTimeout()`` after user
+ * interactions that trigger one or more chained callbacks.
+ */
+export async function waitForDashReady(
+  page: Page,
+  timeout = 15_000,
+): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const loading = document.querySelectorAll(
+        '[data-dash-is-loading="true"]',
+      );
+      return loading.length === 0;
+    },
+    undefined,
+    { timeout },
+  );
+}
+
+/**
+ * Navigate to a Dash page and retry once on callback error.
+ *
+ * Centralises the "goto → waitForDashLoading → check for
+ * Callback-error banner → reload" pattern that was duplicated
+ * across every dashboard page object.
+ */
+export async function gotoDashPage(
+  page: Page,
+  url: string,
+): Promise<void> {
+  await page.goto(url);
+  await waitForDashLoading(page);
+  const err = page.locator("text=Callback error");
+  const navbar = page.locator(".navbar");
+  const needsRetry =
+    (await err.count()) > 0 ||
+    (await navbar.count()) === 0;
+  if (needsRetry) {
+    await waitForDashReady(page);
+    await page.reload();
+    await waitForDashLoading(page);
+  }
 }

@@ -14,6 +14,8 @@ Tab builders exported here:
 - :func:`_quarterly_tab` — Quarterly Financial Results
 """
 
+from __future__ import annotations
+
 from typing import List
 
 import dash_bootstrap_components as dbc

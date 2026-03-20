@@ -46,6 +46,8 @@ Usage::
     df = repo.get_ohlcv("AAPL")
 """
 
+from __future__ import annotations
+
 import logging
 import math
 import time
@@ -70,6 +72,8 @@ _ANALYSIS_SUMMARY = f"{_NAMESPACE}.analysis_summary"
 _FORECAST_RUNS = f"{_NAMESPACE}.forecast_runs"
 _FORECASTS = f"{_NAMESPACE}.forecasts"
 _QUARTERLY_RESULTS = f"{_NAMESPACE}.quarterly_results"
+_CHAT_AUDIT_LOG = f"{_NAMESPACE}.chat_audit_log"
+_PORTFOLIO = f"{_NAMESPACE}.portfolio_transactions"
 
 
 def _now_utc() -> datetime:
@@ -248,6 +252,175 @@ class StockRepository:
                 return filtered[cols]
             return filtered
 
+    def _scan_tickers(
+        self,
+        identifier: str,
+        tickers: list[str],
+        selected_fields: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """Scan a table for multiple tickers in one query.
+
+        Uses ``In("ticker", tickers)`` predicate for
+        Iceberg-level partition pruning.  Falls back to
+        full scan with pandas ``isin()`` on error.
+
+        Args:
+            identifier: Fully-qualified table name.
+            tickers: List of ticker symbols.
+            selected_fields: Optional column projection.
+
+        Returns:
+            DataFrame with rows for all requested
+            tickers, or empty DataFrame.
+        """
+        if not tickers:
+            return pd.DataFrame()
+        try:
+            from pyiceberg.expressions import In
+
+            tbl = self._load_table(identifier)
+            if identifier in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(
+                    identifier
+                )
+            scan_kwargs: dict[str, Any] = {
+                "row_filter": In(
+                    "ticker", tickers,
+                ),
+            }
+            if selected_fields:
+                scan_kwargs["selected_fields"] = (
+                    selected_fields
+                )
+            return tbl.scan(
+                **scan_kwargs
+            ).to_pandas()
+        except Exception as exc:
+            _logger.warning(
+                "Batch scan failed for %s (%s);"
+                " falling back to full scan.",
+                identifier,
+                exc,
+            )
+            df = self._table_to_df(identifier)
+            if df.empty:
+                return df
+            filtered = df[
+                df["ticker"].isin(tickers)
+            ].copy()
+            if selected_fields:
+                cols = [
+                    c
+                    for c in selected_fields
+                    if c in filtered.columns
+                ]
+                return filtered[cols]
+            return filtered
+
+    def get_ohlcv_batch(
+        self,
+        tickers: list[str],
+    ) -> pd.DataFrame:
+        """Return OHLCV data for multiple tickers.
+
+        Single Iceberg scan with ``In`` predicate
+        instead of N individual scans.
+
+        Args:
+            tickers: List of ticker symbols.
+
+        Returns:
+            DataFrame sorted by ticker, date.
+        """
+        df = self._scan_tickers(
+            _OHLCV,
+            [t.upper() for t in tickers],
+        )
+        if df.empty:
+            return df
+        return df.sort_values(
+            ["ticker", "date"]
+        ).reset_index(drop=True)
+
+    def get_technical_indicators_batch(
+        self,
+        tickers: list[str],
+    ) -> pd.DataFrame:
+        """Return technical indicators for tickers.
+
+        Single Iceberg scan with ``In`` predicate.
+
+        Args:
+            tickers: List of ticker symbols.
+
+        Returns:
+            DataFrame sorted by ticker, date.
+        """
+        df = self._scan_tickers(
+            _TECHNICAL_INDICATORS,
+            [t.upper() for t in tickers],
+        )
+        if df.empty:
+            return df
+        return df.sort_values(
+            ["ticker", "date"]
+        ).reset_index(drop=True)
+
+    def get_company_info_batch(
+        self,
+        tickers: list[str],
+    ) -> pd.DataFrame:
+        """Latest company info for multiple tickers.
+
+        Single Iceberg scan, then dedup to latest
+        ``fetched_at`` per ticker.
+
+        Args:
+            tickers: List of ticker symbols.
+
+        Returns:
+            DataFrame with one row per ticker.
+        """
+        df = self._scan_tickers(
+            _COMPANY_INFO,
+            [t.upper() for t in tickers],
+        )
+        if df.empty:
+            return df
+        if "fetched_at" in df.columns:
+            df = df.sort_values("fetched_at")
+        return df.drop_duplicates(
+            subset=["ticker"], keep="last",
+        ).reset_index(drop=True)
+
+    def get_analysis_summary_batch(
+        self,
+        tickers: list[str],
+    ) -> pd.DataFrame:
+        """Latest analysis summary for tickers.
+
+        Single Iceberg scan, then dedup to latest
+        ``analysis_date`` per ticker.
+
+        Args:
+            tickers: List of ticker symbols.
+
+        Returns:
+            DataFrame with one row per ticker.
+        """
+        df = self._scan_tickers(
+            _ANALYSIS_SUMMARY,
+            [t.upper() for t in tickers],
+        )
+        if df.empty:
+            return df
+        if "analysis_date" in df.columns:
+            df = df.sort_values("analysis_date")
+        return df.drop_duplicates(
+            subset=["ticker"], keep="last",
+        ).reset_index(drop=True)
+
     def _scan_two_filters(
         self,
         identifier: str,
@@ -318,6 +491,154 @@ class StockRepository:
             df = pd.DataFrame()
         return tbl, df
 
+    def _scan_ticker_date_range(
+        self,
+        identifier: str,
+        ticker: str,
+        date_col: str = "date",
+        start: date | None = None,
+        end: date | None = None,
+        selected_fields: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """Scan with ticker + date range predicates at Iceberg level.
+
+        Pushes both ticker equality and date range bounds into the
+        Iceberg scan so partition pruning and file-level min/max
+        statistics can skip irrelevant data files.
+
+        Falls back to ``_scan_ticker`` + pandas filtering on error.
+
+        Args:
+            identifier: Fully-qualified table name.
+            ticker: Stock ticker symbol (already uppercased).
+            date_col: Name of the date column to filter on.
+            start: Inclusive start date (``None`` = no lower bound).
+            end: Inclusive end date (``None`` = no upper bound).
+            selected_fields: Optional column projection list.
+
+        Returns:
+            Filtered DataFrame sorted by *date_col* ascending.
+        """
+        try:
+            from pyiceberg.expressions import (
+                And,
+                EqualTo,
+                GreaterThanOrEqual,
+                LessThanOrEqual,
+            )
+
+            tbl = self._load_table(identifier)
+            if identifier in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(identifier)
+
+            row_filter = EqualTo("ticker", ticker)
+            if start is not None:
+                row_filter = And(
+                    row_filter,
+                    GreaterThanOrEqual(date_col, start),
+                )
+            if end is not None:
+                row_filter = And(
+                    row_filter,
+                    LessThanOrEqual(date_col, end),
+                )
+
+            scan_kwargs: dict[str, Any] = {
+                "row_filter": row_filter,
+            }
+            if selected_fields:
+                scan_kwargs["selected_fields"] = selected_fields
+            return tbl.scan(**scan_kwargs).to_pandas()
+        except Exception as exc:
+            _logger.warning(
+                "Iceberg date-range scan failed for %s "
+                "ticker=%s (%s); falling back.",
+                identifier,
+                ticker,
+                exc,
+            )
+            df = self._scan_ticker(
+                identifier,
+                ticker,
+                selected_fields,
+            )
+            if df.empty:
+                return df
+            if start is not None:
+                df = df[pd.to_datetime(df[date_col]).dt.date >= start]
+            if end is not None:
+                df = df[pd.to_datetime(df[date_col]).dt.date <= end]
+            return df
+
+    def _scan_date_range(
+        self,
+        identifier: str,
+        date_col: str,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> pd.DataFrame:
+        """Scan with date range predicates only (no ticker).
+
+        Pushes date bounds into the Iceberg scan for
+        partition pruning on date-partitioned tables
+        like ``llm_usage``.
+
+        Falls back to full scan + pandas filtering on
+        error.
+
+        Args:
+            identifier: Fully-qualified table name.
+            date_col: Date column name.
+            start: Inclusive start date.
+            end: Inclusive end date.
+
+        Returns:
+            Filtered DataFrame.
+        """
+        try:
+            from pyiceberg.expressions import (
+                And,
+                GreaterThanOrEqual,
+                LessThanOrEqual,
+            )
+
+            tbl = self._load_table(identifier)
+            if identifier in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(identifier)
+
+            filters = []
+            if start is not None:
+                filters.append(GreaterThanOrEqual(date_col, start))
+            if end is not None:
+                filters.append(LessThanOrEqual(date_col, end))
+
+            if len(filters) == 2:
+                row_filter = And(filters[0], filters[1])
+            elif len(filters) == 1:
+                row_filter = filters[0]
+            else:
+                return tbl.scan().to_pandas()
+
+            return tbl.scan(
+                row_filter=row_filter,
+            ).to_pandas()
+        except Exception as exc:
+            _logger.warning(
+                "Iceberg date-range scan failed for " "%s (%s); falling back.",
+                identifier,
+                exc,
+            )
+            df = self._table_to_df(identifier)
+            if df.empty:
+                return df
+            if start is not None:
+                df = df[df[date_col] >= start]
+            if end is not None:
+                df = df[df[date_col] <= end]
+            return df
+
     # ------------------------------------------------------------------
     # Retry helpers for Iceberg OCC
     # ------------------------------------------------------------------
@@ -351,6 +672,7 @@ class StockRepository:
             try:
                 getattr(tbl, operation)(*args, **kwargs)
                 self._dirty_tables.add(identifier)
+                self._invalidate_cache(identifier)
                 return
             except CommitFailedException as exc:
                 last_exc = exc
@@ -367,6 +689,92 @@ class StockRepository:
                     )
                     time.sleep(delay)
         raise last_exc  # type: ignore[misc]
+
+    # Table → cache key patterns that must be
+    # invalidated when the table is written to.
+    _CACHE_INVALIDATION_MAP: dict[str, list[str]] = {
+        "stocks.ohlcv": [
+            "cache:chart:ohlcv:*",
+            "cache:dash:watchlist:*",
+            "cache:dash:home:*",
+            "cache:dash:compare:*",
+            "cache:insights:screener:*",
+            "cache:insights:correlation:*",
+        ],
+        "stocks.technical_indicators": [
+            "cache:chart:indicators:*",
+            "cache:dash:analysis:*",
+            "cache:dash:home:*",
+            "cache:insights:screener:*",
+        ],
+        "stocks.analysis_summary": [
+            "cache:dash:analysis:*",
+            "cache:dash:home:*",
+            "cache:insights:screener:*",
+            "cache:insights:risk:*",
+            "cache:insights:sectors:*",
+        ],
+        "stocks.forecast_runs": [
+            "cache:dash:forecasts:*",
+            "cache:dash:home:*",
+            "cache:chart:forecast:*",
+            "cache:insights:targets:*",
+        ],
+        "stocks.forecasts": [
+            "cache:chart:forecast:*",
+        ],
+        "stocks.company_info": [
+            "cache:dash:watchlist:*",
+            "cache:dash:registry",
+            "cache:insights:screener:*",
+            "cache:insights:targets:*",
+            "cache:insights:dividends:*",
+            "cache:insights:risk:*",
+            "cache:insights:sectors:*",
+            "cache:insights:quarterly:*",
+        ],
+        "stocks.dividends": [
+            "cache:insights:dividends:*",
+        ],
+        "stocks.quarterly_results": [
+            "cache:insights:quarterly:*",
+        ],
+        "stocks.llm_usage": [
+            "cache:dash:llm-usage:*",
+            "cache:dash:home:*",
+            "cache:admin:metrics",
+        ],
+        "stocks.registry": [
+            "cache:dash:registry",
+        ],
+    }
+
+    def _invalidate_cache(
+        self, identifier: str,
+    ) -> None:
+        """Invalidate Redis cache keys after write.
+
+        Uses :data:`_CACHE_INVALIDATION_MAP` to find
+        which cache patterns correspond to the given
+        Iceberg table identifier.
+
+        Args:
+            identifier: Fully-qualified table name
+                (e.g. ``"stocks.ohlcv"``).
+        """
+        try:
+            from cache import get_cache
+        except ImportError:
+            return
+        cache = get_cache()
+        patterns = self._CACHE_INVALIDATION_MAP.get(
+            identifier, [],
+        )
+        for pattern in patterns:
+            if "*" in pattern:
+                cache.invalidate(pattern)
+            else:
+                cache.invalidate_exact(pattern)
 
     def _append_rows(self, identifier: str, arrow_table: pa.Table) -> None:
         """Append a PyArrow table to an Iceberg table.
@@ -410,6 +818,34 @@ class StockRepository:
             "delete",
             delete_filter=delete_filter,
         )
+
+    # ------------------------------------------------------------------
+    # Public wrappers for retention / admin callers
+    # ------------------------------------------------------------------
+
+    def load_table(self, identifier: str):
+        """Load an Iceberg table (public API).
+
+        Args:
+            identifier: e.g. ``"stocks.ohlcv"``.
+
+        Returns:
+            The loaded Iceberg table object.
+        """
+        return self._load_table(identifier)
+
+    def delete_rows(
+        self,
+        identifier: str,
+        delete_filter,
+    ) -> None:
+        """Delete rows matching *delete_filter* (public API).
+
+        Args:
+            identifier: Fully-qualified table name.
+            delete_filter: PyIceberg expression.
+        """
+        self._delete_rows(identifier, delete_filter)
 
     # ------------------------------------------------------------------
     # Registry
@@ -916,6 +1352,10 @@ class StockRepository:
     ) -> pd.DataFrame:
         """Return OHLCV data for *ticker*, optionally filtered by date range.
 
+        Uses Iceberg-level date predicates for partition pruning
+        and file-level statistics filtering when *start*/*end* are
+        provided.
+
         Args:
             ticker: Stock ticker symbol.
             start: Inclusive start date (``None`` = no lower bound).
@@ -925,13 +1365,18 @@ class StockRepository:
             DataFrame sorted by date ascending with columns:
             ticker, date, open, high, low, close, adj_close, volume.
         """
-        df = self._scan_ticker(_OHLCV, ticker.upper())
+        if start or end:
+            df = self._scan_ticker_date_range(
+                _OHLCV,
+                ticker.upper(),
+                date_col="date",
+                start=start,
+                end=end,
+            )
+        else:
+            df = self._scan_ticker(_OHLCV, ticker.upper())
         if df.empty:
             return df
-        if start:
-            df = df[pd.to_datetime(df["date"]).dt.date >= start]
-        if end:
-            df = df[pd.to_datetime(df["date"]).dt.date <= end]
         return df.sort_values("date").reset_index(drop=True)
 
     def get_latest_ohlcv_date(self, ticker: str) -> Optional[date]:
@@ -1270,6 +1715,9 @@ class StockRepository:
     ) -> pd.DataFrame:
         """Return technical indicator rows for *ticker*.
 
+        Uses Iceberg-level date predicates for efficient
+        partition pruning when date bounds are provided.
+
         Args:
             ticker: Stock ticker symbol.
             start: Inclusive start date.
@@ -1278,13 +1726,21 @@ class StockRepository:
         Returns:
             DataFrame sorted by date ascending.
         """
-        df = self._scan_ticker(_TECHNICAL_INDICATORS, ticker.upper())
+        if start or end:
+            df = self._scan_ticker_date_range(
+                _TECHNICAL_INDICATORS,
+                ticker.upper(),
+                date_col="date",
+                start=start,
+                end=end,
+            )
+        else:
+            df = self._scan_ticker(
+                _TECHNICAL_INDICATORS,
+                ticker.upper(),
+            )
         if df.empty:
             return df
-        if start:
-            df = df[pd.to_datetime(df["date"]).dt.date >= start]
-        if end:
-            df = df[pd.to_datetime(df["date"]).dt.date <= end]
         return df.sort_values("date").reset_index(drop=True)
 
     # ------------------------------------------------------------------
@@ -1985,3 +2441,1064 @@ class StockRepository:
                 )
                 deleted[table_id] = 0
         return deleted
+
+    # ------------------------------------------------------------------
+    # LLM Pricing
+    # ------------------------------------------------------------------
+
+    _LLM_PRICING = "stocks.llm_pricing"
+
+    def get_current_pricing(self) -> pd.DataFrame:
+        """Return all current LLM pricing rates.
+
+        Current rates have ``effective_to IS NULL``.
+
+        Returns:
+            DataFrame of active pricing rows.
+        """
+        df = self._table_to_df(self._LLM_PRICING)
+        if df.empty:
+            return df
+        return df[df["effective_to"].isna()].reset_index(
+            drop=True,
+        )
+
+    def get_all_pricing(self) -> pd.DataFrame:
+        """Return full pricing history (all rows).
+
+        Returns:
+            DataFrame of all pricing rows.
+        """
+        return self._table_to_df(self._LLM_PRICING)
+
+    def add_pricing(
+        self,
+        provider: str,
+        model: str,
+        input_cost: float,
+        output_cost: float,
+        effective_from: date,
+        updated_by: str | None = None,
+    ) -> str:
+        """Add a new pricing rate row.
+
+        Does NOT close existing rates — call
+        :meth:`update_pricing` for rate changes.
+
+        Args:
+            provider: ``"groq"`` or ``"anthropic"``.
+            model: Full model name.
+            input_cost: $/1M input tokens.
+            output_cost: $/1M output tokens.
+            effective_from: Start date of rate.
+            updated_by: Admin user ID (optional).
+
+        Returns:
+            The generated ``pricing_id``.
+        """
+        pid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).replace(
+            tzinfo=None,
+        )
+        tbl = pa.table(
+            {
+                "pricing_id": pa.array([pid], type=pa.string()),
+                "provider": pa.array([provider], type=pa.string()),
+                "model": pa.array([model], type=pa.string()),
+                "input_cost_per_1m": pa.array([input_cost], type=pa.float64()),
+                "output_cost_per_1m": pa.array(
+                    [output_cost], type=pa.float64()
+                ),
+                "effective_from": pa.array([effective_from], type=pa.date32()),
+                "effective_to": pa.array([None], type=pa.date32()),
+                "currency": pa.array(["USD"], type=pa.string()),
+                "updated_by": pa.array([updated_by], type=pa.string()),
+                "created_at": pa.array([now], type=pa.timestamp("us")),
+            }
+        )
+        self._append_rows(self._LLM_PRICING, tbl)
+        return pid
+
+    def update_pricing(
+        self,
+        provider: str,
+        model: str,
+        input_cost: float,
+        output_cost: float,
+        effective_from: date,
+        updated_by: str | None = None,
+    ) -> str:
+        """Update pricing by closing the current rate and
+        adding a new one.
+
+        Sets ``effective_to`` on the existing current rate
+        to ``effective_from - 1 day``, then appends a new
+        row.
+
+        Args:
+            provider: ``"groq"`` or ``"anthropic"``.
+            model: Full model name.
+            input_cost: New $/1M input tokens.
+            output_cost: New $/1M output tokens.
+            effective_from: Start date of new rate.
+            updated_by: Admin user ID (optional).
+
+        Returns:
+            The new ``pricing_id``.
+        """
+        # Close existing current rate via
+        # copy-on-write (small table).
+        df = self._table_to_df(self._LLM_PRICING)
+        if not df.empty:
+            mask = (
+                (df["provider"] == provider)
+                & (df["model"] == model)
+                & (df["effective_to"].isna())
+            )
+            close_date = effective_from - timedelta(
+                days=1,
+            )
+            df.loc[mask, "effective_to"] = close_date
+            tbl = pa.Table.from_pandas(df, preserve_index=False)
+            self._overwrite_table(self._LLM_PRICING, tbl)
+        return self.add_pricing(
+            provider,
+            model,
+            input_cost,
+            output_cost,
+            effective_from,
+            updated_by,
+        )
+
+    # ------------------------------------------------------------------
+    # LLM Usage
+    # ------------------------------------------------------------------
+
+    _LLM_USAGE = "stocks.llm_usage"
+
+    def append_llm_usage(self, events: list[dict]) -> None:
+        """Append LLM usage event rows.
+
+        Args:
+            events: List of dicts matching the
+                ``llm_usage`` schema fields.
+        """
+        if not events:
+            return
+        arrays = {
+            "usage_id": pa.array(
+                [e.get("usage_id", str(uuid.uuid4())) for e in events],
+                type=pa.string(),
+            ),
+            "request_date": pa.array(
+                [e["request_date"] for e in events],
+                type=pa.date32(),
+            ),
+            "timestamp": pa.array(
+                [e["timestamp"] for e in events],
+                type=pa.timestamp("us"),
+            ),
+            "user_id": pa.array(
+                [e.get("user_id") for e in events],
+                type=pa.string(),
+            ),
+            "agent_id": pa.array(
+                [e["agent_id"] for e in events],
+                type=pa.string(),
+            ),
+            "model": pa.array(
+                [e["model"] for e in events],
+                type=pa.string(),
+            ),
+            "provider": pa.array(
+                [e["provider"] for e in events],
+                type=pa.string(),
+            ),
+            "tier_index": pa.array(
+                [e.get("tier_index", 0) for e in events],
+                type=pa.int32(),
+            ),
+            "event_type": pa.array(
+                [e["event_type"] for e in events],
+                type=pa.string(),
+            ),
+            "cascade_reason": pa.array(
+                [e.get("cascade_reason") for e in events],
+                type=pa.string(),
+            ),
+            "cascade_from_model": pa.array(
+                [e.get("cascade_from_model") for e in events],
+                type=pa.string(),
+            ),
+            "prompt_tokens": pa.array(
+                [e.get("prompt_tokens") for e in events],
+                type=pa.int32(),
+            ),
+            "completion_tokens": pa.array(
+                [e.get("completion_tokens") for e in events],
+                type=pa.int32(),
+            ),
+            "total_tokens": pa.array(
+                [e.get("total_tokens") for e in events],
+                type=pa.int32(),
+            ),
+            "input_cost_per_1m": pa.array(
+                [e.get("input_cost_per_1m") for e in events],
+                type=pa.float64(),
+            ),
+            "output_cost_per_1m": pa.array(
+                [e.get("output_cost_per_1m") for e in events],
+                type=pa.float64(),
+            ),
+            "estimated_cost_usd": pa.array(
+                [e.get("estimated_cost_usd") for e in events],
+                type=pa.float64(),
+            ),
+            "latency_ms": pa.array(
+                [e.get("latency_ms") for e in events],
+                type=pa.int32(),
+            ),
+            "success": pa.array(
+                [e.get("success", True) for e in events],
+                type=pa.bool_(),
+            ),
+            "error_code": pa.array(
+                [e.get("error_code") for e in events],
+                type=pa.string(),
+            ),
+        }
+        self._append_rows(self._LLM_USAGE, pa.table(arrays))
+
+    def get_usage_totals(self) -> dict:
+        """Return lifetime aggregate totals from
+        ``llm_usage``.
+
+        Returns:
+            Dict with ``requests_total``,
+            ``cascade_count``, ``compression_count``.
+        """
+        df = self._table_to_df(self._LLM_USAGE)
+        if df.empty:
+            return {
+                "requests_total": 0,
+                "cascade_count": 0,
+                "compression_count": 0,
+            }
+        return {
+            "requests_total": int((df["event_type"] == "request").sum()),
+            "cascade_count": int((df["event_type"] == "cascade").sum()),
+            "compression_count": int(
+                (df["event_type"] == "compression").sum()
+            ),
+        }
+
+    def get_usage_by_date_range(
+        self,
+        start: date,
+        end: date,
+    ) -> pd.DataFrame:
+        """Return usage rows within a date range.
+
+        Uses Iceberg-level date predicates on the
+        ``request_date`` partition column for efficient
+        partition pruning.
+
+        Args:
+            start: Start date (inclusive).
+            end: End date (inclusive).
+
+        Returns:
+            DataFrame of matching usage rows.
+        """
+        df = self._scan_date_range(
+            self._LLM_USAGE,
+            date_col="request_date",
+            start=start,
+            end=end,
+        )
+        return df.reset_index(drop=True) if not df.empty else df
+
+    # ------------------------------------------------------------------
+    # Dashboard helpers
+    # ------------------------------------------------------------------
+
+    def get_dashboard_ohlcv(
+        self,
+        ticker: str,
+        limit: int = 30,
+    ) -> pd.DataFrame:
+        """Get last N OHLCV rows for sparkline charts.
+
+        Args:
+            ticker: Stock ticker symbol.
+            limit: Maximum rows to return (most recent).
+
+        Returns:
+            DataFrame sorted by date ascending with at
+            most *limit* rows.
+        """
+        try:
+            df = self._scan_ticker(_OHLCV, ticker)
+            if df.empty:
+                return df
+            df = df.sort_values("date", ascending=False)
+            df = df.head(limit)
+            return (
+                df.sort_values("date", ascending=True)
+                .reset_index(drop=True)
+            )
+        except Exception as exc:
+            _logger.warning(
+                "get_dashboard_ohlcv failed for %s: %s",
+                ticker,
+                exc,
+            )
+            return pd.DataFrame()
+
+    def get_dashboard_company_info(
+        self,
+        ticker: str,
+    ) -> dict | None:
+        """Get the most recent company_info snapshot.
+
+        Args:
+            ticker: Stock ticker symbol.
+
+        Returns:
+            Dict of company info fields, or ``None``
+            if no data exists.
+        """
+        try:
+            df = self._scan_ticker(_COMPANY_INFO, ticker)
+            if df.empty:
+                return None
+            df = df.sort_values(
+                "fetched_at", ascending=False,
+            )
+            return df.iloc[0].to_dict()
+        except Exception as exc:
+            _logger.warning(
+                "get_dashboard_company_info failed"
+                " for %s: %s",
+                ticker,
+                exc,
+            )
+            return None
+
+    def get_dashboard_forecast_runs(
+        self,
+        tickers: list[str],
+    ) -> pd.DataFrame:
+        """Get latest forecast_runs per ticker.
+
+        Uses predicate push-down via ``_scan_tickers``
+        instead of loading the full table.
+
+        Args:
+            tickers: List of ticker symbols to include.
+
+        Returns:
+            DataFrame with one row per ticker (latest
+            run), or empty DataFrame.
+        """
+        try:
+            df = self._scan_tickers(
+                _FORECAST_RUNS, tickers,
+            )
+            if df.empty:
+                return df
+            idx = df.groupby("ticker")[
+                "run_date"
+            ].idxmax()
+            return (
+                df.loc[idx].reset_index(drop=True)
+            )
+        except Exception as exc:
+            _logger.warning(
+                "get_dashboard_forecast_runs"
+                " failed: %s",
+                exc,
+            )
+            return pd.DataFrame()
+
+    def get_dashboard_analysis(
+        self,
+        tickers: list[str],
+    ) -> pd.DataFrame:
+        """Get latest analysis_summary per ticker.
+
+        Uses predicate push-down via ``_scan_tickers``
+        instead of loading the full table.
+
+        Args:
+            tickers: List of ticker symbols to include.
+
+        Returns:
+            DataFrame with one row per ticker (latest
+            analysis), or empty DataFrame.
+        """
+        try:
+            df = self._scan_tickers(
+                _ANALYSIS_SUMMARY, tickers,
+            )
+            if df.empty:
+                return df
+            idx = df.groupby("ticker")[
+                "analysis_date"
+            ].idxmax()
+            return (
+                df.loc[idx].reset_index(drop=True)
+            )
+        except Exception as exc:
+            _logger.warning(
+                "get_dashboard_analysis failed: %s",
+                exc,
+            )
+            return pd.DataFrame()
+
+    def get_dashboard_llm_usage(
+        self,
+        user_id: str | None = None,
+        days: int = 30,
+    ) -> dict:
+        """Aggregate LLM usage statistics for dashboard.
+
+        Reads the ``llm_usage`` table and computes
+        summary metrics including totals, per-model
+        breakdown, and daily trend.
+
+        Args:
+            user_id: Optional user filter.  ``None``
+                returns usage across all users.
+            days: Number of trailing days for the daily
+                trend series.
+
+        Returns:
+            Dict with keys ``total_requests``,
+            ``total_cost``, ``avg_latency_ms``,
+            ``per_model``, and ``daily_trend``.
+        """
+        empty: dict = {
+            "total_requests": 0,
+            "total_cost": 0.0,
+            "avg_latency_ms": 0.0,
+            "per_model": {},
+            "daily_trend": [],
+        }
+        try:
+            from pyiceberg.expressions import (
+                EqualTo,
+                GreaterThanOrEqual,
+            )
+
+            cutoff_date = (
+                datetime.now(tz=timezone.utc)
+                - timedelta(days=days)
+            ).date()
+            row_filter: Any = GreaterThanOrEqual(
+                "request_date", cutoff_date,
+            )
+            if user_id is not None:
+                from pyiceberg.expressions import And
+
+                row_filter = And(
+                    row_filter,
+                    EqualTo("user_id", user_id),
+                )
+            try:
+                tbl = self._load_table(
+                    self._LLM_USAGE,
+                )
+                if self._LLM_USAGE in (
+                    self._dirty_tables
+                ):
+                    tbl.refresh()
+                    self._dirty_tables.discard(
+                        self._LLM_USAGE
+                    )
+                df = tbl.scan(
+                    row_filter=row_filter,
+                ).to_pandas()
+            except Exception:
+                df = self._table_to_df(
+                    self._LLM_USAGE,
+                )
+                if not df.empty and (
+                    user_id is not None
+                ):
+                    df = df[
+                        df["user_id"] == user_id
+                    ]
+            if df.empty:
+                return empty
+
+            total_requests = len(df)
+            total_cost = float(
+                df["estimated_cost_usd"]
+                .sum(skipna=True)
+            )
+            avg_latency = float(
+                df["latency_ms"].mean(skipna=True)
+            )
+            if math.isnan(avg_latency):
+                avg_latency = 0.0
+
+            # Per-model breakdown
+            per_model: dict = {}
+            if "model" in df.columns:
+                for model, grp in df.groupby("model"):
+                    per_model[str(model)] = {
+                        "requests": len(grp),
+                        "cost": float(
+                            grp["estimated_cost_usd"]
+                            .sum(skipna=True)
+                        ),
+                    }
+
+            # Daily trend (last N days)
+            cutoff = (
+                datetime.now(tz=timezone.utc)
+                - timedelta(days=days)
+            ).date()
+            daily_trend: list[dict] = []
+            if "request_date" in df.columns:
+                recent = df[
+                    df["request_date"] >= cutoff
+                ]
+                if not recent.empty:
+                    agg = (
+                        recent.groupby("request_date")
+                        .agg(
+                            requests=(
+                                "usage_id", "count"
+                            ),
+                            cost=(
+                                "estimated_cost_usd",
+                                "sum",
+                            ),
+                        )
+                        .reset_index()
+                        .sort_values("request_date")
+                    )
+                    for _, row in agg.iterrows():
+                        daily_trend.append({
+                            "date": str(
+                                row["request_date"]
+                            ),
+                            "requests": int(
+                                row["requests"]
+                            ),
+                            "cost": float(
+                                row["cost"]
+                            ),
+                        })
+
+            return {
+                "total_requests": total_requests,
+                "total_cost": total_cost,
+                "avg_latency_ms": avg_latency,
+                "per_model": per_model,
+                "daily_trend": daily_trend,
+            }
+        except Exception as exc:
+            _logger.warning(
+                "get_dashboard_llm_usage failed: %s",
+                exc,
+            )
+            return empty
+
+    # ------------------------------------------------------------------
+    # Portfolio transactions
+    # ------------------------------------------------------------------
+
+    def get_portfolio_holdings(
+        self, user_id: str,
+    ) -> pd.DataFrame:
+        """Return current holdings for *user_id*.
+
+        Reads all BUY transactions, groups by ticker,
+        and computes total quantity and weighted avg
+        price.
+
+        Returns:
+            DataFrame with columns: ticker, quantity,
+            avg_price, currency, market, invested.
+        """
+        try:
+            from pyiceberg.expressions import (
+                And, EqualTo,
+            )
+
+            tbl = self._load_table(_PORTFOLIO)
+            df = tbl.scan(
+                row_filter=And(
+                    EqualTo("user_id", user_id),
+                    EqualTo("side", "BUY"),
+                ),
+            ).to_pandas()
+        except Exception:
+            df = self._table_to_df(_PORTFOLIO)
+            if not df.empty:
+                df = df[
+                    (df["user_id"] == user_id)
+                    & (df["side"] == "BUY")
+                ]
+
+        if df.empty:
+            return pd.DataFrame(
+                columns=[
+                    "ticker", "quantity",
+                    "avg_price", "currency",
+                    "market", "invested",
+                ],
+            )
+
+        # Weighted average price per ticker
+        df["invested"] = (
+            df["quantity"] * df["price"]
+        )
+        grouped = (
+            df.groupby(
+                ["ticker", "currency", "market"]
+            )
+            .agg(
+                quantity=("quantity", "sum"),
+                invested=("invested", "sum"),
+            )
+            .reset_index()
+        )
+        grouped["avg_price"] = (
+            grouped["invested"]
+            / grouped["quantity"]
+        )
+        return grouped[
+            grouped["quantity"] > 0
+        ].reset_index(drop=True)
+
+    def get_portfolio_transactions(
+        self, user_id: str,
+    ) -> pd.DataFrame:
+        """Return all portfolio transactions for user.
+
+        Returns:
+            DataFrame with all transaction rows.
+        """
+        try:
+            from pyiceberg.expressions import (
+                EqualTo,
+            )
+
+            tbl = self._load_table(_PORTFOLIO)
+            return tbl.scan(
+                row_filter=EqualTo(
+                    "user_id", user_id,
+                ),
+            ).to_pandas()
+        except Exception:
+            df = self._table_to_df(_PORTFOLIO)
+            if df.empty:
+                return df
+            return df[
+                df["user_id"] == user_id
+            ].copy()
+
+    def add_portfolio_transaction(
+        self, txn: dict,
+    ) -> None:
+        """Append a portfolio transaction.
+
+        Args:
+            txn: Dict with keys: transaction_id,
+                user_id, ticker, side, quantity,
+                price, currency, market, trade_date,
+                fees, notes.
+        """
+        row = pa.table({
+            "transaction_id": pa.array(
+                [txn["transaction_id"]],
+                pa.string(),
+            ),
+            "user_id": pa.array(
+                [txn["user_id"]], pa.string(),
+            ),
+            "ticker": pa.array(
+                [txn["ticker"]], pa.string(),
+            ),
+            "side": pa.array(
+                [txn["side"]], pa.string(),
+            ),
+            "quantity": pa.array(
+                [float(txn["quantity"])],
+                pa.float64(),
+            ),
+            "price": pa.array(
+                [float(txn["price"])],
+                pa.float64(),
+            ),
+            "currency": pa.array(
+                [txn.get("currency", "USD")],
+                pa.string(),
+            ),
+            "market": pa.array(
+                [txn.get("market", "us")],
+                pa.string(),
+            ),
+            "trade_date": pa.array(
+                [txn.get("trade_date")],
+                pa.date32(),
+            ),
+            "fees": pa.array(
+                [float(txn.get("fees", 0))],
+                pa.float64(),
+            ),
+            "notes": pa.array(
+                [txn.get("notes", "")],
+                pa.string(),
+            ),
+            "created_at": pa.array(
+                [_now_utc()], pa.timestamp("us"),
+            ),
+        })
+        self._append_rows(_PORTFOLIO, row)
+
+    def update_portfolio_transaction(
+        self,
+        transaction_id: str,
+        user_id: str,
+        updates: dict,
+    ) -> bool:
+        """Update price, quantity, or trade_date.
+
+        Performs a copy-on-write: reads all rows,
+        modifies the matching row, overwrites.
+
+        Returns:
+            True if the transaction was found and
+            updated.
+        """
+        df = self._table_to_df(_PORTFOLIO)
+        if df.empty:
+            return False
+        mask = (
+            (df["transaction_id"] == transaction_id)
+            & (df["user_id"] == user_id)
+        )
+        if not mask.any():
+            return False
+        for key in ("price", "quantity"):
+            if key in updates:
+                df.loc[mask, key] = float(
+                    updates[key]
+                )
+        if "trade_date" in updates:
+            df.loc[mask, "trade_date"] = (
+                updates["trade_date"]
+            )
+        arrow_tbl = pa.Table.from_pandas(
+            df, preserve_index=False,
+        )
+        self._overwrite_table(
+            _PORTFOLIO, arrow_tbl,
+        )
+        return True
+
+    def delete_portfolio_transaction(
+        self,
+        transaction_id: str,
+        user_id: str,
+    ) -> bool:
+        """Delete a portfolio transaction.
+
+        Returns:
+            True if the transaction was found and
+            removed.
+        """
+        df = self._table_to_df(_PORTFOLIO)
+        if df.empty:
+            return False
+        mask = (
+            (df["transaction_id"] == transaction_id)
+            & (df["user_id"] == user_id)
+        )
+        if not mask.any():
+            return False
+        df = df[~mask]
+        arrow_tbl = pa.Table.from_pandas(
+            df, preserve_index=False,
+        )
+        self._overwrite_table(
+            _PORTFOLIO, arrow_tbl,
+        )
+        return True
+
+    # ------------------------------------------------------------------
+    # Chat audit log
+    # ------------------------------------------------------------------
+
+    def _ensure_chat_audit_table(self) -> None:
+        """Create the chat_audit_log table if absent.
+
+        Schema:
+            session_id (string), user_id (string),
+            started_at (timestamp), ended_at (timestamp),
+            message_count (int32), messages_json (string),
+            agent_ids_used (string), created_at (timestamp).
+
+        Partitioned by identity on ``user_id``.
+        """
+        try:
+            from pyiceberg.partitioning import (
+                PartitionField,
+                PartitionSpec,
+            )
+            from pyiceberg.schema import Schema
+            from pyiceberg.transforms import (
+                IdentityTransform,
+            )
+            from pyiceberg.types import (
+                IntegerType,
+                NestedField,
+                StringType,
+                TimestampType,
+            )
+
+            catalog = self._get_catalog()
+            try:
+                catalog.load_table(_CHAT_AUDIT_LOG)
+                return  # already exists
+            except Exception:
+                pass  # table not found — create it
+
+            schema = Schema(
+                NestedField(
+                    1, "session_id", StringType(),
+                    required=True,
+                ),
+                NestedField(
+                    2, "user_id", StringType(),
+                    required=True,
+                ),
+                NestedField(
+                    3, "started_at",
+                    TimestampType(),
+                ),
+                NestedField(
+                    4, "ended_at",
+                    TimestampType(),
+                ),
+                NestedField(
+                    5, "message_count",
+                    IntegerType(),
+                ),
+                NestedField(
+                    6, "messages_json",
+                    StringType(),
+                ),
+                NestedField(
+                    7, "agent_ids_used",
+                    StringType(),
+                ),
+                NestedField(
+                    8, "created_at",
+                    TimestampType(),
+                ),
+            )
+            partition_spec = PartitionSpec(
+                PartitionField(
+                    source_id=2,
+                    field_id=1000,
+                    transform=IdentityTransform(),
+                    name="user_id",
+                ),
+            )
+            catalog.create_table(
+                _CHAT_AUDIT_LOG,
+                schema=schema,
+                partition_spec=partition_spec,
+            )
+            _logger.info(
+                "Created table %s", _CHAT_AUDIT_LOG,
+            )
+        except Exception as exc:
+            _logger.error(
+                "Failed to create %s: %s",
+                _CHAT_AUDIT_LOG,
+                exc,
+            )
+            raise
+
+    def save_chat_session(
+        self,
+        session: dict,
+    ) -> None:
+        """Append a chat transcript to the audit log.
+
+        Ensures the table exists, then builds a
+        single-row PyArrow table from *session* and
+        appends it.
+
+        Args:
+            session: Dict with keys ``session_id``,
+                ``user_id``, ``started_at``,
+                ``ended_at``, ``message_count``,
+                ``messages_json``, ``agent_ids_used``.
+        """
+        try:
+            self._ensure_chat_audit_table()
+            now = _now_utc()
+            arrays = {
+                "session_id": pa.array(
+                    [session["session_id"]],
+                    type=pa.string(),
+                ),
+                "user_id": pa.array(
+                    [session["user_id"]],
+                    type=pa.string(),
+                ),
+                "started_at": pa.array(
+                    [session.get("started_at", now)],
+                    type=pa.timestamp("us"),
+                ),
+                "ended_at": pa.array(
+                    [session.get("ended_at", now)],
+                    type=pa.timestamp("us"),
+                ),
+                "message_count": pa.array(
+                    [session.get(
+                        "message_count", 0
+                    )],
+                    type=pa.int32(),
+                ),
+                "messages_json": pa.array(
+                    [session.get(
+                        "messages_json", "[]"
+                    )],
+                    type=pa.string(),
+                ),
+                "agent_ids_used": pa.array(
+                    [session.get(
+                        "agent_ids_used", "[]"
+                    )],
+                    type=pa.string(),
+                ),
+                "created_at": pa.array(
+                    [now],
+                    type=pa.timestamp("us"),
+                ),
+            }
+            self._append_rows(
+                _CHAT_AUDIT_LOG, pa.table(arrays),
+            )
+        except Exception as exc:
+            _logger.error(
+                "save_chat_session failed: %s", exc,
+            )
+            raise
+
+    def list_chat_sessions(
+        self,
+        user_id: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        keyword: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Query chat sessions for a user.
+
+        Args:
+            user_id: Filter to this user's sessions.
+            start_date: Optional ISO date lower bound
+                on ``started_at``.
+            end_date: Optional ISO date upper bound
+                on ``started_at``.
+            keyword: Optional keyword to match within
+                ``messages_json`` (case-insensitive).
+            limit: Max results to return.
+            offset: Number of results to skip.
+
+        Returns:
+            List of dicts with ``session_id``,
+            ``started_at``, ``ended_at``,
+            ``message_count``, ``preview``,
+            ``agent_ids_used``.
+        """
+        try:
+            self._ensure_chat_audit_table()
+            from pyiceberg.expressions import EqualTo
+
+            tbl = self._load_table(_CHAT_AUDIT_LOG)
+            if _CHAT_AUDIT_LOG in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(
+                    _CHAT_AUDIT_LOG,
+                )
+            df = tbl.scan(
+                row_filter=EqualTo(
+                    "user_id", user_id,
+                ),
+            ).to_pandas()
+        except Exception as exc:
+            _logger.warning(
+                "list_chat_sessions scan failed: %s",
+                exc,
+            )
+            df = self._table_to_df(_CHAT_AUDIT_LOG)
+            if not df.empty:
+                df = df[
+                    df["user_id"] == user_id
+                ].copy()
+
+        if df.empty:
+            return []
+
+        # Date filters
+        if start_date is not None:
+            ts = pd.Timestamp(start_date, tz="UTC")
+            df = df[df["started_at"] >= ts]
+        if end_date is not None:
+            ts = pd.Timestamp(end_date, tz="UTC")
+            df = df[df["started_at"] <= ts]
+
+        # Keyword filter
+        if keyword is not None:
+            kw = keyword.lower()
+            df = df[
+                df["messages_json"]
+                .str.lower()
+                .str.contains(kw, na=False)
+            ]
+
+        # Sort by most recent first
+        df = df.sort_values(
+            "started_at", ascending=False,
+        )
+
+        # Paginate
+        df = df.iloc[offset: offset + limit]
+
+        results: list[dict] = []
+        for _, row in df.iterrows():
+            msgs = str(
+                row.get("messages_json", "")
+            )
+            preview = msgs[:200] if msgs else ""
+            results.append({
+                "session_id": str(
+                    row["session_id"]
+                ),
+                "started_at": str(
+                    row.get("started_at", "")
+                ),
+                "ended_at": str(
+                    row.get("ended_at", "")
+                ),
+                "message_count": int(
+                    row.get("message_count", 0)
+                ),
+                "preview": preview,
+                "agent_ids_used": str(
+                    row.get("agent_ids_used", "[]")
+                ),
+            })
+        return results

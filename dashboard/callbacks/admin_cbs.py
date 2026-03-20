@@ -9,9 +9,10 @@ Example::
     register(app)
 """
 
+from __future__ import annotations
+
 import logging
 import math
-from typing import Optional
 
 from dash import Input, Output, State, html, no_update
 
@@ -88,10 +89,10 @@ def register(app) -> None:
         prevent_initial_call=False,
     )
     def load_users_table(
-        pathname: Optional[str],
-        _refresh: Optional[int],
-        stored_token: Optional[str],
-        url_search: Optional[str],
+        pathname: str | None,
+        _refresh: int | None,
+        stored_token: str | None,
+        url_search: str | None,
     ):
         """Fetch all users from the backend API and store the raw list.
 
@@ -201,10 +202,10 @@ def register(app) -> None:
         prevent_initial_call=False,
     )
     def load_audit_log(
-        active_tab: Optional[str],
-        pathname: Optional[str],
-        stored_token: Optional[str],
-        url_search: Optional[str],
+        active_tab: str | None,
+        pathname: str | None,
+        stored_token: str | None,
+        url_search: str | None,
     ):
         """Fetch the audit log from the backend API.
 

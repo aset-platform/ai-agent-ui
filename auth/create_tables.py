@@ -25,6 +25,8 @@ Both ``data/iceberg/catalog.db`` and ``data/iceberg/warehouse/`` are created
 automatically if they do not already exist.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import sys

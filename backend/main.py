@@ -28,6 +28,7 @@ from bootstrap import setup_agents, setup_tools  # noqa: E402
 from config import Settings, get_settings  # noqa: E402
 from logging_config import setup_logging  # noqa: E402
 from message_compressor import MessageCompressor  # noqa: E402
+from observability import ObservabilityCollector  # noqa: E402
 from routes import create_app  # noqa: E402
 from token_budget import TokenBudget  # noqa: E402
 from tools.registry import ToolRegistry  # noqa: E402
@@ -63,6 +64,13 @@ class ChatServer:
             max_history_turns=settings.max_history_turns,
             max_tool_result_chars=(settings.max_tool_result_chars),
         )
+        # Observability with Iceberg persistence.
+        from tools._stock_shared import _get_repo
+
+        _obs_repo = _get_repo()
+        self.obs_collector = ObservabilityCollector(
+            repo=_obs_repo,
+        )
 
         setup_tools(self.tool_registry)
         setup_agents(
@@ -70,11 +78,14 @@ class ChatServer:
             self.agent_registry,
             self.token_budget,
             self.compressor,
+            self.obs_collector,
         )
         self.app = create_app(
             self.agent_registry,
             self.executor,
             self.settings,
+            self.token_budget,
+            self.obs_collector,
         )
 
 

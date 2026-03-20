@@ -86,9 +86,15 @@ def create_search_market_news_tool(general_agent: BaseAgent) -> BaseTool:
             query,
         )
         try:
-            result = general_agent.run(user_input=query, history=[])
+            result = general_agent.run(
+                user_input=query,
+                history=[],
+                max_iterations=2,
+            )
             logger.debug(
-                "search_market_news result length: %d chars", len(result)
+                "search_market_news result length:"
+                " %d chars",
+                len(result),
             )
             return result
         except Exception as exc:

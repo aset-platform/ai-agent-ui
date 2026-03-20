@@ -8,6 +8,8 @@ Functions
 - :func:`run`
 """
 
+from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING, Dict, List
 
@@ -21,7 +23,12 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
+def run(
+    agent: "BaseAgent",
+    user_input: str,
+    history: List[Dict],
+    max_iterations: int | None = None,
+) -> str:
     """Execute the agentic loop and return the LLM's final text response.
 
     The loop:
@@ -45,6 +52,7 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
         Exception: Any exception raised by the LLM or tool execution is
             logged and re-raised.
     """
+    _cap = max_iterations or MAX_ITERATIONS
     agent.logger.info(
         "Request start | agent=%s | input_len=%d",
         agent.config.agent_id,
@@ -53,21 +61,39 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
     messages = agent._build_messages(user_input, history)
     iteration = 0
     response = None
+    _had_tool_calls = False
+    _use_synthesis = (
+        agent.llm_synthesis is not agent.llm_with_tools
+    )
 
     try:
         while True:
             iteration += 1
-            if iteration > MAX_ITERATIONS:
+            if iteration > _cap:
                 agent.logger.warning(
-                    "Agent '%s' hit MAX_ITERATIONS (%d).",
+                    "Agent '%s' hit max iterations (%d).",
                     agent.config.agent_id,
-                    MAX_ITERATIONS,
+                    _cap,
                 )
                 break
             agent.logger.debug(
-                "Iteration %d | message_count=%d", iteration, len(messages)
+                "Iteration %d | message_count=%d",
+                iteration,
+                len(messages),
             )
-            response = agent.llm_with_tools.invoke(
+
+            # If previous iteration had tool calls and we
+            # have a separate synthesis cascade, use it for
+            # this (likely final) iteration to avoid a
+            # wasted tool-cascade call.
+            llm = agent.llm_with_tools
+            if _had_tool_calls and _use_synthesis:
+                llm = agent.llm_synthesis
+                agent.logger.debug(
+                    "Using synthesis cascade"
+                )
+
+            response = llm.invoke(
                 messages,
                 iteration=iteration,
             )
@@ -76,8 +102,15 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
             if not response.tool_calls:
                 break
 
-            tool_names_called = [tc["name"] for tc in response.tool_calls]
-            agent.logger.info("Tools called: %s", tool_names_called)
+            # Response has tool calls — stay on tool cascade
+            # next iteration (reset synthesis choice).
+            _had_tool_calls = True
+            tool_names_called = [
+                tc["name"] for tc in response.tool_calls
+            ]
+            agent.logger.info(
+                "Tools called: %s", tool_names_called
+            )
 
             for tc in response.tool_calls:
                 tool_name = tc["name"]
@@ -87,7 +120,9 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
                     tool_name,
                     tool_args,
                 )
-                result = agent.tool_registry.invoke(tool_name, tool_args)
+                result = agent.tool_registry.invoke(
+                    tool_name, tool_args
+                )
                 agent.logger.debug(
                     "Tool result | %s: %s",
                     tool_name,
@@ -101,7 +136,9 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
                 )
 
     except Exception:
-        agent.logger.error("Agent run failed", exc_info=True)
+        agent.logger.error(
+            "Agent run failed", exc_info=True
+        )
         raise
 
     agent.logger.info(
@@ -109,8 +146,16 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
         agent.config.agent_id,
         iteration,
     )
-    return (
+    final_text = (
         (response.content or "No response")
         if response is not None
         else "No response"
     )
+
+    # Post-process with report template if available.
+    if hasattr(agent, "format_response"):
+        final_text = agent.format_response(
+            final_text, messages
+        )
+
+    return final_text

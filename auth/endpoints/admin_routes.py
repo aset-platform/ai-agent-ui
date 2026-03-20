@@ -5,14 +5,23 @@ Functions
 - :func:`register` — attach admin routes to the router
 """
 
-import logging
-from typing import Any, Dict, List
+from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import json
+import logging
+from typing import Any, Dict
+
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 import auth.endpoints.helpers as _helpers
-from auth.dependencies import get_auth_service, superuser_only
-from auth.models import AdminPasswordResetBody, UserContext
+from auth.dependencies import (
+    get_auth_service,
+    superuser_only,
+)
+from auth.models import (
+    AdminPasswordResetBody,
+    UserContext,
+)
 from auth.service import AuthService
 
 _logger = logging.getLogger(__name__)
@@ -28,26 +37,48 @@ def register(router: APIRouter) -> None:
     @router.get("/admin/audit-log", tags=["admin"])
     def get_audit_log(
         _: UserContext = Depends(superuser_only),
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        """Return all audit log events, sorted newest-first.
+    ) -> Any:
+        """Return all audit events, newest-first.
 
-        Args:
-            _: Superuser guard.
-
-        Returns:
-            A dict ``{"events": [...]}`` where each element is an audit event
-            with ISO-8601 ``event_timestamp``.
+        Cached in Redis for 60 s to avoid repeated
+        full Iceberg table scans.
         """
+        try:
+            from cache import get_cache, TTL_VOLATILE
+        except ImportError:
+            get_cache = None  # type: ignore[assignment]
+
+        cache = get_cache() if get_cache else None
+        cache_key = "cache:admin:audit"
+
+        if cache is not None:
+            hit = cache.get(cache_key)
+            if hit is not None:
+                return Response(
+                    content=hit,
+                    media_type="application/json",
+                )
+
         repo = _helpers._get_repo()
         raw_events = repo.list_audit_events()
         events = []
         for ev in raw_events:
             d = dict(ev)
             ts = d.get("event_timestamp")
-            if ts is not None and hasattr(ts, "isoformat"):
+            if ts is not None and hasattr(
+                ts, "isoformat"
+            ):
                 d["event_timestamp"] = ts.isoformat()
             events.append(d)
-        return {"events": events}
+
+        result = {"events": events}
+        if cache is not None:
+            cache.set(
+                cache_key,
+                json.dumps(result),
+                TTL_VOLATILE,
+            )
+        return result
 
     @router.post(
         "/users/{user_id}/reset-password",

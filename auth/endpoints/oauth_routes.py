@@ -5,6 +5,8 @@ Functions
 - :func:`register` — attach OAuth routes to the router
 """
 
+from __future__ import annotations
+
 import logging
 from datetime import datetime, timezone
 from typing import Dict, List
@@ -188,6 +190,12 @@ def register(router: APIRouter) -> None:
                 "provider": body.provider.value,
                 "email": user["email"],
             },
+        )
+        service.register_session(
+            user_id=user["user_id"],
+            refresh_token=refresh,
+            ip_address=request.client.host if request.client else "",
+            user_agent=request.headers.get("user-agent", ""),
         )
         _logger.info(
             "OAuth login: user_id=%s provider=%s",

@@ -6,6 +6,7 @@ import { type Locator, expect } from "@playwright/test";
 
 import { DASH } from "../../utils/selectors";
 import {
+  gotoDashPage,
   waitForDashLoading,
   waitForPlotlyChart,
 } from "../../utils/wait.helper";
@@ -36,21 +37,7 @@ export class DashHomePage extends BasePage {
 
   /** Navigate to home with JWT token as URL param. */
   async gotoWithToken(token: string): Promise<void> {
-    await this.page.goto(`/?token=${token}`);
-    await waitForDashLoading(this.page);
-    // If Dash restarted mid-load or returned blank, retry.
-    const errToolbar = this.page.locator(
-      "text=Callback error",
-    );
-    const navbar = this.page.locator(".navbar");
-    const needsRetry =
-      (await errToolbar.count()) > 0 ||
-      (await navbar.count()) === 0;
-    if (needsRetry) {
-      await this.page.waitForTimeout(3_000);
-      await this.page.reload();
-      await waitForDashLoading(this.page);
-    }
+    await gotoDashPage(this.page, `/?token=${token}`);
   }
 
   /** All stock card elements on the current page. */

@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     facebook_app_id: str = ""
     facebook_app_secret: str = ""
     oauth_redirect_uri: str = "http://localhost:3000/auth/oauth/callback"
+    # WebSocket settings
+    ws_auth_timeout_seconds: int = 10
+    ws_ping_interval_seconds: int = 30
+    # Redis (optional — enables RedisTokenStore)
+    redis_url: str = ""
 ```
 
 | Field | Env Var | Default | Description |
@@ -48,6 +53,9 @@ class Settings(BaseSettings):
 | `facebook_app_id` | `FACEBOOK_APP_ID` | `""` | Facebook App ID for OAuth |
 | `facebook_app_secret` | `FACEBOOK_APP_SECRET` | `""` | Facebook App secret for OAuth |
 | `oauth_redirect_uri` | `OAUTH_REDIRECT_URI` | `"http://localhost:3000/auth/oauth/callback"` | Redirect URI registered with each OAuth provider |
+| `ws_auth_timeout_seconds` | `WS_AUTH_TIMEOUT_SECONDS` | `10` | Seconds to wait for WebSocket auth message before closing |
+| `ws_ping_interval_seconds` | `WS_PING_INTERVAL_SECONDS` | `30` | Seconds between WebSocket keepalive pings |
+| `redis_url` | `REDIS_URL` | `""` | Redis connection URL (empty = use InMemoryTokenStore) |
 
 All fields have defaults, so the server starts without any environment configuration. API‑dependent features (LLM inference, web search, SSO) will fail at runtime if the corresponding keys are missing.
 
