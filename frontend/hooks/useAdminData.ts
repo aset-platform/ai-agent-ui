@@ -1,0 +1,390 @@
+"use client";
+/**
+ * Data-fetching hooks for the Admin page.
+ *
+ * Uses SWR for caching so that switching between tabs
+ * returns cached data instantly.  CRUD mutations call
+ * ``mutate()`` to revalidate after writes.
+ */
+
+import { useCallback } from "react";
+import useSWR from "swr";
+import { apiFetch } from "@/lib/apiFetch";
+import { API_URL } from "@/lib/config";
+import type {
+  UserResponse,
+  AuditEvent,
+  MetricsResponse,
+  TierHealthResponse,
+} from "@/lib/types";
+
+async function fetcher<T>(url: string): Promise<T> {
+  const r = await apiFetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+// ---------------------------------------------------------------
+// Users hook
+// ---------------------------------------------------------------
+
+export interface UseAdminUsersResult {
+  users: UserResponse[];
+  loading: boolean;
+  error: string | null;
+  refresh: () => void;
+  createUser: (
+    data: CreateUserData,
+  ) => Promise<UserResponse | null>;
+  updateUser: (
+    userId: string,
+    data: UpdateUserData,
+  ) => Promise<UserResponse | null>;
+  deactivateUser: (
+    userId: string,
+  ) => Promise<boolean>;
+  reactivateUser: (
+    userId: string,
+  ) => Promise<boolean>;
+  resetPassword: (
+    userId: string,
+    newPassword: string,
+  ) => Promise<boolean>;
+  uploadAvatar: (
+    userId: string,
+    file: File,
+  ) => Promise<string | null>;
+}
+
+export interface CreateUserData {
+  email: string;
+  password: string;
+  full_name: string;
+  role: "superuser" | "general";
+}
+
+export interface UpdateUserData {
+  full_name?: string;
+  email?: string;
+  role?: "superuser" | "general";
+  is_active?: boolean;
+  page_permissions?: Record<string, boolean>;
+}
+
+export function useAdminUsers(): UseAdminUsersResult {
+  const { data, error, isLoading, mutate } =
+    useSWR<UserResponse[]>(
+      `${API_URL}/users`,
+      fetcher,
+      {
+        revalidateOnFocus: false,
+        dedupingInterval: 120_000,
+      },
+    );
+
+  const users = data ?? [];
+  const refresh = useCallback(
+    () => {
+      mutate();
+    },
+    [mutate],
+  );
+
+  const createUser = useCallback(
+    async (
+      body: CreateUserData,
+    ): Promise<UserResponse | null> => {
+      const r = await apiFetch(`${API_URL}/users`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(
+          b.detail || `HTTP ${r.status}`,
+        );
+      }
+      const user = await r.json();
+      mutate();
+      return user;
+    },
+    [mutate],
+  );
+
+  const updateUser = useCallback(
+    async (
+      userId: string,
+      body: UpdateUserData,
+    ): Promise<UserResponse | null> => {
+      const r = await apiFetch(
+        `${API_URL}/users/${userId}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        },
+      );
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(
+          b.detail || `HTTP ${r.status}`,
+        );
+      }
+      const user = await r.json();
+      mutate();
+      return user;
+    },
+    [mutate],
+  );
+
+  const deactivateUser = useCallback(
+    async (userId: string): Promise<boolean> => {
+      const r = await apiFetch(
+        `${API_URL}/users/${userId}`,
+        { method: "DELETE" },
+      );
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(
+          b.detail || `HTTP ${r.status}`,
+        );
+      }
+      mutate();
+      return true;
+    },
+    [mutate],
+  );
+
+  const reactivateUser = useCallback(
+    async (userId: string): Promise<boolean> => {
+      const r = await apiFetch(
+        `${API_URL}/users/${userId}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ is_active: true }),
+        },
+      );
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(
+          b.detail || `HTTP ${r.status}`,
+        );
+      }
+      mutate();
+      return true;
+    },
+    [mutate],
+  );
+
+  const resetPassword = useCallback(
+    async (
+      userId: string,
+      newPassword: string,
+    ): Promise<boolean> => {
+      const r = await apiFetch(
+        `${API_URL}/users/${userId}/reset-password`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            new_password: newPassword,
+          }),
+        },
+      );
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(
+          b.detail || `HTTP ${r.status}`,
+        );
+      }
+      return true;
+    },
+    [],
+  );
+
+  const uploadAvatar = useCallback(
+    async (
+      userId: string,
+      file: File,
+    ): Promise<string | null> => {
+      const form = new FormData();
+      form.append("file", file);
+      const r = await apiFetch(
+        `${API_URL}/auth/upload-avatar?user_id=${userId}`,
+        { method: "POST", body: form },
+      );
+      if (!r.ok) return null;
+      const b = await r.json();
+      mutate();
+      return b.avatar_url ?? null;
+    },
+    [mutate],
+  );
+
+  return {
+    users,
+    loading: isLoading,
+    error: error
+      ? error instanceof Error
+        ? error.message
+        : "Failed to load users"
+      : null,
+    refresh,
+    createUser,
+    updateUser,
+    deactivateUser,
+    reactivateUser,
+    resetPassword,
+    uploadAvatar,
+  };
+}
+
+// ---------------------------------------------------------------
+// Audit log hook
+// ---------------------------------------------------------------
+
+export interface UseAdminAuditResult {
+  events: AuditEvent[];
+  loading: boolean;
+  error: string | null;
+  refresh: () => void;
+}
+
+export function useAdminAudit(): UseAdminAuditResult {
+  const { data, error, isLoading, mutate } = useSWR<{
+    events: AuditEvent[];
+  }>(
+    `${API_URL}/admin/audit-log`,
+    fetcher,
+    {
+      revalidateOnFocus: false,
+      dedupingInterval: 120_000,
+    },
+  );
+
+  return {
+    events: data?.events ?? [],
+    loading: isLoading,
+    error: error
+      ? error instanceof Error
+        ? error.message
+        : "Failed to load audit log"
+      : null,
+    refresh: useCallback(
+      () => {
+        mutate();
+      },
+      [mutate],
+    ),
+  };
+}
+
+// ---------------------------------------------------------------
+// LLM Observability hook
+// ---------------------------------------------------------------
+
+export interface UseObservabilityResult {
+  metrics: MetricsResponse | null;
+  health: TierHealthResponse | null;
+  loading: boolean;
+  error: string | null;
+  refresh: () => void;
+  toggleTier: (
+    model: string,
+    enabled: boolean,
+  ) => Promise<void>;
+}
+
+interface ObsData {
+  metrics: MetricsResponse;
+  health: TierHealthResponse;
+}
+
+async function obsFetcher(): Promise<ObsData> {
+  const [m, h] = await Promise.all([
+    apiFetch(`${API_URL}/admin/metrics`).then(
+      (r) => {
+        if (!r.ok)
+          throw new Error(
+            `metrics: HTTP ${r.status}`,
+          );
+        return r.json();
+      },
+    ),
+    apiFetch(`${API_URL}/admin/tier-health`).then(
+      (r) => {
+        if (!r.ok)
+          throw new Error(
+            `health: HTTP ${r.status}`,
+          );
+        return r.json();
+      },
+    ),
+  ]);
+  return {
+    metrics: m as MetricsResponse,
+    health: h as TierHealthResponse,
+  };
+}
+
+export function useObservability(): UseObservabilityResult {
+  const { data, error, isLoading, mutate } =
+    useSWR<ObsData>(
+      `${API_URL}/admin/observability`,
+      obsFetcher,
+      {
+        revalidateOnFocus: false,
+        dedupingInterval: 30_000,
+        refreshInterval: 60_000,
+      },
+    );
+
+  const refresh = useCallback(
+    () => {
+      mutate();
+    },
+    [mutate],
+  );
+
+  const toggleTier = useCallback(
+    async (model: string, enabled: boolean) => {
+      const r = await apiFetch(
+        `${API_URL}/admin/tier-toggle?model=${encodeURIComponent(model)}&enabled=${enabled}`,
+        { method: "POST" },
+      );
+      if (!r.ok) {
+        const b = await r.json().catch(
+          () => ({}),
+        );
+        throw new Error(
+          b.detail || `HTTP ${r.status}`,
+        );
+      }
+      mutate();
+    },
+    [mutate],
+  );
+
+  return {
+    metrics: data?.metrics ?? null,
+    health: data?.health ?? null,
+    loading: isLoading,
+    error: error
+      ? error instanceof Error
+        ? error.message
+        : "Failed to load observability"
+      : null,
+    refresh,
+    toggleTier,
+  };
+}

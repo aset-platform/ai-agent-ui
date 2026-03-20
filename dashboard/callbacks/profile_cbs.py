@@ -17,8 +17,10 @@ Example::
     register(app)
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 import dash
 
@@ -40,7 +42,7 @@ def register(app: dash.Dash) -> None:
         dash.Input("auth-token-store", "data"),
         prevent_initial_call=False,
     )
-    def load_user_profile(token: Optional[str]) -> Optional[Dict[str, Any]]:
+    def load_user_profile(token: str | None) -> dict[str, Any] | None:
         """Fetch and cache the authenticated user's profile.
 
         Used by the ``display_page`` RBAC routing callback to check role and

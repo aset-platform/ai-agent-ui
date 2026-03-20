@@ -11,10 +11,12 @@ Example::
     register(app)
 """
 
+from __future__ import annotations
+
 import base64
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import dash_bootstrap_components as dbc
 from dash import ALL, Input, Output, State, ctx, html, no_update
@@ -31,12 +33,16 @@ _logger = logging.getLogger(__name__)
 
 # Module-level configuration constant — prefixed with _
 # to signal non-public use.
-_BACKEND_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8181")
+_BACKEND_HOST = os.environ.get(
+    "BACKEND_URL",
+    "http://127.0.0.1:8181",
+)
+_BACKEND_URL = f"{_BACKEND_HOST}/v1"
 
 
 def _upload_avatar_for_user(
     contents: str,
-    filename: Optional[str],
+    filename: str | None,
     user_id: str,
     token: str,
 ) -> None:
@@ -104,10 +110,10 @@ def register(app) -> None:
         prevent_initial_call=True,
     )
     def toggle_user_modal(
-        add_clicks: Optional[int],
-        edit_clicks_list: List[Optional[int]],
-        cancel_clicks: Optional[int],
-        users_data: Optional[List[Dict[str, Any]]],
+        add_clicks: int | None,
+        edit_clicks_list: list[int | None],
+        cancel_clicks: int | None,
+        users_data: list[dict[str, Any]] | None,
     ):
         """Open the Add / Edit user modal or close it on Cancel.
 
@@ -216,10 +222,10 @@ def register(app) -> None:
                     [],  # clear stale upload; clear preview
                 )
             # Show permissions section only for non-superuser roles.
-            perms: Dict[str, bool] = user.get("page_permissions") or {}
+            perms: dict[str, bool] = user.get("page_permissions") or {}
             if user.get("role") == "superuser":
-                perms_style: Dict[str, str] = {"display": "none"}
-                perms_value: List[str] = []
+                perms_style: dict[str, str] = {"display": "none"}
+                perms_value: list[str] = []
             else:
                 perms_style = {}
                 perms_value = [k for k, v in perms.items() if v]
@@ -229,7 +235,7 @@ def register(app) -> None:
             )
             if avatar_url:
                 full_url = (
-                    _BACKEND_URL + avatar_url
+                    _BACKEND_HOST + avatar_url
                     if avatar_url.startswith("/")
                     else avatar_url
                 )
@@ -241,7 +247,7 @@ def register(app) -> None:
                         "borderRadius": "50%",
                         "objectFit": "cover",
                         "objectPosition": "top",
-                        "border": "1px solid #dee2e6",
+                        "border": "1px solid var(--border)",
                     },
                 )
             else:
@@ -301,19 +307,19 @@ def register(app) -> None:
         prevent_initial_call=True,
     )
     def save_user(
-        n_clicks: Optional[int],
-        modal_data: Optional[Dict[str, Any]],
-        full_name: Optional[str],
-        email: Optional[str],
-        password: Optional[str],
-        role: Optional[str],
-        is_active_list: Optional[List[str]],
-        perms_list: Optional[List[str]],
-        avatar_contents: Optional[str],
-        avatar_filename: Optional[str],
-        refresh_n: Optional[int],
-        stored_token: Optional[str],
-        url_search: Optional[str],
+        n_clicks: int | None,
+        modal_data: dict[str, Any] | None,
+        full_name: str | None,
+        email: str | None,
+        password: str | None,
+        role: str | None,
+        is_active_list: list[str] | None,
+        perms_list: list[str] | None,
+        avatar_contents: str | None,
+        avatar_filename: str | None,
+        refresh_n: int | None,
+        stored_token: str | None,
+        url_search: str | None,
     ):
         """Create or update a user via the backend API.
 
@@ -362,7 +368,7 @@ def register(app) -> None:
 
         mode = (modal_data or {}).get("mode", "add")
         token = _resolve_token(stored_token, url_search)
-        saved_user_id: Optional[str] = None
+        saved_user_id: str | None = None
 
         if mode == "add":
             if not (password and password.strip()):
@@ -372,7 +378,7 @@ def register(app) -> None:
                     "Password is required for new users.",
                     no_update,
                 )
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "full_name": full_name.strip(),
                 "email": email.strip(),
                 "password": password,
@@ -390,7 +396,7 @@ def register(app) -> None:
             if not user_id:
                 return True, no_update, "Cannot determine user ID.", no_update
             saved_user_id = user_id
-            updates: Dict[str, Any] = {
+            updates: dict[str, Any] = {
                 "full_name": full_name.strip(),
                 "email": email.strip(),
                 "role": role or "general",
@@ -450,11 +456,11 @@ def register(app) -> None:
         prevent_initial_call=True,
     )
     def toggle_user_activation(
-        n_clicks_list: List[Optional[int]],
-        users_data: Optional[List[Dict[str, Any]]],
-        refresh_n: Optional[int],
-        stored_token: Optional[str],
-        url_search: Optional[str],
+        n_clicks_list: list[int | None],
+        users_data: list[dict[str, Any]] | None,
+        refresh_n: int | None,
+        stored_token: str | None,
+        url_search: str | None,
     ):
         """Deactivate or reactivate a user with a single button click.
 
@@ -542,11 +548,11 @@ def register(app) -> None:
         prevent_initial_call=True,
     )
     def save_new_password(
-        n_clicks: Optional[int],
-        new_pw: Optional[str],
-        confirm_pw: Optional[str],
-        stored_token: Optional[str],
-        url_search: Optional[str],
+        n_clicks: int | None,
+        new_pw: str | None,
+        confirm_pw: str | None,
+        stored_token: str | None,
+        url_search: str | None,
     ):
         """Apply a new password via the password-reset flow.
 
@@ -634,9 +640,9 @@ def register(app) -> None:
         prevent_initial_call=True,
     )
     def open_admin_reset_pw_modal(
-        reset_clicks_list: List[Optional[int]],
-        cancel_clicks: Optional[int],
-        users_data: Optional[List[Dict[str, Any]]],
+        reset_clicks_list: list[int | None],
+        cancel_clicks: int | None,
+        users_data: list[dict[str, Any]] | None,
     ):
         """Open or close the admin password-reset modal.
 
@@ -714,12 +720,12 @@ def register(app) -> None:
         prevent_initial_call=True,
     )
     def save_admin_reset_pw(
-        n_clicks: Optional[int],
-        target_user_id: Optional[str],
-        new_pw: Optional[str],
-        confirm_pw: Optional[str],
-        stored_token: Optional[str],
-        url_search: Optional[str],
+        n_clicks: int | None,
+        target_user_id: str | None,
+        new_pw: str | None,
+        confirm_pw: str | None,
+        stored_token: str | None,
+        url_search: str | None,
     ):
         """Apply a new password for the target user.
 

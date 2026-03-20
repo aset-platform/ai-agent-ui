@@ -6,11 +6,13 @@ Functions
 - :func:`list_audit_events`
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pyarrow as pa
 
@@ -27,7 +29,7 @@ def append_audit_event(
     event_type: str,
     actor_user_id: str,
     target_user_id: str,
-    metadata: Optional[Dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """Append an immutable event row to the ``auth.audit_log`` table.
 
@@ -59,7 +61,7 @@ def append_audit_event(
     )
 
 
-def list_audit_events(cat) -> List[Dict[str, Any]]:
+def list_audit_events(cat) -> list[dict[str, Any]]:
     """Return all audit log events, sorted newest-first.
 
     Args:

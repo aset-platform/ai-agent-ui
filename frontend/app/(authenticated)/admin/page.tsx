@@ -1,0 +1,923 @@
+"use client";
+/**
+ * Native Admin page — replaces the Dash iframe.
+ *
+ * Three tabs: Users, Audit Log, LLM Observability.
+ * Role-gated: superuser or admin page permission.
+ */
+
+import {
+  useState,
+  useMemo,
+  useCallback,
+} from "react";
+import {
+  useAdminUsers,
+  useAdminAudit,
+  useObservability,
+} from "@/hooks/useAdminData";
+import type { UserFormData } from "@/components/admin/UserModal";
+import { UserModal } from "@/components/admin/UserModal";
+import { ResetPasswordModal } from "@/components/admin/ResetPasswordModal";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import {
+  InsightsTable,
+  type Column,
+} from "@/components/insights/InsightsTable";
+import { WidgetSkeleton } from "@/components/widgets/WidgetSkeleton";
+import { WidgetError } from "@/components/widgets/WidgetError";
+import type {
+  UserResponse,
+  AuditEvent,
+  CascadeEvent,
+} from "@/lib/types";
+
+// ---------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------
+
+function fmtDate(v: string | null): string {
+  if (!v) return "\u2014";
+  return v.slice(0, 10);
+}
+
+function fmtTimestamp(v: string | null): string {
+  if (!v) return "\u2014";
+  return v.slice(0, 19).replace("T", " ");
+}
+
+function roleBadge(
+  role: string,
+): React.ReactNode {
+  const cls =
+    role === "superuser"
+      ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+      : "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400";
+  return (
+    <span
+      className={`px-1.5 py-0.5 rounded text-xs font-medium ${cls}`}
+    >
+      {role}
+    </span>
+  );
+}
+
+function statusBadge(
+  active: boolean,
+): React.ReactNode {
+  const cls = active
+    ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+    : "bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400";
+  return (
+    <span
+      className={`px-1.5 py-0.5 rounded text-xs font-medium ${cls}`}
+    >
+      {active ? "Active" : "Inactive"}
+    </span>
+  );
+}
+
+function eventBadge(
+  eventType: string,
+): React.ReactNode {
+  return (
+    <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+      {eventType}
+    </span>
+  );
+}
+
+function parseMetadata(
+  meta: string | Record<string, unknown>,
+): string {
+  if (!meta) return "\u2014";
+  if (typeof meta === "string") {
+    try {
+      const parsed = JSON.parse(meta);
+      return Object.entries(parsed)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(", ");
+    } catch {
+      return meta;
+    }
+  }
+  return Object.entries(meta)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(", ");
+}
+
+function truncId(id: string | null): string {
+  if (!id) return "\u2014";
+  return id.length > 8
+    ? `${id.slice(0, 8)}\u2026`
+    : id;
+}
+
+// ---------------------------------------------------------------
+// Column definitions
+// ---------------------------------------------------------------
+
+const auditCols: Column<AuditEvent>[] = [
+  {
+    key: "event_timestamp",
+    label: "When",
+    render: (r) => fmtTimestamp(r.event_timestamp),
+  },
+  {
+    key: "event_type",
+    label: "Event",
+    render: (r) => eventBadge(r.event_type),
+  },
+  {
+    key: "actor_user_id",
+    label: "Actor",
+    render: (r) => (
+      <code className="text-xs">
+        {truncId(r.actor_user_id)}
+      </code>
+    ),
+  },
+  {
+    key: "target_user_id",
+    label: "Target",
+    render: (r) => (
+      <code className="text-xs">
+        {truncId(r.target_user_id)}
+      </code>
+    ),
+  },
+  {
+    key: "metadata",
+    label: "Details",
+    sortable: false,
+    render: (r) => (
+      <span className="text-xs text-gray-500 dark:text-gray-400">
+        {parseMetadata(r.metadata)}
+      </span>
+    ),
+  },
+];
+
+// ---------------------------------------------------------------
+// Users Tab
+// ---------------------------------------------------------------
+
+function UsersTab() {
+  const admin = useAdminUsers();
+  const [search, setSearch] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<
+    "add" | "edit"
+  >("add");
+  const [editUser, setEditUser] =
+    useState<UserResponse | null>(null);
+  const [modalSaving, setModalSaving] =
+    useState(false);
+  const [modalError, setModalError] = useState("");
+
+  // Reset password modal state.
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetUser, setResetUser] =
+    useState<UserResponse | null>(null);
+  const [resetSaving, setResetSaving] =
+    useState(false);
+  const [resetError, setResetError] = useState("");
+  const [deactivateUser, setDeactivateUser] =
+    useState<UserResponse | null>(null);
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return admin.users;
+    const q = search.toLowerCase();
+    return admin.users.filter(
+      (u) =>
+        u.full_name.toLowerCase().includes(q) ||
+        u.email.toLowerCase().includes(q) ||
+        u.role.toLowerCase().includes(q),
+    );
+  }, [admin.users, search]);
+
+  const openAdd = useCallback(() => {
+    setEditUser(null);
+    setModalMode("add");
+    setModalError("");
+    setModalOpen(true);
+  }, []);
+
+  const openEdit = useCallback(
+    (u: UserResponse) => {
+      setEditUser(u);
+      setModalMode("edit");
+      setModalError("");
+      setModalOpen(true);
+    },
+    [],
+  );
+
+  const handleSave = useCallback(
+    async (data: UserFormData) => {
+      setModalSaving(true);
+      setModalError("");
+      try {
+        if (modalMode === "add") {
+          await admin.createUser({
+            email: data.email,
+            password: data.password,
+            full_name: data.full_name,
+            role: data.role,
+          });
+        } else if (editUser) {
+          await admin.updateUser(editUser.user_id, {
+            full_name: data.full_name,
+            email: data.email,
+            role: data.role,
+            is_active: data.is_active,
+            page_permissions:
+              data.role === "general"
+                ? data.page_permissions
+                : undefined,
+          });
+        }
+        setModalOpen(false);
+      } catch (err) {
+        setModalError(
+          err instanceof Error
+            ? err.message
+            : "Save failed",
+        );
+      } finally {
+        setModalSaving(false);
+      }
+    },
+    [modalMode, editUser, admin],
+  );
+
+  const handleToggle = useCallback(
+    async (u: UserResponse) => {
+      try {
+        if (u.is_active) {
+          await admin.deactivateUser(u.user_id);
+        } else {
+          await admin.reactivateUser(u.user_id);
+        }
+      } catch (err) {
+        alert(
+          err instanceof Error
+            ? err.message
+            : "Action failed",
+        );
+      }
+    },
+    [admin],
+  );
+
+  const openReset = useCallback(
+    (u: UserResponse) => {
+      setResetUser(u);
+      setResetError("");
+      setResetOpen(true);
+    },
+    [],
+  );
+
+  const handleReset = useCallback(
+    async (newPassword: string) => {
+      if (!resetUser) return;
+      setResetSaving(true);
+      setResetError("");
+      try {
+        await admin.resetPassword(
+          resetUser.user_id,
+          newPassword,
+        );
+        setResetOpen(false);
+      } catch (err) {
+        setResetError(
+          err instanceof Error
+            ? err.message
+            : "Reset failed",
+        );
+      } finally {
+        setResetSaving(false);
+      }
+    },
+    [resetUser, admin],
+  );
+
+  // Dynamic columns with action buttons.
+  const userCols: Column<UserResponse>[] = useMemo(
+    () => [
+      { key: "full_name", label: "Name" },
+      { key: "email", label: "Email" },
+      {
+        key: "role",
+        label: "Role",
+        render: (r) => roleBadge(r.role),
+      },
+      {
+        key: "is_active",
+        label: "Status",
+        render: (r) => statusBadge(r.is_active),
+      },
+      {
+        key: "created_at",
+        label: "Created",
+        render: (r) => fmtDate(r.created_at),
+      },
+      {
+        key: "last_login_at",
+        label: "Last Login",
+        render: (r) => fmtDate(r.last_login_at),
+      },
+      {
+        key: "user_id",
+        label: "Actions",
+        sortable: false,
+        render: (r) => (
+          <div className="flex gap-1">
+            <button
+              onClick={() => openEdit(r)}
+              className="px-2 py-1 text-xs rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 hover:bg-indigo-200 dark:hover:bg-indigo-900/50 transition-colors"
+            >
+              Edit
+            </button>
+            <button
+              onClick={() => openReset(r)}
+              className="px-2 py-1 text-xs rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors"
+            >
+              Reset Pwd
+            </button>
+            <button
+              onClick={() =>
+                r.is_active
+                  ? setDeactivateUser(r)
+                  : handleToggle(r)
+              }
+              className={`px-2 py-1 text-xs rounded transition-colors ${
+                r.is_active
+                  ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50"
+                  : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 hover:bg-emerald-200 dark:hover:bg-emerald-900/50"
+              }`}
+            >
+              {r.is_active
+                ? "Deactivate"
+                : "Reactivate"}
+            </button>
+          </div>
+        ),
+      },
+    ],
+    [openEdit, openReset, handleToggle],
+  );
+
+  if (admin.loading) return <WidgetSkeleton />;
+  if (admin.error)
+    return <WidgetError message={admin.error} />;
+
+  return (
+    <div className="space-y-4">
+      {/* Header row */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
+            All Accounts ({admin.users.length})
+          </h2>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) =>
+              setSearch(e.target.value)
+            }
+            placeholder="Search name, email, role\u2026"
+            className="rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 w-56 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+          />
+        </div>
+        <button
+          onClick={openAdd}
+          className="px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors"
+        >
+          + Add User
+        </button>
+      </div>
+
+      {/* Users table */}
+      <InsightsTable<UserResponse>
+        columns={userCols}
+        rows={filtered}
+        defaultSort={{
+          col: "full_name",
+          dir: "asc",
+        }}
+      />
+
+      {/* Modals */}
+      <UserModal
+        isOpen={modalOpen}
+        mode={modalMode}
+        user={editUser}
+        saving={modalSaving}
+        error={modalError}
+        onClose={() => setModalOpen(false)}
+        onSave={handleSave}
+      />
+      <ResetPasswordModal
+        isOpen={resetOpen}
+        userName={
+          resetUser?.full_name ?? ""
+        }
+        saving={resetSaving}
+        error={resetError}
+        onClose={() => setResetOpen(false)}
+        onSave={handleReset}
+      />
+      <ConfirmDialog
+        open={deactivateUser !== null}
+        title="Deactivate User"
+        message={
+          deactivateUser
+            ? `Deactivate ${deactivateUser.full_name}? They will lose access immediately.`
+            : ""
+        }
+        confirmLabel="Deactivate"
+        variant="danger"
+        onConfirm={() => {
+          if (deactivateUser) {
+            handleToggle(deactivateUser);
+          }
+          setDeactivateUser(null);
+        }}
+        onCancel={() => setDeactivateUser(null)}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
+// Audit Log Tab
+// ---------------------------------------------------------------
+
+function AuditLogTab() {
+  const audit = useAdminAudit();
+  const [search, setSearch] = useState("");
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return audit.events;
+    const q = search.toLowerCase();
+    return audit.events.filter(
+      (e) =>
+        e.event_type.toLowerCase().includes(q) ||
+        (e.actor_user_id ?? "")
+          .toLowerCase()
+          .includes(q) ||
+        (e.target_user_id ?? "")
+          .toLowerCase()
+          .includes(q) ||
+        parseMetadata(e.metadata)
+          .toLowerCase()
+          .includes(q),
+    );
+  }, [audit.events, search]);
+
+  if (audit.loading) return <WidgetSkeleton />;
+  if (audit.error)
+    return <WidgetError message={audit.error} />;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
+          Audit Log ({audit.events.length} events)
+        </h2>
+        <input
+          type="text"
+          value={search}
+          onChange={(e) =>
+            setSearch(e.target.value)
+          }
+          placeholder="Search events\u2026"
+          className="rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 w-56 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+        />
+      </div>
+
+      <InsightsTable<AuditEvent>
+        columns={auditCols}
+        rows={filtered}
+        defaultSort={{
+          col: "event_timestamp",
+          dir: "desc",
+        }}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
+// LLM Observability Tab
+// ---------------------------------------------------------------
+
+/** Shorten model name for display. */
+function shortModel(m: string): string {
+  const parts = m.split("/");
+  let name = parts[parts.length - 1];
+  name = name
+    .replace("-instruct", "")
+    .replace("-16e-instruct", "")
+    .replace("-versatile", "");
+  return name;
+}
+
+/** Progress bar color based on utilization. */
+function budgetColor(
+  used: number,
+  limit: number,
+): string {
+  if (limit <= 0) return "bg-gray-400";
+  const pct = used / limit;
+  if (pct >= 0.8) return "bg-red-500";
+  if (pct >= 0.5) return "bg-amber-500";
+  return "bg-emerald-500";
+}
+
+/** Parse "1234/8000" into [used, limit]. */
+function parseBudget(
+  s: string,
+): [number, number] {
+  const parts = s.split("/");
+  return [
+    parseInt(parts[0] ?? "0", 10) || 0,
+    parseInt(parts[1] ?? "0", 10) || 0,
+  ];
+}
+
+const STATUS_ICON: Record<string, string> = {
+  healthy: "\u25CF",
+  degraded: "\u25B2",
+  down: "\u2715",
+  disabled: "\u2298",
+};
+
+const STATUS_COLOR: Record<string, string> = {
+  healthy:
+    "text-emerald-600 dark:text-emerald-400",
+  degraded:
+    "text-amber-600 dark:text-amber-400",
+  down: "text-red-600 dark:text-red-400",
+  disabled:
+    "text-gray-400 dark:text-gray-500",
+};
+
+const STATUS_BORDER: Record<string, string> = {
+  healthy:
+    "border-l-emerald-500",
+  degraded:
+    "border-l-amber-500",
+  down: "border-l-red-500",
+  disabled:
+    "border-l-gray-400",
+};
+
+const STATUS_BADGE: Record<string, string> = {
+  healthy:
+    "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+  degraded:
+    "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+  down:
+    "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  disabled:
+    "bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400",
+};
+
+const cascadeCols: Column<CascadeEvent>[] = [
+  {
+    key: "timestamp",
+    label: "Time",
+    render: (r) => {
+      const d = new Date(r.timestamp * 1000);
+      return d.toLocaleTimeString("en-US", {
+        hour12: false,
+        timeZone: "UTC",
+      }) + " UTC";
+    },
+  },
+  {
+    key: "from_model",
+    label: "From",
+    render: (r) => shortModel(r.from_model),
+  },
+  {
+    key: "to_model",
+    label: "To",
+    render: (r) =>
+      r.to_model
+        ? shortModel(r.to_model)
+        : "\u2014",
+  },
+  {
+    key: "reason",
+    label: "Reason",
+    render: (r) => (
+      <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+        {r.reason}
+      </span>
+    ),
+  },
+];
+
+function ObservabilityTab() {
+  const obs = useObservability();
+
+  if (obs.loading) return <WidgetSkeleton />;
+  if (obs.error)
+    return <WidgetError message={obs.error} />;
+
+  const stats = obs.metrics?.cascade_stats;
+  const models = obs.metrics?.models ?? {};
+  const tiers =
+    obs.health?.health.tiers ?? [];
+  const summary = obs.health?.health.summary;
+  const cascadeLog = [
+    ...(stats?.cascade_log ?? []),
+  ].reverse().slice(0, 25);
+
+  const handleToggle = async (
+    model: string,
+    currentStatus: string,
+  ) => {
+    try {
+      await obs.toggleTier(
+        model,
+        currentStatus === "disabled",
+      );
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Toggle failed",
+      );
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Summary cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="rounded-xl bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 p-4">
+          <p className="text-xs font-medium text-indigo-500 dark:text-indigo-400">
+            Total Requests
+          </p>
+          <p className="text-2xl font-semibold text-indigo-700 dark:text-indigo-300 mt-1">
+            {(
+              stats?.requests_total ?? 0
+            ).toLocaleString()}
+          </p>
+        </div>
+        <div className="rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-4">
+          <p className="text-xs font-medium text-amber-500 dark:text-amber-400">
+            Cascades
+          </p>
+          <p className="text-2xl font-semibold text-amber-700 dark:text-amber-300 mt-1">
+            {stats?.cascade_count ?? 0}
+          </p>
+        </div>
+        <div className="rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4">
+          <p className="text-xs font-medium text-blue-500 dark:text-blue-400">
+            Compressions
+          </p>
+          <p className="text-2xl font-semibold text-blue-700 dark:text-blue-300 mt-1">
+            {stats?.compression_count ?? 0}
+          </p>
+        </div>
+      </div>
+
+      {/* Tier Health */}
+      {tiers.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
+              Tier Health
+            </h2>
+            {summary && (
+              <div className="flex gap-2 text-xs">
+                <span className="text-emerald-600 dark:text-emerald-400">
+                  {summary.healthy} Healthy
+                </span>
+                {summary.degraded > 0 && (
+                  <span className="text-amber-600 dark:text-amber-400">
+                    {summary.degraded} Degraded
+                  </span>
+                )}
+                {summary.down > 0 && (
+                  <span className="text-red-600 dark:text-red-400">
+                    {summary.down} Down
+                  </span>
+                )}
+                {summary.disabled > 0 && (
+                  <span className="text-gray-400">
+                    {summary.disabled} Disabled
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {tiers.map((t) => (
+              <div
+                key={t.model}
+                className={`rounded-lg border border-gray-200 dark:border-gray-700 border-l-4 ${STATUS_BORDER[t.status] ?? ""} bg-white dark:bg-gray-900 p-3 space-y-2`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                    {shortModel(t.model)}
+                  </span>
+                  <button
+                    onClick={() =>
+                      handleToggle(
+                        t.model,
+                        t.status,
+                      )
+                    }
+                    className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                    title={
+                      t.status === "disabled"
+                        ? "Enable tier"
+                        : "Disable tier"
+                    }
+                  >
+                    {t.status === "disabled"
+                      ? "Enable"
+                      : "Disable"}
+                  </button>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`text-sm ${STATUS_COLOR[t.status] ?? ""}`}
+                  >
+                    {STATUS_ICON[t.status] ?? "?"}
+                  </span>
+                  <span
+                    className={`text-xs font-medium px-1.5 py-0.5 rounded ${STATUS_BADGE[t.status] ?? ""}`}
+                  >
+                    {t.status}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
+                  <span>
+                    Fail (5m): {t.failures_5m}
+                  </span>
+                  <span>
+                    OK (5m): {t.successes_5m}
+                  </span>
+                  <span>
+                    Cascades: {t.cascade_count}
+                  </span>
+                  <span>
+                    Avg: {t.latency.avg_ms}ms
+                  </span>
+                  <span>
+                    p95: {t.latency.p95_ms}ms
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Model Budget Status */}
+      {Object.keys(models).length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
+            Model Budget Status
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {Object.entries(models).map(
+              ([name, budget]) => {
+                const [tpmUsed, tpmLim] =
+                  parseBudget(budget.tpm);
+                const [rpmUsed, rpmLim] =
+                  parseBudget(budget.rpm);
+                return (
+                  <div
+                    key={name}
+                    className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-3 space-y-2"
+                  >
+                    <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                      {shortModel(name)}
+                    </p>
+                    {/* TPM bar */}
+                    <div>
+                      <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
+                        <span>TPM</span>
+                        <span>{budget.tpm}</span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${budgetColor(tpmUsed, tpmLim)}`}
+                          style={{
+                            width: `${tpmLim > 0 ? Math.min(100, (tpmUsed / tpmLim) * 100) : 0}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                    {/* RPM bar */}
+                    <div>
+                      <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
+                        <span>RPM</span>
+                        <span>{budget.rpm}</span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${budgetColor(rpmUsed, rpmLim)}`}
+                          style={{
+                            width: `${rpmLim > 0 ? Math.min(100, (rpmUsed / rpmLim) * 100) : 0}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              },
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Recent Cascade Events */}
+      {cascadeLog.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
+            Recent Cascade Events
+          </h2>
+          <InsightsTable<CascadeEvent>
+            columns={cascadeCols}
+            rows={cascadeLog}
+            pageSize={10}
+          />
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!stats?.requests_total &&
+        tiers.length === 0 &&
+        Object.keys(models).length === 0 && (
+          <div className="py-12 text-center text-gray-400">
+            No LLM activity recorded yet
+          </div>
+        )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------
+
+type AdminTab = "users" | "audit" | "observability";
+
+export default function AdminPage() {
+  const [tab, setTab] =
+    useState<AdminTab>("users");
+
+  return (
+    <div className="space-y-6 p-4 sm:p-6">
+      {/* Tab bar */}
+      <div className="flex gap-1 border-b border-gray-200 dark:border-gray-700 pb-px">
+        {(
+          [
+            { id: "users", label: "Users" },
+            { id: "audit", label: "Audit Log" },
+            {
+              id: "observability",
+              label: "LLM Observability",
+            },
+          ] as const
+        ).map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`
+              whitespace-nowrap px-3 py-2 text-sm
+              font-medium rounded-t-lg transition-colors
+              ${
+                tab === t.id
+                  ? "text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600 dark:border-indigo-400 -mb-px"
+                  : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+              }
+            `}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      <div className="min-h-[400px]">
+        {tab === "users" && <UsersTab />}
+        {tab === "audit" && <AuditLogTab />}
+        {tab === "observability" && (
+          <ObservabilityTab />
+        )}
+      </div>
+    </div>
+  );
+}

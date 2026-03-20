@@ -1,0 +1,152 @@
+"use client";
+/**
+ * Chat context provider — manages chat panel state, messages, agent
+ * selection, and WebSocket connection for the side panel.
+ *
+ * Replaces the old prop-drilled chat state from page.tsx. The WebSocket
+ * lives here so it stays connected even when the panel is closed.
+ */
+
+import {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  type ReactNode,
+} from "react";
+import type { Message } from "@/lib/constants";
+import {
+  useWebSocket,
+  type UseWebSocketReturn,
+} from "@/hooks/useWebSocket";
+import { useChatSession } from "@/hooks/useChatSession";
+
+interface ChatContextValue {
+  messages: Message[];
+  setMessages: React.Dispatch<
+    React.SetStateAction<Message[]>
+  >;
+  isOpen: boolean;
+  togglePanel: () => void;
+  closePanel: () => void;
+  openPanel: () => void;
+  agentId: string;
+  setAgentId: (id: string) => void;
+  sessionId: string;
+  ws: UseWebSocketReturn;
+  flush: () => Promise<void>;
+}
+
+const ChatContext = createContext<ChatContextValue | null>(
+  null,
+);
+
+export function ChatProvider({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [isOpen, setIsOpen] = useState(false);
+  const [agentId, setAgentId] = useState("general");
+  // Generate sessionId only on client to avoid SSR
+  // hydration mismatch (server vs client UUID).
+  const sessionIdRef = useRef<string>("");
+  if (
+    typeof window !== "undefined" &&
+    !sessionIdRef.current
+  ) {
+    sessionIdRef.current = crypto.randomUUID();
+  }
+  const sessionId = sessionIdRef.current;
+  const ws = useWebSocket();
+  const { flush } = useChatSession(
+    messages,
+    sessionId,
+    agentId,
+  );
+
+  const togglePanel = useCallback(
+    () => setIsOpen((v) => !v),
+    [],
+  );
+  const closePanel = useCallback(
+    () => setIsOpen(false),
+    [],
+  );
+  const openPanel = useCallback(
+    () => setIsOpen(true),
+    [],
+  );
+
+  // Flush on tab close / browser close as last resort
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (messagesRef.current.length === 0) return;
+      // sendBeacon for fire-and-forget on tab close
+      const url = `${
+        process.env.NEXT_PUBLIC_BACKEND_URL
+          ?? "http://127.0.0.1:8181"
+      }/v1/audit/chat-sessions`;
+      const body = JSON.stringify({
+        session_id: sessionId,
+        messages: messagesRef.current.map((m) => ({
+          role: m.role,
+          content: m.content,
+          timestamp: m.timestamp.toISOString(),
+          agent_id: agentId,
+        })),
+      });
+      navigator.sendBeacon(
+        url,
+        new Blob([body], {
+          type: "application/json",
+        }),
+      );
+    };
+    window.addEventListener(
+      "beforeunload",
+      handleBeforeUnload,
+    );
+    return () =>
+      window.removeEventListener(
+        "beforeunload",
+        handleBeforeUnload,
+      );
+  }, [sessionId, agentId]);
+
+  return (
+    <ChatContext.Provider
+      value={{
+        messages,
+        setMessages,
+        isOpen,
+        togglePanel,
+        closePanel,
+        openPanel,
+        agentId,
+        setAgentId,
+        sessionId,
+        ws,
+        flush,
+      }}
+    >
+      {children}
+    </ChatContext.Provider>
+  );
+}
+
+export function useChatContext(): ChatContextValue {
+  const ctx = useContext(ChatContext);
+  if (!ctx) {
+    throw new Error(
+      "useChatContext must be used within ChatProvider",
+    );
+  }
+  return ctx;
+}

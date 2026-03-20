@@ -8,12 +8,13 @@
 ## Project Overview
 
 Fullstack agentic chat app with stock analysis and Prophet forecasting.
+Native portfolio dashboard with TradingView lightweight-charts +
+react-plotly.js. All pages fully migrated from Dash to Next.js.
 
 | Service | Port | Entry point | Stack |
 |---------|------|-------------|-------|
 | Backend | 8181 | `backend/main.py` | Python 3.12, FastAPI, LangChain 1.x |
-| Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19, TypeScript |
-| Dashboard | 8050 | `dashboard/app.py` | Plotly Dash (FLATLY theme) |
+| Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19, lightweight-charts |
 | Docs | 8000 | `mkdocs serve` | MkDocs Material |
 
 ```bash
@@ -22,7 +23,7 @@ Fullstack agentic chat app with stock analysis and Prophet forecasting.
 source ~/.ai-agent-ui/venv/bin/activate      # Python virtualenv
 ```
 
-**Key dirs**: `backend/` (agents, tools, config), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 9 tables), `frontend/` (SPA), `dashboard/` (Dash), `hooks/` (pre-commit, pre-push).
+**Key dirs**: `backend/` (agents, tools, config), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 9 tables), `frontend/` (SPA), `hooks/` (pre-commit, pre-push).
 
 **Config**: `pyproject.toml` + `.flake8` (79 chars), `frontend/eslint.config.mjs`.
 
@@ -73,9 +74,9 @@ Load any memory with `read_memory` when you need the details.
 
 ```bash
 # Lint
-black backend/ auth/ stocks/ scripts/ dashboard/
-isort backend/ auth/ stocks/ scripts/ dashboard/ --profile black
-flake8 backend/ auth/ stocks/ scripts/ dashboard/
+black backend/ auth/ stocks/ scripts/
+isort backend/ auth/ stocks/ scripts/ --profile black
+flake8 backend/ auth/ stocks/ scripts/
 cd frontend && npx eslint . --fix
 
 # Test

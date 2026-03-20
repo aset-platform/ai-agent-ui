@@ -21,7 +21,6 @@ Typical usage::
 
 from agents.base import AgentConfig, BaseAgent
 from config import get_settings
-from llm_fallback import FallbackLLM
 from message_compressor import MessageCompressor
 from token_budget import TokenBudget
 from tools.registry import ToolRegistry
@@ -35,32 +34,18 @@ def _parse_tiers(csv: str) -> list[str]:
 class GeneralAgent(BaseAgent):
     """General-purpose agent with N-tier LLM cascade.
 
-    Inherits the agentic loop from :class:`~agents.base.BaseAgent`
-    and overrides :meth:`_build_llm` to supply FallbackLLM with
-    budget-aware cascading.
+    Inherits the agentic loop and LLM builders from
+    :class:`~agents.base.BaseAgent`.
     """
 
-    def _build_llm(self) -> FallbackLLM:
-        """Instantiate an N-tier :class:`~llm_fallback.FallbackLLM`.
-
-        Returns:
-            A :class:`~llm_fallback.FallbackLLM` with Groq tiers
-            and Anthropic fallback.
-        """
-        return FallbackLLM(
-            groq_models=self.config.groq_model_tiers,
-            anthropic_model="claude-sonnet-4-6",
-            temperature=self.config.temperature,
-            agent_id=self.config.agent_id,
-            token_budget=self.token_budget,
-            compressor=self.compressor,
-        )
+    pass
 
 
 def create_general_agent(
     tool_registry: ToolRegistry,
     token_budget: TokenBudget | None = None,
     compressor: MessageCompressor | None = None,
+    obs_collector=None,
 ) -> GeneralAgent:
     """Build a :class:`GeneralAgent` with default settings.
 
@@ -70,6 +55,8 @@ def create_general_agent(
             Created with defaults if ``None``.
         compressor: Shared :class:`MessageCompressor` instance.
             Created with defaults if ``None``.
+        obs_collector: Optional
+            :class:`~observability.ObservabilityCollector`.
 
     Returns:
         A ready-to-use :class:`GeneralAgent` instance.
@@ -88,10 +75,14 @@ def create_general_agent(
         temperature=0.0,
         tool_names=["get_current_time", "search_web"],
     )
-    agent = GeneralAgent(config=config, tool_registry=tool_registry)
-    agent.token_budget = token_budget or TokenBudget()
-    agent.compressor = compressor or MessageCompressor(
-        max_history_turns=settings.max_history_turns,
-        max_tool_result_chars=settings.max_tool_result_chars,
+    return GeneralAgent(
+        config=config,
+        tool_registry=tool_registry,
+        token_budget=token_budget or TokenBudget(),
+        compressor=compressor
+        or MessageCompressor(
+            max_history_turns=settings.max_history_turns,
+            max_tool_result_chars=(settings.max_tool_result_chars),
+        ),
+        obs_collector=obs_collector,
     )
-    return agent

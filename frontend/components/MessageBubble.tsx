@@ -23,17 +23,17 @@ export const MessageBubble = React.memo(function MessageBubble({ message: msg, o
           ✦
         </div>
       ) : (
-        <div className="w-8 h-8 shrink-0 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 text-xs font-bold select-none">
+        <div className="w-8 h-8 shrink-0 rounded-full bg-indigo-100 dark:bg-indigo-900/50 flex items-center justify-center text-indigo-700 dark:text-indigo-300 text-xs font-bold select-none">
           You
         </div>
       )}
 
-      <div className={`flex flex-col gap-1 max-w-[72%] ${msg.role === "user" ? "items-end" : "items-start"}`}>
+      <div className={`flex flex-col gap-1 max-w-[85%] md:max-w-[72%] ${msg.role === "user" ? "items-end" : "items-start"}`}>
         <div
           className={`px-4 py-2.5 rounded-2xl text-sm shadow-sm ${
             msg.role === "user"
               ? "bg-indigo-600 text-white rounded-br-sm leading-relaxed whitespace-pre-wrap break-words"
-              : "bg-white text-gray-800 border border-gray-100 rounded-bl-sm"
+              : "bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 border border-gray-100 dark:border-gray-700 rounded-bl-sm"
           }`}
         >
           {msg.role === "user" ? (
@@ -42,7 +42,7 @@ export const MessageBubble = React.memo(function MessageBubble({ message: msg, o
             <MarkdownContent content={msg.content} onInternalLink={onInternalLink} />
           )}
         </div>
-        <span className="text-[11px] text-gray-400 px-1">{formatTime(msg.timestamp)}</span>
+        <span className="text-[11px] text-gray-400 dark:text-gray-500 px-1">{formatTime(msg.timestamp)}</span>
       </div>
     </div>
   );

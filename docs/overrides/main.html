@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block extrahead %}
+<script>
+  // Sync theme from parent iframe URL param (?theme=dark|light).
+  // Runs before body renders to prevent flash of wrong theme.
+  (function () {
+    var params = new URLSearchParams(window.location.search);
+    var urlTheme = params.get("theme");
+    if (urlTheme !== "dark" && urlTheme !== "light") return;
+
+    var scheme = urlTheme === "dark" ? "slate" : "default";
+    var index = urlTheme === "dark" ? 1 : 0;
+
+    // Update Material's palette localStorage (format: {index, color})
+    try {
+      var palette = {
+        index: index,
+        color: {
+          media: "",
+          scheme: scheme,
+          primary: "indigo",
+          accent: "indigo"
+        }
+      };
+      localStorage.setItem("/.__palette", JSON.stringify(palette));
+    } catch (e) {
+      // localStorage unavailable in sandboxed iframe
+    }
+
+    // Apply scheme to body as soon as it exists
+    var observer = new MutationObserver(function (_, obs) {
+      if (document.body) {
+        document.body.setAttribute("data-md-color-scheme", scheme);
+        obs.disconnect();
+      }
+    });
+    observer.observe(document.documentElement, { childList: true });
+  })();
+</script>
+{% endblock %}

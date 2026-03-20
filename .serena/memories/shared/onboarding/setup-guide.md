@@ -3,11 +3,26 @@
 ## Quick Start
 
 ```bash
-./setup.sh                              # first-time setup
+./setup.sh                              # first-time setup (interactive)
+./setup.sh --repair                     # fix symlinks/hooks/env only
+./setup.sh --force                      # re-run everything from scratch
 ./scripts/dev-setup.sh                  # AI tooling setup
 ./run.sh start                          # all services
+./run.sh status                         # health check (3-state: up/listening/down)
+./run.sh logs                           # tail service logs
+./run.sh logs --errors                  # grep errors across all logs
+./run.sh doctor                         # diagnostic checklist with fix suggestions
+./run.sh docs-check                     # detect doc drift vs code
 source ~/.ai-agent-ui/venv/bin/activate # Python virtualenv
 ```
+
+## Platform Support
+
+- **macOS**: Xcode CLT + Homebrew. See `docs/setup/macos.md`.
+- **Linux**: apt packages + pyenv. See `docs/setup/linux.md`.
+- **Windows 11**: WSL2 required. Full walkthrough in `docs/setup/windows.md`.
+- Symlink fallback to copy on WSL2 without Developer Mode.
+- Crash-resume: `~/.ai-agent-ui/.setup_state` tracks completed steps.
 
 ## Python Dependencies
 

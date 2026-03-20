@@ -26,52 +26,149 @@ fi
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
 NON_INTERACTIVE=0
+FORCE_SETUP=0
+REPAIR_MODE=0
 for arg in "$@"; do
     case "$arg" in
         --non-interactive) NON_INTERACTIVE=1 ;;
+        --force)           FORCE_SETUP=1 ;;
+        --repair)          REPAIR_MODE=1 ;;
         -h|--help)
-            echo "Usage: ./setup.sh [--non-interactive]"
-            echo ""
-            echo "  --non-interactive   Read all secrets from environment variables (for CI/Docker)"
-            echo "  -h, --help          Show this help message"
+            cat <<HELPEOF
+Usage: ./setup.sh [OPTIONS]
+
+Options:
+  --non-interactive  Read secrets from env vars (CI/Docker)
+  --force            Reset state and re-run everything
+  --repair           Fix symlinks, env files, and hooks only
+  -h, --help         Show this help message
+
+Examples:
+  ./setup.sh                  # interactive first-time setup
+  ./setup.sh --repair         # fix broken symlinks/hooks
+  ./setup.sh --force          # redo everything from scratch
+HELPEOF
             exit 0
             ;;
         *)
             echo -e "${R}Unknown option: $arg${N}"
-            echo "Usage: ./setup.sh [--non-interactive]"
+            echo "Usage: ./setup.sh [--non-interactive] [--force] [--repair]"
             exit 1
             ;;
     esac
 done
 
+# ── Setup state (crash-resume) ─────────────────────────────────
+SETUP_STATE="${HOME}/.ai-agent-ui/.setup_state"
+mkdir -p "$(dirname "$SETUP_STATE")"
+
+if [[ $FORCE_SETUP -eq 1 ]]; then rm -f "$SETUP_STATE"; fi
+[[ -f "$SETUP_STATE" ]] || touch "$SETUP_STATE"
+
+# Mark a step complete / check if already done
+_mark_done() { echo "${1}=done" >> "$SETUP_STATE"; }
+_is_done()   { grep -q "^${1}=done$" "$SETUP_STATE" 2>/dev/null; }
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+_STEP_SKIPPED=0
 step() {
+    local label="$1" desc="$2" key="$3"
+    # If a state key is provided and already done, skip
+    if [[ -n "${key:-}" ]] && _is_done "$key" \
+       && [[ $FORCE_SETUP -eq 0 ]]; then
+        echo ""
+        echo -e "${B}[$label]${N} $desc"
+        echo -e "  ${G}[SKIP]${N} Already completed"
+        _STEP_SKIPPED=1
+        return 0
+    fi
+    _STEP_SKIPPED=0
     echo ""
-    echo -e "${B}[$1]${N} $2"
-    echo "────────────────────────────────────────────────────────────────"
+    echo -e "${B}[$label]${N} $desc"
+    echo "──────────────────────────────────────────────────────────"
 }
+
+# Mark current step done (call at end of each step)
+done_step() { _mark_done "$1"; }
 
 ok()   { echo -e "  ${G}[OK]${N} $1"; }
 warn() { echo -e "  ${Y}[WARN]${N} $1"; }
 fail() { echo -e "  ${R}[FAIL]${N} $1"; exit 1; }
 info() { echo -e "  ${C}[INFO]${N} $1"; }
 
+# Detect WSL environment
+_is_wsl() { grep -qi microsoft /proc/version 2>/dev/null; }
+
+# Remove broken, circular, or chained symlinks at a path.
+# Detects "too many levels of symbolic links" (ELOOP) and dangling links.
+# Usage: _clean_symlink <path>
+_clean_symlink() {
+    local path="$1"
+    # Nothing to clean if path doesn't exist at all (not even as a dangling link)
+    [[ -e "$path" ]] || [[ -L "$path" ]] || return 0
+
+    if [[ -L "$path" ]]; then
+        # Test if the symlink is resolvable (catches ELOOP + dangling)
+        if ! readlink -f "$path" &>/dev/null || [[ ! -e "$path" ]]; then
+            warn "Removing broken/circular symlink: $path"
+            rm -f "$path"
+        fi
+    fi
+}
+
+# Create a symlink, falling back to a copy if symlinks are not supported
+# (e.g. WSL2 without Windows developer mode enabled).
+# Automatically cleans broken/circular symlinks before creating.
+# Usage: _try_symlink <target> <link_path>
+_try_symlink() {
+    local target="$1" link_path="$2"
+    # Clean any broken/circular symlinks first
+    _clean_symlink "$link_path"
+    if ln -sf "$target" "$link_path" 2>/dev/null; then
+        # Verify the new symlink actually resolves (catch ELOOP early)
+        if [[ -e "$link_path" ]]; then
+            return 0
+        fi
+        # Symlink was created but doesn't resolve — remove and copy
+        rm -f "$link_path"
+    fi
+    # Symlink failed or unresolvable — fall back to copying
+    warn "Symlinks not supported (enable Windows Developer Mode for WSL)"
+    cp -f "$target" "$link_path"
+    return 0
+}
+
+# Start a system service, handling the case where systemd is unavailable
+# (common in WSL2).  Falls back to direct daemon launch.
+# Usage: _start_redis_service
+_start_redis_service() {
+    if command -v systemctl &>/dev/null \
+       && systemctl is-system-running &>/dev/null 2>&1; then
+        sudo systemctl enable redis-server 2>/dev/null || true
+        sudo systemctl start redis-server 2>/dev/null || true
+    else
+        # No systemd (typical WSL2) — launch directly
+        redis-server --port "${REDIS_PORT:-6379}" --daemonize yes \
+            --logfile "${HOME}/.ai-agent-ui/logs/redis.log" 2>/dev/null
+    fi
+}
+
 prompt_required() {
     local var_name="$1" prompt_text="$2" value=""
     if [[ $NON_INTERACTIVE -eq 1 ]]; then
         value="${!var_name:-}"
         if [[ -z "$value" ]]; then
-            fail "$var_name is required in --non-interactive mode. Export it before running."
+            fail "$var_name is required in --non-interactive mode."
         fi
         echo "$value"
         return
     fi
     while [[ -z "$value" ]]; do
-        printf "  %s: " "$prompt_text"
+        printf "  %s: " "$prompt_text" >&2
         read -r value
         if [[ -z "$value" ]]; then
-            echo -e "  ${R}This field is required. Please enter a value.${N}"
+            echo -e "  ${R}Required. Please enter a value.${N}" >&2
         fi
     done
     echo "$value"
@@ -83,7 +180,7 @@ prompt_optional() {
         echo "${!var_name:-}"
         return
     fi
-    printf "  %s (Enter to skip): " "$prompt_text"
+    printf "  %s (Enter to skip): " "$prompt_text" >&2
     read -r value
     echo "$value"
 }
@@ -93,19 +190,20 @@ prompt_secret() {
     if [[ $NON_INTERACTIVE -eq 1 ]]; then
         value="${!var_name:-}"
         if [[ -z "$value" ]]; then
-            fail "$var_name is required in --non-interactive mode. Export it before running."
+            fail "$var_name is required in --non-interactive mode."
         fi
         echo "$value"
         return
     fi
     while [[ -z "$value" ]]; do
-        printf "  %s: " "$prompt_text"
+        printf "  %s: " "$prompt_text" >&2
         read -rs value
-        echo ""
+        echo "" >&2
         if [[ -z "$value" ]]; then
-            echo -e "  ${R}This field is required. Please enter a value.${N}"
+            echo -e "  ${R}Required. Please enter a value.${N}" >&2
         fi
     done
+    echo -e "  ${G}[set]${N}" >&2
     echo "$value"
 }
 
@@ -115,11 +213,108 @@ prompt_optional_secret() {
         echo "${!var_name:-}"
         return
     fi
-    printf "  %s (Enter to skip): " "$prompt_text"
+    printf "  %s (Enter to skip): " "$prompt_text" >&2
     read -rs value
-    echo ""
+    echo "" >&2
+    if [[ -n "$value" ]]; then
+        echo -e "  ${G}[set]${N}" >&2
+    fi
     echo "$value"
 }
+
+# ── Repair mode (early exit) ──────────────────────────────────
+if [[ $REPAIR_MODE -eq 1 ]]; then
+    echo ""
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║           AI Agent UI — Repair Mode                       ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    ENV_HOME="$HOME/.ai-agent-ui"
+    BACKEND_ENV_REAL="$ENV_HOME/backend.env"
+    FRONTEND_ENV_REAL="$ENV_HOME/frontend.env.local"
+    BACKEND_ENV_LINK="$SCRIPT_DIR/backend/.env"
+    FRONTEND_ENV_LINK="$SCRIPT_DIR/frontend/.env.local"
+    HOOKS_DIR="$SCRIPT_DIR/.git/hooks"
+
+    # Master env files must exist
+    if [[ ! -f "$BACKEND_ENV_REAL" ]]; then
+        fail "~/.ai-agent-ui/backend.env missing. Run: ./setup.sh"
+    fi
+    if [[ ! -f "$FRONTEND_ENV_REAL" ]]; then
+        fail "~/.ai-agent-ui/frontend.env.local missing. Run: ./setup.sh"
+    fi
+
+    REPAIRED=0
+
+    # ── backend/.env ──
+    echo -e "${B}[1/3]${N} Checking backend/.env"
+    _clean_symlink "$BACKEND_ENV_LINK"
+    if [[ -L "$BACKEND_ENV_LINK" ]]; then
+        LT="$(readlink "$BACKEND_ENV_LINK")"
+        if [[ "$LT" == "$BACKEND_ENV_REAL" ]]; then
+            ok "symlink OK"
+        else
+            rm "$BACKEND_ENV_LINK"
+            _try_symlink "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
+            ok "link repaired"; REPAIRED=$((REPAIRED + 1))
+        fi
+    elif [[ -f "$BACKEND_ENV_LINK" ]]; then
+        cp -f "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
+        ok "copy refreshed"; REPAIRED=$((REPAIRED + 1))
+    else
+        _try_symlink "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
+        ok "link created"; REPAIRED=$((REPAIRED + 1))
+    fi
+
+    # ── frontend/.env.local ──
+    echo -e "${B}[2/3]${N} Checking frontend/.env.local"
+    _clean_symlink "$FRONTEND_ENV_LINK"
+    if [[ -L "$FRONTEND_ENV_LINK" ]]; then
+        LT="$(readlink "$FRONTEND_ENV_LINK")"
+        if [[ "$LT" == "$FRONTEND_ENV_REAL" ]]; then
+            ok "symlink OK"
+        else
+            rm "$FRONTEND_ENV_LINK"
+            _try_symlink "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
+            ok "link repaired"; REPAIRED=$((REPAIRED + 1))
+        fi
+    elif [[ -f "$FRONTEND_ENV_LINK" ]]; then
+        cp -f "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
+        ok "copy refreshed"; REPAIRED=$((REPAIRED + 1))
+    else
+        _try_symlink "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
+        ok "link created"; REPAIRED=$((REPAIRED + 1))
+    fi
+
+    # ── Git hooks ──
+    echo -e "${B}[3/3]${N} Checking git hooks"
+    if [[ -d "$HOOKS_DIR" ]]; then
+        for h in pre-commit pre-push; do
+            if [[ -x "$HOOKS_DIR/$h" ]]; then
+                ok "$h hook OK"
+            else
+                cp "$SCRIPT_DIR/hooks/$h" "$HOOKS_DIR/$h"
+                chmod +x "$HOOKS_DIR/$h"
+                ok "$h hook installed"
+                REPAIRED=$((REPAIRED + 1))
+            fi
+        done
+    else
+        warn ".git/hooks not found — not a git repo?"
+    fi
+
+    echo ""
+    echo "══════════════════════════════════════════════════════════════"
+    if [[ $REPAIRED -eq 0 ]]; then
+        echo -e "${G}  Everything OK — nothing to repair.${N}"
+    else
+        echo -e "${G}  Repaired $REPAIRED item(s).${N}"
+    fi
+    echo "══════════════════════════════════════════════════════════════"
+    echo ""
+    exit 0
+fi
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo ""
@@ -127,7 +322,9 @@ echo "╔═══════════════════════�
 echo "║               AI Agent UI — First-Time Setup                    ║"
 echo "╚══════════════════════════════════════════════════════════════════╝"
 echo ""
-if [[ $NON_INTERACTIVE -eq 1 ]]; then
+if [[ $FORCE_SETUP -eq 1 ]]; then
+    info "Running with --force (all steps will re-run)"
+elif [[ $NON_INTERACTIVE -eq 1 ]]; then
     info "Running in non-interactive mode (reading secrets from env vars)"
 fi
 
@@ -201,14 +398,21 @@ if [[ "$OS" == "linux" ]]; then
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 3: Ensure Python 3.9
+# Step 3: Ensure Python 3.12
 # ══════════════════════════════════════════════════════════════════════════════
-step "3/12" "Ensuring Python 3.12 is available"
+step "3/12" "Ensuring Python 3.12 is available" "STEP_03"
 
 PYTHON312=""
 
 # Check if python3.12 already exists
-if command -v python3.12 &>/dev/null; then
+if [[ $_STEP_SKIPPED -eq 1 ]]; then
+    # Still resolve PYTHON312 for later steps
+    if command -v python3.12 &>/dev/null; then
+        PYTHON312="$(command -v python3.12)"
+    elif [[ -f "$HOME/.pyenv/versions/3.12.9/bin/python3.12" ]]; then
+        PYTHON312="$HOME/.pyenv/versions/3.12.9/bin/python3.12"
+    fi
+elif command -v python3.12 &>/dev/null; then
     PYTHON312="$(command -v python3.12)"
     ok "Python 3.12 found at $PYTHON312 ($(python3.12 --version 2>&1))"
 elif [[ -f "$HOME/.pyenv/versions/3.12.9/bin/python3.12" ]]; then
@@ -272,82 +476,83 @@ else
         fail "Python 3.12 installation failed. Check pyenv output above."
     fi
 fi
+[[ $_STEP_SKIPPED -eq 0 ]] && done_step "STEP_03"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 4: Create virtualenv
 # ══════════════════════════════════════════════════════════════════════════════
-step "4/12" "Creating Python virtualenv (~/.ai-agent-ui/venv)"
+step "4/12" "Creating Python virtualenv (~/.ai-agent-ui/venv)" "STEP_04"
 
 VENV_DIR="${APP_DATA_HOME:-$HOME/.ai-agent-ui}/venv"
-
-# Migrate: if old venv exists at backend/demoenv but new one does not,
-# move it and leave a symlink for backwards compatibility.
-OLD_VENV_DIR="$SCRIPT_DIR/backend/demoenv"
-if [[ -d "$OLD_VENV_DIR" ]] && [[ ! -L "$OLD_VENV_DIR" ]] && [[ ! -d "$VENV_DIR" ]]; then
-    info "Migrating virtualenv from backend/demoenv → $VENV_DIR"
-    mv "$OLD_VENV_DIR" "$VENV_DIR"
-    ln -s "$VENV_DIR" "$OLD_VENV_DIR"
-    ok "Virtualenv migrated (symlink left at backend/demoenv)"
-fi
 VENV_PYTHON="$VENV_DIR/bin/python"
 
-if [[ -f "$VENV_PYTHON" ]]; then
-    # Verify it's actually Python 3.12.x
-    VENV_VERSION="$("$VENV_PYTHON" --version 2>&1)"
-    if [[ "$VENV_VERSION" == *"3.12"* ]]; then
-        ok "Virtualenv already exists ($VENV_VERSION)"
-    else
-        warn "Virtualenv exists but is $VENV_VERSION (expected 3.12.x) — recreating"
-        rm -rf "$VENV_DIR"
-        "$PYTHON312" -m venv "$VENV_DIR"
-        ok "Virtualenv recreated with $("$VENV_PYTHON" --version 2>&1)"
+if [[ $_STEP_SKIPPED -eq 0 ]]; then
+    # Migrate old venv location
+    OLD_VENV_DIR="$SCRIPT_DIR/backend/demoenv"
+    _clean_symlink "$OLD_VENV_DIR"
+    if [[ -d "$OLD_VENV_DIR" ]] && [[ ! -L "$OLD_VENV_DIR" ]] && [[ ! -d "$VENV_DIR" ]]; then
+        info "Migrating virtualenv from backend/demoenv → $VENV_DIR"
+        mv "$OLD_VENV_DIR" "$VENV_DIR"
+        _try_symlink "$VENV_DIR" "$OLD_VENV_DIR"
+        ok "Virtualenv migrated (link left at backend/demoenv)"
     fi
-else
-    "$PYTHON312" -m venv "$VENV_DIR"
-    ok "Virtualenv created ($("$VENV_PYTHON" --version 2>&1))"
+
+    if [[ -f "$VENV_PYTHON" ]]; then
+        VENV_VERSION="$("$VENV_PYTHON" --version 2>&1)"
+        if [[ "$VENV_VERSION" == *"3.12"* ]]; then
+            ok "Virtualenv already exists ($VENV_VERSION)"
+        else
+            warn "Virtualenv is $VENV_VERSION (expected 3.12.x) — recreating"
+            rm -rf "$VENV_DIR"
+            "$PYTHON312" -m venv "$VENV_DIR"
+            ok "Virtualenv recreated with $("$VENV_PYTHON" --version 2>&1)"
+        fi
+    else
+        "$PYTHON312" -m venv "$VENV_DIR"
+        ok "Virtualenv created ($("$VENV_PYTHON" --version 2>&1))"
+    fi
+    done_step "STEP_04"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 5: Install Python dependencies
 # ══════════════════════════════════════════════════════════════════════════════
-step "5/12" "Installing Python dependencies"
+step "5/12" "Installing Python dependencies" "STEP_05"
 
-REQUIREMENTS="$SCRIPT_DIR/backend/requirements.txt"
-if [[ ! -f "$REQUIREMENTS" ]]; then
-    fail "backend/requirements.txt not found"
+if [[ $_STEP_SKIPPED -eq 0 ]]; then
+    REQUIREMENTS="$SCRIPT_DIR/backend/requirements.txt"
+    if [[ ! -f "$REQUIREMENTS" ]]; then
+        fail "backend/requirements.txt not found"
+    fi
+    info "Upgrading pip..."
+    "$VENV_PYTHON" -m pip install --upgrade pip --quiet
+    info "Installing packages (this may take a few minutes)..."
+    "$VENV_PYTHON" -m pip install -r "$REQUIREMENTS" --quiet
+    REQUIREMENTS_DEV="$SCRIPT_DIR/backend/requirements-dev.txt"
+    if [[ -f "$REQUIREMENTS_DEV" ]]; then
+        info "Installing dev/test dependencies..."
+        "$VENV_PYTHON" -m pip install -r "$REQUIREMENTS_DEV" --quiet
+    fi
+    ok "Python dependencies installed"
+    done_step "STEP_05"
 fi
-
-info "Upgrading pip..."
-"$VENV_PYTHON" -m pip install --upgrade pip --quiet
-
-info "Installing packages from requirements.txt (this may take a few minutes)..."
-"$VENV_PYTHON" -m pip install -r "$REQUIREMENTS" --quiet
-
-REQUIREMENTS_DEV="$SCRIPT_DIR/backend/requirements-dev.txt"
-if [[ -f "$REQUIREMENTS_DEV" ]]; then
-    info "Installing dev/test dependencies from requirements-dev.txt..."
-    "$VENV_PYTHON" -m pip install -r "$REQUIREMENTS_DEV" --quiet
-fi
-
-ok "Python dependencies installed"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 6: Check Node.js
+# Step 6: Check Node.js (always runs — validates prerequisite)
 # ══════════════════════════════════════════════════════════════════════════════
 step "6/12" "Checking Node.js"
 
 if command -v node &>/dev/null; then
     NODE_VERSION="$(node --version)"
-    # Extract major version number (v18.17.0 -> 18)
     NODE_MAJOR="${NODE_VERSION#v}"
     NODE_MAJOR="${NODE_MAJOR%%.*}"
     if [[ "$NODE_MAJOR" -ge 18 ]]; then
         ok "Node.js $NODE_VERSION"
     else
-        fail "Node.js $NODE_VERSION is too old. Version 18.17+ required."
+        fail "Node.js $NODE_VERSION is too old. 18.17+ required."
     fi
 else
-    fail "Node.js is not installed. Install Node.js 18.17+ from https://nodejs.org or via nvm/fnm."
+    fail "Node.js not installed. Install 18.17+ from https://nodejs.org"
 fi
 
 if command -v npm &>/dev/null; then
@@ -359,20 +564,23 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 7: Install frontend dependencies
 # ══════════════════════════════════════════════════════════════════════════════
-step "7/12" "Installing frontend dependencies"
+step "7/12" "Installing frontend dependencies" "STEP_07"
 
 FRONTEND_DIR="$SCRIPT_DIR/frontend"
 
-if [[ -d "$FRONTEND_DIR/node_modules" ]]; then
-    ok "node_modules already exists — skipping (delete frontend/node_modules to force reinstall)"
-else
-    info "Running npm ci in frontend/..."
-    (cd "$FRONTEND_DIR" && npm ci --loglevel=warn)
-    ok "Frontend dependencies installed"
+if [[ $_STEP_SKIPPED -eq 0 ]]; then
+    if [[ -d "$FRONTEND_DIR/node_modules" ]]; then
+        ok "node_modules already exists"
+    else
+        info "Running npm ci in frontend/..."
+        (cd "$FRONTEND_DIR" && npm ci --loglevel=warn)
+        ok "Frontend dependencies installed"
+    fi
+    done_step "STEP_07"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 8: Create project directories
+# Step 8: Create project directories (always runs — idempotent)
 # ══════════════════════════════════════════════════════════════════════════════
 step "8/12" "Creating project directories"
 
@@ -400,75 +608,119 @@ ok "All directories created"
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 9: Prompt for API keys and secrets
 # ══════════════════════════════════════════════════════════════════════════════
-step "9/12" "Configuring API keys and secrets"
+step "9/12" "Configuring API keys and secrets" "STEP_09"
+
+if [[ $_STEP_SKIPPED -eq 1 ]]; then
+    # Source existing env to get vars for later steps
+    if [[ -f "$HOME/.ai-agent-ui/backend.env" ]]; then
+        set -a
+        # shellcheck disable=SC1091
+        source "$HOME/.ai-agent-ui/backend.env"
+        set +a
+    fi
+else  # ── begin step 9 body ──
 
 # Auto-generate JWT_SECRET_KEY
-JWT_SECRET_KEY="$("$VENV_PYTHON" -c "import secrets; print(secrets.token_hex(32))")"
+JWT_SECRET_KEY="$("$VENV_PYTHON" -c \
+    "import secrets; print(secrets.token_hex(32))")"
 ok "JWT_SECRET_KEY auto-generated (64 hex chars)"
 
-# Required
+# ── API Keys (numbered prompts) ──────────────────────────────
 echo ""
-echo -e "  ${B}Required:${N}"
-ANTHROPIC_API_KEY="$(prompt_secret "ANTHROPIC_API_KEY" "Anthropic API key (sk-ant-...)")"
-ok "ANTHROPIC_API_KEY set"
-
-# Optional LLM / tools
+echo -e "  ${B}API Keys${N} (6 items — press Enter to skip optional)"
 echo ""
-echo -e "  ${B}Optional (press Enter to skip):${N}"
-GROQ_API_KEY="$(prompt_optional_secret "GROQ_API_KEY" "Groq API key (LLM fallback)")"
-SERPAPI_API_KEY="$(prompt_optional_secret "SERPAPI_API_KEY" "SerpAPI key (web search tool)")"
 
-# Optional SSO
-echo ""
-echo -e "  ${B}Optional — Google SSO:${N}"
-GOOGLE_CLIENT_ID="$(prompt_optional "GOOGLE_CLIENT_ID" "Google Client ID")"
-GOOGLE_CLIENT_SECRET="$(prompt_optional_secret "GOOGLE_CLIENT_SECRET" "Google Client Secret")"
+# 1. Required
+ANTHROPIC_API_KEY="$(prompt_secret \
+    "ANTHROPIC_API_KEY" "[1/6] Anthropic API key (sk-ant-...)")"
 
-echo ""
-echo -e "  ${B}Optional — Facebook SSO:${N}"
-FACEBOOK_APP_ID="$(prompt_optional "FACEBOOK_APP_ID" "Facebook App ID")"
-FACEBOOK_APP_SECRET="$(prompt_optional_secret "FACEBOOK_APP_SECRET" "Facebook App Secret")"
+# 2-3. Optional LLM / tools
+GROQ_API_KEY="$(prompt_optional_secret \
+    "GROQ_API_KEY" "[2/6] Groq API key — LLM fallback")"
+SERPAPI_API_KEY="$(prompt_optional_secret \
+    "SERPAPI_API_KEY" "[3/6] SerpAPI key — web search tool")"
 
-# Optional admin seed
-echo ""
-echo -e "  ${B}Optional — Superuser account:${N}"
-ADMIN_EMAIL="$(prompt_optional "ADMIN_EMAIL" "Admin email")"
-ADMIN_PASSWORD=""
-ADMIN_FULL_NAME=""
+# 4-5. Optional Google SSO
+GOOGLE_CLIENT_ID="$(prompt_optional \
+    "GOOGLE_CLIENT_ID" "[4/6] Google Client ID — SSO")"
+GOOGLE_CLIENT_SECRET="$(prompt_optional_secret \
+    "GOOGLE_CLIENT_SECRET" "[5/6] Google Client Secret — SSO")"
 
-if [[ -n "$ADMIN_EMAIL" ]]; then
-    # Validate admin password
-    while true; do
-        ADMIN_PASSWORD="$(prompt_optional_secret "ADMIN_PASSWORD" "Admin password (min 8 chars, 1 digit)")"
-        if [[ -z "$ADMIN_PASSWORD" ]]; then
-            warn "No password provided — skipping admin account creation"
-            ADMIN_EMAIL=""
-            break
-        fi
-        if [[ ${#ADMIN_PASSWORD} -lt 8 ]]; then
-            echo -e "  ${R}Password must be at least 8 characters.${N}"
-            continue
-        fi
-        if ! [[ "$ADMIN_PASSWORD" =~ [0-9] ]]; then
-            echo -e "  ${R}Password must contain at least one digit.${N}"
-            continue
-        fi
-        break
-    done
-    if [[ -n "$ADMIN_EMAIL" ]]; then
-        ADMIN_FULL_NAME="$(prompt_optional "ADMIN_FULL_NAME" "Admin full name")"
-        [[ -z "$ADMIN_FULL_NAME" ]] && ADMIN_FULL_NAME="Admin User"
-    fi
+# 6. Optional Facebook SSO (ID + secret together)
+FACEBOOK_APP_ID="$(prompt_optional \
+    "FACEBOOK_APP_ID" "[6/6] Facebook App ID — SSO")"
+FACEBOOK_APP_SECRET=""
+if [[ -n "$FACEBOOK_APP_ID" ]]; then
+    FACEBOOK_APP_SECRET="$(prompt_optional_secret \
+        "FACEBOOK_APP_SECRET" "      Facebook App Secret")"
 fi
+
+# ── Superuser account ────────────────────────────────────────
+echo ""
+echo -e "  ${B}Superuser Account${N}"
+echo ""
+
+# Defaults
+_DEFAULT_ADMIN_EMAIL="admin@demo.local"
+_DEFAULT_ADMIN_PASS="Admin123!"
+_DEFAULT_ADMIN_NAME="Admin User"
+
+if [[ $NON_INTERACTIVE -eq 1 ]]; then
+    # Non-interactive: use env vars or defaults
+    ADMIN_EMAIL="${ADMIN_EMAIL:-$_DEFAULT_ADMIN_EMAIL}"
+    ADMIN_PASSWORD="${ADMIN_PASSWORD:-$_DEFAULT_ADMIN_PASS}"
+    ADMIN_FULL_NAME="${ADMIN_FULL_NAME:-$_DEFAULT_ADMIN_NAME}"
+    info "Admin: $ADMIN_EMAIL (non-interactive defaults)"
+else
+    echo -e "  ${C}[1]${N} Use defaults" \
+        "(${_DEFAULT_ADMIN_EMAIL} / ${_DEFAULT_ADMIN_PASS})"
+    echo -e "  ${C}[2]${N} Custom email and password"
+    printf "  Choose [1]: " >&2
+    read -r _admin_choice
+    _admin_choice="${_admin_choice:-1}"
+
+    if [[ "$_admin_choice" == "2" ]]; then
+        # Custom admin
+        echo ""
+        echo -e "  Password rules:" \
+            "min 8 chars, at least 1 digit" >&2
+        ADMIN_EMAIL="$(prompt_required \
+            "ADMIN_EMAIL" "  Admin email")"
+        while true; do
+            ADMIN_PASSWORD="$(prompt_secret \
+                "ADMIN_PASSWORD" "  Admin password")"
+            if [[ ${#ADMIN_PASSWORD} -lt 8 ]]; then
+                echo -e \
+                    "  ${R}Must be 8+ characters.${N}" >&2
+                continue
+            fi
+            if ! [[ "$ADMIN_PASSWORD" =~ [0-9] ]]; then
+                echo -e \
+                    "  ${R}Must contain a digit.${N}" >&2
+                continue
+            fi
+            break
+        done
+        ADMIN_FULL_NAME="$(prompt_optional \
+            "ADMIN_FULL_NAME" "  Admin full name")"
+        [[ -z "$ADMIN_FULL_NAME" ]] \
+            && ADMIN_FULL_NAME="$_DEFAULT_ADMIN_NAME"
+    else
+        ADMIN_EMAIL="$_DEFAULT_ADMIN_EMAIL"
+        ADMIN_PASSWORD="$_DEFAULT_ADMIN_PASS"
+        ADMIN_FULL_NAME="$_DEFAULT_ADMIN_NAME"
+    fi
+    ok "Admin: $ADMIN_EMAIL"
+fi
+done_step "STEP_09"
+fi  # end step 9 skip-check
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 10: Generate config files
 # ══════════════════════════════════════════════════════════════════════════════
-step "10/12" "Generating config files"
+step "10/12" "Generating config files" "STEP_10"
 
-# ── External env directory ────────────────────────────────────────────────────
-# Secrets live outside the repo so git checkout / merge never overwrites them.
-# The project files (backend/.env, frontend/.env.local) are symlinks.
+# Always set path variables (needed by later steps and repair)
 ENV_HOME="$HOME/.ai-agent-ui"
 mkdir -p "$ENV_HOME"
 
@@ -477,6 +729,7 @@ FRONTEND_ENV_REAL="$ENV_HOME/frontend.env.local"
 BACKEND_ENV_LINK="$SCRIPT_DIR/backend/.env"
 FRONTEND_ENV_LINK="$SCRIPT_DIR/frontend/.env.local"
 
+if [[ $_STEP_SKIPPED -eq 0 ]]; then
 # ── backend/.env ──────────────────────────────────────────────────────────────
 
 _write_backend_env() {
@@ -515,6 +768,19 @@ OAUTH_REDIRECT_URI=http://localhost:3000/auth/oauth/callback
 # Token deny-list + OAuth state store. Empty = in-memory fallback.
 REDIS_URL=redis://localhost:6379/0
 
+# ── Data Retention ────────────────────────────────────────────────────
+# Days to keep data (0 = keep forever). Dry-run by default.
+RETENTION_ENABLED=False
+RETENTION_DRY_RUN=True
+RETENTION_LLM_USAGE_DAYS=90
+RETENTION_ANALYSIS_SUMMARY_DAYS=365
+RETENTION_FORECAST_RUNS_DAYS=180
+RETENTION_COMPANY_INFO_DAYS=365
+
+# ── WebSocket ────────────────────────────────────────────────────────
+WS_AUTH_TIMEOUT_SECONDS=10
+WS_PING_INTERVAL_SECONDS=30
+
 # ── Logging / Runtime ─────────────────────────────────────────────────
 LOG_LEVEL=INFO
 LOG_TO_FILE=True
@@ -537,12 +803,17 @@ fi
 # Write master file if it doesn't exist (or overwrite if requested)
 if [[ -f "$BACKEND_ENV_REAL" ]]; then
     if [[ $NON_INTERACTIVE -eq 1 ]]; then
-        info "~/.ai-agent-ui/backend.env exists — overwriting (non-interactive)"
+        info "backend.env exists — overwriting (non-interactive)"
         _write_backend_env
     else
-        printf "  ~/.ai-agent-ui/backend.env already exists. Overwrite? [y/N]: "
-        read -r OVERWRITE
-        if [[ "$OVERWRITE" =~ ^[Yy] ]]; then
+        echo ""
+        echo "  ~/.ai-agent-ui/backend.env already exists."
+        echo -e "  ${C}[1]${N} Keep existing"
+        echo -e "  ${C}[2]${N} Overwrite with new values"
+        printf "  Choose [1]: " >&2
+        read -r _env_choice
+        _env_choice="${_env_choice:-1}"
+        if [[ "$_env_choice" == "2" ]]; then
             _write_backend_env
         else
             ok "~/.ai-agent-ui/backend.env kept unchanged"
@@ -552,19 +823,29 @@ else
     _write_backend_env
 fi
 
-# Create symlink: backend/.env → ~/.ai-agent-ui/backend.env
+# Create symlink (or copy): backend/.env → ~/.ai-agent-ui/backend.env
+# Clean broken/circular symlinks before checking
+_clean_symlink "$BACKEND_ENV_LINK"
 if [[ -L "$BACKEND_ENV_LINK" ]]; then
     LINK_TARGET="$(readlink "$BACKEND_ENV_LINK")"
     if [[ "$LINK_TARGET" == "$BACKEND_ENV_REAL" ]]; then
         ok "backend/.env symlink OK"
     else
         rm "$BACKEND_ENV_LINK"
-        ln -s "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
-        ok "backend/.env symlink updated"
+        _try_symlink "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
+        ok "backend/.env link updated"
     fi
+elif [[ -f "$BACKEND_ENV_LINK" ]]; then
+    # A regular file exists (previous copy-fallback) — refresh it
+    cp -f "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
+    ok "backend/.env copy refreshed"
 else
-    ln -s "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
-    ok "backend/.env → ~/.ai-agent-ui/backend.env (symlink)"
+    _try_symlink "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
+    if [[ -L "$BACKEND_ENV_LINK" ]]; then
+        ok "backend/.env → ~/.ai-agent-ui/backend.env (symlink)"
+    else
+        ok "backend/.env → ~/.ai-agent-ui/backend.env (copy)"
+    fi
 fi
 
 # ── frontend/.env.local ──────────────────────────────────────────────────────
@@ -597,19 +878,28 @@ else
     ok "~/.ai-agent-ui/frontend.env.local already exists"
 fi
 
-# Create symlink: frontend/.env.local → ~/.ai-agent-ui/frontend.env.local
+# Create symlink (or copy): frontend/.env.local → ~/.ai-agent-ui/frontend.env.local
+# Clean broken/circular symlinks before checking
+_clean_symlink "$FRONTEND_ENV_LINK"
 if [[ -L "$FRONTEND_ENV_LINK" ]]; then
     LINK_TARGET="$(readlink "$FRONTEND_ENV_LINK")"
     if [[ "$LINK_TARGET" == "$FRONTEND_ENV_REAL" ]]; then
         ok "frontend/.env.local symlink OK"
     else
         rm "$FRONTEND_ENV_LINK"
-        ln -s "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
-        ok "frontend/.env.local symlink updated"
+        _try_symlink "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
+        ok "frontend/.env.local link updated"
     fi
+elif [[ -f "$FRONTEND_ENV_LINK" ]]; then
+    cp -f "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
+    ok "frontend/.env.local copy refreshed"
 else
-    ln -s "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
-    ok "frontend/.env.local → ~/.ai-agent-ui/frontend.env.local (symlink)"
+    _try_symlink "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
+    if [[ -L "$FRONTEND_ENV_LINK" ]]; then
+        ok "frontend/.env.local → ~/.ai-agent-ui/frontend.env.local (symlink)"
+    else
+        ok "frontend/.env.local → ~/.ai-agent-ui/frontend.env.local (copy)"
+    fi
 fi
 
 # ── .pyiceberg.yaml ──────────────────────────────────────────────────────────
@@ -627,12 +917,15 @@ catalog:
 ICEEOF
     ok ".pyiceberg.yaml created (warehouse: ${HOME}/.ai-agent-ui/data/iceberg/warehouse)"
 fi
+done_step "STEP_10"
+fi  # end step 10 skip-check
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 11: Install and configure Redis
 # ══════════════════════════════════════════════════════════════════════════════
-step "11/12" "Installing Redis (token store backend)"
+step "11/12" "Installing Redis (token store backend)" "STEP_11"
 
+if [[ $_STEP_SKIPPED -eq 0 ]]; then
 REDIS_INSTALLED=0
 
 if command -v redis-server &>/dev/null; then
@@ -669,8 +962,7 @@ if [[ $REDIS_INSTALLED -eq 1 ]]; then
         if [[ "$OS" == "macos" ]]; then
             brew services start redis 2>/dev/null
         else
-            sudo systemctl enable redis-server 2>/dev/null || true
-            sudo systemctl start redis-server 2>/dev/null || true
+            _start_redis_service
         fi
         # Wait up to 5 seconds for Redis to accept connections
         _attempt=0
@@ -693,25 +985,30 @@ if [[ $REDIS_INSTALLED -eq 1 ]]; then
         info "Enabling AOF persistence for token deny-list durability…"
         redis-cli config set appendonly yes &>/dev/null
         redis-cli config set appendfsync everysec &>/dev/null
-        redis-cli config rewrite &>/dev/null
+        # config rewrite fails if Redis was started without a config file
+        # (common on WSL2 with direct daemonize). This is non-fatal.
+        redis-cli config rewrite &>/dev/null || true
         ok "AOF enabled (appendfsync=everysec) — deny-list survives restarts"
     else
         ok "AOF persistence already enabled"
     fi
 fi
+done_step "STEP_11"
+fi  # end step 11 skip-check
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 12: Initialise Iceberg + seed admin + install hooks
 # ══════════════════════════════════════════════════════════════════════════════
-step "12/12" "Initialising database, git hooks, and running verification"
+step "12/12" "Initialising database, git hooks, and running verification" "STEP_12"
 
-# Export env vars so init scripts can find them
-export JWT_SECRET_KEY
+# Always export env vars (may have been sourced from existing env)
+export JWT_SECRET_KEY="${JWT_SECRET_KEY:-}"
 export ADMIN_EMAIL="${ADMIN_EMAIL:-}"
 export ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 export ADMIN_FULL_NAME="${ADMIN_FULL_NAME:-Admin User}"
-export ANTHROPIC_API_KEY
+export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 
+if [[ $_STEP_SKIPPED -eq 0 ]]; then
 # ── Iceberg tables ────────────────────────────────────────────────────────────
 info "Creating auth Iceberg tables..."
 if (cd "$SCRIPT_DIR" && "$VENV_PYTHON" auth/create_tables.py 2>&1); then
@@ -754,15 +1051,34 @@ else
 fi
 
 # ── Seed demo data ────────────────────────────────────────────────────────────
-if [[ "${SKIP_SEED:-}" != "1" ]]; then
-    info "Seeding demo data (5 tickers + 2 users)..."
-    if (cd "$SCRIPT_DIR" && "$VENV_PYTHON" scripts/seed_demo_data.py 2>&1); then
-        ok "Demo data seeded (admin@demo.local / Admin123!, test@demo.local / Test1234!)"
-    else
-        warn "scripts/seed_demo_data.py had issues (data may already exist)"
-    fi
-else
+if [[ "${SKIP_SEED:-}" == "1" ]]; then
     info "SKIP_SEED=1 — skipping demo data seed"
+else
+    _do_seed=1
+    # Check if catalog already has data (re-run scenario)
+    if [[ -f "$HOME/.ai-agent-ui/data/iceberg/catalog.db" ]] \
+       && [[ $NON_INTERACTIVE -eq 0 ]]; then
+        echo ""
+        echo "  Demo data may already exist."
+        echo -e "  ${C}[1]${N} Skip (keep existing data)"
+        echo -e "  ${C}[2]${N} Re-seed (overwrite)"
+        printf "  Choose [1]: " >&2
+        read -r _seed_choice
+        _seed_choice="${_seed_choice:-1}"
+        [[ "$_seed_choice" != "2" ]] && _do_seed=0
+    fi
+    if [[ $_do_seed -eq 1 ]]; then
+        info "Seeding demo data (5 tickers + 2 users)..."
+        if (cd "$SCRIPT_DIR" \
+            && "$VENV_PYTHON" scripts/seed_demo_data.py 2>&1)
+        then
+            ok "Demo data seeded"
+        else
+            warn "seed_demo_data.py had issues (may exist)"
+        fi
+    else
+        ok "Keeping existing demo data"
+    fi
 fi
 
 # ── Git hooks ─────────────────────────────────────────────────────────────────
@@ -777,8 +1093,10 @@ if [[ -d "$HOOKS_DIR" ]]; then
 else
     warn ".git/hooks directory not found — are you in a git repository?"
 fi
+done_step "STEP_12"
+fi  # end step 12 skip-check
 
-# ── Verification ──────────────────────────────────────────────────────────────
+# ── Verification (always runs) ────────────────────────────────────────────────
 echo ""
 echo -e "${B}Verification:${N}"
 echo "────────────────────────────────────────────────────────────────"
@@ -803,9 +1121,11 @@ _check "Key packages (fastapi)" "'$VENV_PYTHON' -c 'import fastapi'"
 _check "Key packages (langchain)" "'$VENV_PYTHON' -c 'import langchain'"
 _check "Key packages (pyiceberg)" "'$VENV_PYTHON' -c 'import pyiceberg'"
 _check "Key packages (dash)" "'$VENV_PYTHON' -c 'import dash'"
+_check "Key packages (slowapi)" "'$VENV_PYTHON' -c 'import slowapi'"
 _check "Frontend node_modules" "[[ -d '$FRONTEND_DIR/node_modules' ]]"
-_check "backend/.env (symlink)" "[[ -L '$BACKEND_ENV_LINK' ]] && [[ -f '$BACKEND_ENV_REAL' ]]"
-_check "frontend/.env.local (symlink)" "[[ -L '$FRONTEND_ENV_LINK' ]] && [[ -f '$FRONTEND_ENV_REAL' ]]"
+# Symlink OR copy — both are valid (copy is the WSL2 fallback)
+_check "backend/.env (linked)" "([[ -L '$BACKEND_ENV_LINK' ]] || [[ -f '$BACKEND_ENV_LINK' ]]) && [[ -f '$BACKEND_ENV_REAL' ]]"
+_check "frontend/.env.local (linked)" "([[ -L '$FRONTEND_ENV_LINK' ]] || [[ -f '$FRONTEND_ENV_LINK' ]]) && [[ -f '$FRONTEND_ENV_REAL' ]]"
 _check ".pyiceberg.yaml" "[[ -f '$PYICEBERG_YAML' ]]"
 _check "Iceberg catalog" "[[ -f '$HOME/.ai-agent-ui/data/iceberg/catalog.db' ]]"
 _check "Git pre-commit hook" "[[ -x '$HOOKS_DIR/pre-commit' ]]"
@@ -823,6 +1143,11 @@ else
     echo -e "${Y}  $PASS/$TOTAL checks passed. Review any failures above.${N}"
 fi
 echo "════════════════════════════════════════════════════════════════════"
+echo ""
+echo -e "  ${B}Admin login:${N}"
+echo -e "    Email:    ${C}${ADMIN_EMAIL}${N}"
+echo -e "    Password: ${C}${ADMIN_PASSWORD}${N}"
+echo -e "    ${Y}Change your password on first login.${N}"
 echo ""
 echo -e "  ${B}Next steps:${N}"
 echo ""
@@ -849,3 +1174,12 @@ echo "    ./run.sh start     Start all services"
 echo "    ./run.sh stop      Stop all services"
 echo "    ./run.sh status    Check service status"
 echo ""
+if [[ $IS_WSL -eq 1 ]]; then
+    echo -e "  ${B}WSL2 notes:${N}"
+    echo "    - If symlinks failed, env files were copied instead."
+    echo "      After editing ~/.ai-agent-ui/backend.env, re-run setup.sh"
+    echo "      or manually copy to backend/.env."
+    echo "    - Access services from Windows browser at http://localhost:<port>"
+    echo "    - To enable symlinks: Settings > Privacy > Developer Mode > ON"
+    echo ""
+fi

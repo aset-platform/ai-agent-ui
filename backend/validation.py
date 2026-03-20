@@ -4,6 +4,10 @@ Provides reusable validators for ticker symbols, search queries,
 and chat messages at the system boundary.  Each function returns
 ``None`` on success or a short error string on failure.
 
+.. note::
+    Uses ``from __future__ import annotations`` for Python 3.9
+    compatibility with PEP 604 union syntax.
+
 Example::
 
     from validation import validate_ticker
@@ -13,6 +17,8 @@ Example::
         return f"Error: {err}"
     ticker = raw.upper().strip()
 """
+
+from __future__ import annotations
 
 import re
 
