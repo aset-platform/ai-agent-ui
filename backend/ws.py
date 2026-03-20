@@ -27,6 +27,8 @@ Functions
 - :func:`register_ws_routes`
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging

@@ -185,30 +185,21 @@ def analysis_layout() -> html.Div:
             ),
             # ── Summary stats ─────────────────────────────────────
             html.Div(id="analysis-stats-row", className="mt-4"),
-            # ── Hidden stores ─────────────────────────────────────
-            dcc.Store(id="analysis-refresh-store", data=0),
-            # Background refresh poller (2 s)
-            dcc.Interval(
-                id="analysis-refresh-poll",
-                interval=2000,
-                n_intervals=0,
-            ),
         ]
     )
 
 
 def analysis_tabs_layout() -> html.Div:
-    """Build the unified Analysis / Forecast / Compare tabbed page layout.
+    """Build the unified Analysis / Forecast / Compare tabbed page.
 
-    Provides three tabs — Price Analysis, Forecast, and Compare Stocks — all
-    accessible from the single ``/analysis`` route.
+    Uses deferred rendering: tab content is rendered lazily via a
+    callback on ``analysis-page-tabs.active_tab``.  Once rendered,
+    tab DOM is cached in ``dcc.Store`` to avoid re-fetch on
+    tab re-visit.
 
     Returns:
-        :class:`~dash.html.Div` representing the full tabbed analysis page.
+        :class:`~dash.html.Div` with tabs and lazy content area.
     """
-    from dashboard.layouts.compare import compare_layout  # noqa: PLC0415
-    from dashboard.layouts.forecast import forecast_layout  # noqa: PLC0415
-
     return html.Div(
         [
             html.Div(
@@ -219,21 +210,43 @@ def analysis_tabs_layout() -> html.Div:
                         dbc.Tab(
                             label="Price Analysis",
                             tab_id="analysis-tab",
-                            children=[analysis_layout()],
                         ),
                         dbc.Tab(
                             label="Forecast",
                             tab_id="forecast-tab",
-                            children=[forecast_layout()],
                         ),
                         dbc.Tab(
                             label="Compare Stocks",
                             tab_id="compare-tab",
-                            children=[compare_layout()],
                         ),
                     ],
                 ),
                 **{"data-testid": "analysis-tabs"},
+            ),
+            # Lazy-loaded tab content container
+            dcc.Loading(
+                id="loading-tab-content",
+                type="circle",
+                color="#4f46e5",
+                children=html.Div(
+                    id="analysis-tab-content",
+                ),
+            ),
+            # Track which tabs have been loaded
+            dcc.Store(
+                id="loaded-tabs-store",
+                data=[],
+            ),
+            # Shared stores — live outside tab content
+            # so they persist across tab switches.
+            dcc.Store(
+                id="analysis-refresh-store",
+                data=0,
+            ),
+            dcc.Interval(
+                id="analysis-refresh-poll",
+                interval=2000,
+                n_intervals=0,
             ),
         ]
     )

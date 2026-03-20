@@ -1,26 +1,35 @@
 # Agent Initialization Pattern
 
-## Critical: BaseAgent.__init__ calls _setup() → _build_llm()
+## BaseAgent.__init__ calls _setup() → _build_llm()
 
 Any attributes used in `_build_llm()` MUST exist before the constructor runs.
 
-### Problem
-Factory functions (`create_general_agent`, `create_stock_agent`) set `agent.token_budget` and `agent.compressor` AFTER construction. But `__init__` calls `_setup()` which calls `_build_llm()` which reads those attrs.
-
-### Solution
-`BaseAgent.__init__` sets defaults via `hasattr` check before calling `_setup()`:
+### Constructor Flow
 ```python
-if not hasattr(self, "token_budget"):
-    from token_budget import TokenBudget
-    self.token_budget = TokenBudget()
-if not hasattr(self, "compressor"):
-    from message_compressor import MessageCompressor
-    self.compressor = MessageCompressor()
+BaseAgent.__init__(config, tool_registry, token_budget, compressor, obs_collector)
+  → sets self.token_budget, self.compressor (with defaults)
+  → calls _setup()
+    → _build_llm() → FallbackLLM (N-tier Groq cascade + Anthropic)
+    → bind_tools(tools)
+    → _build_synthesis_llm() → FallbackLLM (synthesis cascade)
 ```
 
-Factory functions then override with shared instances after construction.
+### LLM Builders in BaseAgent (Mar 19, 2026)
+`_build_llm()` and `_build_synthesis_llm()` are now in BaseAgent
+(extracted from identical copies in GeneralAgent + StockAgent).
 
-### FallbackLLM Interface Change
-`invoke()` now accepts `iteration=` kwarg (passed from loop.py/stream.py).
-Old: `invoke(messages, **kwargs)`
-New: `invoke(messages, *, iteration=1, **kwargs)`
+- `GeneralAgent` — inherits both, no override needed (`pass`)
+- `StockAgent` — inherits both, only overrides `format_response()`
+
+### FallbackLLM Interface
+`invoke()` accepts `iteration=` kwarg (passed from loop.py/stream.py).
+```python
+invoke(messages, *, iteration=1, **kwargs)
+```
+
+### Test Mode
+When `AI_AGENT_UI_ENV=test`:
+- Uses `test_model_tiers` (free Groq only)
+- No Anthropic fallback (`anthropic_model=None`)
+- No synthesis LLM (returns `None`)
+- `cascade_profile="test"`

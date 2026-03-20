@@ -12,6 +12,33 @@
 | Dashboard can't read `.env` | `_load_dotenv()` not called | Dashboard is separate process |
 | JWT auth fails across services | Missing env propagation | `main.py` copies settings to `os.environ` |
 | Tests fail with `AttributeError` | Patching lazy import on wrong module | Patch at SOURCE module |
+| isort/black corrupt packages | Recurse into virtualenv site-packages | Exclusions in `pyproject.toml` (`extend-exclude`, `skip_glob`) |
+| `CommitFailedException` in logs | Concurrent Iceberg writes (OCC) | `_retry_commit()` handles this; check max_workers |
+
+## Iceberg Migration: Avro Manifest Absolute Paths
+
+When migrating Iceberg warehouse to a new directory, JSON metadata
+and SQLite catalog can be rewritten with string replace. But **avro
+manifest files store absolute paths in binary format** — they cannot
+be rewritten.
+
+**Symptom**: After moving `data/iceberg/` and cleaning the old dir,
+dashboard shows "No stocks saved yet" with `FileNotFoundError` in logs.
+
+**Fix**: Create a symlink from old warehouse path to new location:
+```bash
+ln -s ~/.ai-agent-ui/data/iceberg data/iceberg
+```
+Old snapshots naturally expire as new writes create fresh manifests.
+
+## Plotly & Dash Component Gotchas
+
+- **Plotly annotations need `captureevents=True`** for `hovertext` to work
+- **`dbc.Tooltip` silently fails** on duplicate DOM IDs — make IDs column-key-specific
+- **Plotly minimum chart height** is 10px (not 1px) — causes ValueError
+- **Empty chart**: Use full-size figure with annotation, not hidden figure
+  (avoids Plotly.js rendering state issues)
+- **Unicode math symbols** (≤ ≥) are safer than `<` `>` in tooltip text
 
 ## Debug Logging
 

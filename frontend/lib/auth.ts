@@ -22,7 +22,7 @@ export {
   storeOAuthSession,
 } from "@/lib/oauth";
 
-import { BACKEND_URL } from "@/lib/config";
+import { API_URL } from "@/lib/config";
 
 const ACCESS_KEY = "auth_access_token";
 
@@ -75,6 +75,7 @@ interface JwtPayload {
   role?: string;
   exp?: number;
   type?: string;
+  jti?: string;
 }
 
 /**
@@ -126,6 +127,16 @@ export function getUserIdFromToken(): string | null {
   return decodePayload(token)?.sub ?? null;
 }
 
+/**
+ * Extract the JTI (session ID) from the stored access token.
+ * Returns null if no valid token is present.
+ */
+export function getSessionIdFromToken(): string | null {
+  const token = getAccessToken();
+  if (!token) return null;
+  return decodePayload(token)?.jti ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Token refresh
 // ---------------------------------------------------------------------------
@@ -144,7 +155,7 @@ export async function refreshAccessToken(): Promise<string | null> {
 
   try {
     // The refresh token is sent automatically via HttpOnly cookie.
-    const res = await fetch(`${BACKEND_URL}/auth/refresh`, {
+    const res = await fetch(`${API_URL}/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",

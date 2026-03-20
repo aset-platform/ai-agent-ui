@@ -8,7 +8,7 @@
 
 import { useState } from "react";
 import { apiFetch } from "@/lib/apiFetch";
-import { BACKEND_URL } from "@/lib/config";
+import { API_URL } from "@/lib/config";
 
 interface UseChangePasswordResult {
   isOpen: boolean;
@@ -61,7 +61,7 @@ export function useChangePassword(): UseChangePasswordResult {
     setError("");
     try {
       // Step 1: request a reset token
-      const reqRes = await apiFetch(`${BACKEND_URL}/auth/password-reset/request`, {
+      const reqRes = await apiFetch(`${API_URL}/auth/password-reset/request`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
@@ -78,7 +78,7 @@ export function useChangePassword(): UseChangePasswordResult {
       }
 
       // Step 2: confirm with new password
-      const confRes = await apiFetch(`${BACKEND_URL}/auth/password-reset/confirm`, {
+      const confRes = await apiFetch(`${API_URL}/auth/password-reset/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reset_token, new_password: newPassword }),

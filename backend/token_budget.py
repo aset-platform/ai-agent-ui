@@ -16,6 +16,8 @@ Typical usage::
         budget.record("my-model", est)
 """
 
+from __future__ import annotations
+
 import logging
 import threading
 import time

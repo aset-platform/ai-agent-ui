@@ -1,6 +1,6 @@
 # AI Agent UI
 
-A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js. The backend runs an LLM in a tool-calling loop; the frontend is a single-page app that embeds the Docs and Dashboard in-context alongside the chat interface. JWT authentication and role-based access control protect all three surfaces.
+A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js. The backend runs an LLM in a tool-calling loop; the frontend is a single-page app with portfolio management, stock analysis (TradingView charts), and a chat side panel. JWT authentication and role-based access control protect all surfaces. Redis provides caching and session management.
 
 ---
 
@@ -8,9 +8,9 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 
 | Service | Stack | Port | Purpose |
 |---------|-------|------|---------|
-| **Frontend** | Next.js 16 + React 19 + Tailwind 4 | `3000` | Chat UI + SPA shell (login, chat, docs, dashboard, admin) |
-| **Backend** | FastAPI + LangChain + N-tier Groq/Anthropic | `8181` | Agentic loop + REST/WebSocket API + Auth endpoints |
-| **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard (Home / Analysis / Forecast / Compare / Marketplace / 7 Insights tabs) + Admin UI |
+| **Frontend** | Next.js 16 + React 19 + Tailwind 4 + lightweight-charts v5 | `3000` | Portfolio dashboard, TradingView charts, collapsible sidebar, chat side panel |
+| **Backend** | FastAPI + LangChain + N-tier Groq/Anthropic | `8181` | Agentic loop + REST/WebSocket API + Auth + Redis cache |
+| **Redis** | Redis 7 | `6379` | Token deny-list, user preferences, API cache (write-through) |
 | **Docs** | MkDocs Material | `8000` | Project documentation |
 
 ---
@@ -24,7 +24,27 @@ cd ai-agent-ui
 ./run.sh start      # start all services
 ```
 
-`setup.sh` handles everything: Python 3.12 virtualenv, pip install, npm ci, directory creation, config files, `.pyiceberg.yaml`, Iceberg database init, admin seeding, and git hooks. Safe to re-run. For CI/Docker: `ANTHROPIC_API_KEY=sk-ant-... ./setup.sh --non-interactive`
+`setup.sh` handles everything: Python 3.12 virtualenv, pip install, npm ci, directory creation, config files, `.pyiceberg.yaml`, Iceberg database init, admin seeding, and git hooks. Safe to re-run — completed steps are skipped automatically.
+
+| Flag | Purpose |
+|------|---------|
+| `--non-interactive` | Read secrets from env vars (CI/Docker) |
+| `--force` | Reset state and re-run everything from scratch |
+| `--repair` | Fix only symlinks, env files, and git hooks |
+
+For CI/Docker: `ANTHROPIC_API_KEY=sk-ant-... ./setup.sh --non-interactive`
+
+### Platform-Specific Setup Guides
+
+Detailed step-by-step guides with prerequisites for each OS:
+
+| Platform | Guide | Key prerequisites |
+|----------|-------|-------------------|
+| **macOS** | [macOS Guide](http://127.0.0.1:8000/setup/macos/) | Xcode CLT, Homebrew, pyenv, Node.js, Redis |
+| **Linux** (Ubuntu/Debian) | [Linux Guide](http://127.0.0.1:8000/setup/linux/) | apt packages, pyenv, Node.js (nvm), Redis |
+| **Windows 11** | [Windows Guide](http://127.0.0.1:8000/setup/windows/) | WSL2 + Ubuntu, then follow Linux steps |
+
+> **Windows users**: This project runs inside WSL2 (Windows Subsystem for Linux). The Windows guide walks you through the complete WSL2 setup, then the Linux installation inside it. Services are accessible from your Windows browser at `http://localhost:<port>`.
 
 ### AI Tooling Setup (for developers using Claude Code + Serena)
 
@@ -34,7 +54,7 @@ cd ai-agent-ui
 
 This script checks prerequisites, validates shared Serena memories, creates local memory directories, and installs git hooks. Run after `setup.sh`.
 
-**Env files are stored externally** at `~/.ai-agent-ui/` so branch checkouts and merges never overwrite your secrets. `backend/.env` and `frontend/.env.local` are symlinks to the master copies. Edit the files at `~/.ai-agent-ui/` directly.
+**Env files are stored externally** at `~/.ai-agent-ui/` so branch checkouts and merges never overwrite your secrets. `backend/.env` and `frontend/.env.local` are symlinks (or copies on WSL2) to the master copies. Edit the files at `~/.ai-agent-ui/` directly.
 
 ## Quick Start (Manual)
 
@@ -75,7 +95,7 @@ graph TD
     end
 
     subgraph Backend["Backend — :8181"]
-        API["FastAPI<br/>POST /chat/stream<br/>WS /ws/chat<br/>GET /agents<br/>POST /auth/login<br/>GET /users …"]
+        API["FastAPI<br/>POST /v1/chat/stream<br/>WS /ws/chat<br/>GET /v1/agents<br/>POST /v1/auth/login<br/>GET /v1/admin/tier-health"]
         CS["ChatServer"]
         AR["AgentRegistry"]
         TR["ToolRegistry"]
@@ -170,7 +190,7 @@ sequenceDiagram
     participant T as Tool(s)
 
     U->>FE: sends message
-    FE->>BE: POST /chat/stream {message, history, agent_id}
+    FE->>BE: POST /v1/chat/stream {message, history, agent_id}
     Note over FE,BE: Authorization: Bearer <access_token>
     BE->>LLM: invoke(messages + tools)
 
@@ -253,23 +273,31 @@ graph TD
 
 ## Frontend SPA
 
-The entire UI is one mounted React component. The `view` state switches between chat, docs, dashboard, and admin without unmounting — chat history is always preserved.
+The frontend is a full SPA with a **collapsible sidebar** for navigation and a **native portfolio dashboard** as the post-login landing page. All pages use **TradingView lightweight-charts** (~45 KB) for stock and portfolio visualizations. A **chat side panel** (FAB-triggered, resizable drawer) provides access to the agentic chat from any page.
+
+**Analysis page** — 5 tabs with underline navigation:
+- **Portfolio Analysis**: daily value vs invested (TradingView dual-line + P&L histogram), cash-flow-adjusted metrics
+- **Portfolio Forecast**: weighted Prophet forecast with confidence band, 4 explainable summary cards
+- **Stock Analysis**: multi-pane candlestick chart (OHLC + Volume + RSI + MACD)
+- **Stock Forecast**: Prophet forecast with confidence band per ticker
+- **Compare Stocks**: normalized price comparison (multi-line)
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  ✦ AI Agent  [General | Stock Analysis]  [Sign out]  [🗑]    │ ← header
-│           (breadcrumb label when view ≠ chat)                │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│  view = "chat"            │  view = "docs" / "dashboard"    │
-│  ─────────────────────    │    / "admin"                    │
-│  scrollable messages      │  <iframe src={iframeUrl ??      │
-│  + StatusBadge (stream)   │    baseServiceUrl}?token=jwt>   │
-│  + input textarea         │                                  │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-                                              [⊞] ← FAB (bottom-right)
-                                         Chat / Docs / Dashboard / Admin
+┌────┬───────────────────────────────────────────────────────────┐
+│ ◀  │  ✦ AI Agent  Dashboard › Analysis      [Sign out]  [💬]  │ ← header + breadcrumb
+│    ├───────────────────────────────────────────────────────────┤
+│ S  │                                                           │
+│ i  │  /dashboard      → Portfolio dashboard (hero, widgets)    │
+│ d  │  /analytics/*    → Analysis, Insights, Link Stock         │
+│ e  │  /admin          → Users, Audit Log, LLM Observability    │
+│ b  │  /docs           → MkDocs (:8000)                         │
+│ a  │                                                           │
+│ r  │                              ┌─────────────────┐          │
+│    │                              │ Chat Side Panel │ ← FAB   │
+│    │                              │ (resizable)     │          │
+│ ▼  │                              └─────────────────┘          │
+└────┴───────────────────────────────────────────────────────────┘
+  ↑ collapsible sidebar
 ```
 
 ---
@@ -319,14 +347,16 @@ ai-agent-ui/
 │   │   ├── NavigationMenu.tsx # FAB + popup nav (RBAC-filtered)
 │   │   ├── IFrameView.tsx    # Dashboard/Docs iframe wrapper
 │   │   ├── EditProfileModal.tsx
-│   │   └── ChangePasswordModal.tsx
+│   │   ├── ChangePasswordModal.tsx
+│   │   └── SessionManagementModal.tsx
 │   ├── hooks/                # Custom React hooks
 │   │   ├── useAuthGuard.ts   # Redirect to /login if no valid token
 │   │   ├── useChatHistory.ts # Per-agent history + debounced localStorage
 │   │   ├── useWebSocket.ts   # WS connection state machine + reconnect
 │   │   ├── useSendMessage.ts # WS-preferred streaming + HTTP fallback
 │   │   ├── useEditProfile.ts # PATCH /auth/me + avatar upload
-│   │   └── useChangePassword.ts
+│   │   ├── useChangePassword.ts
+│   │   └── useSessionManagement.ts  # List + revoke active sessions
 │   ├── lib/
 │   │   ├── auth.ts           # JWT token helpers
 │   │   ├── apiFetch.ts       # Authenticated fetch wrapper (auto-refresh)
@@ -343,6 +373,8 @@ ai-agent-ui/
 │   ├── llm_fallback.py       # FallbackLLM — N-tier Groq cascade + Anthropic fallback
 │   ├── token_budget.py       # Sliding-window TPM/RPM budget tracker
 │   ├── message_compressor.py # 3-stage message compression
+│   ├── observability.py      # Thread-safe metrics + tier health monitoring
+│   ├── routes.py             # Route registration (/v1/ prefix) + admin endpoints
 │   ├── ws.py                 # WebSocket /ws/chat endpoint (auth + streaming)
 │   ├── agents/
 │   │   ├── base.py           # BaseAgent ABC
@@ -376,6 +408,7 @@ ai-agent-ui/
 │   │   ├── analysis.py       # Technical analysis chart layout
 │   │   ├── insights_tabs.py  # Screener/Targets/Dividends/Risk/Sectors/Correlation/Quarterly
 │   │   ├── admin.py          # User management + audit log layout
+│   │   ├── observability.py  # LLM tier health + budget + cascade log
 │   │   ├── marketplace.py   # Ticker marketplace — browse & add tickers
 │   │   └── navbar.py         # Global navbar
 │   ├── callbacks/            # Interactive callbacks (package)
@@ -386,6 +419,8 @@ ai-agent-ui/
 │   │   ├── insights_cbs.py   # All Insights tab callbacks
 │   │   ├── admin_cbs.py      # User table callbacks
 │   │   ├── admin_cbs2.py     # Add/Edit/Deactivate user modals
+│   │   ├── observability_cbs.py # LLM metrics fetch + health card rendering
+│   │   ├── auth_utils.py    # JWT validation + _api_call helper
 │   │   ├── marketplace_cbs.py # Marketplace add/remove ticker callbacks
 │   │   ├── iceberg.py        # Iceberg repo singleton + 8 TTL-cached helpers
 │   │   └── utils.py          # Shared utilities (currency, market label)
@@ -394,7 +429,7 @@ ai-agent-ui/
 ├── e2e/                      # Playwright E2E tests
 │   ├── playwright.config.ts  # 6 projects (setup, auth, frontend, dashboard, admin, errors)
 │   ├── pages/                # Page Object Models (10 classes)
-│   ├── tests/                # 14 spec files, 49 tests
+│   ├── tests/                # 14+ spec files, ~91 tests
 │   ├── fixtures/             # Auth token fixtures for Dash
 │   └── utils/                # Selectors, wait helpers, API helpers
 │
@@ -420,6 +455,7 @@ ai-agent-ui/
 | Next.js | 16 | Framework |
 | React | 19 | UI |
 | Tailwind CSS | 4 | Styling |
+| react-plotly.js | 2 | Interactive charts (candlestick, heatmap, line) |
 | react-markdown + remark-gfm | 10 / 4 | Markdown rendering |
 | TypeScript | 5 | Type safety |
 
@@ -500,6 +536,9 @@ All backend variables live in `backend/.env` (gitignored).
 | `REFRESH_TOKEN_EXPIRE_DAYS` | No | `7` | JWT refresh token TTL |
 | `LOG_LEVEL` | No | `DEBUG` | Minimum log severity |
 | `LOG_TO_FILE` | No | `true` | Write logs to `~/.ai-agent-ui/logs/agent.log` |
+| `REDIS_URL` | No | `""` | Redis URL for persistent token store (empty = in-memory) |
+| `WS_AUTH_TIMEOUT_SECONDS` | No | `10` | Seconds to wait for WebSocket auth message |
+| `WS_PING_INTERVAL_SECONDS` | No | `30` | WebSocket keepalive ping interval |
 | `NEXT_PUBLIC_BACKEND_URL` | No | `http://127.0.0.1:8181` | `frontend/.env.local` |
 | `NEXT_PUBLIC_DASHBOARD_URL` | No | `http://127.0.0.1:8050` | `frontend/.env.local` |
 | `NEXT_PUBLIC_WS_URL` | No | *(derived from BACKEND_URL)* | WebSocket URL — `frontend/.env.local` |
@@ -547,12 +586,17 @@ When `REDIS_URL` is empty, the backend uses an in-memory `TokenStore` with TTL-b
 
 ### API Versioning
 
-All core endpoints are dual-mounted at `/` (legacy) and `/v1/`:
+All API endpoints are served exclusively under the `/v1/` prefix. WebSocket and static file mounts remain at root:
 
 ```
-POST /chat/stream   ←→   POST /v1/chat/stream
-GET  /health         ←→   GET  /v1/health
-GET  /agents         ←→   GET  /v1/agents
+POST /v1/chat/stream         # NDJSON streaming
+POST /v1/chat                # Synchronous chat
+GET  /v1/health              # Health check
+GET  /v1/agents              # List agents
+GET  /v1/auth/*              # Auth endpoints
+GET  /v1/admin/tier-health   # LLM tier health (superuser)
+WS   /ws/chat                # WebSocket (not versioned)
+GET  /avatars/*              # Static files (not versioned)
 ```
 
 ### SSO / OAuth2 (Google + Facebook PKCE)
@@ -567,15 +611,32 @@ GET  /agents         ←→   GET  /v1/agents
 
 ---
 
+## Testing
+
+```bash
+# Backend (Python 3.12 — always activate venv first)
+source ~/.ai-agent-ui/venv/bin/activate
+python -m pytest tests/backend/ -v        # ~416 tests
+
+# Frontend (vitest)
+cd frontend && npx vitest run             # 61 tests
+```
+
+| Suite | Tests | Coverage |
+|-------|-------|----------|
+| Backend unit | 416+ | Auth, dashboard, portfolio CRUD, cache, agents, WS, analytics |
+| Frontend unit | 61 | Auth, apiFetch, WebSocket, types, ConfirmDialog, hooks |
+| E2E (Playwright) | 49 | Full user flows across all pages |
+
 ## E2E Testing (Playwright)
 
-The `e2e/` directory contains a Playwright test suite covering all 3 app surfaces (Next.js frontend, Plotly Dash dashboard, FastAPI backend).
+The `e2e/` directory contains a Playwright test suite covering all app surfaces.
 
 ```bash
 cd e2e && npm install               # first time only
 npx playwright install chromium     # first time only
 
-npm test                            # run all 50 tests (headless)
+npm test                            # run all ~91 tests (headless)
 npx playwright test --headed        # watch tests in a visible browser
 npx playwright test --ui            # interactive UI mode (best for exploration)
 npx playwright test --project=frontend-chromium   # frontend only
@@ -591,7 +652,8 @@ npx playwright test --project=dashboard-chromium  # dashboard only
 | Dashboard analysis + forecast | 8 | Tabs, charts, refresh, accuracy |
 | Dashboard marketplace + admin | 6 | Add/remove tickers, user table, RBAC |
 | Error handling | 5 | Network errors, auth expiry, 500s |
-| **Total** | **50** | |
+| Dashboard admin (deep) | 3 | LLM observability tier health, budget, cascade |
+| **Total** | **~91** | |
 
 CI runs automatically on PRs via `.github/workflows/e2e.yml` (chromium-only, caches browsers).
 

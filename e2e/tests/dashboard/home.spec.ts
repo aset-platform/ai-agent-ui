@@ -3,6 +3,7 @@
  */
 
 import { test, expect } from "../../fixtures/auth.fixture";
+import { waitForDashReady } from "../../utils/wait.helper";
 
 import { DashHomePage } from "../../pages/dashboard/home.page";
 
@@ -57,12 +58,12 @@ test.describe("Dashboard home", () => {
     // Click US filter
     await homePage.filterUS.click();
     // Wait for Dash callback to re-render cards
-    await page.waitForTimeout(2_000);
+    await waitForDashReady(page);
     const usCount = await homePage.getCardCount();
 
     // Click India filter
     await homePage.filterIndia.click();
-    await page.waitForTimeout(2_000);
+    await waitForDashReady(page);
     const indiaCount = await homePage.getCardCount();
 
     // At least one filter should have cards

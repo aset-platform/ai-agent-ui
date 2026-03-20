@@ -11,7 +11,7 @@ from urllib.parse import parse_qs
 
 import dash
 import dash_bootstrap_components as dbc
-from dash import Input, Output, State, dcc, html
+from dash import ClientsideFunction, Input, Output, State, dcc, html
 
 from dashboard.callbacks import (
     _admin_forbidden,
@@ -22,7 +22,6 @@ from dashboard.components.error_overlay import (
     error_overlay_container,
 )
 from dashboard.layouts import (
-    NAVBAR,
     admin_users_layout,
     analysis_tabs_layout,
     compare_layout,
@@ -41,8 +40,8 @@ def build_layout(app: dash.Dash) -> None:
     """Attach the root layout and page-routing callback to *app*.
 
     Sets ``app.layout`` to a :class:`~dash.html.Div` containing global stores,
-    the navigation bar, the page-content container, the auto-refresh interval,
-    and the change-password modal.  Registers the ``display_page`` routing
+    the page-content container, the auto-refresh interval, and the
+    change-password modal.  Registers the ``display_page`` routing
     callback.
 
     Args:
@@ -54,11 +53,33 @@ def build_layout(app: dash.Dash) -> None:
             dcc.Store(id="nav-ticker-store", data=None),
             dcc.Store(id="auth-token-store", storage_type="local"),
             dcc.Store(id="user-profile-store", storage_type="session"),
+            dcc.Store(
+                id="theme-store",
+                storage_type="local",
+                data="light",
+            ),
             error_overlay_container(),
-            NAVBAR,
+            # Hidden placeholders for navbar callback targets
+            # (navbar removed — Next.js shell handles nav).
+            html.Span(
+                id="navbar-page-name",
+                style={"display": "none"},
+            ),
+            html.Button(
+                id="theme-toggle-btn",
+                style={"display": "none"},
+            ),
+            html.Div(
+                id="nav-item-insights",
+                style={"display": "none"},
+            ),
+            html.Div(
+                id="nav-item-admin",
+                style={"display": "none"},
+            ),
             html.Div(
                 id="page-content",
-                className="container-fluid px-4 py-3",
+                className="container-fluid px-3 py-2",
                 style={"paddingBottom": "5rem"},
             ),
             dcc.Interval(
@@ -66,8 +87,9 @@ def build_layout(app: dash.Dash) -> None:
                 interval=30 * 60 * 1000,  # Fix #20: 30 min (was 5 min)
                 n_intervals=0,
             ),
-            # Change Password modal — triggered by the NAVBAR change-password
-            # button (admin_cbs2.toggle_change_password_modal).
+            # Change Password modal — triggered by the
+            # change-password button
+            # (admin_cbs2.toggle_change_password_modal).
             dbc.Modal(
                 id="change-password-modal",
                 is_open=False,
@@ -222,3 +244,16 @@ def build_layout(app: dash.Dash) -> None:
                 return _admin_forbidden()
             return admin_users_layout()
         return home_layout()
+
+    # ── Theme toggle (clientside) ───────────────────────────
+    app.clientside_callback(
+        ClientsideFunction(
+            namespace="clientside", function_name="toggleTheme"
+        ),
+        Output("theme-store", "data"),
+        Output("theme-toggle-btn", "children"),
+        Input("theme-toggle-btn", "n_clicks"),
+        State("theme-store", "data"),
+        State("url", "search"),
+        prevent_initial_call=False,
+    )

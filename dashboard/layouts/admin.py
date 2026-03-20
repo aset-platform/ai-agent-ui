@@ -9,6 +9,10 @@ supporting hidden stores.
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
+from dashboard.layouts.observability import (
+    observability_layout,
+)
+
 _PAGE_SIZE_OPTS = [
     {"label": "10 / page", "value": "10"},
     {"label": "25 / page", "value": "25"},
@@ -256,6 +260,14 @@ def admin_users_layout() -> html.Div:
                                     ),
                                 ],
                             ),
+                        ],
+                    ),
+                    # ── Tab 3: LLM Observability ──────
+                    dbc.Tab(
+                        label="LLM Observability",
+                        tab_id="observability-tab",
+                        children=[
+                            observability_layout(),
                         ],
                     ),
                 ],

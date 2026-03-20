@@ -3,6 +3,7 @@
  */
 
 import { test, expect } from "@playwright/test";
+import { waitForDashReady } from "../../utils/wait.helper";
 
 test.describe("Auth error handling", () => {
   test("expired JWT on frontend → redirect to login", async ({
@@ -36,7 +37,7 @@ test.describe("Auth error handling", () => {
     await page.goto(
       `${DASHBOARD}/?token=expired.jwt.token`,
     );
-    await page.waitForTimeout(3_000);
+    await waitForDashReady(page);
 
     // Dash shows an unauthenticated notice
     const unauthNotice = page
@@ -46,5 +47,27 @@ test.describe("Auth error handling", () => {
     await expect(unauthNotice.first()).toBeVisible({
       timeout: 10_000,
     });
+  });
+
+  test("dashboard sign-in button redirects to login", async ({
+    page,
+  }) => {
+    const DASHBOARD =
+      process.env.DASHBOARD_URL || "http://127.0.0.1:8050";
+    await page.goto(
+      `${DASHBOARD}/?token=expired.jwt.token`,
+    );
+    await waitForDashReady(page);
+
+    // Click the "Sign in" button on the auth overlay
+    const signInBtn = page
+      .locator("a, button")
+      .filter({ hasText: /sign in/i })
+      .first();
+    await expect(signInBtn).toBeVisible({ timeout: 10_000 });
+    await signInBtn.click();
+
+    // Should navigate to the login page
+    await page.waitForURL(/\/login/, { timeout: 15_000 });
   });
 });

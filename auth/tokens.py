@@ -16,6 +16,8 @@ Functions
 - :func:`is_token_revoked`
 """
 
+from __future__ import annotations
+
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -71,13 +73,16 @@ def create_access_token(
     }
     token = jwt.encode(payload, secret_key, algorithm=_ALGORITHM)
     _logger.debug(
-        "Access token created for user_id=%s", user_id,
+        "Access token created for user_id=%s",
+        user_id,
     )
     return token
 
 
 def create_refresh_token(
-    user_id: str, secret_key: str, expire_days: int,
+    user_id: str,
+    secret_key: str,
+    expire_days: int,
 ) -> str:
     """Create a signed JWT refresh token.
 
@@ -104,7 +109,8 @@ def create_refresh_token(
     }
     token = jwt.encode(payload, secret_key, algorithm=_ALGORITHM)
     _logger.debug(
-        "Refresh token created for user_id=%s", user_id,
+        "Refresh token created for user_id=%s",
+        user_id,
     )
     return token
 
@@ -133,7 +139,9 @@ def decode_token(
     """
     try:
         payload = jwt.decode(
-            token, secret_key, algorithms=[_ALGORITHM],
+            token,
+            secret_key,
+            algorithms=[_ALGORITHM],
         )
     except JWTError as exc:
         _logger.warning("JWT decode failed: %s", exc)
@@ -181,19 +189,21 @@ def revoke_refresh_token(
     """
     try:
         payload = jwt.decode(
-            token, secret_key, algorithms=[_ALGORITHM],
+            token,
+            secret_key,
+            algorithms=[_ALGORITHM],
         )
         jti = payload.get("jti", "")
         if jti:
             ttl = refresh_expire_days * 86400
             store.add(jti, ttl)
             _logger.info(
-                "Refresh token revoked (jti=%s).", jti,
+                "Refresh token revoked (jti=%s).",
+                jti,
             )
     except JWTError:
         _logger.debug(
-            "revoke_refresh_token: token already invalid,"
-            " skipping.",
+            "revoke_refresh_token: token already invalid," " skipping.",
         )
 
 
@@ -214,7 +224,9 @@ def is_token_revoked(
     """
     try:
         payload = jwt.decode(
-            token, secret_key, algorithms=[_ALGORITHM],
+            token,
+            secret_key,
+            algorithms=[_ALGORITHM],
         )
         return store.contains(payload.get("jti", ""))
     except JWTError:

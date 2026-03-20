@@ -15,6 +15,8 @@ Usage::
         ...  # process result
 """
 
+from __future__ import annotations
+
 import logging
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor

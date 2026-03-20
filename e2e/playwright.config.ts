@@ -13,7 +13,7 @@ export default defineConfig({
   expect: { timeout: 5_000 },
   globalTimeout: 1_800_000,
   retries: process.env.CI ? 2 : 1,
-  workers: process.env.CI ? 2 : 2,
+  workers: process.env.CI ? 3 : 3,
   forbidOnly: !!process.env.CI,
   reporter: [["html", { open: "never" }], ["list"]],
   /* Store test artifacts outside the project tree so the Dash
@@ -63,7 +63,7 @@ export default defineConfig({
     {
       name: "dashboard-chromium",
       testDir: "./tests/dashboard",
-      testIgnore: /admin\.spec\.ts/,
+      testIgnore: /admin.*\.spec\.ts/,
       use: {
         ...devices["Desktop Chrome"],
         baseURL: DASHBOARD_URL,
@@ -75,7 +75,7 @@ export default defineConfig({
     {
       name: "admin-chromium",
       testDir: "./tests/dashboard",
-      testMatch: /admin\.spec\.ts/,
+      testMatch: /admin.*\.spec\.ts/,
       use: {
         ...devices["Desktop Chrome"],
         baseURL: DASHBOARD_URL,
@@ -98,10 +98,14 @@ export default defineConfig({
 
   webServer: {
     command: `cd ${process.env.PROJECT_ROOT || ".."} && ./run.sh start`,
-    url: `${BACKEND_URL}/agents`,
+    url: `${BACKEND_URL}/v1/agents`,
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,
     stdout: "pipe",
     stderr: "pipe",
+    env: {
+      ...process.env,
+      AI_AGENT_UI_ENV: "test",
+    },
   },
 });

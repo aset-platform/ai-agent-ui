@@ -55,14 +55,23 @@ def forecast_layout() -> html.Div:
                         [
                             html.Label(
                                 "Forecast Horizon",
-                                className="text-muted small fw-semibold",
+                                className=("text-muted small" " fw-semibold"),
                             ),
                             dbc.RadioItems(
                                 id="forecast-horizon-radio",
                                 options=[
-                                    {"label": "3 Months", "value": "3"},
-                                    {"label": "6 Months", "value": "6"},
-                                    {"label": "9 Months", "value": "9"},
+                                    {
+                                        "label": "3 Months",
+                                        "value": "3",
+                                    },
+                                    {
+                                        "label": "6 Months",
+                                        "value": "6",
+                                    },
+                                    {
+                                        "label": "9 Months",
+                                        "value": "9",
+                                    },
                                 ],
                                 value="9",
                                 inline=True,
@@ -70,16 +79,52 @@ def forecast_layout() -> html.Div:
                             ),
                         ],
                         xs=12,
-                        md=4,
+                        md=3,
                         className="mb-3",
                     ),
                     dbc.Col(
                         [
-                            html.Label("\u00a0", className="d-block small"),
-                            refresh_button_group("forecast-refresh"),
+                            html.Label(
+                                "Chart View",
+                                className=("text-muted small" " fw-semibold"),
+                            ),
+                            dbc.RadioItems(
+                                id="forecast-view-radio",
+                                options=[
+                                    {
+                                        "label": "Standard",
+                                        "value": "standard",
+                                    },
+                                    {
+                                        "label": "Decomposition",
+                                        "value": "decomposition",
+                                    },
+                                    {
+                                        "label": "Multi-Horizon",
+                                        "value": "multi_horizon",
+                                    },
+                                ],
+                                value="standard",
+                                inline=True,
+                                className="mt-1",
+                            ),
                         ],
                         xs=12,
-                        md=4,
+                        md=3,
+                        className="mb-3",
+                    ),
+                    dbc.Col(
+                        [
+                            html.Label(
+                                "\u00a0",
+                                className="d-block small",
+                            ),
+                            refresh_button_group(
+                                "forecast-refresh",
+                            ),
+                        ],
+                        xs=12,
+                        md=2,
                         className="mb-3",
                     ),
                 ],

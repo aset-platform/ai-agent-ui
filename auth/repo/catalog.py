@@ -9,6 +9,8 @@ Functions
 - :func:`scan_all_users`
 """
 
+from __future__ import annotations
+
 import logging
 import os
 from typing import Any, Dict, List

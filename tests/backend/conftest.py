@@ -6,8 +6,12 @@ project-root packages (``auth``, ``stocks``) are importable without
 installing anything.
 """
 
+import os
 import sys
 from pathlib import Path
+
+# Force test cascade profile (free-tier only, no Anthropic).
+os.environ.setdefault("AI_AGENT_UI_ENV", "test")
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _BACKEND_DIR = _PROJECT_ROOT / "backend"
