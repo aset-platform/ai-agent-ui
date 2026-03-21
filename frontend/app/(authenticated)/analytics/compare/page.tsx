@@ -128,7 +128,7 @@ export function CompareContent() {
   return (
     <div className="space-y-6">
       {/* Ticker selector */}
-      <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
+      <div data-testid="compare-ticker-select" className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
         <div className="flex items-center justify-between mb-3">
           <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
             Your linked tickers
@@ -159,7 +159,7 @@ export function CompareContent() {
             ))}
           </div>
         ) : allTickers.length === 0 ? (
-          <p className="text-sm text-gray-400 dark:text-gray-500">
+          <p data-testid="compare-empty" className="text-sm text-gray-400 dark:text-gray-500">
             No tickers linked. Add tickers in the Marketplace first.
           </p>
         ) : (
@@ -200,7 +200,7 @@ export function CompareContent() {
 
       {/* Error */}
       {error && (
-        <div className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+        <div data-testid="compare-error" className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
           {error}
         </div>
       )}
@@ -212,7 +212,7 @@ export function CompareContent() {
       {data && !loading && (
         <>
           {/* Normalized price chart */}
-          <div className="rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900 overflow-hidden">
+          <div data-testid="compare-chart" className="rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900 overflow-hidden">
             <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 dark:border-gray-800">
               <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
                 Normalized Price (base = 100)

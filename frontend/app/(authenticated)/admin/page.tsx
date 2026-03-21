@@ -333,20 +333,26 @@ function UsersTab() {
         label: "Actions",
         sortable: false,
         render: (r) => (
-          <div className="flex gap-1">
+          <div
+            className="flex gap-1"
+            data-testid={`admin-user-row-${r.user_id}`}
+          >
             <button
+              data-testid={`admin-user-edit-${r.user_id}`}
               onClick={() => openEdit(r)}
               className="px-2 py-1 text-xs rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 hover:bg-indigo-200 dark:hover:bg-indigo-900/50 transition-colors"
             >
               Edit
             </button>
             <button
+              data-testid={`admin-user-reset-${r.user_id}`}
               onClick={() => openReset(r)}
               className="px-2 py-1 text-xs rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors"
             >
               Reset Pwd
             </button>
             <button
+              data-testid={`admin-user-toggle-${r.user_id}`}
               onClick={() =>
                 r.is_active
                   ? setDeactivateUser(r)
@@ -383,6 +389,7 @@ function UsersTab() {
           </h2>
           <input
             type="text"
+            data-testid="admin-users-search"
             value={search}
             onChange={(e) =>
               setSearch(e.target.value)
@@ -392,6 +399,7 @@ function UsersTab() {
           />
         </div>
         <button
+          data-testid="admin-users-add-btn"
           onClick={openAdd}
           className="px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors"
         >
@@ -400,6 +408,7 @@ function UsersTab() {
       </div>
 
       {/* Users table */}
+      <div data-testid="admin-users-table">
       <InsightsTable<UserResponse>
         columns={userCols}
         rows={filtered}
@@ -408,6 +417,7 @@ function UsersTab() {
           dir: "asc",
         }}
       />
+      </div>
 
       {/* Modals */}
       <UserModal
@@ -489,6 +499,7 @@ function AuditLogTab() {
         </h2>
         <input
           type="text"
+          data-testid="admin-audit-search"
           value={search}
           onChange={(e) =>
             setSearch(e.target.value)
@@ -498,6 +509,7 @@ function AuditLogTab() {
         />
       </div>
 
+      <div data-testid="admin-audit-table">
       <InsightsTable<AuditEvent>
         columns={auditCols}
         rows={filtered}
@@ -506,6 +518,7 @@ function AuditLogTab() {
           dir: "desc",
         }}
       />
+      </div>
     </div>
   );
 }
@@ -660,7 +673,10 @@ function ObservabilityTab() {
     <div className="space-y-6">
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div className="rounded-xl bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 p-4">
+        <div
+          data-testid="admin-summary-requests"
+          className="rounded-xl bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 p-4"
+        >
           <p className="text-xs font-medium text-indigo-500 dark:text-indigo-400">
             Total Requests
           </p>
@@ -670,7 +686,10 @@ function ObservabilityTab() {
             ).toLocaleString()}
           </p>
         </div>
-        <div className="rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-4">
+        <div
+          data-testid="admin-summary-cascades"
+          className="rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-4"
+        >
           <p className="text-xs font-medium text-amber-500 dark:text-amber-400">
             Cascades
           </p>
@@ -678,7 +697,10 @@ function ObservabilityTab() {
             {stats?.cascade_count ?? 0}
           </p>
         </div>
-        <div className="rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4">
+        <div
+          data-testid="admin-summary-compressions"
+          className="rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4"
+        >
           <p className="text-xs font-medium text-blue-500 dark:text-blue-400">
             Compressions
           </p>
@@ -723,6 +745,7 @@ function ObservabilityTab() {
             {tiers.map((t) => (
               <div
                 key={t.model}
+                data-testid={`admin-tier-card-${t.model}`}
                 className={`rounded-lg border border-gray-200 dark:border-gray-700 border-l-4 ${STATUS_BORDER[t.status] ?? ""} bg-white dark:bg-gray-900 p-3 space-y-2`}
               >
                 <div className="flex items-center justify-between">
@@ -730,6 +753,7 @@ function ObservabilityTab() {
                     {shortModel(t.model)}
                   </span>
                   <button
+                    data-testid={`admin-tier-toggle-${t.model}`}
                     onClick={() =>
                       handleToggle(
                         t.model,
@@ -799,6 +823,7 @@ function ObservabilityTab() {
                 return (
                   <div
                     key={name}
+                    data-testid={`admin-budget-card-${name}`}
                     className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-3 space-y-2"
                   >
                     <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
@@ -848,11 +873,13 @@ function ObservabilityTab() {
           <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
             Recent Cascade Events
           </h2>
+          <div data-testid="admin-cascade-table">
           <InsightsTable<CascadeEvent>
             columns={cascadeCols}
             rows={cascadeLog}
             pageSize={10}
           />
+          </div>
         </div>
       )}
 
@@ -894,6 +921,7 @@ export default function AdminPage() {
         ).map((t) => (
           <button
             key={t.id}
+            data-testid={`admin-tab-${t.id}`}
             onClick={() => setTab(t.id)}
             className={`
               whitespace-nowrap px-3 py-2 text-sm

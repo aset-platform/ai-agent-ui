@@ -2,22 +2,25 @@ import { defineConfig, devices } from "@playwright/test";
 
 const FRONTEND_URL =
   process.env.FRONTEND_URL || "http://localhost:3000";
-const DASHBOARD_URL =
-  process.env.DASHBOARD_URL || "http://127.0.0.1:8050";
 const BACKEND_URL =
   process.env.BACKEND_URL || "http://127.0.0.1:8181";
 
 export default defineConfig({
   testDir: "./tests",
   timeout: 30_000,
-  expect: { timeout: 5_000 },
+  expect: {
+    timeout: 5_000,
+    toHaveScreenshot: {
+      maxDiffPixelRatio: 0.01,
+      threshold: 0.2,
+      animations: "disabled",
+    },
+  },
   globalTimeout: 1_800_000,
   retries: process.env.CI ? 2 : 1,
   workers: process.env.CI ? 3 : 3,
   forbidOnly: !!process.env.CI,
   reporter: [["html", { open: "never" }], ["list"]],
-  /* Store test artifacts outside the project tree so the Dash
-     debug reloader (which watches all files) is not triggered. */
   outputDir: process.env.CI
     ? "./test-results"
     : "/tmp/e2e-test-results",
@@ -47,10 +50,18 @@ export default defineConfig({
       dependencies: ["setup"],
     },
 
-    /* ── Frontend tests (Next.js on port 3000) ─────────── */
+    /* ── Frontend tests (Next.js — auth, chat, profile) ── */
     {
       name: "frontend-chromium",
       testDir: "./tests/frontend",
+      testIgnore: [
+        /analytics.*\.spec\.ts/,
+        /dashboard.*\.spec\.ts/,
+        /insights.*\.spec\.ts/,
+        /marketplace.*\.spec\.ts/,
+        /admin.*\.spec\.ts/,
+        /theme-consistency.*\.spec\.ts/,
+      ],
       use: {
         ...devices["Desktop Chrome"],
         baseURL: FRONTEND_URL,
@@ -59,31 +70,39 @@ export default defineConfig({
       dependencies: ["setup"],
     },
 
-    /* ── Dashboard tests (Dash on port 8050) ───────────── */
+    /* ── Analytics tests (Next.js — all dashboard pages) ── */
     {
-      name: "dashboard-chromium",
-      testDir: "./tests/dashboard",
-      testIgnore: /admin.*\.spec\.ts/,
+      name: "analytics-chromium",
+      testDir: "./tests/frontend",
+      testMatch: [
+        /analytics.*\.spec\.ts/,
+        /dashboard.*\.spec\.ts/,
+        /insights.*\.spec\.ts/,
+        /marketplace.*\.spec\.ts/,
+        /theme-consistency.*\.spec\.ts/,
+      ],
       use: {
         ...devices["Desktop Chrome"],
-        baseURL: DASHBOARD_URL,
+        baseURL: FRONTEND_URL,
+        storageState: ".auth/general-user.json",
       },
       dependencies: ["setup"],
     },
 
-    /* ── Admin tests (superuser role) ──────────────────── */
+    /* ── Admin tests (superuser role, Next.js /admin) ─── */
     {
       name: "admin-chromium",
-      testDir: "./tests/dashboard",
+      testDir: "./tests/frontend",
       testMatch: /admin.*\.spec\.ts/,
       use: {
         ...devices["Desktop Chrome"],
-        baseURL: DASHBOARD_URL,
+        baseURL: FRONTEND_URL,
+        storageState: ".auth/superuser.json",
       },
       dependencies: ["setup"],
     },
 
-    /* ── Error handling tests ──────────────────────────── */
+    /* ── Error handling tests ────────────────────────── */
     {
       name: "errors-chromium",
       testDir: "./tests/errors",
@@ -97,7 +116,8 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: `cd ${process.env.PROJECT_ROOT || ".."} && ./run.sh start`,
+    command:
+      `cd ${process.env.PROJECT_ROOT || ".."} && ./run.sh start`,
     url: `${BACKEND_URL}/v1/agents`,
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,

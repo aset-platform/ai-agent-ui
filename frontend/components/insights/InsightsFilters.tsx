@@ -49,6 +49,7 @@ export function InsightsFilters({
       {/* Market */}
       {onMarketChange && (
         <select
+          data-testid="insights-market-filter"
           value={market ?? "all"}
           onChange={(e) =>
             onMarketChange(e.target.value)
@@ -64,6 +65,7 @@ export function InsightsFilters({
       {/* Sector */}
       {onSectorChange && sectors.length > 0 && (
         <select
+          data-testid="insights-sector-filter"
           value={sector ?? "all"}
           onChange={(e) =>
             onSectorChange(e.target.value)
@@ -82,6 +84,7 @@ export function InsightsFilters({
       {/* Ticker */}
       {onTickerChange && tickers.length > 0 && (
         <select
+          data-testid="insights-ticker-filter"
           value={ticker ?? "all"}
           onChange={(e) =>
             onTickerChange(e.target.value)
@@ -100,6 +103,7 @@ export function InsightsFilters({
       {/* RSI (screener only) */}
       {onRsiFilterChange && (
         <select
+          data-testid="insights-rsi-filter"
           value={rsiFilter ?? "all"}
           onChange={(e) =>
             onRsiFilterChange(e.target.value)

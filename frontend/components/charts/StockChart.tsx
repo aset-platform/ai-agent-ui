@@ -788,5 +788,5 @@ export function StockChart({
     position: "relative",
   };
 
-  return <div ref={containerRef} style={style} />;
+  return <div ref={containerRef} style={style} data-testid="stock-chart-canvas" />;
 }

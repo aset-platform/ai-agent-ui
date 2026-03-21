@@ -320,7 +320,10 @@ function AnalysisTab({
 
   if (error) {
     return (
-      <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-5 py-10 text-center text-sm text-red-600 dark:text-red-400">
+      <div
+        data-testid="stock-analysis-error"
+        className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-5 py-10 text-center text-sm text-red-600 dark:text-red-400"
+      >
         {error}
       </div>
     );
@@ -328,6 +331,7 @@ function AnalysisTab({
 
   return (
     <div
+      data-testid="stock-analysis-chart"
       className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm overflow-hidden"
     >
       {/* Chart header: OHLC legend + controls */}
@@ -350,6 +354,9 @@ function AnalysisTab({
             {RANGE_OPTIONS.map((r) => (
               <button
                 key={r.label}
+                data-testid={
+                  `stock-analysis-range-${r.label.toLowerCase()}`
+                }
                 onClick={() => handleRange(r.label)}
                 className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
                   activeRange === r.label
@@ -373,6 +380,9 @@ function AnalysisTab({
             ).map((iv) => (
               <button
                 key={iv.key}
+                data-testid={
+                  `stock-analysis-interval-${iv.key.toLowerCase()}`
+                }
                 onClick={() => handleInterval(iv.key)}
                 className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
                   chartInterval === iv.key
@@ -388,6 +398,7 @@ function AnalysisTab({
           {/* Indicators dropdown */}
           <div className="relative">
             <button
+              data-testid="stock-analysis-indicators-menu"
               onClick={() => setShowIndicatorMenu((v) => !v)}
               className="flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-md bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 transition-colors"
             >
@@ -400,6 +411,9 @@ function AnalysisTab({
                 {INDICATOR_OPTIONS.map((opt) => (
                   <label
                     key={opt.key}
+                    data-testid={
+                      `stock-analysis-indicator-${opt.key}`
+                    }
                     className="flex items-center gap-2 px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
                   >
                     <input
@@ -563,6 +577,7 @@ function ForecastTab({ ticker }: { ticker: string }) {
   if (error) {
     return (
       <div
+        data-testid="stock-forecast-error"
         className="
           rounded-lg border border-red-200
           dark:border-red-800 bg-red-50
@@ -584,7 +599,10 @@ function ForecastTab({ ticker }: { ticker: string }) {
   return (
     <div className="space-y-6">
       {/* Forecast chart */}
-      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm overflow-hidden">
+      <div
+        data-testid="stock-forecast-chart"
+        className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm overflow-hidden"
+      >
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-gray-100 dark:border-gray-800">
           <div className="flex items-center gap-3">
             <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
@@ -626,6 +644,9 @@ function ForecastTab({ ticker }: { ticker: string }) {
             {([3, 6, 9] as HorizonId[]).map((h) => (
               <button
                 key={h}
+                data-testid={
+                  `stock-forecast-horizon-${h}`
+                }
                 onClick={() => setHorizon(h)}
                 className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
                   horizon === h
@@ -674,11 +695,14 @@ function ForecastTab({ ticker }: { ticker: string }) {
       {/* Forecast target cards */}
       {targets.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {targets.map((target) => {
+          {targets.map((target, idx) => {
             const isPositive = target.pct_change >= 0;
             return (
               <div
                 key={target.horizon_months}
+                data-testid={
+                  `stock-forecast-target-card-${idx}`
+                }
                 className="
                   rounded-lg p-4
                   bg-gray-50 dark:bg-gray-800/50
@@ -765,7 +789,10 @@ function ForecastTab({ ticker }: { ticker: string }) {
           </h3>
           <div className="flex items-center gap-8">
             {summary.mae != null && (
-              <div className="flex items-center gap-1.5">
+              <div
+                data-testid="stock-forecast-accuracy-mae"
+                className="flex items-center gap-1.5"
+              >
                 <span
                   className="
                       text-xs text-gray-400
@@ -785,7 +812,10 @@ function ForecastTab({ ticker }: { ticker: string }) {
               </div>
             )}
             {summary.rmse != null && (
-              <div className="flex items-center gap-1.5">
+              <div
+                data-testid="stock-forecast-accuracy-rmse"
+                className="flex items-center gap-1.5"
+              >
                 <span
                   className="
                       text-xs text-gray-400
@@ -805,7 +835,10 @@ function ForecastTab({ ticker }: { ticker: string }) {
               </div>
             )}
             {summary.mape != null && (
-              <div className="flex items-center gap-1.5">
+              <div
+                data-testid="stock-forecast-accuracy-mape"
+                className="flex items-center gap-1.5"
+              >
                 <span
                   className="
                       text-xs text-gray-400
@@ -1009,7 +1042,10 @@ function PortfolioTab({
 
   if (error) {
     return (
-      <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-5 py-10 text-center text-sm text-red-600 dark:text-red-400">
+      <div
+        data-testid="portfolio-analysis-error"
+        className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-5 py-10 text-center text-sm text-red-600 dark:text-red-400"
+      >
         {error}
       </div>
     );
@@ -1017,7 +1053,10 @@ function PortfolioTab({
 
   if (!data || data.data.length === 0) {
     return (
-      <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 px-5 py-10 text-center text-sm text-gray-500 dark:text-gray-400">
+      <div
+        data-testid="portfolio-analysis-empty"
+        className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 px-5 py-10 text-center text-sm text-gray-500 dark:text-gray-400"
+      >
         Add stocks to your portfolio to see
         performance.{" "}
         <Link
@@ -1035,11 +1074,17 @@ function PortfolioTab({
   return (
     <div className="space-y-4">
       {/* Chart card */}
-      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm overflow-hidden">
+      <div
+        data-testid="portfolio-analysis-chart"
+        className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm overflow-hidden"
+      >
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-gray-100 dark:border-gray-800">
           <div className="flex items-center gap-3 text-xs font-mono">
-            <span className="font-semibold text-gray-900 dark:text-gray-100">
+            <span
+              data-testid="portfolio-analysis-currency-badge"
+              className="font-semibold text-gray-900 dark:text-gray-100"
+            >
               Portfolio ({currency})
             </span>
             <span
@@ -1060,6 +1105,7 @@ function PortfolioTab({
           <div className="flex items-center gap-2">
             {/* Refresh button */}
             <button
+              data-testid="portfolio-analysis-refresh-btn"
               onClick={startRefresh}
               disabled={refreshState === "pending"}
               title={
@@ -1074,19 +1120,19 @@ function PortfolioTab({
               className="p-1 rounded-md text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
             >
               {refreshState === "pending" ? (
-                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg data-testid="portfolio-analysis-refresh-icon" className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M21 12a9 9 0 1 1-6.219-8.56" />
                 </svg>
               ) : refreshState === "success" ? (
-                <svg className="w-4 h-4 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg data-testid="portfolio-analysis-refresh-icon" className="w-4 h-4 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M20 6 9 17l-5-5" />
                 </svg>
               ) : refreshState === "error" ? (
-                <svg className="w-4 h-4 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg data-testid="portfolio-analysis-refresh-icon" className="w-4 h-4 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M18 6 6 18M6 6l12 12" />
                 </svg>
               ) : (
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg data-testid="portfolio-analysis-refresh-icon" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
                   <path d="M3 3v5h5" />
                   <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
@@ -1099,6 +1145,9 @@ function PortfolioTab({
               {PERIOD_OPTIONS.map((p) => (
                 <button
                   key={p}
+                  data-testid={
+                    `portfolio-analysis-period-${p.toLowerCase()}`
+                  }
                   onClick={() => setPeriod(p)}
                   className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
                     period === p
@@ -1130,22 +1179,26 @@ function PortfolioTab({
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           {[
             {
+              tid: "totalReturn",
               label: "Total Return",
               value: `${m.total_return_pct >= 0 ? "+" : ""}${m.total_return_pct.toFixed(2)}%`,
               positive: m.total_return_pct >= 0,
             },
             {
+              tid: "annualized",
               label: "Annualized",
               value: `${m.annualized_return_pct >= 0 ? "+" : ""}${m.annualized_return_pct.toFixed(2)}%`,
               positive:
                 m.annualized_return_pct >= 0,
             },
             {
+              tid: "maxDrawdown",
               label: "Max Drawdown",
               value: `${m.max_drawdown_pct.toFixed(2)}%`,
               positive: false,
             },
             {
+              tid: "sharpe",
               label: "Sharpe Ratio",
               value:
                 m.sharpe_ratio != null
@@ -1156,11 +1209,13 @@ function PortfolioTab({
                 m.sharpe_ratio > 0,
             },
             {
+              tid: "bestDay",
               label: `Best Day (${m.best_day_date})`,
               value: `+${m.best_day_pct.toFixed(2)}%`,
               positive: true,
             },
             {
+              tid: "worstDay",
               label: `Worst Day (${m.worst_day_date})`,
               value: `${m.worst_day_pct.toFixed(2)}%`,
               positive: false,
@@ -1168,12 +1223,18 @@ function PortfolioTab({
           ].map((card) => (
             <div
               key={card.label}
+              data-testid={
+                `portfolio-analysis-metric-${card.tid}`
+              }
               className="rounded-lg p-3 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50"
             >
               <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1">
                 {card.label}
               </p>
               <p
+                data-testid={
+                  `portfolio-analysis-metric-value-${card.tid}`
+                }
                 className={`font-mono text-lg font-semibold ${
                   card.positive
                     ? "text-emerald-600 dark:text-emerald-400"
@@ -1386,7 +1447,10 @@ function PortfolioForecastTab({
 
   if (error) {
     return (
-      <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-5 py-10 text-center text-sm text-red-600 dark:text-red-400">
+      <div
+        data-testid="portfolio-forecast-error"
+        className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-5 py-10 text-center text-sm text-red-600 dark:text-red-400"
+      >
         {error}
       </div>
     );
@@ -1397,7 +1461,10 @@ function PortfolioForecastTab({
     truncated.data.length === 0
   ) {
     return (
-      <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 px-5 py-10 text-center text-sm text-gray-500 dark:text-gray-400">
+      <div
+        data-testid="portfolio-forecast-empty"
+        className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 px-5 py-10 text-center text-sm text-gray-500 dark:text-gray-400"
+      >
         Run forecasts on your holdings first.
       </div>
     );
@@ -1423,7 +1490,10 @@ function PortfolioForecastTab({
 
   return (
     <div className="space-y-4">
-      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm overflow-hidden">
+      <div
+        data-testid="portfolio-forecast-chart"
+        className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm overflow-hidden"
+      >
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-3 border-b border-gray-100 dark:border-gray-800">
           <div className="flex items-center gap-3">
             <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
@@ -1451,6 +1521,7 @@ function PortfolioForecastTab({
           <div className="flex items-center gap-2">
             {/* Refresh button */}
             <button
+              data-testid="portfolio-forecast-refresh-btn"
               onClick={startFcRefresh}
               disabled={fcRefreshState === "pending"}
               title={
@@ -1465,19 +1536,19 @@ function PortfolioForecastTab({
               className="p-1 rounded-md text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
             >
               {fcRefreshState === "pending" ? (
-                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg data-testid="portfolio-forecast-refresh-icon" className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M21 12a9 9 0 1 1-6.219-8.56" />
                 </svg>
               ) : fcRefreshState === "success" ? (
-                <svg className="w-4 h-4 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg data-testid="portfolio-forecast-refresh-icon" className="w-4 h-4 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M20 6 9 17l-5-5" />
                 </svg>
               ) : fcRefreshState === "error" ? (
-                <svg className="w-4 h-4 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg data-testid="portfolio-forecast-refresh-icon" className="w-4 h-4 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M18 6 6 18M6 6l12 12" />
                 </svg>
               ) : (
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg data-testid="portfolio-forecast-refresh-icon" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
                   <path d="M3 3v5h5" />
                   <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
@@ -1490,6 +1561,9 @@ function PortfolioForecastTab({
               {([3, 6, 9] as const).map((h) => (
                 <button
                   key={h}
+                  data-testid={
+                    `portfolio-forecast-horizon-${h}`
+                  }
                   onClick={() => setHorizon(h)}
                   className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
                     horizon === h
@@ -1520,23 +1594,36 @@ function PortfolioForecastTab({
       {/* Summary cards — 4 with explainability */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {/* Total Invested */}
-        <div className="rounded-lg p-4 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50">
+        <div
+          data-testid="portfolio-forecast-card-invested"
+          className="rounded-lg p-4 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50"
+        >
           <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1">
             Total Invested
           </p>
-          <p className="font-mono text-xl font-semibold text-gray-900 dark:text-gray-100">
+          <p
+            data-testid="portfolio-forecast-card-value-invested"
+            className="font-mono text-xl font-semibold text-gray-900 dark:text-gray-100"
+          >
             {sym}{fmtNum(invested)}
           </p>
         </div>
         {/* Current Value + unrealized P&L */}
-        <div className="rounded-lg p-4 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50">
+        <div
+          data-testid="portfolio-forecast-card-current"
+          className="rounded-lg p-4 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50"
+        >
           <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1">
             Current Value
           </p>
-          <p className="font-mono text-xl font-semibold text-gray-900 dark:text-gray-100">
+          <p
+            data-testid="portfolio-forecast-card-value-current"
+            className="font-mono text-xl font-semibold text-gray-900 dark:text-gray-100"
+          >
             {sym}{fmtNum(curVal)}
           </p>
           <p
+            data-testid="portfolio-forecast-card-pnl"
             className={`text-[10px] font-mono mt-0.5 ${
               unrealizedPnl >= 0
                 ? "text-emerald-600 dark:text-emerald-400"
@@ -1551,20 +1638,30 @@ function PortfolioForecastTab({
           </p>
         </div>
         {/* Predicted */}
-        <div className="rounded-lg p-4 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50">
+        <div
+          data-testid="portfolio-forecast-card-predicted"
+          className="rounded-lg p-4 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50"
+        >
           <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1">
             Predicted ({horizon}M)
           </p>
-          <p className="font-mono text-xl font-semibold text-gray-900 dark:text-gray-100">
+          <p
+            data-testid="portfolio-forecast-card-value-predicted"
+            className="font-mono text-xl font-semibold text-gray-900 dark:text-gray-100"
+          >
             {sym}{fmtNum(endVal)}
           </p>
         </div>
         {/* Expected Return (on cost) */}
-        <div className="rounded-lg p-4 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50">
+        <div
+          data-testid="portfolio-forecast-card-return"
+          className="rounded-lg p-4 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50"
+        >
           <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1">
             Expected Return (on cost)
           </p>
           <p
+            data-testid="portfolio-forecast-card-value-return"
             className={`font-mono text-xl font-semibold ${
               expReturn >= 0
                 ? "text-emerald-600 dark:text-emerald-400"
@@ -1808,6 +1905,9 @@ function AnalysisPageInner() {
           {TABS.map((tab) => (
             <button
               key={tab.id}
+              data-testid={
+                `analytics-tab-${tab.id}`
+              }
               onClick={() => {
                 setActiveTab(tab.id);
                 updatePrefs("chart", { tab: tab.id });

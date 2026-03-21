@@ -154,7 +154,10 @@ export default function MarketplacePage() {
     <div className="space-y-4">
       {/* Stats bar */}
       <div className="flex items-center justify-end">
-        <p className="text-sm text-gray-500 dark:text-gray-400">
+        <p
+          data-testid="marketplace-stats"
+          className="text-sm text-gray-500 dark:text-gray-400"
+        >
           {filtered.length} ticker{filtered.length !== 1 ? "s" : ""}
           {" \u00B7 "}
           {linkedSet.size} linked
@@ -167,6 +170,7 @@ export default function MarketplacePage() {
           {/* Search */}
           <input
             type="text"
+            data-testid="marketplace-search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by ticker or company..."
@@ -178,6 +182,7 @@ export default function MarketplacePage() {
             {(["all", "india", "us"] as MarketFilter[]).map((m) => (
               <button
                 key={m}
+                data-testid={`marketplace-market-${m}`}
                 onClick={() => setMarket(m)}
                 className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                   market === m
@@ -193,7 +198,7 @@ export default function MarketplacePage() {
       </div>
 
       {/* Table */}
-      <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
+      <div data-testid="marketplace-table" className="overflow-x-auto rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
@@ -222,6 +227,7 @@ export default function MarketplacePage() {
                 return (
                   <tr
                     key={t.ticker}
+                    data-testid={`marketplace-row-${t.ticker}`}
                     className="transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50"
                   >
                     <td className="px-4 py-3 font-mono font-semibold text-gray-900 dark:text-gray-100">
@@ -252,6 +258,7 @@ export default function MarketplacePage() {
                     <td className="px-4 py-3 text-center">
                       {linked ? (
                         <button
+                          data-testid={`marketplace-unlink-${t.ticker}`}
                           disabled={busy}
                           onClick={() => setUnlinkConfirm(t.ticker)}
                           className="rounded-lg border border-red-300 px-3 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
@@ -260,6 +267,7 @@ export default function MarketplacePage() {
                         </button>
                       ) : (
                         <button
+                          data-testid={`marketplace-link-${t.ticker}`}
                           disabled={busy}
                           onClick={() => linkTicker(t.ticker)}
                           className="rounded-lg bg-indigo-600 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
@@ -280,16 +288,21 @@ export default function MarketplacePage() {
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-2">
           <button
+            data-testid="marketplace-pagination-prev"
             disabled={safePage <= 1}
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-40 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-800"
           >
             Previous
           </button>
-          <span className="text-sm text-gray-500 dark:text-gray-400">
+          <span
+            data-testid="marketplace-page-info"
+            className="text-sm text-gray-500 dark:text-gray-400"
+          >
             Page {safePage} of {totalPages}
           </span>
           <button
+            data-testid="marketplace-pagination-next"
             disabled={safePage >= totalPages}
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-40 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-800"

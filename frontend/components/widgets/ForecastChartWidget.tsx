@@ -556,6 +556,7 @@ export function ForecastChartWidget({
 
   return (
     <div
+      data-testid="dashboard-forecast-widget"
       className="
         col-span-full rounded-xl border
         border-gray-200 dark:border-gray-700

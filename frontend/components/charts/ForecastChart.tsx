@@ -285,5 +285,5 @@ export function ForecastChart({
     handleCrosshair,
   ]);
 
-  return <div ref={containerRef} />;
+  return <div ref={containerRef} data-testid="forecast-chart-canvas" />;
 }

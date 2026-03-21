@@ -160,6 +160,7 @@ export function HeroSection({
                 )}!
               </p>
               <p
+                data-testid="dashboard-hero-portfolio-value"
                 className="
                   mt-1 text-4xl font-bold tracking-tight
                   text-gray-900 dark:text-white
@@ -175,6 +176,7 @@ export function HeroSection({
                 })}
               </p>
               <span
+                data-testid="dashboard-hero-daily-change"
                 className={`
                   mt-2 inline-flex items-center gap-1
                   rounded-full px-2.5 py-0.5 text-xs
@@ -213,6 +215,7 @@ export function HeroSection({
               {/* Country filter */}
               <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5">
                 <button
+                  data-testid="dashboard-market-filter-india"
                   onClick={() => onMarketFilterChange("india")}
                   className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
                     marketFilter === "india"
@@ -223,6 +226,7 @@ export function HeroSection({
                   {"\u{1F1EE}\u{1F1F3}"} India
                 </button>
                 <button
+                  data-testid="dashboard-market-filter-us"
                   onClick={() => onMarketFilterChange("us")}
                   className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
                     marketFilter === "us"

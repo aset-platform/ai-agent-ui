@@ -457,7 +457,7 @@ function ScreenerTab() {
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
-    return <WidgetError message={data.error} />;
+    return <WidgetError message={data.error} data-testid="insights-error" />;
 
   return (
     <div className="space-y-4">
@@ -500,7 +500,7 @@ function TargetsTab() {
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
-    return <WidgetError message={data.error} />;
+    return <WidgetError message={data.error} data-testid="insights-error" />;
 
   return (
     <div className="space-y-4">
@@ -544,7 +544,7 @@ function DividendsTab() {
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
-    return <WidgetError message={data.error} />;
+    return <WidgetError message={data.error} data-testid="insights-error" />;
 
   return (
     <div className="space-y-4">
@@ -587,7 +587,7 @@ function RiskTab() {
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
-    return <WidgetError message={data.error} />;
+    return <WidgetError message={data.error} data-testid="insights-error" />;
 
   return (
     <div className="space-y-4">
@@ -616,7 +616,7 @@ function SectorsTab() {
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
-    return <WidgetError message={data.error} />;
+    return <WidgetError message={data.error} data-testid="insights-error" />;
 
   const rows = data.value?.rows ?? [];
 
@@ -649,6 +649,7 @@ function SectorsTab() {
         onMarketChange={setMarket}
       />
       {rows.length > 0 && (
+        <div data-testid="insights-chart">
         <PlotlyChart
           data={chartData}
           layout={{
@@ -665,6 +666,7 @@ function SectorsTab() {
           }}
           height={320}
         />
+        </div>
       )}
       <InsightsTable<SectorRow>
         columns={sectorCols}
@@ -685,7 +687,7 @@ function CorrelationTab() {
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
-    return <WidgetError message={data.error} />;
+    return <WidgetError message={data.error} data-testid="insights-error" />;
 
   const tickers = data.value?.tickers ?? [];
   const matrix = data.value?.matrix ?? [];
@@ -708,6 +710,7 @@ function CorrelationTab() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <select
+          data-testid="insights-period-filter"
           value={period}
           onChange={(e) =>
             setPeriod(e.target.value)
@@ -725,6 +728,7 @@ function CorrelationTab() {
       </div>
 
       {tickers.length >= 2 ? (
+        <div data-testid="insights-chart">
         <PlotlyChart
           data={chartData}
           layout={{
@@ -739,8 +743,12 @@ function CorrelationTab() {
             tickers.length * 40 + 100,
           )}
         />
+        </div>
       ) : (
-        <div className="py-12 text-center text-gray-400">
+        <div
+          data-testid="insights-empty"
+          className="py-12 text-center text-gray-400"
+        >
           Need at least 2 tickers with data for
           correlation
         </div>
@@ -769,7 +777,7 @@ function QuarterlyTab() {
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
-    return <WidgetError message={data.error} />;
+    return <WidgetError message={data.error} data-testid="insights-error" />;
 
   // Dynamic columns based on statement type.
   const baseCols: Column<QuarterlyRow>[] = [
@@ -932,6 +940,7 @@ function QuarterlyTab() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <select
+          data-testid="insights-statement-type"
           value={stmtType}
           onChange={(e) =>
             setStmtType(e.target.value)
@@ -955,6 +964,7 @@ function QuarterlyTab() {
       </div>
 
       {chartData.length > 0 && (
+        <div data-testid="insights-chart">
         <PlotlyChart
           data={chartData}
           layout={{
@@ -970,6 +980,7 @@ function QuarterlyTab() {
           }}
           height={360}
         />
+        </div>
       )}
 
       <InsightsTable<QuarterlyRow>
@@ -1018,6 +1029,7 @@ export default function InsightsPage() {
         {TABS.map((tab) => (
           <button
             key={tab.id}
+            data-testid={`insights-tab-${tab.id}`}
             onClick={() => setActiveTab(tab.id)}
             className={`
               whitespace-nowrap px-3 py-2 text-sm
