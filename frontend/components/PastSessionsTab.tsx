@@ -10,7 +10,67 @@ import { useState, useEffect, useCallback } from "react";
 import { usePastSessions } from "@/hooks/usePastSessions";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
+import { MarkdownContent } from "@/components/MarkdownContent";
 import type { ChatSessionDetail } from "@/lib/types";
+
+// ── Per-message renderer with markdown + raw toggle ──
+
+function SessionMessage({
+  msg,
+}: {
+  msg: { role: string; content: string };
+}) {
+  const [showRaw, setShowRaw] = useState(false);
+  const isAssistant = msg.role === "assistant";
+
+  const noop = useCallback(() => {}, []);
+
+  return (
+    <div
+      className={`flex ${
+        isAssistant ? "justify-start" : "justify-end"
+      }`}
+    >
+      <div
+        className={`max-w-[85%] px-3 py-2 rounded-xl text-xs ${
+          isAssistant
+            ? "bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-bl-sm"
+            : "bg-indigo-100 dark:bg-indigo-900/40 text-indigo-900 dark:text-indigo-100 rounded-br-sm"
+        }`}
+      >
+        {isAssistant ? (
+          <>
+            <div className="prose prose-xs dark:prose-invert max-w-none">
+              <MarkdownContent
+                content={msg.content}
+                onInternalLink={noop}
+              />
+            </div>
+            {msg.content.length > 50 && (
+              <button
+                onClick={() => setShowRaw((v) => !v)}
+                className="mt-1.5 text-[10px] text-gray-400 dark:text-gray-500 hover:text-indigo-500 dark:hover:text-indigo-400 transition-colors"
+              >
+                {showRaw ? "Hide raw" : "View raw"}
+              </button>
+            )}
+            {showRaw && (
+              <pre className="mt-1 text-[10px] leading-relaxed bg-gray-100 dark:bg-gray-800 rounded-lg p-2 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap break-all">
+                {msg.content}
+              </pre>
+            )}
+          </>
+        ) : (
+          <span className="whitespace-pre-wrap">
+            {msg.content}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Main component ──────────────────────────────────
 
 interface PastSessionsTabProps {
   showKeywordSearch?: boolean;
@@ -236,24 +296,10 @@ export function PastSessionsTab({
                       </div>
                     )}
                     {detail?.messages.map((msg, i) => (
-                      <div
+                      <SessionMessage
                         key={`${msg.timestamp}-${i}`}
-                        className={`flex ${
-                          msg.role === "user"
-                            ? "justify-end"
-                            : "justify-start"
-                        }`}
-                      >
-                        <div
-                          className={`max-w-[85%] px-3 py-2 rounded-xl text-xs whitespace-pre-wrap ${
-                            msg.role === "user"
-                              ? "bg-indigo-100 dark:bg-indigo-900/40 text-indigo-900 dark:text-indigo-100 rounded-br-sm"
-                              : "bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-bl-sm"
-                          }`}
-                        >
-                          {msg.content}
-                        </div>
-                      </div>
+                        msg={msg}
+                      />
                     ))}
                     {!detailLoading &&
                       detail?.messages.length === 0 && (
