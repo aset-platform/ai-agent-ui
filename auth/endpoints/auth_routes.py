@@ -36,7 +36,7 @@ _logger = logging.getLogger(__name__)
 
 # Cookie config for the HttpOnly refresh token.
 _COOKIE_KEY = "refresh_token"
-_COOKIE_PATH = "/v1/auth"
+_COOKIE_PATH = "/"
 _COOKIE_MAX_AGE = 7 * 24 * 3600  # 7 days
 
 
@@ -64,6 +64,9 @@ def _set_refresh_cookie(
 def _clear_refresh_cookie(response: JSONResponse) -> None:
     """Remove the refresh-token cookie.
 
+    Clears both current and legacy paths to handle
+    browsers that still have the old ``/auth`` cookie.
+
     Args:
         response: The outgoing response.
     """
@@ -71,6 +74,12 @@ def _clear_refresh_cookie(response: JSONResponse) -> None:
         key=_COOKIE_KEY,
         path=_COOKIE_PATH,
     )
+    # Clear legacy cookie paths from older deploys
+    for legacy in ("/auth", "/v1/auth"):
+        response.delete_cookie(
+            key=_COOKIE_KEY,
+            path=legacy,
+        )
 
 
 def register(router: APIRouter) -> None:
@@ -227,6 +236,14 @@ def register(router: APIRouter) -> None:
         """
         # Prefer cookie, fall back to body.
         token = request.cookies.get(_COOKIE_KEY)
+        _logger.info(
+            "Refresh: cookie_key=%s found=%s"
+            " all_cookies=%s origin=%s",
+            _COOKIE_KEY,
+            bool(token),
+            list(request.cookies.keys()),
+            request.headers.get("origin", "?"),
+        )
         if not token and body:
             token = body.refresh_token
         if not token:

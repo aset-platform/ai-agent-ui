@@ -966,6 +966,17 @@ def create_app(
         )
 
         repo = _get_repo()
+
+        # Build user_id → name/email lookup
+        all_users = repo.list_all()
+        user_map: dict[str, dict] = {}
+        for u in all_users:
+            uid = u.get("user_id", "")
+            user_map[uid] = {
+                "name": u.get("full_name", ""),
+                "email": u.get("email", ""),
+            }
+
         cat = repo._get_catalog()
         tbl = cat.load_table(_PAYMENT_TXN_TABLE)
         df = tbl.scan().to_pandas()
@@ -978,12 +989,23 @@ def create_app(
         df = df.sort_values(
             "created_at", ascending=False,
         ).head(limit)
+        import math as _math
+
         rows = df.to_dict("records")
         for r in rows:
             if hasattr(r.get("created_at"), "isoformat"):
                 r["created_at"] = (
                     r["created_at"].isoformat()
                 )
+            # Enrich with user name/email
+            uid = r.get("user_id", "")
+            info = user_map.get(uid, {})
+            r["user_name"] = info.get("name", "")
+            r["user_email"] = info.get("email", "")
+            # Replace NaN with None for JSON compat
+            for k, v in list(r.items()):
+                if isinstance(v, float) and _math.isnan(v):
+                    r[k] = None
         return {"transactions": rows}
 
     admin_router.add_api_route(

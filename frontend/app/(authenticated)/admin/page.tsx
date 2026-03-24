@@ -1396,8 +1396,10 @@ function TransactionsTab() {
               <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400">
                 <th className="pb-2 pr-3">Date</th>
                 <th className="pb-2 pr-3">User</th>
+                <th className="pb-2 pr-3">Name</th>
                 <th className="pb-2 pr-3">Gateway</th>
                 <th className="pb-2 pr-3">Event</th>
+                <th className="pb-2 pr-3">Source</th>
                 <th className="pb-2 pr-3">Amount</th>
                 <th className="pb-2 pr-3">Tier Change</th>
                 <th className="pb-2 pr-3">Status</th>
@@ -1413,6 +1415,10 @@ function TransactionsTab() {
                     <td className="py-1.5 pr-3 whitespace-nowrap">{String(t.created_at ?? "").slice(0, 19)}</td>
                     <td className="py-1.5 pr-3 font-mono">{String(t.user_id ?? "").slice(0, 8)}</td>
                     <td className="py-1.5 pr-3">
+                      <div className="font-medium text-gray-900 dark:text-gray-100">{String(t.user_name ?? "")}</div>
+                      <div className="text-gray-400 text-[10px]">{String(t.user_email ?? "")}</div>
+                    </td>
+                    <td className="py-1.5 pr-3">
                       <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
                         t.gateway === "stripe" ? "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400"
                         : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
@@ -1421,6 +1427,21 @@ function TransactionsTab() {
                       </span>
                     </td>
                     <td className="py-1.5 pr-3">{String(t.event_type ?? "")}</td>
+                    <td className="py-1.5 pr-3">
+                      {(() => {
+                        const evt = String(t.event_type ?? "");
+                        const isUser = evt.startsWith("user_") || evt === "upgrade";
+                        return (
+                          <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                            isUser
+                              ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400"
+                              : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400"
+                          }`}>
+                            {isUser ? "User" : "Webhook"}
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td className="py-1.5 pr-3">{t.amount ? `${t.currency} ${t.amount}` : "\u2014"}</td>
                     <td className="py-1.5 pr-3">{t.tier_before && t.tier_after ? `${t.tier_before} \u2192 ${t.tier_after}` : "\u2014"}</td>
                     <td className={`py-1.5 pr-3 font-medium ${statusColor(String(t.status ?? ""))}`}>{String(t.status ?? "")}</td>

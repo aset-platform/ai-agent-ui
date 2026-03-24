@@ -192,9 +192,7 @@ export async function refreshAccessToken(): Promise<string | null> {
     // The refresh token is sent automatically via HttpOnly cookie.
     const res = await fetch(`${API_URL}/auth/refresh`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({}),
       signal: controller.signal,
     });
 

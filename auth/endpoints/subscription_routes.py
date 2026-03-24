@@ -362,6 +362,11 @@ def _checkout_razorpay(
                     },
                 )
                 upgraded = True
+                old_tier = (
+                    db_user.get("subscription_tier")
+                    if db_user
+                    else None
+                ) or "free"
                 _safe_update(
                     repo,
                     user.user_id,
@@ -369,6 +374,22 @@ def _checkout_razorpay(
                         "subscription_tier": tier,
                         "subscription_status": "active",
                     },
+                )
+                from subscription_config import (
+                    TIER_PRICE_INR,
+                )
+
+                _log_transaction(
+                    user_id=user.user_id,
+                    gateway="razorpay",
+                    event_type="upgrade",
+                    subscription_id=rz_sub_id,
+                    amount=float(
+                        TIER_PRICE_INR.get(tier, 0)
+                    ),
+                    tier_before=old_tier,
+                    tier_after=tier,
+                    currency="INR",
                 )
             except Exception:
                 rz_sub_id = None
@@ -477,6 +498,28 @@ def _checkout_stripe(
                         "subscription_tier": tier,
                         "subscription_status": "active",
                     },
+                )
+                old_tier = (
+                    db_user.get("subscription_tier")
+                    if db_user
+                    else None
+                ) or "free"
+                from subscription_config import (
+                    TIER_PRICE_USD,
+                )
+
+                _log_transaction(
+                    user_id=user.user_id,
+                    gateway="stripe",
+                    event_type="upgrade",
+                    subscription_id=st_sub_id,
+                    customer_id=st_cust_id,
+                    amount=float(
+                        TIER_PRICE_USD.get(tier, 0),
+                    ),
+                    tier_before=old_tier,
+                    tier_after=tier,
+                    currency="USD",
                 )
                 _logger.info(
                     "Stripe upgrade: user=%s"
@@ -748,6 +791,19 @@ def register(router: APIRouter) -> None:
             },
         )
 
+        gw = (
+            "stripe" if st_sub_id
+            else "razorpay" if rz_sub_id
+            else "unknown"
+        )
+        _log_transaction(
+            user_id=user.user_id,
+            gateway=gw,
+            event_type="user_cancelled",
+            subscription_id=st_sub_id or rz_sub_id,
+            tier_before=db_tier,
+            tier_after="free",
+        )
         _logger.info(
             "Subscription cancelled: user_id=%s",
             user.user_id,
@@ -1021,6 +1077,12 @@ def _handle_stripe_checkout(
         return
 
     repo = _helpers._get_repo()
+    old_user = repo.get_by_id(user_id)
+    old_tier = (
+        old_user.get("subscription_tier")
+        if old_user
+        else None
+    ) or "free"
     _safe_update(
         repo,
         user_id,
@@ -1031,14 +1093,22 @@ def _handle_stripe_checkout(
             "stripe_subscription_id": sub_id,
         },
     )
+    # amount_total is in cents
+    amt_cents = session.get("amount_total")
+    amt = float(amt_cents) / 100 if amt_cents else None
+
     _log_transaction(
         user_id=user_id,
         gateway="stripe",
         event_type="checkout_completed",
         subscription_id=sub_id,
         customer_id=cust_id,
+        amount=amt,
+        tier_before=old_tier,
         tier_after=tier,
-        currency="USD",
+        currency=(
+            session.get("currency", "usd").upper()
+        ),
         raw_payload=json.dumps(session),
     )
     _logger.info(
@@ -1223,12 +1293,15 @@ def _handle_charged(entity: Dict[str, Any]) -> None:
             "razorpay_subscription_id": sub_id,
         },
     )
+    from subscription_config import TIER_PRICE_INR
+
     _log_transaction(
         user_id=user["user_id"],
         gateway="razorpay",
         event_type="charged",
         subscription_id=sub_id,
         customer_id=cust_id,
+        amount=float(TIER_PRICE_INR.get(tier, 0)),
         tier_before=(
             user.get("subscription_tier") or "free"
         ),

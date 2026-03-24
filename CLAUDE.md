@@ -49,6 +49,8 @@ These rules MUST be followed in every interaction:
 10. **Iceberg writes MUST NOT be silenced** — let errors propagate.
 11. **Update `PROGRESS.md`** after every session (dated entry).
 12. **Test-after-feature** — happy path + 1 error path minimum.
+13. **Co-Authored-By in commits** — always use:
+    `Co-Authored-By: Abhay Kumar Singh <asequitytrading@gmail.com>`
 
 ---
 
