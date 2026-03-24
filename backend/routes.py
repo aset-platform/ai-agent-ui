@@ -953,6 +953,45 @@ def create_app(
         methods=["GET"],
         dependencies=[Depends(superuser_only)],
     )
+
+    async def _admin_payment_txns(
+        user_id: str | None = None,
+        gateway: str | None = None,
+        limit: int = 50,
+    ):
+        """GET /admin/payment-transactions."""
+        from auth.endpoints.helpers import _get_repo
+        from auth.repo.schemas import (
+            _PAYMENT_TXN_TABLE,
+        )
+
+        repo = _get_repo()
+        cat = repo._get_catalog()
+        tbl = cat.load_table(_PAYMENT_TXN_TABLE)
+        df = tbl.scan().to_pandas()
+        if df.empty:
+            return {"transactions": []}
+        if user_id:
+            df = df[df["user_id"] == user_id]
+        if gateway:
+            df = df[df["gateway"] == gateway]
+        df = df.sort_values(
+            "created_at", ascending=False,
+        ).head(limit)
+        rows = df.to_dict("records")
+        for r in rows:
+            if hasattr(r.get("created_at"), "isoformat"):
+                r["created_at"] = (
+                    r["created_at"].isoformat()
+                )
+        return {"transactions": rows}
+
+    admin_router.add_api_route(
+        "/admin/payment-transactions",
+        _admin_payment_txns,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
     app.include_router(admin_router)
 
     # Dashboard + audit + insights endpoints.

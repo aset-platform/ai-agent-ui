@@ -35,6 +35,7 @@ _USERS_TABLE = f"{_NAMESPACE}.users"
 _AUDIT_LOG_TABLE = f"{_NAMESPACE}.audit_log"
 _USER_TICKERS_TABLE = f"{_NAMESPACE}.user_tickers"
 _USAGE_HISTORY_TABLE = f"{_NAMESPACE}.usage_history"
+_PAYMENT_TXN_TABLE = f"{_NAMESPACE}.payment_transactions"
 
 # pa.timestamp("us") matches PyIceberg TimestampType (microseconds, no tz).
 # _TS is an immutable constant; kept module-level as a shared type reference.
@@ -139,6 +140,56 @@ _USAGE_HISTORY_PA_SCHEMA = pa.schema(
         ),
         pa.field(
             "archived_at", _TS, nullable=False,
+        ),
+    ]
+)
+
+_PAYMENT_TXN_PA_SCHEMA = pa.schema(
+    [
+        pa.field(
+            "transaction_id", pa.string(),
+            nullable=False,
+        ),
+        pa.field(
+            "user_id", pa.string(), nullable=False,
+        ),
+        pa.field(
+            "gateway", pa.string(), nullable=False,
+        ),
+        pa.field(
+            "event_type", pa.string(), nullable=False,
+        ),
+        pa.field(
+            "gateway_event_id", pa.string(),
+            nullable=True,
+        ),
+        pa.field(
+            "subscription_id", pa.string(),
+            nullable=True,
+        ),
+        pa.field(
+            "customer_id", pa.string(), nullable=True,
+        ),
+        pa.field(
+            "amount", pa.float64(), nullable=True,
+        ),
+        pa.field(
+            "currency", pa.string(), nullable=True,
+        ),
+        pa.field(
+            "tier_before", pa.string(), nullable=True,
+        ),
+        pa.field(
+            "tier_after", pa.string(), nullable=True,
+        ),
+        pa.field(
+            "status", pa.string(), nullable=False,
+        ),
+        pa.field(
+            "raw_payload", pa.string(), nullable=True,
+        ),
+        pa.field(
+            "created_at", _TS, nullable=False,
         ),
     ]
 )

@@ -49,6 +49,7 @@ from pyiceberg.catalog.sql import SqlCatalog  # noqa: E402
 from pyiceberg.schema import Schema  # noqa: E402
 from pyiceberg.types import (  # noqa: E402
     BooleanType,
+    DoubleType,
     IntegerType,
     NestedField,
     StringType,
@@ -67,6 +68,7 @@ _USERS_TABLE = f"{_NAMESPACE}.users"
 _AUDIT_LOG_TABLE = f"{_NAMESPACE}.audit_log"
 _USER_TICKERS_TABLE = f"{_NAMESPACE}.user_tickers"
 _USAGE_HISTORY_TABLE = f"{_NAMESPACE}.usage_history"
+_PAYMENT_TXN_TABLE = f"{_NAMESPACE}.payment_transactions"
 
 
 def _get_catalog() -> SqlCatalog:
@@ -361,6 +363,96 @@ def _usage_history_schema() -> Schema:
     )
 
 
+def _payment_transactions_schema() -> Schema:
+    """Return Iceberg schema for ``payment_transactions``."""
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="transaction_id",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=2,
+            name="user_id",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=3,
+            name="gateway",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=4,
+            name="event_type",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=5,
+            name="gateway_event_id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=6,
+            name="subscription_id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=7,
+            name="customer_id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=8,
+            name="amount",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=9,
+            name="currency",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=10,
+            name="tier_before",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=11,
+            name="tier_after",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=12,
+            name="status",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=13,
+            name="raw_payload",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=14,
+            name="created_at",
+            field_type=TimestampType(),
+            required=True,
+        ),
+    )
+
+
 def create_tables() -> None:
     """Create auth Iceberg tables.
 
@@ -436,6 +528,22 @@ def create_tables() -> None:
         logger.info(
             "Table '%s' already exists — skipping.",
             _USAGE_HISTORY_TABLE,
+        )
+
+    # Create payment_transactions table
+    try:
+        catalog.create_table(
+            identifier=_PAYMENT_TXN_TABLE,
+            schema=_payment_transactions_schema(),
+        )
+        logger.info(
+            "Created Iceberg table '%s'.",
+            _PAYMENT_TXN_TABLE,
+        )
+    except Exception:
+        logger.info(
+            "Table '%s' already exists — skipping.",
+            _PAYMENT_TXN_TABLE,
         )
 
     logger.info("Iceberg table initialisation complete.")

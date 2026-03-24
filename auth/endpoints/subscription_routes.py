@@ -55,21 +55,25 @@ class CheckoutRequest(BaseModel):
 
 
 class CheckoutResponse(BaseModel):
-    """Razorpay checkout response.
+    """Checkout response (supports both gateways).
 
     Attributes:
+        gateway: ``"razorpay"`` or ``"stripe"``.
+        upgraded: True if existing sub was PATCHed.
         subscription_id: Razorpay subscription ID.
-        key_id: Razorpay public key for the checkout modal.
+        key_id: Razorpay public key.
         plan_id: Razorpay plan ID.
-        gateway: Always ``"razorpay"``.
-        upgraded: True if existing sub was updated.
+        checkout_url: Stripe hosted checkout URL.
     """
 
-    subscription_id: str
-    key_id: str
-    plan_id: str
     gateway: str = "razorpay"
     upgraded: bool = False
+    # Razorpay fields
+    subscription_id: str | None = None
+    key_id: str | None = None
+    plan_id: str | None = None
+    # Stripe fields
+    checkout_url: str | None = None
 
 
 class SubscriptionStatus(BaseModel):
@@ -88,6 +92,7 @@ class SubscriptionStatus(BaseModel):
     usage_count: int
     usage_limit: int
     usage_remaining: int | None
+    gateway: str | None = None
 
 
 # ---------------------------------------------------------------
@@ -161,6 +166,48 @@ def _fetch_rz_sub_status(
 
 
 # ---------------------------------------------------------------
+# Stripe helpers
+# ---------------------------------------------------------------
+
+
+def _get_stripe_client():
+    """Return configured Stripe module.
+
+    Raises:
+        HTTPException: 503 if keys not configured.
+    """
+    from config import get_settings
+
+    settings = get_settings()
+    if not settings.stripe_secret_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Stripe not configured",
+        )
+    import stripe
+
+    stripe.api_key = settings.stripe_secret_key
+    return stripe
+
+
+def _get_stripe_price_id(tier: str) -> str:
+    """Resolve Stripe price ID for *tier*."""
+    import os
+
+    key = f"STRIPE_PRICE_{tier.upper()}"
+    price_id = os.environ.get(key, "")
+    if not price_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Stripe price not configured"
+                f" for tier: {tier}"
+            ),
+        )
+    return price_id
+
+
+# ---------------------------------------------------------------
 # Webhook signature verification
 # ---------------------------------------------------------------
 
@@ -177,6 +224,310 @@ def verify_razorpay_signature(
         hashlib.sha256,
     ).hexdigest()
     return hmac.compare_digest(expected, signature)
+
+
+# ---------------------------------------------------------------
+# Transaction ledger
+# ---------------------------------------------------------------
+
+
+def _log_transaction(
+    user_id: str,
+    gateway: str,
+    event_type: str,
+    gateway_event_id: str | None = None,
+    subscription_id: str | None = None,
+    customer_id: str | None = None,
+    amount: float | None = None,
+    currency: str | None = None,
+    tier_before: str | None = None,
+    tier_after: str | None = None,
+    status: str = "success",
+    raw_payload: str | None = None,
+) -> None:
+    """Append a payment event to the ledger.
+
+    Fire-and-forget — errors logged, never raised.
+    """
+    try:
+        import uuid
+        from datetime import datetime, timezone
+
+        import pyarrow as pa
+
+        from auth.repo.schemas import (
+            _PAYMENT_TXN_PA_SCHEMA,
+            _PAYMENT_TXN_TABLE,
+        )
+
+        now = (
+            datetime.now(timezone.utc)
+            .replace(tzinfo=None)
+        )
+        repo = _helpers._get_repo()
+        cat = repo._get_catalog()
+        tbl = cat.load_table(_PAYMENT_TXN_TABLE)
+        row = pa.table(
+            {
+                "transaction_id": [str(uuid.uuid4())],
+                "user_id": [user_id],
+                "gateway": [gateway],
+                "event_type": [event_type],
+                "gateway_event_id": [
+                    gateway_event_id
+                ],
+                "subscription_id": [subscription_id],
+                "customer_id": [customer_id],
+                "amount": [amount],
+                "currency": [currency],
+                "tier_before": [tier_before],
+                "tier_after": [tier_after],
+                "status": [status],
+                "raw_payload": [raw_payload],
+                "created_at": [now],
+            },
+            schema=_PAYMENT_TXN_PA_SCHEMA,
+        )
+        tbl.append(row)
+        _logger.info(
+            "Transaction logged: user=%s gw=%s"
+            " event=%s status=%s",
+            user_id,
+            gateway,
+            event_type,
+            status,
+        )
+    except Exception:
+        _logger.exception(
+            "Failed to log transaction for user=%s",
+            user_id,
+        )
+
+
+# ---------------------------------------------------------------
+# Gateway-specific checkout helpers
+# ---------------------------------------------------------------
+
+
+def _checkout_razorpay(
+    repo: Any,
+    db_user: dict | None,
+    user: UserContext,
+    tier: str,
+) -> CheckoutResponse:
+    """Razorpay checkout — modal-based."""
+    client = _get_razorpay_client()
+
+    rz_cust_id = (
+        db_user.get("razorpay_customer_id")
+        if db_user
+        else None
+    )
+    if not rz_cust_id:
+        cust = client.customer.create({
+            "name": (
+                db_user.get("full_name", "")
+                if db_user
+                else ""
+            ),
+            "email": user.email,
+        })
+        rz_cust_id = cust["id"]
+        repo.update(
+            user.user_id,
+            {"razorpay_customer_id": rz_cust_id},
+        )
+
+    plan_id = _get_razorpay_plan_id(tier)
+
+    rz_sub_id = (
+        db_user.get("razorpay_subscription_id")
+        if db_user
+        else None
+    )
+    upgraded = False
+
+    if rz_sub_id:
+        rz_status = _fetch_rz_sub_status(
+            client, rz_sub_id,
+        )
+        if rz_status in _ACTIVE_STATUSES:
+            try:
+                client.subscription.edit(
+                    rz_sub_id,
+                    {
+                        "plan_id": plan_id,
+                        "schedule_change_at": "now",
+                        "customer_notify": 1,
+                    },
+                )
+                upgraded = True
+                _safe_update(
+                    repo,
+                    user.user_id,
+                    {
+                        "subscription_tier": tier,
+                        "subscription_status": "active",
+                    },
+                )
+            except Exception:
+                rz_sub_id = None
+
+    if not upgraded:
+        if rz_sub_id:
+            try:
+                client.subscription.cancel(rz_sub_id)
+            except Exception:
+                pass
+        sub = client.subscription.create({
+            "plan_id": plan_id,
+            "customer_id": rz_cust_id,
+            "total_count": 12,
+            "quantity": 1,
+        })
+        rz_sub_id = sub["id"]
+        repo.update(
+            user.user_id,
+            {"razorpay_subscription_id": rz_sub_id},
+        )
+
+    from config import get_settings
+    settings = get_settings()
+
+    _logger.info(
+        "Razorpay checkout: user=%s tier=%s"
+        " sub=%s upgraded=%s",
+        user.user_id,
+        tier,
+        rz_sub_id,
+        upgraded,
+    )
+    return CheckoutResponse(
+        gateway="razorpay",
+        subscription_id=rz_sub_id,
+        key_id=settings.razorpay_key_id,
+        plan_id=plan_id,
+        upgraded=upgraded,
+    )
+
+
+def _checkout_stripe(
+    repo: Any,
+    db_user: dict | None,
+    user: UserContext,
+    tier: str,
+) -> CheckoutResponse:
+    """Stripe checkout — redirect to hosted page."""
+    stripe = _get_stripe_client()
+    from config import get_settings
+
+    settings = get_settings()
+
+    # Create or reuse Stripe customer
+    st_cust_id = (
+        db_user.get("stripe_customer_id")
+        if db_user
+        else None
+    )
+    if not st_cust_id:
+        cust = stripe.Customer.create(
+            email=user.email,
+            name=(
+                db_user.get("full_name", "")
+                if db_user
+                else ""
+            ),
+        )
+        st_cust_id = cust.id
+        repo.update(
+            user.user_id,
+            {"stripe_customer_id": st_cust_id},
+        )
+
+    price_id = _get_stripe_price_id(tier)
+
+    # Try to upgrade existing Stripe subscription
+    st_sub_id = (
+        db_user.get("stripe_subscription_id")
+        if db_user
+        else None
+    )
+    if st_sub_id:
+        try:
+            existing = stripe.Subscription.retrieve(
+                st_sub_id,
+            )
+            if existing.status in ("active", "trialing"):
+                # Modify subscription — Stripe handles
+                # pro-rata automatically
+                stripe.Subscription.modify(
+                    st_sub_id,
+                    items=[{
+                        "id": existing["items"]["data"][
+                            0
+                        ]["id"],
+                        "price": price_id,
+                    }],
+                    proration_behavior="create_prorations",
+                )
+                _safe_update(
+                    repo,
+                    user.user_id,
+                    {
+                        "subscription_tier": tier,
+                        "subscription_status": "active",
+                    },
+                )
+                _logger.info(
+                    "Stripe upgrade: user=%s"
+                    " tier=%s sub=%s",
+                    user.user_id,
+                    tier,
+                    st_sub_id,
+                )
+                return CheckoutResponse(
+                    gateway="stripe",
+                    upgraded=True,
+                )
+        except Exception:
+            _logger.warning(
+                "Stripe modify failed, creating"
+                " new session: sub=%s",
+                st_sub_id,
+            )
+
+    # Create Stripe Checkout Session (new sub)
+    session = stripe.checkout.Session.create(
+        customer=st_cust_id,
+        mode="subscription",
+        line_items=[
+            {"price": price_id, "quantity": 1},
+        ],
+        success_url=(
+            f"{settings.oauth_redirect_uri}"
+            "/../dashboard?billing=success"
+        ).replace("/auth/oauth/callback/../", "/"),
+        cancel_url=(
+            f"{settings.oauth_redirect_uri}"
+            "/../dashboard?billing=cancelled"
+        ).replace("/auth/oauth/callback/../", "/"),
+        metadata={
+            "user_id": user.user_id,
+            "tier": tier,
+        },
+    )
+
+    _logger.info(
+        "Stripe checkout: user=%s tier=%s"
+        " session=%s",
+        user.user_id,
+        tier,
+        session.id,
+    )
+    return CheckoutResponse(
+        gateway="stripe",
+        checkout_url=session.url,
+    )
 
 
 # ---------------------------------------------------------------
@@ -246,123 +597,15 @@ def register(router: APIRouter) -> None:
                 detail="Already on this tier or higher",
             )
 
-        client = _get_razorpay_client()
-
-        # Create or reuse Razorpay customer
-        rz_cust_id = (
-            db_user.get("razorpay_customer_id")
-            if db_user
-            else None
-        )
-        if not rz_cust_id:
-            cust = client.customer.create({
-                "name": (
-                    db_user.get("full_name", "")
-                    if db_user
-                    else ""
-                ),
-                "email": user.email,
-            })
-            rz_cust_id = cust["id"]
-            repo.update(
-                user.user_id,
-                {"razorpay_customer_id": rz_cust_id},
+        # ── Stripe path ──────────────────────
+        if body.gateway == "stripe":
+            return _checkout_stripe(
+                repo, db_user, user, body.tier,
             )
 
-        plan_id = _get_razorpay_plan_id(body.tier)
-
-        # Try to upgrade existing subscription
-        rz_sub_id = (
-            db_user.get("razorpay_subscription_id")
-            if db_user
-            else None
-        )
-        upgraded = False
-
-        if rz_sub_id:
-            rz_status = _fetch_rz_sub_status(
-                client, rz_sub_id,
-            )
-            if rz_status in _ACTIVE_STATUSES:
-                # PATCH existing subscription
-                try:
-                    client.subscription.edit(
-                        rz_sub_id,
-                        {
-                            "plan_id": plan_id,
-                            "schedule_change_at": "now",
-                            "customer_notify": 1,
-                        },
-                    )
-                    upgraded = True
-                    _logger.info(
-                        "Subscription upgraded:"
-                        " user_id=%s sub=%s"
-                        " new_plan=%s",
-                        user.user_id,
-                        rz_sub_id,
-                        plan_id,
-                    )
-                    # Update tier immediately
-                    _safe_update(
-                        repo,
-                        user.user_id,
-                        {
-                            "subscription_tier": body.tier,
-                            "subscription_status": "active",
-                        },
-                    )
-                except Exception:
-                    _logger.warning(
-                        "PATCH sub failed, creating"
-                        " new: sub=%s",
-                        rz_sub_id,
-                    )
-                    rz_sub_id = None
-
-        if not upgraded:
-            # Cancel any stale subscription first
-            if rz_sub_id:
-                try:
-                    client.subscription.cancel(
-                        rz_sub_id,
-                    )
-                except Exception:
-                    pass
-
-            # Create fresh subscription
-            sub = client.subscription.create({
-                "plan_id": plan_id,
-                "customer_id": rz_cust_id,
-                "total_count": 12,
-                "quantity": 1,
-            })
-            rz_sub_id = sub["id"]
-            repo.update(
-                user.user_id,
-                {
-                    "razorpay_subscription_id": (
-                        rz_sub_id
-                    ),
-                },
-            )
-
-        from config import get_settings
-        settings = get_settings()
-
-        _logger.info(
-            "Checkout: user=%s tier=%s sub=%s"
-            " upgraded=%s",
-            user.user_id,
-            body.tier,
-            rz_sub_id,
-            upgraded,
-        )
-        return CheckoutResponse(
-            subscription_id=rz_sub_id,
-            key_id=settings.razorpay_key_id,
-            plan_id=plan_id,
-            upgraded=upgraded,
+        # ── Razorpay path (default) ─────────
+        return _checkout_razorpay(
+            repo, db_user, user, body.tier,
         )
 
     # -----------------------------------------------------------
@@ -411,12 +654,23 @@ def register(router: APIRouter) -> None:
             else max(0, quota - count)
         )
 
+        # Detect which gateway is active
+        active_gw = None
+        if db_user:
+            if db_user.get("stripe_subscription_id"):
+                active_gw = "stripe"
+            elif db_user.get(
+                "razorpay_subscription_id",
+            ):
+                active_gw = "razorpay"
+
         return SubscriptionStatus(
             tier=effective_tier,
             status=status,
             usage_count=count,
             usage_limit=quota,
             usage_remaining=remaining,
+            gateway=active_gw,
         )
 
     # -----------------------------------------------------------
@@ -450,12 +704,12 @@ def register(router: APIRouter) -> None:
                 detail="No active subscription",
             )
 
+        # Cancel in Razorpay if active
         rz_sub_id = (
             db_user.get("razorpay_subscription_id")
             if db_user
             else None
         )
-
         if rz_sub_id:
             try:
                 client = _get_razorpay_client()
@@ -466,7 +720,23 @@ def register(router: APIRouter) -> None:
                     rz_sub_id,
                 )
 
-        # Reset to free + clear sub ID
+        # Cancel in Stripe if active
+        st_sub_id = (
+            db_user.get("stripe_subscription_id")
+            if db_user
+            else None
+        )
+        if st_sub_id:
+            try:
+                stripe = _get_stripe_client()
+                stripe.Subscription.cancel(st_sub_id)
+            except Exception:
+                _logger.exception(
+                    "Stripe cancel failed: sub=%s",
+                    st_sub_id,
+                )
+
+        # Reset to free + clear both sub IDs
         _safe_update(
             repo,
             user.user_id,
@@ -474,6 +744,7 @@ def register(router: APIRouter) -> None:
                 "subscription_tier": "free",
                 "subscription_status": "cancelled",
                 "razorpay_subscription_id": None,
+                "stripe_subscription_id": None,
             },
         )
 
@@ -667,6 +938,212 @@ def register(router: APIRouter) -> None:
 
         return {"status": "ok"}
 
+    # -----------------------------------------------------------
+    # Stripe webhook handler
+    # -----------------------------------------------------------
+
+    @router.post(
+        "/subscription/webhooks/stripe",
+        tags=["webhooks"],
+    )
+    async def stripe_webhook(
+        request: Request,
+    ) -> Dict[str, str]:
+        """Handle Stripe webhook events."""
+        stripe = _get_stripe_client()
+        from config import get_settings
+
+        settings = get_settings()
+        body = await request.body()
+        sig = request.headers.get(
+            "Stripe-Signature", "",
+        )
+
+        # Verify signature
+        secret = settings.stripe_webhook_secret
+        if secret:
+            try:
+                event = stripe.Webhook.construct_event(
+                    body, sig, secret,
+                )
+            except Exception as exc:
+                _logger.warning(
+                    "Stripe signature failed: %s",
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid Stripe signature",
+                )
+        else:
+            event = json.loads(body)
+            _logger.warning(
+                "Stripe webhook secret not set"
+                " — skipping verification",
+            )
+
+        event_type = event.get(
+            "type", event.get("event", ""),
+        )
+        data = event.get("data", {}).get("object", {})
+
+        _logger.info(
+            "Stripe webhook: type=%s", event_type,
+        )
+
+        if event_type == "checkout.session.completed":
+            _handle_stripe_checkout(data)
+        elif event_type in (
+            "customer.subscription.deleted",
+            "customer.subscription.updated",
+        ):
+            _handle_stripe_sub_change(data)
+        elif event_type == "invoice.payment_failed":
+            _handle_stripe_payment_failed(data)
+
+        return {"status": "ok"}
+
+
+def _handle_stripe_checkout(
+    session: Dict[str, Any],
+) -> None:
+    """Process checkout.session.completed."""
+    cust_id = session.get("customer", "")
+    sub_id = session.get("subscription", "")
+    meta = session.get("metadata", {})
+    user_id = meta.get("user_id", "")
+    tier = meta.get("tier", "pro")
+
+    if not user_id:
+        _logger.warning(
+            "Stripe checkout: no user_id in metadata",
+        )
+        return
+
+    repo = _helpers._get_repo()
+    _safe_update(
+        repo,
+        user_id,
+        {
+            "subscription_tier": tier,
+            "subscription_status": "active",
+            "stripe_customer_id": cust_id,
+            "stripe_subscription_id": sub_id,
+        },
+    )
+    _log_transaction(
+        user_id=user_id,
+        gateway="stripe",
+        event_type="checkout_completed",
+        subscription_id=sub_id,
+        customer_id=cust_id,
+        tier_after=tier,
+        currency="USD",
+        raw_payload=json.dumps(session),
+    )
+    _logger.info(
+        "Stripe tier activated: user=%s tier=%s",
+        user_id,
+        tier,
+    )
+
+
+def _handle_stripe_sub_change(
+    sub: Dict[str, Any],
+) -> None:
+    """Process subscription.deleted/updated."""
+    status = sub.get("status", "")
+    cust_id = sub.get("customer", "")
+    sub_id = sub.get("id", "")
+
+    repo = _helpers._get_repo()
+    user = _find_user_by_stripe(repo, sub_id, cust_id)
+    if user is None:
+        return
+
+    if status in ("canceled", "unpaid"):
+        _safe_update(
+            repo,
+            user["user_id"],
+            {
+                "subscription_tier": "free",
+                "subscription_status": "cancelled",
+                "stripe_subscription_id": None,
+            },
+        )
+        _log_transaction(
+            user_id=user["user_id"],
+            gateway="stripe",
+            event_type="cancelled",
+            subscription_id=sub.get("id"),
+            customer_id=cust_id,
+            tier_before=(
+                user.get("subscription_tier")
+                or "free"
+            ),
+            tier_after="free",
+            raw_payload=json.dumps(sub),
+        )
+        _logger.info(
+            "Stripe sub cancelled: user=%s",
+            user["user_id"],
+        )
+
+
+def _handle_stripe_payment_failed(
+    invoice: Dict[str, Any],
+) -> None:
+    """Process invoice.payment_failed."""
+    cust_id = invoice.get("customer", "")
+    sub_id = invoice.get("subscription", "")
+
+    repo = _helpers._get_repo()
+    user = _find_user_by_stripe(repo, sub_id, cust_id)
+    if user is None:
+        return
+
+    _safe_update(
+        repo,
+        user["user_id"],
+        {"subscription_status": "past_due"},
+    )
+    _log_transaction(
+        user_id=user["user_id"],
+        gateway="stripe",
+        event_type="payment_failed",
+        subscription_id=sub_id,
+        customer_id=cust_id,
+        status="failed",
+    )
+    _logger.info(
+        "Stripe payment failed: user=%s",
+        user["user_id"],
+    )
+
+
+def _find_user_by_stripe(
+    repo: Any,
+    sub_id: str,
+    cust_id: str,
+) -> dict | None:
+    """Find user by Stripe IDs (sub_id first)."""
+    users = repo.list_all()
+    if sub_id:
+        for u in users:
+            if (
+                u.get("stripe_subscription_id")
+                == sub_id
+            ):
+                return u
+    if cust_id:
+        for u in users:
+            if (
+                u.get("stripe_customer_id")
+                == cust_id
+            ):
+                return u
+    return None
+
 
 # ---------------------------------------------------------------
 # Retry helper
@@ -746,6 +1223,19 @@ def _handle_charged(entity: Dict[str, Any]) -> None:
             "razorpay_subscription_id": sub_id,
         },
     )
+    _log_transaction(
+        user_id=user["user_id"],
+        gateway="razorpay",
+        event_type="charged",
+        subscription_id=sub_id,
+        customer_id=cust_id,
+        tier_before=(
+            user.get("subscription_tier") or "free"
+        ),
+        tier_after=tier,
+        currency="INR",
+        raw_payload=json.dumps(entity),
+    )
     _logger.info(
         "Tier activated: user_id=%s tier=%s",
         user["user_id"],
@@ -784,6 +1274,18 @@ def _handle_cancelled(entity: Dict[str, Any]) -> None:
             "razorpay_subscription_id": None,
         },
     )
+    _log_transaction(
+        user_id=user["user_id"],
+        gateway="razorpay",
+        event_type="cancelled",
+        subscription_id=sub_id,
+        customer_id=cust_id,
+        tier_before=(
+            user.get("subscription_tier") or "free"
+        ),
+        tier_after="free",
+        raw_payload=json.dumps(entity),
+    )
     _logger.info(
         "Subscription cancelled via webhook:"
         " user_id=%s",
@@ -810,6 +1312,14 @@ def _handle_payment_failed(
         repo,
         user["user_id"],
         {"subscription_status": "past_due"},
+    )
+    _log_transaction(
+        user_id=user["user_id"],
+        gateway="razorpay",
+        event_type="payment_failed",
+        subscription_id=sub_id,
+        customer_id=cust_id,
+        status="failed",
     )
     _logger.info(
         "Payment failed: user_id=%s marked past_due",

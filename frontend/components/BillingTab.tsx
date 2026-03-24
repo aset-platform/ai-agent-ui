@@ -22,6 +22,7 @@ interface SubscriptionInfo {
   usage_count: number;
   usage_limit: number;
   usage_remaining: number | null;
+  gateway: string | null;
 }
 
 declare global {
@@ -41,8 +42,8 @@ const TIERS = [
   {
     id: "free",
     name: "Free",
-    price: 0,
-    priceLabel: "Free forever",
+    priceINR: "Free forever",
+    priceUSD: "Free forever",
     features: [
       "3 analyses / month",
       "10 chat messages / day",
@@ -53,8 +54,8 @@ const TIERS = [
   {
     id: "pro",
     name: "Pro",
-    price: 499,
-    priceLabel: "\u20B9499/mo",
+    priceINR: "\u20B9499/mo",
+    priceUSD: "$6/mo",
     features: [
       "30 analyses / month",
       "100 chat messages / day",
@@ -66,8 +67,8 @@ const TIERS = [
   {
     id: "premium",
     name: "Premium",
-    price: 1499,
-    priceLabel: "\u20B91,499/mo",
+    priceINR: "\u20B91,499/mo",
+    priceUSD: "$18/mo",
     features: [
       "Unlimited analyses",
       "Unlimited messages",
@@ -90,13 +91,22 @@ export function BillingTab() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [gateway, setGateway] = useState<"razorpay" | "stripe">("razorpay");
 
   /* Fetch current subscription */
   const fetchSubscription = useCallback(async () => {
     try {
       const res = await apiFetch(`${API_URL}/subscription`);
       if (res.ok) {
-        setSub(await res.json());
+        const data = await res.json();
+        setSub(data);
+        if (data.gateway) {
+          setGateway(
+            data.gateway === "stripe"
+              ? "stripe"
+              : "razorpay",
+          );
+        }
       }
     } catch {
       /* ignore */
@@ -128,7 +138,7 @@ export function BillingTab() {
       const res = await apiFetch(`${API_URL}/subscription/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tier, gateway: "razorpay" }),
+        body: JSON.stringify({ tier, gateway }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -145,7 +155,13 @@ export function BillingTab() {
         return;
       }
 
-      // New subscription — open Razorpay checkout modal
+      // Stripe → redirect to hosted checkout
+      if (data.checkout_url) {
+        window.location.href = data.checkout_url;
+        return;
+      }
+
+      // Razorpay → open checkout modal
       if (!window.Razorpay) {
         setError("Razorpay SDK not loaded. Please refresh.");
         return;
@@ -322,7 +338,7 @@ export function BillingTab() {
                 {t.name}
               </h3>
               <p className="text-lg font-bold text-gray-900 dark:text-gray-100 mt-1">
-                {t.priceLabel}
+                {gateway === "stripe" ? t.priceUSD : t.priceINR}
               </p>
               <ul className="mt-2 space-y-1 flex-1">
                 {t.features.map((f) => (
@@ -364,9 +380,36 @@ export function BillingTab() {
         })}
       </div>
 
+      {/* Gateway selector */}
+      <div className="flex items-center justify-center gap-2">
+        <span className="text-xs text-gray-500 dark:text-gray-400">Pay with:</span>
+        <button
+          onClick={() => setGateway("razorpay")}
+          className={`text-xs px-3 py-1 rounded-full border transition-colors ${
+            gateway === "razorpay"
+              ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 font-medium"
+              : "border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-gray-400"
+          }`}
+        >
+          UPI / Card (INR)
+        </button>
+        <button
+          onClick={() => setGateway("stripe")}
+          className={`text-xs px-3 py-1 rounded-full border transition-colors ${
+            gateway === "stripe"
+              ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 font-medium"
+              : "border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-gray-400"
+          }`}
+        >
+          International Card (USD)
+        </button>
+      </div>
+
       {/* Payment info */}
       <p className="text-xs text-gray-400 dark:text-gray-500 text-center">
-        Payments processed securely via Razorpay. Sandbox/test mode.
+        {gateway === "stripe"
+          ? "Payments processed securely via Stripe. Sandbox/test mode."
+          : "Payments processed securely via Razorpay. Sandbox/test mode."}
       </p>
     </div>
   );

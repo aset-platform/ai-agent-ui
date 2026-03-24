@@ -93,13 +93,14 @@ def _archive_usage(
     try:
         import pyarrow as pa
 
-        from auth.repo.catalog import get_catalog
+        from auth.endpoints.helpers import _get_repo
         from auth.repo.schemas import (
             _USAGE_HISTORY_PA_SCHEMA,
             _USAGE_HISTORY_TABLE,
         )
 
-        cat = get_catalog()
+        repo = _get_repo()
+        cat = repo._get_catalog()
         tbl = cat.load_table(_USAGE_HISTORY_TABLE)
         row = pa.table(
             {
@@ -350,12 +351,13 @@ def get_usage_history(
         tier, archived_at.
     """
     try:
-        from auth.repo.catalog import get_catalog
+        from auth.endpoints.helpers import _get_repo
         from auth.repo.schemas import (
             _USAGE_HISTORY_TABLE,
         )
 
-        cat = get_catalog()
+        repo = _get_repo()
+        cat = repo._get_catalog()
         tbl = cat.load_table(_USAGE_HISTORY_TABLE)
         scan = tbl.scan()
         df = scan.to_pandas()

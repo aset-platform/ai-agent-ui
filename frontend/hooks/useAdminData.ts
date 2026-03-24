@@ -530,6 +530,24 @@ export function useAdminMaintenance() {
     [],
   );
 
+  const getPaymentTransactions = useCallback(
+    async (
+      userId?: string,
+      gw?: string,
+    ): Promise<{
+      transactions: Record<string, unknown>[];
+    }> => {
+      const params = new URLSearchParams();
+      if (userId) params.set("user_id", userId);
+      if (gw) params.set("gateway", gw);
+      const res = await apiFetch(
+        `${API_URL}/admin/payment-transactions?${params}`,
+      );
+      return res.json();
+    },
+    [],
+  );
+
   return {
     cleanupSubscriptions,
     resetUsage,
@@ -538,5 +556,6 @@ export function useAdminMaintenance() {
     runRetention,
     retainSelected,
     analyzeGaps,
+    getPaymentTransactions,
   };
 }

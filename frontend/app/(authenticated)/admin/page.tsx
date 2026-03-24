@@ -8,6 +8,7 @@
 
 import {
   useState,
+  useEffect,
   useMemo,
   useCallback,
 } from "react";
@@ -1336,6 +1337,118 @@ function MaintenanceTab() {
 }
 
 // ---------------------------------------------------------------
+// Transactions Tab
+// ---------------------------------------------------------------
+
+function TransactionsTab() {
+  const m = useAdminMaintenance();
+  const [txns, setTxns] = useState<Record<string, unknown>[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [gwFilter, setGwFilter] = useState<string>("");
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const fetchTxns = async () => {
+    setLoading(true);
+    try {
+      const r = await m.getPaymentTransactions(undefined, gwFilter || undefined);
+      setTxns(r.transactions || []);
+    } catch { /* ignore */ }
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchTxns(); }, [gwFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const statusColor = (s: string) =>
+    s === "success" ? "text-emerald-600 dark:text-emerald-400"
+    : s === "failed" ? "text-red-600 dark:text-red-400"
+    : "text-amber-600 dark:text-amber-400";
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <select
+          value={gwFilter}
+          onChange={(e) => setGwFilter(e.target.value)}
+          className="text-xs border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-lg px-2 py-1.5 text-gray-700 dark:text-gray-300"
+        >
+          <option value="">All Gateways</option>
+          <option value="razorpay">Razorpay</option>
+          <option value="stripe">Stripe</option>
+        </select>
+        <button
+          onClick={fetchTxns}
+          disabled={loading}
+          className="text-xs px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+        >
+          {loading ? "Loading\u2026" : "Refresh"}
+        </button>
+        <span className="text-xs text-gray-400">{txns.length} transactions</span>
+      </div>
+
+      {txns.length === 0 && !loading && (
+        <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-8">No transactions recorded yet.</p>
+      )}
+
+      {txns.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400">
+                <th className="pb-2 pr-3">Date</th>
+                <th className="pb-2 pr-3">User</th>
+                <th className="pb-2 pr-3">Gateway</th>
+                <th className="pb-2 pr-3">Event</th>
+                <th className="pb-2 pr-3">Amount</th>
+                <th className="pb-2 pr-3">Tier Change</th>
+                <th className="pb-2 pr-3">Status</th>
+                <th className="pb-2">Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              {txns.map((t) => {
+                const tid = String(t.transaction_id ?? "");
+                const isExpanded = expanded === tid;
+                return (
+                  <tr key={tid} className="border-b border-gray-100 dark:border-gray-800 align-top">
+                    <td className="py-1.5 pr-3 whitespace-nowrap">{String(t.created_at ?? "").slice(0, 19)}</td>
+                    <td className="py-1.5 pr-3 font-mono">{String(t.user_id ?? "").slice(0, 8)}</td>
+                    <td className="py-1.5 pr-3">
+                      <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                        t.gateway === "stripe" ? "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400"
+                        : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                      }`}>
+                        {String(t.gateway ?? "")}
+                      </span>
+                    </td>
+                    <td className="py-1.5 pr-3">{String(t.event_type ?? "")}</td>
+                    <td className="py-1.5 pr-3">{t.amount ? `${t.currency} ${t.amount}` : "\u2014"}</td>
+                    <td className="py-1.5 pr-3">{t.tier_before && t.tier_after ? `${t.tier_before} \u2192 ${t.tier_after}` : "\u2014"}</td>
+                    <td className={`py-1.5 pr-3 font-medium ${statusColor(String(t.status ?? ""))}`}>{String(t.status ?? "")}</td>
+                    <td className="py-1.5">
+                      <button
+                        onClick={() => setExpanded(isExpanded ? null : tid)}
+                        className="text-indigo-600 dark:text-indigo-400 hover:underline"
+                      >
+                        {isExpanded ? "Hide" : "View"}
+                      </button>
+                      {isExpanded && t.raw_payload && (
+                        <pre className="mt-1 text-[10px] bg-gray-50 dark:bg-gray-900 rounded p-2 max-h-40 overflow-auto whitespace-pre-wrap break-all">
+                          {(() => { try { return JSON.stringify(JSON.parse(String(t.raw_payload)), null, 2); } catch { return String(t.raw_payload); } })()}
+                        </pre>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------
 
@@ -1343,7 +1456,8 @@ type AdminTab =
   | "users"
   | "audit"
   | "observability"
-  | "maintenance";
+  | "maintenance"
+  | "transactions";
 
 export default function AdminPage() {
   const [tab, setTab] =
@@ -1364,6 +1478,10 @@ export default function AdminPage() {
             {
               id: "maintenance",
               label: "Maintenance",
+            },
+            {
+              id: "transactions",
+              label: "Transactions",
             },
           ] as const
         ).map((t) => (
@@ -1395,6 +1513,9 @@ export default function AdminPage() {
         )}
         {tab === "maintenance" && (
           <MaintenanceTab />
+        )}
+        {tab === "transactions" && (
+          <TransactionsTab />
         )}
       </div>
     </div>
