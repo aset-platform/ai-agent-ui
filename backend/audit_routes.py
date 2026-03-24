@@ -14,6 +14,7 @@ from auth.dependencies import get_current_user
 from auth.models import UserContext
 from dashboard_models import (
     ChatSessionCreate,
+    ChatSessionDetail,
     ChatSessionSummary,
 )
 
@@ -160,5 +161,93 @@ def create_audit_router() -> APIRouter:
             )
 
         return result
+
+    @router.get(
+        "/chat-sessions/{session_id}",
+        response_model=ChatSessionDetail,
+    )
+    async def get_chat_session_detail(
+        session_id: str,
+        user: UserContext = Depends(
+            get_current_user,
+        ),
+    ):
+        """Fetch a single chat session with
+        full message history."""
+        stock_repo = _get_stock_repo()
+
+        try:
+            detail = (
+                stock_repo.get_chat_session_detail(
+                    user_id=user.user_id,
+                    session_id=session_id,
+                )
+            )
+        except Exception as exc:
+            _logger.error(
+                "Audit: failed to get session "
+                "%s for user=%s: %s",
+                session_id,
+                user.user_id,
+                exc,
+            )
+            from fastapi.responses import (
+                JSONResponse,
+            )
+
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": "Failed to load "
+                    "session"
+                },
+            )
+
+        if detail is None:
+            from fastapi.responses import (
+                JSONResponse,
+            )
+
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "detail": "Session not found"
+                },
+            )
+
+        agent_ids = detail.get(
+            "agent_ids_used", []
+        )
+        if isinstance(agent_ids, str):
+            try:
+                agent_ids = json.loads(
+                    agent_ids
+                )
+            except (
+                json.JSONDecodeError,
+                TypeError,
+            ):
+                agent_ids = []
+
+        messages = detail.get("messages", [])
+        return ChatSessionDetail(
+            session_id=str(
+                detail.get("session_id", "")
+            ),
+            started_at=str(
+                detail.get("started_at", "")
+            ),
+            ended_at=str(
+                detail.get("ended_at", "")
+            ),
+            message_count=int(
+                detail.get("message_count", 0)
+            ),
+            preview=str(
+                detail.get("preview", "")
+            ),
+            agent_ids_used=agent_ids,
+            messages=messages,
+        )
 
     return router

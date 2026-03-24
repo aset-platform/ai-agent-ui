@@ -48,6 +48,7 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import time
@@ -3346,6 +3347,23 @@ class StockRepository:
         try:
             self._ensure_chat_audit_table()
             now = _now_utc()
+
+            def _parse_ts(val):
+                """Parse ISO string or return now."""
+                if val is None or val == "":
+                    return now
+                if isinstance(val, str):
+                    return pd.Timestamp(
+                        val,
+                    ).to_pydatetime()
+                return val
+
+            started = _parse_ts(
+                session.get("started_at"),
+            )
+            ended = _parse_ts(
+                session.get("ended_at"),
+            )
             arrays = {
                 "session_id": pa.array(
                     [session["session_id"]],
@@ -3356,11 +3374,11 @@ class StockRepository:
                     type=pa.string(),
                 ),
                 "started_at": pa.array(
-                    [session.get("started_at", now)],
+                    [started],
                     type=pa.timestamp("us"),
                 ),
                 "ended_at": pa.array(
-                    [session.get("ended_at", now)],
+                    [ended],
                     type=pa.timestamp("us"),
                 ),
                 "message_count": pa.array(
@@ -3479,10 +3497,36 @@ class StockRepository:
 
         results: list[dict] = []
         for _, row in df.iterrows():
-            msgs = str(
+            msgs_raw = str(
                 row.get("messages_json", "")
             )
-            preview = msgs[:200] if msgs else ""
+            preview = ""
+            try:
+                parsed = json.loads(msgs_raw)
+                if isinstance(parsed, list):
+                    for m in parsed:
+                        if (
+                            isinstance(m, dict)
+                            and m.get("role") == "user"
+                            and m.get("content")
+                        ):
+                            preview = str(
+                                m["content"]
+                            )[:200]
+                            break
+                if not preview and isinstance(
+                    parsed, list
+                ) and parsed:
+                    first = parsed[0]
+                    if isinstance(first, dict):
+                        preview = str(
+                            first.get("content", "")
+                        )[:200]
+            except (
+                json.JSONDecodeError,
+                TypeError,
+            ):
+                preview = msgs_raw[:200]
             results.append({
                 "session_id": str(
                     row["session_id"]
@@ -3502,6 +3546,107 @@ class StockRepository:
                 ),
             })
         return results
+
+    def get_chat_session_detail(
+        self,
+        user_id: str,
+        session_id: str,
+    ) -> dict | None:
+        """Fetch a single chat session with messages.
+
+        Returns:
+            Dict with all summary fields plus a
+            ``messages`` list, or ``None`` if not found.
+        """
+        try:
+            self._ensure_chat_audit_table()
+            from pyiceberg.expressions import (
+                And,
+                EqualTo,
+            )
+
+            tbl = self._load_table(_CHAT_AUDIT_LOG)
+            if _CHAT_AUDIT_LOG in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(
+                    _CHAT_AUDIT_LOG,
+                )
+            df = tbl.scan(
+                row_filter=And(
+                    EqualTo("user_id", user_id),
+                    EqualTo("session_id", session_id),
+                ),
+            ).to_pandas()
+        except Exception as exc:
+            _logger.warning(
+                "get_chat_session_detail scan "
+                "failed: %s",
+                exc,
+            )
+            df = self._table_to_df(
+                _CHAT_AUDIT_LOG,
+            )
+            if not df.empty:
+                df = df[
+                    (df["user_id"] == user_id)
+                    & (
+                        df["session_id"]
+                        == session_id
+                    )
+                ].copy()
+
+        if df.empty:
+            return None
+
+        row = df.iloc[0]
+        msgs_raw = str(
+            row.get("messages_json", "[]")
+        )
+        try:
+            messages = json.loads(msgs_raw)
+            if not isinstance(messages, list):
+                messages = []
+        except (json.JSONDecodeError, TypeError):
+            messages = []
+
+        agents_raw = str(
+            row.get("agent_ids_used", "[]")
+        )
+        try:
+            agent_ids = json.loads(agents_raw)
+        except (json.JSONDecodeError, TypeError):
+            agent_ids = []
+
+        # Build preview from first user message
+        preview = ""
+        for m in messages:
+            if (
+                isinstance(m, dict)
+                and m.get("role") == "user"
+                and m.get("content")
+            ):
+                preview = str(
+                    m["content"]
+                )[:200]
+                break
+
+        return {
+            "session_id": str(
+                row["session_id"]
+            ),
+            "started_at": str(
+                row.get("started_at", "")
+            ),
+            "ended_at": str(
+                row.get("ended_at", "")
+            ),
+            "message_count": int(
+                row.get("message_count", 0)
+            ),
+            "preview": preview,
+            "agent_ids_used": agent_ids,
+            "messages": messages,
+        }
 
     # ---------------------------------------------------------------
     # Query log (question tracking)

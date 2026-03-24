@@ -349,11 +349,42 @@ def _run_graph(
             )
     msgs.append(HumanMessage(content=message))
 
+    # Build user context (currency/market mix)
+    user_ctx = {}
+    try:
+        from stocks.repository import (
+            StockRepository,
+        )
+        repo = StockRepository()
+        holdings = repo.get_portfolio_holdings(
+            user_id or "",
+        )
+        if not holdings.empty:
+            currencies: dict[str, int] = {}
+            markets: dict[str, int] = {}
+            for _, h in holdings.iterrows():
+                ccy = h.get("currency", "USD")
+                mkt = h.get("market", "us")
+                currencies[ccy] = (
+                    currencies.get(ccy, 0) + 1
+                )
+                markets[mkt] = (
+                    markets.get(mkt, 0) + 1
+                )
+            user_ctx = {
+                "currencies": currencies,
+                "markets": markets,
+                "total_holdings": len(holdings),
+            }
+    except Exception:
+        pass
+
     input_state = {
         "messages": msgs,
         "user_input": message,
         "user_id": user_id or "",
         "history": history or [],
+        "user_context": user_ctx,
         "intent": "",
         "next_agent": "",
         "current_agent": "",

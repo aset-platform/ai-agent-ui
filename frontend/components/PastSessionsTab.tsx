@@ -91,6 +91,9 @@ export function PastSessionsTab({
   const [detail, setDetail] =
     useState<ChatSessionDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<
+    string | null
+  >(null);
 
   // Fetch on mount
   useEffect(() => {
@@ -116,6 +119,7 @@ export function PastSessionsTab({
       }
       setExpandedId(sessionId);
       setDetail(null);
+      setDetailError(null);
       setDetailLoading(true);
       try {
         const res = await apiFetch(
@@ -126,6 +130,9 @@ export function PastSessionsTab({
         setDetail(data);
       } catch {
         setDetail(null);
+        setDetailError(
+          "Failed to load session messages",
+        );
       } finally {
         setDetailLoading(false);
       }
@@ -301,7 +308,13 @@ export function PastSessionsTab({
                         msg={msg}
                       />
                     ))}
+                    {!detailLoading && detailError && (
+                      <p className="text-xs text-red-500 text-center py-2">
+                        {detailError}
+                      </p>
+                    )}
                     {!detailLoading &&
+                      !detailError &&
                       detail?.messages.length === 0 && (
                         <p className="text-xs text-gray-400 text-center">
                           No messages in this session

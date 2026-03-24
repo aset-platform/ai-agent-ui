@@ -63,6 +63,9 @@ export type ChartInterval = "D" | "W" | "M";
  * Aggregate daily OHLCV rows into weekly or monthly
  * candles.  Daily rows are returned unchanged.
  */
+// Reject epoch/invalid dates before aggregation
+const _VALID_YEAR = /^(19[89]\d|2\d{3})-/;
+
 export function aggregateOHLCV(
   rows: OHLCVRow[],
   interval: ChartInterval,
@@ -85,8 +88,11 @@ export function aggregateOHLCV(
     return monday.toISOString().slice(0, 10);
   };
 
+  const valid = rows.filter(
+    (r) => !!r.date && _VALID_YEAR.test(r.date),
+  );
   const buckets = new Map<string, OHLCVRow[]>();
-  for (const row of rows) {
+  for (const row of valid) {
     const key = bucketKey(row.date);
     let arr = buckets.get(key);
     if (!arr) {
@@ -137,11 +143,14 @@ export function aggregateIndicators(
     return monday.toISOString().slice(0, 10);
   };
 
+  const valid = rows.filter(
+    (r) => !!r.date && _VALID_YEAR.test(r.date),
+  );
   const buckets = new Map<
     string,
     IndicatorRow[]
   >();
-  for (const row of rows) {
+  for (const row of valid) {
     const key = bucketKey(row.date);
     let arr = buckets.get(key);
     if (!arr) {
@@ -206,17 +215,28 @@ interface StockChartProps {
 // ---------------------------------------------------------------
 
 /** Convert "YYYY-MM-DD" → lightweight-charts time string. */
-function toTime(d: string) {
-  return d as string;
+function toTime(d: string): string {
+  if (!d) return "";
+  // Ensure YYYY-MM-DD — lightweight-charts
+  // rejects full ISO timestamps.
+  return d.length > 10 ? d.slice(0, 10) : d;
 }
+
+// Reuse the same year filter for chart data
+const _DATE_RE = _VALID_YEAR;
 
 function filterNull(
   arr: { time: string; value: number | null }[],
 ): { time: string; value: number }[] {
-  return arr.filter(
-    (p): p is { time: string; value: number } =>
-      p.value != null && !Number.isNaN(p.value),
-  );
+  return arr
+    .filter(
+      (p): p is { time: string; value: number } =>
+        !!p.time &&
+        _DATE_RE.test(p.time) &&
+        p.value != null &&
+        !Number.isNaN(p.value),
+    )
+    .sort((a, b) => (a.time < b.time ? -1 : 1));
 }
 
 // ---------------------------------------------------------------
@@ -367,6 +387,8 @@ export function StockChart({
     const candleData = aggOhlcv
       .filter(
         (d) =>
+          !!d.date &&
+          _DATE_RE.test(d.date) &&
           d.open != null &&
           d.high != null &&
           d.low != null &&
@@ -378,7 +400,8 @@ export function StockChart({
         high: d.high,
         low: d.low,
         close: d.close,
-      }));
+      }))
+      .sort((a, b) => (a.time < b.time ? -1 : 1));
 
     const candleSeries = chart.addSeries(
       CandlestickSeries,
@@ -531,14 +554,21 @@ export function StockChart({
         },
       );
       volumeSeries.setData(
-        aggOhlcv.map((d) => ({
-          time: toTime(d.date),
-          value: d.volume,
-          color:
-            d.close >= d.open
-              ? "rgba(16,185,129,0.4)"
-              : "rgba(239,68,68,0.4)",
-        })),
+        aggOhlcv
+          .filter(
+            (d) => !!d.date && _DATE_RE.test(d.date),
+          )
+          .map((d) => ({
+            time: toTime(d.date),
+            value: d.volume,
+            color:
+              d.close >= d.open
+                ? "rgba(16,185,129,0.4)"
+                : "rgba(239,68,68,0.4)",
+          }))
+          .sort((a, b) =>
+            a.time < b.time ? -1 : 1,
+          ),
       );
     }
 

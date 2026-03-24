@@ -71,10 +71,10 @@ export function ChatProvider({
     () => setIsOpen((v) => !v),
     [],
   );
-  const closePanel = useCallback(
-    () => setIsOpen(false),
-    [],
-  );
+  const closePanel = useCallback(() => {
+    setIsOpen(false);
+    flush();
+  }, [flush]);
   const openPanel = useCallback(
     () => setIsOpen(true),
     [],
@@ -87,11 +87,17 @@ export function ChatProvider({
   useEffect(() => {
     const handleBeforeUnload = () => {
       if (messagesRef.current.length === 0) return;
-      // sendBeacon for fire-and-forget on tab close
+      // Use fetch+keepalive (not sendBeacon) so we
+      // can include the Authorization header.
       const url = `${
         process.env.NEXT_PUBLIC_BACKEND_URL
           ?? "http://127.0.0.1:8181"
       }/v1/audit/chat-sessions`;
+      const token =
+        typeof localStorage !== "undefined"
+          ? localStorage.getItem("auth_access_token")
+          : null;
+      if (!token) return;
       const body = JSON.stringify({
         session_id: sessionId,
         messages: messagesRef.current.map((m) => ({
@@ -101,12 +107,15 @@ export function ChatProvider({
           agent_id: agentId,
         })),
       });
-      navigator.sendBeacon(
-        url,
-        new Blob([body], {
-          type: "application/json",
-        }),
-      );
+      fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body,
+        keepalive: true,
+      });
     };
     window.addEventListener(
       "beforeunload",

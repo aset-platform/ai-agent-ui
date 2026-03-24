@@ -44,6 +44,8 @@ class AgentState(dict):
         "intent": str,
         "next_agent": str,
         "current_agent": str,
+        # ── User context ──────────────────────────
+        "user_context": dict,
         # ── Data context ───────────────────────────
         "tickers": list[str],
         "data_sources_used": Annotated[

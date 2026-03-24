@@ -10,7 +10,6 @@ calls ``format_response()`` for post-processing.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -83,6 +82,73 @@ def _infer_data_source(
     return _EXTERNAL_TOOLS.get(tool_name, "iceberg")
 
 
+_CURRENCY_SYMBOLS: dict[str, str] = {
+    "INR": "₹", "USD": "$", "EUR": "€",
+    "GBP": "£", "JPY": "¥",
+}
+
+
+def _build_context_block(
+    user_ctx: dict,
+) -> str:
+    """Build a context block for the system prompt.
+
+    Summarises the user's portfolio currency/market
+    mix so the LLM uses the correct currency symbols.
+    """
+    currencies = user_ctx.get("currencies", {})
+    markets = user_ctx.get("markets", {})
+    total = user_ctx.get("total_holdings", 0)
+    if not currencies and not markets:
+        return ""
+
+    parts = ["## User Portfolio Context"]
+    if total:
+        parts.append(f"- Holdings: {total} stocks")
+    if currencies:
+        ccy_parts = []
+        for ccy, count in sorted(
+            currencies.items(),
+            key=lambda x: -x[1],
+        ):
+            sym = _CURRENCY_SYMBOLS.get(ccy, ccy)
+            ccy_parts.append(
+                f"{ccy} ({sym}) — {count} holdings"
+            )
+        parts.append(
+            "- Currencies: " + ", ".join(ccy_parts)
+        )
+    if markets:
+        mkt_parts = []
+        for mkt, count in sorted(
+            markets.items(),
+            key=lambda x: -x[1],
+        ):
+            mkt_parts.append(f"{mkt} ({count})")
+        parts.append(
+            "- Markets: " + ", ".join(mkt_parts)
+        )
+
+    # Explicit instruction based on currency mix
+    ccy_list = list(currencies.keys())
+    if len(ccy_list) == 1:
+        sym = _CURRENCY_SYMBOLS.get(
+            ccy_list[0], ccy_list[0],
+        )
+        parts.append(
+            f"\nAll holdings are {ccy_list[0]}. "
+            f"Use {sym} for all monetary values."
+        )
+    elif len(ccy_list) > 1:
+        parts.append(
+            "\nMulti-currency portfolio. "
+            "Always break down values per currency. "
+            "Ask the user which market if unclear."
+        )
+
+    return "\n".join(parts)
+
+
 def _make_sub_agent_node(
     config: SubAgentConfig,
     tool_registry: ToolRegistry,
@@ -110,11 +176,17 @@ def _make_sub_agent_node(
         )
         llm_with_tools = llm.bind_tools(tools)
 
+        # Inject dynamic user context into prompt
+        prompt = config.system_prompt
+        user_ctx = state.get("user_context") or {}
+        if user_ctx:
+            ctx_block = _build_context_block(user_ctx)
+            if ctx_block:
+                prompt = prompt + "\n\n" + ctx_block
+
         # Build messages: system + conversation
         messages: list = [
-            SystemMessage(
-                content=config.system_prompt,
-            ),
+            SystemMessage(content=prompt),
             *list(state.get("messages", [])),
         ]
         events: list[dict] = []
