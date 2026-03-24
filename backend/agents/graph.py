@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
-from langchain_core.messages import AIMessage
 from langgraph.graph import END, START, StateGraph
 
 from agents.configs.forecaster import FORECASTER_CONFIG
@@ -39,53 +38,6 @@ from config import Settings
 from tools.registry import ToolRegistry
 
 _logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------
-# Stub nodes for Sprint 5 agents
-# ---------------------------------------------------------------
-
-
-def _portfolio_stub(state: dict) -> dict:
-    """Portfolio Agent — coming in Sprint 5."""
-    return {
-        "final_response": (
-            "Portfolio analysis is coming soon. "
-            "For now, check your portfolio on the "
-            "Dashboard page."
-        ),
-        "tool_events": [],
-        "current_agent": "portfolio",
-        "messages": [
-            AIMessage(
-                content=(
-                    "Portfolio analysis is coming "
-                    "soon."
-                ),
-            ),
-        ],
-    }
-
-
-def _forecaster_stub(state: dict) -> dict:
-    """Forecaster Agent — coming in Sprint 5."""
-    return {
-        "final_response": (
-            "Forecasting via the chat agent is "
-            "coming soon. Use the Stock Forecast "
-            "tab on the Dashboard for now."
-        ),
-        "tool_events": [],
-        "current_agent": "forecaster",
-        "messages": [
-            AIMessage(
-                content=(
-                    "Forecasting via chat is "
-                    "coming soon."
-                ),
-            ),
-        ],
-    }
 
 
 # ---------------------------------------------------------------
