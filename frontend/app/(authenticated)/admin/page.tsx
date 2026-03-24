@@ -15,6 +15,13 @@ import {
   useAdminUsers,
   useAdminAudit,
   useObservability,
+  useAdminMaintenance,
+} from "@/hooks/useAdminData";
+import type {
+  TriageEntry,
+  RetentionResult,
+  GapResult,
+  UsageUser,
 } from "@/hooks/useAdminData";
 import type { UserFormData } from "@/components/admin/UserModal";
 import { UserModal } from "@/components/admin/UserModal";
@@ -896,10 +903,447 @@ function ObservabilityTab() {
 }
 
 // ---------------------------------------------------------------
+// Maintenance Tab
+// ---------------------------------------------------------------
+
+const RISK_COLORS = {
+  none: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+  low: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+  medium: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+  high: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+} as const;
+
+function RiskBadge({ level }: { level: keyof typeof RISK_COLORS }) {
+  return (
+    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${RISK_COLORS[level]}`}>
+      {level.charAt(0).toUpperCase() + level.slice(1)} risk
+    </span>
+  );
+}
+
+function MaintenanceTab() {
+  const m = useAdminMaintenance();
+  const [triageResult, setTriageResult] = useState<{ triage: TriageEntry[]; cleaned: number; dry_run: boolean } | null>(null);
+  const [usageResult, setUsageResult] = useState<{ reset_count: number } | null>(null);
+  const [usageUsers, setUsageUsers] = useState<UsageUser[] | null>(null);
+  const [selectedUsers, setSelectedUsers] = useState<Set<string>>(new Set());
+  const [retentionResult, setRetentionResult] = useState<RetentionResult[] | null>(null);
+  const [selectedTables, setSelectedTables] = useState<Set<string>>(new Set());
+  const [gapResult, setGapResult] = useState<GapResult | null>(null);
+  const [loading, setLoading] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
+
+  const run = async (key: string, fn: () => Promise<void>) => {
+    setLoading(key);
+    try { await fn(); } catch { /* shown in result */ }
+    setLoading(null);
+  };
+
+  return (
+    <div className="space-y-4">
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ""}
+        message={confirm?.message ?? ""}
+        confirmLabel="Execute"
+        variant="warning"
+        onConfirm={() => {
+          confirm?.onConfirm();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
+
+      {/* Subscription Cleanup */}
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Razorpay: Triage Orphaned Subscriptions</h3>
+          <RiskBadge level="medium" />
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          Scans active Razorpay subscriptions and classifies as <strong>Matched</strong> (current), <strong>Orphaned</strong> (same customer, wrong sub — safe to cancel), or <strong>Unlinked</strong> (no user — manual review).
+        </p>
+        <div className="flex gap-2 mb-3">
+          <button
+            onClick={() => run("scan", async () => { setTriageResult(await m.cleanupSubscriptions(true)); })}
+            disabled={loading === "scan"}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+          >
+            {loading === "scan" ? "Scanning\u2026" : "Scan"}
+          </button>
+          {triageResult?.triage.some((t) => t.classification === "orphaned") && (
+            <button
+              onClick={() => setConfirm({
+                title: "Cancel Orphaned Subscriptions",
+                message: `This will cancel ${triageResult.triage.filter((t) => t.classification === "orphaned").length} orphaned subscription(s) in Razorpay. Continue?`,
+                onConfirm: () => run("cleanup", async () => { setTriageResult(await m.cleanupSubscriptions(false)); }),
+              })}
+              disabled={loading === "cleanup"}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+            >
+              {loading === "cleanup" ? "Cleaning\u2026" : "Execute Cleanup"}
+            </button>
+          )}
+        </div>
+        {triageResult && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400">
+                  <th className="pb-1 pr-3">Sub ID</th>
+                  <th className="pb-1 pr-3">Customer</th>
+                  <th className="pb-1 pr-3">Status</th>
+                  <th className="pb-1 pr-3">Classification</th>
+                  <th className="pb-1">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {triageResult.triage.map((t) => (
+                  <tr key={t.sub_id} className="border-b border-gray-100 dark:border-gray-800">
+                    <td className="py-1 pr-3 font-mono">{t.sub_id.slice(0, 20)}</td>
+                    <td className="py-1 pr-3 font-mono">{t.customer_id.slice(0, 20)}</td>
+                    <td className="py-1 pr-3">{t.status}</td>
+                    <td className="py-1 pr-3">
+                      <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                        t.classification === "matched" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                        : t.classification === "orphaned" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                        : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400"
+                      }`}>
+                        {t.classification}
+                      </span>
+                    </td>
+                    <td className="py-1">{t.action}</td>
+                  </tr>
+                ))}
+                {triageResult.triage.length === 0 && (
+                  <tr><td colSpan={5} className="py-2 text-center text-gray-400">No active subscriptions found</td></tr>
+                )}
+              </tbody>
+            </table>
+            {!triageResult.dry_run && <p className="mt-2 text-xs text-emerald-600 dark:text-emerald-400 font-medium">Cleaned: {triageResult.cleaned} subscription(s)</p>}
+          </div>
+        )}
+      </div>
+
+      {/* Usage Reset */}
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Reset Monthly Usage Counters</h3>
+          <RiskBadge level="low" />
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          Scan users to see usage stats, then reset individually, selected, or all at once.
+        </p>
+        <div className="flex gap-2 mb-3">
+          <button
+            onClick={() => run("usage-scan", async () => {
+              const r = await m.getUsageStats();
+              setUsageUsers(r.users);
+              setSelectedUsers(new Set());
+              setUsageResult(null);
+            })}
+            disabled={loading === "usage-scan"}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+          >
+            {loading === "usage-scan" ? "Scanning\u2026" : "Scan"}
+          </button>
+          {usageUsers && selectedUsers.size > 0 && (
+            <button
+              onClick={() => run("usage-selected", async () => {
+                const r = await m.resetSelectedUsage([...selectedUsers]);
+                setUsageResult(r);
+                const fresh = await m.getUsageStats();
+                setUsageUsers(fresh.users);
+                setSelectedUsers(new Set());
+              })}
+              disabled={loading === "usage-selected"}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+            >
+              {loading === "usage-selected" ? "Resetting\u2026" : `Reset Selected (${selectedUsers.size})`}
+            </button>
+          )}
+          <button
+            onClick={() => setConfirm({
+              title: "Reset All Usage Counters",
+              message: "This will zero the monthly usage count for ALL users. Continue?",
+              onConfirm: () => run("usage-all", async () => {
+                const r = await m.resetUsage();
+                setUsageResult(r);
+                if (usageUsers) {
+                  const fresh = await m.getUsageStats();
+                  setUsageUsers(fresh.users);
+                }
+              }),
+            })}
+            disabled={loading === "usage-all"}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {loading === "usage-all" ? "Resetting\u2026" : "Reset All"}
+          </button>
+        </div>
+        {usageResult && (
+          <p className="mb-2 text-xs text-emerald-600 dark:text-emerald-400 font-medium">Reset: {usageResult.reset_count} user(s)</p>
+        )}
+        {usageUsers && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400">
+                  <th className="pb-1 pr-2 w-8">
+                    <input
+                      type="checkbox"
+                      checked={usageUsers.length > 0 && selectedUsers.size === usageUsers.filter((u) => u.monthly_usage_count > 0).length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedUsers(new Set(usageUsers.filter((u) => u.monthly_usage_count > 0).map((u) => u.user_id)));
+                        } else {
+                          setSelectedUsers(new Set());
+                        }
+                      }}
+                      className="rounded border-gray-300 dark:border-gray-600"
+                    />
+                  </th>
+                  <th className="pb-1 pr-3">User</th>
+                  <th className="pb-1 pr-3">Tier</th>
+                  <th className="pb-1 pr-3">Usage</th>
+                  <th className="pb-1">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {usageUsers.map((u) => (
+                  <tr key={u.user_id} className="border-b border-gray-100 dark:border-gray-800">
+                    <td className="py-1 pr-2">
+                      {u.monthly_usage_count > 0 && (
+                        <input
+                          type="checkbox"
+                          checked={selectedUsers.has(u.user_id)}
+                          onChange={(e) => {
+                            const next = new Set(selectedUsers);
+                            if (e.target.checked) next.add(u.user_id);
+                            else next.delete(u.user_id);
+                            setSelectedUsers(next);
+                          }}
+                          className="rounded border-gray-300 dark:border-gray-600"
+                        />
+                      )}
+                    </td>
+                    <td className="py-1 pr-3">
+                      <div className="font-medium text-gray-900 dark:text-gray-100">{u.full_name || "\u2014"}</div>
+                      <div className="text-gray-400">{u.email}</div>
+                    </td>
+                    <td className="py-1 pr-3 capitalize">{u.subscription_tier}</td>
+                    <td className="py-1 pr-3 font-mono">{u.monthly_usage_count}</td>
+                    <td className="py-1">
+                      {u.monthly_usage_count > 0 && (
+                        <button
+                          onClick={() => run(`reset-${u.user_id}`, async () => {
+                            await m.resetSelectedUsage([u.user_id]);
+                            const fresh = await m.getUsageStats();
+                            setUsageUsers(fresh.users);
+                          })}
+                          disabled={loading === `reset-${u.user_id}`}
+                          className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 disabled:opacity-50"
+                        >
+                          {loading === `reset-${u.user_id}` ? "Resetting\u2026" : "Reset"}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {usageUsers.length === 0 && (
+                  <tr><td colSpan={5} className="py-2 text-center text-gray-400">No users found</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Data Retention */}
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Iceberg Data Retention Cleanup</h3>
+          <RiskBadge level="high" />
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          Scan tables to see what would be deleted, then clean individually, selected, or all at once. Protected tables (stocks.registry) are never touched.
+        </p>
+        <div className="flex gap-2 mb-3">
+          <button
+            onClick={() => run("retention-scan", async () => {
+              const r = await m.runRetention(true);
+              setRetentionResult(r.results);
+              setSelectedTables(new Set());
+            })}
+            disabled={loading === "retention-scan"}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+          >
+            {loading === "retention-scan" ? "Scanning\u2026" : "Scan"}
+          </button>
+          {retentionResult && selectedTables.size > 0 && (
+            <button
+              onClick={() => setConfirm({
+                title: "Delete Selected Tables",
+                message: `This will permanently delete old rows from ${selectedTables.size} table(s). This cannot be undone. Continue?`,
+                onConfirm: () => run("retention-selected", async () => {
+                  const r = await m.retainSelected([...selectedTables]);
+                  setRetentionResult(r.results);
+                  setSelectedTables(new Set());
+                }),
+              })}
+              disabled={loading === "retention-selected"}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+            >
+              {loading === "retention-selected" ? "Deleting\u2026" : `Delete Selected (${selectedTables.size})`}
+            </button>
+          )}
+          <button
+            onClick={() => setConfirm({
+              title: "Delete All — Data Retention",
+              message: "This will permanently delete old rows from ALL tables. This cannot be undone. Continue?",
+              onConfirm: () => run("retention-all", async () => {
+                const r = await m.runRetention(false);
+                setRetentionResult(r.results);
+                setSelectedTables(new Set());
+              }),
+            })}
+            disabled={loading === "retention-all"}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            {loading === "retention-all" ? "Deleting\u2026" : "Delete All"}
+          </button>
+        </div>
+        {retentionResult && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400">
+                  <th className="pb-1 pr-2 w-8">
+                    <input
+                      type="checkbox"
+                      checked={retentionResult.length > 0 && selectedTables.size === retentionResult.filter((r) => r.rows_deleted > 0).length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedTables(new Set(retentionResult.filter((r) => r.rows_deleted > 0).map((r) => r.table)));
+                        } else {
+                          setSelectedTables(new Set());
+                        }
+                      }}
+                      className="rounded border-gray-300 dark:border-gray-600"
+                    />
+                  </th>
+                  <th className="pb-1 pr-3">Table</th>
+                  <th className="pb-1 pr-3">Cutoff</th>
+                  <th className="pb-1 pr-3">Rows</th>
+                  <th className="pb-1 pr-3">Would Delete</th>
+                  <th className="pb-1">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {retentionResult.map((r) => (
+                  <tr key={r.table} className="border-b border-gray-100 dark:border-gray-800">
+                    <td className="py-1 pr-2">
+                      {r.rows_deleted > 0 && r.dry_run && (
+                        <input
+                          type="checkbox"
+                          checked={selectedTables.has(r.table)}
+                          onChange={(e) => {
+                            const next = new Set(selectedTables);
+                            if (e.target.checked) next.add(r.table);
+                            else next.delete(r.table);
+                            setSelectedTables(next);
+                          }}
+                          className="rounded border-gray-300 dark:border-gray-600"
+                        />
+                      )}
+                    </td>
+                    <td className="py-1 pr-3 font-mono">{r.table}</td>
+                    <td className="py-1 pr-3">{r.cutoff_date}</td>
+                    <td className="py-1 pr-3">{r.rows_before}</td>
+                    <td className="py-1 pr-3">{r.dry_run ? `(${r.rows_deleted})` : r.rows_deleted}</td>
+                    <td className="py-1">
+                      {r.error ? (
+                        <span className="text-red-500">{r.error}</span>
+                      ) : r.dry_run && r.rows_deleted > 0 ? (
+                        <button
+                          onClick={() => setConfirm({
+                            title: `Delete from ${r.table}`,
+                            message: `Delete ${r.rows_deleted} rows older than ${r.cutoff_date} from ${r.table}?`,
+                            onConfirm: () => run(`retain-${r.table}`, async () => {
+                              await m.retainSelected([r.table]);
+                              const fresh = await m.runRetention(true);
+                              setRetentionResult(fresh.results);
+                            }),
+                          })}
+                          disabled={loading === `retain-${r.table}`}
+                          className="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 disabled:opacity-50"
+                        >
+                          {loading === `retain-${r.table}` ? "Deleting\u2026" : "Delete"}
+                        </button>
+                      ) : r.dry_run ? (
+                        <span className="text-gray-400">clean</span>
+                      ) : (
+                        <span className="text-emerald-600 dark:text-emerald-400">done</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Gap Analysis */}
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Query Gap Analysis</h3>
+          <RiskBadge level="none" />
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          Read-only analysis of unresolved data gaps, external API usage, and local data sufficiency.
+        </p>
+        <button
+          onClick={() => run("gaps", async () => { setGapResult(await m.analyzeGaps()); })}
+          disabled={loading === "gaps"}
+          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+        >
+          {loading === "gaps" ? "Analyzing\u2026" : "Analyze"}
+        </button>
+        {gapResult && (
+          <div className="mt-3 space-y-2 text-xs">
+            <div>
+              <span className="font-medium text-gray-700 dark:text-gray-300">Top gap tickers: </span>
+              <span className="text-gray-500 dark:text-gray-400">{gapResult.top_gap_tickers?.join(", ") || "None"}</span>
+            </div>
+            <div>
+              <span className="font-medium text-gray-700 dark:text-gray-300">Local sufficiency: </span>
+              <span className="text-gray-500 dark:text-gray-400">{((gapResult.local_sufficiency_rate ?? 0) * 100).toFixed(1)}%</span>
+            </div>
+            {gapResult.external_api_usage && (
+              <div>
+                <span className="font-medium text-gray-700 dark:text-gray-300">External API calls: </span>
+                <span className="text-gray-500 dark:text-gray-400">
+                  {Object.entries(gapResult.external_api_usage).map(([k, v]) => `${k}: ${v}`).join(", ")}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------
 
-type AdminTab = "users" | "audit" | "observability";
+type AdminTab =
+  | "users"
+  | "audit"
+  | "observability"
+  | "maintenance";
 
 export default function AdminPage() {
   const [tab, setTab] =
@@ -916,6 +1360,10 @@ export default function AdminPage() {
             {
               id: "observability",
               label: "LLM Observability",
+            },
+            {
+              id: "maintenance",
+              label: "Maintenance",
             },
           ] as const
         ).map((t) => (
@@ -944,6 +1392,9 @@ export default function AdminPage() {
         {tab === "audit" && <AuditLogTab />}
         {tab === "observability" && (
           <ObservabilityTab />
+        )}
+        {tab === "maintenance" && (
+          <MaintenanceTab />
         )}
       </div>
     </div>

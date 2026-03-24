@@ -140,6 +140,21 @@ def create_app(
     )
 
     # ---------------------------------------------------------------
+    # Usage tracking helper
+    # ---------------------------------------------------------------
+
+    def _track_usage(user_id: str) -> None:
+        """Increment monthly usage count (fire-and-forget)."""
+        try:
+            from usage_tracker import increment_usage
+            increment_usage(user_id)
+        except Exception:
+            _logger.debug(
+                "Usage tracking skipped for %s",
+                user_id,
+            )
+
+    # ---------------------------------------------------------------
     # Core route handlers — shared by root and /v1 mounts
     # ---------------------------------------------------------------
 
@@ -197,6 +212,7 @@ def create_app(
                 status_code=500,
                 detail="Agent execution failed",
             )
+        _track_usage(req.user_id)
         return ChatResponse(
             response=result,
             agent_id=req.agent_id,
@@ -238,6 +254,7 @@ def create_app(
                 status_code=500,
                 detail="Agent execution failed",
             )
+        _track_usage(req.user_id)
         return ChatResponse(
             response=result.get(
                 "final_response", ""
@@ -281,6 +298,7 @@ def create_app(
                         req.history,
                     ):
                         event_queue.put(event)
+                    _track_usage(req.user_id)
                 except Exception:
                     pass
                 finally:
@@ -336,6 +354,46 @@ def create_app(
     # LangGraph helpers
     # ---------------------------------------------------------------
 
+    def _build_user_context(
+        user_id: str,
+    ) -> dict:
+        """Build user context from portfolio."""
+        if not user_id:
+            return {}
+        try:
+            from stocks.repository import (
+                StockRepository,
+            )
+            repo = StockRepository()
+            holdings = repo.get_portfolio_holdings(
+                user_id,
+            )
+            if holdings.empty:
+                return {}
+
+            currencies: dict[str, int] = {}
+            markets: dict[str, int] = {}
+            for _, h in holdings.iterrows():
+                ccy = h.get("currency", "USD")
+                mkt = h.get("market", "us")
+                currencies[ccy] = (
+                    currencies.get(ccy, 0) + 1
+                )
+                markets[mkt] = (
+                    markets.get(mkt, 0) + 1
+                )
+            return {
+                "currencies": currencies,
+                "markets": markets,
+                "total_holdings": len(holdings),
+            }
+        except Exception:
+            _logger.debug(
+                "user context build failed",
+                exc_info=True,
+            )
+            return {}
+
     def _build_graph_input(req: ChatRequest) -> dict:
         """Build LangGraph AgentState input from req."""
         from langchain_core.messages import (
@@ -357,11 +415,16 @@ def create_app(
             HumanMessage(content=req.message),
         )
 
+        user_ctx = _build_user_context(
+            req.user_id or "",
+        )
+
         return {
             "messages": msgs,
             "user_input": req.message,
             "user_id": req.user_id or "",
             "history": req.history or [],
+            "user_context": user_ctx,
             "intent": "",
             "next_agent": "",
             "current_agent": "",
@@ -406,6 +469,7 @@ def create_app(
                         })
                         + "\n"
                     )
+                    _track_usage(req.user_id)
                 except Exception as exc:
                     event_queue.put(
                         json.dumps({
@@ -753,6 +817,34 @@ def create_app(
         methods=["POST"],
         dependencies=[Depends(superuser_only)],
     )
+
+    async def _admin_retention_selected(
+        request: Request,
+    ):
+        """POST /admin/retention/selected."""
+        body = await request.json()
+        table_ids = body.get("table_ids", [])
+        if not table_ids:
+            return {"results": []}
+        from stocks.retention import RetentionManager
+        mgr = RetentionManager()
+        results = mgr.run_cleanup_tables(
+            table_ids, dry_run=False,
+        )
+        return {
+            "results": [
+                {
+                    "table": r.table_id,
+                    "cutoff_date": str(r.cutoff_date),
+                    "rows_before": r.rows_before,
+                    "rows_deleted": r.rows_deleted,
+                    "dry_run": r.dry_run,
+                    "error": r.error,
+                }
+                for r in results
+            ],
+        }
+
     admin_router.add_api_route(
         "/admin/retention",
         _admin_retention,
@@ -760,8 +852,75 @@ def create_app(
         dependencies=[Depends(superuser_only)],
     )
     admin_router.add_api_route(
+        "/admin/retention/selected",
+        _admin_retention_selected,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
         "/admin/query-gaps",
         _admin_query_gaps,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    async def _admin_reset_usage():
+        """POST /admin/reset-usage — zero monthly counts."""
+        from usage_tracker import reset_monthly_usage
+        count = reset_monthly_usage()
+        return {"reset_count": count}
+
+    async def _admin_usage_stats():
+        """GET /admin/usage-stats — all users + counts."""
+        from usage_tracker import get_usage_stats
+        return {"users": get_usage_stats()}
+
+    async def _admin_reset_selected(
+        request: Request,
+    ):
+        """POST /admin/reset-usage/selected."""
+        body = await request.json()
+        user_ids = body.get("user_ids", [])
+        if not user_ids:
+            return {"reset_count": 0}
+        from usage_tracker import reset_user_usage
+        count = reset_user_usage(user_ids)
+        return {"reset_count": count}
+
+    admin_router.add_api_route(
+        "/admin/reset-usage",
+        _admin_reset_usage,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/usage-stats",
+        _admin_usage_stats,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/reset-usage/selected",
+        _admin_reset_selected,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    async def _admin_usage_history(
+        user_id: str | None = None,
+        limit: int = 12,
+    ):
+        """GET /admin/usage-history."""
+        from usage_tracker import get_usage_history
+        return {
+            "history": get_usage_history(
+                user_id=user_id, limit=limit,
+            ),
+        }
+
+    admin_router.add_api_route(
+        "/admin/usage-history",
+        _admin_usage_history,
         methods=["GET"],
         dependencies=[Depends(superuser_only)],
     )

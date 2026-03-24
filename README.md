@@ -103,18 +103,22 @@ graph TD
         ICE["IcebergUserRepository<br/>(SQLite catalog)"]
     end
 
-    subgraph Agents["Agents"]
-        GA["GeneralAgent<br/><i>N-tier Groq → Anthropic</i>"]
-        SA["StockAgent<br/><i>N-tier Groq → Anthropic</i>"]
+    subgraph Agents["LangGraph Supervisor"]
+        GD["Guardrail + Router<br/><i>keyword → LLM classifier</i>"]
+        PA["Portfolio Agent<br/><i>currency-aware</i>"]
+        SA["Stock Analyst<br/><i>N-tier Groq → Anthropic</i>"]
+        FC["Forecaster<br/><i>Prophet models</i>"]
+        RA["Research Agent<br/><i>news + sentiment</i>"]
     end
 
     subgraph Tools["Tools"]
         T1["get_current_time"]
         T2["search_web<br/><i>SerpAPI</i>"]
-        T3["search_market_news<br/><i>wraps GeneralAgent</i>"]
+        T3["search_market_news"]
         T4["fetch_stock_data<br/>load_stock_data<br/>get_stock_info …"]
-        T5["analyse_stock_price<br/><i>ta + Plotly</i>"]
-        T6["forecast_stock<br/><i>Prophet + Plotly</i>"]
+        T5["analyse_stock_price<br/><i>ta + TradingView</i>"]
+        T6["forecast_stock<br/><i>Prophet</i>"]
+        T7["get_portfolio_holdings<br/>get_portfolio_summary<br/>get_risk_metrics …"]
     end
 
     subgraph Data["Data"]
@@ -127,9 +131,12 @@ graph TD
     AUTH --> ICE --> IC
     UI -->|"WS /ws/chat · POST /chat/stream<br/>Bearer token"| API
     API --> CS --> AR
-    AR --> GA & SA
-    GA --> T1 & T2
-    SA --> T3 & T4 & T5 & T6
+    AR --> GD
+    GD --> PA & SA & FC & RA
+    PA --> T7
+    SA --> T4 & T5
+    FC --> T6
+    RA --> T2 & T3
     T4 --> IC
     T5 --> IC & C
     T6 --> IC & C
@@ -473,6 +480,7 @@ ai-agent-ui/
 | Plotly | Interactive HTML charts |
 | pyarrow | Parquet read/write |
 | pandas / numpy | Data manipulation |
+| razorpay | Razorpay payment gateway SDK |
 
 ### Dashboard
 | Package | Role |
@@ -595,6 +603,13 @@ GET  /v1/health              # Health check
 GET  /v1/agents              # List agents
 GET  /v1/auth/*              # Auth endpoints
 GET  /v1/admin/tier-health   # LLM tier health (superuser)
+POST /v1/admin/reset-usage   # Zero monthly usage (superuser)
+GET  /v1/admin/usage-stats   # User usage stats (superuser)
+GET  /v1/admin/usage-history # Month-on-month history (superuser)
+POST /v1/subscription/checkout   # Razorpay checkout (create/upgrade)
+GET  /v1/subscription            # Current tier + usage
+POST /v1/subscription/cancel     # Cancel subscription
+POST /v1/webhooks/razorpay       # Razorpay webhook
 WS   /ws/chat                # WebSocket (not versioned)
 GET  /avatars/*              # Static files (not versioned)
 ```
@@ -609,6 +624,18 @@ GET  /avatars/*              # Static files (not versioned)
 | `FACEBOOK_APP_SECRET` | Placeholder |
 | `OAUTH_REDIRECT_URI` | Default: `http://localhost:3000/auth/oauth/callback` |
 
+### Subscription & Payments (Razorpay)
+
+| Variable | Notes |
+|----------|-------|
+| `RAZORPAY_KEY_ID` | Test mode key from Razorpay Dashboard |
+| `RAZORPAY_KEY_SECRET` | Test mode secret |
+| `RAZORPAY_WEBHOOK_SECRET` | Webhook secret (optional in test mode) |
+| `RAZORPAY_PLAN_PRO` | Plan ID for Pro tier (₹499/mo) |
+| `RAZORPAY_PLAN_PREMIUM` | Plan ID for Premium tier (₹1,499/mo) |
+
+Subscription tiers: **Free** (3 analyses/mo), **Pro** (30/mo, ₹499), **Premium** (unlimited, ₹1,499). Upgrades use Razorpay PATCH API for pro-rata billing. Usage counters auto-reset on month boundary via lazy reset (no cron needed).
+
 ---
 
 ## Testing
@@ -616,7 +643,7 @@ GET  /avatars/*              # Static files (not versioned)
 ```bash
 # Backend (Python 3.12 — always activate venv first)
 source ~/.ai-agent-ui/venv/bin/activate
-python -m pytest tests/backend/ -v        # ~416 tests
+python -m pytest tests/backend/ -v        # ~579 tests
 
 # Frontend (vitest)
 cd frontend && npx vitest run             # 61 tests

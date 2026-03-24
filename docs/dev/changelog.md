@@ -4,6 +4,76 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 24, 2026 — Subscription & Paywall System, Razorpay Integration, Admin Maintenance
+
+### Added
+- **Subscription data model** — 9 Iceberg columns, JWT claims, UserContext fields, subscription_config.py
+- **Guard middleware** — `require_tier()` (403), `check_usage_quota()` (429) FastAPI dependencies
+- **Usage tracking** — `increment_usage()` in all chat routes, lazy auto-reset on month boundary
+- **Usage history** — `auth.usage_history` Iceberg table, month-on-month archival on reset
+- **Razorpay integration** — checkout (create + upgrade via PATCH), cancel, webhook handler, signature verification
+- **Billing UI** — `BillingTab` in EditProfileModal with pricing cards, usage meter, Razorpay checkout.js
+- **UsageBadge** — compact usage pill in ChatHeader (color-coded green/yellow/red)
+- **UpgradeBanner** — dismissible amber banner when quota exhausted (SWR-based)
+- **"Billing" in profile dropdown** — opens EditProfileModal on Billing tab
+- **Admin Maintenance tab** — subscription cleanup (triage), usage reset (scan + selective), data retention (scan + selective), gap analysis
+- **Triage-based subscription cleanup** — classifies Razorpay subs as matched/orphaned/unlinked, dry-run + execute
+- **Per-table data retention** — scan, checkbox select, individual/selected/all delete with confirmation
+- **Admin endpoints** — `GET /admin/usage-stats`, `POST /admin/reset-usage/selected`, `GET /admin/usage-history`, `POST /admin/retention/selected`
+
+### Changed
+- **Subscription endpoints read from Iceberg** (not JWT) — `GET /subscription`, `POST /subscription/checkout`, `POST /subscription/cancel`
+- **Checkout uses PATCH for upgrades** — pro-rata billing via Razorpay subscription update API, no duplicate subscriptions
+- **Cancel resets tier to free** — also clears razorpay_subscription_id
+- **Webhook handlers have sub_id match guard** — ignore events for old/orphaned subscriptions
+- **`_find_user_by_razorpay()` prioritises sub_id** over cust_id to prevent wrong matches
+- **`_safe_update()` with 3 retries** on Iceberg CommitFailedException
+- **`onRefresh` triggers portfolio re-fetch** — both `/dashboard/home` and `/users/me/portfolio` SWR keys invalidated
+- **RetentionManager.run_cleanup_tables()** — supports per-table selective cleanup
+
+### Fixed
+- **ASETPLTFRM-162** — OHLCV NaN close price caused portfolio value to show ₹0.00. Added `dropna(subset=["close"])` in 5 files.
+- **ASETPLTFRM-163** — Hero section portfolio value not updating after stock refresh. Added `portfolioData.refresh()`.
+- **ASETPLTFRM-164** — Subscription endpoints read stale tier from JWT instead of Iceberg.
+- **ASETPLTFRM-165** — Checkout created orphaned Razorpay subscriptions on upgrade.
+- **ASETPLTFRM-166** — Iceberg CommitFailedException on concurrent subscription writes.
+
+---
+
+## Mar 22, 2026 — Chat Session Recording, Activity Log, Currency-Aware Agent, Chart Fix
+
+### Added
+- **Session detail endpoint** `GET /v1/audit/chat-sessions/{session_id}` — returns full `ChatSessionDetail` with parsed messages from Iceberg
+- **`get_chat_session_detail()`** repository method — queries by `user_id` + `session_id`, parses `messages_json`
+- **Dynamic portfolio context injection** — `_build_context_block()` in `sub_agents.py` detects user's currency/market mix and injects into LLM system prompt
+- **`user_context` field** in `AgentState` graph state — populated in both HTTP and WebSocket paths with portfolio currency/market breakdown
+- **Currency symbols in tool outputs** — `_CCY_SYMBOLS` map (₹/$/ €/£/¥) used in `get_portfolio_holdings`, `get_portfolio_summary`, `get_portfolio_performance`
+- **Close button on Activity Log tab** — X button in `EditProfileModal` header, visible on both Profile and Activity Log tabs
+- **Detail fetch error state** in `PastSessionsTab` — shows "Failed to load session messages" instead of silent collapse
+
+### Changed
+- **Portfolio agent system prompt** — mandatory tool-use rules ("YOUR FIRST RESPONSE MUST ONLY be a tool call"), currency rules ("NEVER default to $"), anti-hallucination guardrails, concise response rules
+- **`useChatSession.flush()`** — uses raw `fetch()` + `getAccessToken()` instead of `apiFetch` to avoid 401→redirect race during logout
+- **`beforeunload` handler** — `fetch()` + `keepalive: true` replaces `navigator.sendBeacon()` (which cannot send Authorization headers)
+- **`closePanel` callback** — now calls `flush()` to save session when chat panel X button is clicked
+- **`ChatHeader` sign-out** — added `await chatContext.flush()` before `clearTokens()`
+- **`toTime()` in StockChart** — slices dates to `YYYY-MM-DD` format (TradingView rejects full ISO timestamps)
+- **`filterNull()` in StockChart** — validates dates with `/^\d{4}-\d{2}-\d{2}/` regex + sorts ascending
+- **Session preview in `list_chat_sessions()`** — parses JSON and extracts first user message content instead of raw JSON truncation
+
+### Fixed
+- **Chat session not recording** — 5 bugs: `sendBeacon` no auth header, `apiFetch` 401 race, ChatHeader missing `flush()`, PyArrow ISO string → timestamp conversion, wrong localStorage key (`access_token` → `auth_access_token`)
+- **Activity Log raw JSON preview** — cards showed `[{"role": "user", "content":...}` instead of readable text
+- **Session expand 404** — detail endpoint didn't exist; frontend fetch silently failed
+- **Portfolio agent hallucination** — LLM fabricated data ($1.2M, "ABC Corp") instead of calling tools; system prompt now forces tool-first responses
+- **Portfolio agent wrong currency** — showed $ for Indian stocks (₹); now uses correct symbols from tool output + dynamic context
+- **TradingView chart crash** — `time=0` assertion from full ISO timestamps or invalid dates; fixed with date validation + sort
+
+Tickets: ASETPLTFRM-158 (5 pts), ASETPLTFRM-159 (3 pts), ASETPLTFRM-160 (5 pts), ASETPLTFRM-161 (2 pts)
+Branch: feature/sprint3
+
+---
+
 ## Mar 20, 2026 — Portfolio Analytics, TradingView Migration, UX Polish
 
 ### Added

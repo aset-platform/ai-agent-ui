@@ -174,10 +174,12 @@ def register(router: APIRouter) -> None:
         repo.update(
             user["user_id"], {"last_login_at": datetime.now(timezone.utc)}
         )
+        sub_claims = _helpers._subscription_claims(user)
         access = service.create_access_token(
             user_id=user["user_id"],
             email=user["email"],
             role=user["role"],
+            **sub_claims,
         )
         refresh = service.create_refresh_token(
             user_id=user["user_id"],

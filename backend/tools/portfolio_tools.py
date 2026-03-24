@@ -20,6 +20,11 @@ from tools._ticker_linker import get_current_user
 
 _logger = logging.getLogger(__name__)
 
+_CCY_SYMBOLS: dict[str, str] = {
+    "INR": "₹", "USD": "$", "EUR": "€",
+    "GBP": "£", "JPY": "¥",
+}
+
 
 def _get_user_or_error() -> str:
     """Get current user_id or raise."""
@@ -39,7 +44,10 @@ def _current_price(
     ohlcv = repo.get_ohlcv(ticker)
     if ohlcv.empty:
         return None
-    return float(ohlcv.iloc[-1]["close"])
+    valid = ohlcv.dropna(subset=["close"])
+    if valid.empty:
+        return None
+    return float(valid.iloc[-1]["close"])
 
 
 # ---------------------------------------------------------------
@@ -104,28 +112,51 @@ def get_portfolio_holdings() -> str:
         f"**Portfolio Holdings** "
         f"(as of {date.today()})\n",
         "| Ticker | Qty | Avg | Current | "
-        "Value | P&L | P&L% | Weight |",
+        "Value | P&L | P&L% | Weight | Ccy |",
         "|--------|-----|-----|---------|"
-        "-------|-----|------|--------|",
+        "-------|-----|------|--------|-----|",
     ]
     for r in rows:
+        sym = _CCY_SYMBOLS.get(
+            r["currency"], r["currency"],
+        )
         curr_str = (
-            f"{r['curr']}" if r['curr'] else "N/A"
+            f"{sym}{r['curr']}"
+            if r['curr'] else "N/A"
         )
         lines.append(
             f"| {r['ticker']} | {r['qty']} | "
-            f"{r['avg']} | {curr_str} | "
-            f"{r['value']} | {r['pnl']} | "
-            f"{r['pnl_pct']}% | {r['weight']}% |"
+            f"{sym}{r['avg']} | {curr_str} | "
+            f"{sym}{r['value']} | "
+            f"{sym}{r['pnl']} | "
+            f"{r['pnl_pct']}% | "
+            f"{r['weight']}% | "
+            f"{r['currency']} |"
         )
 
-    total_invested = sum(r["invested"] for r in rows)
-    total_pnl = total_value - total_invested
-    lines.append(
-        f"\n**Total**: Value={round(total_value, 2)} "
-        f"| Invested={round(total_invested, 2)} "
-        f"| P&L={round(total_pnl, 2)}"
-    )
+    # Per-currency totals
+    by_ccy: dict[str, dict] = {}
+    for r in rows:
+        ccy = r["currency"]
+        if ccy not in by_ccy:
+            by_ccy[ccy] = {
+                "invested": 0, "value": 0,
+            }
+        by_ccy[ccy]["invested"] += r["invested"]
+        by_ccy[ccy]["value"] += r["value"]
+
+    lines.append("")
+    for ccy, totals in sorted(by_ccy.items()):
+        sym = _CCY_SYMBOLS.get(ccy, ccy)
+        pnl = totals["value"] - totals["invested"]
+        lines.append(
+            f"**{ccy} Total**: "
+            f"Value={sym}{totals['value']:,.2f}"
+            f" | Invested="
+            f"{sym}{totals['invested']:,.2f}"
+            f" | P&L={sym}{pnl:,.2f}"
+        )
+
     return "\n".join(lines)
 
 
@@ -214,9 +245,20 @@ def get_portfolio_performance(
         * np.sqrt(252)
     ) if daily_returns.std() > 0 else 0
 
+    # Determine currencies in this portfolio
+    ccy_set = set()
+    mkt_set = set()
+    for _, h in holdings.iterrows():
+        ccy_set.add(h.get("currency", "USD"))
+        mkt_set.add(h.get("market", "us"))
+    ccy_note = ", ".join(sorted(ccy_set))
+    mkt_note = ", ".join(sorted(mkt_set))
+
     return (
         f"[Source: iceberg]\n"
         f"**Portfolio Performance ({period})**\n"
+        f"Currencies: {ccy_note} | "
+        f"Markets: {mkt_note}\n"
         f"Period: {daily_value.index[0]} to "
         f"{daily_value.index[-1]}\n\n"
         f"| Metric | Value |\n"
@@ -560,37 +602,57 @@ def get_portfolio_summary() -> str:
             "invested": invested,
             "value": value,
             "pnl_pct": pnl_pct,
+            "currency": h.get("currency", "USD"),
         })
-
-    total_invested = sum(r["invested"] for r in rows)
-    total_value = sum(r["value"] for r in rows)
-    total_pnl = total_value - total_invested
-    total_pnl_pct = (
-        (total_pnl / total_invested * 100)
-        if total_invested else 0
-    )
 
     top_gainer = max(rows, key=lambda r: r["pnl_pct"])
     top_loser = min(rows, key=lambda r: r["pnl_pct"])
 
-    return (
-        f"[Source: iceberg]\n"
+    # Group by currency
+    by_ccy: dict[str, dict] = {}
+    for r in rows:
+        ccy = r["currency"]
+        if ccy not in by_ccy:
+            by_ccy[ccy] = {
+                "invested": 0, "value": 0,
+                "count": 0,
+            }
+        by_ccy[ccy]["invested"] += r["invested"]
+        by_ccy[ccy]["value"] += r["value"]
+        by_ccy[ccy]["count"] += 1
+
+    lines = [
+        "[Source: iceberg]",
         f"**Portfolio Summary** "
-        f"(as of {date.today()})\n\n"
-        f"- **Holdings**: {len(rows)} stocks\n"
-        f"- **Total Invested**: "
-        f"{total_invested:.2f}\n"
-        f"- **Current Value**: "
-        f"{total_value:.2f}\n"
-        f"- **P&L**: {total_pnl:.2f} "
-        f"({total_pnl_pct:+.2f}%)\n"
+        f"(as of {date.today()})\n",
+        f"- **Holdings**: {len(rows)} stocks",
+    ]
+
+    for ccy, totals in sorted(by_ccy.items()):
+        sym = _CCY_SYMBOLS.get(ccy, ccy)
+        inv = totals["invested"]
+        val = totals["value"]
+        pnl = val - inv
+        pnl_pct = (
+            (pnl / inv * 100) if inv else 0
+        )
+        lines.append(
+            f"- **{ccy} ({totals['count']} "
+            f"stocks)**: Invested "
+            f"{sym}{inv:,.2f} | Value "
+            f"{sym}{val:,.2f} | P&L "
+            f"{sym}{pnl:,.2f} ({pnl_pct:+.2f}%)"
+        )
+
+    lines.extend([
         f"- **Top Gainer**: "
         f"{top_gainer['ticker']} "
-        f"({top_gainer['pnl_pct']:+.1f}%)\n"
+        f"({top_gainer['pnl_pct']:+.1f}%)",
         f"- **Top Loser**: "
         f"{top_loser['ticker']} "
-        f"({top_loser['pnl_pct']:+.1f}%)"
-    )
+        f"({top_loser['pnl_pct']:+.1f}%)",
+    ])
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------

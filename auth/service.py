@@ -152,6 +152,9 @@ class AuthService:
         user_id: str,
         email: str,
         role: str,
+        subscription_tier: str = "free",
+        subscription_status: str = "active",
+        usage_remaining: int | None = None,
     ) -> str:
         """Delegate to :func:`auth.tokens.create_access_token`.
 
@@ -159,6 +162,10 @@ class AuthService:
             user_id: UUID string of the authenticated user.
             email: Email address to embed in the token.
             role: User role.
+            subscription_tier: ``"free"``, ``"pro"``, or
+                ``"premium"``.
+            subscription_status: Subscription state.
+            usage_remaining: Analyses left this month.
 
         Returns:
             A signed JWT string.
@@ -169,6 +176,9 @@ class AuthService:
             role,
             self._secret_key,
             self._access_expire_minutes,
+            subscription_tier=subscription_tier,
+            subscription_status=subscription_status,
+            usage_remaining=usage_remaining,
         )
 
     def create_refresh_token(self, user_id: str) -> str:

@@ -9,10 +9,51 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { clearTokens } from "@/lib/auth";
+import {
+  clearTokens,
+  getSubscriptionTierFromToken,
+  getUsageRemainingFromToken,
+} from "@/lib/auth";
+import { useChatContext } from "@/providers/ChatProvider";
 import { type View } from "@/lib/constants";
 import type { UserProfile } from "@/hooks/useEditProfile";
 import { BACKEND_URL } from "@/lib/config";
+
+/** Compact usage indicator in the header bar. */
+function UsageBadge() {
+  const tier = getSubscriptionTierFromToken();
+  const remaining = getUsageRemainingFromToken();
+
+  // Premium (unlimited) — show a small badge
+  if (remaining === null) {
+    return (
+      <span className="hidden sm:inline-flex items-center gap-1 text-xs text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full font-medium capitalize">
+        {tier}
+      </span>
+    );
+  }
+
+  // Determine color: green < 50%, yellow 50-80%, red > 80%
+  const quotas: Record<string, number> = { free: 3, pro: 30 };
+  const total = quotas[tier] ?? 3;
+  const used = total - remaining;
+  const pct = total > 0 ? (used / total) * 100 : 0;
+  const color =
+    pct < 50
+      ? "text-emerald-600 bg-emerald-50"
+      : pct < 80
+        ? "text-amber-600 bg-amber-50"
+        : "text-red-600 bg-red-50";
+
+  return (
+    <span
+      className={`hidden sm:inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full font-medium ${color}`}
+      title={`${used}/${total} analyses used this month`}
+    >
+      {used}/{total}
+    </span>
+  );
+}
 
 interface ChatHeaderProps {
   view: View;
@@ -48,7 +89,9 @@ export function ChatHeader({
     return () => document.removeEventListener("mousedown", handleClick);
   }, [dropdownOpen]);
 
-  const handleSignOut = () => {
+  const chatContext = useChatContext();
+  const handleSignOut = async () => {
+    await chatContext.flush();
     clearTokens();
     router.replace("/login");
   };
@@ -124,6 +167,9 @@ export function ChatHeader({
             Clear
           </button>
         )}
+
+        {/* Usage meter */}
+        <UsageBadge />
 
         {/* Profile chip + dropdown */}
         <div className="relative" ref={dropdownRef}>

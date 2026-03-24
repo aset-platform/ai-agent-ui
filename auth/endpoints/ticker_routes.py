@@ -343,9 +343,13 @@ def get_portfolio(
         try:
             ohlcv = stock_repo.get_ohlcv(ticker)
             if not ohlcv.empty:
-                current_price = float(
-                    ohlcv.iloc[-1]["close"]
+                valid = ohlcv.dropna(
+                    subset=["close"],
                 )
+                if not valid.empty:
+                    current_price = float(
+                        valid.iloc[-1]["close"]
+                    )
         except Exception:
             pass
 

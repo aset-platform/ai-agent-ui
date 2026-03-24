@@ -138,6 +138,11 @@ class Settings(BaseSettings):
     # Empty = in-memory fallback (single-instance dev).
     redis_url: str = ""
 
+    # Razorpay payment gateway (test mode).
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    razorpay_webhook_secret: str = ""
+
     # Data retention policies (days to keep; 0 = keep forever).
     # Applies to append-only tables that grow unboundedly.
     retention_llm_usage_days: int = 90

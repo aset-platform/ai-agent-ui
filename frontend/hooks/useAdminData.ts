@@ -388,3 +388,155 @@ export function useObservability(): UseObservabilityResult {
     toggleTier,
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* useAdminMaintenance — on-demand admin actions                       */
+/* ------------------------------------------------------------------ */
+
+export interface TriageEntry {
+  sub_id: string;
+  customer_id: string;
+  status: string;
+  classification: "matched" | "orphaned" | "unlinked";
+  action: string;
+}
+
+export interface CleanupResult {
+  triage: TriageEntry[];
+  cleaned: number;
+  dry_run: boolean;
+  error?: string;
+}
+
+export interface RetentionResult {
+  table: string;
+  cutoff_date: string;
+  rows_before: number;
+  rows_deleted: number;
+  dry_run: boolean;
+  error: string | null;
+}
+
+export interface UsageUser {
+  user_id: string;
+  email: string;
+  full_name: string;
+  subscription_tier: string;
+  monthly_usage_count: number;
+}
+
+export interface GapResult {
+  top_gap_tickers: string[];
+  external_api_usage: Record<string, number>;
+  intent_distribution: Record<string, number>;
+  local_sufficiency_rate: number;
+}
+
+export function useAdminMaintenance() {
+  const cleanupSubscriptions = useCallback(
+    async (dryRun: boolean): Promise<CleanupResult> => {
+      const res = await apiFetch(
+        `${API_URL}/subscription/cleanup?dry_run=${dryRun}`,
+        { method: "POST" },
+      );
+      return res.json();
+    },
+    [],
+  );
+
+  const resetUsage = useCallback(
+    async (): Promise<{ reset_count: number }> => {
+      const res = await apiFetch(
+        `${API_URL}/admin/reset-usage`,
+        { method: "POST" },
+      );
+      return res.json();
+    },
+    [],
+  );
+
+  const getUsageStats = useCallback(
+    async (): Promise<{ users: UsageUser[] }> => {
+      const res = await apiFetch(
+        `${API_URL}/admin/usage-stats`,
+      );
+      return res.json();
+    },
+    [],
+  );
+
+  const resetSelectedUsage = useCallback(
+    async (
+      userIds: string[],
+    ): Promise<{ reset_count: number }> => {
+      const res = await apiFetch(
+        `${API_URL}/admin/reset-usage/selected`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            user_ids: userIds,
+          }),
+        },
+      );
+      return res.json();
+    },
+    [],
+  );
+
+  const runRetention = useCallback(
+    async (
+      dryRun: boolean,
+    ): Promise<{ results: RetentionResult[] }> => {
+      const res = await apiFetch(
+        `${API_URL}/admin/retention?dry_run=${dryRun}`,
+        { method: "POST" },
+      );
+      return res.json();
+    },
+    [],
+  );
+
+  const analyzeGaps = useCallback(
+    async (): Promise<GapResult> => {
+      const res = await apiFetch(
+        `${API_URL}/admin/query-gaps`,
+      );
+      return res.json();
+    },
+    [],
+  );
+
+  const retainSelected = useCallback(
+    async (
+      tableIds: string[],
+    ): Promise<{ results: RetentionResult[] }> => {
+      const res = await apiFetch(
+        `${API_URL}/admin/retention/selected`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            table_ids: tableIds,
+          }),
+        },
+      );
+      return res.json();
+    },
+    [],
+  );
+
+  return {
+    cleanupSubscriptions,
+    resetUsage,
+    getUsageStats,
+    resetSelectedUsage,
+    runRetention,
+    retainSelected,
+    analyzeGaps,
+  };
+}

@@ -76,6 +76,9 @@ interface JwtPayload {
   exp?: number;
   type?: string;
   jti?: string;
+  subscription_tier?: string;
+  subscription_status?: string;
+  usage_remaining?: number | null;
 }
 
 /**
@@ -135,6 +138,38 @@ export function getSessionIdFromToken(): string | null {
   const token = getAccessToken();
   if (!token) return null;
   return decodePayload(token)?.jti ?? null;
+}
+
+/**
+ * Extract the subscription tier from the stored access token.
+ * Returns "free" if no valid token is present.
+ */
+export function getSubscriptionTierFromToken(): string {
+  const token = getAccessToken();
+  if (!token) return "free";
+  return decodePayload(token)?.subscription_tier ?? "free";
+}
+
+/**
+ * Extract the subscription status from the stored access token.
+ * Returns "active" if no valid token is present.
+ */
+export function getSubscriptionStatusFromToken(): string {
+  const token = getAccessToken();
+  if (!token) return "active";
+  return decodePayload(token)?.subscription_status ?? "active";
+}
+
+/**
+ * Extract usage_remaining from the stored access token.
+ * Returns null for unlimited (premium) or when no token is present.
+ */
+export function getUsageRemainingFromToken(): number | null {
+  const token = getAccessToken();
+  if (!token) return null;
+  const payload = decodePayload(token);
+  if (!payload) return null;
+  return payload.usage_remaining ?? null;
 }
 
 // ---------------------------------------------------------------------------

@@ -41,6 +41,9 @@ def create_access_token(
     role: str,
     secret_key: str,
     expire_minutes: int,
+    subscription_tier: str = "free",
+    subscription_status: str = "active",
+    usage_remaining: int | None = None,
 ) -> str:
     """Create a signed JWT access token.
 
@@ -50,6 +53,12 @@ def create_access_token(
         role: User role (``"superuser"`` or ``"general"``).
         secret_key: HMAC-SHA256 secret.
         expire_minutes: Access token lifetime in minutes.
+        subscription_tier: ``"free"``, ``"pro"``, or
+            ``"premium"``.
+        subscription_status: ``"active"``, ``"past_due"``,
+            ``"cancelled"``, or ``"expired"``.
+        usage_remaining: Analyses left this month, or
+            ``None`` for unlimited.
 
     Returns:
         A signed JWT string.
@@ -66,6 +75,9 @@ def create_access_token(
         "sub": user_id,
         "email": email,
         "role": role,
+        "subscription_tier": subscription_tier,
+        "subscription_status": subscription_status,
+        "usage_remaining": usage_remaining,
         "type": _ACCESS_TOKEN_TYPE,
         "jti": str(uuid.uuid4()),
         "iat": now,
@@ -73,8 +85,9 @@ def create_access_token(
     }
     token = jwt.encode(payload, secret_key, algorithm=_ALGORITHM)
     _logger.debug(
-        "Access token created for user_id=%s",
+        "Access token created for user_id=%s tier=%s",
         user_id,
+        subscription_tier,
     )
     return token
 

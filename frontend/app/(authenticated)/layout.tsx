@@ -24,6 +24,7 @@ import { ChatPanel } from "@/components/ChatPanel";
 import { EditProfileModal } from "@/components/EditProfileModal";
 import { ChangePasswordModal } from "@/components/ChangePasswordModal";
 import { SessionManagementModal } from "@/components/SessionManagementModal";
+import { UpgradeBanner } from "@/components/UpgradeBanner";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
 import { getSessionIdFromToken } from "@/lib/auth";
@@ -36,7 +37,7 @@ function AuthenticatedShell({
   const [profile, setProfile] =
     useState<UserProfile | null>(null);
   const [profileInitialTab, setProfileInitialTab] =
-    useState<"profile" | "audit">("profile");
+    useState<"profile" | "billing" | "audit">("profile");
   const { sidebarCollapsed } = useLayoutContext();
   const { isOpen: chatOpen } = useChatContext();
   const editProfile = useEditProfile();
@@ -108,8 +109,18 @@ function AuthenticatedShell({
           }}
           onChangePassword={changePassword.open}
           onManageSessions={sessionMgmt.open}
+          onBilling={() => {
+            setProfileInitialTab("billing");
+            editProfile.open();
+          }}
           onActivityLog={() => {
             setProfileInitialTab("audit");
+            editProfile.open();
+          }}
+        />
+        <UpgradeBanner
+          onUpgrade={() => {
+            setProfileInitialTab("billing");
             editProfile.open();
           }}
         />

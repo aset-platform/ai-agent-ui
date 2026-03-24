@@ -116,10 +116,12 @@ def register(router: APIRouter) -> None:
             actor_user_id=user["user_id"],
             target_user_id=user["user_id"],
         )
+        sub_claims = _helpers._subscription_claims(user)
         access = service.create_access_token(
             user_id=user["user_id"],
             email=user["email"],
             role=user["role"],
+            **sub_claims,
         )
         refresh = service.create_refresh_token(
             user_id=user["user_id"],
@@ -127,12 +129,17 @@ def register(router: APIRouter) -> None:
         service.register_session(
             user_id=user["user_id"],
             refresh_token=refresh,
-            ip_address=request.client.host if request.client else "",
-            user_agent=request.headers.get("user-agent", ""),
+            ip_address=(
+                request.client.host if request.client else ""
+            ),
+            user_agent=request.headers.get(
+                "user-agent", ""
+            ),
         )
         _logger.info(
-            "User logged in: user_id=%s",
+            "User logged in: user_id=%s tier=%s",
             user["user_id"],
+            sub_claims["subscription_tier"],
         )
         resp = JSONResponse(
             content=TokenResponse(
@@ -172,12 +179,22 @@ def register(router: APIRouter) -> None:
         repo.update(
             user["user_id"], {"last_login_at": datetime.now(timezone.utc)}
         )
-        repo.append_audit_event("LOGIN", user["user_id"], user["user_id"])
-        access = service.create_access_token(
-            user_id=user["user_id"], email=user["email"], role=user["role"]
+        repo.append_audit_event(
+            "LOGIN", user["user_id"], user["user_id"],
         )
-        refresh = service.create_refresh_token(user_id=user["user_id"])
-        return TokenResponse(access_token=access, refresh_token=refresh)
+        sub_claims = _helpers._subscription_claims(user)
+        access = service.create_access_token(
+            user_id=user["user_id"],
+            email=user["email"],
+            role=user["role"],
+            **sub_claims,
+        )
+        refresh = service.create_refresh_token(
+            user_id=user["user_id"],
+        )
+        return TokenResponse(
+            access_token=access, refresh_token=refresh,
+        )
 
     @router.post(
         "/auth/refresh",
@@ -231,10 +248,12 @@ def register(router: APIRouter) -> None:
                 detail="User not found or deactivated",
             )
         service.revoke_refresh_token(token)
+        sub_claims = _helpers._subscription_claims(user)
         access = service.create_access_token(
             user_id=user["user_id"],
             email=user["email"],
             role=user["role"],
+            **sub_claims,
         )
         new_refresh = service.create_refresh_token(
             user_id=user["user_id"],

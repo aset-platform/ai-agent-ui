@@ -1,8 +1,8 @@
-"""Iceberg schema migration — add OAuth columns to ``auth.users``.
+"""Iceberg schema migration — evolve ``auth.users`` schema.
 
-Run once after pulling this branch to add the three SSO columns to an
-existing ``auth.users`` table.  The script is idempotent — columns that
-already exist are skipped without error.
+Adds OAuth columns (v1) and subscription columns (v2) to an
+existing ``auth.users`` table.  The script is idempotent — columns
+that already exist are skipped without error.
 
 Usage::
 
@@ -10,13 +10,24 @@ Usage::
     source ~/.ai-agent-ui/venv/bin/activate
     python auth/migrate_users_table.py
 
-New columns added
------------------
-- ``oauth_provider`` (StringType, nullable) — ``"google"`` / ``"facebook"``
-  / ``None`` for email-only accounts.
-- ``oauth_sub`` (StringType, nullable) — provider-specific unique user ID.
-- ``profile_picture_url`` (StringType, nullable) — avatar URL refreshed on
-  each SSO login.
+Columns added
+-------------
+**v1 — OAuth:**
+- ``oauth_provider`` (StringType, nullable)
+- ``oauth_sub`` (StringType, nullable)
+- ``profile_picture_url`` (StringType, nullable)
+- ``page_permissions`` (StringType, nullable)
+
+**v2 — Subscription:**
+- ``subscription_tier`` (StringType, nullable)
+- ``subscription_status`` (StringType, nullable)
+- ``razorpay_customer_id`` (StringType, nullable)
+- ``razorpay_subscription_id`` (StringType, nullable)
+- ``stripe_customer_id`` (StringType, nullable)
+- ``stripe_subscription_id`` (StringType, nullable)
+- ``monthly_usage_count`` (IntegerType, nullable)
+- ``subscription_start_at`` (TimestampType, nullable)
+- ``subscription_end_at`` (TimestampType, nullable)
 """
 
 from __future__ import annotations
@@ -24,42 +35,41 @@ from __future__ import annotations
 import logging
 import os
 
-from pyiceberg.types import StringType
+from pyiceberg.types import IntegerType, StringType, TimestampType
 
-# Module-level logger (non-mutable).
-# Prefixed with '_' to indicate internal use.
 _logger = logging.getLogger(__name__)
 
 _USERS_TABLE = "auth.users"
 
-# Immutable collection of new columns to add.
-# Prefixed with '_' as internal constant.
 _NEW_COLUMNS = (
+    # v1 — OAuth
     ("oauth_provider", StringType()),
     ("oauth_sub", StringType()),
     ("profile_picture_url", StringType()),
     ("page_permissions", StringType()),
+    # v2 — Subscription
+    ("subscription_tier", StringType()),
+    ("subscription_status", StringType()),
+    ("razorpay_customer_id", StringType()),
+    ("razorpay_subscription_id", StringType()),
+    ("stripe_customer_id", StringType()),
+    ("stripe_subscription_id", StringType()),
+    ("monthly_usage_count", IntegerType()),
+    ("usage_month", StringType()),
+    ("subscription_start_at", TimestampType()),
+    ("subscription_end_at", TimestampType()),
 )
 
 
 def migrate() -> None:
-    """Add the three OAuth columns to ``auth.users`` if they are absent.
+    """Add OAuth and subscription columns to ``auth.users``.
 
-    Uses Iceberg schema evolution (``update_schema()``) so existing data
-    rows are unaffected — new columns read as ``None`` for pre-migration
-    rows.
-
-    Args:
-        None.
-
-    Returns:
-        None.
+    Uses Iceberg schema evolution (``update_schema()``) so existing
+    data rows are unaffected — new columns read as ``None`` for
+    pre-migration rows.
 
     Raises:
         RuntimeError: If the Iceberg catalog cannot be loaded.
-
-    Example:
-        >>> migrate()  # doctest: +SKIP
     """
     from pyiceberg.catalog import load_catalog
 
@@ -81,7 +91,10 @@ def migrate() -> None:
     if added:
         _logger.info("Migration complete — added columns: %s", added)
     else:
-        _logger.info("Migration complete — no changes needed (all columns present).")
+        _logger.info(
+            "Migration complete — no changes needed"
+            " (all columns present).",
+        )
 
 
 if __name__ == "__main__":

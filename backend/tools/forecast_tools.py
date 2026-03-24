@@ -144,9 +144,13 @@ def get_portfolio_forecast(
 
         # Current price
         ohlcv = repo.get_ohlcv(ticker)
+        valid = (
+            ohlcv.dropna(subset=["close"])
+            if not ohlcv.empty else ohlcv
+        )
         curr = (
-            float(ohlcv.iloc[-1]["close"])
-            if not ohlcv.empty else None
+            float(valid.iloc[-1]["close"])
+            if not valid.empty else None
         )
         if curr is None:
             missing.append(ticker)

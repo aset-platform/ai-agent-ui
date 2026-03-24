@@ -1,6 +1,6 @@
 # Agents
 
-The agent framework lives in `backend/agents/`. It provides a base class with the full agentic loop, a registry for lookup and routing, and concrete implementations backed by an N-tier Groq/Anthropic LLM cascade.
+The agent framework lives in `backend/agents/`. It uses a **LangGraph supervisor graph** that automatically routes user queries to specialised sub-agents via a two-tier intent classifier (keyword match → LLM fallback). Legacy `GeneralAgent` and `StockAgent` classes are retained as fallback but are unused when `use_langgraph=True` (default).
 
 ---
 
@@ -8,14 +8,23 @@ The agent framework lives in `backend/agents/`. It provides a base class with th
 
 | File | Purpose |
 |------|---------|
-| `agents/base.py` | `BaseAgent` ABC (owns the agentic loop) |
+| `agents/graph.py` | `build_supervisor_graph()` — 10-node LangGraph StateGraph |
+| `agents/graph_state.py` | `AgentState` TypedDict (messages, intent, user_context, etc.) |
+| `agents/sub_agents.py` | `_make_sub_agent_node()` factory + `_build_context_block()` for dynamic context injection |
+| `agents/configs/portfolio.py` | Portfolio Agent config (currency-aware, mandatory tool-use) |
+| `agents/configs/stock_analyst.py` | Stock Analyst config (pipeline: fetch → analyse → verdict) |
+| `agents/configs/forecaster.py` | Forecaster config (Prophet models) |
+| `agents/configs/research.py` | Research Agent config (news + sentiment) |
+| `agents/nodes/guardrail.py` | Content safety + financial relevance gate |
+| `agents/nodes/router_node.py` | Tier 1 keyword-based intent classifier (zero LLM) |
+| `agents/nodes/llm_classifier.py` | Tier 2 LLM fallback classifier (1 cheap call) |
+| `agents/nodes/supervisor.py` | Intent → sub-agent mapper |
+| `agents/nodes/synthesis.py` | Output formatting |
+| `agents/nodes/log_query.py` | Audit logging to Iceberg |
+| `agents/nodes/decline.py` | Polite refusal for non-financial queries |
 | `agents/config.py` | `AgentConfig` dataclass + `MAX_ITERATIONS` constant |
-| `agents/loop.py` | Agentic loop logic (extracted from base) |
-| `agents/stream.py` | NDJSON streaming support |
-| `agents/registry.py` | `AgentRegistry` — maps agent IDs to agent instances |
-| `agents/general_agent.py` | `GeneralAgent` concrete class + `create_general_agent` factory |
-| `agents/stock_agent.py` | `StockAgent` concrete class + `create_stock_agent` factory |
-| `agents/__init__.py` | Empty (marks directory as a Python package) |
+| `agents/registry.py` | `AgentRegistry` — maps agent IDs to agent instances (legacy) |
+| `agents/base.py` | `BaseAgent` ABC (legacy fallback) |
 
 ---
 
@@ -39,7 +48,62 @@ The `groq_model_tiers` list defines the Groq model cascade order. Each model is 
 
 ---
 
-## BaseAgent
+## LangGraph Supervisor Graph
+
+The primary execution path (`use_langgraph=True`, default). Built in `agents/graph.py` via `build_supervisor_graph()`.
+
+### Graph Flow
+
+```
+User Message
+  → guardrail (content safety + finance relevance)
+  → router_node (Tier 1: keyword match, zero LLM)
+  → llm_classifier (Tier 2: LLM fallback if router uncertain)
+  → supervisor (intent → sub-agent mapper)
+  → sub_agent node (portfolio | stock_analyst | forecaster | research)
+  → log_query (audit to Iceberg)
+  → synthesis (output formatting)
+  → Response
+```
+
+If the guardrail rejects → `decline` node (polite refusal). If router is confident → skips `llm_classifier`.
+
+### AgentState (TypedDict)
+
+Defined in `agents/graph_state.py`:
+
+```python
+class AgentState(TypedDict):
+    messages: list           # LangChain message history
+    intent: str              # Classified intent
+    current_agent: str       # Active sub-agent ID
+    tool_events: list        # Streaming tool events
+    final_response: str      # Output text
+    user_context: dict       # Portfolio currency/market context
+    error: str | None
+    start_time_ns: int
+```
+
+The `user_context` field is populated from the user's portfolio holdings at request time, injected into the sub-agent's system prompt via `_build_context_block()` for currency-aware responses.
+
+### Sub-Agent Configs
+
+Each sub-agent is configured via a dataclass in `agents/configs/`:
+
+| Config | Agent | Key Behaviour |
+|--------|-------|---------------|
+| `portfolio.py` | Portfolio Agent | Mandatory tool-use, currency rules, dynamic context |
+| `stock_analyst.py` | Stock Analyst | Pipeline: fetch → analyse → verdict |
+| `forecaster.py` | Forecaster | Prophet models, horizon selection |
+| `research.py` | Research Agent | News search + sentiment |
+
+### Dynamic Context Injection
+
+`_build_context_block()` in `agents/sub_agents.py` detects the user's currency/market mix from portfolio holdings and injects it into the LLM system prompt. This ensures the portfolio agent uses correct currency symbols (₹/$) and market conventions.
+
+---
+
+## BaseAgent (Legacy Fallback)
 
 `BaseAgent` is an abstract base class (ABC) defined in `agents/base.py`. It implements everything except the LLM construction — subclasses only need to override `_build_llm()`.
 
