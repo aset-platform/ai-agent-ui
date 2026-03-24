@@ -2,6 +2,49 @@
 
 ---
 
+# Session: Mar 24–25, 2026 — Subscription & Paywall System, Razorpay + Stripe, Admin Maintenance
+
+## Sprint 3 — 100% Complete (all 11 stories + 15 bugs)
+
+### Additional Deliverables (Mar 24 evening – Mar 25)
+
+**ASETPLTFRM-79 (3 pts) — Stripe Sandbox Integration:**
+- stripe==14.4.1, 3 config fields, Stripe Checkout Session + `Subscription.modify()` for pro-rata upgrades
+- Stripe webhook handler (checkout.session.completed, customer.subscription.deleted, invoice.payment_failed)
+- Gateway selector UI (INR vs USD toggle), dynamic pricing, auto-detect active gateway
+- Cancel supports both Razorpay + Stripe
+
+**ASETPLTFRM-81 (3 pts) — Subscription E2E Tests:**
+- 3 Playwright test specs: billing UI, paywall enforcement, admin management (13 tests)
+- subscription.helper.ts API utilities
+
+**Payment Transaction Ledger:**
+- `auth.payment_transactions` Iceberg table (14 columns) — every payment event logged
+- Wired into all webhook handlers + PATCH upgrades + user cancels
+- Admin "Transactions" tab (6th) with gateway filter, Source column (User/Webhook), Name column, raw payload viewer
+
+**Bug Fixes (ASETPLTFRM-167–176):**
+- Cookie path mismatch → login redirect after payment (167)
+- WS streaming + usage tracking missing (168)
+- Quota enforcement on chat (169)
+- SWR cache leak between users (170)
+- get_catalog() missing root arg (171)
+- Stripe no pro-rata on upgrade (172)
+- useEffect not imported crash (173)
+- INR prices for Stripe users (174)
+- Native confirm() → ConfirmDialog (175)
+- Missing news tools in stock analyst (176)
+
+**Session Stability Fix (root cause):**
+- `NEXT_PUBLIC_BACKEND_URL` was `http://127.0.0.1:8181` but frontend runs on `localhost:3000`
+- Different hostnames = browser doesn't send HttpOnly cookie on API calls = refresh always fails
+- Fixed to `http://localhost:8181` — session now stable across token refreshes and payments
+- Also fixed: refresh endpoint 422 (empty JSON body), cookie path to `/`, legacy cookie cleanup
+
+**Sprint 3 Final: 22 story pts + 23 bug pts = 45 pts delivered**
+
+---
+
 # Session: Mar 24, 2026 — Subscription & Paywall System, Razorpay Integration, Admin Maintenance
 
 ## Sprint 3 subscription + billing on `feature/sprint3`

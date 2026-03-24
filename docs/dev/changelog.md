@@ -4,6 +4,31 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 24–25, 2026 — Full Billing System, Razorpay + Stripe, Session Stability
+
+### Added (late Mar 24)
+- **Stripe sandbox integration** — checkout sessions, `Subscription.modify()` for pro-rata upgrades, webhook handler
+- **Gateway selector** — INR/USD toggle in BillingTab, auto-detect from active subscription
+- **Payment transaction ledger** — `auth.payment_transactions` Iceberg table, logged from all webhook/upgrade/cancel paths
+- **Admin Transactions tab** — gateway filter, Source column (User/Webhook), Name column with user lookup, raw payload viewer
+- **Subscription E2E tests** — 3 Playwright specs (billing, paywall, admin) + API helpers
+- **News tools in stock analyst** — `get_ticker_news` + `get_analyst_recommendations` added to analysis pipeline
+
+### Fixed (late Mar 24 – early Mar 25)
+- **ASETPLTFRM-167** — Cookie path `/auth` → `/` (login redirect after payment)
+- **ASETPLTFRM-168** — WS streaming: thread-local event sink for real-time tool events
+- **ASETPLTFRM-169** — Quota enforcement: `_enforce_quota()` in HTTP + WS, disabled chat input
+- **ASETPLTFRM-170** — SWR cache leak: `window.location.href` on login/logout
+- **ASETPLTFRM-171** — `get_catalog()` missing root arg in transaction/usage logger
+- **ASETPLTFRM-172** — Stripe upgrade: `Subscription.modify()` with proration
+- **ASETPLTFRM-173** — Missing `useEffect` import in TransactionsTab
+- **ASETPLTFRM-174** — INR prices shown for Stripe users (auto-detect gateway)
+- **ASETPLTFRM-175** — Native `confirm()` → `ConfirmDialog` for cancel subscription
+- **ASETPLTFRM-176** — Stock analyst missing news/analyst tools
+- **Session stability root cause** — `NEXT_PUBLIC_BACKEND_URL` hostname mismatch (`127.0.0.1` vs `localhost`) prevented HttpOnly cookies from being sent. Fixed + refresh endpoint 422 (empty JSON body)
+
+---
+
 ## Mar 24, 2026 — Subscription & Paywall System, Razorpay Integration, Admin Maintenance
 
 ### Added
