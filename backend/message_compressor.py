@@ -20,7 +20,8 @@ Typical usage::
 
 import logging
 import re
-from typing import List
+
+from langsmith import traceable
 
 from langchain_core.messages import (
     AIMessage,
@@ -71,12 +72,13 @@ class MessageCompressor:
         self._max_tool_chars = max_tool_result_chars
         self._condensed_ratio = condensed_prompt_ratio
 
+    @traceable(name="MessageCompressor.compress")
     def compress(
         self,
-        messages: List[BaseMessage],
+        messages: list[BaseMessage],
         iteration: int,
         target_tokens: int | None = None,
-    ) -> List[BaseMessage]:
+    ) -> list[BaseMessage]:
         """Return a compressed copy of *messages*.
 
         Args:
@@ -134,8 +136,8 @@ class MessageCompressor:
     # ------------------------------------------------------------------
 
     def _condense_system_prompt(
-        self, messages: List[BaseMessage]
-    ) -> List[BaseMessage]:
+        self, messages: list[BaseMessage]
+    ) -> list[BaseMessage]:
         """Replace the SystemMessage with a condensed version.
 
         Keeps lines matching key structural patterns (numbered
@@ -154,7 +156,7 @@ class MessageCompressor:
 
         original = messages[0].content or ""
         lines = original.split("\n")
-        kept: List[str] = []
+        kept: list[str] = []
         for line in lines:
             if _KEEP_PATTERNS.match(line):
                 kept.append(line)
@@ -182,9 +184,9 @@ class MessageCompressor:
 
     def _truncate_history(
         self,
-        messages: List[BaseMessage],
+        messages: list[BaseMessage],
         max_turns: int,
-    ) -> List[BaseMessage]:
+    ) -> list[BaseMessage]:
         """Keep system + last N history turns + loop messages.
 
         A "turn" is a ``(HumanMessage, AIMessage)`` pair from the
@@ -211,8 +213,8 @@ class MessageCompressor:
             return list(messages)
 
         # Split into parts.
-        prefix: List[BaseMessage] = []  # SystemMessage(s)
-        history: List[BaseMessage] = []
+        prefix: list[BaseMessage] = []  # SystemMessage(s)
+        history: list[BaseMessage] = []
         idx = 0
 
         # Collect prefix (SystemMessage).
@@ -227,8 +229,8 @@ class MessageCompressor:
         loop_msgs = list(messages[boundary:])
 
         # Truncate history to last max_turns pairs.
-        turns: List[List[BaseMessage]] = []
-        current_turn: List[BaseMessage] = []
+        turns: list[list[BaseMessage]] = []
+        current_turn: list[BaseMessage] = []
         for msg in history:
             current_turn.append(msg)
             if isinstance(msg, AIMessage):
@@ -238,7 +240,7 @@ class MessageCompressor:
             turns.append(current_turn)
 
         kept_turns = turns[-max_turns:] if max_turns > 0 else []
-        kept_history: List[BaseMessage] = []
+        kept_history: list[BaseMessage] = []
         for turn in kept_turns:
             kept_history.extend(turn)
 
@@ -254,7 +256,7 @@ class MessageCompressor:
 
     @staticmethod
     def _find_loop_boundary(
-        messages: List[BaseMessage],
+        messages: list[BaseMessage],
     ) -> int:
         """Find index of the HumanMessage starting the current request.
 
@@ -265,8 +267,8 @@ class MessageCompressor:
             Index of the boundary HumanMessage, or 0.
         """
         # Single-pass: collect indices by type.
-        human_idxs: List[int] = []
-        tool_idxs: List[int] = []
+        human_idxs: list[int] = []
+        tool_idxs: list[int] = []
         for i, msg in enumerate(messages):
             if isinstance(msg, HumanMessage):
                 human_idxs.append(i)
@@ -298,9 +300,9 @@ class MessageCompressor:
 
     @staticmethod
     def _truncate_tool_results(
-        messages: List[BaseMessage],
+        messages: list[BaseMessage],
         max_chars: int,
-    ) -> List[BaseMessage]:
+    ) -> list[BaseMessage]:
         """Truncate ToolMessage content exceeding *max_chars*.
 
         Args:
@@ -310,7 +312,7 @@ class MessageCompressor:
         Returns:
             New list with truncated ToolMessages.
         """
-        result: List[BaseMessage] = []
+        result: list[BaseMessage] = []
         for msg in messages:
             if (
                 isinstance(msg, ToolMessage)
@@ -339,9 +341,9 @@ class MessageCompressor:
 
     def _progressive_compress(
         self,
-        messages: List[BaseMessage],
+        messages: list[BaseMessage],
         target_tokens: int,
-    ) -> List[BaseMessage]:
+    ) -> list[BaseMessage]:
         """Apply increasingly aggressive compression.
 
         Pass 1: already done (default stages).

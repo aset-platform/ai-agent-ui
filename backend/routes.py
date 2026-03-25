@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from langsmith.middleware import TracingMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from models import ChatRequest, ChatResponse
@@ -26,6 +27,8 @@ from slowapi.errors import RateLimitExceeded
 from tools._ticker_linker import set_current_user
 
 from auth.api import create_auth_router, get_ticker_router
+from auth.dependencies import get_current_user
+from auth.models import UserContext
 from auth.rate_limit import limiter, rate_limit_exceeded_handler
 
 _logger = logging.getLogger(__name__)
@@ -55,14 +58,15 @@ def create_app(
     Returns:
         A fully configured :class:`~fastapi.FastAPI` instance.
     """
+
     @asynccontextmanager
     async def _lifespan(a):
         """Startup: warm Redis cache."""
         try:
             from cache_warmup import (
+                warm_frequent_users,
                 warm_shared,
                 warm_tickers,
-                warm_frequent_users,
             )
 
             warm_shared()
@@ -87,6 +91,10 @@ def create_app(
             _logger.warning(
                 "cache warm-up skipped",
                 exc_info=True,
+            )
+        if not settings.jwt_secret_key:
+            _logger.error(
+                "JWT_SECRET_KEY not set" " — auth will fail",
             )
         yield
 
@@ -128,9 +136,23 @@ def create_app(
             response.headers["Referrer-Policy"] = (
                 "strict-origin-when-cross-origin"
             )
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' "
+                "'unsafe-eval'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: blob: https:; "
+                "connect-src 'self' "
+                "http://localhost:* "
+                "ws://localhost:*; "
+                "font-src 'self';"
+            )
             return response
 
     app.add_middleware(_SecurityHeadersMiddleware)
+
+    # LangSmith: correlate HTTP requests with LLM traces.
+    app.add_middleware(TracingMiddleware)
 
     # Rate limiting (slowapi).
     app.state.limiter = limiter
@@ -147,6 +169,7 @@ def create_app(
         """Raise 429 if user's monthly quota is used."""
         try:
             from usage_tracker import is_quota_exceeded
+
             if is_quota_exceeded(user_id):
                 raise HTTPException(
                     status_code=429,
@@ -158,12 +181,21 @@ def create_app(
         except HTTPException:
             raise
         except Exception:
-            pass  # fail open
+            _logger.error(
+                "Quota check failed for %s",
+                user_id,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Usage tracking unavailable",
+            )
 
     def _track_usage(user_id: str) -> None:
         """Increment monthly usage count (fire-and-forget)."""
         try:
             from usage_tracker import increment_usage
+
             increment_usage(user_id)
         except Exception:
             _logger.debug(
@@ -175,8 +207,14 @@ def create_app(
     # Core route handlers — shared by root and /v1 mounts
     # ---------------------------------------------------------------
 
-    async def _chat(req: ChatRequest):
+    async def _chat(
+        req: ChatRequest,
+        current_user: UserContext = Depends(
+            get_current_user,
+        ),
+    ):
         """Sync agent dispatch (POST /chat)."""
+        req.user_id = current_user.user_id
         _enforce_quota(req.user_id)
 
         # ── LangGraph path ────────────────────────
@@ -191,14 +229,11 @@ def create_app(
         if agent is None:
             raise HTTPException(
                 status_code=404,
-                detail=(
-                    f"Agent '{req.agent_id}' "
-                    "not found"
-                ),
+                detail=(f"Agent '{req.agent_id}' " "not found"),
             )
         set_current_user(req.user_id)
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
                 executor,
                 agent.run,
@@ -207,9 +242,7 @@ def create_app(
             )
             result = await asyncio.wait_for(
                 future,
-                timeout=(
-                    settings.agent_timeout_seconds
-                ),
+                timeout=(settings.agent_timeout_seconds),
             )
         except asyncio.TimeoutError:
             _logger.warning(
@@ -239,14 +272,10 @@ def create_app(
 
     async def _chat_langgraph(req: ChatRequest):
         """Sync chat via LangGraph supervisor graph."""
-        from langchain_core.messages import (
-            HumanMessage,
-        )
-
         input_state = _build_graph_input(req)
         set_current_user(req.user_id)
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
                 executor,
                 graph.invoke,
@@ -254,9 +283,7 @@ def create_app(
             )
             result = await asyncio.wait_for(
                 future,
-                timeout=(
-                    settings.agent_timeout_seconds
-                ),
+                timeout=(settings.agent_timeout_seconds),
             )
         except asyncio.TimeoutError:
             raise HTTPException(
@@ -275,16 +302,18 @@ def create_app(
             )
         _track_usage(req.user_id)
         return ChatResponse(
-            response=result.get(
-                "final_response", ""
-            ),
-            agent_id=result.get(
-                "current_agent", "graph"
-            ),
+            response=result.get("final_response", ""),
+            agent_id=result.get("current_agent", "graph"),
         )
 
-    async def _chat_stream(req: ChatRequest):
+    async def _chat_stream(
+        req: ChatRequest,
+        current_user: UserContext = Depends(
+            get_current_user,
+        ),
+    ):
         """NDJSON streaming (POST /chat/stream)."""
+        req.user_id = current_user.user_id
         _enforce_quota(req.user_id)
 
         # ── LangGraph path ────────────────────────
@@ -299,10 +328,7 @@ def create_app(
         if agent is None:
             raise HTTPException(
                 status_code=404,
-                detail=(
-                    f"Agent '{req.agent_id}' "
-                    "not found"
-                ),
+                detail=(f"Agent '{req.agent_id}' " "not found"),
             )
 
         timeout = settings.agent_timeout_seconds
@@ -320,8 +346,21 @@ def create_app(
                     ):
                         event_queue.put(event)
                     _track_usage(req.user_id)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.warning(
+                        "Stream worker error: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    event_queue.put(
+                        json.dumps(
+                            {
+                                "type": "error",
+                                "message": str(exc),
+                            }
+                        )
+                        + "\n"
+                    )
                 finally:
                     event_queue.put(None)
 
@@ -330,40 +369,10 @@ def create_app(
                 daemon=True,
             )
             worker.start()
-
-            start = time.time()
-            while True:
-                elapsed = time.time() - start
-                if elapsed >= timeout:
-                    yield json.dumps(
-                        {
-                            "type": "timeout",
-                            "message": (
-                                "Agent timed out" f" after {timeout}s"
-                            ),
-                        }
-                    ) + "\n"
-                    break
-                remaining = timeout - elapsed
-                try:
-                    item = event_queue.get(
-                        timeout=remaining,
-                    )
-                    if item is None:
-                        break
-                    yield item
-                except queue.Empty:
-                    if time.time() - start >= timeout:
-                        yield json.dumps(
-                            {
-                                "type": "timeout",
-                                "message": (
-                                    "Agent timed out" f" after {timeout}s"
-                                ),
-                            }
-                        ) + "\n"
-                        break
-
+            yield from _drain_queue(
+                event_queue,
+                timeout,
+            )
             worker.join(timeout=2)
 
         return StreamingResponse(
@@ -372,48 +381,44 @@ def create_app(
         )
 
     # ---------------------------------------------------------------
+    # Shared stream-queue drain
+    # ---------------------------------------------------------------
+
+    def _drain_queue(
+        event_queue: queue.Queue,
+        timeout: float,
+    ):
+        """Yield items from *event_queue* until done
+        or *timeout* seconds elapse."""
+        start = time.time()
+        while True:
+            elapsed = time.time() - start
+            if elapsed >= timeout:
+                yield json.dumps(
+                    {
+                        "type": "timeout",
+                        "message": (f"Agent timed out" f" after {timeout}s"),
+                    }
+                ) + "\n"
+                break
+            remaining = timeout - elapsed
+            try:
+                item = event_queue.get(
+                    timeout=min(remaining, 1.0),
+                )
+                if item is None:
+                    break
+                yield item
+            except queue.Empty:
+                continue
+
+    # ---------------------------------------------------------------
     # LangGraph helpers
     # ---------------------------------------------------------------
 
-    def _build_user_context(
-        user_id: str,
-    ) -> dict:
-        """Build user context from portfolio."""
-        if not user_id:
-            return {}
-        try:
-            from stocks.repository import (
-                StockRepository,
-            )
-            repo = StockRepository()
-            holdings = repo.get_portfolio_holdings(
-                user_id,
-            )
-            if holdings.empty:
-                return {}
+    from user_context import build_user_context
 
-            currencies: dict[str, int] = {}
-            markets: dict[str, int] = {}
-            for _, h in holdings.iterrows():
-                ccy = h.get("currency", "USD")
-                mkt = h.get("market", "us")
-                currencies[ccy] = (
-                    currencies.get(ccy, 0) + 1
-                )
-                markets[mkt] = (
-                    markets.get(mkt, 0) + 1
-                )
-            return {
-                "currencies": currencies,
-                "markets": markets,
-                "total_holdings": len(holdings),
-            }
-        except Exception:
-            _logger.debug(
-                "user context build failed",
-                exc_info=True,
-            )
-            return {}
+    _build_user_context = build_user_context
 
     def _build_graph_input(req: ChatRequest) -> dict:
         """Build LangGraph AgentState input from req."""
@@ -423,7 +428,7 @@ def create_app(
         )
 
         msgs = []
-        for h in (req.history or []):
+        for h in req.history or []:
             role = h.get("role", "user")
             content = h.get("content", "")
             if role == "assistant":
@@ -474,9 +479,7 @@ def create_app(
                     )
 
                     def _sink(ev):
-                        event_queue.put(
-                            json.dumps(ev) + "\n"
-                        )
+                        event_queue.put(json.dumps(ev) + "\n")
 
                     set_event_sink(_sink)
                     try:
@@ -487,57 +490,38 @@ def create_app(
                         set_event_sink(None)
                     # Emit final
                     event_queue.put(
-                        json.dumps({
-                            "type": "final",
-                            "response": result.get(
-                                "final_response", ""
-                            ),
-                            "agent": result.get(
-                                "current_agent", ""
-                            ),
-                        })
+                        json.dumps(
+                            {
+                                "type": "final",
+                                "response": result.get("final_response", ""),
+                                "agent": result.get("current_agent", ""),
+                            }
+                        )
                         + "\n"
                     )
                     _track_usage(req.user_id)
                 except Exception as exc:
                     event_queue.put(
-                        json.dumps({
-                            "type": "error",
-                            "message": str(exc),
-                        })
+                        json.dumps(
+                            {
+                                "type": "error",
+                                "message": str(exc),
+                            }
+                        )
                         + "\n"
                     )
                 finally:
                     event_queue.put(None)
 
             worker = threading.Thread(
-                target=run, daemon=True,
+                target=run,
+                daemon=True,
             )
             worker.start()
-
-            start = time.time()
-            while True:
-                elapsed = time.time() - start
-                if elapsed >= timeout:
-                    yield json.dumps({
-                        "type": "timeout",
-                        "message": (
-                            "Agent timed out"
-                            f" after {timeout}s"
-                        ),
-                    }) + "\n"
-                    break
-                remaining = timeout - elapsed
-                try:
-                    item = event_queue.get(
-                        timeout=min(remaining, 1.0),
-                    )
-                    if item is None:
-                        break
-                    yield item
-                except queue.Empty:
-                    continue
-
+            yield from _drain_queue(
+                event_queue,
+                timeout,
+            )
             worker.join(timeout=2)
 
         return StreamingResponse(
@@ -589,13 +573,17 @@ def create_app(
 
             repo = _require_repo()
             usage = repo.get_dashboard_llm_usage(
-                user_id=None, days=30,
+                user_id=None,
+                days=30,
             )
             cascade_stats["requests_total"] = int(
                 usage.get("total_requests", 0)
             )
         except Exception:
-            pass  # keep in-memory count as fallback
+            _logger.debug(
+                "Iceberg LLM usage fallback",
+                exc_info=True,
+            )
 
         result["cascade_stats"] = cascade_stats
         return result
@@ -623,7 +611,8 @@ def create_app(
         top_gaps = sorted(
             gaps,
             key=lambda g: g.get(
-                "query_count", 0,
+                "query_count",
+                0,
             ),
             reverse=True,
         )[:10]
@@ -631,8 +620,6 @@ def create_app(
         # Query log stats
         logs = []
         try:
-            from datetime import date, timedelta
-
             # Read recent logs (all users)
             tbl = repo._load_table(
                 repo._QUERY_LOG,
@@ -642,37 +629,42 @@ def create_app(
             if not df.empty:
                 logs = df.to_dict("records")
         except Exception:
-            pass
+            _logger.debug(
+                "Query log scan failed",
+                exc_info=True,
+            )
 
         # External API usage
         yf_today = sum(
-            1 for l in logs
-            if "yfinance" in str(
-                l.get("data_sources_used", ""),
+            1
+            for rec in logs
+            if "yfinance"
+            in str(
+                rec.get("data_sources_used", ""),
             )
         )
         serp_today = sum(
-            1 for l in logs
-            if "serpapi" in str(
-                l.get("data_sources_used", ""),
+            1
+            for rec in logs
+            if "serpapi"
+            in str(
+                rec.get("data_sources_used", ""),
             )
         )
 
         # Intent distribution
         intents: dict[str, int] = {}
-        for l in logs:
-            intent = l.get(
-                "classified_intent", "unknown",
+        for rec in logs:
+            intent = rec.get(
+                "classified_intent",
+                "unknown",
             )
-            intents[intent] = (
-                intents.get(intent, 0) + 1
-            )
+            intents[intent] = intents.get(intent, 0) + 1
 
         # Local sufficiency
         total = len(logs) or 1
         local_ok = sum(
-            1 for l in logs
-            if l.get("was_local_sufficient", False)
+            1 for rec in logs if rec.get("was_local_sufficient", False)
         )
 
         return {
@@ -680,10 +672,12 @@ def create_app(
                 {
                     "ticker": g.get("ticker", ""),
                     "query_count": g.get(
-                        "query_count", 0,
+                        "query_count",
+                        0,
                     ),
                     "data_type": g.get(
-                        "data_type", "",
+                        "data_type",
+                        "",
                     ),
                 }
                 for g in top_gaps
@@ -694,7 +688,8 @@ def create_app(
             },
             "intent_distribution": intents,
             "local_sufficiency_rate": round(
-                local_ok / total, 2,
+                local_ok / total,
+                2,
             ),
         }
 
@@ -856,9 +851,11 @@ def create_app(
         if not table_ids:
             return {"results": []}
         from stocks.retention import RetentionManager
+
         mgr = RetentionManager()
         results = mgr.run_cleanup_tables(
-            table_ids, dry_run=False,
+            table_ids,
+            dry_run=False,
         )
         return {
             "results": [
@@ -896,12 +893,14 @@ def create_app(
     async def _admin_reset_usage():
         """POST /admin/reset-usage — zero monthly counts."""
         from usage_tracker import reset_monthly_usage
+
         count = reset_monthly_usage()
         return {"reset_count": count}
 
     async def _admin_usage_stats():
         """GET /admin/usage-stats — all users + counts."""
         from usage_tracker import get_usage_stats
+
         return {"users": get_usage_stats()}
 
     async def _admin_reset_selected(
@@ -913,6 +912,7 @@ def create_app(
         if not user_ids:
             return {"reset_count": 0}
         from usage_tracker import reset_user_usage
+
         count = reset_user_usage(user_ids)
         return {"reset_count": count}
 
@@ -941,9 +941,11 @@ def create_app(
     ):
         """GET /admin/usage-history."""
         from usage_tracker import get_usage_history
+
         return {
             "history": get_usage_history(
-                user_id=user_id, limit=limit,
+                user_id=user_id,
+                limit=limit,
             ),
         }
 
@@ -987,16 +989,15 @@ def create_app(
         if gateway:
             df = df[df["gateway"] == gateway]
         df = df.sort_values(
-            "created_at", ascending=False,
+            "created_at",
+            ascending=False,
         ).head(limit)
         import math as _math
 
         rows = df.to_dict("records")
         for r in rows:
             if hasattr(r.get("created_at"), "isoformat"):
-                r["created_at"] = (
-                    r["created_at"].isoformat()
-                )
+                r["created_at"] = r["created_at"].isoformat()
             # Enrich with user name/email
             uid = r.get("user_id", "")
             info = user_map.get(uid, {})
@@ -1017,8 +1018,8 @@ def create_app(
     app.include_router(admin_router)
 
     # Dashboard + audit + insights endpoints.
-    from dashboard_routes import create_dashboard_router
     from audit_routes import create_audit_router
+    from dashboard_routes import create_dashboard_router
     from insights_routes import create_insights_router
 
     app.include_router(
@@ -1046,7 +1047,10 @@ def create_app(
     from ws import register_ws_routes
 
     register_ws_routes(
-        app, agent_registry, executor, settings,
+        app,
+        agent_registry,
+        executor,
+        settings,
         graph=graph,
     )
 

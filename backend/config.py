@@ -165,6 +165,13 @@ class Settings(BaseSettings):
     # to legacy BaseAgent dispatch).
     use_langgraph: bool = True
 
+    # ── Observability: LangSmith / LangFuse ──────
+    # LangSmith auto-traces LangChain/LangGraph calls
+    # when LANGCHAIN_TRACING_V2=true is set in env.
+    langsmith_enabled: bool = True
+    langfuse_enabled: bool = False
+    trace_sample_rate: float = 1.0  # 1.0 = 100% (dev)
+
     # Read from .env in the working directory; silently skip if absent.
     # Real environment variables always take precedence over .env values.
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

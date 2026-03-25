@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
+from langsmith import traceable
 from langgraph.graph import END, START, StateGraph
 
 from agents.configs.forecaster import FORECASTER_CONFIG
@@ -50,6 +51,7 @@ def _route_by_next_agent(state: dict) -> str:
     return state.get("next_agent", "decline")
 
 
+@traceable(name="build_supervisor_graph", run_type="chain")
 def build_supervisor_graph(
     tool_registry: ToolRegistry,
     llm_factory: Callable,
