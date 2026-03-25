@@ -11,10 +11,11 @@ Functions
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Dict, List
+from typing import TYPE_CHECKING
 
 from agents.config import MAX_ITERATIONS
 from langchain_core.messages import ToolMessage
+from langsmith import traceable
 
 if TYPE_CHECKING:
     from agents.base import BaseAgent
@@ -23,10 +24,11 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
+@traceable(name="agentic_loop.run", run_type="chain")
 def run(
     agent: "BaseAgent",
     user_input: str,
-    history: List[Dict],
+    history: list[dict],
     max_iterations: int | None = None,
 ) -> str:
     """Execute the agentic loop and return the LLM's final text response.
@@ -62,9 +64,7 @@ def run(
     iteration = 0
     response = None
     _had_tool_calls = False
-    _use_synthesis = (
-        agent.llm_synthesis is not agent.llm_with_tools
-    )
+    _use_synthesis = agent.llm_synthesis is not agent.llm_with_tools
 
     try:
         while True:
@@ -89,9 +89,7 @@ def run(
             llm = agent.llm_with_tools
             if _had_tool_calls and _use_synthesis:
                 llm = agent.llm_synthesis
-                agent.logger.debug(
-                    "Using synthesis cascade"
-                )
+                agent.logger.debug("Using synthesis cascade")
 
             response = llm.invoke(
                 messages,
@@ -105,12 +103,8 @@ def run(
             # Response has tool calls — stay on tool cascade
             # next iteration (reset synthesis choice).
             _had_tool_calls = True
-            tool_names_called = [
-                tc["name"] for tc in response.tool_calls
-            ]
-            agent.logger.info(
-                "Tools called: %s", tool_names_called
-            )
+            tool_names_called = [tc["name"] for tc in response.tool_calls]
+            agent.logger.info("Tools called: %s", tool_names_called)
 
             for tc in response.tool_calls:
                 tool_name = tc["name"]
@@ -120,9 +114,7 @@ def run(
                     tool_name,
                     tool_args,
                 )
-                result = agent.tool_registry.invoke(
-                    tool_name, tool_args
-                )
+                result = agent.tool_registry.invoke(tool_name, tool_args)
                 agent.logger.debug(
                     "Tool result | %s: %s",
                     tool_name,
@@ -136,9 +128,7 @@ def run(
                 )
 
     except Exception:
-        agent.logger.error(
-            "Agent run failed", exc_info=True
-        )
+        agent.logger.error("Agent run failed", exc_info=True)
         raise
 
     agent.logger.info(
@@ -154,8 +144,6 @@ def run(
 
     # Post-process with report template if available.
     if hasattr(agent, "format_response"):
-        final_text = agent.format_response(
-            final_text, messages
-        )
+        final_text = agent.format_response(final_text, messages)
 
     return final_text

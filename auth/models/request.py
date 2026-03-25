@@ -81,7 +81,11 @@ class ProfileUpdateRequest(BaseModel):
     """
 
     full_name: str | None = Field(None, max_length=200)
-    avatar_url: str | None = Field(None, max_length=500)
+    avatar_url: str | None = Field(
+        None,
+        max_length=500,
+        pattern=r"^https?://",
+    )
 
 
 class AdminPasswordResetBody(BaseModel):

@@ -129,7 +129,7 @@ export function PlotlyChart({
   );
 
   return (
-    <div className={`w-full ${className}`}>
+    <div className={`w-full ${className}`} data-testid="plotly-chart">
       <Plot
         data={data}
         layout={mergedLayout}

@@ -184,6 +184,36 @@ class RetentionManager:
 
         return results
 
+    def run_cleanup_tables(
+        self,
+        table_ids: list[str],
+        dry_run: bool = False,
+    ) -> list[RetentionResult]:
+        """Execute retention for specific tables only.
+
+        Args:
+            table_ids: Table identifiers to clean.
+            dry_run: If True, report only.
+
+        Returns:
+            List of :class:`RetentionResult`.
+        """
+        from stocks.repository import StockRepository
+
+        repo = StockRepository()
+        results: list[RetentionResult] = []
+        allowed = set(table_ids)
+
+        for policy in self._policies:
+            if policy.table_id in allowed:
+                results.append(
+                    self._apply_policy(
+                        repo, policy, dry_run,
+                    )
+                )
+
+        return results
+
     def _apply_policy(
         self,
         repo,

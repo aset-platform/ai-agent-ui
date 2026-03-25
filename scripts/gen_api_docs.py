@@ -23,7 +23,7 @@ import os  # noqa: E402
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 os.environ.setdefault(
     "JWT_SECRET_KEY",
-    "docgen-placeholder-key-not-real",
+    "docgen-placeholder-key-not-real-xxx",
 )
 
 
@@ -41,24 +41,16 @@ def _auth_label(
 
     # Router-level deps
     for d in router_deps or []:
-        names.append(
-            getattr(d, "__name__", str(d))
-        )
+        names.append(getattr(d, "__name__", str(d)))
 
     # Endpoint-level deps (FastAPI stores these in
     # route.dependant.dependencies[].call)
     dependant = getattr(route, "dependant", None)
     if dependant:
-        for dep in getattr(
-            dependant, "dependencies", []
-        ):
+        for dep in getattr(dependant, "dependencies", []):
             call = getattr(dep, "call", None)
             if call:
-                names.append(
-                    getattr(
-                        call, "__name__", str(call)
-                    )
-                )
+                names.append(getattr(call, "__name__", str(call)))
 
     if any("superuser" in n for n in names):
         return "superuser"
@@ -86,10 +78,12 @@ def _build_app_lightweight():
         )
 
         app.include_router(
-            create_auth_router(), prefix="/v1",
+            create_auth_router(),
+            prefix="/v1",
         )
         app.include_router(
-            get_ticker_router(), prefix="/v1",
+            get_ticker_router(),
+            prefix="/v1",
         )
     except Exception:
         pass
@@ -125,7 +119,8 @@ def _build_app_lightweight():
         )
 
         app.include_router(
-            create_audit_router(), prefix="/v1",
+            create_audit_router(),
+            prefix="/v1",
         )
     except Exception:
         pass
@@ -181,27 +176,22 @@ def _generate() -> str:
 
         deps = getattr(route, "dependencies", [])
         dep_callables = [
-            d.dependency
-            for d in deps
-            if hasattr(d, "dependency")
+            d.dependency for d in deps if hasattr(d, "dependency")
         ]
         auth = _auth_label(dep_callables, route)
 
         for method in sorted(methods):
             if method == "HEAD":
                 continue
-            groups.setdefault(group, []).append({
-                "method": method,
-                "path": path,
-                "name": getattr(
-                    route, "name", ""
-                ),
-                "summary": getattr(
-                    route, "summary", ""
-                )
-                or "",
-                "auth": auth,
-            })
+            groups.setdefault(group, []).append(
+                {
+                    "method": method,
+                    "path": path,
+                    "name": getattr(route, "name", ""),
+                    "summary": getattr(route, "summary", "") or "",
+                    "auth": auth,
+                }
+            )
 
     # Render tables.
     order = [
@@ -219,15 +209,9 @@ def _generate() -> str:
         if not routes:
             continue
         lines.append(f"## {grp}\n")
-        lines.append(
-            "| Method | Path | Auth | Description |"
-        )
-        lines.append(
-            "|--------|------|------|-------------|"
-        )
-        for r in sorted(
-            routes, key=lambda x: x["path"]
-        ):
+        lines.append("| Method | Path | Auth | Description |")
+        lines.append("|--------|------|------|-------------|")
+        for r in sorted(routes, key=lambda x: x["path"]):
             desc = r["summary"] or r["name"]
             lines.append(
                 f"| `{r['method']}` "
@@ -239,9 +223,7 @@ def _generate() -> str:
 
     # Count.
     total = sum(len(v) for v in groups.values())
-    lines.append(
-        f"---\n\n*{total} endpoints total.*\n"
-    )
+    lines.append(f"---\n\n*{total} endpoints total.*\n")
     return "\n".join(lines)
 
 
@@ -253,9 +235,7 @@ else:
         import mkdocs_gen_files  # noqa: F401
 
         content = _generate()
-        with mkdocs_gen_files.open(
-            "backend/api-reference.md", "w"
-        ) as f:
+        with mkdocs_gen_files.open("backend/api-reference.md", "w") as f:
             f.write(content)
     except ImportError:
         pass

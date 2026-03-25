@@ -24,7 +24,11 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from agents.registry import AgentRegistry  # noqa: E402
-from bootstrap import setup_agents, setup_tools  # noqa: E402
+from bootstrap import (  # noqa: E402
+    setup_agents,
+    setup_graph,
+    setup_tools,
+)
 from config import Settings, get_settings  # noqa: E402
 from logging_config import setup_logging  # noqa: E402
 from message_compressor import MessageCompressor  # noqa: E402
@@ -80,12 +84,31 @@ class ChatServer:
             self.compressor,
             self.obs_collector,
         )
+
+        # Build LangGraph supervisor graph
+        self.graph = None
+        if self.settings.use_langgraph:
+            try:
+                self.graph = setup_graph(
+                    self.tool_registry,
+                    self.token_budget,
+                    self.compressor,
+                    self.obs_collector,
+                )
+            except Exception:
+                logger.warning(
+                    "LangGraph setup failed, "
+                    "using legacy agents",
+                    exc_info=True,
+                )
+
         self.app = create_app(
             self.agent_registry,
             self.executor,
             self.settings,
             self.token_budget,
             self.obs_collector,
+            graph=self.graph,
         )
 
 

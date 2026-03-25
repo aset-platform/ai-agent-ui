@@ -1,8 +1,8 @@
 /**
  * Direct backend API helpers for test setup and teardown.
  *
- * These bypass the UI to create preconditions (users, tickers)
- * and clean up after tests.
+ * These bypass the UI to create preconditions (users, tickers,
+ * portfolio holdings) and clean up after tests.
  */
 
 import { type APIRequestContext } from "@playwright/test";
@@ -77,4 +77,55 @@ export async function apiGetProfile(
     headers: { Authorization: `Bearer ${token}` },
   });
   return res.json();
+}
+
+/** Add a stock holding to the user's portfolio. */
+export async function apiAddPortfolioHolding(
+  request: APIRequestContext,
+  token: string,
+  ticker: string,
+  quantity: number,
+  price: number,
+  tradeDate?: string,
+): Promise<void> {
+  const trade_date =
+    tradeDate ||
+    new Date().toISOString().slice(0, 10);
+  const res = await request.post(
+    `${BACKEND}/users/me/portfolio`,
+    {
+      data: { ticker, quantity, price, trade_date },
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  );
+  if (!res.ok() && res.status() !== 409) {
+    throw new Error(
+      `Add holding failed (${res.status()}): ` +
+        `${await res.text()}`,
+    );
+  }
+}
+
+/** Get the user's portfolio holdings. */
+export async function apiGetPortfolio(
+  request: APIRequestContext,
+  token: string,
+): Promise<{ holdings: Array<{ ticker: string }> }> {
+  const res = await request.get(
+    `${BACKEND}/users/me/portfolio`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  return res.json();
+}
+
+/** Delete a stock holding from the user's portfolio. */
+export async function apiDeletePortfolioHolding(
+  request: APIRequestContext,
+  token: string,
+  ticker: string,
+): Promise<void> {
+  await request.delete(
+    `${BACKEND}/users/me/portfolio/${ticker}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
 }

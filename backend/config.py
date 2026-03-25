@@ -138,6 +138,16 @@ class Settings(BaseSettings):
     # Empty = in-memory fallback (single-instance dev).
     redis_url: str = ""
 
+    # Razorpay payment gateway (test mode).
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    razorpay_webhook_secret: str = ""
+
+    # Stripe payment gateway (test mode).
+    stripe_secret_key: str = ""
+    stripe_publishable_key: str = ""
+    stripe_webhook_secret: str = ""
+
     # Data retention policies (days to keep; 0 = keep forever).
     # Applies to append-only tables that grow unboundedly.
     retention_llm_usage_days: int = 90
@@ -150,6 +160,17 @@ class Settings(BaseSettings):
     # Smart cache warming: pre-warm Redis for the top
     # N most active users at startup.
     cache_warm_top_users: int = 5
+
+    # LangGraph supervisor graph (set False to revert
+    # to legacy BaseAgent dispatch).
+    use_langgraph: bool = True
+
+    # ── Observability: LangSmith / LangFuse ──────
+    # LangSmith auto-traces LangChain/LangGraph calls
+    # when LANGCHAIN_TRACING_V2=true is set in env.
+    langsmith_enabled: bool = True
+    langfuse_enabled: bool = False
+    trace_sample_rate: float = 1.0  # 1.0 = 100% (dev)
 
     # Read from .env in the working directory; silently skip if absent.
     # Real environment variables always take precedence over .env values.

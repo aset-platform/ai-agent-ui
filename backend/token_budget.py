@@ -11,9 +11,12 @@ Typical usage::
 
     budget = TokenBudget()
     est = budget.estimate_tokens(messages)
-    if budget.can_afford("my-model", est):
-        # ... invoke LLM ...
-        budget.record("my-model", est)
+    if budget.reserve("my-model", est):
+        try:
+            result = llm.invoke(messages)
+        except Exception:
+            budget.release("my-model", est)
+            raise
 """
 
 from __future__ import annotations
@@ -23,7 +26,9 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any
+
+from langsmith import traceable
 
 _logger = logging.getLogger(__name__)
 
@@ -53,7 +58,7 @@ class ModelLimits:
 
 
 # Hardcoded free-tier defaults (March 2026).
-_DEFAULT_LIMITS: Dict[str, ModelLimits] = {
+_DEFAULT_LIMITS: dict[str, ModelLimits] = {
     "meta-llama/llama-4-scout-17b-16e-instruct": ModelLimits(
         rpm=30,
         tpm=30_000,
@@ -134,14 +139,14 @@ class TokenBudget:
 
     def __init__(
         self,
-        limits: Dict[str, ModelLimits] | None = None,
+        limits: dict[str, ModelLimits] | None = None,
     ) -> None:
-        self._limits: Dict[str, ModelLimits] = {
+        self._limits: dict[str, ModelLimits] = {
             **_DEFAULT_LIMITS,
             **(limits or {}),
         }
         # Pre-allocate state for all known models.
-        self._state: Dict[str, _ModelState] = {
+        self._state: dict[str, _ModelState] = {
             model: _ModelState() for model in self._limits
         }
 
@@ -163,7 +168,7 @@ class TokenBudget:
 
     @staticmethod
     def estimate_tokens(
-        messages: List[Any],
+        messages: list[Any],
     ) -> int:
         """Estimate token count for a message list.
 
@@ -254,6 +259,120 @@ class TokenBudget:
             return False
         return True
 
+    @traceable(name="TokenBudget.reserve")
+    def reserve(
+        self,
+        model: str,
+        estimated_tokens: int,
+    ) -> bool:
+        """Atomically check budget AND record a tentative spend.
+
+        Eliminates the TOCTOU race between separate
+        :meth:`can_afford` / :meth:`record` calls by holding the
+        lock for both operations.  On LLM failure, call
+        :meth:`release` to roll back.
+
+        Args:
+            model: Groq model identifier.
+            estimated_tokens: Pre-computed token estimate.
+
+        Returns:
+            ``True`` if the reservation succeeded.
+        """
+        lim = self._limits.get(model)
+        if lim is None:
+            return True
+
+        state = self._get_state(model)
+        with state.lock:
+            now = time.monotonic()
+
+            tpm_used, _ = self._window_total(
+                state.minute_tokens,
+                _MINUTE,
+                now,
+                state.minute_tokens_total,
+            )
+            state.minute_tokens_total = tpm_used
+
+            rpm_used, _ = self._window_total(
+                state.minute_requests,
+                _MINUTE,
+                now,
+                state.minute_requests_total,
+            )
+            state.minute_requests_total = rpm_used
+
+            tpd_used, _ = self._window_total(
+                state.day_tokens,
+                _DAY,
+                now,
+                state.day_tokens_total,
+            )
+            state.day_tokens_total = tpd_used
+
+            rpd_used, _ = self._window_total(
+                state.day_requests,
+                _DAY,
+                now,
+                state.day_requests_total,
+            )
+            state.day_requests_total = rpd_used
+
+            # Budget check (same thresholds as can_afford).
+            if tpm_used + estimated_tokens > lim.tpm * _THRESHOLD:
+                return False
+            if rpm_used + 1 > lim.rpm * _THRESHOLD:
+                return False
+            if tpd_used + estimated_tokens > lim.tpd * _THRESHOLD:
+                return False
+            if rpd_used + 1 > lim.rpd * _THRESHOLD:
+                return False
+
+            # Tentatively record the spend while still
+            # holding the lock — no other thread can
+            # double-spend.
+            state.minute_tokens.append(
+                (now, estimated_tokens),
+            )
+            state.minute_tokens_total += estimated_tokens
+            state.minute_requests.append((now, 1))
+            state.minute_requests_total += 1
+            state.day_tokens.append(
+                (now, estimated_tokens),
+            )
+            state.day_tokens_total += estimated_tokens
+            state.day_requests.append((now, 1))
+            state.day_requests_total += 1
+
+        return True
+
+    def release(
+        self,
+        model: str,
+        estimated_tokens: int,
+    ) -> None:
+        """Roll back a prior :meth:`reserve` on LLM failure.
+
+        Subtracts the tentative spend so the budget is available
+        for the next tier.  Safe to call even if the model has
+        no limits entry.
+
+        Args:
+            model: Groq model identifier.
+            estimated_tokens: Same value passed to
+                :meth:`reserve`.
+        """
+        if model not in self._limits:
+            return
+
+        state = self._get_state(model)
+        with state.lock:
+            state.minute_tokens_total -= estimated_tokens
+            state.minute_requests_total -= 1
+            state.day_tokens_total -= estimated_tokens
+            state.day_requests_total -= 1
+
     def record(self, model: str, tokens_used: int) -> None:
         """Record a completed request for *model*.
 
@@ -277,7 +396,7 @@ class TokenBudget:
         self,
         estimated_tokens: int,
         prefer: str,
-        fallbacks: List[str] | None = None,
+        fallbacks: list[str] | None = None,
     ) -> str | None:
         """Return the first model that can afford *estimated_tokens*.
 
@@ -297,13 +416,13 @@ class TokenBudget:
                 return model
         return None
 
-    def get_status(self) -> Dict[str, Dict[str, str]]:
+    def get_status(self) -> dict[str, dict[str, str]]:
         """Return human-readable utilization per model.
 
         Returns:
             ``{model: {tpm: "1234/8000", ...}}``.
         """
-        result: Dict[str, Dict[str, str]] = {}
+        result: dict[str, dict[str, str]] = {}
         now = time.monotonic()
         for model, lim in self._limits.items():
             state = self._get_state(model)

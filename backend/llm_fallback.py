@@ -44,9 +44,10 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Any, List
+from typing import Any
 
 from langchain_anthropic import ChatAnthropic
+from langsmith import traceable
 from message_compressor import MessageCompressor
 from observability import ObservabilityCollector
 from token_budget import TokenBudget
@@ -87,7 +88,7 @@ class FallbackLLM:
 
     def __init__(
         self,
-        groq_models: List[str],
+        groq_models: list[str],
         anthropic_model: str | None,
         temperature: float,
         agent_id: str,
@@ -120,7 +121,7 @@ class FallbackLLM:
         self._cascade_profile = cascade_profile
 
         # Groq tiers: [(model_name, raw_llm, bound_llm), ...]
-        self._groq_tiers: List[tuple] = []
+        self._groq_tiers: list[tuple] = []
 
         groq_key = os.environ.get("GROQ_API_KEY", "").strip()
         if _GROQ_AVAILABLE and groq_key:
@@ -132,8 +133,7 @@ class FallbackLLM:
                 )
                 self._groq_tiers.append((model, llm, llm))
             _logger.info(
-                "FallbackLLM [%s]: Groq %d tiers: "
-                "%s (agent=%s)",
+                "FallbackLLM [%s]: Groq %d tiers: " "%s (agent=%s)",
                 cascade_profile,
                 len(self._groq_tiers),
                 [t[0] for t in self._groq_tiers],
@@ -160,7 +160,7 @@ class FallbackLLM:
             self._anthropic_llm = None
             self._anthropic_bound = None
 
-    def bind_tools(self, tools: List[Any], **kwargs: Any) -> "FallbackLLM":
+    def bind_tools(self, tools: list[Any], **kwargs: Any) -> "FallbackLLM":
         """Bind tools to all inner LLMs and return *self*.
 
         Args:
@@ -176,14 +176,14 @@ class FallbackLLM:
             self._groq_tiers[i] = (name, raw, bound)
 
         if self._anthropic_llm is not None:
-            self._anthropic_bound = (
-                self._anthropic_llm.bind_tools(tools, **kwargs)
+            self._anthropic_bound = self._anthropic_llm.bind_tools(
+                tools, **kwargs
             )
         return self
 
     def invoke(
         self,
-        messages: List[Any],
+        messages: list[Any],
         *,
         iteration: int = 1,
         **kwargs: Any,
@@ -237,7 +237,7 @@ class FallbackLLM:
 
             # If default compression exceeds budget, try
             # progressive compression targeting 70% of TPM.
-            if not self._budget.can_afford(model_name, cur_est):
+            if not self._budget.reserve(model_name, cur_est):
                 tpm = self._budget.get_tpm(model_name)
                 if tpm is not None:
                     target = int(tpm * 0.70)
@@ -246,7 +246,9 @@ class FallbackLLM:
                         iteration,
                         target_tokens=target,
                     )
-                    cur_est = self._budget.estimate_tokens(cur_compressed)
+                    cur_est = self._budget.estimate_tokens(
+                        cur_compressed,
+                    )
                     if self._obs:
                         self._obs.record_compression(
                             agent_id=self._agent_id,
@@ -261,34 +263,45 @@ class FallbackLLM:
                         self._agent_id,
                     )
 
-            if not self._budget.can_afford(model_name, cur_est):
-                if self._obs:
-                    self._obs.record_cascade(
-                        model_name,
-                        "budget_exhausted",
-                        provider="groq",
-                        agent_id=self._agent_id,
-                        tier_index=idx,
-                        user_id=_user,
-                    )
-                _logger.info(
-                    "Skip %s: budget exhausted " "(est=%d, agent=%s)",
+                # Try reserve after progressive compression.
+                if not self._budget.reserve(
                     model_name,
                     cur_est,
-                    self._agent_id,
-                )
-                continue
+                ):
+                    if self._obs:
+                        self._obs.record_cascade(
+                            model_name,
+                            "budget_exhausted",
+                            provider="groq",
+                            agent_id=self._agent_id,
+                            tier_index=idx,
+                            user_id=_user,
+                        )
+                    _logger.info(
+                        "Skip %s: budget exhausted " "(est=%d, agent=%s)",
+                        model_name,
+                        cur_est,
+                        self._agent_id,
+                    )
+                    continue
 
+            # Budget is now reserved atomically — invoke LLM.
             _t0 = time.monotonic()
             try:
-                result = bound_llm.invoke(cur_compressed, **kwargs)
+                result = bound_llm.invoke(
+                    cur_compressed,
+                    **kwargs,
+                )
                 _ms = int(
                     (time.monotonic() - _t0) * 1000,
                 )
-                self._budget.record(model_name, cur_est)
                 # Extract token usage from response.
                 _pt = _ct = None
-                _umeta = getattr(result, "usage_metadata", None)
+                _umeta = getattr(
+                    result,
+                    "usage_metadata",
+                    None,
+                )
                 if _umeta:
                     _pt = _umeta.get("input_tokens")
                     _ct = _umeta.get("output_tokens")
@@ -312,6 +325,11 @@ class FallbackLLM:
                 )
                 return result
             except Exception as exc:
+                # Roll back the reservation on failure.
+                self._budget.release(
+                    model_name,
+                    cur_est,
+                )
                 if _GROQ_AVAILABLE and isinstance(
                     exc,
                     (

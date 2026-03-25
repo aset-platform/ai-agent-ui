@@ -1,36 +1,18 @@
 """Basic agent tests without LLM dependencies.
 
 Validates config constants, registry behaviour, and router
-logic.  Uses ``sys.modules`` stubs so langchain is not
-required at runtime.
+logic.  All required packages (langchain_core, langchain_groq,
+langchain_anthropic) are installed in the test virtualenv.
 """
 
-import sys
 from unittest.mock import MagicMock
 
-# ---------------------------------------------------------------
-# Install stubs before any agent imports.
-# ---------------------------------------------------------------
-
-_STUBS = {
-    "langchain_groq": MagicMock(),
-    "langchain_anthropic": MagicMock(),
-    "langchain_core": MagicMock(),
-    "langchain_core.messages": MagicMock(),
-    "langchain_core.tools": MagicMock(),
-    "tools._ticker_linker": MagicMock(),
-    "tools.registry": MagicMock(),
-}
-for _n, _m in _STUBS.items():
-    if _n not in sys.modules:
-        sys.modules[_n] = _m
-
-from agents.config import (  # noqa: E402
+from agents.config import (
     MAX_ITERATIONS,
     AgentConfig,
 )
-from agents.registry import AgentRegistry  # noqa: E402
-from agents.router import (  # noqa: E402
+from agents.registry import AgentRegistry
+from agents.router import (
     BLOCKED_RESPONSE,
     is_blocked,
     route,

@@ -103,18 +103,22 @@ graph TD
         ICE["IcebergUserRepository<br/>(SQLite catalog)"]
     end
 
-    subgraph Agents["Agents"]
-        GA["GeneralAgent<br/><i>N-tier Groq → Anthropic</i>"]
-        SA["StockAgent<br/><i>N-tier Groq → Anthropic</i>"]
+    subgraph Agents["LangGraph Supervisor"]
+        GD["Guardrail + Router<br/><i>keyword → LLM classifier</i>"]
+        PA["Portfolio Agent<br/><i>currency-aware</i>"]
+        SA["Stock Analyst<br/><i>N-tier Groq → Anthropic</i>"]
+        FC["Forecaster<br/><i>Prophet models</i>"]
+        RA["Research Agent<br/><i>news + sentiment</i>"]
     end
 
     subgraph Tools["Tools"]
         T1["get_current_time"]
         T2["search_web<br/><i>SerpAPI</i>"]
-        T3["search_market_news<br/><i>wraps GeneralAgent</i>"]
+        T3["search_market_news"]
         T4["fetch_stock_data<br/>load_stock_data<br/>get_stock_info …"]
-        T5["analyse_stock_price<br/><i>ta + Plotly</i>"]
-        T6["forecast_stock<br/><i>Prophet + Plotly</i>"]
+        T5["analyse_stock_price<br/><i>ta + TradingView</i>"]
+        T6["forecast_stock<br/><i>Prophet</i>"]
+        T7["get_portfolio_holdings<br/>get_portfolio_summary<br/>get_risk_metrics …"]
     end
 
     subgraph Data["Data"]
@@ -127,9 +131,12 @@ graph TD
     AUTH --> ICE --> IC
     UI -->|"WS /ws/chat · POST /chat/stream<br/>Bearer token"| API
     API --> CS --> AR
-    AR --> GA & SA
-    GA --> T1 & T2
-    SA --> T3 & T4 & T5 & T6
+    AR --> GD
+    GD --> PA & SA & FC & RA
+    PA --> T7
+    SA --> T4 & T5
+    FC --> T6
+    RA --> T2 & T3
     T4 --> IC
     T5 --> IC & C
     T6 --> IC & C
@@ -427,10 +434,10 @@ ai-agent-ui/
 │   └── assets/custom.css     # Light theme styles
 │
 ├── e2e/                      # Playwright E2E tests
-│   ├── playwright.config.ts  # 6 projects (setup, auth, frontend, dashboard, admin, errors)
-│   ├── pages/                # Page Object Models (10 classes)
-│   ├── tests/                # 14+ spec files, ~91 tests
-│   ├── fixtures/             # Auth token fixtures for Dash
+│   ├── playwright.config.ts  # 7 projects (setup, auth, frontend, analytics, admin, errors, performance)
+│   ├── pages/                # Page Object Models (11 classes)
+│   ├── tests/                # 34 spec files, ~219 tests
+│   ├── fixtures/             # Auth, portfolio, subscription fixtures
 │   └── utils/                # Selectors, wait helpers, API helpers
 │
 ├── docs/                     # MkDocs source
@@ -473,6 +480,8 @@ ai-agent-ui/
 | Plotly | Interactive HTML charts |
 | pyarrow | Parquet read/write |
 | pandas / numpy | Data manipulation |
+| razorpay | Razorpay payment gateway SDK |
+| stripe | Stripe payment gateway SDK |
 
 ### Dashboard
 | Package | Role |
@@ -499,10 +508,10 @@ Project knowledge is shared via git-committed Serena memories:
 ```
 .serena/memories/
 ├── shared/              # Git-tracked, PR-reviewed
-│   ├── architecture/    # System design (5 files)
-│   ├── conventions/     # Coding standards (6 files)
-│   ├── debugging/       # Gotchas & workarounds (2 files)
-│   ├── onboarding/      # Setup guide (1 file)
+│   ├── architecture/    # System design (16 files)
+│   ├── conventions/     # Coding standards (10 files)
+│   ├── debugging/       # Gotchas & workarounds (12 files)
+│   ├── onboarding/      # Setup guides (3 files)
 │   └── api/             # Protocol docs (1 file)
 ├── session/             # Gitignored — daily progress
 └── personal/            # Gitignored — individual notes
@@ -595,6 +604,15 @@ GET  /v1/health              # Health check
 GET  /v1/agents              # List agents
 GET  /v1/auth/*              # Auth endpoints
 GET  /v1/admin/tier-health   # LLM tier health (superuser)
+POST /v1/admin/reset-usage   # Zero monthly usage (superuser)
+GET  /v1/admin/usage-stats   # User usage stats (superuser)
+GET  /v1/admin/usage-history # Month-on-month history (superuser)
+POST /v1/subscription/checkout   # Checkout (Razorpay or Stripe)
+GET  /v1/subscription            # Current tier + usage
+POST /v1/subscription/cancel     # Cancel subscription
+POST /v1/webhooks/razorpay       # Razorpay webhook (signature required)
+POST /v1/subscription/webhooks/stripe  # Stripe webhook (signature required)
+GET  /v1/admin/payment-transactions    # Transaction ledger (superuser)
 WS   /ws/chat                # WebSocket (not versioned)
 GET  /avatars/*              # Static files (not versioned)
 ```
@@ -609,6 +627,22 @@ GET  /avatars/*              # Static files (not versioned)
 | `FACEBOOK_APP_SECRET` | Placeholder |
 | `OAUTH_REDIRECT_URI` | Default: `http://localhost:3000/auth/oauth/callback` |
 
+### Subscription & Payments (Razorpay + Stripe)
+
+| Variable | Notes |
+|----------|-------|
+| `RAZORPAY_KEY_ID` | Test mode key from Razorpay Dashboard |
+| `RAZORPAY_KEY_SECRET` | Test mode secret |
+| `RAZORPAY_WEBHOOK_SECRET` | Webhook secret (**required** — unsigned webhooks rejected) |
+| `RAZORPAY_PLAN_PRO` | Plan ID for Pro tier (₹499/mo) |
+| `RAZORPAY_PLAN_PREMIUM` | Plan ID for Premium tier (₹1,499/mo) |
+| `STRIPE_SECRET_KEY` | Stripe secret key (test mode) |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook secret (**required**) |
+| `STRIPE_PRICE_PRO` | Stripe Price ID for Pro tier ($5.99/mo) |
+| `STRIPE_PRICE_PREMIUM` | Stripe Price ID for Premium tier ($17.99/mo) |
+
+Subscription tiers: **Free** (3 analyses/mo), **Pro** (30/mo), **Premium** (unlimited). Dual-gateway: Razorpay (INR, modal) + Stripe (USD, hosted checkout). Upgrades use pro-rata billing. Usage counters auto-reset on month boundary via lazy reset. Payment transaction ledger tracks all events in Iceberg.
+
 ---
 
 ## Testing
@@ -616,7 +650,7 @@ GET  /avatars/*              # Static files (not versioned)
 ```bash
 # Backend (Python 3.12 — always activate venv first)
 source ~/.ai-agent-ui/venv/bin/activate
-python -m pytest tests/backend/ -v        # ~416 tests
+python -m pytest tests/backend/ -v        # ~548 tests
 
 # Frontend (vitest)
 cd frontend && npx vitest run             # 61 tests
@@ -624,9 +658,9 @@ cd frontend && npx vitest run             # 61 tests
 
 | Suite | Tests | Coverage |
 |-------|-------|----------|
-| Backend unit | 416+ | Auth, dashboard, portfolio CRUD, cache, agents, WS, analytics |
+| Backend unit | 548 | Auth, dashboard, portfolio CRUD, cache, agents, WS, analytics, billing, security |
 | Frontend unit | 61 | Auth, apiFetch, WebSocket, types, ConfirmDialog, hooks |
-| E2E (Playwright) | 49 | Full user flows across all pages |
+| E2E (Playwright) | ~219 | Full user flows, business workflows, payment flows, performance |
 
 ## E2E Testing (Playwright)
 
@@ -636,24 +670,34 @@ The `e2e/` directory contains a Playwright test suite covering all app surfaces.
 cd e2e && npm install               # first time only
 npx playwright install chromium     # first time only
 
-npm test                            # run all ~91 tests (headless)
+npm test                            # run all ~219 tests (headless)
 npx playwright test --headed        # watch tests in a visible browser
 npx playwright test --ui            # interactive UI mode (best for exploration)
 npx playwright test --project=frontend-chromium   # frontend only
-npx playwright test --project=dashboard-chromium  # dashboard only
+npx playwright test --project=analytics-chromium  # analytics/dashboard only
+npx playwright test --project=admin-chromium      # admin only
+npx playwright test --project=performance         # Lighthouse/Core Web Vitals
 ```
 
 | Area | Tests | Coverage |
 |------|-------|----------|
-| Auth (login, logout, OAuth, token refresh) | 8 | Login flow, RBAC, token expiry |
-| Frontend chat | 8 | Send, stream, agent switch, clear, Enter key |
-| Frontend navigation + profile | 5 | Menu, iframe, modals |
-| Dashboard home | 6 | Cards, search, dropdown, pagination, filter |
-| Dashboard analysis + forecast | 8 | Tabs, charts, refresh, accuracy |
-| Dashboard marketplace + admin | 6 | Add/remove tickers, user table, RBAC |
-| Error handling | 5 | Network errors, auth expiry, 500s |
-| Dashboard admin (deep) | 3 | LLM observability tier health, budget, cascade |
-| **Total** | **~91** | |
+| Auth (login, logout, OAuth, token refresh) | 11 | Login flow, RBAC, token expiry |
+| Chat (UI, agents, keyboard, streaming) | 17 | Send, stream, agent switch, Enter key, tools |
+| Chat tool invocations | 4 | Stock analysis, forecast, portfolio, error handling |
+| WebSocket lifecycle | 6 | Connect, stream, reconnect, HTTP fallback |
+| Navigation + profile + sessions | 16 | Menu, modals, session management |
+| Dashboard home | 11 | Cards, filters, watchlist, add stock |
+| Portfolio CRUD | 8 | Add/edit/delete holdings, ConfirmDialog |
+| Analytics (5 tabs) | 67 | Candlestick, indicators, forecast, compare |
+| Insights (7 tabs) | 17 | Screener, filters, Plotly charts, quarterly |
+| Marketplace | 11 | Search, link/unlink, pagination |
+| Admin + admin CRUD | 25 | Users, audit, observability, create/edit/delete |
+| Billing + subscription | 17 | Pricing, gateway toggle, paywall, lifecycle |
+| Payment flows | 7 | Razorpay/Stripe mocked checkout, cancel |
+| Theme / dark mode | 14 | Persistence, chart sync, TradingView + Plotly |
+| Error handling | 4 | Network errors, auth expiry, 500s |
+| Performance (Lighthouse) | 4 | LCP, FCP, TBT, CLS on 4 key pages |
+| **Total** | **~219** | |
 
 CI runs automatically on PRs via `.github/workflows/e2e.yml` (chromium-only, caches browsers).
 

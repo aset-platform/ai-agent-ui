@@ -482,8 +482,7 @@ def main() -> None:
     _seed_stocks()
     _seed_users()
     _logger.info(
-        "Demo data ready. Login: admin@demo.com / "
-        "Admin123! or test@demo.com / Test1234!"
+        "Demo data ready. Login: admin@demo.com" " or test@demo.com",
     )
 
 

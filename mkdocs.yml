@@ -58,6 +58,7 @@ nav:
       - API Reference (Auto): backend/api-reference.md
       - Auth & Users: backend/auth.md
       - OAuth / SSO: backend/oauth.md
+      - Billing & Subscriptions: backend/billing.md
       - Agents: backend/agents.md
       - Tools: backend/tools.md
       - Configuration: backend/config.md

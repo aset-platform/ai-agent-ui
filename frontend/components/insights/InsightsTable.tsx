@@ -113,7 +113,7 @@ export function InsightsTable<
   return (
     <div className="space-y-3">
       {/* Table */}
-      <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+      <div data-testid="insights-table" className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 dark:bg-gray-800/50">
@@ -160,6 +160,7 @@ export function InsightsTable<
                 <td
                   colSpan={columns.length}
                   className="px-3 py-8 text-center text-gray-400"
+                  data-testid="insights-empty"
                 >
                   No data available
                 </td>

@@ -129,7 +129,10 @@ def create_dashboard_router() -> APIRouter:
 
             # Keep last 30 rows for sparkline
             t_ohlcv = t_ohlcv.tail(30)
-            latest = t_ohlcv.iloc[-1]
+            t_valid = t_ohlcv.dropna(subset=["close"])
+            if t_valid.empty:
+                continue
+            latest = t_valid.iloc[-1]
             cur = float(latest.get("close", 0))
             prev = float(
                 t_ohlcv.iloc[-2]["close"]
@@ -1576,11 +1579,14 @@ def _build_portfolio_forecast(
         qty = float(row["quantity"])
         avg_p = _safe_float(row.get("avg_price"))
 
-        # Current price from OHLCV
+        # Current price from OHLCV (skip NaN rows)
         ohlcv = stock_repo.get_ohlcv(t)
         if ohlcv.empty:
             continue
-        cur_price = float(ohlcv.iloc[-1]["close"])
+        valid = ohlcv.dropna(subset=["close"])
+        if valid.empty:
+            continue
+        cur_price = float(valid.iloc[-1]["close"])
         current_value += qty * cur_price
         # If avg_price missing/zero, fallback to
         # current price as cost estimate

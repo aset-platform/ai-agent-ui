@@ -34,6 +34,8 @@ _NAMESPACE = "auth"
 _USERS_TABLE = f"{_NAMESPACE}.users"
 _AUDIT_LOG_TABLE = f"{_NAMESPACE}.audit_log"
 _USER_TICKERS_TABLE = f"{_NAMESPACE}.user_tickers"
+_USAGE_HISTORY_TABLE = f"{_NAMESPACE}.usage_history"
+_PAYMENT_TXN_TABLE = f"{_NAMESPACE}.payment_transactions"
 
 # pa.timestamp("us") matches PyIceberg TimestampType (microseconds, no tz).
 # _TS is an immutable constant; kept module-level as a shared type reference.
@@ -58,6 +60,41 @@ _USERS_PA_SCHEMA = pa.schema(
         pa.field("oauth_sub", pa.string(), nullable=True),
         pa.field("profile_picture_url", pa.string(), nullable=True),
         pa.field("page_permissions", pa.string(), nullable=True),
+        # Subscription fields (field_ids 16–24)
+        pa.field(
+            "subscription_tier", pa.string(), nullable=True,
+        ),
+        pa.field(
+            "subscription_status", pa.string(), nullable=True,
+        ),
+        pa.field(
+            "razorpay_customer_id", pa.string(), nullable=True,
+        ),
+        pa.field(
+            "razorpay_subscription_id",
+            pa.string(),
+            nullable=True,
+        ),
+        pa.field(
+            "stripe_customer_id", pa.string(), nullable=True,
+        ),
+        pa.field(
+            "stripe_subscription_id",
+            pa.string(),
+            nullable=True,
+        ),
+        pa.field(
+            "monthly_usage_count", pa.int32(), nullable=True,
+        ),
+        pa.field(
+            "usage_month", pa.string(), nullable=True,
+        ),
+        pa.field(
+            "subscription_start_at", _TS, nullable=True,
+        ),
+        pa.field(
+            "subscription_end_at", _TS, nullable=True,
+        ),
     ]
 )
 
@@ -85,11 +122,85 @@ _USER_TICKERS_PA_SCHEMA = pa.schema(
     ]
 )
 
+# _USAGE_HISTORY_PA_SCHEMA stores month-on-month usage
+# snapshots archived at reset time.
+_USAGE_HISTORY_PA_SCHEMA = pa.schema(
+    [
+        pa.field(
+            "user_id", pa.string(), nullable=False,
+        ),
+        pa.field(
+            "month", pa.string(), nullable=False,
+        ),
+        pa.field(
+            "usage_count", pa.int32(), nullable=False,
+        ),
+        pa.field(
+            "tier", pa.string(), nullable=False,
+        ),
+        pa.field(
+            "archived_at", _TS, nullable=False,
+        ),
+    ]
+)
+
+_PAYMENT_TXN_PA_SCHEMA = pa.schema(
+    [
+        pa.field(
+            "transaction_id", pa.string(),
+            nullable=False,
+        ),
+        pa.field(
+            "user_id", pa.string(), nullable=False,
+        ),
+        pa.field(
+            "gateway", pa.string(), nullable=False,
+        ),
+        pa.field(
+            "event_type", pa.string(), nullable=False,
+        ),
+        pa.field(
+            "gateway_event_id", pa.string(),
+            nullable=True,
+        ),
+        pa.field(
+            "subscription_id", pa.string(),
+            nullable=True,
+        ),
+        pa.field(
+            "customer_id", pa.string(), nullable=True,
+        ),
+        pa.field(
+            "amount", pa.float64(), nullable=True,
+        ),
+        pa.field(
+            "currency", pa.string(), nullable=True,
+        ),
+        pa.field(
+            "tier_before", pa.string(), nullable=True,
+        ),
+        pa.field(
+            "tier_after", pa.string(), nullable=True,
+        ),
+        pa.field(
+            "status", pa.string(), nullable=False,
+        ),
+        pa.field(
+            "raw_payload", pa.string(), nullable=True,
+        ),
+        pa.field(
+            "created_at", _TS, nullable=False,
+        ),
+    ]
+)
+
 _USER_TS_COLS = (
     "created_at",
     "updated_at",
     "last_login_at",
     "password_reset_expiry",
+    "subscription_start_at",
+    "subscription_end_at",
 )
 
 

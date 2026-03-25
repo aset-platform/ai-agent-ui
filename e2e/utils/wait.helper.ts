@@ -1,145 +1,122 @@
 /**
- * Dash-specific wait utilities for Playwright.
+ * Wait utilities for Next.js Playwright tests.
  *
- * Plotly Dash re-renders DOM fragments via server callbacks.
- * Standard ``page.waitForNavigation()`` does not work for most
- * Dash interactions — these helpers wait for DOM signals instead.
+ * Provides helpers for TradingView charts (canvas-based),
+ * Plotly charts, API response interception, and refresh
+ * button state transitions.
  */
 
-import {
-  type Locator,
-  type Page,
-  expect,
-} from "@playwright/test";
+import { type Page, expect } from "@playwright/test";
 
 /**
- * Wait for a Dash callback result by watching a DOM element.
+ * Wait for a TradingView lightweight-chart to render its canvas.
  *
- * Dash callbacks replace the ``children`` of a target element.
- * This helper waits until the element contains the expected text.
+ * TradingView draws on a ``<canvas>`` element inside the
+ * container identified by ``data-testid``.
  */
-export async function waitForDashCallback(
-  locator: Locator,
-  expectedText: string,
-  timeout = 15_000,
-): Promise<void> {
-  await expect(locator).toContainText(expectedText, { timeout });
-}
-
-/**
- * Wait for a Plotly chart to finish rendering.
- *
- * Plotly injects an element with class ``.js-plotly-plot``
- * inside the container once the chart is drawn.
- */
-export async function waitForPlotlyChart(
+export async function waitForTradingViewChart(
   page: Page,
-  containerSelector: string,
+  testId: string,
   timeout = 15_000,
 ): Promise<void> {
-  await page
-    .locator(`${containerSelector} .js-plotly-plot`)
+  const container = page.getByTestId(testId);
+  await container.waitFor({ state: "visible", timeout });
+  await container
+    .locator("canvas")
+    .first()
     .waitFor({ state: "visible", timeout });
 }
 
 /**
- * Wait for the Dash loading spinner to appear then disappear.
- *
- * Some fast callbacks never show a spinner, so the initial
- * "visible" wait has a short timeout that is silently ignored.
+ * Wait for a Plotly chart to finish rendering inside a
+ * Next.js component identified by ``data-testid``.
  */
-export async function waitForDashLoading(
+export async function waitForPlotlyChart(
   page: Page,
-  timeout = 30_000,
+  testId: string,
+  timeout = 15_000,
 ): Promise<void> {
-  const spinner = page.locator("._dash-loading");
-  try {
-    await spinner.waitFor({ state: "visible", timeout: 3_000 });
-    await spinner.waitFor({ state: "hidden", timeout });
-  } catch {
-    // Spinner may never appear for fast callbacks — that is OK.
-  }
+  const container = page.getByTestId(testId);
+  await container.waitFor({ state: "visible", timeout });
+  await container
+    .locator(".js-plotly-plot")
+    .waitFor({ state: "visible", timeout });
 }
 
 /**
- * Wait for a Dash ``dcc.Store`` to have a specific value.
+ * Intercept an API response and return its JSON body.
  *
- * Reads the store's ``data`` property via JavaScript.
+ * Useful for validating the data that feeds a chart or table
+ * without relying on DOM scraping.
  */
-export async function waitForStoreValue(
+export async function waitForApiResponse<T = unknown>(
   page: Page,
-  storeId: string,
-  expected: unknown,
-  timeout = 10_000,
-): Promise<void> {
-  await page.waitForFunction(
-    ([id, val]) => {
-      const el = document.getElementById(id as string);
-      if (!el) return false;
-      try {
-        const data = JSON.parse(
-          el.getAttribute("data-dash-is-loading") === "false"
-            ? (el as HTMLElement).innerText || "{}"
-            : "{}",
-        );
-        return JSON.stringify(data) === JSON.stringify(val);
-      } catch {
-        return false;
+  urlPattern: string | RegExp,
+  timeout = 15_000,
+): Promise<T> {
+  const response = await page.waitForResponse(
+    (res) => {
+      const url = res.url();
+      if (typeof urlPattern === "string") {
+        return url.includes(urlPattern) && res.status() === 200;
       }
+      return urlPattern.test(url) && res.status() === 200;
     },
-    [storeId, expected],
     { timeout },
   );
+  return response.json() as Promise<T>;
 }
 
 /**
- * Wait until **all** Dash callbacks have finished.
+ * Wait for a refresh button to cycle through its states.
  *
- * Dash sets ``data-dash-is-loading="true"`` on every component
- * that is currently being updated by a callback.  This helper
- * polls the DOM until no such attribute remains, meaning the
- * callback chain has fully settled.
- *
- * Use this instead of ``page.waitForTimeout()`` after user
- * interactions that trigger one or more chained callbacks.
+ * Watches the refresh icon ``data-testid`` for the
+ * ``data-state`` attribute to transition from "pending"
+ * to "success" or "error".
  */
-export async function waitForDashReady(
+export async function waitForRefreshComplete(
+  page: Page,
+  iconTestId: string,
+  timeout = 180_000,
+): Promise<string> {
+  const icon = page.getByTestId(iconTestId);
+
+  // Wait for pending state to appear
+  await expect(icon).toHaveAttribute(
+    "data-state",
+    "pending",
+    { timeout: 5_000 },
+  ).catch(() => {
+    // May already be past pending if very fast
+  });
+
+  // Wait for terminal state
+  await page.waitForFunction(
+    (tid) => {
+      const el = document.querySelector(
+        `[data-testid="${tid}"]`,
+      );
+      if (!el) return false;
+      const state = el.getAttribute("data-state");
+      return state === "success" || state === "error";
+    },
+    iconTestId,
+    { timeout },
+  );
+
+  const state = await icon.getAttribute("data-state");
+  return state || "unknown";
+}
+
+/**
+ * Wait for a Next.js page to be fully hydrated and idle.
+ *
+ * Waits until there are no pending network requests and the
+ * page has reached "networkidle" state.
+ */
+export async function waitForPageReady(
   page: Page,
   timeout = 15_000,
 ): Promise<void> {
-  await page.waitForFunction(
-    () => {
-      const loading = document.querySelectorAll(
-        '[data-dash-is-loading="true"]',
-      );
-      return loading.length === 0;
-    },
-    undefined,
-    { timeout },
-  );
-}
-
-/**
- * Navigate to a Dash page and retry once on callback error.
- *
- * Centralises the "goto → waitForDashLoading → check for
- * Callback-error banner → reload" pattern that was duplicated
- * across every dashboard page object.
- */
-export async function gotoDashPage(
-  page: Page,
-  url: string,
-): Promise<void> {
-  await page.goto(url);
-  await waitForDashLoading(page);
-  const err = page.locator("text=Callback error");
-  const navbar = page.locator(".navbar");
-  const needsRetry =
-    (await err.count()) > 0 ||
-    (await navbar.count()) === 0;
-  if (needsRetry) {
-    await waitForDashReady(page);
-    await page.reload();
-    await waitForDashLoading(page);
-  }
+  await page.waitForLoadState("networkidle", { timeout });
 }

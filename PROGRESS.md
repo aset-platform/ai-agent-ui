@@ -2,6 +2,263 @@
 
 ---
 
+# Session: Mar 25, 2026 — Security Hardening, Code Quality, E2E Coverage
+
+## Security Hardening (ASETPLTFRM-178, 9 stories — ALL DONE)
+
+### 3 CRITICAL fixes
+- Webhook signatures now mandatory — 503 if secret missing (`subscription_routes.py`)
+- Chat endpoints require JWT — `user_id` derived from token only (`routes.py`, `ws.py`)
+- Password reset token gated behind `settings.debug` (`auth_routes.py`)
+
+### 7 HIGH fixes
+- Cookie `secure` env-gated + `samesite=strict`
+- Rate limits on `/auth/login/form` + `password_reset_confirm`
+- CSP header added to SecurityHeadersMiddleware
+- Quota enforcement fails closed (503) not open
+- Stripe/Razorpay tier/plan validated before DB write
+- Rate limiter IP spoofing documented
+
+### 10 MEDIUM + 4 LOW fixes
+- `CheckoutRequest` uses `Literal` types, `AddPortfolioRequest` has Field constraints
+- `ChatRequest.history` capped at 100
+- Refresh log reduced to DEBUG, avatar_url pattern validated
+- JWT startup check, demo log cleanup, script placeholder padding
+
+## Code Quality (ASETPLTFRM-188, 4 stories — ALL DONE)
+- **TokenBudget TOCTOU race** fixed — atomic `reserve()`/`release()` pattern
+- **Repository singleton bypass** — 3 call sites → `_require_repo()`
+- **`asyncio.get_running_loop()`** — replaced deprecated `get_event_loop()` at 3 sites
+- **Extracted `backend/user_context.py`** — eliminated duplication between routes.py and ws.py
+- **12+ silent `except: pass`** → proper logging, WS errors emit events to client
+- **8 files migrated** from legacy `typing` to PEP 604 builtins
+- **Mutable default fixed** in BaseAgent (`history: list[dict] | None = None`)
+
+## E2E Test Coverage (ASETPLTFRM-193 — IN PROGRESS)
+46 new Playwright tests across 8 files:
+- `portfolio-crud.spec.ts` (8) — add/edit/delete holdings
+- `payment-flows.spec.ts` (7) — mocked Razorpay/Stripe checkout
+- `websocket.spec.ts` (6) — WS connect/stream/reconnect/fallback
+- `chat-tools.spec.ts` (4) — LLM tool invocations
+- `admin-crud.spec.ts` (8) — user CRUD + audit log
+- `subscription-lifecycle.spec.ts` (5) — paywall/quota/upgrade/cancel
+- `insights-filters.spec.ts` (4) — chained filters, quarterly switch
+- `lighthouse.spec.ts` (4) — Core Web Vitals assertions (LCP/FCP/TBT/CLS)
+
+Supporting: 27 `data-testid` attrs on 6 components, 1 new POM, 1 fixture, selectors.ts + config updated.
+
+## Code Simplification
+- `Dict` → `dict` (PEP 604) in auth_routes, subscription_routes
+- `_drain_queue()` helper eliminated duplicate timeout logic in routes.py
+- `next()` patterns in `_find_user_by_razorpay/stripe`
+- Removed unused imports, fixed E741 variable names
+
+## AgentShield Security Scan
+- Grade: B (87) → **A (97)**
+- Permissions score: 36 → 85/100
+- settings.local.json: cleaned ~90 stale allow rules → ~50 reusable, added 22-rule deny list
+- Skill metadata (version, rollback, observe, feedback) added to 2 custom commands
+
+## Test Results
+- **Python**: 548 passed, 0 failures (fixed 2 pre-existing flaky tests)
+- **E2E**: 96 passed, 22 did not run (fixture path + screenshot baselines need update)
+
+## Jira
+- **ASETPLTFRM-178** (Epic) — Security Hardening: 9 stories, all Done
+- **ASETPLTFRM-188** (Epic) — Code Quality: 4 stories, all Done
+- **ASETPLTFRM-193** (Story) — E2E Coverage: In Progress
+
+## Shared Memories Promoted (6 new)
+- `shared/debugging/chat-session-recording`
+- `shared/architecture/currency-aware-agent`
+- `shared/debugging/iceberg-epoch-dates`
+- `shared/conventions/security-hardening`
+- `shared/architecture/token-budget-concurrency`
+- `shared/conventions/e2e-test-patterns`
+
+---
+
+# Session: Mar 24–25, 2026 — Subscription & Paywall System, Razorpay + Stripe, Admin Maintenance
+
+## Sprint 3 — 100% Complete (all 11 stories + 15 bugs)
+
+### Additional Deliverables (Mar 24 evening – Mar 25)
+
+**ASETPLTFRM-79 (3 pts) — Stripe Sandbox Integration:**
+- stripe==14.4.1, 3 config fields, Stripe Checkout Session + `Subscription.modify()` for pro-rata upgrades
+- Stripe webhook handler (checkout.session.completed, customer.subscription.deleted, invoice.payment_failed)
+- Gateway selector UI (INR vs USD toggle), dynamic pricing, auto-detect active gateway
+- Cancel supports both Razorpay + Stripe
+
+**ASETPLTFRM-81 (3 pts) — Subscription E2E Tests:**
+- 3 Playwright test specs: billing UI, paywall enforcement, admin management (13 tests)
+- subscription.helper.ts API utilities
+
+**Payment Transaction Ledger:**
+- `auth.payment_transactions` Iceberg table (14 columns) — every payment event logged
+- Wired into all webhook handlers + PATCH upgrades + user cancels
+- Admin "Transactions" tab (6th) with gateway filter, Source column (User/Webhook), Name column, raw payload viewer
+
+**Bug Fixes (ASETPLTFRM-167–176):**
+- Cookie path mismatch → login redirect after payment (167)
+- WS streaming + usage tracking missing (168)
+- Quota enforcement on chat (169)
+- SWR cache leak between users (170)
+- get_catalog() missing root arg (171)
+- Stripe no pro-rata on upgrade (172)
+- useEffect not imported crash (173)
+- INR prices for Stripe users (174)
+- Native confirm() → ConfirmDialog (175)
+- Missing news tools in stock analyst (176)
+
+**Session Stability Fix (root cause):**
+- `NEXT_PUBLIC_BACKEND_URL` was `http://127.0.0.1:8181` but frontend runs on `localhost:3000`
+- Different hostnames = browser doesn't send HttpOnly cookie on API calls = refresh always fails
+- Fixed to `http://localhost:8181` — session now stable across token refreshes and payments
+- Also fixed: refresh endpoint 422 (empty JSON body), cookie path to `/`, legacy cookie cleanup
+
+**Sprint 3 Final: 22 story pts + 23 bug pts = 45 pts delivered**
+
+---
+
+# Session: Mar 24, 2026 — Subscription & Paywall System, Razorpay Integration, Admin Maintenance
+
+## Sprint 3 subscription + billing on `feature/sprint3`
+
+### Subscription Data Model (ASETPLTFRM-76, 3 pts)
+
+- 9 new Iceberg columns on `auth.users`: subscription_tier, subscription_status, razorpay_customer_id, razorpay_subscription_id, stripe_customer_id, stripe_subscription_id, monthly_usage_count, usage_month, subscription_start_at, subscription_end_at
+- JWT access token extended with subscription_tier, subscription_status, usage_remaining
+- UserContext model updated; get_current_user() extracts subscription claims
+- Login/refresh/OAuth endpoints fetch subscription data from Iceberg
+- `backend/subscription_config.py` — tier quotas, ordering, pricing constants
+- 16 tests (test_subscription_model.py)
+
+### Guard Middleware + Usage Tracking (ASETPLTFRM-77, 3 pts)
+
+- `require_tier(min_tier)` factory dependency — returns 403 if tier too low
+- `check_usage_quota()` dependency — returns 429 when monthly quota exhausted
+- `increment_usage()` in all 4 chat route paths with lazy auto-reset
+- `usage_month` field tracks which month the counter belongs to
+- `auth.usage_history` Iceberg table — archives month-on-month snapshots on reset
+- Admin endpoints: usage-stats, reset-usage, reset-usage/selected, usage-history
+- 14 tests (test_subscription_guard.py)
+
+### Razorpay Sandbox Integration (ASETPLTFRM-78, 5 pts)
+
+- `razorpay==2.0.1` SDK, config fields in Settings
+- `POST /v1/subscription/checkout` — PATCH for upgrades (pro-rata), POST for new subs
+- `GET /v1/subscription` — reads tier/status from Iceberg (not JWT)
+- `POST /v1/subscription/cancel` — resets tier to free, clears sub_id
+- Webhook handler at `/v1/webhooks/razorpay` — handles charged, cancelled, payment.failed
+- Signature verification (skippable in test mode), stale sub guard, Iceberg retry on commit conflict
+- Triage-based orphan cleanup: `POST /v1/subscription/cleanup?dry_run=true`
+- ngrok tunnel for local webhook testing
+- 17 tests (test_razorpay_integration.py)
+
+### Frontend Billing UI (ASETPLTFRM-80, 5 pts)
+
+- `BillingTab` component in EditProfileModal — pricing cards, usage meter, Razorpay checkout.js
+- Server-side upgrade (PATCH) shows instant success; new subs open Razorpay modal
+- `UsageBadge` in ChatHeader — compact usage pill (color-coded)
+- `UpgradeBanner` below AppHeader when quota exhausted (SWR, dismissible)
+- "Billing" in profile dropdown menu
+- Token refresh after payment/cancel
+
+### Admin Maintenance Tab
+
+- 4th tab on Admin page: Subscription Cleanup, Usage Reset, Data Retention, Gap Analysis
+- Subscription cleanup: scan → triage (matched/orphaned/unlinked) → execute
+- Usage reset: scan → per-user checkboxes → reset individual/selected/all
+- Data retention: scan → per-table checkboxes → delete individual/selected/all
+- Risk badges (none/low/medium/high), confirmation dialogs
+
+### Bug Fixes
+
+- **ASETPLTFRM-162** (2 pts) — OHLCV NaN close price → ₹0.00 portfolio. Added `dropna(subset=["close"])` in 5 files.
+- **ASETPLTFRM-163** (1 pt) — Hero section not updating after stock refresh. Added `portfolioData.refresh()` to onRefresh callback.
+- **ASETPLTFRM-164** (2 pts) — Subscription endpoints read JWT instead of Iceberg. All 3 endpoints now read from Iceberg.
+- **ASETPLTFRM-165** (3 pts) — Checkout created orphaned Razorpay subs. Now uses PATCH for upgrades, cancel clears sub_id, webhook guards.
+- **ASETPLTFRM-166** (1 pt) — Iceberg CommitFailedException. Added `_safe_update()` with 3 retries.
+
+### Files Changed (35+)
+
+**New files:** `backend/subscription_config.py`, `backend/usage_tracker.py`, `auth/endpoints/subscription_routes.py`, `frontend/components/BillingTab.tsx`, `frontend/components/UpgradeBanner.tsx`, `tests/backend/test_subscription_model.py`, `tests/backend/test_subscription_guard.py`, `tests/backend/test_razorpay_integration.py`
+
+**Modified:** `auth/repo/schemas.py`, `auth/create_tables.py`, `auth/migrate_users_table.py`, `auth/tokens.py`, `auth/service.py`, `auth/models/response.py`, `auth/dependencies.py`, `auth/endpoints/helpers.py`, `auth/endpoints/auth_routes.py`, `auth/endpoints/oauth_routes.py`, `auth/endpoints/__init__.py`, `auth/endpoints/ticker_routes.py`, `backend/config.py`, `backend/routes.py`, `backend/dashboard_routes.py`, `backend/tools/portfolio_tools.py`, `backend/tools/forecast_tools.py`, `backend/requirements.txt`, `frontend/lib/auth.ts`, `frontend/components/EditProfileModal.tsx`, `frontend/components/ChatHeader.tsx`, `frontend/components/AppHeader.tsx`, `frontend/hooks/useAdminData.ts`, `frontend/hooks/usePortfolio.ts`, `frontend/app/(authenticated)/layout.tsx`, `frontend/app/(authenticated)/admin/page.tsx`, `frontend/app/(authenticated)/dashboard/page.tsx`, `stocks/retention.py`
+
+### Sprint 3 Progress: 25 pts delivered (16 story + 9 bug fix)
+
+---
+
+# Session: Mar 22, 2026 — Chat Session Recording, Activity Log, Currency-Aware Agent, Chart Fix
+
+## Sprint 3 bugs on `feature/sprint3`
+
+### Chat Session Recording Fix (ASETPLTFRM-158, 5 pts)
+
+Session history stopped persisting to Iceberg. Five root causes:
+
+1. **`sendBeacon` cannot send auth headers** — `ChatProvider.tsx` used `navigator.sendBeacon()` on tab close → no Authorization header → 401. Fixed: `fetch()` + `keepalive: true` + auth header.
+2. **`apiFetch` 401 handler races with logout** — `useChatSession.flush()` used `apiFetch` which on 401 calls `clearTokens()` + redirects, racing with the actual logout. Fixed: raw `fetch()` with `getAccessToken()`.
+3. **ChatHeader sign-out missing `flush()`** — went straight to `clearTokens()`. Fixed: added `await chatContext.flush()`.
+4. **PyArrow timestamp conversion** — `save_chat_session()` passed ISO strings to `pa.timestamp("us")` → `"str cannot be converted to int"`. Endpoint returned 201 (error swallowed) but Iceberg write never happened. Fixed: `_parse_ts()` via `pd.Timestamp().to_pydatetime()`.
+5. **Wrong localStorage key** — `beforeunload` used `"access_token"` but actual key is `"auth_access_token"`.
+6. **Close panel flush** — `closePanel` callback only did `setIsOpen(false)` without saving. Fixed: added `flush()` call.
+
+### Activity Log UI Fix (ASETPLTFRM-159, 3 pts)
+
+1. **Raw JSON preview** — session cards showed `[{"role": "user"...}` instead of readable text. Fixed: parse JSON, extract first user message content in `list_chat_sessions()`.
+2. **No close button on Activity Log tab** — EditProfileModal only had Cancel/Save in Profile tab footer. Fixed: X button in modal header visible on both tabs.
+3. **Missing detail endpoint** — `GET /v1/audit/chat-sessions/{session_id}` didn't exist → 404 on expand. Fixed: `get_chat_session_detail()` repo method + route returning `ChatSessionDetail`.
+4. **Silent failure** — expand showed nothing on error. Fixed: error state with message.
+
+### Currency-Aware Portfolio Agent (ASETPLTFRM-160, 5 pts)
+
+AI chat showed `$332,325.99` for an all-Indian (₹) portfolio and hallucinated data.
+
+1. **System prompt rewrite** — mandatory tool-use ("YOUR FIRST RESPONSE MUST ONLY be a tool call"), currency rules ("NEVER default to $"), anti-hallucination guardrails.
+2. **Dynamic context injection** — `_build_context_block()` in `sub_agents.py` detects user's currency/market mix from holdings and appends to system prompt (e.g., "All holdings are INR. Use ₹").
+3. **`user_context` in graph state** — new `AgentState` field populated in both HTTP (`routes.py`) and WebSocket (`ws.py`) paths.
+4. **Currency-aware tool outputs** — `get_portfolio_holdings()` shows ₹/$ per row + per-currency totals; `get_portfolio_summary()` groups by currency; `get_portfolio_performance()` shows currency/market context.
+
+### TradingView Chart Crash Fix (ASETPLTFRM-161, 2 pts)
+
+`Assertion failed: data must be asc ordered by time, index=1, time=0, prev time=0`
+
+1. **`toTime()`** — now slices to `YYYY-MM-DD` (was passing full ISO timestamps that TradingView silently converted to `0`).
+2. **`filterNull()`** — validates dates with `/^\d{4}-\d{2}-\d{2}/` regex + sorts ascending.
+3. **Candle + volume data** — same date validation applied.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `stocks/repository.py` | `import json`, preview parsing, `_parse_ts()`, `get_chat_session_detail()` |
+| `backend/audit_routes.py` | `GET /audit/chat-sessions/{session_id}` detail endpoint |
+| `backend/agents/configs/portfolio.py` | Mandatory tool-use + currency rules in system prompt |
+| `backend/agents/sub_agents.py` | `_build_context_block()`, `_CURRENCY_SYMBOLS`, context injection |
+| `backend/agents/graph_state.py` | `user_context: dict` field |
+| `backend/tools/portfolio_tools.py` | `_CCY_SYMBOLS`, currency in holdings/summary/performance |
+| `backend/routes.py` | `_build_user_context()`, `user_context` in graph input |
+| `backend/ws.py` | `user_context` in WS graph input |
+| `frontend/providers/ChatProvider.tsx` | `fetch+keepalive` replacing `sendBeacon`, flush on close |
+| `frontend/hooks/useChatSession.ts` | Raw `fetch` replacing `apiFetch` |
+| `frontend/components/ChatHeader.tsx` | `flush()` before `clearTokens()` on sign-out |
+| `frontend/components/EditProfileModal.tsx` | X close button in header |
+| `frontend/components/PastSessionsTab.tsx` | Detail error state |
+| `frontend/components/charts/StockChart.tsx` | `toTime()` YYYY-MM-DD, `filterNull` regex+sort, date validation |
+
+### Jira tickets
+- ASETPLTFRM-158 (5 pts) — Chat session recording: **Done**
+- ASETPLTFRM-159 (3 pts) — Activity Log UI: **Done**
+- ASETPLTFRM-160 (5 pts) — Currency-aware portfolio agent: **Done**
+- ASETPLTFRM-161 (2 pts) — TradingView chart crash: **Done**
+
+Sprint 3 progress: 15 pts delivered (Mar 22)
+
+---
+
 # Session: Mar 20, 2026 — Portfolio Analytics, TradingView Migration, UX Polish
 
 ## Sprint 2 continuation on `feature/sprint2-planning`

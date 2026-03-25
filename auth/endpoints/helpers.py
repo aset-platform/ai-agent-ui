@@ -111,6 +111,45 @@ def _user_to_response(user: dict[str, Any]) -> UserResponse:
     )
 
 
+def _subscription_claims(
+    user: dict[str, Any],
+) -> dict[str, Any]:
+    """Extract subscription kwargs for access token creation.
+
+    Reads the user's subscription fields from Iceberg and
+    computes ``usage_remaining`` from quota minus monthly count.
+
+    Args:
+        user: A user dict from
+            :class:`~auth.repository.IcebergUserRepository`.
+
+    Returns:
+        A dict with ``subscription_tier``,
+        ``subscription_status``, and ``usage_remaining``.
+    """
+    from subscription_config import (
+        DEFAULT_STATUS,
+        DEFAULT_TIER,
+        USAGE_QUOTAS,
+    )
+
+    tier = user.get("subscription_tier") or DEFAULT_TIER
+    status = user.get("subscription_status") or DEFAULT_STATUS
+    quota = USAGE_QUOTAS.get(tier, 0)
+    count = user.get("monthly_usage_count") or 0
+
+    if quota == 0:
+        remaining = None  # unlimited
+    else:
+        remaining = max(0, quota - count)
+
+    return {
+        "subscription_tier": tier,
+        "subscription_status": status,
+        "usage_remaining": remaining,
+    }
+
+
 def _require_active_user(
     user: dict[str, Any] | None, email: str
 ) -> dict[str, Any]:

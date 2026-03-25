@@ -11,7 +11,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useChatContext } from "@/providers/ChatProvider";
 import { useSendMessage } from "@/hooks/useSendMessage";
 import { useResizePanel } from "@/hooks/useResizePanel";
-import { AGENTS } from "@/lib/constants";
+import { CHAT_HINT } from "@/lib/constants";
 import { StatusBadge } from "@/components/StatusBadge";
 import { MessageBubble } from "@/components/MessageBubble";
 import { ChatInput } from "@/components/ChatInput";
@@ -39,6 +39,8 @@ export function ChatPanel() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [statusLine, setStatusLine] = useState("");
+  const [quotaExceeded, setQuotaExceeded] =
+    useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -77,7 +79,23 @@ export function ChatPanel() {
     messagesEndRef.current?.scrollIntoView({
       behavior: "smooth",
     });
-  }, [messages, loading]);
+  }, [messages, loading, statusLine]);
+
+  // Detect quota exceeded from error messages
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const last = messages[messages.length - 1];
+    if (
+      last.role === "assistant" &&
+      typeof last.content === "string" &&
+      last.content.toLowerCase().includes(
+        "quota exceeded",
+      )
+    ) {
+      /* eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: detecting error state from message */
+      setQuotaExceeded(true);
+    }
+  }, [messages]);
 
   // ESC to close
   useEffect(() => {
@@ -97,10 +115,7 @@ export function ChatPanel() {
     }
   }, [isOpen]);
 
-  const agentHint = useMemo(
-    () => AGENTS.find((a) => a.id === agentId)?.hint,
-    [agentId],
-  );
+  const agentHint = CHAT_HINT;
 
   // Internal link handler for markdown links
   const handleInternalLink = useCallback(
@@ -183,6 +198,13 @@ export function ChatPanel() {
                 <ChatInput
                   input={input}
                   loading={loading}
+                  quotaExceeded={quotaExceeded}
+                  onUpgrade={() => {
+                    closePanel();
+                    window.dispatchEvent(
+                      new CustomEvent("open-billing"),
+                    );
+                  }}
                   textareaRef={textareaRef}
                   onInput={handleInput}
                   onKeyDown={handleKeyDown}

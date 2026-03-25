@@ -212,5 +212,5 @@ export function PortfolioChart({
     };
   }, [data, isDark, height, handleCrosshair]);
 
-  return <div ref={containerRef} />;
+  return <div ref={containerRef} data-testid="portfolio-chart-canvas" />;
 }

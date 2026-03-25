@@ -25,10 +25,10 @@ export interface Message {
 // Agent configuration
 // ---------------------------------------------------------------------------
 
-export const AGENTS = [
-  { id: "general", label: "General", hint: "Ask me anything — I can search the web or check the time." },
-  { id: "stock",   label: "Stock Analysis", hint: 'Try: "Analyse AAPL" · "Forecast TSLA for 6 months" · "Compare AAPL and MSFT"' },
-] as const;
+/** Default hint shown in the empty chat state. */
+export const CHAT_HINT =
+  'Ask me anything — I can search the web or check the time.' +
+  ' Try: "Analyse AAPL" · "Forecast TSLA for 6 months"';
 
 // ---------------------------------------------------------------------------
 // Navigation items

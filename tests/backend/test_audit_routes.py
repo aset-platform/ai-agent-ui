@@ -93,13 +93,8 @@ _VALID_SESSION = {
 @pytest.fixture()
 def client():
     """TestClient with auth override."""
-    from audit_routes import _resolve_user
-
     app = _make_app()
     app.dependency_overrides[get_current_user] = (
-        lambda: _TEST_USER
-    )
-    app.dependency_overrides[_resolve_user] = (
         lambda: _TEST_USER
     )
     yield TestClient(app)

@@ -42,8 +42,10 @@ def _make_fallback(
     budget_mock.estimate_tokens.return_value = 100
     if callable(budget_can_afford):
         budget_mock.can_afford.side_effect = budget_can_afford
+        budget_mock.reserve.side_effect = budget_can_afford
     else:
         budget_mock.can_afford.return_value = budget_can_afford
+        budget_mock.reserve.return_value = budget_can_afford
 
     compressor_mock = MagicMock()
     compressor_mock.compress.side_effect = lambda msgs, *a, **kw: msgs
@@ -336,6 +338,7 @@ class TestNoGroqKey:
         budget = MagicMock()
         budget.estimate_tokens.return_value = 100
         budget.can_afford.return_value = True
+        budget.reserve.return_value = True
         comp = MagicMock()
         comp.compress.side_effect = lambda msgs, *a, **kw: msgs
         anth = MagicMock()

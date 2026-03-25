@@ -26,7 +26,10 @@ class ChatRequest(BaseModel):
     """
 
     message: str = Field(..., min_length=1, max_length=10_000)
-    history: list = []
+    history: list = Field(
+        default=[],
+        max_length=100,
+    )
     agent_id: str = Field("general", max_length=50, pattern=r"^[a-z_]+$")
     user_id: str | None = Field(
         default=None,

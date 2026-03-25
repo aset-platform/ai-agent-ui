@@ -181,10 +181,18 @@ def client(fake_repo):
 
     with patch("auth.endpoints.helpers._get_repo", return_value=fake_repo):
         from auth.api import create_auth_router
+        from auth.rate_limit import limiter
 
+        limiter.reset()
         app = FastAPI()
+        app.state.limiter = limiter
+        # Exempt test client from rate limits so
+        # test ordering doesn't cause flaky 429s.
+        limiter.enabled = False
         app.include_router(create_auth_router())
         yield TestClient(app, raise_server_exceptions=False)
+        limiter.enabled = True
+        limiter.reset()
 
     deps._get_service.cache_clear()
 

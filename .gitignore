@@ -80,8 +80,8 @@ instruction.txt
 .serena/memories/session/
 .serena/memories/personal/
 
-# Auto-generated project index (local)
-PROJECT_INDEX.md
-
 # Backend runtime data (deny-list, etc.)
 backend/data/
+
+# Lighthouse CI local artifacts
+.lighthouseci/

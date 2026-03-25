@@ -1,0 +1,716 @@
+{
+  "sprint": 3,
+  "date": "2026-03-25",
+  "tool": "playwright-performance-api",
+  "device": "desktop-headless",
+  "total_points": 52,
+  "passed": 49,
+  "skipped": 10,
+  "failed": 3,
+  "overall_score": 87,
+  "section_scores": {
+    "pages": 91,
+    "tabs": 83,
+    "modals": 92,
+    "interactive": 77
+  },
+  "results": [
+    {
+      "id": "page-login",
+      "type": "page",
+      "score": 70,
+      "budget": 75,
+      "passed": false,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "fcp_ms": 784,
+        "lcp_ms": 0,
+        "cls": 0,
+        "tbt_ms": 691
+      }
+    },
+    {
+      "id": "page-dashboard",
+      "type": "page",
+      "score": 97,
+      "budget": 75,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "fcp_ms": 488,
+        "lcp_ms": 0,
+        "cls": 0,
+        "tbt_ms": 235
+      }
+    },
+    {
+      "id": "page-analytics",
+      "type": "page",
+      "score": 100,
+      "budget": 80,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "fcp_ms": 488,
+        "lcp_ms": 0,
+        "cls": 0,
+        "tbt_ms": 148
+      }
+    },
+    {
+      "id": "page-analysis",
+      "type": "page",
+      "score": 98,
+      "budget": 70,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "fcp_ms": 664,
+        "lcp_ms": 0,
+        "cls": 0,
+        "tbt_ms": 232
+      }
+    },
+    {
+      "id": "page-compare",
+      "type": "page",
+      "score": 94,
+      "budget": 75,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "fcp_ms": 980,
+        "lcp_ms": 0,
+        "cls": 0,
+        "tbt_ms": 275
+      }
+    },
+    {
+      "id": "page-insights",
+      "type": "page",
+      "score": 93,
+      "budget": 70,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "fcp_ms": 552,
+        "lcp_ms": 0,
+        "cls": 0,
+        "tbt_ms": 299
+      }
+    },
+    {
+      "id": "page-marketplace",
+      "type": "page",
+      "score": 95,
+      "budget": 75,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "fcp_ms": 496,
+        "lcp_ms": 0,
+        "cls": 0,
+        "tbt_ms": 263
+      }
+    },
+    {
+      "id": "page-admin",
+      "type": "page",
+      "score": null,
+      "budget": 70,
+      "passed": true,
+      "skipped": true,
+      "error": null,
+      "metrics": null
+    },
+    {
+      "id": "page-docs",
+      "type": "page",
+      "score": 89,
+      "budget": 85,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "fcp_ms": 352,
+        "lcp_ms": 0,
+        "cls": 0,
+        "tbt_ms": 345
+      }
+    },
+    {
+      "id": "page-insights-legacy",
+      "type": "page",
+      "score": 80,
+      "budget": 75,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "fcp_ms": 996,
+        "lcp_ms": 0,
+        "cls": 0,
+        "tbt_ms": 462
+      }
+    },
+    {
+      "id": "tab-analysis-portfolio",
+      "type": "tab",
+      "score": 83,
+      "budget": 65,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "switch_ms": 1356,
+        "cls": 0,
+        "tbt_ms": 102
+      }
+    },
+    {
+      "id": "tab-analysis-portfolio-forecast",
+      "type": "tab",
+      "score": 83,
+      "budget": 65,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "switch_ms": 1331,
+        "cls": 0,
+        "tbt_ms": 70
+      }
+    },
+    {
+      "id": "tab-analysis-analysis",
+      "type": "tab",
+      "score": 89,
+      "budget": 65,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "switch_ms": 588,
+        "cls": 0,
+        "tbt_ms": 194
+      }
+    },
+    {
+      "id": "tab-analysis-forecast",
+      "type": "tab",
+      "score": 94,
+      "budget": 65,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "switch_ms": 824,
+        "cls": 0,
+        "tbt_ms": 88
+      }
+    },
+    {
+      "id": "tab-analysis-compare",
+      "type": "tab",
+      "score": 99,
+      "budget": 65,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "switch_ms": 558,
+        "cls": 0,
+        "tbt_ms": 29
+      }
+    },
+    {
+      "id": "tab-insights-screener",
+      "type": "tab",
+      "score": 99,
+      "budget": 65,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "switch_ms": 538,
+        "cls": 0,
+        "tbt_ms": 14
+      }
+    },
+    {
+      "id": "tab-insights-targets",
+      "type": "tab",
+      "score": 64,
+      "budget": 65,
+      "passed": false,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "switch_ms": 2325,
+        "cls": 0,
+        "tbt_ms": 50
+      }
+    },
+    {
+      "id": "tab-insights-dividends",
+      "type": "tab",
+      "score": 83,
+      "budget": 65,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "switch_ms": 1337,
+        "cls": 0,
+        "tbt_ms": 79
+      }
+    },
+    {
+      "id": "tab-insights-risk",
+      "type": "tab",
+      "score": 63,
+      "budget": 65,
+      "passed": false,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "switch_ms": 2328,
+        "cls": 0,
+        "tbt_ms": 51
+      }
+    },
+    {
+      "id": "tab-insights-sectors",
+      "type": "tab",
+      "score": 67,
+      "budget": 65,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "switch_ms": 1820,
+        "cls": 0,
+        "tbt_ms": 168
+      }
+    },
+    {
+      "id": "tab-insights-correlation",
+      "type": "tab",
+      "score": 94,
+      "budget": 65,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "switch_ms": 816,
+        "cls": 0,
+        "tbt_ms": 46
+      }
+    },
+    {
+      "id": "tab-insights-quarterly",
+      "type": "tab",
+      "score": 83,
+      "budget": 65,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "switch_ms": 1328,
+        "cls": 0,
+        "tbt_ms": 79
+      }
+    },
+    {
+      "id": "tab-admin-users",
+      "type": "tab",
+      "score": null,
+      "budget": 65,
+      "passed": true,
+      "skipped": true,
+      "error": null,
+      "metrics": null
+    },
+    {
+      "id": "tab-admin-audit",
+      "type": "tab",
+      "score": null,
+      "budget": 65,
+      "passed": true,
+      "skipped": true,
+      "error": null,
+      "metrics": null
+    },
+    {
+      "id": "tab-admin-observability",
+      "type": "tab",
+      "score": null,
+      "budget": 65,
+      "passed": true,
+      "skipped": true,
+      "error": null,
+      "metrics": null
+    },
+    {
+      "id": "tab-admin-maintenance",
+      "type": "tab",
+      "score": null,
+      "budget": 65,
+      "passed": true,
+      "skipped": true,
+      "error": null,
+      "metrics": null
+    },
+    {
+      "id": "tab-admin-transactions",
+      "type": "tab",
+      "score": null,
+      "budget": 65,
+      "passed": true,
+      "skipped": true,
+      "error": null,
+      "metrics": null
+    },
+    {
+      "id": "tab-profile-profile",
+      "type": "tab",
+      "score": null,
+      "budget": 65,
+      "passed": true,
+      "skipped": true,
+      "error": null,
+      "metrics": null
+    },
+    {
+      "id": "tab-profile-billing",
+      "type": "tab",
+      "score": null,
+      "budget": 65,
+      "passed": true,
+      "skipped": true,
+      "error": null,
+      "metrics": null
+    },
+    {
+      "id": "tab-profile-audit",
+      "type": "tab",
+      "score": null,
+      "budget": 65,
+      "passed": true,
+      "skipped": true,
+      "error": null,
+      "metrics": null
+    },
+    {
+      "id": "modal-edit-profile",
+      "type": "modal",
+      "score": 88,
+      "budget": 80,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "open_ms": 690,
+        "cls": 0,
+        "tbt_ms": 51
+      }
+    },
+    {
+      "id": "modal-change-password",
+      "type": "modal",
+      "score": 89,
+      "budget": 80,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "open_ms": 678,
+        "cls": 0,
+        "tbt_ms": 48
+      }
+    },
+    {
+      "id": "modal-session-management",
+      "type": "modal",
+      "score": 88,
+      "budget": 80,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "open_ms": 679,
+        "cls": 0,
+        "tbt_ms": 56
+      }
+    },
+    {
+      "id": "modal-add-stock",
+      "type": "modal",
+      "score": 98,
+      "budget": 80,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "open_ms": 363,
+        "cls": 0,
+        "tbt_ms": 35
+      }
+    },
+    {
+      "id": "modal-user-add",
+      "type": "modal",
+      "score": null,
+      "budget": 80,
+      "passed": true,
+      "skipped": true,
+      "error": null,
+      "metrics": null
+    },
+    {
+      "id": "modal-confirm-dialog",
+      "type": "modal",
+      "score": 98,
+      "budget": 80,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "open_ms": 351,
+        "cls": 0,
+        "tbt_ms": 29
+      }
+    },
+    {
+      "id": "interact-range-1m",
+      "type": "interaction",
+      "score": 54,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 1621,
+        "cls": 0,
+        "tbt_ms": 105
+      }
+    },
+    {
+      "id": "interact-range-3m",
+      "type": "interaction",
+      "score": 58,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 1599,
+        "cls": 0,
+        "tbt_ms": 81
+      }
+    },
+    {
+      "id": "interact-range-6m",
+      "type": "interaction",
+      "score": 56,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 1598,
+        "cls": 0,
+        "tbt_ms": 95
+      }
+    },
+    {
+      "id": "interact-range-1y",
+      "type": "interaction",
+      "score": 59,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 1585,
+        "cls": 0,
+        "tbt_ms": 77
+      }
+    },
+    {
+      "id": "interact-range-2y",
+      "type": "interaction",
+      "score": 58,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 1596,
+        "cls": 0,
+        "tbt_ms": 79
+      }
+    },
+    {
+      "id": "interact-range-3y",
+      "type": "interaction",
+      "score": 55,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 1613,
+        "cls": 0,
+        "tbt_ms": 96
+      }
+    },
+    {
+      "id": "interact-range-max",
+      "type": "interaction",
+      "score": 59,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 1588,
+        "cls": 0,
+        "tbt_ms": 74
+      }
+    },
+    {
+      "id": "interact-market-india",
+      "type": "interaction",
+      "score": 93,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 541,
+        "cls": 0,
+        "tbt_ms": 47
+      }
+    },
+    {
+      "id": "interact-market-us",
+      "type": "interaction",
+      "score": 93,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 543,
+        "cls": 0,
+        "tbt_ms": 29
+      }
+    },
+    {
+      "id": "interact-sidebar-collapse",
+      "type": "interaction",
+      "score": 92,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 562,
+        "cls": 0,
+        "tbt_ms": 47
+      }
+    },
+    {
+      "id": "interact-sidebar-expand",
+      "type": "interaction",
+      "score": 93,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 536,
+        "cls": 0,
+        "tbt_ms": 47
+      }
+    },
+    {
+      "id": "interact-chat-open",
+      "type": "interaction",
+      "score": 91,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 555,
+        "cls": 0,
+        "tbt_ms": 58
+      }
+    },
+    {
+      "id": "interact-chat-close",
+      "type": "interaction",
+      "score": 90,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 547,
+        "cls": 0,
+        "tbt_ms": 70
+      }
+    },
+    {
+      "id": "interact-marketplace-next",
+      "type": "interaction",
+      "score": 93,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 549,
+        "cls": 0,
+        "tbt_ms": 20
+      }
+    },
+    {
+      "id": "interact-marketplace-prev",
+      "type": "interaction",
+      "score": 93,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 526,
+        "cls": 0,
+        "tbt_ms": 18
+      }
+    },
+    {
+      "id": "interact-theme-toggle",
+      "type": "interaction",
+      "score": 88,
+      "budget": 50,
+      "passed": true,
+      "skipped": false,
+      "error": null,
+      "metrics": {
+        "response_ms": 535,
+        "cls": 0,
+        "tbt_ms": 88
+      }
+    }
+  ]
+}

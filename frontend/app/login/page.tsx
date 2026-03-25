@@ -26,7 +26,7 @@ export default function LoginPage() {
   useEffect(() => {
     const token = getAccessToken();
     if (token && !isTokenExpired(token)) {
-      router.replace("/dashboard");
+      window.location.href = "/dashboard";
       return;
     }
     // Fix #15: AbortController so the fetch is cancelled if the component unmounts
@@ -122,7 +122,7 @@ export default function LoginPage() {
       };
       // Refresh token is now in HttpOnly cookie.
       setTokens(data.access_token);
-      router.replace("/dashboard");
+      window.location.href = "/dashboard";
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
       setError("Could not reach the server. Is the backend running?");

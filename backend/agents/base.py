@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC
-from typing import Dict, Iterator, List
+from typing import Iterator
 
 import agents.loop as _loop
 import agents.stream as _stream
@@ -136,16 +136,10 @@ class BaseAgent(ABC):
         from llm_fallback import FallbackLLM
 
         settings = get_settings()
-        is_test = (
-            settings.ai_agent_ui_env == "test"
-        )
+        is_test = settings.ai_agent_ui_env == "test"
 
         def _parse(csv: str) -> list[str]:
-            return [
-                t.strip()
-                for t in csv.split(",")
-                if t.strip()
-            ]
+            return [t.strip() for t in csv.split(",") if t.strip()]
 
         tiers = (
             _parse(settings.test_model_tiers)
@@ -154,19 +148,13 @@ class BaseAgent(ABC):
         )
         return FallbackLLM(
             groq_models=tiers,
-            anthropic_model=(
-                None
-                if is_test
-                else "claude-sonnet-4-6"
-            ),
+            anthropic_model=(None if is_test else "claude-sonnet-4-6"),
             temperature=self.config.temperature,
             agent_id=self.config.agent_id,
             token_budget=self.token_budget,
             compressor=self.compressor,
             obs_collector=self.obs_collector,
-            cascade_profile=(
-                "test" if is_test else "tool"
-            ),
+            cascade_profile=("test" if is_test else "tool"),
         )
 
     def _build_synthesis_llm(self):
@@ -186,11 +174,7 @@ class BaseAgent(ABC):
             return None
 
         def _parse(csv: str) -> list[str]:
-            return [
-                t.strip()
-                for t in csv.split(",")
-                if t.strip()
-            ]
+            return [t.strip() for t in csv.split(",") if t.strip()]
 
         return FallbackLLM(
             groq_models=_parse(
@@ -206,8 +190,8 @@ class BaseAgent(ABC):
         )
 
     def _build_messages(
-        self, user_input: str, history: List[Dict]
-    ) -> List[BaseMessage]:
+        self, user_input: str, history: list[dict]
+    ) -> list[BaseMessage]:
         """Convert raw history and user input into LangChain messages.
 
         Args:
@@ -218,7 +202,7 @@ class BaseAgent(ABC):
         Returns:
             Ordered list of BaseMessage objects.
         """
-        messages: List[BaseMessage] = []
+        messages: list[BaseMessage] = []
         if self.config.system_prompt:
             messages.append(SystemMessage(content=self.config.system_prompt))
         for msg in history:
@@ -234,7 +218,7 @@ class BaseAgent(ABC):
     def run(
         self,
         user_input: str,
-        history: List[Dict] = [],
+        history: list[dict] | None = None,
         max_iterations: int | None = None,
     ) -> str:
         """Execute the agentic loop and return the final text response.
@@ -251,12 +235,13 @@ class BaseAgent(ABC):
         Raises:
             Exception: Any LLM or tool exception is re-raised.
         """
-        return _loop.run(
-            self, user_input, history, max_iterations
-        )
+        history = history or []
+        return _loop.run(self, user_input, history, max_iterations)
 
     def stream(
-        self, user_input: str, history: List[Dict] = []
+        self,
+        user_input: str,
+        history: list[dict] | None = None,
     ) -> Iterator[str]:
         """Execute the agentic loop, yielding NDJSON status events.
 
@@ -270,4 +255,5 @@ class BaseAgent(ABC):
         Raises:
             Exception: Re-raised after yielding an error event.
         """
+        history = history or []
         return _stream.stream(self, user_input, history)

@@ -1,6 +1,10 @@
 ---
 description: Promote a session/personal Serena memory to shared (team) memory with AI cleanup
 allowed-tools: [Read, Write, Edit, Bash, Glob, Grep, mcp__serena__list_memories, mcp__serena__read_memory, mcp__serena__write_memory, mcp__serena__delete_memory]
+version: 1.0.0
+rollback: revert to previous SKILL.md commit
+observe: log promoted memory name, source, and target category to session output
+feedback: user selects target category and confirms cleaned content before writing
 ---
 
 # /promote-memory — Promote Session Memory to Shared

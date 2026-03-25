@@ -8,16 +8,54 @@
 
 import { useState, useRef, useEffect, useMemo } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
-import { clearTokens } from "@/lib/auth";
-import { AGENTS, type View } from "@/lib/constants";
+import {
+  clearTokens,
+  getSubscriptionTierFromToken,
+  getUsageRemainingFromToken,
+} from "@/lib/auth";
+import { useChatContext } from "@/providers/ChatProvider";
+import { type View } from "@/lib/constants";
 import type { UserProfile } from "@/hooks/useEditProfile";
 import { BACKEND_URL } from "@/lib/config";
 
+/** Compact usage indicator in the header bar. */
+function UsageBadge() {
+  const tier = getSubscriptionTierFromToken();
+  const remaining = getUsageRemainingFromToken();
+
+  // Premium (unlimited) — show a small badge
+  if (remaining === null) {
+    return (
+      <span className="hidden sm:inline-flex items-center gap-1 text-xs text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full font-medium capitalize">
+        {tier}
+      </span>
+    );
+  }
+
+  // Determine color: green < 50%, yellow 50-80%, red > 80%
+  const quotas: Record<string, number> = { free: 3, pro: 30 };
+  const total = quotas[tier] ?? 3;
+  const used = total - remaining;
+  const pct = total > 0 ? (used / total) * 100 : 0;
+  const color =
+    pct < 50
+      ? "text-emerald-600 bg-emerald-50"
+      : pct < 80
+        ? "text-amber-600 bg-amber-50"
+        : "text-red-600 bg-red-50";
+
+  return (
+    <span
+      className={`hidden sm:inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full font-medium ${color}`}
+      title={`${used}/${total} analyses used this month`}
+    >
+      {used}/{total}
+    </span>
+  );
+}
+
 interface ChatHeaderProps {
   view: View;
-  agentId: string;
-  setAgentId: (id: string) => void;
   messages: { role: string }[];
   onClearMessages: () => void;
   profile: UserProfile | null;
@@ -27,15 +65,12 @@ interface ChatHeaderProps {
 
 export function ChatHeader({
   view,
-  agentId,
-  setAgentId,
   messages,
   onClearMessages,
   profile,
   onEditProfile,
   onChangePassword,
 }: ChatHeaderProps) {
-  const router = useRouter();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [avatarErrSrc, setAvatarErrSrc] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -52,9 +87,11 @@ export function ChatHeader({
     return () => document.removeEventListener("mousedown", handleClick);
   }, [dropdownOpen]);
 
-  const handleSignOut = () => {
+  const chatContext = useChatContext();
+  const handleSignOut = async () => {
+    await chatContext.flush();
     clearTokens();
-    router.replace("/login");
+    window.location.href = "/login";
   };
 
   // Build the avatar element: real image if available, else initials circle.
@@ -101,32 +138,18 @@ export function ChatHeader({
           priority
         />
 
-        {view === "chat" ? (
-          <div className="flex items-center gap-1 ml-4 bg-gray-100 rounded-lg p-0.5" data-testid="agent-selector">
-            {AGENTS.map((a) => (
-              <button
-                key={a.id}
-                onClick={() => setAgentId(a.id)}
-                className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${
-                  agentId === a.id
-                    ? "bg-white text-indigo-700 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                {a.label}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <span className="ml-4 text-sm font-medium text-gray-500">
-            {view === "docs" ? "Documentation" : view === "admin" ? "Admin" : "Dashboard"}
-          </span>
-        )}
+        <span className="ml-4 text-sm font-medium text-gray-500">
+          {view === "docs"
+            ? "Documentation"
+            : view === "admin"
+              ? "Admin"
+              : "Dashboard"}
+        </span>
       </div>
 
       {/* ── Right: clear button + profile chip ──────────────────────────── */}
       <div className="flex items-center gap-2">
-        {view === "chat" && messages.length > 0 && (
+        {(view as string) === "chat" && messages.length > 0 && (
           <button
             onClick={onClearMessages}
             title="Clear chat"
@@ -142,6 +165,9 @@ export function ChatHeader({
             Clear
           </button>
         )}
+
+        {/* Usage meter */}
+        <UsageBadge />
 
         {/* Profile chip + dropdown */}
         <div className="relative" ref={dropdownRef}>

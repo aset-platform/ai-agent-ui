@@ -17,7 +17,8 @@
 | — | `/analytics/analysis?tab=portfolio-forecast` (Portfolio Forecast) | New (TradingView) |
 | `/marketplace` | `/analytics/marketplace` (Link Stock) | Native |
 | `/insights` | `/analytics/insights` (7 tabs) | Native |
-| `/admin` | `/admin` (3 tabs) | Native |
+| `/admin` | `/admin` (4 tabs) | Native |
+| — | Profile → Billing tab | New (Razorpay) |
 
 ## Analysis Page — 5 Tabs
 

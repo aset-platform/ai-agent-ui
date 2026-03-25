@@ -136,5 +136,5 @@ export function CompareChart({
     };
   }, [series, isDark, height]);
 
-  return <div ref={containerRef} />;
+  return <div ref={containerRef} data-testid="compare-chart-canvas" />;
 }

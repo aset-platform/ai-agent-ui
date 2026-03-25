@@ -1,24 +1,21 @@
-"""FastAPI dependency functions for JWT auth and RBAC.
+"""FastAPI dependency functions for JWT auth, RBAC, and subscription guards.
 
-This module exposes two FastAPI ``Depends``-compatible functions:
-
-- :func:`get_current_user` — decodes the Bearer token and returns a
-  :class:`~auth.models.UserContext`.  Use this on any endpoint that requires
-  authentication.
-
-- :func:`superuser_only` — extends :func:`get_current_user` and additionally
-  verifies that the caller has the ``"superuser"`` role.  Use this on
-  admin-only endpoints.
-
-The :class:`~auth.service.AuthService` singleton is created lazily on first
-call from environment variables.  The singleton persists for the process
-lifetime so the in-memory refresh-token deny-list works correctly across
-requests.
+Dependencies
+------------
+- :func:`get_current_user` — decode Bearer token → UserContext.
+- :func:`superuser_only` — additionally require ``"superuser"`` role.
+- :func:`require_tier` — factory returning a dependency that enforces
+  a minimum subscription tier.
+- :func:`check_usage_quota` — reject if monthly quota is exhausted.
 
 Usage in a FastAPI route::
 
     from fastapi import APIRouter, Depends
-    from auth.dependencies import get_current_user, superuser_only
+    from auth.dependencies import (
+        get_current_user,
+        require_tier,
+        check_usage_quota,
+    )
     from auth.models import UserContext
 
     router = APIRouter()
@@ -27,9 +24,9 @@ Usage in a FastAPI route::
     def me(user: UserContext = Depends(get_current_user)):
         return {"user_id": user.user_id}
 
-    @router.get("/admin")
-    def admin(user: UserContext = Depends(superuser_only)):
-        return {"role": user.role}
+    @router.get("/pro-feature")
+    def pro(user: UserContext = Depends(require_tier("pro"))):
+        return {"tier": user.subscription_tier}
 """
 
 from __future__ import annotations
@@ -37,6 +34,7 @@ from __future__ import annotations
 import logging
 import os
 from functools import lru_cache
+from typing import Callable
 
 from fastapi import Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
@@ -141,10 +139,24 @@ def get_current_user(
     role: str | None = payload.get("role")
 
     if not user_id or not role:
-        raise HTTPException(status_code=401, detail="Malformed token payload")
+        raise HTTPException(
+            status_code=401,
+            detail="Malformed token payload",
+        )
 
     logger.debug("Authenticated user_id=%s role=%s", user_id, role)
-    return UserContext(user_id=user_id, email=email or "", role=role)
+    return UserContext(
+        user_id=user_id,
+        email=email or "",
+        role=role,
+        subscription_tier=payload.get(
+            "subscription_tier", "free"
+        ),
+        subscription_status=payload.get(
+            "subscription_status", "active"
+        ),
+        usage_remaining=payload.get("usage_remaining"),
+    )
 
 
 def superuser_only(
@@ -171,9 +183,97 @@ def superuser_only(
     """
     if user.role != "superuser":
         logger.warning(
-            "Forbidden: user_id=%s role=%s attempted superuser-only action.",
+            "Forbidden: user_id=%s role=%s"
+            " attempted superuser-only action.",
             user.user_id,
             user.role,
         )
-        raise HTTPException(status_code=403, detail="Superuser role required")
+        raise HTTPException(
+            status_code=403,
+            detail="Superuser role required",
+        )
+    return user
+
+
+def require_tier(
+    min_tier: str,
+) -> Callable[..., UserContext]:
+    """Factory that returns a dependency enforcing *min_tier*.
+
+    Args:
+        min_tier: Minimum subscription tier required
+            (``"free"``, ``"pro"``, or ``"premium"``).
+
+    Returns:
+        A FastAPI-compatible dependency function.
+
+    Example:
+        >>> dep = require_tier("pro")
+        >>> callable(dep)
+        True
+    """
+    from subscription_config import TIER_ORDER
+
+    required_level = TIER_ORDER.get(min_tier, 0)
+
+    def _guard(
+        user: UserContext = Depends(get_current_user),
+    ) -> UserContext:
+        user_level = TIER_ORDER.get(
+            user.subscription_tier, 0,
+        )
+        if user_level < required_level:
+            logger.warning(
+                "Tier guard: user_id=%s tier=%s"
+                " < required=%s",
+                user.user_id,
+                user.subscription_tier,
+                min_tier,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"This feature requires the"
+                    f" {min_tier} tier or above"
+                ),
+            )
+        return user
+
+    return _guard
+
+
+def check_usage_quota(
+    user: UserContext = Depends(get_current_user),
+) -> UserContext:
+    """Reject if the user's monthly analysis quota is used up.
+
+    Reads ``usage_remaining`` from the JWT. Returns 429
+    when the quota is exhausted (``usage_remaining == 0``).
+    Premium users (``usage_remaining is None``) are always
+    allowed through.
+
+    Args:
+        user: Authenticated user context with subscription
+            claims from the JWT.
+
+    Returns:
+        The :class:`~auth.models.UserContext` if quota allows.
+
+    Raises:
+        HTTPException: 429 if usage quota is exhausted.
+    """
+    remaining = user.usage_remaining
+    if remaining is not None and remaining <= 0:
+        logger.warning(
+            "Quota exceeded: user_id=%s tier=%s",
+            user.user_id,
+            user.subscription_tier,
+        )
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Monthly analysis quota exceeded."
+                " Upgrade your plan for more."
+            ),
+        )
     return user

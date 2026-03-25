@@ -1,0 +1,66 @@
+# ------------------------------------------------------------------
+# Lighthouse CI — Performance gate for pull requests
+#
+# STATUS: DISABLED — Uncomment the trigger below when ready for CI.
+# See PERFORMANCE.md for local usage instructions.
+# ------------------------------------------------------------------
+
+name: Lighthouse CI
+
+# ┌──────────────────────────────────────────────────────────────┐
+# │ UNCOMMENT BELOW TO ENABLE ON PULL REQUESTS                  │
+# └──────────────────────────────────────────────────────────────┘
+# on:
+#   pull_request:
+#     branches: [dev]
+#     paths:
+#       - "frontend/**"
+#       - "lighthouserc.js"
+#       - ".github/workflows/lighthouse.yml"
+
+# Temporary: manual trigger only
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: lighthouse-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  lighthouse:
+    name: Lighthouse Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: cd frontend && npm ci
+
+      - name: Build frontend
+        run: cd frontend && npm run build
+
+      - name: Run Lighthouse CI
+        run: npx @lhci/cli autorun
+        env:
+          LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
+          PERF_TEST_EMAIL: ${{ secrets.PERF_TEST_EMAIL }}
+          PERF_TEST_PASSWORD: ${{ secrets.PERF_TEST_PASSWORD }}
+
+      # ┌──────────────────────────────────────────────────────────┐
+      # │ UNCOMMENT BELOW TO ENABLE BUNDLE SIZE CHECK             │
+      # └──────────────────────────────────────────────────────────┘
+      # - name: Bundle size check
+      #   run: npx bundlewatch
+      #   env:
+      #     BUNDLEWATCH_GITHUB_TOKEN: ${{ secrets.BUNDLEWATCH_GITHUB_TOKEN }}
+      #     CI_BRANCH_BASE: dev

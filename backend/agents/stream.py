@@ -10,10 +10,11 @@ Functions
 
 import json
 import logging
-from typing import TYPE_CHECKING, Dict, Iterator, List
+from typing import TYPE_CHECKING, Iterator
 
 from agents.config import MAX_ITERATIONS
 from langchain_core.messages import ToolMessage
+from langsmith import traceable
 
 if TYPE_CHECKING:
     from agents.base import BaseAgent
@@ -22,8 +23,9 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
+@traceable(name="agentic_loop.stream", run_type="chain")
 def stream(
-    agent: "BaseAgent", user_input: str, history: List[Dict]
+    agent: "BaseAgent", user_input: str, history: list[dict]
 ) -> Iterator[str]:
     """Execute the agentic loop, yielding NDJSON status events.
 
@@ -59,9 +61,7 @@ def stream(
     iteration = 0
     response = None
     _had_tool_calls = False
-    _use_synthesis = (
-        agent.llm_synthesis is not agent.llm_with_tools
-    )
+    _use_synthesis = agent.llm_synthesis is not agent.llm_with_tools
 
     try:
         while True:
@@ -96,9 +96,7 @@ def stream(
             llm = agent.llm_with_tools
             if _had_tool_calls and _use_synthesis:
                 llm = agent.llm_synthesis
-                agent.logger.debug(
-                    "Using synthesis cascade"
-                )
+                agent.logger.debug("Using synthesis cascade")
 
             response = llm.invoke(
                 messages,
@@ -123,9 +121,7 @@ def stream(
                     )
                     + "\n"
                 )
-                result = agent.tool_registry.invoke(
-                    tool_name, tool_args
-                )
+                result = agent.tool_registry.invoke(tool_name, tool_args)
                 yield (
                     json.dumps(
                         {
@@ -156,9 +152,7 @@ def stream(
 
     # Post-process with report template if available.
     if hasattr(agent, "format_response"):
-        final_response = agent.format_response(
-            final_response, messages
-        )
+        final_response = agent.format_response(final_response, messages)
 
     agent.logger.info(
         "Stream end | agent=%s | iterations=%d",
