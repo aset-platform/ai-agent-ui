@@ -113,6 +113,18 @@ export default defineConfig({
       },
       dependencies: ["setup"],
     },
+
+    /* ── Performance tests (Lighthouse/Core Web Vitals) */
+    {
+      name: "performance",
+      testDir: "./tests/performance",
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: FRONTEND_URL,
+        storageState: ".auth/general-user.json",
+      },
+      dependencies: ["setup"],
+    },
   ],
 
   webServer: {

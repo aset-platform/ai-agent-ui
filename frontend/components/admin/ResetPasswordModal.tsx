@@ -92,6 +92,7 @@ export function ResetPasswordModal({
             type="password"
             value={pw}
             onChange={(e) => setPw(e.target.value)}
+            data-testid="reset-password-input"
             className={inputClass}
             placeholder="Min 8 chars, 1 digit, 1 uppercase"
           />
@@ -123,6 +124,7 @@ export function ResetPasswordModal({
           <button
             onClick={handleSave}
             disabled={saving}
+            data-testid="reset-password-submit"
             className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50"
           >
             {saving

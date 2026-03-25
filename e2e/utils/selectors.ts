@@ -167,6 +167,45 @@ export const FE = {
   adminSummaryCascades: "admin-summary-cascades",
   adminSummaryCompressions: "admin-summary-compressions",
 
+  // ── AddStockModal ────────────────────────────────
+  addStockTicker: "add-stock-ticker",
+  addStockQuantity: "add-stock-quantity",
+  addStockPrice: "add-stock-price",
+  addStockDate: "add-stock-date",
+  addStockNotes: "add-stock-notes",
+  addStockSubmit: "add-stock-submit",
+  addStockError: "add-stock-error",
+
+  // ── EditStockModal ──────────────────────────────
+  editStockQuantity: "edit-stock-quantity",
+  editStockPrice: "edit-stock-price",
+  editStockSave: "edit-stock-save",
+  editStockError: "edit-stock-error",
+
+  // ── ConfirmDialog ───────────────────────────────
+  confirmDialog: "confirm-dialog",
+  confirmDialogConfirm: "confirm-dialog-confirm",
+  confirmDialogCancel: "confirm-dialog-cancel",
+
+  // ── UserModal ───────────────────────────────────
+  userModalEmail: "user-modal-email",
+  userModalName: "user-modal-name",
+  userModalRole: "user-modal-role",
+  userModalPassword: "user-modal-password",
+  userModalSubmit: "user-modal-submit",
+
+  // ── ResetPasswordModal ──────────────────────────
+  resetPasswordInput: "reset-password-input",
+  resetPasswordSubmit: "reset-password-submit",
+
+  // ── BillingTab ──────────────────────────────────
+  billingGatewayRazorpay: "billing-gateway-razorpay",
+  billingGatewayStripe: "billing-gateway-stripe",
+  billingUpgradePro: "billing-upgrade-pro",
+  billingUpgradePremium: "billing-upgrade-premium",
+  billingCancel: "billing-cancel",
+  billingCurrentPlan: "billing-current-plan",
+
   // ── Chart canvases ───────────────────────────────
   portfolioChartCanvas: "portfolio-chart-canvas",
   portfolioForecastChartCanvas:

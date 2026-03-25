@@ -89,6 +89,7 @@ export function EditStockModal({
               }
               min="0"
               step="1"
+              data-testid="edit-stock-quantity"
               className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
             />
           </div>
@@ -104,13 +105,17 @@ export function EditStockModal({
               }
               min="0"
               step="0.01"
+              data-testid="edit-stock-price"
               className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
             />
           </div>
         </div>
 
         {error && (
-          <p className="text-xs text-red-600 dark:text-red-400 mb-3">
+          <p
+            data-testid="edit-stock-error"
+            className="text-xs text-red-600 dark:text-red-400 mb-3"
+          >
             {error}
           </p>
         )}
@@ -125,6 +130,7 @@ export function EditStockModal({
           <button
             onClick={handleSubmit}
             disabled={saving}
+            data-testid="edit-stock-save"
             className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
           >
             {saving ? "Saving..." : "Save"}

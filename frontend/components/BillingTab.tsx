@@ -268,7 +268,10 @@ export function BillingTab() {
             <p className="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
               Current Plan
             </p>
-            <p className="text-lg font-semibold text-gray-900 dark:text-gray-100 capitalize">
+            <p
+              data-testid="billing-current-plan"
+              className="text-lg font-semibold text-gray-900 dark:text-gray-100 capitalize"
+            >
               {currentTier}
               {sub?.status === "cancelled" && (
                 <span className="ml-2 text-xs font-normal text-amber-600 dark:text-amber-400">
@@ -286,6 +289,7 @@ export function BillingTab() {
             <button
               onClick={() => setShowCancelConfirm(true)}
               disabled={cancelling}
+              data-testid="billing-cancel"
               className="text-xs text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 disabled:opacity-50"
             >
               {cancelling ? "Cancelling\u2026" : "Cancel plan"}
@@ -368,6 +372,7 @@ export function BillingTab() {
                 <button
                   onClick={() => handleUpgrade(t.id)}
                   disabled={upgradingTier !== null}
+                  data-testid={`billing-upgrade-${t.id}`}
                   className="mt-3 w-full text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 py-1.5 rounded-lg transition-colors"
                 >
                   {upgradingTier === t.id ? "Processing\u2026" : currentTier === "free" ? "Subscribe" : "Upgrade"}
@@ -385,6 +390,7 @@ export function BillingTab() {
         <span className="text-xs text-gray-500 dark:text-gray-400">Pay with:</span>
         <button
           onClick={() => setGateway("razorpay")}
+          data-testid="billing-gateway-razorpay"
           className={`text-xs px-3 py-1 rounded-full border transition-colors ${
             gateway === "razorpay"
               ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 font-medium"
@@ -395,6 +401,7 @@ export function BillingTab() {
         </button>
         <button
           onClick={() => setGateway("stripe")}
+          data-testid="billing-gateway-stripe"
           className={`text-xs px-3 py-1 rounded-full border transition-colors ${
             gateway === "stripe"
               ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 font-medium"
