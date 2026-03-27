@@ -22,7 +22,7 @@ frontend/app/
 │   ├── analytics/analysis/page.tsx    (Tabbed: Analysis+Forecast+Compare)
 │   ├── analytics/compare/page.tsx     (Compare — also embedded in Analysis tab)
 │   ├── analytics/insights/page.tsx    (Insights — Dash iframe, pending migration)
-│   ├── analytics/marketplace/page.tsx (Link Ticker — native)
+│   ├── analytics/marketplace/page.tsx (redirects to /analytics)
 │   ├── docs/page.tsx                  (MkDocs iframe)
 │   └── admin/page.tsx                 (Admin — Dash iframe, pending migration)
 ├── login/page.tsx
@@ -41,9 +41,9 @@ Dashboard ▾         → collapsible group
   ├─ Home           → /analytics (native)
   ├─ Analysis       → /analytics/analysis (native, tabbed)
   ├─ Insights       → /analytics/insights (Dash iframe → pending migration)
-  └─ Link Ticker    → /analytics/marketplace (native)
+  └─ Insights       → /analytics/insights (native)
 Docs                → /docs (MkDocs iframe)
-Admin               → /admin (Dash iframe → pending migration)
+Admin               → /admin (native — 6 tabs: Users, Audit, LLM Obs, Maintenance, Transactions, Scheduler)
 ```
 
 ### Charts
@@ -69,8 +69,10 @@ Admin               → /admin (Dash iframe → pending migration)
 - POST /v1/audit/chat-sessions — save chat transcript on logout
 - GET /v1/audit/chat-sessions — list past sessions (filtered by user)
 
-## Iceberg Tables (12)
+## Iceberg Tables (15)
 stocks.registry, stocks.company_info, stocks.ohlcv, stocks.dividends,
 stocks.technical_indicators, stocks.analysis_summary, stocks.forecast_runs,
 stocks.forecasts, stocks.quarterly_results, stocks.llm_pricing,
-stocks.llm_usage, stocks.chat_audit_log (new)
+stocks.llm_usage, stocks.chat_audit_log,
+stocks.portfolio_transactions, stocks.scheduled_jobs (new),
+stocks.scheduler_runs (new)

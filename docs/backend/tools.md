@@ -15,6 +15,9 @@ The tool framework lives in `backend/tools/`. It provides a registry that decoup
 | `tools/stock_data_tool.py` | 6 stock data tools (delta fetch, parquet, registry) |
 | `tools/price_analysis_tool.py` | `analyse_stock_price` — technical indicators + chart + same-day cache |
 | `tools/forecasting_tool.py` | `forecast_stock` — Prophet forecast + chart + same-day cache |
+| `tools/_sentiment_sources.py` | Multi-source headline fetcher (yfinance, Yahoo RSS, Google RSS) with fuzzy dedup |
+| `tools/_sentiment_scorer.py` | LLM-based sentiment scoring via FallbackLLM with weighted averages |
+| `tools/sentiment_agent.py` | 3 sentiment tools: `score_ticker_sentiment`, `get_cached_sentiment`, `get_market_sentiment` |
 | `tools/__init__.py` | Empty (marks directory as a Python package) |
 | `validation.py` | Shared input validators: `validate_ticker`, `validate_search_query`, `validate_ticker_batch` |
 

@@ -8,13 +8,14 @@ The agent framework lives in `backend/agents/`. It uses a **LangGraph supervisor
 
 | File | Purpose |
 |------|---------|
-| `agents/graph.py` | `build_supervisor_graph()` — 10-node LangGraph StateGraph |
+| `agents/graph.py` | `build_supervisor_graph()` — 11-node LangGraph StateGraph |
 | `agents/graph_state.py` | `AgentState` TypedDict (messages, intent, user_context, etc.) |
 | `agents/sub_agents.py` | `_make_sub_agent_node()` factory + `_build_context_block()` for dynamic context injection |
 | `agents/configs/portfolio.py` | Portfolio Agent config (currency-aware, mandatory tool-use) |
 | `agents/configs/stock_analyst.py` | Stock Analyst config (pipeline: fetch → analyse → verdict) |
 | `agents/configs/forecaster.py` | Forecaster config (Prophet models) |
 | `agents/configs/research.py` | Research Agent config (news + sentiment) |
+| `agents/configs/sentiment.py` | Sentiment Agent config (3-source headlines, market mood) |
 | `agents/nodes/guardrail.py` | Content safety + financial relevance gate |
 | `agents/nodes/router_node.py` | Tier 1 keyword-based intent classifier (zero LLM) |
 | `agents/nodes/llm_classifier.py` | Tier 2 LLM fallback classifier (1 cheap call) |
@@ -60,7 +61,7 @@ User Message
   → router_node (Tier 1: keyword match, zero LLM)
   → llm_classifier (Tier 2: LLM fallback if router uncertain)
   → supervisor (intent → sub-agent mapper)
-  → sub_agent node (portfolio | stock_analyst | forecaster | research)
+  → sub_agent node (portfolio | stock_analyst | forecaster | research | sentiment)
   → log_query (audit to Iceberg)
   → synthesis (output formatting)
   → Response
@@ -95,7 +96,8 @@ Each sub-agent is configured via a dataclass in `agents/configs/`:
 | `portfolio.py` | Portfolio Agent | Mandatory tool-use, currency rules, dynamic context |
 | `stock_analyst.py` | Stock Analyst | Pipeline: fetch → analyse → verdict |
 | `forecaster.py` | Forecaster | Prophet models, horizon selection |
-| `research.py` | Research Agent | News search + sentiment |
+| `research.py` | Research Agent | News search + analyst recommendations |
+| `sentiment.py` | Sentiment Agent | 3-source headlines, market mood, hybrid cached/live UX |
 
 ### Dynamic Context Injection
 

@@ -7,7 +7,7 @@ The `stocks/` package provides an Apache Iceberg-backed persistence layer for al
 ```
 stocks/
 ├── __init__.py        — package docstring + public API note
-├── create_tables.py   — idempotent table initialisation (8 tables)
+├── create_tables.py   — idempotent table initialisation (15 tables)
 ├── repository.py      — StockRepository: all reads + writes
 └── backfill.py        — one-time migration of existing flat files
 ```
@@ -28,7 +28,18 @@ Iceberg is the **single source of truth** for all stock data. All backend tool f
 | `stocks.analysis_summary` | stocks | Append-only snapshots | (ticker, analysis_date) |
 | `stocks.forecast_runs` | stocks | Append-only | (ticker, horizon_months, run_date) |
 | `stocks.forecasts` | stocks | Replace per run | (ticker, horizon_months, run_date) |
+| `stocks.quarterly_results` | stocks | Append + deduplicate | (ticker, period_end) |
+| `stocks.sentiment_scores` | stocks | Append (1 row/ticker/day) | (ticker, score_date) |
+| `stocks.llm_pricing` | stocks | Append-only | (provider, model, effective_from) |
+| `stocks.llm_usage` | stocks | Append-only | (request_id) |
+| `stocks.scheduled_jobs` | stocks | Upsert (copy-on-write) | job_id |
+| `stocks.scheduler_runs` | stocks | Append-only | run_id |
+| `stocks.portfolio_transactions` | stocks | Append-only | (transaction_id) |
+| `auth.users` | auth | Upsert (copy-on-write) | user_id |
 | `auth.user_tickers` | auth | Upsert (copy-on-write) | (user_id, ticker) |
+| `auth.audit_log` | auth | Append-only | event_id |
+| `auth.usage_history` | auth | Append-only | (user_id, month) |
+| `auth.payment_transactions` | auth | Append-only | transaction_id |
 
 ---
 

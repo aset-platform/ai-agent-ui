@@ -1,116 +1,155 @@
 # Project Index: ai-agent-ui
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-03-26 (Sprint 3 complete)
+> Last refreshed: 2026-03-28 (Sprint 3 + Sentiment Agent)
 
-## Directory Structure
+---
+
+## Project Structure
 
 ```
 ai-agent-ui/
-├── backend/          # FastAPI + LangChain + LangGraph (24 modules)
-│   ├── agents/       # LangGraph supervisor + 4 sub-agents (27 files)
-│   └── tools/        # LangChain tools — stock, forecast, portfolio, news (25 files)
-├── auth/             # JWT + OAuth PKCE + RBAC + Razorpay/Stripe (33 files)
-│   ├── endpoints/    # Route handlers (auth, subscription, admin, profile)
-│   └── repo/         # IcebergUserRepository (CRUD, audit, OAuth)
-├── stocks/           # Iceberg data layer — 11 tables (8 files)
-├── frontend/         # Next.js 16 + React 19 SPA (14 pages, 21 components)
-│   ├── components/   # Charts (7), widgets (9), admin (2), insights (2)
-│   └── hooks/        # 16 custom hooks (auth, data, chat, WS)
-├── e2e/              # Playwright — 49 specs + fixtures + POMs
-├── tests/            # pytest — 45 files, 548 tests
-├── scripts/          # Automation (27 files)
-│   └── perf/         # Performance audit modules (10 files)
-├── docs/             # MkDocs Material (31 .md, 13 dirs)
-├── perf-baselines/   # Sprint performance baselines (JSON)
-└── .github/workflows # CI (lighthouse.yml, ci.yml, e2e.yml)
+├── backend/              # FastAPI + LangChain + LangGraph (Python 3.12)
+│   ├── main.py           # ASGI entry, ChatServer, startup wiring
+│   ├── config.py         # Pydantic Settings (env-based)
+│   ├── routes.py         # HTTP chat + streaming endpoints
+│   ├── ws.py             # WebSocket /ws/chat
+│   ├── bootstrap.py      # Tool + agent + graph registration
+│   ├── llm_fallback.py   # N-tier Groq cascade + Anthropic fallback
+│   ├── token_budget.py   # Sliding-window TPM/RPM tracker
+│   ├── message_compressor.py  # 3-stage context compression
+│   ├── observability.py  # Tier health, cascade counts → Iceberg
+│   ├── tracing.py        # LangSmith + LangFuse setup
+│   ├── agents/           # LangGraph supervisor + 5 sub-agents
+│   │   ├── graph.py      # 11-node StateGraph builder
+│   │   ├── sub_agents.py # Factory + dynamic context injection
+│   │   ├── configs/      # portfolio, stock_analyst, forecaster, research, sentiment
+│   │   └── nodes/        # guardrail, router, llm_classifier, supervisor, synthesis, log_query, decline
+│   ├── tools/            # 26 LangChain @tool modules
+│   │   ├── stock_data_tool.py      # 7 stock data tools
+│   │   ├── price_analysis_tool.py  # Technical analysis + chart
+│   │   ├── forecasting_tool.py     # Prophet forecast pipeline
+│   │   ├── news_tools.py           # Tiered news (yfinance → RSS → SerpAPI)
+│   │   ├── portfolio_tools.py      # 7 portfolio tools
+│   │   ├── sentiment_agent.py      # 3 sentiment tools
+│   │   ├── _sentiment_sources.py   # 3-source headline fetcher + dedup
+│   │   ├── _sentiment_scorer.py    # FallbackLLM scoring + weighted avg
+│   │   ├── _forecast_model.py      # Prophet training
+│   │   ├── _forecast_ensemble.py   # XGBoost residual correction
+│   │   └── _forecast_shared.py     # Regressor loading from Iceberg
+│   ├── jobs/             # Background schedulers
+│   │   ├── gap_filler.py           # Daily: gaps, indices, sentiment, purge
+│   │   ├── scheduler_service.py    # Admin UI scheduler
+│   │   └── executor.py             # Job execution engine
+│   ├── dashboard_routes.py  # /v1/dashboard/*
+│   ├── insights_routes.py   # /v1/insights/*
+│   └── audit_routes.py      # /v1/audit/*
+├── auth/                 # JWT + RBAC + OAuth PKCE + Subscriptions
+│   ├── service.py        # AuthService
+│   ├── dependencies.py   # get_current_user, require_tier
+│   ├── endpoints/        # auth, oauth, ticker, subscription, admin routes
+│   ├── repo/             # Iceberg user CRUD (copy-on-write)
+│   └── create_tables.py  # 5 auth Iceberg tables
+├── stocks/               # Iceberg data layer
+│   ├── repository.py     # StockRepository (~4000 lines)
+│   └── create_tables.py  # 15 stocks Iceberg tables
+├── frontend/             # Next.js 16 + React 19 + Tailwind CSS 4
+│   ├── app/              # App Router pages
+│   │   ├── (authenticated)/dashboard/    # Portfolio dashboard
+│   │   ├── (authenticated)/analytics/    # Unified analytics
+│   │   ├── (authenticated)/admin/        # Admin panel
+│   │   └── login/
+│   ├── components/       # 44 React components
+│   │   ├── widgets/      # HeroSection, WatchlistWidget, ForecastChartWidget
+│   │   ├── charts/       # StockChart, ForecastChart, PortfolioChart, CompareChart, CorrelationHeatmap
+│   │   ├── admin/        # SchedulerTab, UserModal
+│   │   └── insights/     # InsightsTable, InsightsFilters
+│   ├── hooks/            # 19 custom hooks
+│   └── lib/              # apiFetch, config, types, auth, constants
+├── scripts/              # 22 utility scripts
+├── tests/backend/        # 49 test files, 613 test cases
+├── e2e/                  # Playwright E2E (~219 tests)
+├── docs/                 # MkDocs Material
+│   ├── design/           # Architecture specs
+│   └── workflow/         # Implementation plans
+└── dashboard/            # Legacy Dash app (deprecated)
 ```
 
 ## Entry Points
 
-| Service | Port | File | Stack |
-|---------|------|------|-------|
-| Backend | 8181 | `backend/main.py` | FastAPI, LangChain 1.2, LangGraph 1.0 |
-| Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19 |
-| Docs | 8000 | `mkdocs.yml` | MkDocs Material |
-| Launcher | — | `./run.sh` | Bash (start/stop/status/restart) |
+| Entry | Path | Port |
+|-------|------|------|
+| Backend | `backend/main.py` | 8181 |
+| Frontend | `frontend/app/page.tsx` | 3000 |
+| Docs | `mkdocs.yml` | 8000 |
+| Launcher | `./run.sh start` | all |
 
-## Backend Core Modules
+## Iceberg Tables (20)
 
-| Module | Purpose |
-|--------|---------|
-| `routes.py` | HTTP handlers, CORS, security headers, TracingMiddleware |
-| `ws.py` | WebSocket `/ws/chat` with auth-first protocol |
-| `llm_fallback.py` | N-tier Groq cascade + Anthropic fallback |
-| `token_budget.py` | Sliding-window TPM/RPM per model |
-| `message_compressor.py` | 3-stage compression (prompt, history, tools) |
-| `observability.py` | Tier health, cascade counts, Iceberg persistence |
-| `cache.py` | Redis-backed response cache (22 endpoints) |
-| `subscription_config.py` | Tier quotas, usage tracking |
-| `agents/graph.py` | LangGraph StateGraph supervisor |
-| `agents/loop.py` | Sync agentic tool-calling loop |
-| `agents/stream.py` | Streaming NDJSON event emitter |
+### stocks (15 tables, ~336K rows)
+`registry` (52) · `company_info` (62) · `ohlcv` (152K) · `dividends` (1.6K) · `technical_indicators` (130K) · `analysis_summary` (57) · `forecast_runs` (57) · `forecasts` (52K) · `quarterly_results` (653) · `sentiment_scores` (47) · `llm_pricing` (0) · `llm_usage` (0) · `scheduled_jobs` (2) · `scheduler_runs` (2) · `portfolio_transactions` (8)
 
-## Auth Architecture
+### auth (5 tables)
+`users` (5) · `user_tickers` (11) · `audit_log` (1) · `payment_transactions` (0) · `usage_history` (0)
 
-| File | Purpose |
-|------|---------|
-| `tokens.py` | JWT create/validate/revoke (JTI deny-list) |
-| `dependencies.py` | `get_current_user`, `require_tier`, `check_usage_quota` |
-| `endpoints/auth_routes.py` | Login, refresh, logout, password reset |
-| `endpoints/subscription_routes.py` | Razorpay + Stripe checkout/cancel/webhooks |
-| `endpoints/ticker_routes.py` | Portfolio CRUD, stock linking |
+## LangGraph Supervisor (5 sub-agents)
 
-## Frontend Pages (14 routes)
+```
+START → guardrail → router → [llm_classifier] → supervisor
+  → portfolio | stock_analyst | forecaster | research | sentiment
+  → synthesis → log_query → END
+```
 
-Public: `/login`, `/auth/oauth/callback`
-Authenticated: `/dashboard`, `/analytics`, `/analytics/analysis`,
-`/analytics/compare`, `/analytics/insights`, `/analytics/marketplace`,
-`/admin`, `/docs`, `/insights`
+| Agent | Purpose |
+|-------|---------|
+| portfolio | Currency-aware holdings, performance, risk metrics |
+| stock_analyst | Technical analysis pipeline (fetch → analyse → verdict) |
+| forecaster | Prophet + XGBoost ensemble forecasting |
+| research | Tiered news search (yfinance → RSS → SerpAPI) |
+| sentiment | 3-source headline scoring, market mood, hybrid cached/live |
 
-## Iceberg Tables (11)
+## LLM Cascade
 
-`stocks`, `ohlcv`, `metadata`, `fundamentals`, `sentiment`,
-`price_targets`, `forecast`, `usage_history`, `portfolio`,
-`payment_transactions`, `quarterly`
+`llama-3.3-70b → kimi-k2 → gpt-oss-120b → scout-17b → claude-sonnet-4.6`
 
-## Observability
+All via FallbackLLM + TokenBudget + MessageCompressor + LangSmith tracing.
 
-- **LangSmith** — auto-traces LLM calls, tools, LangGraph nodes (EU endpoint)
-- **ObservabilityCollector** — tier health, cascade monitoring → Iceberg
-- **Performance audit** — `npm run perf:full` (42+ Playwright audit points)
-- **Baselines** — `perf-baselines/sprint-N-full.json`
+## Background Jobs (gap_filler.py)
 
-## Key Dependencies
-
-| Package | Version | Purpose |
-|---------|---------|---------|
-| langchain | 1.2.10 | Agent orchestration |
-| langgraph | 1.0.10 | StateGraph supervisor |
-| langsmith | 0.7.10 | LLM tracing (EU) |
-| fastapi | 0.115.1 | Web framework |
-| pyiceberg | 0.8.1 | Iceberg tables |
-| next | 16.1.6 | React framework |
-| lightweight-charts | 5.1.0 | TradingView charts |
-| playwright | — | E2E testing |
-
-## Test Coverage
-
-| Suite | Count | Command |
-|-------|-------|---------|
-| Python (pytest) | 548 | `python -m pytest tests/ -v` |
-| Frontend (vitest) | 18 | `cd frontend && npx vitest run` |
-| E2E (Playwright) | 219 | `cd e2e && npm test` |
-| Performance | 42+ | `cd frontend && npm run perf:full` |
+| UTC | Job |
+|-----|-----|
+| 05:30 | Market indices (VIX, GSPC, TNX, CL=F, DX-Y.NYB) |
+| 06:00 | Sentiment (all tickers, FallbackLLM, 3 sources) |
+| 12:30 | Data gaps (after NSE close) |
+| 15:30 | Data gaps (after NYSE close) |
+| Sun 04:00 | Purge (>11Y data, expire Iceberg snapshots) |
 
 ## Configuration
 
 | File | Purpose |
 |------|---------|
-| `pyproject.toml` | black (79), isort, pytest |
-| `.flake8` | flake8 (79), E203/W503 ignored |
-| `lighthouserc.js` | LHCI budgets |
-| `.bundlewatch.config.json` | JS < 500KB |
-| `frontend/next.config.ts` | Bundle analyzer |
-| `CLAUDE.md` | Session rules, code standards |
-| `PERFORMANCE.md` | Perf workflow docs |
+| `~/.ai-agent-ui/backend.env` | Master env (secrets, API keys) |
+| `backend/config.py` | Pydantic Settings |
+| `pyproject.toml` | black, isort, pytest |
+| `.flake8` | 79 char line, exclude demoenv |
+| `frontend/.env.local` | NEXT_PUBLIC_BACKEND_URL |
+
+## Key Dependencies
+
+**Backend**: FastAPI, LangChain 1.2.10, LangGraph 1.0.10, LangSmith 0.7.10, Prophet, XGBoost, PyIceberg, yfinance, feedparser, Razorpay SDK, Stripe SDK
+
+**Frontend**: Next.js 16, React 19, Tailwind CSS 4, lightweight-charts (TradingView), ECharts, react-plotly.js
+
+## Quick Start
+
+```bash
+source ~/.ai-agent-ui/venv/bin/activate
+./run.sh start                                    # all services
+python -m pytest tests/ -v                        # 613 tests
+PYTHONPATH=backend python scripts/check_tables.py # Iceberg health
+PYTHONPATH=backend python scripts/seed_demo_data.py # first run
+```
+
+## Sprint 3 (94+ SP, all Done)
+
+Sentiment Agent (16 SP) · Unified Analytics (8) · Admin Scheduler (13) · Correlation Heatmap (5) · Security Hardening (24 fixes) · E2E Coverage (46 tests) · LangSmith Observability · Lighthouse Performance (45→87)

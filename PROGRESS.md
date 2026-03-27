@@ -2,6 +2,369 @@
 
 ---
 
+# Session: Mar 28, 2026 — Sentiment Agent + Bug Fixes
+
+## ASETPLTFRM-211: Sentiment Agent (16 SP, Done)
+- **Epic**: ASETPLTFRM-211 | Stories: 212, 213, 214, 215
+- **Design**: `docs/design/DESIGN-sentiment-agent.md` | **Workflow**: `docs/workflow/WORKFLOW-sentiment-agent.md`
+- New `_sentiment_sources.py` — 3-source headline fetcher (yfinance w=1.0, Yahoo RSS w=0.8, Google RSS w=0.6) with fuzzy dedup
+- Refactored `_sentiment_scorer.py` — FallbackLLM, weighted scoring `Σ(score×w)/Σ(w)`, shared `refresh_ticker_sentiment()` code path
+- New `sentiment_agent.py` — 3 `@tool` functions: `score_ticker_sentiment`, `get_cached_sentiment`, `get_market_sentiment`
+- 5th LangGraph sub-agent registered in supervisor graph
+- Gap filler refactored: bare ChatGroq → FallbackLLM (all LLM calls now traced via LangSmith)
+- 27 new tests, 602 total passing
+- Validated: Admin Scheduler triggered full refresh → 47/47 tickers scored, 42 with sentiment
+
+## Bug Fixes
+
+### Iceberg Table Corruption Recovery
+- 14 of 20 tables had corrupted parquet references (snapshot expiry deleted metadata, data files already gone)
+- Fix: drop + recreate corrupted tables, re-seed demo users
+- Created `scripts/check_tables.py` — diagnostic tool for all tables with row counts
+- All 20 tables healthy (~336K+ total rows)
+
+### Auth: user_writes.py missing subscription fields
+- `create()` missing 10 subscription columns → `KeyError` on user seed
+- Added all fields with sensible defaults (free/active)
+
+### Billing: Razorpay "customer already exists" (500)
+- After DB rebuild, `razorpay_customer_id` lost → checkout creates → Razorpay rejects
+- Fix: catch error, paginate `customer.all()` to find by email, save ID back
+
+### Portfolio ↔ Watchlist Sync
+- Portfolio stocks added via "+" were NOT linked to watchlist → dashboard showed "0 tickers"
+- Unlink button returned 404 for portfolio-only tickers
+- Fix: auto-link on portfolio add + unlink no longer 404s
+- Backfill: `scripts/backfill_portfolio_links.py`
+
+---
+
+# Session: Mar 27-28, 2026 — Forecast Phase 2+3 + Data Quality + Cleanup Incident
+
+## ASETPLTFRM-201 Phase 2: Forecast Pipeline Wiring (Done)
+- Merged market indices (^VIX, ^INDIAVIX, ^GSPC, ^NSEI) into `stocks.ohlcv` table
+- Dropped separate `stocks.market_indices` table + purged from Iceberg catalog
+- Removed dead code: `insert_market_index()`, `get_market_index_series()`, `_market_indices_schema()`
+- Added Steps 6 (market indices) + 7 (sentiment) to 8-step `run_full_refresh()` pipeline
+- Prophet now receives regressors: vix, index_return, sentiment, analyst_bias, eps_revision
+- Daily batch sentiment scoring (`refresh_all_sentiment`) + freshness gates
+- 5 new tests, 573→579 total passing
+
+## ASETPLTFRM-202 Phase 3a: Macro Regressors via yfinance (Done)
+- Dropped `fredapi` (rate-limited) — all macro via yfinance: ^TNX, ^IRX, CL=F, DX-Y.NYB
+- Computed yield spread (10Y − 3M) as recession signal
+- All macro regressors apply to BOTH US and Indian stocks
+- No new deps, no new tables — reuses OHLCV + `insert_ohlcv()` path
+
+## ASETPLTFRM-202 Phase 3b: XGBoost Ensemble (Done — disabled)
+- New module: `backend/tools/_forecast_ensemble.py`
+- Architecture: `final_price = prophet_yhat + xgb_residual_correction`
+- 17 features: prophet_yhat + 7 regressors + 7 tech indicators + 2 removed (analyst)
+- Feature flag: `ENSEMBLE_ENABLED=true` in backend.env
+- **DISABLED** after quality analysis showed overfitting on out-of-sample data
+
+## Data Quality Analysis
+- Built `scripts/regressor_quality.py` — 3-model comparison (baseline vs regressors vs ensemble)
+- Standardized CV to 10-year data cap + `initial="730 days"` for apples-to-apples comparison
+- Removed `analyst_bias` and `eps_revision` from Prophet (zero feature importance)
+- Kept sentiment (low but improving as daily LLM scores accumulate)
+- Prophet regressors: 7 (was 9) — vix, index_return, sentiment, treasury_10y, yield_spread, oil_price, dollar_index
+
+### Quality Results (10-year cap, 32 cutoffs)
+| | AAPL | RELIANCE.NS |
+|---|---|---|
+| Baseline MAPE | 14.2% | 14.2% |
+| + Regressors | 14.0% (-0.2pp) | 13.5% (-0.7pp) |
+| XGBoost OOS | +0.3pp (hurts) | +0.7pp (hurts) |
+
+## Iceberg Data Incident
+- Orphaned file cleanup script accidentally deleted parquet files still referenced by snapshots
+- 11 stocks tables + 3 auth tables corrupted (FileNotFoundError on scan)
+- Fix: drop + recreate empty tables via `create_tables.py`
+- Healthy tables survived: ohlcv, forecasts, quarterly_results, registry, technical_indicators, auth.users, auth.usage_history
+- **Lesson**: Never delete Iceberg data files based on snapshot diff — PyIceberg doesn't track file-to-snapshot mapping reliably
+- Rolled back ALL purge/cleanup code from gap_filler.py
+- Removed hardcoded schedules from gap_filler.py — all scheduling via Admin UI only
+
+## Architecture Changes
+- `gap_filler.py`: No hardcoded cron schedules — all via Admin Scheduler or manual triggers
+- `_forecast_accuracy.py`: CV uses 10-year data cap with refit for consistent evaluation
+- `config.py`: Added `ensemble_enabled` (default False), removed `fred_api_key`
+
+## Jira: ASETPLTFRM-200, 201, 202 — all Done (Sprint 3)
+## Tests: 602 passing (up from 579)
+
+---
+
+# Session: Mar 27, 2026 (Night) — ASETPLTFRM-211 Sentiment Agent
+
+## Sentiment Agent — multi-source headlines + LangGraph agent (16 SP)
+- **Epic**: ASETPLTFRM-211 | Stories: 212, 213, 214, 215
+- **Design doc**: `docs/design/DESIGN-sentiment-agent.md`
+- **Workflow**: `docs/workflow/WORKFLOW-sentiment-agent.md`
+
+### New files
+- `backend/tools/_sentiment_sources.py` — multi-source headline fetcher (yfinance w=1.0, Yahoo RSS w=0.8, Google RSS w=0.6) with fuzzy dedup (SequenceMatcher ≥0.8)
+- `backend/tools/sentiment_agent.py` — 3 `@tool` functions: `score_ticker_sentiment`, `get_cached_sentiment`, `get_market_sentiment`
+- `backend/agents/configs/sentiment.py` — SubAgentConfig for sentiment sub-agent
+- `tests/backend/test_sentiment_sources.py` — 12 tests
+- `tests/backend/test_sentiment_scorer.py` — 15 tests
+
+### Modified files
+- `backend/tools/_sentiment_scorer.py` — refactored: FallbackLLM, weighted scoring, shared `refresh_ticker_sentiment()` code path
+- `backend/agents/graph.py` — registered sentiment node + edges in supervisor
+- `backend/bootstrap.py` — registered 3 sentiment tools
+- `backend/jobs/gap_filler.py` — replaced bare ChatGroq with FallbackLLM via shared pipeline
+- `mkdocs.yml` — added Design + Workflow sections to nav
+
+### Key decisions
+- Weighted dedup: yfinance > Yahoo RSS > Google RSS for source trust
+- FallbackLLM everywhere — no more bare ChatGroq in gap_filler
+- Hybrid chat UX: cached Iceberg score instant, offer live refresh if stale (>24h)
+- Market sentiment includes broad indices (SPY, ^GSPC, ^DJI, ^IXIC) + portfolio tickers
+- 27 new tests, 602 total passing (up from 548)
+
+---
+
+# Session: Mar 27, 2026 (Late PM) — ASETPLTFRM-202 Phase 3 Macro + XGBoost Ensemble
+
+## Phase 3a: Macro Regressors via yfinance (ASETPLTFRM-202)
+- Dropped `fredapi` dependency (rate-limited on new keys) — all macro data via yfinance
+- Added 4 macro symbols to daily refresh: `^TNX` (10Y Treasury), `^IRX` (13W T-Bill), `CL=F` (WTI Oil), `DX-Y.NYB` (Dollar Index)
+- Computed yield spread (10Y − 3M) as recession signal
+- All macro regressors apply to BOTH US and Indian stocks (Fed rate → FII flows, oil → India import bill)
+- No new deps, no new Iceberg tables — reuses OHLCV table + `insert_ohlcv()` path
+- Removed `fred_api_key` from config and backend.env
+
+## Phase 3b: XGBoost Ensemble on Prophet Residuals (ASETPLTFRM-202)
+- New module: `backend/tools/_forecast_ensemble.py`
+- Architecture: `final_price = prophet_yhat + xgb_residual_correction`
+- XGBoost trained on 2327 rows with 17 features:
+  - Prophet yhat (base prediction)
+  - 9 Prophet regressors: vix, index_return, sentiment, treasury_10y, yield_spread, oil_price, dollar_index, analyst_bias, eps_revision
+  - 7 technical indicators: sma_50, sma_200, rsi_14, macd, bb_upper, bb_lower, atr_14
+- Feature flag: `ensemble_enabled` in config (set via `ENSEMBLE_ENABLED=true` in env)
+- Graceful fallback: if ensemble fails or insufficient data, returns pure Prophet forecast
+- Dynamic feature selection: only uses features present in the DataFrame
+- Added `xgboost>=2.0` to requirements (needs `brew install libomp` on macOS)
+
+### Validation Results (AAPL, 9-month horizon)
+| Metric | Phase 2 (Prophet only) | Phase 3a (+macro) | Phase 3b (+XGBoost) |
+|--------|----------------------|-------------------|---------------------|
+| MAE    | 13.23                | 12.75             | 12.75 (CV is Prophet-only) |
+| MAPE   | 10.1%                | 10.0%             | 10.0% (CV is Prophet-only) |
+| XGBoost mean correction | — | — | -$5.05 (corrected overshot) |
+
+### Daily Schedule (IST)
+| Time | Job |
+|------|-----|
+| 11:00 AM | Market indices + macro (^VIX, ^GSPC, ^TNX, ^IRX, CL=F, DX-Y.NYB + 2 India) |
+| 11:30 AM | Sentiment batch (all portfolio tickers) |
+| 6:00 PM | Data gap filler (after NSE close) |
+| 9:00 PM | Data gap filler (after NYSE close) |
+
+### Tests
+- 4 new ensemble tests in `tests/backend/test_forecast_ensemble.py`
+- 2 new macro tests in `tests/backend/test_refresh_pipeline.py`
+- 579 total tests pass, all lint clean
+
+### Files Changed
+- `backend/tools/_forecast_ensemble.py` — **new** XGBoost ensemble module
+- `backend/tools/_forecast_shared.py` — macro regressor loading + merge
+- `backend/tools/forecasting_tool.py` — ensemble wiring (feature-flagged)
+- `dashboard/services/stock_refresh.py` — ensemble wiring in Step 8
+- `backend/jobs/gap_filler.py` — macro symbols in indices list
+- `backend/config.py` — removed fred_api_key, added ensemble_enabled
+- `backend/requirements.txt` — added xgboost>=2.0
+- `scripts/backfill_sentiment.py` — macro symbols in backfill
+- `tests/backend/test_forecast_ensemble.py` — **new** ensemble tests
+- `tests/backend/test_refresh_pipeline.py` — macro regressor tests
+
+### Jira: ASETPLTFRM-202 — Done
+
+---
+
+# Session: Mar 27, 2026 (PM) — ASETPLTFRM-201 Phase 2 Forecast Pipeline
+
+## Forecast Phase 2: Sentiment + Market Indices Wiring (ASETPLTFRM-201, Done)
+
+### Market Indices → OHLCV Table Migration
+- Merged market indices (^VIX, ^INDIAVIX, ^GSPC, ^NSEI) into `stocks.ohlcv` table
+- Dropped separate `stocks.market_indices` table + purged data from Iceberg
+- Removed dead code: `insert_market_index()`, `get_market_index_series()`, `_market_indices_schema()`
+- `refresh_market_indices()` now uses `insert_ohlcv()` with built-in dedup
+- `_load_regressors_from_iceberg()` reads from `get_ohlcv()` instead of old table
+- Backfill script updated to match
+
+### 8-Step Refresh Pipeline
+- Added Step 6 (Market indices) + Step 7 (Sentiment) to `run_full_refresh()`
+- Prophet (Step 8) now receives full regressors: VIX, index_return, sentiment, analyst_bias, eps_revision
+- Previously refresh pipeline trained Prophet without any regressors
+- All non-critical steps: failures don't abort pipeline
+
+### Daily Data Capture (Gap-Free)
+- `refresh_all_sentiment()` — batch scores all portfolio tickers daily (11:30 AM IST / 06:00 UTC)
+- `refresh_market_indices()` — fetches all 4 indices daily (11:00 AM IST / 05:30 UTC)
+- Freshness gates: `refresh_sentiment()` skips if today's score exists, `refresh_market_indices()` skips if already ran today
+- No redundant LLM/yfinance calls when refreshing multiple tickers
+
+### Validation Results (AAPL)
+- Market indices: 11,169 rows backfilled into OHLCV
+- Sentiment: LLM-scored 8 headlines → 0.24 (bullish), source=llm
+- Forecast: Prophet trained on 2,526 rows with regressors
+- Accuracy: MAE=13.23, RMSE=16.95, MAPE=10.1%
+- Targets: 3M +3.9%, 6M +9.8%, 9M +16.3%
+
+### Tests
+- 5 new tests in `tests/backend/test_refresh_pipeline.py`
+- 573 total tests pass, all lint clean
+
+### Iceberg Tables: 16 (was 17 — dropped market_indices)
+
+### Files Changed
+- `backend/jobs/gap_filler.py` — rewrite indices, add batch sentiment, daily flags
+- `backend/tools/_forecast_shared.py` — get_ohlcv instead of get_market_index_series
+- `dashboard/services/stock_refresh.py` — steps 6+7, regressors to Prophet
+- `scripts/backfill_sentiment.py` — use insert_ohlcv for indices
+- `stocks/repository.py` — removed dead market_indices methods
+- `stocks/create_tables.py` — removed market_indices schema + table creation
+- `tests/backend/test_refresh_pipeline.py` — new test file
+
+---
+
+# Session: Mar 27, 2026 — UI Beautification, Scheduler, Insights Enhancements
+
+## Unified Analytics Page (ASETPLTFRM-204)
+- Merged Analytics Home + Marketplace (Link Stock) into single card-based page
+- 3-tier card system: Portfolio (emerald accent), Watchlist (indigo accent), Unlinked (muted)
+- Cards sorted by tier: Portfolio → Watchlist → Unlinked
+- Toolbar: search, market pills (All/India/US), Select All, bulk actions dropdown
+- Sub-filter pills: All / Portfolio / Watchlist / Unlinked with counts
+- Pagination: 3 cols x 2 rows = 6 per page
+- Add to Portfolio button on both Watchlist and Portfolio cards
+- Marketplace page replaced with redirect to /analytics
+- Extracted reusable hooks: useTickerRefresh.ts, useLinkUnlink.ts
+
+## Admin Scheduler (ASETPLTFRM-205)
+- Full backend: 2 Iceberg tables (scheduled_jobs, scheduler_runs), executor registry, SchedulerService
+- Extensible @register_job decorator — data_refresh built-in, add new types easily
+- schedule lib + daemon thread, IST timezone, ThreadPoolExecutor(3)
+- 7 REST endpoints (CRUD + trigger + runs + stats), all superuser_only
+- Frontend: Design B dashboard — stat cards, job list, new schedule form, run timeline
+- Auto-refresh every 30s for live tracking
+
+## Scheduler Bug Fixes (ASETPLTFRM-206)
+- Fixed tz-naive vs tz-aware datetime mismatch on Iceberg writes
+- Fixed NaN JSON serialization (ValueError: Out of range float values)
+- Added stale run cleanup on restart (marks orphaned "running" as "failed")
+
+## ForecastChart Fix (ASETPLTFRM-207)
+- Fixed null value crash in lightweight-charts setData() for all 4 series
+
+## Compare Stocks Multi-Select (ASETPLTFRM-208)
+- Replaced pill button wall with searchable multi-select dropdown
+- Search input, checkbox list, removable chips, max 7 enforced
+
+## Correlation Heatmap (ASETPLTFRM-209)
+- Migrated from broken Plotly (basic bundle lacks heatmap) to ECharts (tree-shaken ~150KB)
+- Portfolio-only data source (was all linked tickers)
+- Correlation scores in each cell, Red→White→Blue colorscale, dark/light mode
+- Backend: added source=portfolio parameter to correlation endpoint
+
+## Quarterly Portfolio Filter (ASETPLTFRM-210)
+- Added "Portfolio" as first option in Sectors dropdown, selected by default
+- Chart and table show only portfolio stocks by default
+
+## Jira: ASETPLTFRM-204 to 210 — all in Sprint 3, all Done (31 story points)
+
+---
+
+# Session: Mar 26-27, 2026 — Observability, Forecast Enhancement, Cleanup
+
+## Observability (ASETPLTFRM-195)
+- LangFuse v4 dual-platform integration (Phase 2 & 3)
+- Secret redaction always-on (API keys, JWT, all providers)
+- `hide_trace_io` toggle (dev=visible, prod=hidden)
+- Settings leak fix in `build_supervisor_graph` traces
+- LangFuse mask fix (recursive walker for v4 arbitrary types)
+
+## Bug Fixes (ASETPLTFRM-196, 197, 198)
+- Forecast cooldown returns cached Iceberg report (not "come back later")
+- yfinance v1.2: news (nested content), analyst recs (upgrades_downgrades + consensus)
+- News cache removed — always fresh
+- Link Stock page: company info fetched on link + background backfill
+
+## Dead Code Cleanup (ASETPLTFRM-199)
+- 3 files deleted: _forecast_chart.py, _forecast_persist.py, _analysis_chart.py
+- ~395 lines removed, 520 MB freed
+- `_load_parquet()` renamed to `_load_ohlcv()` (5 files)
+
+## Prophet Forecast Enhancement (ASETPLTFRM-200, 201)
+### Phase 1: Quick Wins
+- Market-specific holidays (India for .NS/.BO, US for others)
+- VIX + benchmark index as Prophet regressors (^VIX/^INDIAVIX + ^GSPC/^NSEI)
+- Prophet cross-validation (rolling window, background only)
+
+### Phase 2: Sentiment + Analyst
+- LLM sentiment scoring via Groq (llama-3.3-70b)
+- Earnings dates as Prophet holidays (±2 day window)
+- Analyst target price bias + EPS revision momentum
+- 5 regressors total: vix, index_return, sentiment, analyst_bias, eps_revision
+- Live chat reads from Iceberg (no live compute), background refresh does heavy lifting
+
+### Infrastructure
+- 2 new Iceberg tables: `market_indices`, `sentiment_scores`
+- Repository methods: insert/get for both tables
+- Background jobs: `refresh_market_indices()`, `refresh_sentiment()`
+- Price-derived sentiment proxy backfilled (137K rows, 52 tickers)
+- Accuracy: removed in-sample from live chat, CV-only in background
+
+## Pending (tomorrow)
+- Redesign `market_indices` table: full OHLCV + is_interpolated
+- Wire indices + sentiment into `run_full_refresh()` pipeline
+- Fix Iceberg commit conflicts for bulk index inserts
+- Backfill script for new OHLCV index schema
+
+## Tests: 568 passed, 0 failed
+
+---
+
+# Session: Mar 26, 2026 — LangFuse + Production Hardening (ASETPLTFRM-194)
+
+## Phase 2: LangFuse Dual-Platform (3 pts)
+- **langfuse v4.0.1** added to requirements.txt (OpenTelemetry-based)
+- Import path: `from langfuse.langchain import CallbackHandler`
+- Config fields: `langfuse_public_key`, `langfuse_secret_key`, `langfuse_host`
+- `langfuse_enabled` flag already existed — now wired up
+- New `backend/tracing.py` module: singleton client, callback factory
+- Callbacks injected per-call in `FallbackLLM.invoke()` (Groq + Anthropic)
+- No `@traceable` on `invoke()` — callbacks pass through `config={"callbacks": [...]}`
+
+## Phase 3: Production Hardening (2 pts)
+- **Trace sampling**: `should_trace()` uses `trace_sample_rate` config
+  - Errors always traced (100%), successes sampled at configured rate
+  - LangFuse v4 native `sample_rate` also set on client init
+- **PII redaction**: `redact_pii()` strips email, phone, PAN, Aadhaar, cards
+  - LangSmith: `setup_anonymizer()` via `create_anonymizer` at startup
+  - LangFuse: `mask=redact_pii` passed to `Langfuse()` constructor
+  - Both use same regex patterns — single source of truth
+
+## Tests
+- 13 new tests in `test_tracing.py` (PII, sampling, callbacks)
+- 1 new test in `test_llm_fallback.py` (callback forwarding)
+- **562 passed**, 7 skipped, 0 failed (up from 548)
+
+## Files Changed
+- `backend/requirements.txt` — langfuse + transitive deps
+- `backend/config.py` — 3 new LangFuse settings
+- `backend/tracing.py` — **new** (sampling, PII, callbacks)
+- `backend/llm_fallback.py` — callback injection in invoke()
+- `backend/main.py` — setup_anonymizer() at startup
+- `tests/backend/test_tracing.py` — **new** (13 tests)
+- `tests/backend/test_llm_fallback.py` — 1 new test
+
+---
+
 # Session: Mar 25, 2026 — Security Hardening, Code Quality, E2E Coverage
 
 ## Security Hardening (ASETPLTFRM-178, 9 stories — ALL DONE)

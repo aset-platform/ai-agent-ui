@@ -24,7 +24,7 @@ All pages fully migrated from Dash to Next.js.
 source ~/.ai-agent-ui/venv/bin/activate      # Python virtualenv
 ```
 
-**Key dirs**: `backend/` (agents, tools, config), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 11 tables), `frontend/` (SPA), `hooks/` (pre-commit, pre-push).
+**Key dirs**: `backend/` (agents, tools, config), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 20 tables), `frontend/` (SPA), `hooks/` (pre-commit, pre-push).
 
 **Config**: `pyproject.toml` + `.flake8` (79 chars), `frontend/eslint.config.mjs`.
 
@@ -70,9 +70,9 @@ see all available topics.
 
 | Category | Topics |
 |----------|--------|
-| `shared/architecture/` | system-overview, agent-init-pattern, groq-chunking, iceberg-data-layer, auth-jwt-flow, langsmith-observability, lighthouse-performance-workflow, subscription-billing, portfolio-analytics, currency-aware-agent, token-budget-concurrency, payment-transaction-ledger |
-| `shared/conventions/` | python-style, typescript-style, git-workflow, testing-patterns, performance, error-handling, llm-tool-forcing, jira-mcp-usage, security-hardening, e2e-test-patterns |
-| `shared/debugging/` | common-issues, mock-patching-gotchas, chat-session-recording, cookie-hostname-mismatch, ohlcv-nan-close-price, razorpay-integration-gotchas, iceberg-epoch-dates |
+| `shared/architecture/` | system-overview, agent-init-pattern, groq-chunking, iceberg-data-layer, auth-jwt-flow, langsmith-observability, lighthouse-performance-workflow, subscription-billing, portfolio-analytics, currency-aware-agent, token-budget-concurrency, payment-transaction-ledger, sentiment-agent, iceberg-column-projection |
+| `shared/conventions/` | python-style, typescript-style, git-workflow, testing-patterns, performance, error-handling, llm-tool-forcing, jira-mcp-usage, security-hardening, e2e-test-patterns, isort-black-exclude-virtualenv, git-push-workflow |
+| `shared/debugging/` | common-issues, mock-patching-gotchas, chat-session-recording, cookie-hostname-mismatch, ohlcv-nan-close-price, razorpay-integration-gotchas, iceberg-epoch-dates, portfolio-watchlist-sync, iceberg-table-corruption-recovery, razorpay-customer-exists, playwright-react19-dash-patterns |
 | `shared/onboarding/` | setup-guide, test-venv-setup, tooling |
 | `shared/api/` | streaming-protocol |
 
@@ -97,6 +97,16 @@ Load any memory with `read_memory` when you need the details.
   `tools/_stock_shared.py` — never instantiate directly.
 - **E2E demo passwords**: Run `seed_demo_data.py` if login
   fails. Previous test runs may have changed passwords.
+- **Iceberg table corruption**: If `FileNotFoundError` on
+  parquet files, run `scripts/check_tables.py` to identify
+  corrupted tables. Fix: drop + recreate via `create_tables.py`.
+- **Portfolio ↔ Watchlist sync**: Adding a portfolio stock
+  auto-links to watchlist. If unlinking fails, the ticker
+  may be portfolio-only (pre-auto-link). See
+  `scripts/backfill_portfolio_links.py`.
+- **Razorpay "customer already exists"**: After DB rebuild,
+  checkout self-heals by searching Razorpay for the existing
+  customer by email.
 
 ---
 
@@ -110,7 +120,7 @@ flake8 backend/ auth/ stocks/ scripts/
 cd frontend && npx eslint . --fix
 
 # Test
-python -m pytest tests/ -v        # all (548 tests)
+python -m pytest tests/ -v        # all (602 tests)
 cd frontend && npx vitest run     # frontend (18 tests)
 cd e2e && npm test                # E2E (~219 tests, needs live services)
 

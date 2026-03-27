@@ -71,6 +71,12 @@ nav:
       - Overview: dashboard/overview.md
   - Frontend:
       - Overview: frontend/overview.md
+  - Design:
+      - Sentiment Agent: design/DESIGN-sentiment-agent.md
+      - Dashboard Overhaul: design/DESIGN-dashboard-overhaul.md
+  - Workflow:
+      - Sentiment Agent: workflow/WORKFLOW-sentiment-agent.md
+      - Dashboard Overhaul: workflow/WORKFLOW-dashboard-overhaul.md
   - Development:
       - How to Run: dev/how-to-run.md
       - E2E Testing: dev/e2e-testing.md
