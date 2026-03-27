@@ -17,12 +17,10 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
-from langsmith import traceable
-from langgraph.graph import END, START, StateGraph
-
 from agents.configs.forecaster import FORECASTER_CONFIG
 from agents.configs.portfolio import PORTFOLIO_CONFIG
 from agents.configs.research import RESEARCH_CONFIG
+from agents.configs.sentiment import SENTIMENT_CONFIG
 from agents.configs.stock_analyst import (
     STOCK_ANALYST_CONFIG,
 )
@@ -36,6 +34,8 @@ from agents.nodes.supervisor import supervisor
 from agents.nodes.synthesis import synthesis
 from agents.sub_agents import _make_sub_agent_node
 from config import Settings
+from langgraph.graph import END, START, StateGraph
+from langsmith import traceable
 from tools.registry import ToolRegistry
 
 _logger = logging.getLogger(__name__)
@@ -51,7 +51,19 @@ def _route_by_next_agent(state: dict) -> str:
     return state.get("next_agent", "decline")
 
 
-@traceable(name="build_supervisor_graph", run_type="chain")
+def _scrub_graph_inputs(inputs: dict) -> dict:
+    """Strip secrets from traceable inputs."""
+    scrubbed = dict(inputs)
+    if "settings" in scrubbed:
+        scrubbed["settings"] = "<Settings: redacted>"
+    return scrubbed
+
+
+@traceable(
+    name="build_supervisor_graph",
+    run_type="chain",
+    process_inputs=_scrub_graph_inputs,
+)
 def build_supervisor_graph(
     tool_registry: ToolRegistry,
     llm_factory: Callable,
@@ -90,6 +102,11 @@ def build_supervisor_graph(
         tool_registry,
         llm_factory,
     )
+    sentiment_node = _make_sub_agent_node(
+        SENTIMENT_CONFIG,
+        tool_registry,
+        llm_factory,
+    )
 
     # Build graph
     g = StateGraph(AgentState)
@@ -103,6 +120,7 @@ def build_supervisor_graph(
     g.add_node("stock_analyst", stock_node)
     g.add_node("forecaster", forecaster_node)
     g.add_node("research", research_node)
+    g.add_node("sentiment", sentiment_node)
     g.add_node("synthesis", synthesis)
     g.add_node("log_query", log_query)
     g.add_node("decline", decline_node)
@@ -152,6 +170,7 @@ def build_supervisor_graph(
             "stock_analyst": "stock_analyst",
             "forecaster": "forecaster",
             "research": "research",
+            "sentiment": "sentiment",
         },
     )
 
@@ -160,6 +179,7 @@ def build_supervisor_graph(
     g.add_edge("stock_analyst", "synthesis")
     g.add_edge("forecaster", "synthesis")
     g.add_edge("research", "synthesis")
+    g.add_edge("sentiment", "synthesis")
 
     # Synthesis → log → END
     g.add_edge("synthesis", "log_query")

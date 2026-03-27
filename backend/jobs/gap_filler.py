@@ -1,24 +1,22 @@
-"""Daily data gap filler background job.
+"""Data gap filler, market index refresh, and sentiment scoring.
 
-Runs after market close to fetch missing data for
-tickers that users queried but had stale/missing
-local data.
+All functions are called by the Admin Scheduler
+(``SchedulerService``) or user-initiated triggers —
+no hardcoded cron schedules.
 
-Schedule:
-- 12:30 UTC (6:00 PM IST) — after NSE close
-- 15:30 UTC (9:00 PM IST) — after NYSE close
+Public API::
 
-Usage::
-
-    from jobs.gap_filler import start_gap_filler
-    start_gap_filler()  # starts daemon thread
+    fill_data_gaps()           — fetch missing OHLCV/info
+    refresh_market_indices()   — VIX, benchmarks, macro
+    refresh_sentiment(ticker)  — LLM headline scoring
+    refresh_all_sentiment()    — batch all tickers
 """
 
 from __future__ import annotations
 
 import logging
-import threading
-import time
+
+import pandas as pd
 
 _logger = logging.getLogger(__name__)
 
@@ -50,7 +48,8 @@ def fill_data_gaps() -> int:
         return 0
 
     _logger.info(
-        "Gap filler: processing %d gaps", len(gaps),
+        "Gap filler: processing %d gaps",
+        len(gaps),
     )
     resolved = 0
 
@@ -79,23 +78,27 @@ def fill_data_gaps() -> int:
                 continue
 
             repo.resolve_data_gap(
-                gap_id, "yfinance_fetch",
+                gap_id,
+                "yfinance_fetch",
             )
             resolved += 1
             _logger.info(
                 "Gap filled: %s/%s",
-                ticker, data_type,
+                ticker,
+                data_type,
             )
         except Exception:
             _logger.warning(
                 "Gap fill failed: %s/%s",
-                ticker, data_type,
+                ticker,
+                data_type,
                 exc_info=True,
             )
 
     _logger.info(
         "Gap filler: resolved %d/%d gaps",
-        resolved, len(gaps),
+        resolved,
+        len(gaps),
     )
     return resolved
 
@@ -103,7 +106,6 @@ def fill_data_gaps() -> int:
 def _fetch_ohlcv(ticker: str) -> None:
     """Fetch OHLCV data via yfinance."""
     import yfinance as yf
-
     from tools._stock_shared import _require_repo
 
     repo = _require_repo()
@@ -119,7 +121,6 @@ def _fetch_ohlcv(ticker: str) -> None:
 def _fetch_company_info(ticker: str) -> None:
     """Fetch company info via yfinance."""
     import yfinance as yf
-
     from tools._stock_shared import _require_repo
 
     repo = _require_repo()
@@ -135,7 +136,6 @@ def _fetch_company_info(ticker: str) -> None:
 def _fetch_dividends(ticker: str) -> None:
     """Fetch dividend history via yfinance."""
     import yfinance as yf
-
     from tools._stock_shared import _require_repo
 
     repo = _require_repo()
@@ -151,7 +151,6 @@ def _fetch_dividends(ticker: str) -> None:
 def _fetch_quarterly(ticker: str) -> None:
     """Fetch quarterly results via yfinance."""
     import yfinance as yf
-
     from tools._stock_shared import _require_repo
 
     repo = _require_repo()
@@ -164,33 +163,221 @@ def _fetch_quarterly(ticker: str) -> None:
     repo.insert_quarterly_results(ticker, q)
 
 
-def _scheduler_loop() -> None:
-    """Run the scheduler in a daemon thread."""
-    import schedule
+_indices_last_refresh = None  # date | None
 
-    schedule.every().day.at("12:30").do(
-        fill_data_gaps,
-    )
-    schedule.every().day.at("15:30").do(
-        fill_data_gaps,
-    )
 
-    _logger.info(
-        "Gap filler scheduler started "
-        "(12:30 UTC + 15:30 UTC)",
-    )
+def refresh_market_indices() -> int:
+    """Fetch VIX + benchmark indices into the OHLCV table.
 
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
+    Skips the yfinance fetch if already called today.
+    Uses the standard ``insert_ohlcv()`` path with
+    built-in dedup.
+
+    Returns:
+        Number of index-date rows inserted.
+    """
+    global _indices_last_refresh  # noqa: PLW0603
+
+    from datetime import date as _date
+
+    if _indices_last_refresh == _date.today():
+        _logger.debug("Market indices already refreshed today")
+        return 0
+
+    try:
+        from datetime import timedelta
+
+        import yfinance as yf
+        from tools._stock_shared import _require_repo
+
+        repo = _require_repo()
+        indices = [
+            # Market indices (Phase 2)
+            "^VIX",
+            "^INDIAVIX",
+            "^GSPC",
+            "^NSEI",
+            # Macro indicators (Phase 3)
+            "^TNX",  # 10-Year Treasury Yield
+            "^IRX",  # 13-Week T-Bill Rate
+            "CL=F",  # WTI Crude Oil
+            "DX-Y.NYB",  # US Dollar Index
+        ]
+        total = 0
+
+        for idx_sym in indices:
+            try:
+                last = repo.get_latest_ohlcv_date(
+                    idx_sym,
+                )
+                if last is not None:
+                    start = str(
+                        last + timedelta(days=1),
+                    )
+                else:
+                    start = "2015-01-01"
+
+                hist = yf.Ticker(idx_sym).history(
+                    start=start,
+                    auto_adjust=False,
+                )
+                if hist.empty:
+                    continue
+
+                hist.index = pd.to_datetime(
+                    hist.index,
+                ).tz_localize(None)
+                n = repo.insert_ohlcv(idx_sym, hist)
+                total += n
+                _logger.info(
+                    "Market index %s: %d rows",
+                    idx_sym,
+                    n,
+                )
+            except Exception:
+                _logger.debug(
+                    "Market index %s failed",
+                    idx_sym,
+                    exc_info=True,
+                )
+        _indices_last_refresh = _date.today()
+        _logger.info(
+            "Market indices refresh: %d rows",
+            total,
+        )
+        return total
+    except Exception:
+        _logger.warning(
+            "Market indices refresh failed",
+            exc_info=True,
+        )
+        return 0
+
+
+def _get_scoring_llm():
+    """Build a FallbackLLM for batch sentiment scoring.
+
+    Uses the same cascade as agents so that calls are
+    traced via LangSmith and counted in the token budget.
+    """
+    try:
+        from config import get_settings
+        from llm_fallback import FallbackLLM
+        from message_compressor import (
+            MessageCompressor,
+        )
+        from token_budget import TokenBudget
+
+        settings = get_settings()
+
+        def _parse(csv: str) -> list[str]:
+            return [t.strip() for t in csv.split(",") if t.strip()]
+
+        env = settings.ai_agent_ui_env
+        if env == "test":
+            tiers = _parse(settings.test_model_tiers)
+            anthropic = None
+        else:
+            tiers = _parse(settings.groq_model_tiers)
+            anthropic = "claude-sonnet-4-6"
+
+        return FallbackLLM(
+            groq_models=tiers,
+            anthropic_model=anthropic,
+            temperature=0,
+            agent_id="sentiment_batch",
+            token_budget=TokenBudget(),
+            compressor=MessageCompressor(),
+            cascade_profile="tool",
+        )
+    except Exception:
+        _logger.debug(
+            "FallbackLLM init failed for sentiment",
+            exc_info=True,
+        )
+        return None
+
+
+def refresh_sentiment(ticker: str) -> float | None:
+    """Score today's headlines for *ticker* via LLM.
+
+    Uses the shared multi-source pipeline from
+    ``_sentiment_scorer.refresh_ticker_sentiment`` with
+    FallbackLLM for full observability.
+
+    Returns:
+        The average sentiment score, or ``None`` on failure.
+    """
+    try:
+        from tools._sentiment_scorer import (
+            refresh_ticker_sentiment,
+        )
+
+        llm = _get_scoring_llm()
+        return refresh_ticker_sentiment(
+            ticker,
+            llm=llm,
+        )
+    except Exception:
+        _logger.debug(
+            "Sentiment refresh failed for %s",
+            ticker,
+            exc_info=True,
+        )
+        return None
+
+
+def refresh_all_sentiment() -> int:
+    """Score today's headlines for ALL registered tickers.
+
+    Runs once daily so that the ``sentiment_scores`` table
+    has no gaps — even when forecasts are skipped (7-day
+    cooldown).
+
+    Returns:
+        Number of tickers successfully scored.
+    """
+    try:
+        from tools._stock_shared import _get_repo
+
+        repo = _get_repo()
+        if repo is None:
+            return 0
+
+        registry = repo.get_all_registry()
+        tickers = list(registry.keys()) if registry else []
+        if not tickers:
+            return 0
+
+        scored = 0
+        for ticker in tickers:
+            result = refresh_sentiment(ticker)
+            if result is not None:
+                scored += 1
+
+        _logger.info(
+            "Sentiment batch: %d/%d tickers scored",
+            scored,
+            len(tickers),
+        )
+        return scored
+    except Exception:
+        _logger.warning(
+            "Sentiment batch failed",
+            exc_info=True,
+        )
+        return 0
 
 
 def start_gap_filler() -> None:
-    """Start the gap filler in a daemon thread."""
-    thread = threading.Thread(
-        target=_scheduler_loop,
-        daemon=True,
-        name="gap-filler",
+    """No-op — gap filler schedules removed.
+
+    All data refresh, market indices, and sentiment
+    scoring now run exclusively through the Admin
+    Scheduler (``SchedulerService``) or user-initiated
+    triggers.
+    """
+    _logger.info(
+        "Gap filler: no hardcoded schedules — "
+        "use Admin Scheduler or manual triggers",
     )
-    thread.start()
-    _logger.info("Gap filler thread started")

@@ -112,6 +112,23 @@ def setup_tools(registry):
             exc_info=True,
         )
 
+    # Register sentiment tools for Sentiment Agent
+    try:
+        from tools.sentiment_agent import (
+            get_cached_sentiment,
+            get_market_sentiment,
+            score_ticker_sentiment,
+        )
+
+        registry.register(score_ticker_sentiment)
+        registry.register(get_cached_sentiment)
+        registry.register(get_market_sentiment)
+    except Exception:
+        _logger.warning(
+            "Sentiment tools registration failed",
+            exc_info=True,
+        )
+
     _logger.info(
         "Tools registered: %s",
         registry.list_names(),
@@ -187,10 +204,7 @@ def setup_graph(
     settings = get_settings()
 
     def _parse_tiers(csv: str) -> list[str]:
-        return [
-            t.strip() for t in csv.split(",")
-            if t.strip()
-        ]
+        return [t.strip() for t in csv.split(",") if t.strip()]
 
     def llm_factory(agent_id: str = "graph"):
         """Create a FallbackLLM for a sub-agent."""
@@ -218,7 +232,9 @@ def setup_graph(
         )
 
     graph = build_supervisor_graph(
-        tool_registry, llm_factory, settings,
+        tool_registry,
+        llm_factory,
+        settings,
     )
     _logger.info("LangGraph supervisor graph built")
 
