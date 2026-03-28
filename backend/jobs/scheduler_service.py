@@ -94,6 +94,68 @@ def _last_scheduled_window(
     return None
 
 
+def _next_run_ist_dates(
+    cron_dates: str, cron_time: str,
+) -> datetime | None:
+    """Next run in IST for day-of-month schedule."""
+    stripped = cron_dates.strip()
+    if not stripped:
+        return None
+    allowed = {
+        int(d.strip())
+        for d in stripped.split(",")
+        if d.strip().isdigit()
+    }
+    if not allowed:
+        return None
+    now = datetime.now(IST)
+    time_obj = datetime.strptime(
+        cron_time, "%H:%M",
+    ).time()
+    for offset in range(63):
+        candidate = now + timedelta(days=offset)
+        if candidate.day in allowed:
+            candidate_dt = datetime.combine(
+                candidate.date(),
+                time_obj,
+                tzinfo=IST,
+            )
+            if candidate_dt > now:
+                return candidate_dt
+    return None
+
+
+def _last_window_dates(
+    cron_dates: str, cron_time: str,
+) -> datetime | None:
+    """Most recent past window for day-of-month."""
+    stripped = cron_dates.strip()
+    if not stripped:
+        return None
+    allowed = {
+        int(d.strip())
+        for d in stripped.split(",")
+        if d.strip().isdigit()
+    }
+    if not allowed:
+        return None
+    now = datetime.now(IST)
+    time_obj = datetime.strptime(
+        cron_time, "%H:%M",
+    ).time()
+    for offset in range(63):
+        candidate = now - timedelta(days=offset)
+        if candidate.day in allowed:
+            candidate_dt = datetime.combine(
+                candidate.date(),
+                time_obj,
+                tzinfo=IST,
+            )
+            if candidate_dt <= now:
+                return candidate_dt
+    return None
+
+
 class SchedulerService:
     """Persistent job scheduler backed by Iceberg."""
 
@@ -177,6 +239,9 @@ class SchedulerService:
         for job_id, job in self._jobs.items():
             if not job.get("enabled"):
                 continue
+            cron_dates = (
+                job.get("cron_dates", "") or ""
+            ).strip()
             cron_days = (
                 job.get("cron_days", "") or ""
             ).split(",")
@@ -186,9 +251,14 @@ class SchedulerService:
             ]
             cron_time = job.get("cron_time", "18:00")
 
-            last_window = _last_scheduled_window(
-                cron_days, cron_time,
-            )
+            if cron_dates:
+                last_window = _last_window_dates(
+                    cron_dates, cron_time,
+                )
+            else:
+                last_window = _last_scheduled_window(
+                    cron_days, cron_time,
+                )
             if last_window is None:
                 continue
 
@@ -281,25 +351,36 @@ class SchedulerService:
 
     def _register_schedule(self, job: dict) -> None:
         """Register a single job with the schedule lib."""
+        cron_dates = (
+            job.get("cron_dates", "") or ""
+        ).strip()
         cron_days = (
             job.get("cron_days", "") or ""
         ).split(",")
         cron_time = job.get("cron_time", "18:00")
         job_id = job["job_id"]
 
-        for day_abbr in cron_days:
-            day_abbr = day_abbr.strip().lower()
-            day_full = _DAY_MAP.get(day_abbr)
-            if not day_full:
-                continue
-            sched_day = getattr(
-                self._scheduler.every(), day_full,
-            )
-            # schedule lib uses system local time (IST)
-            # — no UTC conversion needed
-            sched_day.at(cron_time).do(
+        if cron_dates:
+            # Day-of-month: register daily, gate in
+            # _trigger_job on matching day
+            self._scheduler.every().day.at(
+                cron_time,
+            ).do(
                 self._trigger_job, job_id,
             ).tag(job_id)
+        else:
+            for day_abbr in cron_days:
+                day_abbr = day_abbr.strip().lower()
+                day_full = _DAY_MAP.get(day_abbr)
+                if not day_full:
+                    continue
+                sched_day = getattr(
+                    self._scheduler.every(), day_full,
+                )
+                # schedule lib uses local time (IST)
+                sched_day.at(cron_time).do(
+                    self._trigger_job, job_id,
+                ).tag(job_id)
 
     def add_job(self, job: dict) -> str:
         """Create and persist a new job. Returns job_id."""
@@ -364,6 +445,21 @@ class SchedulerService:
         job = self._jobs.get(job_id)
         if not job or not job.get("enabled"):
             return
+
+        # Day-of-month gate: skip if today doesn't
+        # match any configured date
+        cron_dates = (
+            job.get("cron_dates", "") or ""
+        ).strip()
+        if cron_dates:
+            today_dom = datetime.now(IST).day
+            allowed = [
+                int(d.strip())
+                for d in cron_dates.split(",")
+                if d.strip().isdigit()
+            ]
+            if today_dom not in allowed:
+                return
 
         with self._lock:
             existing = self._futures.get(job_id)
@@ -476,11 +572,21 @@ class SchedulerService:
         result = []
         runs = self._repo.get_scheduler_runs(days=7)
         for job in self._jobs.values():
+            cron_dates = (
+                job.get("cron_dates", "") or ""
+            ).strip()
             cron_days = (
                 job.get("cron_days", "") or ""
             ).split(",")
             cron_time = job.get("cron_time", "18:00")
-            nxt = _next_run_ist(cron_days, cron_time)
+            if cron_dates:
+                nxt = _next_run_ist_dates(
+                    cron_dates, cron_time,
+                )
+            else:
+                nxt = _next_run_ist(
+                    cron_days, cron_time,
+                )
 
             # Find last run for this job
             job_runs = [
@@ -502,6 +608,14 @@ class SchedulerService:
                 "name": job.get("name", ""),
                 "job_type": job.get("job_type", ""),
                 "cron_days": cron_days,
+                "cron_dates": (
+                    [
+                        int(d.strip())
+                        for d in cron_dates.split(",")
+                        if d.strip().isdigit()
+                    ]
+                    if cron_dates else []
+                ),
                 "cron_time": cron_time,
                 "scope": job.get("scope", "all"),
                 "enabled": bool(job.get("enabled")),

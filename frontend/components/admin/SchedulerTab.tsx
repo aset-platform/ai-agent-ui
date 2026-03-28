@@ -7,6 +7,7 @@ import {
   useSchedulerJobs,
   useSchedulerRuns,
   useSchedulerStats,
+  type SchedulerJob,
   type SchedulerRun,
 } from "@/hooks/useSchedulerData";
 
@@ -152,6 +153,23 @@ function TrashIcon({ className = "h-3.5 w-3.5" }) {
     >
       <polyline points="3 6 5 6 21 6" />
       <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    </svg>
+  );
+}
+
+function PencilIcon({ className = "h-3.5 w-3.5" }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
     </svg>
   );
 }
@@ -318,8 +336,10 @@ function StatCards() {
 
 function JobList({
   onCreateClick,
+  onEditClick,
 }: {
   onCreateClick: () => void;
+  onEditClick: (job: SchedulerJob) => void;
 }) {
   const { jobs, mutate } = useSchedulerJobs();
 
@@ -480,6 +500,23 @@ function JobList({
                 Run Now
               </button>
               <button
+                onClick={() => onEditClick(j)}
+                className="shrink-0 flex h-[30px]
+                  w-[30px] items-center justify-center
+                  rounded-lg border border-gray-200
+                  text-gray-400 transition-all
+                  hover:border-indigo-400
+                  hover:bg-indigo-50
+                  hover:text-indigo-600
+                  dark:border-gray-700
+                  dark:text-gray-500
+                  dark:hover:border-indigo-500
+                  dark:hover:bg-indigo-500/10
+                  dark:hover:text-indigo-400"
+              >
+                <PencilIcon />
+              </button>
+              <button
                 onClick={() => handleDelete(j.job_id)}
                 className="shrink-0 flex h-[30px]
                   w-[30px] items-center justify-center
@@ -529,9 +566,13 @@ const PRESETS = [
 ];
 
 function NewScheduleForm({
+  editingJob,
   onCreated,
+  onCancel,
 }: {
+  editingJob: SchedulerJob | null;
   onCreated: () => void;
+  onCancel: () => void;
 }) {
   const [name, setName] = useState("");
   const [time, setTime] = useState("18:00");
@@ -539,44 +580,110 @@ function NewScheduleForm({
     "mon", "tue", "wed", "thu",
     "fri", "sat", "sun",
   ]);
+  const [cronDates, setCronDates] = useState<number[]>(
+    [],
+  );
+  const [scheduleType, setScheduleType] = useState<
+    "weekly" | "monthly"
+  >("weekly");
   const [scope, setScope] = useState("all");
   const [saving, setSaving] = useState(false);
   const [activePreset, setActivePreset] = useState(0);
+
+  // Pre-fill when editing
+  useEffect(() => {
+    if (editingJob) {
+      setName(editingJob.name);
+      setTime(editingJob.cron_time);
+      setScope(editingJob.scope);
+      if (
+        editingJob.cron_dates &&
+        editingJob.cron_dates.length > 0
+      ) {
+        setScheduleType("monthly");
+        setCronDates(editingJob.cron_dates);
+        setDays([]);
+      } else {
+        setScheduleType("weekly");
+        setDays(editingJob.cron_days);
+        setCronDates([]);
+      }
+      setActivePreset(-1);
+    } else {
+      setName("");
+      setTime("18:00");
+      setDays([
+        "mon", "tue", "wed", "thu",
+        "fri", "sat", "sun",
+      ]);
+      setCronDates([]);
+      setScheduleType("weekly");
+      setScope("all");
+      setActivePreset(0);
+    }
+  }, [editingJob]);
 
   const applyPreset = (idx: number) => {
     setActivePreset(idx);
     setDays(PRESETS[idx].days);
     setTime(PRESETS[idx].time);
+    setScheduleType("weekly");
+    setCronDates([]);
   };
 
-  const handleCreate = useCallback(async () => {
+  const handleSubmit = useCallback(async () => {
     setSaving(true);
     try {
-      const jobName =
-        name.trim() ||
-        `Data Refresh - ${scheduleLabel(days, time)}`;
-      await apiFetch(
-        `${API_URL}/admin/scheduler/jobs`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
+      const label =
+        scheduleType === "monthly"
+          ? `Monthly ${cronDates.join(",")} at ${time}`
+          : scheduleLabel(days, time);
+      const jobName = name.trim() ||
+        `Data Refresh - ${label}`;
+      const payload = {
+        name: jobName,
+        job_type: "data_refresh",
+        cron_days:
+          scheduleType === "weekly" ? days : [],
+        cron_dates:
+          scheduleType === "monthly"
+            ? cronDates
+            : [],
+        cron_time: time,
+        scope,
+      };
+      if (editingJob) {
+        await apiFetch(
+          `${API_URL}/admin/scheduler/jobs/${editingJob.job_id}`,
+          {
+            method: "PATCH",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
           },
-          body: JSON.stringify({
-            name: jobName,
-            job_type: "data_refresh",
-            cron_days: days,
-            cron_time: time,
-            scope,
-          }),
-        },
-      );
+        );
+      } else {
+        await apiFetch(
+          `${API_URL}/admin/scheduler/jobs`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          },
+        );
+      }
       setName("");
       onCreated();
     } finally {
       setSaving(false);
     }
-  }, [name, days, time, scope, onCreated]);
+  }, [
+    name, days, cronDates, scheduleType,
+    time, scope, editingJob, onCreated,
+  ]);
 
   return (
     <div
@@ -589,7 +696,7 @@ function NewScheduleForm({
           py-3.5 dark:border-gray-800"
       >
         <h3 className="text-[15px] font-bold">
-          New Schedule
+          {editingJob ? "Edit Schedule" : "New Schedule"}
         </h3>
       </div>
       <div className="space-y-5 p-5">
@@ -688,6 +795,71 @@ function NewScheduleForm({
           >
             Schedule
           </label>
+          <div className="mb-2 flex gap-1.5">
+            {(
+              [
+                { key: "weekly", label: "Weekly" },
+                { key: "monthly", label: "Monthly" },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.key}
+                onClick={() => {
+                  setScheduleType(t.key);
+                  if (t.key === "monthly") {
+                    setDays([]);
+                    setActivePreset(-1);
+                  } else {
+                    setCronDates([]);
+                  }
+                }}
+                className={`flex-1 rounded-[10px]
+                  border px-3 py-2 text-xs
+                  font-semibold transition-all
+                  ${
+                    scheduleType === t.key
+                      ? "border-indigo-500 bg-indigo-50 text-indigo-600 dark:bg-indigo-500/12 dark:text-indigo-400"
+                      : "border-gray-200 text-gray-400 hover:border-gray-300 dark:border-gray-700 dark:text-gray-500"
+                  }
+                `}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {scheduleType === "monthly" ? (
+            <div className="grid grid-cols-7 gap-1.5">
+              {Array.from(
+                { length: 31 },
+                (_, i) => i + 1,
+              ).map((d) => (
+                <button
+                  key={d}
+                  onClick={() =>
+                    setCronDates((prev) =>
+                      prev.includes(d)
+                        ? prev.filter((x) => x !== d)
+                        : [...prev, d].sort(
+                            (a, b) => a - b,
+                          ),
+                    )
+                  }
+                  className={`rounded-lg border
+                    px-1.5 py-1.5 text-[11px]
+                    font-semibold transition-all
+                    ${
+                      cronDates.includes(d)
+                        ? "border-indigo-500 bg-indigo-600 text-white"
+                        : "border-gray-200 text-gray-400 hover:border-indigo-400 dark:border-gray-700 dark:text-gray-500"
+                    }
+                  `}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+          ) : (
           <div className="flex flex-wrap gap-1.5">
             {PRESETS.map((p, i) => (
               <button
@@ -707,6 +879,7 @@ function NewScheduleForm({
               </button>
             ))}
           </div>
+          )}
         </div>
 
         {/* Time */}
@@ -775,19 +948,42 @@ function NewScheduleForm({
           </div>
         </div>
 
-        {/* Create button */}
-        <button
-          onClick={handleCreate}
-          disabled={saving}
-          className="w-full rounded-[10px] bg-indigo-600
-            py-3 text-sm font-bold text-white
-            transition-all hover:bg-indigo-700
-            hover:-translate-y-0.5
-            hover:shadow-[0_4px_14px_rgba(79,70,229,0.2)]
-            disabled:opacity-50"
-        >
-          {saving ? "Creating..." : "Create Schedule"}
-        </button>
+        {/* Submit + Cancel */}
+        <div className="space-y-2">
+          <button
+            onClick={handleSubmit}
+            disabled={saving}
+            className="w-full rounded-[10px]
+              bg-indigo-600 py-3 text-sm font-bold
+              text-white transition-all
+              hover:bg-indigo-700
+              hover:-translate-y-0.5
+              hover:shadow-[0_4px_14px_rgba(79,70,229,0.2)]
+              disabled:opacity-50"
+          >
+            {saving
+              ? editingJob
+                ? "Updating..."
+                : "Creating..."
+              : editingJob
+                ? "Update Schedule"
+                : "Create Schedule"}
+          </button>
+          {editingJob && (
+            <button
+              onClick={onCancel}
+              className="w-full rounded-[10px] border
+                border-gray-200 py-3 text-sm
+                font-bold text-gray-500
+                transition-all hover:bg-gray-50
+                dark:border-gray-700
+                dark:text-gray-400
+                dark:hover:bg-gray-800"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -914,6 +1110,8 @@ export function SchedulerTab() {
   const { mutate: mutateRuns } = useSchedulerRuns();
   const { mutate: mutateStats } = useSchedulerStats();
   const [showForm, setShowForm] = useState(true);
+  const [editingJob, setEditingJob] =
+    useState<SchedulerJob | null>(null);
 
   const refreshAll = useCallback(() => {
     mutateJobs();
@@ -938,10 +1136,26 @@ export function SchedulerTab() {
           lg:grid-cols-[1.4fr_1fr]"
       >
         <JobList
-          onCreateClick={() => setShowForm(true)}
+          onCreateClick={() => {
+            setEditingJob(null);
+            setShowForm(true);
+          }}
+          onEditClick={(job) => {
+            setEditingJob(job);
+            setShowForm(true);
+          }}
         />
         {showForm && (
-          <NewScheduleForm onCreated={refreshAll} />
+          <NewScheduleForm
+            editingJob={editingJob}
+            onCreated={() => {
+              setEditingJob(null);
+              refreshAll();
+            }}
+            onCancel={() => {
+              setEditingJob(null);
+            }}
+          />
         )}
       </div>
 

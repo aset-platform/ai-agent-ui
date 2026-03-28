@@ -1394,6 +1394,12 @@ def _scheduled_jobs_schema() -> Schema:
             field_type=TimestampType(),
             required=False,
         ),
+        NestedField(
+            field_id=10,
+            name="cron_dates",
+            field_type=StringType(),
+            required=False,
+        ),
     )
 
 

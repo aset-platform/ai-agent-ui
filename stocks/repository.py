@@ -3834,6 +3834,19 @@ class StockRepository:
         """Insert or update a scheduled job."""
         try:
             tbl = self._load_table(self._SCHEDULED_JOBS)
+            # Auto-evolve schema for cron_dates
+            col_names = [
+                f.name for f in tbl.schema().fields
+            ]
+            if "cron_dates" not in col_names:
+                from pyiceberg.types import StringType
+                with tbl.update_schema() as upd:
+                    upd.add_column(
+                        "cron_dates", StringType(),
+                    )
+                tbl = self._load_table(
+                    self._SCHEDULED_JOBS,
+                )
             df = tbl.scan().to_pandas()
             mask = df["job_id"] == job["job_id"]
             if mask.any():

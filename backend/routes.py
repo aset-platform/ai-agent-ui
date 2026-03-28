@@ -1070,12 +1070,18 @@ def create_app(
         cron_days = body.get("cron_days", [])
         if isinstance(cron_days, list):
             cron_days = ",".join(cron_days)
+        cron_dates = body.get("cron_dates", [])
+        if isinstance(cron_dates, list):
+            cron_dates = ",".join(
+                str(d) for d in cron_dates
+            )
         job = {
             "name": body.get("name", "Untitled"),
             "job_type": body.get(
                 "job_type", "data_refresh",
             ),
             "cron_days": cron_days,
+            "cron_dates": cron_dates or "",
             "cron_time": body.get("cron_time", "18:00"),
             "scope": body.get("scope", "all"),
         }
@@ -1099,8 +1105,8 @@ def create_app(
         else:
             updates = {}
             for k in (
-                "name", "cron_days", "cron_time",
-                "scope",
+                "name", "cron_days", "cron_dates",
+                "cron_time", "scope",
             ):
                 if k in body:
                     v = body[k]
@@ -1108,6 +1114,12 @@ def create_app(
                         v, list,
                     ):
                         v = ",".join(v)
+                    if k == "cron_dates" and isinstance(
+                        v, list,
+                    ):
+                        v = ",".join(
+                            str(d) for d in v
+                        )
                     updates[k] = v
             if updates:
                 svc.update_job(job_id, updates)

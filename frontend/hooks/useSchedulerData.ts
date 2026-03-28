@@ -15,6 +15,7 @@ export interface SchedulerJob {
   name: string;
   job_type: string;
   cron_days: string[];
+  cron_dates: number[];
   cron_time: string;
   scope: string;
   enabled: boolean;
