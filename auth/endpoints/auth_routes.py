@@ -62,7 +62,7 @@ def _set_refresh_cookie(
         value=refresh_token,
         httponly=True,
         secure=_secure,
-        samesite="strict",
+        samesite="lax",  # lax for payment redirects
         path=_COOKIE_PATH,
         max_age=_COOKIE_MAX_AGE,
     )
