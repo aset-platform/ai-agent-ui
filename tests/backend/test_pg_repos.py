@@ -375,3 +375,92 @@ async def test_repository_facade(pg_session):
     await repo.unlink_ticker(user["user_id"], "AAPL")
     tickers = await repo.get_user_tickers(user["user_id"])
     assert "AAPL" not in tickers
+
+
+from backend.db.models.registry import StockRegistry
+from backend.db.models.scheduler import ScheduledJob
+
+
+# ── pg_stocks: registry ──
+
+
+@pytest.mark.asyncio
+async def test_registry_upsert(pg_session):
+    from backend.db.pg_stocks import (
+        upsert_registry, get_registry,
+    )
+
+    await upsert_registry(pg_session, {
+        "ticker": "AAPL",
+        "market": "NASDAQ",
+        "total_rows": 100,
+    })
+
+    row = await get_registry(pg_session, "AAPL")
+    assert row["ticker"] == "AAPL"
+    assert row["total_rows"] == 100
+
+    # Upsert again
+    await upsert_registry(pg_session, {
+        "ticker": "AAPL",
+        "total_rows": 200,
+    })
+    row = await get_registry(pg_session, "AAPL")
+    assert row["total_rows"] == 200
+
+
+@pytest.mark.asyncio
+async def test_registry_get_all(pg_session):
+    from backend.db.pg_stocks import (
+        upsert_registry, get_registry,
+    )
+
+    await upsert_registry(pg_session, {
+        "ticker": "AAPL", "market": "NASDAQ",
+    })
+    await upsert_registry(pg_session, {
+        "ticker": "MSFT", "market": "NASDAQ",
+    })
+
+    df = await get_registry(pg_session)
+    assert len(df) == 2
+
+
+# ── pg_stocks: scheduler ──
+
+
+@pytest.mark.asyncio
+async def test_scheduler_job_crud(pg_session):
+    from backend.db.pg_stocks import (
+        upsert_scheduled_job,
+        get_scheduled_jobs,
+        delete_scheduled_job,
+    )
+
+    await upsert_scheduled_job(pg_session, {
+        "job_id": "j1",
+        "name": "daily-fetch",
+        "job_type": "fetch",
+        "cron_days": "mon,wed,fri",
+        "cron_time": "09:00",
+        "enabled": True,
+    })
+
+    jobs = await get_scheduled_jobs(pg_session)
+    assert len(jobs) == 1
+    assert jobs[0]["name"] == "daily-fetch"
+
+    # Toggle off
+    await upsert_scheduled_job(pg_session, {
+        "job_id": "j1",
+        "name": "daily-fetch",
+        "job_type": "fetch",
+        "enabled": False,
+    })
+    jobs = await get_scheduled_jobs(pg_session)
+    assert jobs[0]["enabled"] is False
+
+    # Delete
+    await delete_scheduled_job(pg_session, "j1")
+    jobs = await get_scheduled_jobs(pg_session)
+    assert len(jobs) == 0
