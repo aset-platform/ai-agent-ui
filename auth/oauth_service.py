@@ -4,7 +4,7 @@ This module provides :class:`OAuthService`, which manages the server-side
 state tokens required for CSRF protection, constructs provider authorization
 URLs, and exchanges authorization codes for user-identity dictionaries that
 can be passed directly to
-:meth:`~auth.repository.IcebergUserRepository.get_or_create_by_oauth`.
+:meth:`~auth.repository.UserRepository.get_or_create_by_oauth`.
 
 The PKCE ``code_verifier`` is generated and stored client-side
 (``sessionStorage``); only the ``code_challenge`` (SHA-256 hash) is sent

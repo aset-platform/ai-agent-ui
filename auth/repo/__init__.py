@@ -1,21 +1,24 @@
-"""auth.repo — Iceberg-backed repository sub-package for user and audit data.
+"""auth.repo -- PostgreSQL-backed user repository + Iceberg audit data.
 
-The public API is :class:`IcebergUserRepository`.  All callers should import
+The public API is :class:`UserRepository`.  All callers should import
 from here or from :mod:`auth.repository` (the backward-compatible shim)::
 
-    from auth.repo import IcebergUserRepository
+    from auth.repo import UserRepository
     # or
-    from auth.repository import IcebergUserRepository
+    from auth.repository import UserRepository
 """
 
 import logging
 
-from auth.repo.repository import IcebergUserRepository  # noqa: F401
+from auth.repo.repository import (  # noqa: F401
+    IcebergUserRepository,
+    UserRepository,
+)
 
 logger = logging.getLogger(__name__)
 
-# Module-level export list — kept here as required
+# Module-level export list -- kept here as required
 # by Python packaging conventions.
-_all_exports = ["IcebergUserRepository"]
+_all_exports = ["UserRepository", "IcebergUserRepository"]
 
 __all__ = _all_exports

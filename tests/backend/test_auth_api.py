@@ -31,7 +31,7 @@ os.environ.setdefault(
 
 
 class _FakeRepo:
-    """In-memory stand-in for IcebergUserRepository."""
+    """In-memory stand-in for UserRepository."""
 
     def __init__(self):
         self._users: Dict[str, Dict[str, Any]] = {}

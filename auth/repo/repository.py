@@ -1,9 +1,4 @@
-"""User repository facade — PostgreSQL via SQLAlchemy.
-
-Maintains the same interface as the old Iceberg-backed
-IcebergUserRepository so callers do not need changes.
-Will be renamed to UserRepository in cleanup story.
-"""
+"""User repository facade -- PostgreSQL via SQLAlchemy."""
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
@@ -21,7 +16,7 @@ from auth.repo import (
 log = logging.getLogger(__name__)
 
 
-class IcebergUserRepository:
+class UserRepository:
     """Facade over PostgreSQL-backed user operations."""
 
     def __init__(
@@ -197,3 +192,8 @@ class IcebergUserRepository:
         """Read audit events from Iceberg (unchanged)."""
         log.debug("List audit events (Iceberg)")
         return []
+
+
+# Deprecated alias — kept for backward compatibility with
+# scripts and tests that reference the old name.
+IcebergUserRepository = UserRepository

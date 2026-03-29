@@ -230,7 +230,7 @@ def verify_razorpay_signature(
 # ---------------------------------------------------------------
 
 
-def _log_transaction(
+async def _log_transaction(
     user_id: str,
     gateway: str,
     event_type: str,
@@ -244,47 +244,29 @@ def _log_transaction(
     status: str = "success",
     raw_payload: str | None = None,
 ) -> None:
-    """Append a payment event to the ledger.
+    """Append a payment event to the PG ledger.
 
-    Fire-and-forget — errors logged, never raised.
+    Fire-and-forget -- errors logged, never raised.
     """
     try:
-        import uuid
-        from datetime import datetime, timezone
-
-        import pyarrow as pa
-
-        from auth.repo.schemas import (
-            _PAYMENT_TXN_PA_SCHEMA,
-            _PAYMENT_TXN_TABLE,
-        )
-
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
         repo = _helpers._get_repo()
-        cat = repo._get_catalog()
-        tbl = cat.load_table(_PAYMENT_TXN_TABLE)
-        row = pa.table(
-            {
-                "transaction_id": [str(uuid.uuid4())],
-                "user_id": [user_id],
-                "gateway": [gateway],
-                "event_type": [event_type],
-                "gateway_event_id": [gateway_event_id],
-                "subscription_id": [subscription_id],
-                "customer_id": [customer_id],
-                "amount": [amount],
-                "currency": [currency],
-                "tier_before": [tier_before],
-                "tier_after": [tier_after],
-                "status": [status],
-                "raw_payload": [raw_payload],
-                "created_at": [now],
-            },
-            schema=_PAYMENT_TXN_PA_SCHEMA,
-        )
-        tbl.append(row)
+        await repo.record_payment({
+            "user_id": user_id,
+            "gateway": gateway,
+            "event_type": event_type,
+            "gateway_event_id": gateway_event_id,
+            "subscription_id": subscription_id,
+            "customer_id": customer_id,
+            "amount": amount,
+            "currency": currency,
+            "tier_before": tier_before,
+            "tier_after": tier_after,
+            "status": status,
+            "raw_payload": raw_payload,
+        })
         _logger.info(
-            "Transaction logged: user=%s gw=%s" " event=%s status=%s",
+            "Transaction logged: user=%s gw=%s"
+            " event=%s status=%s",
             user_id,
             gateway,
             event_type,
@@ -292,7 +274,8 @@ def _log_transaction(
         )
     except Exception:
         _logger.exception(
-            "Failed to log transaction for user=%s",
+            "Failed to log transaction for"
+            " user=%s",
             user_id,
         )
 
@@ -392,7 +375,7 @@ async def _checkout_razorpay(
                     TIER_PRICE_INR,
                 )
 
-                _log_transaction(
+                await _log_transaction(
                     user_id=user.user_id,
                     gateway="razorpay",
                     event_type="upgrade",
@@ -507,7 +490,7 @@ async def _checkout_stripe(
                     TIER_PRICE_USD,
                 )
 
-                _log_transaction(
+                await _log_transaction(
                     user_id=user.user_id,
                     gateway="stripe",
                     event_type="upgrade",
@@ -761,7 +744,7 @@ def register(router: APIRouter) -> None:
         )
 
         gw = "stripe" if st_sub_id else "razorpay" if rz_sub_id else "unknown"
-        _log_transaction(
+        await _log_transaction(
             user_id=user.user_id,
             gateway=gw,
             event_type="user_cancelled",
@@ -1077,7 +1060,7 @@ async def _handle_stripe_checkout(
     amt_cents = session.get("amount_total")
     amt = float(amt_cents) / 100 if amt_cents else None
 
-    _log_transaction(
+    await _log_transaction(
         user_id=user_id,
         gateway="stripe",
         event_type="checkout_completed",
@@ -1121,7 +1104,7 @@ async def _handle_stripe_sub_change(
                 "stripe_subscription_id": None,
             },
         )
-        _log_transaction(
+        await _log_transaction(
             user_id=user["user_id"],
             gateway="stripe",
             event_type="cancelled",
@@ -1156,7 +1139,7 @@ async def _handle_stripe_payment_failed(
         user["user_id"],
         {"subscription_status": "past_due"},
     )
-    _log_transaction(
+    await _log_transaction(
         user_id=user["user_id"],
         gateway="stripe",
         event_type="payment_failed",
@@ -1272,7 +1255,7 @@ async def _handle_charged(entity: dict[str, Any]) -> None:
     )
     from subscription_config import TIER_PRICE_INR
 
-    _log_transaction(
+    await _log_transaction(
         user_id=user["user_id"],
         gateway="razorpay",
         event_type="charged",
@@ -1324,7 +1307,7 @@ async def _handle_cancelled(entity: dict[str, Any]) -> None:
             "razorpay_subscription_id": None,
         },
     )
-    _log_transaction(
+    await _log_transaction(
         user_id=user["user_id"],
         gateway="razorpay",
         event_type="cancelled",
@@ -1362,7 +1345,7 @@ async def _handle_payment_failed(
         user["user_id"],
         {"subscription_status": "past_due"},
     )
-    _log_transaction(
+    await _log_transaction(
         user_id=user["user_id"],
         gateway="razorpay",
         event_type="payment_failed",

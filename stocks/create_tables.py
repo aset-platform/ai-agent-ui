@@ -16,7 +16,6 @@ created automatically if they do not already exist.
 
 Tables created
 --------------
-- ``stocks.registry``
 - ``stocks.company_info``
 - ``stocks.ohlcv``
 - ``stocks.dividends``
@@ -27,6 +26,12 @@ Tables created
 - ``stocks.quarterly_results``
 - ``stocks.llm_pricing``
 - ``stocks.llm_usage``
+
+Migrated to PostgreSQL (no longer created here)
+------------------------------------------------
+- ``stocks.registry``
+- ``stocks.scheduled_jobs``
+- ``stocks.scheduler_runs``
 """
 
 import logging
@@ -66,7 +71,6 @@ _logger = logging.getLogger(__name__)
 _NAMESPACE = "stocks"
 
 # Table identifiers
-_REGISTRY_TABLE = f"{_NAMESPACE}.registry"
 _COMPANY_INFO_TABLE = f"{_NAMESPACE}.company_info"
 _OHLCV_TABLE = f"{_NAMESPACE}.ohlcv"
 _DIVIDENDS_TABLE = f"{_NAMESPACE}.dividends"
@@ -77,8 +81,6 @@ _FORECASTS_TABLE = f"{_NAMESPACE}.forecasts"
 _QUARTERLY_RESULTS_TABLE = f"{_NAMESPACE}.quarterly_results"
 _LLM_PRICING_TABLE = f"{_NAMESPACE}.llm_pricing"
 _LLM_USAGE_TABLE = f"{_NAMESPACE}.llm_usage"
-_SCHEDULED_JOBS_TABLE = f"{_NAMESPACE}.scheduled_jobs"
-_SCHEDULER_RUNS_TABLE = f"{_NAMESPACE}.scheduler_runs"
 _SENTIMENT_SCORES_TABLE = f"{_NAMESPACE}.sentiment_scores"
 
 
@@ -100,58 +102,6 @@ def _get_catalog() -> SqlCatalog:
             "Failed to load Iceberg catalog. "
             "Check that .pyiceberg.yaml exists in the project root."
         ) from exc
-
-
-def _registry_schema() -> Schema:
-    """Return the Iceberg schema for ``stocks.registry``.
-
-    Returns:
-        Schema: One row per ticker; tracks fetch metadata and date ranges.
-    """
-    return Schema(
-        NestedField(
-            field_id=1, name="ticker", field_type=StringType(), required=False
-        ),
-        NestedField(
-            field_id=2,
-            name="last_fetch_date",
-            field_type=DateType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=3,
-            name="total_rows",
-            field_type=LongType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=4,
-            name="date_range_start",
-            field_type=DateType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=5,
-            name="date_range_end",
-            field_type=DateType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=6, name="market", field_type=StringType(), required=False
-        ),
-        NestedField(
-            field_id=7,
-            name="created_at",
-            field_type=TimestampType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=8,
-            name="updated_at",
-            field_type=TimestampType(),
-            required=False,
-        ),
-    )
 
 
 def _company_info_schema() -> Schema:
@@ -1337,156 +1287,6 @@ def _portfolio_transactions_schema() -> Schema:
     )
 
 
-def _scheduled_jobs_schema() -> Schema:
-    """Return the schema for ``stocks.scheduled_jobs``."""
-    return Schema(
-        NestedField(
-            field_id=1,
-            name="job_id",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=2,
-            name="name",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=3,
-            name="job_type",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=4,
-            name="cron_days",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=5,
-            name="cron_time",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=6,
-            name="scope",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=7,
-            name="enabled",
-            field_type=BooleanType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=8,
-            name="created_at",
-            field_type=TimestampType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=9,
-            name="updated_at",
-            field_type=TimestampType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=10,
-            name="cron_dates",
-            field_type=StringType(),
-            required=False,
-        ),
-    )
-
-
-def _scheduler_runs_schema() -> Schema:
-    """Return the schema for ``stocks.scheduler_runs``."""
-    return Schema(
-        NestedField(
-            field_id=1,
-            name="run_id",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=2,
-            name="job_id",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=3,
-            name="job_name",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=4,
-            name="job_type",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=5,
-            name="scope",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=6,
-            name="status",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=7,
-            name="started_at",
-            field_type=TimestampType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=8,
-            name="completed_at",
-            field_type=TimestampType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=9,
-            name="duration_secs",
-            field_type=DoubleType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=10,
-            name="tickers_total",
-            field_type=IntegerType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=11,
-            name="tickers_done",
-            field_type=IntegerType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=12,
-            name="error_message",
-            field_type=StringType(),
-            required=False,
-        ),
-        NestedField(
-            field_id=13,
-            name="trigger_type",
-            field_type=StringType(),
-            required=False,
-        ),
-    )
-
-
 def _sentiment_scores_schema() -> Schema:
     """Schema for ``stocks.sentiment_scores``.
 
@@ -1588,7 +1388,6 @@ def create_tables() -> None:
     # No-partition tables
     empty_spec = PartitionSpec()
 
-    _create_table(catalog, _REGISTRY_TABLE, _registry_schema(), empty_spec)
     _create_table(
         catalog, _COMPANY_INFO_TABLE, _company_info_schema(), empty_spec
     )
@@ -1657,20 +1456,6 @@ def create_tables() -> None:
         catalog,
         f"{_NAMESPACE}.portfolio_transactions",
         _portfolio_transactions_schema(),
-        empty_spec,
-    )
-
-    # Scheduler tables (no partition — small tables)
-    _create_table(
-        catalog,
-        _SCHEDULED_JOBS_TABLE,
-        _scheduled_jobs_schema(),
-        empty_spec,
-    )
-    _create_table(
-        catalog,
-        _SCHEDULER_RUNS_TABLE,
-        _scheduler_runs_schema(),
         empty_spec,
     )
 

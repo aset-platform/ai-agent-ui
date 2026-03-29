@@ -239,32 +239,5 @@ class TestSubscriptionClaimsHelper:
         assert claims["usage_remaining"] == 30  # 30 - 0
 
 
-# -----------------------------------------------------------
-# Iceberg schema has subscription columns
-# -----------------------------------------------------------
-class TestIcebergSchemaColumns:
-    """Verify PyArrow schema includes all 9 subscription fields."""
-
-    def test_users_schema_has_subscription_fields(self):
-        from auth.repo.schemas import _USERS_PA_SCHEMA
-
-        names = _USERS_PA_SCHEMA.names
-        expected = [
-            "subscription_tier",
-            "subscription_status",
-            "razorpay_customer_id",
-            "razorpay_subscription_id",
-            "stripe_customer_id",
-            "stripe_subscription_id",
-            "monthly_usage_count",
-            "subscription_start_at",
-            "subscription_end_at",
-        ]
-        for col in expected:
-            assert col in names, f"Missing column: {col}"
-
-    def test_subscription_timestamps_in_ts_cols(self):
-        from auth.repo.schemas import _USER_TS_COLS
-
-        assert "subscription_start_at" in _USER_TS_COLS
-        assert "subscription_end_at" in _USER_TS_COLS
+# TestIcebergSchemaColumns removed — users table migrated
+# to PostgreSQL; schema validation now in ORM model tests.

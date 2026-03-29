@@ -32,7 +32,7 @@ os.environ.setdefault(
 
 
 class _FakeRepo:
-    """In-memory stand-in for IcebergUserRepository.
+    """In-memory stand-in for UserRepository.
 
     Extends the minimal fake with ``get_user_tickers``,
     ``link_ticker``, and ``unlink_ticker`` so the ticker

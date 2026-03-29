@@ -141,7 +141,7 @@ async def _maybe_reset(
     updates usage_month to current.
 
     Args:
-        repo: IcebergUserRepository instance.
+        repo: UserRepository instance.
         user: User dict from Iceberg.
         current_month: Current ``YYYY-MM``.
 

@@ -2,7 +2,7 @@
 
 Functions
 ---------
-- :func:`_get_repo` — lru_cache singleton for IcebergUserRepository
+- :func:`_get_repo` — lru_cache singleton for UserRepository
 - :func:`_get_oauth_svc` — lru_cache singleton for OAuthService
 - :func:`_user_to_response` — convert raw user dict to UserResponse
 - :func:`_require_active_user` — raise HTTP 401 for missing/inactive users
@@ -20,7 +20,7 @@ from fastapi import HTTPException
 
 from auth.models import UserResponse
 from auth.oauth_service import OAuthService
-from auth.repository import IcebergUserRepository
+from auth.repository import UserRepository
 
 # Module-level logger; cannot be moved into a class
 # as these are module-level functions.
@@ -28,19 +28,19 @@ _logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
-def _get_repo() -> IcebergUserRepository:
-    """Return the app-wide IcebergUserRepository.
+def _get_repo() -> UserRepository:
+    """Return the app-wide UserRepository.
 
     Constructed once and cached for the process lifetime.
     Uses a session factory so each method call gets its
     own per-request async session.
 
     Returns:
-        The cached IcebergUserRepository instance.
+        The cached UserRepository instance.
     """
     from backend.db.engine import get_session_factory
 
-    return IcebergUserRepository(
+    return UserRepository(
         session_factory=get_session_factory(),
     )
 
@@ -78,7 +78,7 @@ def _user_to_response(user: dict[str, Any]) -> UserResponse:
 
     Args:
         user: A user dict as returned by
-            :class:`~auth.repository.IcebergUserRepository`.
+            :class:`~auth.repository.UserRepository`.
 
     Returns:
         A :class:`~auth.models.UserResponse` safe to include in API responses.
@@ -127,7 +127,7 @@ def _subscription_claims(
 
     Args:
         user: A user dict from
-            :class:`~auth.repository.IcebergUserRepository`.
+            :class:`~auth.repository.UserRepository`.
 
     Returns:
         A dict with ``subscription_tier``,

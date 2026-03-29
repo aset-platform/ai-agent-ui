@@ -346,9 +346,9 @@ async def test_update_payment_status(pg_session):
 
 @pytest.mark.asyncio
 async def test_repository_facade(pg_session):
-    from auth.repo.repository import IcebergUserRepository
+    from auth.repo.repository import UserRepository
 
-    repo = IcebergUserRepository(session=pg_session)
+    repo = UserRepository(session=pg_session)
 
     # Create
     user = await repo.create({
