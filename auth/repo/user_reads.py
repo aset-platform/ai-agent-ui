@@ -1,96 +1,48 @@
-"""Read-only user queries against the ``auth.users`` Iceberg table.
-
-Functions
----------
-- :func:`get_by_email`
-- :func:`get_by_id`
-- :func:`list_all`
-"""
-
-from __future__ import annotations
-
+"""User read operations — PostgreSQL via SQLAlchemy."""
 import logging
 from typing import Any
 
-from auth.repo.catalog import scan_all_users, users_table
-from auth.repo.schemas import _row_to_dict
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# Module-level logger; kept here as a module-level
-# constant (immutable binding).
-_logger = logging.getLogger(__name__)
+from backend.db.models.user import User
 
-
-def get_by_email(cat, email: str) -> dict[str, Any] | None:
-    """Fetch a single user by email address.
-
-    Attempts a predicate-push-down scan first; falls back to a full scan
-    on failure.
-
-    Args:
-        cat: The loaded Iceberg catalog.
-        email: The email address to search for.
-
-    Returns:
-        A user dict if found, otherwise ``None``.
-    """
-    tbl = users_table(cat)
-    try:
-        from pyiceberg.expressions import EqualTo
-
-        arrow = tbl.scan(row_filter=EqualTo("email", email)).to_arrow()
-        rows = arrow.to_pylist()
-        if not rows:
-            return None
-        return _row_to_dict(rows[0])
-    except Exception as exc:
-        _logger.error(
-            "get_by_email predicate scan failed,"
-            " falling back to full scan: %s",
-            exc,
-        )
-        for row in scan_all_users(cat):
-            if row.get("email") == email:
-                return row
-        return None
+log = logging.getLogger(__name__)
 
 
-def get_by_id(cat, user_id: str) -> dict[str, Any] | None:
-    """Fetch a single user by UUID.
-
-    Args:
-        cat: The loaded Iceberg catalog.
-        user_id: The UUID string of the user to retrieve.
-
-    Returns:
-        A user dict if found, otherwise ``None``.
-    """
-    tbl = users_table(cat)
-    try:
-        from pyiceberg.expressions import EqualTo
-
-        arrow = tbl.scan(row_filter=EqualTo("user_id", user_id)).to_arrow()
-        rows = arrow.to_pylist()
-        if not rows:
-            return None
-        return _row_to_dict(rows[0])
-    except Exception as exc:
-        _logger.error(
-            "get_by_id predicate scan failed, falling back to full scan: %s",
-            exc,
-        )
-        for row in scan_all_users(cat):
-            if row.get("user_id") == user_id:
-                return row
-        return None
+def _user_to_dict(user: User) -> dict[str, Any]:
+    """Convert User ORM instance to dict."""
+    return {
+        c.name: getattr(user, c.name)
+        for c in user.__table__.columns
+    }
 
 
-def list_all(cat) -> list[dict[str, Any]]:
-    """Return all users from the ``auth.users`` table.
+async def get_by_email(
+    session: AsyncSession, email: str,
+) -> dict[str, Any] | None:
+    """Return user dict by email, or None."""
+    result = await session.execute(
+        select(User).where(User.email == email)
+    )
+    user = result.scalar_one_or_none()
+    return _user_to_dict(user) if user else None
 
-    Args:
-        cat: The loaded Iceberg catalog.
 
-    Returns:
-        A list of user dicts (may be empty).
-    """
-    return scan_all_users(cat)
+async def get_by_id(
+    session: AsyncSession, user_id: str,
+) -> dict[str, Any] | None:
+    """Return user dict by user_id, or None."""
+    result = await session.execute(
+        select(User).where(User.user_id == user_id)
+    )
+    user = result.scalar_one_or_none()
+    return _user_to_dict(user) if user else None
+
+
+async def list_all(
+    session: AsyncSession,
+) -> list[dict[str, Any]]:
+    """Return all users as list of dicts."""
+    result = await session.execute(select(User))
+    return [_user_to_dict(u) for u in result.scalars().all()]
