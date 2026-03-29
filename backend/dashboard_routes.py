@@ -121,7 +121,7 @@ def create_dashboard_router() -> APIRouter:
 
         repo = _helpers._get_repo()
         stock_repo = _get_stock_repo()
-        tickers = repo.get_user_tickers(user.user_id)
+        tickers = await repo.get_user_tickers(user.user_id)
 
         if not tickers:
             return WatchlistResponse()
@@ -222,7 +222,7 @@ def create_dashboard_router() -> APIRouter:
 
         repo = _helpers._get_repo()
         stock_repo = _get_stock_repo()
-        tickers = repo.get_user_tickers(user.user_id)
+        tickers = await repo.get_user_tickers(user.user_id)
 
         if not tickers:
             return ForecastsResponse()
@@ -306,7 +306,7 @@ def create_dashboard_router() -> APIRouter:
 
         repo = _helpers._get_repo()
         stock_repo = _get_stock_repo()
-        tickers = repo.get_user_tickers(user.user_id)
+        tickers = await repo.get_user_tickers(user.user_id)
 
         if not tickers:
             return AnalysisResponse()

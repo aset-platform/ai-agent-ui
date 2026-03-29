@@ -69,7 +69,7 @@ def create_app(
                 warm_tickers,
             )
 
-            warm_shared()
+            await warm_shared()
 
             top_n = getattr(
                 settings,
@@ -82,8 +82,9 @@ def create_app(
                 name="cache-warmup-tickers",
             ).start()
             threading.Thread(
-                target=warm_frequent_users,
-                args=(top_n,),
+                target=lambda: asyncio.run(
+                    warm_frequent_users(top_n)
+                ),
                 daemon=True,
                 name="cache-warmup-users",
             ).start()
@@ -1026,7 +1027,7 @@ def create_app(
         repo = _get_repo()
 
         # Build user_id → name/email lookup
-        all_users = repo.list_all()
+        all_users = await repo.list_all()
         user_map: dict[str, dict] = {}
         for u in all_users:
             uid = u.get("user_id", "")
