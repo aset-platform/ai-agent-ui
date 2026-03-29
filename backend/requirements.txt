@@ -151,6 +151,7 @@ asyncpg==0.30.0
 alembic==1.15.2
 duckdb==1.2.2
 aiosqlite==0.20.0
+greenlet==3.3.2
 stanio==0.5.1
 starlette==0.52.1
 strictyaml==1.7.3
