@@ -1,183 +1,104 @@
-# Project Index: ai-agent-ui
+# Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-03-29 (Sprint 4 + Containerization)
-
----
+> Last refreshed: 2026-03-29 (Sprint 4 + Hybrid DB Migration)
 
 ## Project Structure
 
 ```
 ai-agent-ui/
-├── backend/              # FastAPI + LangChain + LangGraph (Python 3.12)
-│   ├── main.py           # ASGI entry, ChatServer, startup wiring
-│   ├── config.py         # Pydantic Settings (env-based, database_url, ollama_*)
-│   ├── routes.py         # HTTP chat + streaming + admin endpoints
-│   ├── ws.py             # WebSocket /ws/chat
-│   ├── bootstrap.py      # Tool + agent + graph registration
-│   ├── llm_fallback.py   # N-tier Ollama → Groq → Anthropic cascade
-│   ├── ollama_manager.py # Local LLM lifecycle (health probe, load/unload)
-│   ├── token_budget.py   # Sliding-window TPM/RPM tracker
-│   ├── message_compressor.py  # 3-stage context compression
-│   ├── observability.py  # Tier health, cascade counts → Iceberg
-│   ├── tracing.py        # LangSmith + LangFuse setup
-│   ├── agents/           # LangGraph supervisor + 5 sub-agents
-│   │   ├── graph.py      # 11-node StateGraph builder
-│   │   ├── sub_agents.py # Factory + dynamic context injection
-│   │   ├── configs/      # portfolio, stock_analyst, forecaster, research, sentiment
-│   │   └── nodes/        # guardrail, router, llm_classifier, supervisor, synthesis, log_query
-│   ├── tools/            # 26 LangChain @tool modules
-│   │   ├── stock_data_tool.py      # 7 stock data tools
-│   │   ├── price_analysis_tool.py  # Technical analysis + chart
-│   │   ├── forecasting_tool.py     # Prophet forecast pipeline
-│   │   ├── news_tools.py           # Tiered news (yfinance → RSS → SerpAPI)
-│   │   ├── portfolio_tools.py      # 7 portfolio tools
-│   │   ├── sentiment_agent.py      # 3 sentiment tools (ollama_first=True)
-│   │   ├── _sentiment_sources.py   # 3-source headline fetcher + dedup
-│   │   ├── _sentiment_scorer.py    # FallbackLLM scoring + weighted avg
-│   │   └── _forecast_model.py      # Prophet training
-│   ├── jobs/             # Background schedulers
-│   │   ├── gap_filler.py           # Batch sentiment with Ollama auto-load/unload
-│   │   ├── scheduler_service.py    # Admin UI scheduler (catch-up, monthly)
-│   │   └── executor.py             # Job execution engine
-│   ├── dashboard_routes.py  # /v1/dashboard/* (LLM usage widget with provider)
-│   ├── insights_routes.py   # /v1/insights/*
-│   └── audit_routes.py      # /v1/audit/*
-├── auth/                 # JWT + RBAC + OAuth PKCE + Subscriptions
-│   ├── service.py        # AuthService
-│   ├── dependencies.py   # get_current_user, require_tier
-│   ├── endpoints/        # auth, oauth, ticker, subscription, admin routes
-│   ├── repo/             # Iceberg user CRUD (copy-on-write)
-│   └── create_tables.py  # 5 auth Iceberg tables
-├── stocks/               # Iceberg data layer
-│   ├── repository.py     # StockRepository (~4000 lines)
-│   └── create_tables.py  # 15 stocks Iceberg tables
-├── frontend/             # Next.js 16 + React 19 + Tailwind CSS 4
-│   ├── app/              # App Router (12 routes)
-│   │   ├── (authenticated)/dashboard/    # Portfolio dashboard
-│   │   ├── (authenticated)/analytics/    # Analysis, Compare, Insights
-│   │   ├── (authenticated)/admin/        # Admin (6 tabs)
-│   │   └── login/
-│   ├── components/       # 44 React components
-│   │   ├── ChatPanel.tsx       # Chat panel (scroll, focus, markdown)
-│   │   ├── ChatInput.tsx       # Input (readOnly during loading, autoFocus)
-│   │   ├── widgets/            # HeroSection, WatchlistWidget, LLMUsageWidget
-│   │   ├── charts/             # StockChart, ForecastChart, CompareChart
-│   │   └── admin/              # SchedulerTab, UserModal
-│   ├── hooks/            # 19 custom hooks
-│   │   ├── useSendMessage.ts   # Streaming NDJSON + tool calls header
-│   │   └── useDashboardData.ts # SWR data fetching
-│   └── lib/              # apiFetch, config, types, auth, constants
-├── dashboard/            # Plotly Dash (imported by backend for callbacks)
-├── scripts/              # 25 utility scripts
-├── tests/backend/        # 52 test files (~620 test cases)
-├── e2e/                  # Playwright E2E (~219 tests)
-├── docs/                 # MkDocs Material
-│   └── dev/              # changelog, how-to-run, decisions, e2e-testing
-│
-│ ── Docker ──────────────────────────────────────────
-├── Dockerfile.backend    # 2-stage: builder (gcc) → runtime (slim)
-├── Dockerfile.frontend   # 3-stage: deps → build → runner (standalone)
-├── docker-compose.yml    # backend + frontend + postgres:16 + redis:7
-├── docker-compose.override.yml  # Dev hot-reload (source mounts)
-├── .env.example          # Env var template (committed)
-├── .env                  # Secrets (gitignored)
-└── .dockerignore         # Build context exclusions
+├── backend/          97 .py — FastAPI, LangChain agents, tools, ORM
+│   ├── agents/       LangGraph nodes, configs, registry
+│   ├── tools/        23 tool implementations (forecast, sentiment, portfolio)
+│   ├── db/           SQLAlchemy models, engine, Alembic, DuckDB, pg_stocks
+│   └── jobs/         Scheduler service, executor, gap filler
+├── auth/             34 .py — JWT, OAuth PKCE, endpoints, repositories
+│   ├── endpoints/    9 route handlers (auth, admin, ticker, subscription)
+│   └── repo/         UserRepository facade, reads, writes, oauth, ticker, payment
+├── stocks/           8 .py — Iceberg tables (14 OLAP), repository, cached_repository
+├── frontend/         109 .tsx — Next.js 16, React 19, TailwindCSS 4
+│   ├── app/          18 pages (dashboard, analytics, admin, portfolio, docs)
+│   ├── components/   Charts, widgets, admin panels, chat UI
+│   ├── hooks/        18 custom hooks (data, auth, chat, portfolio)
+│   └── lib/          apiFetch, auth, OAuth, config, types
+├── tests/            57 .py — pytest backend tests
+├── e2e/              55 .ts — Playwright E2E tests
+├── scripts/          39 — seed, migrate, backfill, perf, setup
+└── docs/             35+ .md — MkDocs Material site
 ```
 
 ## Entry Points
 
-| Entry | Path | Port | Docker |
-|-------|------|------|--------|
-| Backend | `backend/main.py` | 8181 | `docker compose up backend` |
-| Frontend | `frontend/app/page.tsx` | 3000 | `docker compose up frontend` |
-| PostgreSQL | Docker image | 5432 | `docker compose up postgres` |
-| Redis | Docker image | 6379 | `docker compose up redis` |
-| Ollama | Host-native | 11434 | `ollama-profile reasoning` |
-| All services | — | — | `docker compose up -d` |
-| Docs | `mkdocs.yml` | 8000 | `mkdocs serve` |
+- **Backend:** `backend/main.py` → uvicorn :8181
+- **Frontend:** `frontend/app/page.tsx` → Next.js :3000
+- **Tests:** `python -m pytest tests/ -v` (backend), `cd e2e && npm test` (E2E)
+- **Docs:** `mkdocs serve` → :8000
 
-## LLM Cascade
+## Data Architecture (Hybrid)
 
-```
-Sentiment/Batch (ollama_first=True):
-  Ollama gpt-oss:20b → Groq (4 tiers) → Anthropic claude-sonnet-4-6
+**PostgreSQL (5 OLTP tables):** users, user_tickers, payment_transactions,
+stock_registry, scheduled_jobs — `backend/db/models/`, Alembic migrations
 
-Interactive Chat (ollama_first=False):
-  Groq (4 tiers) → Ollama gpt-oss:20b → Anthropic claude-sonnet-4-6
-```
+**Iceberg (14 OLAP tables):** ohlcv, indicators, forecasts, dividends,
+company_info, analysis_summary, forecast_runs, quarterly_results,
+llm_pricing, llm_usage, scheduler_runs, audit_log, usage_history,
+portfolio_transactions — `stocks/repository.py`, PyIceberg
 
-Groq tiers: `llama-3.3-70b → kimi-k2 → gpt-oss-120b → llama-4-scout`
+**DuckDB:** In-process analytics on Iceberg — `backend/db/duckdb_engine.py`
 
-All via FallbackLLM + OllamaManager + TokenBudget + MessageCompressor + LangSmith tracing.
+## Core Modules
 
-**Ollama CLI**: `ollama-profile coding|reasoning|unload|status`
-**Admin API**: `GET/POST /v1/admin/ollama/{status,load,unload}`
-
-## LangGraph Supervisor (5 sub-agents)
-
-```
-START → guardrail → router → [llm_classifier] → supervisor
-  → portfolio | stock_analyst | forecaster | research | sentiment
-  → synthesis → log_query → END
-```
-
-| Agent | Purpose | Ollama Priority |
-|-------|---------|-----------------|
-| portfolio | Currency-aware holdings, performance, risk | After Groq |
-| stock_analyst | Technical analysis pipeline | After Groq |
-| forecaster | Prophet + ensemble forecasting | After Groq |
-| research | Tiered news search | After Groq |
-| sentiment | 3-source headline scoring, market mood | **First** |
-
-## Iceberg Tables (20)
-
-### stocks (15 tables) — OLAP, stays on Iceberg
-`ohlcv` · `technical_indicators` · `forecasts` · `forecast_runs` · `sentiment_scores` · `analysis_summary` · `company_info` · `dividends` · `quarterly_results` · `llm_usage` · `llm_pricing` · `registry` · `scheduled_jobs` · `scheduler_runs` · `portfolio_transactions`
-
-### auth (5 tables) — planned migration to PostgreSQL
-`users` · `user_tickers` · `audit_log` · `payment_transactions` · `usage_history`
+| Module | Path | Purpose |
+|--------|------|---------|
+| Routes | `backend/routes.py` (1406 LOC) | Main HTTP API |
+| Dashboard | `backend/dashboard_routes.py` (1677 LOC) | Dashboard endpoints |
+| Insights | `backend/insights_routes.py` (988 LOC) | Analytics endpoints |
+| WebSocket | `backend/ws.py` (486 LOC) | Real-time chat |
+| LLM Fallback | `backend/llm_fallback.py` (692 LOC) | Multi-tier cascade |
+| Token Budget | `backend/token_budget.py` (502 LOC) | Cost-aware LLM |
+| Observability | `backend/observability.py` (667 LOC) | OpenTelemetry |
+| Auth Service | `auth/service.py` | JWT + bcrypt |
+| User Repo | `auth/repo/repository.py` | UserRepository facade |
+| Stock Repo | `stocks/repository.py` | Iceberg + PG wrappers |
+| Agent Graph | `backend/agents/graph.py` | LangGraph state machine |
 
 ## Configuration
 
 | File | Purpose |
 |------|---------|
-| `.env` / `.env.example` | All env vars (Docker Compose reads this) |
-| `backend/config.py` | Pydantic Settings (database_url, ollama_*, groq_*) |
-| `pyproject.toml` | black, isort, pytest (79 chars) |
-| `.flake8` | Flake8 linter |
-| `frontend/next.config.ts` | Next.js (standalone output) |
-| `.pyiceberg.yaml` | Iceberg catalog (SQLite) |
-| `docker-compose.yml` | Container orchestration |
+| `pyproject.toml` | Black/isort/pytest (79 chars) |
+| `docker-compose.yml` | Backend, Frontend, PG 16, Redis 7 |
+| `alembic.ini` | PG schema migrations |
+| `.pyiceberg.yaml` | Iceberg SQLite catalog |
+| `mkdocs.yml` | Documentation site |
+| `.flake8` | Linting rules |
 
 ## Key Dependencies
 
-**Backend**: FastAPI, LangChain 1.2, LangGraph 1.0, langchain-ollama, langchain-groq, langchain-anthropic, PyIceberg, Prophet, Redis, Razorpay/Stripe SDKs
+**Backend:** FastAPI 0.135, SQLAlchemy 2.0, LangChain 1.2, LangGraph 1.0,
+asyncpg, Alembic, DuckDB, PyIceberg, pandas 3.0, Prophet 1.3, yfinance,
+Stripe, Razorpay, Redis 7, OpenTelemetry
 
-**Frontend**: Next.js 16, React 19, Tailwind CSS 4, lightweight-charts, ECharts, react-plotly.js, SWR
+**Frontend:** Next.js 16, React 19, TailwindCSS 4, ECharts 6,
+lightweight-charts 5, Plotly, SWR, Axios, Vitest
 
 ## Quick Start
 
 ```bash
-# Docker (recommended)
-cp .env.example .env              # fill in API keys
-docker compose up -d              # start all services
-open http://localhost:3000        # frontend
-
-# Ollama (optional — local LLM)
-ollama-profile reasoning          # load GPT-OSS 20B
-
-# Tests
-source ~/.ai-agent-ui/venv/bin/activate
-python -m pytest tests/ -v        # ~620 tests
-cd frontend && npx vitest run     # 18 tests
+docker compose up -d              # Start all services
+alembic upgrade head              # Apply PG migrations
+PYTHONPATH=backend python scripts/seed_demo_data.py  # Seed data
+# Visit http://localhost:3000
 ```
 
-## Sprint 4 (43 SP, all Done)
+## Stats
 
-Scheduler overhaul (14 SP) · Ollama LLM integration (11 SP) · Docker containerization (13 SP) · Billing/Iceberg fixes (5 SP)
-
-## Backlog (Sprint 5-6)
-
-- **Epic: Hybrid DB Migration** (31 SP) — PostgreSQL for OLTP, Iceberg for OLAP, DuckDB query engine
-- **Epic: Cloud IaC** (21 SP) — Terraform + Kubernetes + CI/CD
+| Metric | Count |
+|--------|-------|
+| Python modules | 139 |
+| TypeScript files | 109 |
+| Backend tests | 57 files (~644 tests) |
+| E2E tests | 55 files (~219 tests) |
+| Backend deps | 180 |
+| Frontend deps | 48 |
+| Docker services | 4 (+ Ollama host-native) |
