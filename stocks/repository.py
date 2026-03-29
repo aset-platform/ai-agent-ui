@@ -77,11 +77,21 @@ _PORTFOLIO = f"{_NAMESPACE}.portfolio_transactions"
 _SCHEDULER_RUNS = f"{_NAMESPACE}.scheduler_runs"
 
 
-def _run_pg(coro):
-    """Run an async PG coroutine from sync context.
+def _run_pg(async_fn):
+    """Run an async PG function from sync context.
 
-    Handles the case where we're already inside a running
-    event loop (FastAPI) by delegating to a thread.
+    Accepts an async *callable* (not a coroutine) so it can
+    be safely invoked in a fresh event loop with a fresh
+    engine — avoiding the 'Future attached to a different
+    loop' error from reusing the cached asyncpg pool.
+
+    Usage::
+
+        def get_all_registry(self):
+            async def _call():
+                async with _pg_session() as s:
+                    return await pg_get(s)
+            return _run_pg(_call)
     """
     import asyncio
     import concurrent.futures
@@ -95,8 +105,35 @@ def _run_pg(coro):
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=1,
         ) as pool:
-            return pool.submit(asyncio.run, coro).result()
-    return asyncio.run(coro)
+            return pool.submit(
+                asyncio.run, async_fn(),
+            ).result()
+    return asyncio.run(async_fn())
+
+
+def _pg_session():
+    """Create a one-shot async session (fresh engine).
+
+    Returns an async context manager. Used inside _run_pg
+    callables to avoid sharing the cached engine across
+    event loops.
+    """
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+    from config import get_settings
+
+    engine = create_async_engine(
+        get_settings().database_url,
+        pool_pre_ping=True,
+    )
+    factory = async_sessionmaker(
+        engine, class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    return factory()
 
 
 def _now_utc() -> datetime:
@@ -3797,13 +3834,11 @@ class StockRepository:
         from backend.db.pg_stocks import (
             get_registry as pg_get,
         )
-        from backend.db.engine import get_session_factory
-
         async def _call():
-            async with get_session_factory()() as s:
+            async with _pg_session() as s:
                 return await pg_get(s, ticker=ticker)
 
-        result = _run_pg(_call())
+        result = _run_pg(_call)
         if isinstance(result, dict):
             return pd.DataFrame([result])
         if result is None:
@@ -3821,13 +3856,11 @@ class StockRepository:
         from backend.db.pg_stocks import (
             get_registry as pg_get,
         )
-        from backend.db.engine import get_session_factory
-
         async def _call():
-            async with get_session_factory()() as s:
+            async with _pg_session() as s:
                 return await pg_get(s)
 
-        df = _run_pg(_call())
+        df = _run_pg(_call)
         if df is None or (
             hasattr(df, "empty") and df.empty
         ):
@@ -3881,15 +3914,13 @@ class StockRepository:
         from backend.db.pg_stocks import (
             get_registry as pg_get,
         )
-        from backend.db.engine import get_session_factory
-
         async def _call():
-            async with get_session_factory()() as s:
+            async with _pg_session() as s:
                 return await pg_get(
                     s, ticker=ticker.upper(),
                 )
 
-        result = _run_pg(_call())
+        result = _run_pg(_call)
         if result is None:
             return None
         if isinstance(result, pd.DataFrame):
@@ -3964,7 +3995,7 @@ class StockRepository:
             async with get_session_factory()() as s:
                 await pg_upsert(s, data)
 
-        _run_pg(_call())
+        _run_pg(_call)
         _logger.debug(
             "Registry upserted for %s", ticker,
         )
@@ -3976,14 +4007,12 @@ class StockRepository:
         from backend.db.pg_stocks import (
             get_scheduled_jobs as pg_jobs,
         )
-        from backend.db.engine import get_session_factory
-
         async def _call():
-            async with get_session_factory()() as s:
+            async with _pg_session() as s:
                 return await pg_jobs(s)
 
         try:
-            return _run_pg(_call())
+            return _run_pg(_call)
         except Exception:
             _logger.warning(
                 "get_scheduled_jobs failed",
@@ -3998,14 +4027,12 @@ class StockRepository:
         from backend.db.pg_stocks import (
             upsert_scheduled_job as pg_upsert,
         )
-        from backend.db.engine import get_session_factory
-
         async def _call():
-            async with get_session_factory()() as s:
+            async with _pg_session() as s:
                 await pg_upsert(s, job)
 
         try:
-            _run_pg(_call())
+            _run_pg(_call)
         except Exception:
             _logger.warning(
                 "upsert_scheduled_job failed",
@@ -4019,14 +4046,12 @@ class StockRepository:
         from backend.db.pg_stocks import (
             delete_scheduled_job as pg_del,
         )
-        from backend.db.engine import get_session_factory
-
         async def _call():
-            async with get_session_factory()() as s:
+            async with _pg_session() as s:
                 await pg_del(s, job_id)
 
         try:
-            _run_pg(_call())
+            _run_pg(_call)
         except Exception:
             _logger.warning(
                 "delete_scheduled_job %s failed",
