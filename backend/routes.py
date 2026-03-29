@@ -557,9 +557,23 @@ def create_app(
             media_type="application/x-ndjson",
         )
 
+    async def _pg_health() -> dict:
+        """Check PostgreSQL connectivity."""
+        try:
+            from sqlalchemy import text
+
+            from db.engine import get_engine
+
+            async with get_engine().connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            return {"postgresql": "ok"}
+        except Exception as exc:
+            return {"postgresql": f"error: {exc}"}
+
     async def _health():
         """GET /health."""
-        return {"status": "ok"}
+        pg = await _pg_health()
+        return {"status": "ok", **pg}
 
     async def _list_agents():
         """GET /agents."""

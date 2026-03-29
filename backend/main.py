@@ -79,6 +79,12 @@ class ChatServer:
         """
         self.settings = settings
         _ensure_iceberg_tables()
+
+        from db.engine import get_session_factory
+
+        self._pg_session_factory = get_session_factory()
+        logger.info("PostgreSQL async engine ready")
+
         self.tool_registry = ToolRegistry()
         self.agent_registry = AgentRegistry()
 
