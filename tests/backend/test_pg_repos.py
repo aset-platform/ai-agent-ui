@@ -211,3 +211,167 @@ async def test_get_or_create_by_oauth_existing_email(pg_session):
     )
     assert result["oauth_provider"] == "facebook"
     assert result["oauth_sub"] == "fb456"
+
+
+from backend.db.models.user_ticker import UserTicker
+from backend.db.models.payment import PaymentTransaction
+
+
+# ── ticker_repo ──
+
+
+@pytest.mark.asyncio
+async def test_link_ticker(pg_session):
+    from auth.repo.ticker_repo import (
+        link_ticker, get_user_tickers,
+    )
+    from auth.repo.user_writes import create
+
+    user = await create(pg_session, {
+        "email": "t@test.com", "hashed_password": "h",
+        "full_name": "T", "role": "user",
+    })
+
+    linked = await link_ticker(
+        pg_session, user["user_id"], "AAPL",
+    )
+    assert linked is True
+
+    tickers = await get_user_tickers(
+        pg_session, user["user_id"],
+    )
+    assert "AAPL" in tickers
+
+
+@pytest.mark.asyncio
+async def test_link_ticker_duplicate(pg_session):
+    from auth.repo.ticker_repo import link_ticker
+    from auth.repo.user_writes import create
+
+    user = await create(pg_session, {
+        "email": "t2@test.com", "hashed_password": "h",
+        "full_name": "T2", "role": "user",
+    })
+    await link_ticker(
+        pg_session, user["user_id"], "MSFT",
+    )
+    result = await link_ticker(
+        pg_session, user["user_id"], "MSFT",
+    )
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_unlink_ticker(pg_session):
+    from auth.repo.ticker_repo import (
+        link_ticker, unlink_ticker, get_user_tickers,
+    )
+    from auth.repo.user_writes import create
+
+    user = await create(pg_session, {
+        "email": "t3@test.com", "hashed_password": "h",
+        "full_name": "T3", "role": "user",
+    })
+    await link_ticker(
+        pg_session, user["user_id"], "GOOG",
+    )
+    await unlink_ticker(
+        pg_session, user["user_id"], "GOOG",
+    )
+
+    tickers = await get_user_tickers(
+        pg_session, user["user_id"],
+    )
+    assert "GOOG" not in tickers
+
+
+# ── payment_repo ──
+
+
+@pytest.mark.asyncio
+async def test_record_payment(pg_session):
+    from auth.repo.payment_repo import (
+        record_transaction, get_by_user,
+    )
+    from auth.repo.user_writes import create
+
+    user = await create(pg_session, {
+        "email": "p@test.com", "hashed_password": "h",
+        "full_name": "P", "role": "user",
+    })
+
+    txn = await record_transaction(pg_session, {
+        "user_id": user["user_id"],
+        "gateway": "razorpay",
+        "event_type": "subscription.charged",
+        "status": "success",
+        "amount": 499.0,
+        "currency": "INR",
+        "raw_payload": {"id": "evt_123"},
+    })
+    assert txn["transaction_id"]
+    assert txn["gateway"] == "razorpay"
+
+    txns = await get_by_user(pg_session, user["user_id"])
+    assert len(txns) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_payment_status(pg_session):
+    from auth.repo.payment_repo import (
+        record_transaction, update_status,
+    )
+    from auth.repo.user_writes import create
+
+    user = await create(pg_session, {
+        "email": "p2@test.com", "hashed_password": "h",
+        "full_name": "P2", "role": "user",
+    })
+
+    txn = await record_transaction(pg_session, {
+        "user_id": user["user_id"],
+        "gateway": "stripe",
+        "event_type": "charge.succeeded",
+        "status": "pending",
+    })
+
+    updated = await update_status(
+        pg_session, txn["transaction_id"], "success",
+    )
+    assert updated["status"] == "success"
+
+
+# ── repository facade ──
+
+
+@pytest.mark.asyncio
+async def test_repository_facade(pg_session):
+    from auth.repo.repository import IcebergUserRepository
+
+    repo = IcebergUserRepository(session=pg_session)
+
+    # Create
+    user = await repo.create({
+        "email": "facade@test.com", "hashed_password": "h",
+        "full_name": "Facade", "role": "user",
+    })
+    assert user["email"] == "facade@test.com"
+
+    # Read
+    found = await repo.get_by_email("facade@test.com")
+    assert found is not None
+
+    # Update
+    updated = await repo.update(
+        user["user_id"], {"full_name": "Updated"},
+    )
+    assert updated["full_name"] == "Updated"
+
+    # Tickers
+    await repo.link_ticker(user["user_id"], "AAPL")
+    tickers = await repo.get_user_tickers(user["user_id"])
+    assert "AAPL" in tickers
+
+    await repo.unlink_ticker(user["user_id"], "AAPL")
+    tickers = await repo.get_user_tickers(user["user_id"])
+    assert "AAPL" not in tickers
