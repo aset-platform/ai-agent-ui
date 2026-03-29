@@ -1,6 +1,6 @@
 # AI Agent UI
 
-A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js. The backend runs an LLM in a tool-calling loop; the frontend is a single-page app with portfolio management, stock analysis (TradingView charts), and a chat side panel. JWT authentication and role-based access control protect all surfaces. Redis provides caching and session management.
+A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js. The backend runs an LLM in a tool-calling loop; the frontend is a single-page app with portfolio management, stock analysis (TradingView charts), and a chat side panel. JWT authentication and role-based access control protect all surfaces. Redis provides caching and session management. Data layer uses a hybrid architecture: PostgreSQL (SQLAlchemy 2.0 async) for OLTP and Apache Iceberg for OLAP analytics.
 
 ---
 
@@ -9,7 +9,8 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 | Service | Stack | Port | Purpose |
 |---------|-------|------|---------|
 | **Frontend** | Next.js 16 + React 19 + Tailwind 4 + lightweight-charts v5 | `3000` | Portfolio dashboard, TradingView charts, collapsible sidebar, chat side panel |
-| **Backend** | FastAPI + LangChain + N-tier Groq/Anthropic | `8181` | Agentic loop + REST/WebSocket API + Auth + Redis cache |
+| **Backend** | FastAPI + LangChain + SQLAlchemy 2.0 async + N-tier Groq/Anthropic | `8181` | Agentic loop + REST/WebSocket API + Auth + Redis cache |
+| **PostgreSQL** | PostgreSQL 16 Alpine | `5432` | OLTP: users, tickers, payments, stock registry, scheduled jobs |
 | **Redis** | Redis 7 | `6379` | Token deny-list, user preferences, API cache (write-through) |
 | **Docs** | MkDocs Material | `8000` | Project documentation |
 
@@ -122,13 +123,15 @@ graph TD
     end
 
     subgraph Data["Data"]
-        IC["Iceberg<br/>~/.ai-agent-ui/data/iceberg/<br/><i>single source of truth</i>"]
+        PG["PostgreSQL 5432<br/><i>users, tickers, payments,<br/>registry, scheduled_jobs</i>"]
+        IC["Iceberg<br/>~/.ai-agent-ui/data/iceberg/<br/><i>OLAP: 14 append-only tables</i>"]
         C["Cache<br/>~/.ai-agent-ui/data/cache/"]
         P["Parquet backup<br/>~/.ai-agent-ui/data/{raw,forecasts}/"]
     end
 
     Login -->|"POST /auth/login"| AUTH
-    AUTH --> ICE --> IC
+    AUTH --> ICE --> PG
+    ICE -.->|"OLAP reads"| IC
     UI -->|"WS /ws/chat · POST /chat/stream<br/>Bearer token"| API
     API --> CS --> AR
     AR --> GD

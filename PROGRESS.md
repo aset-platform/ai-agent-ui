@@ -2,6 +2,38 @@
 
 ---
 
+# Session: Mar 29, 2026 (evening) — Hybrid DB Migration Foundation
+
+## Branch: `feature/sprint4` — Epic ASETPLTFRM-225
+
+### Hybrid DB Migration: PostgreSQL (OLTP) + Iceberg (OLAP)
+
+**Split:** 5 tables → PostgreSQL (CRUD), 14 tables → Iceberg (append/scoped-delete)
+
+**PostgreSQL tables:** users, user_tickers, payment_transactions,
+stock_registry, scheduled_jobs
+
+**Completed:**
+- SQLAlchemy 2.0 async engine + session factory (`backend/db/`)
+- 5 ORM models with constraints (FK cascade, composite PK, JSONB, indexes)
+- Alembic async migrations (initial schema applied to Docker PG)
+- Auth repo rewrite: user_reads, user_writes, oauth → async SQLAlchemy
+- Ticker repo + payment repo (new modules)
+- IcebergUserRepository facade with session_factory injection
+- Stock registry + scheduler PG functions (`backend/db/pg_stocks.py`)
+- DuckDB query layer foundation (`backend/db/duckdb_engine.py`)
+- Data migration script (`scripts/migrate_iceberg_to_pg.py`)
+- Async conversion of 37 functions across 11 files (endpoints + callers)
+- PG health check in `/v1/health`
+- 30 new tests (all passing), 652/666 existing tests passing
+  (14 failures pre-existing, unrelated to migration)
+
+**Jira stories:** ASETPLTFRM-231 through 236 (24 SP)
+**Design spec:** `docs/superpowers/specs/2026-03-29-hybrid-db-migration-design.md`
+**Plan:** `docs/superpowers/plans/2026-03-29-hybrid-db-migration.md`
+
+---
+
 # Session: Mar 29, 2026 — Ollama LLM Integration + Chat UX + Containerization
 
 ## Branch: `feature/sprint4` — Sprint 4 completed (43 SP, 12 tickets)

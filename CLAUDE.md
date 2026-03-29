@@ -14,11 +14,12 @@ All pages fully migrated from Dash to Next.js.
 
 | Service | Port | Entry point | Stack |
 |---------|------|-------------|-------|
-| Backend | 8181 | `backend/main.py` | Python 3.12, FastAPI, LangChain 1.x |
+| Backend | 8181 | `backend/main.py` | Python 3.12, FastAPI, LangChain 1.x, SQLAlchemy 2.0 async |
 | Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19, lightweight-charts |
-| PostgreSQL | 5432 | Docker | PostgreSQL 16 Alpine |
+| PostgreSQL | 5432 | Docker | PostgreSQL 16 Alpine (OLTP: 5 tables) |
 | Redis | 6379 | Docker | Redis 7 Alpine |
 | Docs | 8000 | `mkdocs serve` | MkDocs Material |
+| Alembic | — | `backend/db/migrations/` | Schema migrations for PostgreSQL |
 
 ```bash
 # Docker (preferred — mirrors production)
@@ -37,7 +38,7 @@ ollama-profile reasoning                    # load GPT-OSS 20B
 ollama-profile status                       # check loaded model
 ```
 
-**Key dirs**: `backend/` (agents, tools, config), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 20 tables), `frontend/` (SPA), `dashboard/` (Dash callbacks, imported by backend), `hooks/` (pre-commit, pre-push).
+**Key dirs**: `backend/` (agents, tools, config), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 14 OLAP tables), `frontend/` (SPA), `dashboard/` (Dash callbacks, imported by backend), `hooks/` (pre-commit, pre-push).
 
 **Docker files**: `Dockerfile.backend`, `Dockerfile.frontend`,
 `docker-compose.yml`, `docker-compose.override.yml` (dev hot-reload),
@@ -67,6 +68,44 @@ ollama-profile status                       # check loaded model
 - Admin API: `GET/POST /v1/admin/ollama/{status,load,unload}`
 - `ollama-profile` CLI: `coding` (Qwen), `reasoning` (GPT-OSS), `unload`
 - Observability: `provider="ollama"` in `ObservabilityCollector`
+
+---
+
+## Hybrid DB Architecture
+
+OLTP/OLAP split — PostgreSQL for row-level CRUD, Iceberg for
+append-only analytics.
+
+### PostgreSQL tables (SQLAlchemy 2.0 async ORM)
+
+| Table | Module | Pattern |
+|-------|--------|---------|
+| `auth.users` | `backend/db/models.py` | CRUD via `UserRepository` |
+| `auth.user_tickers` | `backend/db/models.py` | Upsert + delete |
+| `auth.payment_transactions` | `backend/db/models.py` | Insert + read |
+| `stocks.registry` | `backend/db/pg_stocks.py` | Upsert |
+| `stocks.scheduled_jobs` | `backend/db/pg_stocks.py` | Upsert |
+
+### Iceberg tables (14 — append / scoped-delete)
+
+`audit_log`, `usage_history`, `company_info`, `dividends`, `ohlcv`,
+`technical_indicators`, `analysis_summary`, `forecast_runs`,
+`forecasts`, `quarterly_results`, `llm_pricing`, `llm_usage`,
+`scheduler_runs` (stocks ns) + portfolio_transactions (stocks ns)
+
+### Key components
+
+- `backend/db/engine.py` — async `session_factory` (asyncpg driver,
+  `pool_pre_ping=True`)
+- `backend/db/models.py` — 5 SQLAlchemy ORM models (FK cascade,
+  JSONB, composite PK, indexes)
+- `backend/db/migrations/` — Alembic async migrations
+- `backend/db/user_repository.py` — `UserRepository` facade
+  (replaces `IcebergUserRepository` for OLTP tables)
+- `backend/db/pg_stocks.py` — registry + scheduler PG functions
+- `backend/db/duckdb_engine.py` — DuckDB query layer foundation
+  (reads Iceberg parquet directly for analytics)
+- `scripts/migrate_iceberg_to_pg.py` — one-time data migration
 
 ---
 
@@ -160,6 +199,19 @@ Load any memory with `read_memory` when you need the details.
 - **Ollama in Docker**: Backend reaches host Ollama via
   `host.docker.internal:11434`, not `localhost`. Set via
   `OLLAMA_BASE_URL` env var.
+- **asyncpg `pool_pre_ping=True`**: Required when uvicorn
+  reloads — stale connections from the old process cause
+  "SSL connection has been closed unexpectedly". Always set
+  in `backend/db/engine.py`.
+- **`_run_pg()` bridge**: Scheduler threads are sync; use the
+  `_run_pg(coro)` helper in `backend/db/pg_stocks.py` to
+  run async SQLAlchemy calls from the scheduler event loop.
+  Do NOT call `asyncio.run()` directly — it creates a new
+  loop and conflicts with uvicorn's loop.
+- **Iceberg NaT/NaN → PG insert**: Iceberg timestamps can
+  be `NaT` and floats can be `NaN`. Sanitize with
+  `pd.Timestamp` checks and `float("nan")` guards before
+  inserting into PostgreSQL — PG rejects both.
 
 ---
 
@@ -176,6 +228,11 @@ cd frontend && npx eslint . --fix
 python -m pytest tests/ -v        # all (~620 tests)
 cd frontend && npx vitest run     # frontend (18 tests)
 cd e2e && npm test                # E2E (~219 tests, needs live services)
+
+# Database migrations (PostgreSQL)
+alembic upgrade head                          # apply all migrations
+alembic revision --autogenerate -m "desc"    # generate new migration
+PYTHONPATH=backend python scripts/migrate_iceberg_to_pg.py  # one-time data migration
 
 # Seed (required before first E2E run)
 PYTHONPATH=backend python scripts/seed_demo_data.py
