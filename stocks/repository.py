@@ -74,6 +74,29 @@ _FORECASTS = f"{_NAMESPACE}.forecasts"
 _QUARTERLY_RESULTS = f"{_NAMESPACE}.quarterly_results"
 _CHAT_AUDIT_LOG = f"{_NAMESPACE}.chat_audit_log"
 _PORTFOLIO = f"{_NAMESPACE}.portfolio_transactions"
+_SCHEDULER_RUNS = f"{_NAMESPACE}.scheduler_runs"
+
+
+def _run_pg(coro):
+    """Run an async PG coroutine from sync context.
+
+    Handles the case where we're already inside a running
+    event loop (FastAPI) by delegating to a thread.
+    """
+    import asyncio
+    import concurrent.futures
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+        ) as pool:
+            return pool.submit(asyncio.run, coro).result()
+    return asyncio.run(coro)
 
 
 def _now_utc() -> datetime:
@@ -3756,3 +3779,465 @@ class StockRepository:
             )
             .reset_index(drop=True)
         )
+
+    # -- PG-backed registry wrappers --
+
+    def get_registry(
+        self, ticker: str | None = None,
+    ) -> pd.DataFrame:
+        """Return registry rows (PG-backed).
+
+        Args:
+            ticker: If given, return only that ticker's
+                row.  ``None`` returns all rows.
+
+        Returns:
+            pandas DataFrame with registry rows.
+        """
+        from backend.db.pg_stocks import (
+            get_registry as pg_get,
+        )
+        from backend.db.engine import get_session_factory
+
+        async def _call():
+            async with get_session_factory()() as s:
+                return await pg_get(s, ticker=ticker)
+
+        result = _run_pg(_call())
+        if isinstance(result, dict):
+            return pd.DataFrame([result])
+        if result is None:
+            return pd.DataFrame()
+        return result
+
+    def get_all_registry(self) -> dict[str, dict]:
+        """Return full registry as dict keyed by ticker.
+
+        Returns:
+            Dict mapping ticker to metadata dicts with
+            ``ticker``, ``last_fetch_date``, ``total_rows``,
+            ``date_range``, ``market``, ``file_path``.
+        """
+        from backend.db.pg_stocks import (
+            get_registry as pg_get,
+        )
+        from backend.db.engine import get_session_factory
+
+        async def _call():
+            async with get_session_factory()() as s:
+                return await pg_get(s)
+
+        df = _run_pg(_call())
+        if df is None or (
+            hasattr(df, "empty") and df.empty
+        ):
+            return {}
+        result: dict[str, dict] = {}
+        for row in df.to_dict("records"):
+            ticker = str(row.get("ticker", ""))
+            if not ticker:
+                continue
+            lfd = row.get("last_fetch_date")
+            start = row.get("date_range_start")
+            end = row.get("date_range_end")
+            result[ticker] = {
+                "ticker": ticker,
+                "last_fetch_date": (
+                    str(lfd)[:10] if lfd else ""
+                ),
+                "total_rows": (
+                    int(row["total_rows"])
+                    if row.get("total_rows") is not None
+                    else 0
+                ),
+                "date_range": {
+                    "start": (
+                        str(start)[:10] if start else ""
+                    ),
+                    "end": (
+                        str(end)[:10] if end else ""
+                    ),
+                },
+                "market": str(
+                    row.get("market", "us"),
+                ),
+                "file_path": str(
+                    Path(__file__).parent.parent
+                    / "data"
+                    / "raw"
+                    / f"{ticker}_raw.parquet"
+                ),
+            }
+        return result
+
+    def check_existing_data(
+        self, ticker: str,
+    ) -> dict | None:
+        """Look up a single ticker in the registry.
+
+        Returns:
+            Registry entry dict or ``None``.
+        """
+        from backend.db.pg_stocks import (
+            get_registry as pg_get,
+        )
+        from backend.db.engine import get_session_factory
+
+        async def _call():
+            async with get_session_factory()() as s:
+                return await pg_get(
+                    s, ticker=ticker.upper(),
+                )
+
+        result = _run_pg(_call())
+        if result is None:
+            return None
+        if isinstance(result, pd.DataFrame):
+            if result.empty:
+                return None
+            row = result.iloc[0].to_dict()
+        else:
+            row = result
+        lfd = row.get("last_fetch_date")
+        start = row.get("date_range_start")
+        end = row.get("date_range_end")
+        return {
+            "ticker": ticker.upper(),
+            "last_fetch_date": (
+                str(lfd)[:10] if lfd else ""
+            ),
+            "total_rows": (
+                int(row["total_rows"])
+                if row.get("total_rows") is not None
+                else 0
+            ),
+            "date_range": {
+                "start": (
+                    str(start)[:10] if start else ""
+                ),
+                "end": (
+                    str(end)[:10] if end else ""
+                ),
+            },
+            "file_path": str(
+                Path(__file__).parent.parent
+                / "data"
+                / "raw"
+                / f"{ticker.upper()}_raw.parquet"
+            ),
+        }
+
+    def upsert_registry(
+        self,
+        ticker: str,
+        last_fetch_date: date,
+        total_rows: int,
+        date_range_start: date,
+        date_range_end: date,
+        market: str,
+    ) -> None:
+        """Insert or update registry row (PG-backed).
+
+        Args:
+            ticker: Stock ticker symbol.
+            last_fetch_date: Date of last fetch.
+            total_rows: Total OHLCV row count.
+            date_range_start: Earliest trading date.
+            date_range_end: Most recent trading date.
+            market: ``"india"`` or ``"us"``.
+        """
+        from backend.db.pg_stocks import (
+            upsert_registry as pg_upsert,
+        )
+        from backend.db.engine import get_session_factory
+
+        data = {
+            "ticker": ticker,
+            "last_fetch_date": last_fetch_date,
+            "total_rows": int(total_rows),
+            "date_range_start": date_range_start,
+            "date_range_end": date_range_end,
+            "market": market,
+        }
+
+        async def _call():
+            async with get_session_factory()() as s:
+                await pg_upsert(s, data)
+
+        _run_pg(_call())
+        _logger.debug(
+            "Registry upserted for %s", ticker,
+        )
+
+    # -- PG-backed scheduled_jobs wrappers --
+
+    def get_scheduled_jobs(self) -> list[dict]:
+        """Return all scheduled job definitions."""
+        from backend.db.pg_stocks import (
+            get_scheduled_jobs as pg_jobs,
+        )
+        from backend.db.engine import get_session_factory
+
+        async def _call():
+            async with get_session_factory()() as s:
+                return await pg_jobs(s)
+
+        try:
+            return _run_pg(_call())
+        except Exception:
+            _logger.warning(
+                "get_scheduled_jobs failed",
+                exc_info=True,
+            )
+            return []
+
+    def upsert_scheduled_job(
+        self, job: dict,
+    ) -> None:
+        """Insert or update a scheduled job."""
+        from backend.db.pg_stocks import (
+            upsert_scheduled_job as pg_upsert,
+        )
+        from backend.db.engine import get_session_factory
+
+        async def _call():
+            async with get_session_factory()() as s:
+                await pg_upsert(s, job)
+
+        try:
+            _run_pg(_call())
+        except Exception:
+            _logger.warning(
+                "upsert_scheduled_job failed",
+                exc_info=True,
+            )
+
+    def delete_scheduled_job(
+        self, job_id: str,
+    ) -> None:
+        """Delete a scheduled job by ID."""
+        from backend.db.pg_stocks import (
+            delete_scheduled_job as pg_del,
+        )
+        from backend.db.engine import get_session_factory
+
+        async def _call():
+            async with get_session_factory()() as s:
+                await pg_del(s, job_id)
+
+        try:
+            _run_pg(_call())
+        except Exception:
+            _logger.warning(
+                "delete_scheduled_job %s failed",
+                job_id,
+                exc_info=True,
+            )
+
+    # -- Iceberg scheduler_runs (append-only) --
+
+    def append_scheduler_run(
+        self, run: dict,
+    ) -> None:
+        """Append a single scheduler run record."""
+        try:
+            clean = {}
+            for k, v in run.items():
+                if (
+                    hasattr(v, "tzinfo")
+                    and v.tzinfo
+                ):
+                    v = v.replace(tzinfo=None)
+                clean[k] = v
+            tbl = self._load_table(_SCHEDULER_RUNS)
+            col_names = [
+                f.name for f in tbl.schema().fields
+            ]
+            if "trigger_type" not in col_names:
+                from pyiceberg.types import StringType
+
+                with tbl.update_schema() as upd:
+                    upd.add_column(
+                        "trigger_type",
+                        StringType(),
+                    )
+                tbl = self._load_table(
+                    _SCHEDULER_RUNS,
+                )
+            schema = tbl.schema().as_arrow()
+            df = pd.DataFrame([clean])
+            at = pa.Table.from_pandas(
+                df, schema=schema,
+            )
+            self._append_rows(_SCHEDULER_RUNS, at)
+        except Exception:
+            _logger.error(
+                "append_scheduler_run failed",
+                exc_info=True,
+            )
+
+    def update_scheduler_run(
+        self,
+        run_id: str,
+        updates: dict,
+    ) -> None:
+        """Update fields on an existing run."""
+        try:
+            tbl = self._load_table(_SCHEDULER_RUNS)
+            df = tbl.scan().to_pandas()
+            mask = df["run_id"] == run_id
+            if not mask.any():
+                _logger.warning(
+                    "update_scheduler_run:"
+                    " run_id %s not found",
+                    run_id,
+                )
+                return
+            clean = {}
+            for k, v in updates.items():
+                if (
+                    hasattr(v, "tzinfo")
+                    and v.tzinfo
+                ):
+                    v = v.replace(tzinfo=None)
+                clean[k] = v
+            for k, v in clean.items():
+                df.loc[mask, k] = v
+            schema = tbl.schema().as_arrow()
+            at = pa.Table.from_pandas(
+                df, schema=schema,
+            )
+            self._overwrite_table(
+                _SCHEDULER_RUNS, at,
+            )
+        except Exception:
+            _logger.error(
+                "update_scheduler_run %s failed",
+                run_id,
+                exc_info=True,
+            )
+
+    def get_scheduler_runs(
+        self, days: int = 7,
+    ) -> list[dict]:
+        """Return scheduler runs from last N days."""
+        try:
+            df = self._table_to_df(_SCHEDULER_RUNS)
+            if df.empty:
+                return []
+            if "started_at" in df.columns:
+                df["started_at"] = pd.to_datetime(
+                    df["started_at"],
+                    utc=True,
+                    errors="coerce",
+                )
+                cutoff = pd.Timestamp.now(
+                    tz="UTC",
+                ) - pd.Timedelta(days=days)
+                df = df[
+                    df["started_at"].notna()
+                    & (df["started_at"] >= cutoff)
+                ]
+                df = df.sort_values(
+                    "started_at",
+                    ascending=False,
+                )
+            if "completed_at" in df.columns:
+                df["completed_at"] = pd.to_datetime(
+                    df["completed_at"],
+                    utc=True,
+                    errors="coerce",
+                )
+            df = df.where(df.notna(), None)
+            records = df.to_dict(orient="records")
+            for r in records:
+                for k, v in list(r.items()):
+                    if hasattr(v, "isoformat"):
+                        r[k] = v.isoformat()
+                    elif isinstance(v, float) and (
+                        v != v
+                    ):
+                        r[k] = None
+            return records
+        except Exception:
+            _logger.error(
+                "get_scheduler_runs failed",
+                exc_info=True,
+            )
+            return []
+
+    def get_scheduler_run_stats(self) -> dict:
+        """Return aggregate stats for dashboard."""
+        try:
+            runs = self.get_scheduler_runs(days=1)
+            total = len(runs)
+            success = sum(
+                1
+                for r in runs
+                if r.get("status") == "success"
+            )
+            failed = sum(
+                1
+                for r in runs
+                if r.get("status") == "failed"
+            )
+            running = sum(
+                1
+                for r in runs
+                if r.get("status") == "running"
+            )
+            return {
+                "runs_today": total,
+                "runs_today_success": success,
+                "runs_today_failed": failed,
+                "runs_today_running": running,
+            }
+        except Exception:
+            _logger.warning(
+                "get_scheduler_run_stats failed",
+                exc_info=True,
+            )
+            return {
+                "runs_today": 0,
+                "runs_today_success": 0,
+                "runs_today_failed": 0,
+                "runs_today_running": 0,
+            }
+
+    def get_last_run_for_job(
+        self, job_id: str,
+    ) -> dict | None:
+        """Return the most recent run for a job."""
+        try:
+            df = self._table_to_df(_SCHEDULER_RUNS)
+            if df.empty:
+                return None
+            df = df[df["job_id"] == job_id]
+            if df.empty:
+                return None
+            if "started_at" in df.columns:
+                df["started_at"] = pd.to_datetime(
+                    df["started_at"],
+                    utc=True,
+                    errors="coerce",
+                )
+                df = df.sort_values(
+                    "started_at",
+                    ascending=False,
+                )
+            row = df.iloc[0].to_dict()
+            for k, v in list(row.items()):
+                if hasattr(v, "isoformat"):
+                    row[k] = v.isoformat()
+                elif (
+                    isinstance(v, float) and v != v
+                ):
+                    row[k] = None
+            return row
+        except Exception:
+            _logger.error(
+                "get_last_run_for_job %s failed",
+                job_id,
+                exc_info=True,
+            )
+            return None

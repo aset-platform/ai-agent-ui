@@ -31,6 +31,9 @@ Migrated to PostgreSQL (no longer created here)
 ------------------------------------------------
 - ``stocks.registry``
 - ``stocks.scheduled_jobs``
+
+Still on Iceberg (append-only, not migrated)
+--------------------------------------------
 - ``stocks.scheduler_runs``
 """
 
