@@ -24,6 +24,7 @@ All pages fully migrated from Dash to Next.js.
 ```bash
 # Docker (preferred — mirrors production)
 docker compose up -d                        # all services
+docker compose build backend               # rebuild after requirements.txt changes
 docker compose ps                           # health check
 docker compose logs -f backend              # tail logs
 docker compose down                         # stop all
@@ -97,11 +98,11 @@ append-only analytics.
 
 - `backend/db/engine.py` — async `session_factory` (asyncpg driver,
   `pool_pre_ping=True`)
-- `backend/db/models.py` — 5 SQLAlchemy ORM models (FK cascade,
+- `backend/db/models/` — 5 SQLAlchemy ORM models (FK cascade,
   JSONB, composite PK, indexes)
 - `backend/db/migrations/` — Alembic async migrations
-- `backend/db/user_repository.py` — `UserRepository` facade
-  (replaces `IcebergUserRepository` for OLTP tables)
+- `auth/repo/repository.py` — `UserRepository` facade
+  (session_factory injection, per-call sessions)
 - `backend/db/pg_stocks.py` — registry + scheduler PG functions
 - `backend/db/duckdb_engine.py` — DuckDB query layer foundation
   (reads Iceberg parquet directly for analytics)
@@ -203,11 +204,12 @@ Load any memory with `read_memory` when you need the details.
   reloads — stale connections from the old process cause
   "SSL connection has been closed unexpectedly". Always set
   in `backend/db/engine.py`.
-- **`_run_pg()` bridge**: Scheduler threads are sync; use the
-  `_run_pg(coro)` helper in `backend/db/pg_stocks.py` to
-  run async SQLAlchemy calls from the scheduler event loop.
-  Do NOT call `asyncio.run()` directly — it creates a new
-  loop and conflicts with uvicorn's loop.
+- **`_run_pg()` + `_pg_session()` bridge**: For sync callers
+  of async PG code (scheduler threads, background jobs): pass
+  a *callable* not a coroutine (`_run_pg(_call)` not
+  `_run_pg(_call())`), and use `_pg_session()` (fresh engine)
+  not `get_session_factory()` (cached, binds to uvicorn loop).
+  Both live in `stocks/repository.py`.
 - **Iceberg NaT/NaN → PG insert**: Iceberg timestamps can
   be `NaT` and floats can be `NaN`. Sanitize with
   `pd.Timestamp` checks and `float("nan")` guards before
@@ -216,15 +218,6 @@ Load any memory with `read_memory` when you need the details.
   ALL callers must be found — use `grep -rn "repo\."` across
   auth/, backend/, stocks/. Missing `await` returns a coroutine
   object that silently breaks (no compile error).
-- **`_run_pg()` takes a callable, not a coroutine**: Pass
-  `_run_pg(_call)` not `_run_pg(_call())`. The helper calls
-  it inside `asyncio.run()` in a fresh loop. Passing a
-  coroutine directly causes cross-loop Future errors.
-- **`_pg_session()` not `get_session_factory()`**: In sync
-  `StockRepository` wrappers, always use `_pg_session()` from
-  `stocks/repository.py` — it creates a fresh engine per call.
-  The cached `get_session_factory()` binds to uvicorn's loop
-  and fails in ThreadPoolExecutor contexts.
 - **Test mocks after async conversion**: Replace `MagicMock`
   with `AsyncMock` for any mocked repo method. Awaiting a
   plain MagicMock returns a coroutine, not the mock value.
@@ -241,7 +234,7 @@ flake8 backend/ auth/ stocks/ scripts/
 cd frontend && npx eslint . --fix
 
 # Test
-python -m pytest tests/ -v        # all (~620 tests)
+python -m pytest tests/ -v        # all (~644 tests)
 cd frontend && npx vitest run     # frontend (18 tests)
 cd e2e && npm test                # E2E (~219 tests, needs live services)
 
