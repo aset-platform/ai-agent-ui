@@ -1,7 +1,7 @@
 # Project Index: ai-agent-ui
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-03-28 (Sprint 3 + Sentiment Agent)
+> Last refreshed: 2026-03-29 (Sprint 4 + Containerization)
 
 ---
 
@@ -11,11 +11,12 @@
 ai-agent-ui/
 ├── backend/              # FastAPI + LangChain + LangGraph (Python 3.12)
 │   ├── main.py           # ASGI entry, ChatServer, startup wiring
-│   ├── config.py         # Pydantic Settings (env-based)
-│   ├── routes.py         # HTTP chat + streaming endpoints
+│   ├── config.py         # Pydantic Settings (env-based, database_url, ollama_*)
+│   ├── routes.py         # HTTP chat + streaming + admin endpoints
 │   ├── ws.py             # WebSocket /ws/chat
 │   ├── bootstrap.py      # Tool + agent + graph registration
-│   ├── llm_fallback.py   # N-tier Groq cascade + Anthropic fallback
+│   ├── llm_fallback.py   # N-tier Ollama → Groq → Anthropic cascade
+│   ├── ollama_manager.py # Local LLM lifecycle (health probe, load/unload)
 │   ├── token_budget.py   # Sliding-window TPM/RPM tracker
 │   ├── message_compressor.py  # 3-stage context compression
 │   ├── observability.py  # Tier health, cascade counts → Iceberg
@@ -24,24 +25,22 @@ ai-agent-ui/
 │   │   ├── graph.py      # 11-node StateGraph builder
 │   │   ├── sub_agents.py # Factory + dynamic context injection
 │   │   ├── configs/      # portfolio, stock_analyst, forecaster, research, sentiment
-│   │   └── nodes/        # guardrail, router, llm_classifier, supervisor, synthesis, log_query, decline
+│   │   └── nodes/        # guardrail, router, llm_classifier, supervisor, synthesis, log_query
 │   ├── tools/            # 26 LangChain @tool modules
 │   │   ├── stock_data_tool.py      # 7 stock data tools
 │   │   ├── price_analysis_tool.py  # Technical analysis + chart
 │   │   ├── forecasting_tool.py     # Prophet forecast pipeline
 │   │   ├── news_tools.py           # Tiered news (yfinance → RSS → SerpAPI)
 │   │   ├── portfolio_tools.py      # 7 portfolio tools
-│   │   ├── sentiment_agent.py      # 3 sentiment tools
+│   │   ├── sentiment_agent.py      # 3 sentiment tools (ollama_first=True)
 │   │   ├── _sentiment_sources.py   # 3-source headline fetcher + dedup
 │   │   ├── _sentiment_scorer.py    # FallbackLLM scoring + weighted avg
-│   │   ├── _forecast_model.py      # Prophet training
-│   │   ├── _forecast_ensemble.py   # XGBoost residual correction
-│   │   └── _forecast_shared.py     # Regressor loading from Iceberg
+│   │   └── _forecast_model.py      # Prophet training
 │   ├── jobs/             # Background schedulers
-│   │   ├── gap_filler.py           # Daily: gaps, indices, sentiment, purge
-│   │   ├── scheduler_service.py    # Admin UI scheduler
+│   │   ├── gap_filler.py           # Batch sentiment with Ollama auto-load/unload
+│   │   ├── scheduler_service.py    # Admin UI scheduler (catch-up, monthly)
 │   │   └── executor.py             # Job execution engine
-│   ├── dashboard_routes.py  # /v1/dashboard/*
+│   ├── dashboard_routes.py  # /v1/dashboard/* (LLM usage widget with provider)
 │   ├── insights_routes.py   # /v1/insights/*
 │   └── audit_routes.py      # /v1/audit/*
 ├── auth/                 # JWT + RBAC + OAuth PKCE + Subscriptions
@@ -54,43 +53,66 @@ ai-agent-ui/
 │   ├── repository.py     # StockRepository (~4000 lines)
 │   └── create_tables.py  # 15 stocks Iceberg tables
 ├── frontend/             # Next.js 16 + React 19 + Tailwind CSS 4
-│   ├── app/              # App Router pages
+│   ├── app/              # App Router (12 routes)
 │   │   ├── (authenticated)/dashboard/    # Portfolio dashboard
-│   │   ├── (authenticated)/analytics/    # Unified analytics
-│   │   ├── (authenticated)/admin/        # Admin panel
+│   │   ├── (authenticated)/analytics/    # Analysis, Compare, Insights
+│   │   ├── (authenticated)/admin/        # Admin (6 tabs)
 │   │   └── login/
 │   ├── components/       # 44 React components
-│   │   ├── widgets/      # HeroSection, WatchlistWidget, ForecastChartWidget
-│   │   ├── charts/       # StockChart, ForecastChart, PortfolioChart, CompareChart, CorrelationHeatmap
-│   │   ├── admin/        # SchedulerTab, UserModal
-│   │   └── insights/     # InsightsTable, InsightsFilters
+│   │   ├── ChatPanel.tsx       # Chat panel (scroll, focus, markdown)
+│   │   ├── ChatInput.tsx       # Input (readOnly during loading, autoFocus)
+│   │   ├── widgets/            # HeroSection, WatchlistWidget, LLMUsageWidget
+│   │   ├── charts/             # StockChart, ForecastChart, CompareChart
+│   │   └── admin/              # SchedulerTab, UserModal
 │   ├── hooks/            # 19 custom hooks
+│   │   ├── useSendMessage.ts   # Streaming NDJSON + tool calls header
+│   │   └── useDashboardData.ts # SWR data fetching
 │   └── lib/              # apiFetch, config, types, auth, constants
-├── scripts/              # 22 utility scripts
-├── tests/backend/        # 49 test files, 613 test cases
+├── dashboard/            # Plotly Dash (imported by backend for callbacks)
+├── scripts/              # 25 utility scripts
+├── tests/backend/        # 52 test files (~620 test cases)
 ├── e2e/                  # Playwright E2E (~219 tests)
 ├── docs/                 # MkDocs Material
-│   ├── design/           # Architecture specs
-│   └── workflow/         # Implementation plans
-└── dashboard/            # Legacy Dash app (deprecated)
+│   └── dev/              # changelog, how-to-run, decisions, e2e-testing
+│
+│ ── Docker ──────────────────────────────────────────
+├── Dockerfile.backend    # 2-stage: builder (gcc) → runtime (slim)
+├── Dockerfile.frontend   # 3-stage: deps → build → runner (standalone)
+├── docker-compose.yml    # backend + frontend + postgres:16 + redis:7
+├── docker-compose.override.yml  # Dev hot-reload (source mounts)
+├── .env.example          # Env var template (committed)
+├── .env                  # Secrets (gitignored)
+└── .dockerignore         # Build context exclusions
 ```
 
 ## Entry Points
 
-| Entry | Path | Port |
-|-------|------|------|
-| Backend | `backend/main.py` | 8181 |
-| Frontend | `frontend/app/page.tsx` | 3000 |
-| Docs | `mkdocs.yml` | 8000 |
-| Launcher | `./run.sh start` | all |
+| Entry | Path | Port | Docker |
+|-------|------|------|--------|
+| Backend | `backend/main.py` | 8181 | `docker compose up backend` |
+| Frontend | `frontend/app/page.tsx` | 3000 | `docker compose up frontend` |
+| PostgreSQL | Docker image | 5432 | `docker compose up postgres` |
+| Redis | Docker image | 6379 | `docker compose up redis` |
+| Ollama | Host-native | 11434 | `ollama-profile reasoning` |
+| All services | — | — | `docker compose up -d` |
+| Docs | `mkdocs.yml` | 8000 | `mkdocs serve` |
 
-## Iceberg Tables (20)
+## LLM Cascade
 
-### stocks (15 tables, ~336K rows)
-`registry` (52) · `company_info` (62) · `ohlcv` (152K) · `dividends` (1.6K) · `technical_indicators` (130K) · `analysis_summary` (57) · `forecast_runs` (57) · `forecasts` (52K) · `quarterly_results` (653) · `sentiment_scores` (47) · `llm_pricing` (0) · `llm_usage` (0) · `scheduled_jobs` (2) · `scheduler_runs` (2) · `portfolio_transactions` (8)
+```
+Sentiment/Batch (ollama_first=True):
+  Ollama gpt-oss:20b → Groq (4 tiers) → Anthropic claude-sonnet-4-6
 
-### auth (5 tables)
-`users` (5) · `user_tickers` (11) · `audit_log` (1) · `payment_transactions` (0) · `usage_history` (0)
+Interactive Chat (ollama_first=False):
+  Groq (4 tiers) → Ollama gpt-oss:20b → Anthropic claude-sonnet-4-6
+```
+
+Groq tiers: `llama-3.3-70b → kimi-k2 → gpt-oss-120b → llama-4-scout`
+
+All via FallbackLLM + OllamaManager + TokenBudget + MessageCompressor + LangSmith tracing.
+
+**Ollama CLI**: `ollama-profile coding|reasoning|unload|status`
+**Admin API**: `GET/POST /v1/admin/ollama/{status,load,unload}`
 
 ## LangGraph Supervisor (5 sub-agents)
 
@@ -100,56 +122,62 @@ START → guardrail → router → [llm_classifier] → supervisor
   → synthesis → log_query → END
 ```
 
-| Agent | Purpose |
-|-------|---------|
-| portfolio | Currency-aware holdings, performance, risk metrics |
-| stock_analyst | Technical analysis pipeline (fetch → analyse → verdict) |
-| forecaster | Prophet + XGBoost ensemble forecasting |
-| research | Tiered news search (yfinance → RSS → SerpAPI) |
-| sentiment | 3-source headline scoring, market mood, hybrid cached/live |
+| Agent | Purpose | Ollama Priority |
+|-------|---------|-----------------|
+| portfolio | Currency-aware holdings, performance, risk | After Groq |
+| stock_analyst | Technical analysis pipeline | After Groq |
+| forecaster | Prophet + ensemble forecasting | After Groq |
+| research | Tiered news search | After Groq |
+| sentiment | 3-source headline scoring, market mood | **First** |
 
-## LLM Cascade
+## Iceberg Tables (20)
 
-`llama-3.3-70b → kimi-k2 → gpt-oss-120b → scout-17b → claude-sonnet-4.6`
+### stocks (15 tables) — OLAP, stays on Iceberg
+`ohlcv` · `technical_indicators` · `forecasts` · `forecast_runs` · `sentiment_scores` · `analysis_summary` · `company_info` · `dividends` · `quarterly_results` · `llm_usage` · `llm_pricing` · `registry` · `scheduled_jobs` · `scheduler_runs` · `portfolio_transactions`
 
-All via FallbackLLM + TokenBudget + MessageCompressor + LangSmith tracing.
-
-## Background Jobs (gap_filler.py)
-
-| UTC | Job |
-|-----|-----|
-| 05:30 | Market indices (VIX, GSPC, TNX, CL=F, DX-Y.NYB) |
-| 06:00 | Sentiment (all tickers, FallbackLLM, 3 sources) |
-| 12:30 | Data gaps (after NSE close) |
-| 15:30 | Data gaps (after NYSE close) |
-| Sun 04:00 | Purge (>11Y data, expire Iceberg snapshots) |
+### auth (5 tables) — planned migration to PostgreSQL
+`users` · `user_tickers` · `audit_log` · `payment_transactions` · `usage_history`
 
 ## Configuration
 
 | File | Purpose |
 |------|---------|
-| `~/.ai-agent-ui/backend.env` | Master env (secrets, API keys) |
-| `backend/config.py` | Pydantic Settings |
-| `pyproject.toml` | black, isort, pytest |
-| `.flake8` | 79 char line, exclude demoenv |
-| `frontend/.env.local` | NEXT_PUBLIC_BACKEND_URL |
+| `.env` / `.env.example` | All env vars (Docker Compose reads this) |
+| `backend/config.py` | Pydantic Settings (database_url, ollama_*, groq_*) |
+| `pyproject.toml` | black, isort, pytest (79 chars) |
+| `.flake8` | Flake8 linter |
+| `frontend/next.config.ts` | Next.js (standalone output) |
+| `.pyiceberg.yaml` | Iceberg catalog (SQLite) |
+| `docker-compose.yml` | Container orchestration |
 
 ## Key Dependencies
 
-**Backend**: FastAPI, LangChain 1.2.10, LangGraph 1.0.10, LangSmith 0.7.10, Prophet, XGBoost, PyIceberg, yfinance, feedparser, Razorpay SDK, Stripe SDK
+**Backend**: FastAPI, LangChain 1.2, LangGraph 1.0, langchain-ollama, langchain-groq, langchain-anthropic, PyIceberg, Prophet, Redis, Razorpay/Stripe SDKs
 
-**Frontend**: Next.js 16, React 19, Tailwind CSS 4, lightweight-charts (TradingView), ECharts, react-plotly.js
+**Frontend**: Next.js 16, React 19, Tailwind CSS 4, lightweight-charts, ECharts, react-plotly.js, SWR
 
 ## Quick Start
 
 ```bash
+# Docker (recommended)
+cp .env.example .env              # fill in API keys
+docker compose up -d              # start all services
+open http://localhost:3000        # frontend
+
+# Ollama (optional — local LLM)
+ollama-profile reasoning          # load GPT-OSS 20B
+
+# Tests
 source ~/.ai-agent-ui/venv/bin/activate
-./run.sh start                                    # all services
-python -m pytest tests/ -v                        # 613 tests
-PYTHONPATH=backend python scripts/check_tables.py # Iceberg health
-PYTHONPATH=backend python scripts/seed_demo_data.py # first run
+python -m pytest tests/ -v        # ~620 tests
+cd frontend && npx vitest run     # 18 tests
 ```
 
-## Sprint 3 (94+ SP, all Done)
+## Sprint 4 (43 SP, all Done)
 
-Sentiment Agent (16 SP) · Unified Analytics (8) · Admin Scheduler (13) · Correlation Heatmap (5) · Security Hardening (24 fixes) · E2E Coverage (46 tests) · LangSmith Observability · Lighthouse Performance (45→87)
+Scheduler overhaul (14 SP) · Ollama LLM integration (11 SP) · Docker containerization (13 SP) · Billing/Iceberg fixes (5 SP)
+
+## Backlog (Sprint 5-6)
+
+- **Epic: Hybrid DB Migration** (31 SP) — PostgreSQL for OLTP, Iceberg for OLAP, DuckDB query engine
+- **Epic: Cloud IaC** (21 SP) — Terraform + Kubernetes + CI/CD

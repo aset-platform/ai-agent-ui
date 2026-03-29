@@ -2,6 +2,142 @@
 
 ---
 
+# Session: Mar 29, 2026 — Ollama LLM Integration + Chat UX + Containerization
+
+## Branch: `feature/sprint4` — Sprint 4 completed (43 SP, 12 tickets)
+
+### ASETPLTFRM-222: Ollama multi-model profile switcher (3 SP, Done)
+- `ollama-profile` CLI at `~/.local/bin/` — coding/reasoning/unload/status
+- GPT-OSS 20B pulled (13 GB MXFP4), Qwen 2.5 Coder 14B for coding
+- Claude Code `SessionStart` hook for model status reporting
+
+### ASETPLTFRM-223: Local Ollama LLM as Tier 0 in cascade (8 SP, Done)
+- `OllamaManager` singleton with TTL-cached health probe
+- FallbackLLM Tier 0 with `ollama_first` flag:
+  - `True` for sentiment + batch (before Groq)
+  - `False` for interactive chat (after Groq, before Anthropic)
+- Admin REST: GET/POST /admin/ollama/{status,load,unload}
+- Performance tuning: flash attention, KV cache q8_0, num_ctx 8192
+- LLM Usage widget: provider from Iceberg data (was hardcoded "groq")
+- 12 unit tests for OllamaManager
+
+### Chat UX Fixes (part of ASETPLTFRM-223)
+- **Auto-scroll**: `scrollTop = scrollHeight` on scroll container
+- **Input focus**: `readOnly` during loading (not `disabled`), `autoFocus`
+- **Markdown formatting**: all 6 agent prompts + synthesis updated
+- **Tool calls header**: `Tools used: tool1 → tool2` prepended to responses
+- **Tables for metrics**: prompts request `| Metric | Value |` format
+- **Past sessions fix**: PyArrow non-nullable schema for Iceberg fields
+- **CompareChart null fix**: filter null values before setData()
+
+### ASETPLTFRM-227-230: Containerization Epic (13 SP, Done)
+- `Dockerfile.backend`: 2-stage (builder + runtime), Python 3.12-slim
+- `Dockerfile.frontend`: 3-stage (deps + build + runner), Node 22 Alpine
+- `docker-compose.yml`: backend, frontend, postgres:16, redis:7
+- `docker-compose.override.yml`: dev hot-reload with source mounts
+- `.env.example`: documented env vars template
+- `next.config.ts`: added `output: "standalone"`
+- `config.py`: added `database_url` setting
+- Docker Desktop 29.3.1 installed, all 4 services verified healthy
+
+### Bugfixes (from previous sessions, transitioned to Done)
+- ASETPLTFRM-216 (5 SP) — Scheduler catch-up on startup
+- ASETPLTFRM-217 (2 SP) — Scheduler timezone fix
+- ASETPLTFRM-218 (2 SP) — Scheduler edit jobs UI
+- ASETPLTFRM-219 (5 SP) — Day-of-month scheduling
+- ASETPLTFRM-220 (3 SP) — Admin Transactions bug
+- ASETPLTFRM-221 (2 SP) — Auto-create Iceberg tables
+
+### Backlog Created (Sprint 5-6)
+- **Epic: Hybrid DB Migration** (ASETPLTFRM-225) — 31 SP, 7 stories
+  - PostgreSQL for OLTP, Iceberg for OLAP, DuckDB query engine
+- **Epic: Cloud IaC** (ASETPLTFRM-226) — 21 SP, 4 stories
+  - Terraform + Kubernetes, CI/CD, backup + monitoring
+
+---
+
+# Session: Mar 29, 2026 (Early) — Forecast Bugfix + Ollama Multi-Model Switcher
+
+## Branch: `feature/sprint4`
+
+### Bugfix: Forecast chart null price crash
+- `page.tsx:573` — added null guard for `info.price` in `handleFcMove` callback
+- Crosshair hover over gaps in chart series no longer throws TypeError
+
+### ASETPLTFRM-223: Local Ollama LLM as Tier 0 in cascade (5 SP, Done)
+- **OllamaManager** (`backend/ollama_manager.py`): singleton with TTL-cached health probe, load/unload, status
+- **FallbackLLM Tier 0** (`backend/llm_fallback.py`): Ollama tried first, cascades to Groq on failure/context exceeded/unavailable
+- **Config** (`backend/config.py`): 6 new settings (ollama_enabled, model, base_url, num_ctx, timeout, health_cache_ttl)
+- **Wired into**: bootstrap llm_factory, sentiment agent `_get_llm()`, batch gap_filler with auto-load/unload
+- **Admin API** (`backend/routes.py`): GET /admin/ollama/status, POST load, POST unload (superuser auth)
+- **Observability**: provider="ollama" in existing ObservabilityCollector — zero changes needed
+- **Dependency**: `langchain-ollama>=0.3.0` added to requirements.txt
+- **Tests**: 12 unit tests for OllamaManager (all pass)
+
+### ASETPLTFRM-222: Ollama multi-model profile switcher (3 SP, Done)
+- **`ollama-profile` CLI** (`~/.local/bin/ollama-profile`):
+  - Interactive menu + direct invocation: `coding`, `reasoning`, `unload`, `status`
+  - Profiles: Qwen 2.5 Coder 14B (coding) + GPT-OSS 20B (reasoning)
+  - Clean unload→load transition, KV cache freed on switch
+  - Already-loaded detection, model-pulled validation
+  - Bash 3.2 compatible (macOS default)
+- **Claude Code SessionStart hook** (`~/.claude/hooks/ollama-session-check.sh`):
+  - Reports Ollama model status at session start
+  - Injects context so Claude knows which model is loaded
+- **GPT-OSS 20B pulled** — 13 GB, MoE (3.6B active), matches o3-mini reasoning
+- Disk: ~32 GB total in `~/.ollama/models/` (3 models)
+
+---
+
+# Session: Mar 28, 2026 (Late) — Sprint 4 Scheduler Overhaul + Billing Fixes
+
+## Branch: `feature/sprint4` (6 commits)
+
+### ASETPLTFRM-216: Scheduler catch-up on startup (5 SP, In Progress)
+- `_last_scheduled_window()` + `_catchup_missed_jobs()` — detect missed job windows on backend start
+- `trigger_type` tracking: "scheduled", "manual", "catchup" — persisted in Iceberg, shown as badges in UI
+- Amber "Catch-up" badge + blue "Manual" badge in run timeline
+- `scheduler_catchup_enabled` config (default: true)
+- 13 unit tests
+
+### ASETPLTFRM-217: Scheduler timezone fix (2 SP, In Progress)
+- Root cause: `_ist_to_utc()` converted IST cron_time to UTC for `schedule.at()`, but schedule lib uses system local time (IST) — jobs fired 5.5h early
+- Fix: removed `_ist_to_utc()` entirely, pass cron_time directly
+- 1 regression test
+
+### ASETPLTFRM-218: Scheduler edit jobs UI (2 SP, In Progress)
+- PencilIcon + edit button on job rows
+- NewScheduleForm: edit mode with pre-fill, PATCH submit, Cancel button
+- Title/button toggle: "Edit Schedule" / "New Schedule"
+
+### ASETPLTFRM-219: Day-of-month scheduling (5 SP, In Progress)
+- `cron_dates` column in Iceberg `scheduled_jobs` + auto-schema-evolution
+- Monthly jobs: register as daily, gate in `_trigger_job` on matching day
+- `_next_run_ist_dates()` + `_last_window_dates()` helpers
+- Frontend: Weekly/Monthly toggle, 7x5 day grid (1-31)
+- 7 monthly tests (21 total scheduler tests)
+
+### Billing redirect fixes (not ticketed)
+- SameSite=strict → lax on refresh token cookie (payment redirects)
+- Non-blocking `refreshAccessToken()` in Razorpay handler (was causing login redirect after successful payment)
+- `NEXT_PUBLIC_BACKEND_URL` fixed: 127.0.0.1 → localhost (cookie hostname mismatch)
+
+### Environment setup
+- Installed ngrok, configured reserved domain tunnel
+- Migrated Iceberg auth.users table (+10 subscription columns)
+- Installed 15 new Python packages + 201 frontend packages
+- Updated 87 Jira tickets (Sprint 3 dates/SP/assignee/epic links)
+
+### Qwen evaluation
+- Qwen2.5-Coder 14B: 13 tok/s, 16K context, 13GB VRAM on M5 24GB
+- Delegation workflow validated: Claude reasons → Qwen writes code
+- Decision: stay at 16K context, split multi-file requests
+
+### Pending: ASETPLTFRM-220
+- Admin Transactions tab shows 0 transactions after successful payments
+
+---
+
 # Session: Mar 28, 2026 — Sentiment Agent + Bug Fixes
 
 ## ASETPLTFRM-211: Sentiment Agent (16 SP, Done)

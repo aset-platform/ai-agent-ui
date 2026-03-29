@@ -1,37 +1,34 @@
-# Admin Scheduler — Extensible Job Scheduling
+# Admin Scheduler Architecture
 
 ## Overview
-Superuser-only scheduler system under Admin → Scheduler tab for recurring background jobs.
-First job type: "Data Refresh" (refreshes all tickers via `run_full_refresh()`).
+Persistent job scheduler under Admin → Scheduler tab. Backend daemon thread + Iceberg persistence.
 
-## Backend Architecture
-- **Job definitions** persisted in Iceberg table `stocks.scheduled_jobs`
-- **Run history** persisted in `stocks.scheduler_runs`
-- **Executor registry** in `backend/jobs/executor.py` — extensible via `@register_job("type")` decorator
-- **SchedulerService** in `backend/jobs/scheduler_service.py`:
-  - Loads jobs from Iceberg on startup
-  - Registers with `schedule` library (daemon thread, checks every 30s)
-  - IST → UTC time conversion via `ZoneInfo("Asia/Kolkata")`
-  - `ThreadPoolExecutor(max_workers=3)` for concurrent runs
-  - Stale run cleanup on restart (marks orphaned "running" as "failed")
-- **7 REST endpoints** at `/v1/admin/scheduler/*` (all `Depends(superuser_only)`)
-- **Config**: `scheduler_enabled`, `scheduler_max_workers` in `backend/config.py`
+## Components
+- `backend/jobs/scheduler_service.py` — SchedulerService class (schedule lib + ThreadPoolExecutor)
+- `backend/jobs/executor.py` — @register_job decorator, data_refresh executor
+- `backend/routes.py` — 7 REST endpoints (CRUD, trigger, runs, stats), all superuser_only
+- `stocks/create_tables.py` — scheduled_jobs + scheduler_runs Iceberg schemas
+- `stocks/repository.py` — Iceberg CRUD (get_scheduled_jobs, upsert, append_run, update_run, get_last_run_for_job)
+- `frontend/components/admin/SchedulerTab.tsx` — StatCards, JobList, NewScheduleForm, RunTimeline
+- `frontend/hooks/useSchedulerData.ts` — SWR hooks for jobs/runs/stats
 
-## Frontend
-- **SchedulerTab** component in `frontend/components/admin/SchedulerTab.tsx`
-- Design B "Dashboard-First": stat cards, job list with toggles, new schedule form, run timeline
-- **SWR hooks** in `frontend/hooks/useSchedulerData.ts` (auto-refresh 30s)
-- Wired as 6th tab in Admin page
+## Scheduling Modes
+- **Weekly**: cron_days (mon-sun) + cron_time → schedule.every().monday.at(time)
+- **Monthly**: cron_dates (1-31) + cron_time → schedule.every().day.at(time) + day gate in _trigger_job
 
-## Adding a New Job Type
-1. Backend: Add function in `executor.py` with `@register_job("new_type")`
-2. Frontend: Add card in NewScheduleForm job type selector
-3. No schema changes needed — `job_type` is a string field
+## Key Design Decisions
+- schedule lib uses system local time (IST) — NO UTC conversion (bug was _ist_to_utc)
+- trigger_type field: "scheduled" | "manual" | "catchup" — tracked in scheduler_runs Iceberg table
+- Catch-up on startup: _catchup_missed_jobs() compares last run vs last scheduled window
+- cron_days and cron_dates are mutually exclusive (frontend enforces via scheduleType toggle)
+- Schema evolution: auto-add new columns (trigger_type, cron_dates) on first write
 
-## Critical Gotchas
-- Iceberg TimestampType is **tz-naive** — always `v.replace(tzinfo=None)` before writing
-- Sanitize NaN/NaT from pandas before JSON serialization (`v != v` check or `pd.isna()`)
-- `schedule` lib uses UTC internally — convert IST times with `_ist_to_utc()`
-- Backend must restart to pick up code changes (no `--reload` flag in production)
+## Config
+- scheduler_enabled (bool, default true)
+- scheduler_max_workers (int, default 3)
+- scheduler_catchup_enabled (bool, default true)
 
-## Jira: ASETPLTFRM-205 (feature), ASETPLTFRM-206 (bug fixes)
+## IST Times
+- All cron_time values stored and displayed in IST (Asia/Kolkata)
+- Iceberg timestamps stored as UTC tz-naive
+- _next_run_ist / _last_scheduled_window compute in IST

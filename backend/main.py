@@ -40,6 +40,26 @@ from tools.registry import ToolRegistry  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
+def _ensure_iceberg_tables() -> None:
+    """Create missing Iceberg tables (idempotent)."""
+    try:
+        from auth.create_tables import (
+            create_tables as create_auth_tables,
+        )
+        from stocks.create_tables import (
+            create_tables as create_stock_tables,
+        )
+        create_auth_tables()
+        create_stock_tables()
+        logger.info("Iceberg tables ensured.")
+    except Exception:
+        logger.warning(
+            "Iceberg table init failed — "
+            "tables may need manual creation",
+            exc_info=True,
+        )
+
+
 class ChatServer:
     """Thin orchestrator that wires registries and the ASGI app.
 
@@ -58,6 +78,7 @@ class ChatServer:
                 :func:`~config.get_settings`.
         """
         self.settings = settings
+        _ensure_iceberg_tables()
         self.tool_registry = ToolRegistry()
         self.agent_registry = AgentRegistry()
 

@@ -6,8 +6,29 @@
 |---------|------|-------------|-------|
 | Backend | 8181 | `backend/main.py` | Python 3.12, FastAPI, LangChain 1.x |
 | Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19, TypeScript |
-| Dashboard | 8050 | `dashboard/app.py` | Plotly Dash (FLATLY theme) — being migrated to Next.js |
+| PostgreSQL | 5432 | Docker | PostgreSQL 16 Alpine (OLTP) |
+| Redis | 6379 | Docker | Redis 7 Alpine (cache + sessions) |
 | Docs | 8000 | `mkdocs serve` | MkDocs Material |
+| Ollama | 11434 | Host-native | GPT-OSS 20B, Qwen 2.5 Coder 14B |
+
+## Deployment
+
+### Docker Compose (primary)
+```
+docker compose up -d        # all services
+docker compose ps           # health check
+docker compose down         # stop
+```
+- `docker-compose.yml`: production-like (4 services)
+- `docker-compose.override.yml`: dev hot-reload (auto-loaded)
+- `.env`: secrets (gitignored), `.env.example`: template (committed)
+- Iceberg data mounted at host path for catalog compatibility
+- Ollama runs on host, accessed via `host.docker.internal:11434`
+
+### Legacy (still works)
+```
+./run.sh start              # starts redis, backend, frontend, docs
+```
 
 ## Frontend Architecture (Post-Overhaul)
 

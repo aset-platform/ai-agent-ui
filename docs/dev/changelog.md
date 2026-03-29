@@ -4,6 +4,76 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 29, 2026 — Sprint 4 Final: Ollama LLM + Chat UX + Containerization
+
+### Added
+- **Ollama multi-model profile switcher** (ASETPLTFRM-222) — `ollama-profile` CLI at `~/.local/bin/` with coding/reasoning/unload/status profiles; Claude Code `SessionStart` hook for model status
+- **Local LLM as Tier 0 in FallbackLLM** (ASETPLTFRM-223) — `OllamaManager` singleton with TTL-cached health probe; `ollama_first` flag (True for sentiment/batch, False for chat); admin API `GET/POST /v1/admin/ollama/{status,load,unload}`; `langchain-ollama>=0.3.0` dependency
+- **Docker containerization** (ASETPLTFRM-227-230) — `Dockerfile.backend` (2-stage Python 3.12), `Dockerfile.frontend` (3-stage Node 22 Alpine standalone), `docker-compose.yml` (backend + frontend + postgres:16 + redis:7), `docker-compose.override.yml` (dev hot-reload), `.env.example` template
+- **Chat tool calls header** — `Tools used: tool1 → tool2` prepended above LLM responses
+- **12 unit tests** for OllamaManager (health probe, load/unload, graceful degradation)
+- **GPT-OSS 20B** pulled (13 GB MXFP4, MoE 3.6B active) for local reasoning
+- **3 Jira epics + 15 stories** created for hybrid DB migration + cloud IaC
+
+### Changed
+- **LLM cascade order** — Ollama Tier 0 for sentiment (before Groq), after Groq for interactive chat (before Anthropic paid fallback)
+- **Ollama performance tuning** — flash attention enabled (`OLLAMA_FLASH_ATTENTION=1`), KV cache quantization (q8_0), context reduced to 8192 for faster prefill
+- **Chat auto-scroll** — replaced `scrollIntoView` with `scrollTop = scrollHeight` on container ref (more reliable in React 19)
+- **Chat input focus** — `readOnly` during loading instead of `disabled` (preserves browser focus); `autoFocus` attribute on textarea
+- **Markdown formatting** — all 6 agent system prompts + synthesis node updated with explicit markdown instructions (bold, bullets, tables for metrics, headings)
+- **LLM Usage widget** — provider badge now from Iceberg data (was hardcoded "groq"); shows "ollama" for GPT-OSS-20B
+- **`next.config.ts`** — added `output: "standalone"` for Docker production build
+- **`backend/config.py`** — added `database_url`, 6 Ollama settings (enabled, base_url, model, num_ctx, timeout, health_cache_ttl)
+
+### Fixed
+- **ASETPLTFRM-220** — Admin Transactions tab 0 txns (missing Iceberg table, SameSite cookie, blocking refresh)
+- **ASETPLTFRM-221** — Auto-create Iceberg tables on startup (prevents silent failures)
+- **Forecast chart crash** — `info.price` null guard in `handleFcMove` crosshair handler
+- **CompareChart crash** — null values filtered before `lineSeries.setData()`
+- **Past sessions save** — PyArrow schema with `nullable=False` for required Iceberg fields (`session_id`, `user_id`)
+- **Iceberg snapshot bloat** — identified as root cause for CRUD tables; migration to PostgreSQL planned (Epic 2)
+
+### Infrastructure
+- **Docker Desktop 29.3.1** installed on Apple M5 (arm64)
+- **PostgreSQL 16** running in Docker (tuned: 512MB shared_buffers, 20 max_connections)
+- **Redis 7** running in Docker with persistent volume
+- **Iceberg warehouse** mounted at host path inside container (SQLite catalog compatibility)
+- **Ollama** stays host-native; accessed via `host.docker.internal:11434` from Docker
+
+---
+
+## Mar 28, 2026 — Sprint 4: Scheduler Overhaul + Billing Fixes
+
+### Added
+- **Scheduler catch-up on startup** (ASETPLTFRM-216) — `_catchup_missed_jobs()` detects missed job windows and fires a single compensating run; `trigger_type` field tracks scheduled/manual/catchup; amber "Catch-up" + blue "Manual" badges in run timeline
+- **Day-of-month scheduling** (ASETPLTFRM-219) — `cron_dates` column in Iceberg, Weekly/Monthly toggle in UI, 7x5 day grid (1-31), daily registration with date gate in `_trigger_job`
+- **Edit jobs UI** (ASETPLTFRM-218) — pencil icon on job rows, NewScheduleForm supports edit mode with pre-fill, PATCH submit, Cancel button
+- **`scheduler_catchup_enabled`** config field (default: true)
+- **`_next_run_ist_dates()`** + **`_last_window_dates()`** — day-of-month schedule helpers
+- **`get_last_run_for_job()`** — repository method for catch-up logic
+- **21 scheduler tests** — 14 catch-up + 7 monthly, all passing
+- **ngrok** installed + reserved domain tunnel configured
+
+### Changed
+- **Cookie `SameSite=strict` → `lax`** — payment redirects from Razorpay/Stripe were stripping refresh token cookie on cross-site navigation
+- **`refreshAccessToken()` non-blocking** in Razorpay handler — was causing login redirect after successful payment; now fire-and-forget with `.catch(() => {})`
+- **`NEXT_PUBLIC_BACKEND_URL`** fixed to `http://localhost:8181` (was `127.0.0.1` — cookie hostname mismatch)
+- **`_register_schedule()`** uses `cron_time` directly — removed broken `_ist_to_utc()` conversion that caused jobs to fire 5.5h early
+
+### Removed
+- **`_ist_to_utc()`** function — dead code after timezone fix (ASETPLTFRM-217)
+
+### Fixed
+- **ASETPLTFRM-217** — scheduler jobs firing 5.5h early due to IST→UTC conversion for schedule lib (which uses local time)
+- **Payment redirect → login** — 3-layer fix (hostname mismatch + SameSite + blocking refresh)
+- **Iceberg `auth.users` schema** — migrated 10 missing subscription columns (`subscription_tier`, `razorpay_*`, `stripe_*`, `monthly_usage_count`, etc.)
+
+### Resolved in Mar 29 session
+- **ASETPLTFRM-220** — Fixed (missing Iceberg table + cookie + refresh issues)
+- **ASETPLTFRM-221** — Added auto-create Iceberg tables on startup
+
+---
+
 ## Mar 25, 2026 — Security Hardening, Code Quality, E2E Coverage
 
 ### Added

@@ -6,11 +6,13 @@
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Python | 3.12+ | Virtualenv at `~/.ai-agent-ui/venv` (Python 3.12.9) |
-| Node.js | 18+ | Required by Next.js 16 |
-| npm | 9+ | Comes with Node.js |
+| Docker Desktop | 29+ | [Install](https://docs.docker.com/desktop/setup/install/mac-install/) — runs all services |
+| Python | 3.12+ | Virtualenv at `~/.ai-agent-ui/venv` (for native dev) |
+| Node.js | 22+ | Required by Next.js 16 (for native dev) |
+| GROQ_API_KEY | — | Get at [console.groq.com](https://console.groq.com) (free tier) |
 | ANTHROPIC_API_KEY | — | Get at [console.anthropic.com](https://console.anthropic.com) |
 | SERPAPI_API_KEY | — | Get at [serpapi.com](https://serpapi.com) (100 free searches/month) |
+| Ollama (optional) | — | [ollama.com](https://ollama.com) — local LLM for sentiment/experiments |
 
 ---
 
@@ -64,7 +66,56 @@ This script:
 
 ---
 
-## All Services at Once (Recommended)
+## Docker Compose (Recommended)
+
+The preferred way to run all services. Mirrors the production
+environment exactly.
+
+### Prerequisites
+- **Docker Desktop** — [Install from Docker](https://docs.docker.com/desktop/setup/install/mac-install/)
+- **`.env` file** — copy from template: `cp .env.example .env` and fill in API keys
+
+### Start
+```bash
+docker compose up -d          # start all (backend, frontend, postgres, redis)
+docker compose ps             # verify all healthy
+docker compose logs -f backend  # tail backend logs
+```
+
+### Services
+| Service | Port | Health Check |
+|---------|------|-------------|
+| Backend (FastAPI) | 8181 | `curl localhost:8181/v1/health` |
+| Frontend (Next.js) | 3000 | `http://localhost:3000` |
+| PostgreSQL 16 | 5432 | `pg_isready` |
+| Redis 7 | 6379 | `redis-cli ping` |
+
+### Dev Hot-Reload
+`docker-compose.override.yml` is auto-loaded and mounts source
+directories for live reload. Edit Python/TypeScript files and
+changes take effect immediately.
+
+### Stop
+```bash
+docker compose down           # stop all containers
+docker compose down -v        # stop + remove volumes (reset data)
+```
+
+### Ollama (Local LLM — Optional)
+Ollama runs on the host (not in Docker). Install from
+[ollama.com](https://ollama.com), then:
+```bash
+ollama-profile coding         # load Qwen 2.5 Coder 14B
+ollama-profile reasoning      # load GPT-OSS 20B
+ollama-profile status         # check loaded model
+ollama-profile unload         # free RAM
+```
+If Ollama is not running, the LLM cascade falls back to
+Groq (free cloud) → Anthropic (paid).
+
+---
+
+## Legacy: run.sh (Still Works)
 
 `run.sh` in the project root starts, stops, and monitors all four services.
 
