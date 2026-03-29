@@ -10,15 +10,6 @@ import os
 import sys
 from pathlib import Path
 
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-from backend.db.base import Base
-
 # Force test cascade profile (free-tier only, no Anthropic).
 os.environ.setdefault("AI_AGENT_UI_ENV", "test")
 
@@ -28,6 +19,15 @@ _BACKEND_DIR = _PROJECT_ROOT / "backend"
 for _p in (str(_BACKEND_DIR), str(_PROJECT_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
+import pytest_asyncio  # noqa: E402
+from sqlalchemy.ext.asyncio import (  # noqa: E402
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from backend.db.base import Base  # noqa: E402
 
 
 def _reset_limiter():
