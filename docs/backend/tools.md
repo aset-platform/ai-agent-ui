@@ -215,6 +215,70 @@ At inference time, the LLM decides whether to respond directly or request a tool
 
 ---
 
+## News Recency & Date Utilities
+
+### `_date_utils.py`
+
+`backend/tools/_date_utils.py` provides three pure functions used
+by all news and sentiment tools to filter and weight articles by
+publication date.
+
+```python
+def parse_published(value) -> datetime | None:
+    """Parse a publication date from any common format.
+
+    Handles:
+      - Unix timestamps (int / float)
+      - RFC 2822 strings  ("Mon, 30 Mar 2026 10:00:00 +0000")
+      - ISO 8601 strings  ("2026-03-30T10:00:00Z")
+
+    Returns None only if all parsers fail.
+    """
+
+def is_within_window(dt: datetime, days_back: int = 7) -> bool:
+    """Return True if dt falls within the last days_back days."""
+
+def time_decay_weight(dt: datetime) -> float:
+    """Return a recency weight for use in sentiment averaging."""
+```
+
+**Conservative policy:** when `parse_published` returns `None`
+(unparseable date), the calling tool **keeps** the article and
+assigns it a weight of `1.0`. Articles are never silently dropped
+due to a missing or malformed date field.
+
+### `days_back` parameter
+
+`get_ticker_news`, `search_financial_news`, and
+`score_ticker_sentiment` all accept a `days_back` keyword
+argument (default `7`). Articles whose publication date falls
+outside the window are excluded **before** any LLM scoring, which
+keeps token usage low and prevents stale headlines from influencing
+the result.
+
+```python
+# Example: only consider news from the last 3 days
+result = score_ticker_sentiment("AAPL", days_back=3)
+```
+
+### Time-decay weight table
+
+Weights are applied as multipliers when `_sentiment_scorer.py`
+computes the final weighted-average sentiment score.
+
+| Age | Weight |
+|-----|--------|
+| 0–2 days | 1.0 |
+| 3–7 days | 0.5 |
+| 8–30 days | 0.25 |
+| > 30 days | 0.1 |
+
+A recency-weighted score therefore emphasises breaking news and
+gradually discounts older background coverage without discarding
+it entirely.
+
+---
+
 ## Adding a New Tool
 
 1. Create `backend/tools/my_tool.py`:

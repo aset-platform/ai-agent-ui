@@ -4,6 +4,20 @@ A fullstack agentic chat application built with Next.js and FastAPI. The LLM run
 
 ---
 
+## Feature Highlights
+
+- **5 specialized AI agents** — Portfolio, Stock Analyst, Forecaster, Research, and Sentiment agents, each with purpose-built tool sets, routed by a LangGraph supervisor
+- **Context-aware multi-turn conversations** — rolling summary window maintains coherent long conversations without overflowing the context budget
+- **Recency-aware news** — 7-day default window with time-decay scoring surfaces the most relevant recent headlines first
+- **Dual payment gateways** — Razorpay (INR modal) and Stripe (USD hosted checkout) with pro-rata billing and webhook-verified transaction ledger
+- **Prophet forecasting with ensemble correction** — 3/6/9-month price targets with 80% confidence bands, cached same-day
+- **Real-time WebSocket streaming** — live `tool_start` / `tool_done` events give users visibility into the agentic loop as it runs
+- **Ollama local LLM support** — zero-cost inference as Tier 0 in the cascade; gracefully skipped when unavailable
+- **Docker Compose 5-service orchestration** — `docker compose up -d` starts backend (8181), frontend (3000), PostgreSQL (5432), Redis (6379), and docs (8000)
+- **Lighthouse performance monitoring** — 94/100 score; LHCI gate enforced pre-PR via `npm run perf:check`
+
+---
+
 ## Stack
 
 | Layer | Technology |

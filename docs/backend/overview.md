@@ -177,6 +177,81 @@ This gives each handler access to `self.agent_registry` and `self.tool_registry`
 
 ---
 
+## Context-Aware Chat
+
+Conversation context is tracked across turns so that follow-up
+questions ("what about its PE ratio?") are resolved against the
+previous exchange rather than treated as isolated queries.
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `backend/agents/conversation_context.py` | `ConversationContext` dataclass + in-memory session store |
+| `backend/agents/nodes/topic_classifier.py` | Follow-up vs new-topic detection node |
+
+### How it works
+
+**Session store** — `ConversationContext` holds a rolling summary,
+the last agent used, and the tickers referenced in recent turns.
+Instances are keyed by `session_id` in a module-level dict.
+
+**Topic classifier** — after the cache check and before the
+guardrail, `topic_classifier` runs a 1-shot LLM call to decide
+whether the incoming message continues the previous topic. If the
+LLM call fails for any reason, the node degrades gracefully to
+`"new_topic"` so the request still proceeds.
+
+**Rolling summary** — after every turn `_update_conversation_context()`
+re-summarises the exchange via the Ollama/Groq cascade and stores
+the new summary back in the session store.
+
+**Context injection** — `_build_messages(session_id)` in
+`BaseAgent` prepends a `[Conversation Context]` block to the
+system prompt when a non-empty session summary exists, giving
+every sub-agent awareness of what was discussed earlier.
+
+---
+
+## Recency-Aware News
+
+All news and sentiment tools filter and weight articles by age so
+that stale headlines do not distort analysis.
+
+### Date utilities — `backend/tools/_date_utils.py`
+
+| Function | Description |
+|----------|-------------|
+| `parse_published(value)` | Parses Unix timestamps, RFC 2822, and ISO 8601 strings into `datetime` |
+| `is_within_window(dt, days_back)` | Returns `True` if `dt` is within the last `days_back` days |
+| `time_decay_weight(dt)` | Returns a float weight based on article age (see table below) |
+
+**Conservative policy:** if a date cannot be parsed, the article
+is **kept** (weight 1.0) rather than dropped. This avoids silently
+discarding valid headlines from sources with non-standard date
+formats.
+
+### `days_back` parameter
+
+`get_ticker_news`, `search_financial_news`, and
+`score_ticker_sentiment` all accept a `days_back=7` keyword
+argument. Articles outside the window are excluded before
+sentiment scoring begins.
+
+### Time-decay weight table
+
+| Age | Weight |
+|-----|--------|
+| 0–2 days | 1.0 |
+| 3–7 days | 0.5 |
+| 8–30 days | 0.25 |
+| > 30 days | 0.1 |
+
+Weights are applied as multipliers when computing the weighted
+average sentiment score in `_sentiment_scorer.py`.
+
+---
+
 ## Observability & Tier Health
 
 The `ObservabilityCollector` in `observability.py` provides thread-safe metrics collection for the N-tier LLM cascade:

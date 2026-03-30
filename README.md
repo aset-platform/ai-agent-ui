@@ -4,6 +4,20 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 
 ---
 
+## Features
+
+- **5 specialized AI sub-agents** — Portfolio, Stock Analyst, Forecaster, Research, and Sentiment agents routed by a LangGraph supervisor
+- **Context-aware multi-turn chat** — rolling summary window keeps long conversations coherent without blowing the context budget
+- **Recency-aware news** — 7-day default window with time-decay scoring surfaces the most relevant recent headlines
+- **Ollama local LLM (Tier 0)** — zero-cost inference via host-native Ollama; cascade falls back to Groq → Anthropic when unavailable
+- **Prophet forecasting with ensemble correction** — 3/6/9-month price targets with 80% confidence bands
+- **Real-time WebSocket streaming** — live tool event visibility (`tool_start` / `tool_done`) during agentic loop execution
+- **Dual payment gateways** — Razorpay (INR modal) and Stripe (USD hosted checkout) with pro-rata billing
+- **Docker Compose 5-service orchestration** — single command spins up backend, frontend, PostgreSQL, Redis, and docs
+- **Lighthouse performance monitoring** — 94/100 score; LHCI gate enforced pre-PR
+
+---
+
 ## Services at a Glance
 
 | Service | Stack | Port | Purpose |
@@ -17,6 +31,22 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 ---
 
 ## First-Time Setup (Recommended)
+
+### Docker Compose (preferred — mirrors production)
+
+```bash
+git clone git@github.com:asequitytrading-design/ai-agent-ui.git
+cd ai-agent-ui
+cp .env.example .env          # fill in API keys
+docker compose up -d          # start all 5 services
+
+# Seed demo data (required for first E2E run / demo login)
+docker compose exec backend python scripts/seed_demo_data.py
+```
+
+Open [http://localhost:3000](http://localhost:3000). Demo credentials: `admin@demo.com` / `Admin123!`
+
+### Native Setup
 
 ```bash
 git clone git@github.com:asequitytrading-design/ai-agent-ui.git
@@ -76,7 +106,10 @@ cp frontend/.env.local.example frontend/.env.local
 #    On first run: Iceberg tables are created and superuser is seeded automatically
 ./run.sh start
 
-# 4. Log in and open the chat
+# 4. (Optional) Seed demo data for testing
+PYTHONPATH=backend python scripts/seed_demo_data.py
+
+# 5. Log in and open the chat
 open http://localhost:3000/login
 ```
 

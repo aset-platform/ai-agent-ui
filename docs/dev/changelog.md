@@ -4,6 +4,45 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 30, 2026 — Context-Aware Chat + Recency-Aware News + Bug Fixes
+
+### Context-Aware Chat Phase 1 (19 SP, ASETPLTFRM-249–256)
+- **ConversationContext** server-side session tracking with 1hr TTL eviction
+- **Topic classifier** detects follow-up questions via 1-shot LLM prompt
+- **Rolling summary** updated after each turn via Ollama/Groq cascade
+- **Guardrail integration**: follow-ups skip router, reuse last agent
+- **Context injection**: [Conversation Context] block prepended to all
+  agent system prompts
+- **Frontend**: `session_id` passed in HTTP + WebSocket requests
+
+### Recency-Aware News & Sentiment (ASETPLTFRM-244)
+- `_date_utils.py`: date parsing for yfinance, RSS, ISO 8601 formats
+- `days_back=7` default on `get_ticker_news`,
+  `search_financial_news`, `score_ticker_sentiment`
+- Time-decay weighting in sentiment scoring (1.0→0.1 by headline age)
+- Agent prompts updated with recency rules and temporal expansion
+  guidance
+
+### Bug Fixes
+- **ASETPLTFRM-243**: Portfolio NaN crash — sanitized via
+  `dropna(subset=["close"])`
+- **ASETPLTFRM-245**: Fixed 18 test failures (AsyncMock, feedparser,
+  forecast mock, pricing fixture)
+- **ASETPLTFRM-247**: Scheduler event loop — `upsert_registry()` uses
+  `_pg_session()` not cached engine
+- **ASETPLTFRM-248**: Docs 404 — pre-generated config/api reference,
+  removed gen-files plugin
+
+### Infrastructure
+- MkDocs containerized as 5th Docker Compose service (port 8000)
+- Seed script fixed for Docker (PyIceberg env vars + async
+  UserRepository)
+- E2E login redirect fix (`waitForURL` → `**/dashboard**`)
+- Test suite: 701 passed (was 646)
+- Performance: 94/100 — zero regression vs Sprint 3
+
+---
+
 ## Mar 29, 2026 — Sprint 4 Final: Ollama LLM + Chat UX + Containerization
 
 ### Added

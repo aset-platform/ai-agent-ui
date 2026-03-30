@@ -68,17 +68,19 @@ This script:
 
 ## Docker Compose (Recommended)
 
-The preferred way to run all services. Mirrors the production
-environment exactly.
+Docker Compose is the recommended approach — it mirrors the production
+environment exactly and starts all services with a single command.
 
 ### Prerequisites
 - **Docker Desktop** — [Install from Docker](https://docs.docker.com/desktop/setup/install/mac-install/)
-- **`.env` file** — copy from template: `cp .env.example .env` and fill in API keys
+- **`.env` file** — copy from template: `cp .env.example .env` and
+  fill in API keys
 
 ### Start
 ```bash
-docker compose up -d          # start all (backend, frontend, postgres, redis)
-docker compose ps             # verify all healthy
+# start all services (backend, frontend, postgres, redis, docs)
+docker compose up -d
+docker compose ps               # verify all healthy
 docker compose logs -f backend  # tail backend logs
 ```
 
@@ -89,6 +91,24 @@ docker compose logs -f backend  # tail backend logs
 | Frontend (Next.js) | 3000 | `http://localhost:3000` |
 | PostgreSQL 16 | 5432 | `pg_isready` |
 | Redis 7 | 6379 | `redis-cli ping` |
+| Docs (MkDocs) | 8000 | `http://localhost:8000` |
+
+### Seed Demo Data
+
+After starting for the first time (or after a data reset), seed the
+demo users and portfolio data:
+
+```bash
+docker compose exec backend \
+    python scripts/seed_demo_data.py
+```
+
+Demo credentials after seeding:
+
+| Role | Email | Password |
+|------|-------|----------|
+| Admin | `admin@demo.com` | `Admin123!` |
+| User | `test@demo.com` | `Test1234!` |
 
 ### Dev Hot-Reload
 `docker-compose.override.yml` is auto-loaded and mounts source
@@ -101,17 +121,18 @@ docker compose down           # stop all containers
 docker compose down -v        # stop + remove volumes (reset data)
 ```
 
-### Ollama (Local LLM — Optional)
-Ollama runs on the host (not in Docker). Install from
-[ollama.com](https://ollama.com), then:
+### Ollama (Local LLM — Host-Native, Optional)
+Ollama runs on the **host machine** — it is not containerized.
+Install from [ollama.com](https://ollama.com), then:
 ```bash
 ollama-profile coding         # load Qwen 2.5 Coder 14B
 ollama-profile reasoning      # load GPT-OSS 20B
 ollama-profile status         # check loaded model
 ollama-profile unload         # free RAM
 ```
-If Ollama is not running, the LLM cascade falls back to
-Groq (free cloud) → Anthropic (paid).
+The backend reaches host Ollama via `host.docker.internal:11434`
+(set via `OLLAMA_BASE_URL` in `.env`). If Ollama is not running,
+the LLM cascade falls back to Groq (free cloud) → Anthropic (paid).
 
 ---
 

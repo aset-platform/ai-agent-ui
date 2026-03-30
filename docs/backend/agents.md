@@ -103,6 +103,64 @@ Each sub-agent is configured via a dataclass in `agents/configs/`:
 
 `_build_context_block()` in `agents/sub_agents.py` detects the user's currency/market mix from portfolio holdings and injects it into the LLM system prompt. This ensures the portfolio agent uses correct currency symbols (₹/$) and market conventions.
 
+### Context-Aware Routing
+
+The graph extends the basic routing pipeline with a
+conversation-context layer that runs between the cache check and
+the guardrail.
+
+**Guardrail node — follow-up detection**
+
+Before applying content-safety rules, the guardrail node checks
+whether the incoming message is a follow-up to the previous turn.
+A follow-up bypasses the full keyword → LLM classification path
+and is routed directly to the same sub-agent that handled the
+prior turn, preserving conversational continuity.
+
+**Topic classifier (`agents/nodes/topic_classifier.py`)**
+
+When the guardrail cannot resolve the intent from session context
+alone, the topic classifier node runs a 1-shot LLM call:
+
+```
+Input  : last summary + current message
+Output : "follow_up" | "new_topic"
+```
+
+If the LLM call raises (timeout, rate-limit, etc.), the node
+degrades gracefully to `"new_topic"` so the request always
+continues through the normal routing path.
+
+**Context injection**
+
+When a session summary exists, `_build_messages(session_id)` in
+`BaseAgent` inserts a `[Conversation Context]` block at the top of
+the sub-agent's system prompt:
+
+```
+[Conversation Context]
+Summary : <rolling summary of prior turns>
+Last agent : stock_analyst
+Tickers   : AAPL, MSFT
+```
+
+This ensures the active sub-agent sees prior topics, tickers, and
+the user's cumulative intent without re-sending the full message
+history.
+
+**Post-response update**
+
+After the synthesis node produces the final response,
+`_update_conversation_context()` is called with the new
+exchange. It:
+
+1. Re-summarises the full conversation via the Ollama/Groq
+   cascade.
+2. Records the sub-agent that answered (`current_agent`).
+3. Updates the ticker list extracted from the response.
+4. Writes the updated `ConversationContext` back to the
+   in-memory session store.
+
 ---
 
 ## BaseAgent (Legacy Fallback)
