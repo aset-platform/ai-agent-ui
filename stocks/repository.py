@@ -3980,7 +3980,6 @@ class StockRepository:
         from backend.db.pg_stocks import (
             upsert_registry as pg_upsert,
         )
-        from backend.db.engine import get_session_factory
 
         data = {
             "ticker": ticker,
@@ -3992,7 +3991,7 @@ class StockRepository:
         }
 
         async def _call():
-            async with get_session_factory()() as s:
+            async with _pg_session() as s:
                 await pg_upsert(s, data)
 
         _run_pg(_call)
