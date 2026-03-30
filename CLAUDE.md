@@ -177,7 +177,7 @@ see all available topics.
 
 | Category | Topics |
 |----------|--------|
-| `shared/architecture/` | system-overview, agent-init-pattern, groq-chunking, iceberg-data-layer, auth-jwt-flow, langsmith-observability, lighthouse-performance-workflow, subscription-billing, portfolio-analytics, currency-aware-agent, token-budget-concurrency, payment-transaction-ledger, sentiment-agent, iceberg-column-projection, llm-cascade-profiles, docker-containerization, redis-cache-layer, per-ticker-refresh, api-versioning, security-hardening-patterns, hybrid-db-postgresql-iceberg |
+| `shared/architecture/` | system-overview, agent-init-pattern, groq-chunking, iceberg-data-layer, auth-jwt-flow, langsmith-observability, lighthouse-performance-workflow, subscription-billing, portfolio-analytics, currency-aware-agent, token-budget-concurrency, payment-transaction-ledger, sentiment-agent, iceberg-column-projection, llm-cascade-profiles, docker-containerization, redis-cache-layer, per-ticker-refresh, api-versioning, security-hardening-patterns, hybrid-db-postgresql-iceberg, context-aware-chat |
 | `shared/conventions/` | python-style, typescript-style, git-workflow, testing-patterns, performance, error-handling, llm-tool-forcing, jira-mcp-usage, security-hardening, e2e-test-patterns, isort-black-exclude-virtualenv, git-push-workflow |
 | `shared/debugging/` | common-issues, mock-patching-gotchas, chat-session-recording, cookie-hostname-mismatch, ohlcv-nan-close-price, razorpay-integration-gotchas, iceberg-epoch-dates, portfolio-watchlist-sync, iceberg-table-corruption-recovery, razorpay-customer-exists, playwright-react19-dash-patterns, asyncpg-sync-async-bridge |
 | `shared/onboarding/` | setup-guide, test-venv-setup, tooling |
@@ -246,6 +246,17 @@ Load any memory with `read_memory` when you need the details.
 - **Test mocks after async conversion**: Replace `MagicMock`
   with `AsyncMock` for any mocked repo method. Awaiting a
   plain MagicMock returns a coroutine, not the mock value.
+- **Docker seed script**: `seed_demo_data.py` needs
+  `PYICEBERG_CATALOG__LOCAL__URI` set before any pyiceberg
+  import. Script now sets it from `paths.py`. Also needs
+  `fixtures/` volume mounted in `docker-compose.override.yml`.
+- **MkDocs gen-files in Docker**: gen-files scripts need
+  backend Python modules unavailable in docs container.
+  Pre-generate instead: `python scripts/gen_config_docs.py
+  > docs/backend/config-reference.md`.
+- **Test mock dates**: Never hardcode dates in test mocks
+  (e.g., `"2026-03-21"`) — they go stale. Use
+  `str(int(time.time()) - 86400)` for "yesterday".
 
 ---
 
@@ -259,7 +270,7 @@ flake8 backend/ auth/ stocks/ scripts/
 cd frontend && npx eslint . --fix
 
 # Test
-python -m pytest tests/ -v        # all (~644 tests)
+python -m pytest tests/ -v        # all (~712 tests)
 cd frontend && npx vitest run     # frontend (18 tests)
 cd e2e && npm test                # E2E (~219 tests, needs live services)
 
