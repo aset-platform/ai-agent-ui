@@ -507,6 +507,71 @@ def create_app(
             "start_time_ns": 0,
         }
 
+    def _update_conversation_context(
+        session_id: str,
+        user_input: str,
+        response: str,
+        agent: str,
+        intent: str,
+        tickers: list[str],
+        user_id: str,
+    ) -> None:
+        """Update or create conversation context."""
+        if not session_id:
+            return
+
+        try:
+            from agents.conversation_context import (
+                ConversationContext,
+                context_store,
+                update_summary,
+            )
+
+            ctx = context_store.get(session_id)
+            if ctx is None:
+                ctx = ConversationContext(
+                    session_id=session_id,
+                )
+                # Populate user profile on first turn.
+                try:
+                    user_ctx = _build_user_context(
+                        user_id,
+                    )
+                    ctx.user_tickers = user_ctx.get(
+                        "tickers", [],
+                    )
+                    ctx.market_preference = user_ctx.get(
+                        "market", "",
+                    )
+                    ctx.subscription_tier = user_ctx.get(
+                        "tier", "",
+                    )
+                except Exception:
+                    pass
+
+            ctx.last_agent = agent
+            ctx.last_intent = intent
+            ctx.current_topic = (
+                f"{', '.join(tickers)} {intent}"
+                if tickers else intent
+            )
+            for t in tickers:
+                if t not in ctx.tickers_mentioned:
+                    ctx.tickers_mentioned.append(t)
+
+            # Update summary (non-blocking).
+            try:
+                update_summary(ctx, user_input, response)
+            except Exception:
+                ctx.turn_count += 1
+
+            context_store.upsert(session_id, ctx)
+        except Exception:
+            _logger.debug(
+                "Context update failed",
+                exc_info=True,
+            )
+
     def _stream_langgraph(req: ChatRequest):
         """NDJSON streaming via LangGraph graph."""
         timeout = settings.agent_timeout_seconds
@@ -532,6 +597,26 @@ def create_app(
                         )
                     finally:
                         set_event_sink(None)
+                    # Update conversation context.
+                    _update_conversation_context(
+                        session_id=(
+                            req.session_id or ""
+                        ),
+                        user_input=req.message,
+                        response=result.get(
+                            "final_response", "",
+                        ),
+                        agent=result.get(
+                            "current_agent", "",
+                        ),
+                        intent=result.get(
+                            "intent", "",
+                        ),
+                        tickers=result.get(
+                            "tickers", [],
+                        ),
+                        user_id=req.user_id or "",
+                    )
                     # Emit final
                     event_queue.put(
                         json.dumps(
