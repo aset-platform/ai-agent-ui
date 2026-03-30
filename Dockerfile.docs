@@ -1,7 +1,5 @@
 FROM squidfunk/mkdocs-material:9
 
-RUN pip install --no-cache-dir mkdocs-gen-files
-
 WORKDIR /docs
 EXPOSE 8000
 ENTRYPOINT ["mkdocs"]

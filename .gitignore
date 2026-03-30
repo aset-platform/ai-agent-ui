@@ -3,9 +3,8 @@
 .env.local
 .env*.local
 
-# Auto-generated docs (mkdocs-gen-files)
-docs/backend/api-reference.md
-docs/backend/config-reference.md
+# Auto-generated docs — now committed (gen-files
+# removed; regenerate manually if config changes)
 
 # Node.js
 node_modules/

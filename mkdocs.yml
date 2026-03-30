@@ -29,10 +29,10 @@ theme:
 
 plugins:
   - search
-  - gen-files:
-      scripts:
-        - scripts/gen_api_docs.py
-        - scripts/gen_config_docs.py
+  # gen-files removed — scripts need backend Python
+  # modules unavailable in docs container. Pre-generate
+  # via: python scripts/gen_config_docs.py > docs/backend/config-reference.md
+  #      python scripts/gen_api_docs.py > docs/backend/api-reference.md
 
 markdown_extensions:
   - pymdownx.highlight:

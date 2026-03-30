@@ -25,7 +25,6 @@ services:
     volumes:
       - ./docs:/docs/docs
       - ./mkdocs.yml:/docs/mkdocs.yml
-      - ./scripts:/docs/scripts
 
   frontend:
     build:

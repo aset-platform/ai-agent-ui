@@ -81,7 +81,6 @@ services:
     volumes:
       - ./docs:/docs/docs:ro
       - ./mkdocs.yml:/docs/mkdocs.yml:ro
-      - ./scripts:/docs/scripts:ro
     restart: unless-stopped
 
   # ── Redis 7 (cache + session store) ────────────────
