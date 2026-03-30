@@ -190,29 +190,81 @@ class BaseAgent(ABC):
         )
 
     def _build_messages(
-        self, user_input: str, history: list[dict]
+        self,
+        user_input: str,
+        history: list[dict],
+        session_id: str = "",
     ) -> list[BaseMessage]:
         """Convert raw history and user input into LangChain messages.
 
         Args:
             user_input: The latest message from the user.
             history: Prior conversation turns as
-                ``[{"role": "user"|"assistant", "content": "..."}]``.
+                ``[{"role": "user"|"assistant",
+                "content": "..."}]``.
+            session_id: Optional session identifier used to
+                inject conversation context into the system
+                prompt.  Defaults to ``""`` (no injection).
 
         Returns:
             Ordered list of BaseMessage objects.
         """
         messages: list[BaseMessage] = []
-        if self.config.system_prompt:
-            messages.append(SystemMessage(content=self.config.system_prompt))
+
+        # Build system prompt with context injection.
+        system = self.config.system_prompt or ""
+        if session_id:
+            try:
+                from agents.conversation_context import (
+                    context_store,
+                )
+
+                ctx = context_store.get(session_id)
+                if ctx and ctx.summary:
+                    context_block = (
+                        "[Conversation Context]\n"
+                        f"Turn {ctx.turn_count} of an "
+                        "ongoing conversation.\n"
+                        f"Summary: {ctx.summary}\n"
+                        f"Current topic: "
+                        f"{ctx.current_topic}\n"
+                    )
+                    if ctx.user_tickers:
+                        tickers = ", ".join(
+                            ctx.user_tickers,
+                        )
+                        context_block += (
+                            f"User portfolio: {tickers}\n"
+                        )
+                    if ctx.market_preference:
+                        context_block += (
+                            f"Market: "
+                            f"{ctx.market_preference}\n"
+                        )
+                    context_block += "\n---\n"
+                    system = context_block + system
+            except Exception:
+                pass  # Context injection is best-effort
+
+        if system:
+            messages.append(
+                SystemMessage(content=system),
+            )
+
         for msg in history:
             role = msg.get("role")
             content = msg.get("content", "")
             if role == "user":
-                messages.append(HumanMessage(content=content))
+                messages.append(
+                    HumanMessage(content=content),
+                )
             elif role == "assistant":
-                messages.append(AIMessage(content=content))
-        messages.append(HumanMessage(content=user_input))
+                messages.append(
+                    AIMessage(content=content),
+                )
+        messages.append(
+            HumanMessage(content=user_input),
+        )
         return messages
 
     def run(
