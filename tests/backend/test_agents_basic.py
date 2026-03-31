@@ -27,9 +27,9 @@ from agents.router import (
 class TestAgentConfig:
     """Tests for agents.config constants."""
 
-    def test_max_iterations_is_15(self):
-        """MAX_ITERATIONS defaults to 15."""
-        assert MAX_ITERATIONS == 15
+    def test_max_iterations_is_25(self):
+        """MAX_ITERATIONS defaults to 25."""
+        assert MAX_ITERATIONS == 25
 
     def test_max_iterations_is_int(self):
         """MAX_ITERATIONS is an integer."""

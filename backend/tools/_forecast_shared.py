@@ -1,17 +1,10 @@
-"""Shared constants, lazy Iceberg repository, and data helpers for forecasting.
-
-Attributes
-----------
-_CACHE_DIR : pathlib.Path
-    Directory used for same-day file caching.
-"""
+"""Shared constants, lazy Iceberg repository, and data helpers for forecasting."""
 
 import logging
 from datetime import date
 
 import holidays as holidays_lib
 import pandas as pd
-from paths import CACHE_DIR
 from tools._stock_shared import (  # noqa: F401 — re-exported
     _get_repo,
     _require_repo,
@@ -19,38 +12,6 @@ from tools._stock_shared import (  # noqa: F401 — re-exported
 
 # Module-level logger; required at module scope.
 _logger = logging.getLogger(__name__)
-
-_CACHE_DIR = CACHE_DIR
-
-
-def _load_cache(ticker: str, key: str) -> str | None:
-    """Return cached result text for today if it exists, otherwise ``None``.
-
-    Args:
-        ticker: Stock ticker symbol (uppercased).
-        key: Cache key string, e.g. ``"forecast_9m"``.
-
-    Returns:
-        Cached result string, or ``None`` if absent.
-    """
-    path = _CACHE_DIR / f"{ticker}_{key}_{date.today()}.txt"
-    if path.exists():
-        return path.read_text(encoding="utf-8")
-    return None
-
-
-def _save_cache(ticker: str, key: str, result: str) -> None:
-    """Write result text to a dated cache file.
-
-    Args:
-        ticker: Stock ticker symbol (uppercased).
-        key: Cache key string, e.g. ``"forecast_9m"``.
-        result: The string result to cache.
-    """
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path = _CACHE_DIR / f"{ticker}_{key}_{date.today()}.txt"
-    path.write_text(result, encoding="utf-8")
-    _logger.debug("Cache saved: %s", path)
 
 
 # Fix #6: delegate to shared helpers module to eliminate duplication.
@@ -507,8 +468,49 @@ def _fetch_earnings_holidays(
         )
 
 
+def _is_ohlcv_stale(df: pd.DataFrame) -> bool:
+    """Return True if OHLCV data is more than 2 calendar days old.
+
+    Args:
+        df: OHLCV DataFrame with a ``date`` column.
+
+    Returns:
+        ``True`` when data needs refreshing.
+    """
+    if df.empty:
+        return True
+    latest = pd.to_datetime(df["date"]).max().date()
+    gap = (date.today() - latest).days
+    return gap > 2
+
+
+def _auto_fetch(ticker: str) -> None:
+    """Trigger a yfinance fetch to fill missing/stale data.
+
+    Args:
+        ticker: Stock ticker symbol (already uppercased).
+    """
+    try:
+        from tools.stock_data_tool import (
+            fetch_stock_data,
+        )
+
+        _logger.info(
+            "Auto-fetching stale/missing OHLCV for %s",
+            ticker,
+        )
+        fetch_stock_data.invoke({"ticker": ticker})
+    except Exception as exc:
+        _logger.warning(
+            "Auto-fetch failed for %s: %s", ticker, exc
+        )
+
+
 def _load_ohlcv(ticker: str) -> pd.DataFrame | None:
     """Load OHLCV data for a ticker from Iceberg.
+
+    If Iceberg has no data or the data is stale (>2 days old),
+    automatically triggers a yfinance fetch before reading.
 
     Returns a DataFrame with a DatetimeIndex and columns
     ``Open``, ``High``, ``Low``, ``Close``, ``Adj Close``,
@@ -518,22 +520,32 @@ def _load_ohlcv(ticker: str) -> pd.DataFrame | None:
         ticker: Stock ticker symbol (already uppercased).
 
     Returns:
-        A :class:`pandas.DataFrame` with a DatetimeIndex, or ``None`` if no
-        OHLCV data exists in Iceberg for this ticker.
+        A :class:`pandas.DataFrame` with a DatetimeIndex, or
+        ``None`` if data is unavailable even after fetch.
     """
     try:
         repo = _require_repo()
         df = repo.get_ohlcv(ticker)
-        if df.empty:
-            _logger.warning("No OHLCV data in Iceberg for %s", ticker)
-            return None
+
+        if df.empty or _is_ohlcv_stale(df):
+            _auto_fetch(ticker)
+            df = repo.get_ohlcv(ticker)
+            if df.empty:
+                _logger.warning(
+                    "No OHLCV data for %s after auto-fetch",
+                    ticker,
+                )
+                return None
+
         df["date"] = pd.to_datetime(df["date"])
         df = df.sort_values("date").set_index("date")
-        # Use adj_close only when it has meaningful coverage (>50 %);
-        # otherwise fall back to close.  Indian stocks via yfinance
-        # often have adj_close as all-NaN or nearly so.
+        # Use adj_close only when it has meaningful coverage
+        # (>50 %); otherwise fall back to close.  Indian
+        # stocks via yfinance often have adj_close as
+        # all-NaN or nearly so.
         use_adj = (
-            "adj_close" in df.columns and df["adj_close"].notna().mean() > 0.5
+            "adj_close" in df.columns
+            and df["adj_close"].notna().mean() > 0.5
         )
         adj_col = df["adj_close"] if use_adj else df["close"]
         result = pd.DataFrame(
@@ -550,7 +562,11 @@ def _load_ohlcv(ticker: str) -> pd.DataFrame | None:
         result.index = pd.to_datetime(result.index)
         return result
     except Exception as exc:
-        _logger.warning("Iceberg OHLCV read failed for %s: %s", ticker, exc)
+        _logger.warning(
+            "Iceberg OHLCV read failed for %s: %s",
+            ticker,
+            exc,
+        )
         return None
 
 

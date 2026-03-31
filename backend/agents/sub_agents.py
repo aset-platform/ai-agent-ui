@@ -16,6 +16,7 @@ from typing import Callable
 
 from langchain_core.messages import (
     AIMessage,
+    HumanMessage,
     SystemMessage,
     ToolMessage,
 )
@@ -205,11 +206,86 @@ def _make_sub_agent_node(
             if ctx_block:
                 prompt = prompt + "\n\n" + ctx_block
 
-        # Build messages: system + conversation
+        # Build messages: summary-based context instead
+        # of raw conversation history.
+        #
+        # Raw history causes two problems:
+        #  1. Intent switch: prior agent's verbose tool
+        #     results confuse weaker models into
+        #     hallucinating instead of calling tools.
+        #  2. Same-intent follow-up: history grows
+        #     unboundedly, hitting Groq's 12K TPM by
+        #     turn 3-4 and cascading to weaker models.
+        #
+        # Solution: use the rolling ConversationContext
+        # summary (~100 tokens) instead of raw messages
+        # (~3,000+ tokens). Summary is already maintained
+        # by conversation_context.py after each turn.
+        #
+        # Rules:
+        #  - First message: prompt + user query
+        #  - Same-intent follow-up: prompt + summary
+        #    + user query
+        #  - Intent switch: prompt + user query only
+        all_msgs = list(state.get("messages", []))
+        user_input = state.get("user_input", "")
+        session_id = state.get("session_id", "")
+
+        # Extract the current user message
+        last_human = [
+            m for m in all_msgs
+            if isinstance(m, HumanMessage)
+        ]
+        current_query = (
+            last_human[-1]
+            if last_human
+            else HumanMessage(content=user_input)
+        )
+
+        # Look up conversation context for summary
+        ctx_summary = ""
+        is_intent_switch = False
+        if session_id:
+            try:
+                from agents.conversation_context import (
+                    context_store,
+                )
+
+                _ctx = context_store.get(session_id)
+                if _ctx:
+                    if (
+                        _ctx.last_agent
+                        and _ctx.last_agent
+                        != config.agent_id
+                    ):
+                        is_intent_switch = True
+                        _logger.info(
+                            "Intent switch %s → %s: "
+                            "clean context",
+                            _ctx.last_agent,
+                            config.agent_id,
+                        )
+                    if (
+                        _ctx.summary
+                        and not is_intent_switch
+                    ):
+                        ctx_summary = _ctx.summary
+            except Exception:
+                pass
+
         messages: list = [
             SystemMessage(content=prompt),
-            *list(state.get("messages", [])),
         ]
+        if ctx_summary:
+            messages.append(
+                SystemMessage(
+                    content=(
+                        "[Prior conversation]\n"
+                        + ctx_summary
+                    ),
+                ),
+            )
+        messages.append(current_query)
         events: list[dict] = []
         data_sources: list[str] = []
 
@@ -221,7 +297,9 @@ def _make_sub_agent_node(
                 "agent": config.agent_id,
             })
 
-            response = llm_with_tools.invoke(messages)
+            response = llm_with_tools.invoke(
+                messages, iteration=iteration + 1,
+            )
             messages.append(response)
 
             if not getattr(

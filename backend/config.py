@@ -118,7 +118,7 @@ class Settings(BaseSettings):
 
     # Message compression settings.
     max_history_turns: int = 3
-    max_tool_result_chars: int = 2000
+    max_tool_result_chars: int = 800
 
     # Auth / JWT settings — required for the authentication module.
     # JWT_SECRET_KEY must be at least 32 random characters.  Generate with:

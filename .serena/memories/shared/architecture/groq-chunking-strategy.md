@@ -21,7 +21,7 @@ paid fallback. Configured via `GROQ_MODEL_TIERS` env var (comma-separated).
 - `backend/token_budget.py` — Sliding-window deque tracker, 80% threshold,
   thread-safe per-model locks, `get_tpm()` for progressive compression
 - `backend/message_compressor.py` — 3 stages: system prompt condensing
-  (iter 2+), history truncation (3 turns), tool result truncation (2K chars)
+  (iter 2+), history truncation (3 turns), tool result truncation (800 chars)
 - `backend/config.py` — `groq_model_tiers` (CSV), `max_history_turns`,
   `max_tool_result_chars`
 - `backend/agents/config.py` — `AgentConfig.groq_model_tiers: List[str]`
@@ -30,7 +30,7 @@ paid fallback. Configured via `GROQ_MODEL_TIERS` env var (comma-separated).
 ## Config (env vars)
 - `GROQ_MODEL_TIERS` — comma-separated ordered model list
 - `MAX_HISTORY_TURNS` — default: 3
-- `MAX_TOOL_RESULT_CHARS` — default: 2000
+- `MAX_TOOL_RESULT_CHARS` — default: 800 (reduced from 2000)
 
 ## Cascade Profiles (ASETPLTFRM-66)
 
@@ -68,6 +68,16 @@ News sub-agent (`search_market_news`) capped at `max_iterations=2`.
 - Progressive compression targets 70% of TPM (not 100%) for headroom
 - Tier 1 is largest model — small models may skip tool calls on
   complex prompts
+
+## Progressive Compression Updates (2026-03-31)
+
+- `max_tool_result_chars` reduced from 2000 to 800 chars (default)
+- Progressive compression now has 3 passes:
+  - Pass 1: 800 chars (default)
+  - Pass 2: 500 chars
+  - Pass 3: 300 chars
+- Iteration counter now correctly passed from `sub_agents.py` loop to `FallbackLLM.invoke()` (was always 1 before this fix)
+- System prompt condensing triggers from iteration 2+ in the sub_agents loop (requires correct iteration counter)
 
 ## Groq Free Tier Limits (March 2026)
 See `token_budget._DEFAULT_LIMITS` for all models. Key ones:

@@ -31,10 +31,13 @@ _STOCK_SYSTEM_PROMPT = (
     "STEP 2 (analysis): Only AFTER step 1 results "
     "are returned, call analyse_stock_price and "
     "forecast_stock.\n"
-    "STEP 3 (news): After analysis, call "
-    "get_ticker_news and get_analyst_recommendations "
-    "to gather market sentiment and institutional "
-    "activity.\n"
+    "STEP 3 (news — MANDATORY): After analysis, you "
+    "MUST call get_ticker_news and "
+    "get_analyst_recommendations. Do NOT skip this "
+    "step. Do NOT fabricate news, headlines, analyst "
+    "ratings, or institutional activity. If the tools "
+    "return no data, say 'No recent news available' "
+    "— never invent headlines or sources.\n"
     "STEP 4 (verdict): The data tables are rendered "
     "automatically by the system. You ONLY need to "
     "provide:\n"
@@ -54,6 +57,23 @@ _STOCK_SYSTEM_PROMPT = (
     "forecast_stock in the same step as "
     "fetch_stock_data. Data must be written to the "
     "database before it can be read.\n\n"
+    "DISCOVERY PIPELINE — for sector/category stock "
+    "discovery requests (e.g. 'pick stocks from "
+    "financial services', 'suggest pharma stocks'):\n"
+    "1. Call suggest_sector_stocks with the sector "
+    "name.\n"
+    "2. Present the results as a numbered list "
+    "showing each stock's ticker, company name, and "
+    "freshness status (fresh/stale/no_data).\n"
+    "3. DO NOT batch-analyse. Ask the user which "
+    "stock to analyse first.\n"
+    "4. After analysing one stock, suggest the next "
+    "unanalysed stock or offer 'Compare all "
+    "analysed stocks'.\n"
+    "5. Include an actions block at the END of your "
+    "response for clickable buttons:\n"
+    "<!--actions:[{\"label\":\"Analyse TICKER "
+    "\\u2192\",\"prompt\":\"analyse TICKER\"}]-->\n\n"
     "COMPARISON PIPELINE — for multi-stock requests:\n"
     "1. Call fetch_multiple_stocks with a "
     "comma-separated list of tickers.\n"
@@ -151,6 +171,7 @@ STOCK_ANALYST_CONFIG = SubAgentConfig(
         "get_analyst_recommendations",
         "fetch_multiple_stocks",
         "list_available_stocks",
+        "suggest_sector_stocks",
     ],
     format_response=_format_stock_response,
 )

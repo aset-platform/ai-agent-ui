@@ -93,6 +93,8 @@ _STOCK_KEYWORDS: set[str] = {
     "stocks",
     "share",
     "shares",
+    "sector",
+    "sectors",
     "ticker",
     "tickers",
     "analyze",

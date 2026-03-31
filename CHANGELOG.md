@@ -7,6 +7,64 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — feature/sprint4
 
+### Fixed — 2026-03-31: Stale Prices, Intent Routing, Anti-Hallucination (ASETPLTFRM-257, 259, 260)
+
+**Stale data fix (ASETPLTFRM-257)**
+
+- Removed file-based cache from `_analysis_shared.py` and
+  `_forecast_shared.py`; added `_is_ohlcv_stale()` + yfinance
+  auto-fetch fallback to `_load_ohlcv()`.
+- Iceberg freshness gate now compares analysis_date vs latest OHLCV date.
+- Forecast NaN accuracy guard (`math.isnan` check).
+- Currency defaults to INR for `.NS`/`.BO` tickers (was USD).
+
+**Intent-aware routing (ASETPLTFRM-257)**
+
+- Extracted `best_intent()` / `score_intents()` from `router_node.py`.
+- Guardrail follow-up: keyword check before LLM classifier; only
+  reuse agent on same intent.
+- `_merge_tickers()` + `_build_clarification()` for ambiguous switches.
+
+**Anti-hallucination (ASETPLTFRM-257)**
+
+- Query cache skips responses without tool_events.
+- Hallucination guardrail rejects data-heavy responses with zero
+  tool calls.
+- Stock analyst: mandatory `get_ticker_news` +
+  `get_analyst_recommendations` in Step 3.
+- Tool call ID sanitization for Anthropic cascade
+  (`_sanitize_tool_ids` in `llm_fallback.py`).
+
+### Added — 2026-03-31: Interactive Stock Discovery (ASETPLTFRM-259)
+
+- `suggest_sector_stocks` tool with Iceberg scan + popular fallback
+  (8 sectors, ~40 stocks).
+- `get_stocks_by_sector()` on `StockRepository`.
+- DISCOVERY PIPELINE section in stock_analyst + portfolio agent prompts.
+- Actions extraction (`<!--actions:[]-->`) in synthesis node;
+  `response_actions` in graph state + WS `final` event.
+- Frontend `ActionButtons` component + `sendDirect` hook.
+
+### Changed — 2026-03-31: Token Optimization (ASETPLTFRM-260)
+
+- Fixed iteration counter passthrough from sub_agents ReAct loop to
+  `FallbackLLM` (compression was never triggered).
+- Tool result truncation reduced: 2000 → 800 chars default,
+  progressive 500 → 300.
+- Summary-based context injection: raw history (~3K tokens) replaced
+  with `ConversationContext.summary` (~100 tokens) for sub-agents.
+- Intent switch sends system prompt + user query only (no prior
+  agent history).
+
+### Infrastructure — 2026-03-31
+
+- IST timestamps in backend logs (`logging_config.py`).
+- Removed `/app/.next` anonymous volume from
+  `docker-compose.override.yml` (Turbopack cache corruption fix).
+- "sector"/"sectors" added to `_STOCK_KEYWORDS` in `router.py`.
+- `MAX_ITERATIONS` increased from 15 to 25.
+- 18 new routing tests; 718-719 total passing, 2 pre-existing failures.
+
 ### Added — 2026-03-29: Hybrid DB Migration (ASETPLTFRM-225, Epic 24 SP)
 
 **New components**

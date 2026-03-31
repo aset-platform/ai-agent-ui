@@ -81,10 +81,14 @@ export function useSendMessage({
           response = `**Tools used:** ${toolLine}\n\n---\n\n${response}`;
         }
         toolCallsRef.current = [];
-        setMessages([
-          ...updatedMessages,
-          { role: "assistant", content: response, timestamp: new Date() },
-        ]);
+        const actions = (event.actions as { label: string; prompt: string }[]) || [];
+        const msg: Message = {
+          role: "assistant",
+          content: response,
+          timestamp: new Date(),
+          ...(actions.length > 0 ? { actions } : {}),
+        };
+        setMessages([...updatedMessages, msg]);
         setStatusLine("");
         setLoading(false);
         setTimeout(() => textareaRef.current?.focus(), 150);
@@ -248,5 +252,35 @@ export function useSendMessage({
     e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
   }, [setInput]);
 
-  return { sendMessage, handleKeyDown, handleInput };
+  // ---------------------------------------------------------------
+  // sendDirect — inject a prompt and send without using input state
+  // ---------------------------------------------------------------
+  const sendDirect = useCallback(
+    async (prompt: string) => {
+      if (!prompt.trim()) return;
+
+      abortControllerRef.current?.abort();
+      toolCallsRef.current = [];
+
+      const userMessage: Message = {
+        role: "user",
+        content: prompt.trim(),
+        timestamp: new Date(),
+      };
+
+      const updatedMessages = [...messages, userMessage];
+      setMessages(updatedMessages);
+      setLoading(true);
+      setStatusLine("Thinking...");
+
+      if (ws?.isConnected) {
+        sendViaWs(userMessage, updatedMessages);
+      } else {
+        await sendViaHttp(userMessage, updatedMessages);
+      }
+    },
+    [messages, setLoading, setMessages, setStatusLine, ws, sendViaWs, sendViaHttp],
+  );
+
+  return { sendMessage, sendDirect, handleKeyDown, handleInput };
 }

@@ -58,6 +58,7 @@ class AgentState(dict):
             list[dict], operator.add
         ],
         "final_response": str,
+        "response_actions": list[dict],
         "error": str | None,
         # ── Timing ─────────────────────────────────
         "start_time_ns": int,

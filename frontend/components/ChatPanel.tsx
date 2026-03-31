@@ -63,7 +63,7 @@ export function ChatPanel() {
     defaultWidth,
   );
 
-  const { sendMessage, handleKeyDown, handleInput } =
+  const { sendMessage, sendDirect, handleKeyDown, handleInput } =
     useSendMessage({
       agentId,
       sessionId,
@@ -209,6 +209,7 @@ export function ChatPanel() {
                       key={`${msg.timestamp.getTime()}-${msg.role}-${i}`}
                       message={msg}
                       onInternalLink={handleInternalLink}
+                      onActionClick={sendDirect}
                     />
                   ))}
 
@@ -281,6 +282,7 @@ export function ChatPanel() {
                     key={`${msg.timestamp.getTime()}-${msg.role}-${i}`}
                     message={msg}
                     onInternalLink={handleInternalLink}
+                    onActionClick={sendDirect}
                   />
                 ))}
 

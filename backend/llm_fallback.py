@@ -47,12 +47,43 @@ import time
 from typing import Any
 
 from langchain_anthropic import ChatAnthropic
+import re as _re
+
 from langsmith import traceable
 from message_compressor import MessageCompressor
 from observability import ObservabilityCollector
 from token_budget import TokenBudget
 
 _logger = logging.getLogger(__name__)
+
+# Anthropic requires tool_call IDs to match ^[a-zA-Z0-9_-]+$
+# Groq models sometimes generate IDs with other characters.
+_VALID_ID = _re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def _sanitize_tool_ids(messages: list) -> list:
+    """Rewrite tool-call IDs that violate Anthropic's pattern.
+
+    Replaces any non-``[a-zA-Z0-9_-]`` characters with ``_``.
+    Mutates in-place and returns the same list for chaining.
+    """
+    for msg in messages:
+        # AIMessage with tool_calls
+        tcs = getattr(msg, "tool_calls", None)
+        if tcs:
+            for tc in tcs:
+                tid = tc.get("id", "")
+                if tid and not _VALID_ID.match(tid):
+                    tc["id"] = _re.sub(
+                        r"[^a-zA-Z0-9_-]", "_", tid,
+                    )
+        # ToolMessage with tool_call_id
+        tcid = getattr(msg, "tool_call_id", None)
+        if tcid and not _VALID_ID.match(tcid):
+            msg.tool_call_id = _re.sub(
+                r"[^a-zA-Z0-9_-]", "_", tcid,
+            )
+    return messages
 
 # Groq imports are optional — only needed when GROQ_API_KEY is set.
 try:
@@ -657,6 +688,7 @@ class FallbackLLM:
         if _trace_cbs:
             _akw.setdefault("config", {})
             _akw["config"]["callbacks"] = _trace_cbs
+        _sanitize_tool_ids(compressed)
         result = self._anthropic_bound.invoke(
             compressed,
             **_akw,

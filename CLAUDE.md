@@ -51,7 +51,8 @@ All pages fully migrated from Dash to Next.js.
 docker compose up -d                        # all services
 docker compose build backend               # rebuild after requirements.txt changes
 docker compose ps                           # health check
-docker compose logs -f backend              # tail logs
+docker compose logs -f backend              # tail logs (IST timestamps)
+docker compose logs backend | grep 429      # check Groq rate limits
 docker compose down                         # stop all
 
 # Native (legacy, still works)
@@ -177,9 +178,9 @@ see all available topics.
 
 | Category | Topics |
 |----------|--------|
-| `shared/architecture/` | system-overview, agent-init-pattern, groq-chunking, iceberg-data-layer, auth-jwt-flow, langsmith-observability, lighthouse-performance-workflow, subscription-billing, portfolio-analytics, currency-aware-agent, token-budget-concurrency, payment-transaction-ledger, sentiment-agent, iceberg-column-projection, llm-cascade-profiles, docker-containerization, redis-cache-layer, per-ticker-refresh, api-versioning, security-hardening-patterns, hybrid-db-postgresql-iceberg, context-aware-chat |
+| `shared/architecture/` | system-overview, agent-init-pattern, groq-chunking, iceberg-data-layer, auth-jwt-flow, langsmith-observability, lighthouse-performance-workflow, subscription-billing, portfolio-analytics, currency-aware-agent, token-budget-concurrency, payment-transaction-ledger, sentiment-agent, iceberg-column-projection, llm-cascade-profiles, docker-containerization, redis-cache-layer, per-ticker-refresh, api-versioning, security-hardening-patterns, hybrid-db-postgresql-iceberg, context-aware-chat, intent-aware-routing, summary-based-context, interactive-stock-discovery |
 | `shared/conventions/` | python-style, typescript-style, git-workflow, testing-patterns, performance, error-handling, llm-tool-forcing, jira-mcp-usage, security-hardening, e2e-test-patterns, isort-black-exclude-virtualenv, git-push-workflow |
-| `shared/debugging/` | common-issues, mock-patching-gotchas, chat-session-recording, cookie-hostname-mismatch, ohlcv-nan-close-price, razorpay-integration-gotchas, iceberg-epoch-dates, portfolio-watchlist-sync, iceberg-table-corruption-recovery, razorpay-customer-exists, playwright-react19-dash-patterns, asyncpg-sync-async-bridge |
+| `shared/debugging/` | common-issues, mock-patching-gotchas, chat-session-recording, cookie-hostname-mismatch, ohlcv-nan-close-price, razorpay-integration-gotchas, iceberg-epoch-dates, portfolio-watchlist-sync, iceberg-table-corruption-recovery, razorpay-customer-exists, playwright-react19-dash-patterns, asyncpg-sync-async-bridge, llm-hallucination-guardrail |
 | `shared/onboarding/` | setup-guide, test-venv-setup, tooling |
 | `shared/api/` | streaming-protocol |
 
@@ -257,6 +258,33 @@ Load any memory with `read_memory` when you need the details.
 - **Test mock dates**: Never hardcode dates in test mocks
   (e.g., `"2026-03-21"`) — they go stale. Use
   `str(int(time.time()) - 86400)` for "yesterday".
+- **Intent-switch hallucination**: When user switches intents
+  mid-conversation (portfolio → stock analysis), the guardrail's
+  `best_intent()` detects the keyword change. If prior agent's
+  raw history is sent to the new agent, weaker Groq models
+  fabricate data instead of calling tools. Fix: summary-based
+  context in `sub_agents.py` sends `ConversationContext.summary`
+  (~100 tokens) instead of raw history (~3K tokens).
+- **Hallucination guardrail**: `synthesis.py:_is_hallucinated()`
+  rejects responses with 3+ stock-analysis patterns (CMP:, P/E,
+  RSI, SMA) but zero `tool_done` events. Don't use broad
+  financial terms in the pattern — causes false positives on
+  portfolio sector discussions.
+- **ReAct iteration counter**: `sub_agents.py` MUST pass
+  `iteration=iteration+1` to `llm_with_tools.invoke()`.
+  Without it, `FallbackLLM` always sees iteration=1 and
+  compression (system prompt condensing) never triggers.
+- **Groq tool call IDs → Anthropic**: Groq models generate
+  tool call IDs that may not match Anthropic's
+  `^[a-zA-Z0-9_-]+$` pattern. `_sanitize_tool_ids()` in
+  `llm_fallback.py` cleans them before the Anthropic fallback.
+- **Turbopack cache corruption**: Docker's `/app/.next`
+  anonymous volume corrupts on unclean shutdown. Removed from
+  `docker-compose.override.yml` — `.next` now lives on bind
+  mount and rebuilds fresh each start.
+- **Groq 100K TPD daily limit**: Hit silently — only 429s
+  in logs. Monitor with `docker compose logs backend | grep 429`.
+  Consider Groq Dev Tier for heavier usage.
 
 ---
 
@@ -270,7 +298,7 @@ flake8 backend/ auth/ stocks/ scripts/
 cd frontend && npx eslint . --fix
 
 # Test
-python -m pytest tests/ -v        # all (~712 tests)
+python -m pytest tests/ -v        # all (~719 tests)
 cd frontend && npx vitest run     # frontend (18 tests)
 cd e2e && npm test                # E2E (~219 tests, needs live services)
 

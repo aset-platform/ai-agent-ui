@@ -7,15 +7,17 @@
 
 import React from "react";
 import { MarkdownContent } from "./MarkdownContent";
+import { ActionButtons } from "./ActionButtons";
 import { formatTime } from "@/lib/constants";
 import type { Message } from "@/lib/constants";
 
 interface MessageBubbleProps {
   message: Message;
   onInternalLink: (href: string) => void;
+  onActionClick?: (prompt: string) => void;
 }
 
-export const MessageBubble = React.memo(function MessageBubble({ message: msg, onInternalLink }: MessageBubbleProps) {
+export const MessageBubble = React.memo(function MessageBubble({ message: msg, onInternalLink, onActionClick }: MessageBubbleProps) {
   return (
     <div className={`flex items-end gap-2.5 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`} data-testid={msg.role === "user" ? "user-message" : "assistant-message"}>
       {msg.role === "assistant" ? (
@@ -39,7 +41,12 @@ export const MessageBubble = React.memo(function MessageBubble({ message: msg, o
           {msg.role === "user" ? (
             msg.content
           ) : (
-            <MarkdownContent content={msg.content} onInternalLink={onInternalLink} />
+            <>
+              <MarkdownContent content={msg.content} onInternalLink={onInternalLink} />
+              {msg.actions && msg.actions.length > 0 && onActionClick && (
+                <ActionButtons actions={msg.actions} onAction={onActionClick} />
+              )}
+            </>
           )}
         </div>
         <span className="text-[11px] text-gray-400 dark:text-gray-500 px-1">{formatTime(msg.timestamp)}</span>

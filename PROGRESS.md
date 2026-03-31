@@ -2,6 +2,63 @@
 
 ---
 
+# Session: Mar 31, 2026 — Stale Prices Fix, Intent Routing, Anti-Hallucination, Stock Discovery, Token Optimization
+
+## Branch: `feature/sprint4`
+
+### ASETPLTFRM-257: Chat returns stale/wrong stock prices — Done
+
+**Layer 1 — Stale data fix:**
+- Removed file-based cache from `_analysis_shared.py` and `_forecast_shared.py` (eliminated `_load_cache`, `_save_cache`)
+- Added `_is_ohlcv_stale()` + `_auto_fetch()` yfinance fallback to `_load_ohlcv()` in both modules
+- Updated Iceberg freshness gate in `analyse_stock_price` to compare analysis_date vs latest OHLCV date
+- Fixed forecast NaN accuracy guard (`math.isnan` check)
+- Fixed currency defaulting to USD for .NS/.BO tickers (now defaults to INR)
+
+**Layer 2 — Intent-aware routing:**
+- Extracted `best_intent()` and `score_intents()` from `router_node.py`
+- Restructured guardrail follow-up logic: keyword check before LLM classifier, only reuse agent on same intent
+- Added `_merge_tickers()` and `_build_clarification()` for ambiguous intent switches
+- 18 new routing tests in `test_guardrail_routing.py`
+
+**Layer 3 — Anti-hallucination:**
+- Query cache only stores responses with tool_events (`synthesis.py`)
+- Hallucination guardrail: rejects data-heavy responses (3+ stock-analysis patterns) with zero tool calls
+- Stock analyst Step 3 enforcement: MANDATORY `get_ticker_news` + `get_analyst_recommendations`
+- Tool call ID sanitization for Anthropic cascade (`_sanitize_tool_ids` in `llm_fallback.py`)
+
+### ASETPLTFRM-259: Interactive Stock Discovery — Done
+- New `suggest_sector_stocks` tool with Iceberg scan + popular fallback (8 sectors, ~40 stocks)
+- New `get_stocks_by_sector()` method on `StockRepository`
+- DISCOVERY PIPELINE section in stock_analyst + portfolio agent prompts
+- Actions extraction (`<!--actions:[]-->`) in synthesis node
+- `response_actions` field in graph state + WS `final` event
+- Frontend: `ActionButtons` component, `sendDirect` hook, Message type extension
+
+### ASETPLTFRM-260: Token Optimization — Done
+- Fixed iteration counter not being passed from sub_agents ReAct loop to `FallbackLLM` (compression never triggered)
+- Reduced tool result truncation: 2000 → 800 chars default, progressive 500 → 300
+- **Summary-based context injection**: replaced raw conversation history (~3K tokens) with `ConversationContext.summary` (~100 tokens) for all sub-agent invocations
+- Intent switch: system prompt + user query only (no prior agent history)
+- Same-intent follow-up: system prompt + summary + user query
+
+### Infrastructure
+- IST timestamps in all backend logs (`logging_config.py`)
+- Removed `/app/.next` anonymous volume from `docker-compose.override.yml` (fixes Turbopack cache corruption)
+- Added "sector"/"sectors" to `_STOCK_KEYWORDS` in `router.py`
+- `MAX_ITERATIONS` increased from 15 to 25
+
+### New Jira Tickets Created
+- ASETPLTFRM-261: Fix forecast accuracy NaN
+- ASETPLTFRM-262: Auto-link ticker to watchlist during analysis
+- ASETPLTFRM-263: Add Groq daily token usage dashboard
+
+### Test suite: 718-719 passed, 2 pre-existing failures
+- 18 new routing tests added
+- Zero new test failures introduced
+
+---
+
 # Session: Mar 30, 2026 — Bug Fixes, Recency-Aware News, Context-Aware Chat Phase 1
 
 ## Branch: `feature/sprint4`

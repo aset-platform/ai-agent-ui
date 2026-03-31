@@ -924,6 +924,59 @@ class StockRepository:
             return None
         return latest.to_dict()
 
+    def get_stocks_by_sector(
+        self,
+        sector: str,
+    ) -> pd.DataFrame:
+        """Return latest company info snapshot per ticker
+        for a given sector.
+
+        Uses ``EqualTo("sector", sector)`` predicate push-down
+        where possible, falling back to in-memory filtering.
+
+        Args:
+            sector: Sector name (e.g. ``"Financial Services"``).
+
+        Returns:
+            DataFrame with one row per ticker (latest
+            ``fetched_at``), or empty DataFrame.
+        """
+        try:
+            from pyiceberg.expressions import EqualTo
+
+            tbl = self._load_table(_COMPANY_INFO)
+            if _COMPANY_INFO in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(_COMPANY_INFO)
+            scan = tbl.scan(
+                row_filter=EqualTo("sector", sector),
+            )
+            df = scan.to_pandas()
+        except Exception as exc:
+            _logger.warning(
+                "Sector predicate push-down failed "
+                "for '%s' (%s); falling back.",
+                sector,
+                exc,
+            )
+            df = self._table_to_df(_COMPANY_INFO)
+            if not df.empty:
+                df = df[
+                    df["sector"].str.lower()
+                    == sector.lower()
+                ].copy()
+
+        if df.empty:
+            return df
+
+        # Keep only the latest snapshot per ticker
+        df = df.sort_values(
+            "fetched_at", ascending=False,
+        )
+        return df.drop_duplicates(
+            subset=["ticker"], keep="first",
+        ).reset_index(drop=True)
+
     def get_currency(self, ticker: str) -> str:
         """Return the ISO currency code for *ticker*
         from the latest company info.

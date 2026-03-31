@@ -129,6 +129,19 @@ def setup_tools(registry):
             exc_info=True,
         )
 
+    # Sector discovery
+    try:
+        from tools.sector_discovery_tool import (
+            suggest_sector_stocks,
+        )
+
+        registry.register(suggest_sector_stocks)
+    except Exception:
+        _logger.warning(
+            "Sector discovery tool registration failed",
+            exc_info=True,
+        )
+
     _logger.info(
         "Tools registered: %s",
         registry.list_names(),

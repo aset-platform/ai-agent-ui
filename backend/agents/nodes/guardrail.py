@@ -79,6 +79,84 @@ _COMMON_WORDS: set[str] = {
 }
 
 
+_INTENT_LABELS: dict[str, str] = {
+    "portfolio": "Portfolio analysis (holdings, P&L, rebalancing)",
+    "stock_analysis": "Stock analysis (technicals, OHLCV, indicators)",
+    "forecast": "Price forecast (Prophet model, price targets)",
+    "research": "News & research (headlines, analyst ratings)",
+}
+
+
+def _build_clarification(
+    user_input: str,
+    old_intent: str,
+    new_intent: str,
+) -> str:
+    """Build a clarification message with numbered options.
+
+    Args:
+        user_input: Raw user message.
+        old_intent: Previous conversation intent.
+        new_intent: Newly detected intent.
+
+    Returns:
+        Markdown-formatted clarification string.
+    """
+    old_label = _INTENT_LABELS.get(
+        old_intent, old_intent,
+    )
+    new_label = _INTENT_LABELS.get(
+        new_intent, new_intent,
+    )
+    return (
+        f"I noticed your request could go in two "
+        f"directions. Which would you prefer?\n\n"
+        f"1. **{new_label}**\n"
+        f"2. **{old_label}** "
+        f"(continuing current conversation)\n\n"
+        f"Reply with **1** or **2**, or rephrase "
+        f"your question to be more specific."
+    )
+
+
+def _extract_tickers(user_input: str) -> list[str]:
+    """Extract ticker-like symbols from *user_input*.
+
+    Filters out common English words that look like
+    ticker symbols (e.g. ``"I"``, ``"A"``, ``"IT"``).
+
+    Args:
+        user_input: Raw user message.
+
+    Returns:
+        List of ticker strings.
+    """
+    raw = _TICKER_PATTERN.findall(user_input)
+    return [t for t in raw if t not in _COMMON_WORDS]
+
+
+def _merge_tickers(
+    ctx_tickers: list[str] | None,
+    user_input: str,
+) -> list[str]:
+    """Merge context tickers with newly extracted ones.
+
+    Args:
+        ctx_tickers: Tickers from conversation context.
+        user_input: Raw user message for extraction.
+
+    Returns:
+        Deduplicated merged list.
+    """
+    merged = list(ctx_tickers or [])
+    seen = set(merged)
+    for t in _extract_tickers(user_input):
+        if t not in seen:
+            merged.append(t)
+            seen.add(t)
+    return merged
+
+
 def guardrail(state: dict) -> dict:
     """Check if query is financial and extract tickers.
 
@@ -117,52 +195,127 @@ def guardrail(state: dict) -> dict:
             "start_time_ns": start_ns,
         }
 
-    # ── Follow-up detection (BEFORE keyword gate) ───
-    # Follow-ups like "which one should I increase?"
-    # may lack financial keywords but are valid in
-    # context. Must run before the relevance check.
+    # ── Intent-aware follow-up detection ────────────
+    # 1. Run keyword router (zero LLM cost)
+    # 2. If keywords found + same intent → reuse agent
+    # 3. If keywords found + different intent → router
+    # 4. If no keywords + context → LLM classifier
+    #    for ambiguous messages ("which one?")
     session_id = state.get("session_id", "")
-    _followup_result = "new_topic"
     _ctx = None
     if session_id:
         try:
             from agents.conversation_context import (
                 context_store,
             )
-            from agents.nodes.topic_classifier import (
-                classify_followup,
-            )
 
             _ctx = context_store.get(session_id)
-            _followup_result = classify_followup(
-                user_input, _ctx,
-            )
-            if _followup_result == "follow_up" and _ctx:
-                _logger.debug(
-                    "Follow-up for session %s"
-                    " — reusing agent=%s",
-                    session_id,
-                    _ctx.last_agent,
-                )
         except Exception:
             _logger.debug(
-                "Follow-up detection failed",
+                "Context lookup failed",
                 exc_info=True,
             )
 
-    # If follow-up with known agent, skip keyword
-    # gate AND router — go straight to the agent.
-    if (
-        _followup_result == "follow_up"
-        and _ctx
-        and _ctx.last_agent
-    ):
-        return {
-            "tickers": _ctx.tickers_mentioned,
-            "next_agent": _ctx.last_agent,
-            "intent": _ctx.last_intent,
-            "start_time_ns": start_ns,
-        }
+    from agents.nodes.router_node import (
+        best_intent,
+        score_intents,
+    )
+
+    detected_intent = best_intent(user_input)
+
+    if _ctx and _ctx.last_agent:
+        if detected_intent:
+            if detected_intent == _ctx.last_intent:
+                # Same-intent follow-up → reuse agent
+                _logger.debug(
+                    "Same-intent follow-up (%s)"
+                    " — reusing agent=%s",
+                    detected_intent,
+                    _ctx.last_agent,
+                )
+                return {
+                    "tickers": _merge_tickers(
+                        _ctx.tickers_mentioned,
+                        user_input,
+                    ),
+                    "next_agent": _ctx.last_agent,
+                    "intent": _ctx.last_intent,
+                    "start_time_ns": start_ns,
+                }
+
+            # Intent CHANGED — check if ambiguous
+            scores = score_intents(user_input)
+            old_score = scores.get(
+                _ctx.last_intent, 0,
+            )
+            new_score = scores.get(
+                detected_intent, 0,
+            )
+
+            if old_score > 0 and old_score == new_score:
+                # Ambiguous: tied scores across intents
+                # Offer clarification to the user
+                _logger.debug(
+                    "Ambiguous intent switch: "
+                    "%s=%d vs %s=%d — clarifying",
+                    _ctx.last_intent,
+                    old_score,
+                    detected_intent,
+                    new_score,
+                )
+                clarification = (
+                    _build_clarification(
+                        user_input,
+                        _ctx.last_intent,
+                        detected_intent,
+                    )
+                )
+                return {
+                    "final_response": clarification,
+                    "next_agent": "cache_hit",
+                    "start_time_ns": start_ns,
+                    "tool_events": [],
+                    "current_agent": "clarification",
+                }
+
+            # Clear winner → route through router
+            _logger.debug(
+                "Intent switch: %s → %s"
+                " — re-routing",
+                _ctx.last_intent,
+                detected_intent,
+            )
+            # Fall through to financial relevance
+        else:
+            # No keywords → LLM topic classifier
+            # for ambiguous messages
+            try:
+                from agents.nodes.topic_classifier import (
+                    classify_followup,
+                )
+
+                result = classify_followup(
+                    user_input, _ctx,
+                )
+                if result == "follow_up":
+                    _logger.debug(
+                        "Ambiguous follow-up"
+                        " — reusing agent=%s",
+                        _ctx.last_agent,
+                    )
+                    return {
+                        "tickers": (
+                            _ctx.tickers_mentioned
+                        ),
+                        "next_agent": _ctx.last_agent,
+                        "intent": _ctx.last_intent,
+                        "start_time_ns": start_ns,
+                    }
+            except Exception:
+                _logger.debug(
+                    "Follow-up detection failed",
+                    exc_info=True,
+                )
 
     # ── Financial relevance ─────────────────────────
     lower = user_input.lower()
@@ -173,12 +326,7 @@ def guardrail(state: dict) -> dict:
     # Weak keywords (could be financial or general)
     weak = tokens & _EXTRA_FINANCIAL
 
-    # Check for ticker-like symbols
-    raw_tickers = _TICKER_PATTERN.findall(user_input)
-    tickers = [
-        t for t in raw_tickers
-        if t not in _COMMON_WORDS
-    ]
+    tickers = _extract_tickers(user_input)
     has_ticker = bool(tickers)
 
     # Financial if: strong keyword, or ticker found,

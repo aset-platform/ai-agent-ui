@@ -469,13 +469,15 @@ def _run_graph(
             )
 
     # Emit final (tool events already sent in real-time)
-    event_queue.put(
-        {
-            "type": "final",
-            "response": result.get("final_response", ""),
-            "agent": result.get("current_agent", ""),
-        }
-    )
+    final_event = {
+        "type": "final",
+        "response": result.get("final_response", ""),
+        "agent": result.get("current_agent", ""),
+    }
+    actions = result.get("response_actions", [])
+    if actions:
+        final_event["actions"] = actions
+    event_queue.put(final_event)
 
     # Track usage
     if user_id:
