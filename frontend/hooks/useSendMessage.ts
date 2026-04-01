@@ -82,11 +82,15 @@ export function useSendMessage({
         }
         toolCallsRef.current = [];
         const actions = (event.actions as { label: string; prompt: string }[]) || [];
+        const memUsed = Boolean(
+          event.memory_used,
+        );
         const msg: Message = {
           role: "assistant",
           content: response,
           timestamp: new Date(),
           ...(actions.length > 0 ? { actions } : {}),
+          ...(memUsed ? { memoryUsed: true } : {}),
         };
         setMessages([...updatedMessages, msg]);
         setStatusLine("");

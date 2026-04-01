@@ -25,6 +25,7 @@ export interface Message {
   content: string;
   timestamp: Date;
   actions?: ActionButton[];
+  memoryUsed?: boolean;
 }
 
 // ---------------------------------------------------------------------------

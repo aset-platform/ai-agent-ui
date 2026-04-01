@@ -49,7 +49,17 @@ export const MessageBubble = React.memo(function MessageBubble({ message: msg, o
             </>
           )}
         </div>
-        <span className="text-[11px] text-gray-400 dark:text-gray-500 px-1">{formatTime(msg.timestamp)}</span>
+        <div className="flex items-center gap-1.5 px-1">
+          <span className="text-[11px] text-gray-400 dark:text-gray-500">
+            {formatTime(msg.timestamp)}
+          </span>
+          {msg.role === "assistant" &&
+            msg.memoryUsed && (
+              <span className="text-[10px] text-violet-500 dark:text-violet-400">
+                memory
+              </span>
+            )}
+        </div>
       </div>
     </div>
   );

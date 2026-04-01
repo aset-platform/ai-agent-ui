@@ -74,10 +74,15 @@ function SessionMessage({
 
 interface PastSessionsTabProps {
   showKeywordSearch?: boolean;
+  onStartFromSession?: (
+    sessionId: string,
+    preview: string,
+  ) => void;
 }
 
 export function PastSessionsTab({
   showKeywordSearch = false,
+  onStartFromSession,
 }: PastSessionsTabProps) {
   const { sessions, loading, error, fetchSessions } =
     usePastSessions();
@@ -319,6 +324,26 @@ export function PastSessionsTab({
                         <p className="text-xs text-gray-400 text-center">
                           No messages in this session
                         </p>
+                      )}
+                    {/* Resume button */}
+                    {onStartFromSession &&
+                      !detailLoading &&
+                      detail &&
+                      detail.messages.length > 0 && (
+                        <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+                          <button
+                            onClick={() =>
+                              onStartFromSession(
+                                s.session_id,
+                                s.preview,
+                              )
+                            }
+                            className="w-full px-3 py-1.5 text-xs font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 border border-indigo-200 dark:border-indigo-700 rounded-lg transition-colors"
+                          >
+                            Start new session
+                            from this
+                          </button>
+                        </div>
                       )}
                   </div>
                 )}

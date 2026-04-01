@@ -36,6 +36,10 @@ interface ChatContextValue {
   sessionId: string;
   ws: UseWebSocketReturn;
   flush: () => Promise<void>;
+  startFromSession: (
+    oldSessionId: string,
+    preview: string,
+  ) => void;
 }
 
 const ChatContext = createContext<ChatContextValue | null>(
@@ -78,6 +82,27 @@ export function ChatProvider({
   const openPanel = useCallback(
     () => setIsOpen(true),
     [],
+  );
+
+  const startFromSession = useCallback(
+    (oldSessionId: string, preview: string) => {
+      // Flush current session before starting new
+      flush();
+      // Generate a fresh session ID
+      sessionIdRef.current = crypto.randomUUID();
+      // Clear messages and inject a system note
+      setMessages([
+        {
+          role: "assistant" as const,
+          content:
+            `Continuing from a previous session. ` +
+            `Context: ${preview.slice(0, 150)}`,
+          timestamp: new Date(),
+        },
+      ]);
+      setIsOpen(true);
+    },
+    [flush],
   );
 
   // Flush on tab close / browser close as last resort
@@ -141,6 +166,7 @@ export function ChatProvider({
         sessionId,
         ws,
         flush,
+        startFromSession,
       }}
     >
       {children}

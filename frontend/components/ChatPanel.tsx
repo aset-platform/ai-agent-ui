@@ -32,11 +32,21 @@ export function ChatPanel() {
     agentId,
     sessionId,
     ws,
+    startFromSession,
   } = useChatContext();
 
   const [activeTab, setActiveTab] = useState<
     "chat" | "history"
   >("chat");
+
+  const handleStartFromSession = useCallback(
+    (oldSessionId: string, preview: string) => {
+      startFromSession(oldSessionId, preview);
+      setActiveTab("chat");
+    },
+    [startFromSession],
+  );
+
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [statusLine, setStatusLine] = useState("");
@@ -246,7 +256,11 @@ export function ChatPanel() {
                 />
               </>
             ) : (
-              <PastSessionsTab />
+              <PastSessionsTab
+                onStartFromSession={
+                  handleStartFromSession
+                }
+              />
             )}
           </>
         )}
