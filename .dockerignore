@@ -1,0 +1,51 @@
+# Git
+.git
+.github
+
+# IDE / editor
+.vscode
+.idea
+*.swp
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+venv/
+.pytest_cache/
+*.egg-info
+
+# Node
+frontend/node_modules
+frontend/.next
+frontend/.turbo
+
+# Env files (secrets)
+.env
+.env.local
+.env*.local
+backend/.env
+frontend/.env.local
+
+# Logs and data
+logs/
+data/
+*.log
+
+# Test artifacts
+e2e/
+tests/
+*.png
+.playwright-mcp/
+
+# Docs / assets
+docs/
+claudedocs/
+images/
+*.md
+!README.md
+
+# Claude Code
+.claude/
+.serena/
+.qwen-conventions.md

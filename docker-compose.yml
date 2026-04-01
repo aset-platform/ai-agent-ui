@@ -1,0 +1,103 @@
+# ── AI Agent UI — Docker Compose ─────────────────────
+# Production-like configuration.  Dev hot-reload is in
+# docker-compose.override.yml (auto-loaded).
+#
+# Usage:
+#   docker compose up -d          # start all services
+#   docker compose ps              # check health
+#   docker compose logs -f backend # tail backend logs
+#   docker compose down            # stop all
+
+services:
+  # ── Backend: FastAPI + LangChain agents ────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8181:8181"
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://app:${PG_PASSWORD:-devpass123}@postgres:5432/aiagent
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - AI_AGENT_UI_HOME=${AI_AGENT_UI_HOME:-/Users/abhay/.ai-agent-ui}
+    volumes:
+      # Mount at the SAME path as host so Iceberg
+      # catalog metadata file paths resolve correctly.
+      - ${AI_AGENT_UI_HOME:-~/.ai-agent-ui}:${AI_AGENT_UI_HOME:-/Users/abhay/.ai-agent-ui}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Frontend: Next.js 16 ───────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        NEXT_PUBLIC_BACKEND_URL: http://localhost:8181
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── PostgreSQL 16 (OLTP) ───────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: aiagent
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-devpass123}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d aiagent"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    command: >
+      postgres
+        -c shared_buffers=512MB
+        -c effective_cache_size=1GB
+        -c work_mem=32MB
+        -c max_connections=20
+
+  # ── MkDocs Material (documentation) ────────────────
+  docs:
+    build:
+      context: .
+      dockerfile: Dockerfile.docs
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./docs:/docs/docs:ro
+      - ./mkdocs.yml:/docs/mkdocs.yml:ro
+    restart: unless-stopped
+
+  # ── Redis 7 (cache + session store) ────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redis-data:
+  iceberg-data:

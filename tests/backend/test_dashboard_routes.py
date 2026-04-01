@@ -6,7 +6,7 @@ analysis, and LLM usage.  All Iceberg access is mocked via
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -107,8 +107,8 @@ class TestWatchlist:
         self, mock_repo, client,
     ):
         """No linked tickers -> empty response."""
-        mock_repo.return_value.get_user_tickers \
-            .return_value = []
+        mock_repo.return_value.get_user_tickers = \
+            AsyncMock(return_value=[])
 
         resp = client.get("/v1/dashboard/watchlist")
 
@@ -126,8 +126,8 @@ class TestWatchlist:
         mock_stock_repo, mock_cache, client,
     ):
         """One ticker returns price + change."""
-        mock_user_repo.return_value.get_user_tickers \
-            .return_value = ["AAPL"]
+        mock_user_repo.return_value.get_user_tickers = \
+            AsyncMock(return_value=["AAPL"])
 
         cache = MagicMock()
         cache.get.return_value = None
@@ -189,8 +189,8 @@ class TestForecasts:
     )
     def test_empty(self, mock_repo, client):
         """No linked tickers -> empty forecasts."""
-        mock_repo.return_value.get_user_tickers \
-            .return_value = []
+        mock_repo.return_value.get_user_tickers = \
+            AsyncMock(return_value=[])
 
         resp = client.get(
             "/v1/dashboard/forecasts/summary",
@@ -208,8 +208,8 @@ class TestForecasts:
         self, mock_user_repo, mock_stock_repo, client,
     ):
         """Forecast run with 3-month target."""
-        mock_user_repo.return_value.get_user_tickers \
-            .return_value = ["AAPL"]
+        mock_user_repo.return_value.get_user_tickers = \
+            AsyncMock(return_value=["AAPL"])
 
         df = pd.DataFrame(
             [
@@ -260,8 +260,8 @@ class TestAnalysis:
     )
     def test_empty(self, mock_repo, client):
         """No linked tickers -> empty analyses."""
-        mock_repo.return_value.get_user_tickers \
-            .return_value = []
+        mock_repo.return_value.get_user_tickers = \
+            AsyncMock(return_value=[])
 
         resp = client.get(
             "/v1/dashboard/analysis/latest",
@@ -279,8 +279,8 @@ class TestAnalysis:
         self, mock_user_repo, mock_stock_repo, client,
     ):
         """Analysis row with RSI signal."""
-        mock_user_repo.return_value.get_user_tickers \
-            .return_value = ["AAPL"]
+        mock_user_repo.return_value.get_user_tickers = \
+            AsyncMock(return_value=["AAPL"])
 
         df = pd.DataFrame(
             [
@@ -591,8 +591,8 @@ class TestHome:
         mock_stock_repo, mock_cache_fn, client,
     ):
         """Verify all 4 widget keys present."""
-        mock_user_repo.return_value \
-            .get_user_tickers.return_value = []
+        mock_user_repo.return_value.get_user_tickers = \
+            AsyncMock(return_value=[])
 
         repo = MagicMock()
         repo.get_dashboard_llm_usage.return_value = {

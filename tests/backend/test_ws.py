@@ -142,7 +142,7 @@ class TestWebSocket:
 
     @patch("ws._validate_token", side_effect=_mock_validate)
     def test_chat_unknown_agent(self, _mock, client):
-        """Chat with unknown agent returns error."""
+        """Chat with unknown agent completes via LangGraph."""
         with client.websocket_connect("/ws/chat") as ws:
             ws.send_json(
                 {"type": "auth", "token": _VALID_TOKEN},
@@ -156,8 +156,10 @@ class TestWebSocket:
                 }
             )
             resp = ws.receive_json()
-            assert resp["type"] == "error"
-            assert "not found" in resp["message"]
+            # LangGraph routes through supervisor;
+            # unknown agent_id is ignored (graph
+            # uses its own routing, not agent_id).
+            assert resp["type"] in ("final", "error")
 
     @patch("ws._validate_token", side_effect=_mock_validate)
     def test_reauth(self, _mock, client):

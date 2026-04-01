@@ -13,13 +13,14 @@ import { useState, useRef, useEffect, useCallback, type ChangeEvent } from "reac
 import Image from "next/image";
 import type { UserProfile } from "@/hooks/useEditProfile";
 import { PastSessionsTab } from "@/components/PastSessionsTab";
+import { BillingTab } from "@/components/BillingTab";
 
 import { BACKEND_URL } from "@/lib/config";
 
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 const UNSUPPORTED_TYPES = ["image/heic", "image/heif", "image/tiff", "image/bmp"];
 
-type ModalTab = "profile" | "audit";
+type ModalTab = "profile" | "billing" | "audit";
 
 interface EditProfileModalProps {
   isOpen: boolean;
@@ -125,26 +126,47 @@ export function EditProfileModal({
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
-        className={`bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full mx-4 p-6 transition-colors ${activeTab === "audit" ? "max-w-2xl" : "max-w-sm"}`}
+        className={`bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full mx-4 p-6 transition-colors max-h-[85vh] flex flex-col ${activeTab === "profile" ? "max-w-sm" : activeTab === "billing" ? "max-w-2xl" : "max-w-2xl"}`}
         data-testid="edit-profile-modal"
       >
-        {/* Tab bar */}
-        <div className="flex gap-1 mb-4 border-b border-gray-200 dark:border-gray-700">
+        {/* Tab bar + close */}
+        <div className="flex items-center mb-4 border-b border-gray-200 dark:border-gray-700">
+          <div className="flex gap-1 flex-1">
+            <button
+              onClick={() => setActiveTab("profile")}
+              className={`px-3 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${activeTab === "profile" ? "border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400" : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
+            >
+              Profile
+            </button>
+            <button
+              onClick={() => setActiveTab("billing")}
+              className={`px-3 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${activeTab === "billing" ? "border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400" : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
+            >
+              Billing
+            </button>
+            <button
+              onClick={() => setActiveTab("audit")}
+              className={`px-3 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${activeTab === "audit" ? "border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400" : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
+            >
+              Activity Log
+            </button>
+          </div>
           <button
-            onClick={() => setActiveTab("profile")}
-            className={`px-3 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${activeTab === "profile" ? "border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400" : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
+            onClick={onClose}
+            className="p-1 -mt-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+            aria-label="Close"
           >
-            Profile
-          </button>
-          <button
-            onClick={() => setActiveTab("audit")}
-            className={`px-3 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${activeTab === "audit" ? "border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400" : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
-          >
-            Activity Log
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
         </div>
 
-        {activeTab === "profile" ? (
+        {activeTab === "billing" ? (
+          <div className="flex-1 overflow-y-auto">
+            <BillingTab />
+          </div>
+        ) : activeTab === "profile" ? (
           <>
             <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">Edit Profile</h2>
 
@@ -217,7 +239,7 @@ export function EditProfileModal({
             </div>
           </>
         ) : (
-          <div className="min-h-[300px]">
+          <div className="min-h-[300px] flex-1 overflow-y-auto">
             <PastSessionsTab showKeywordSearch />
           </div>
         )}

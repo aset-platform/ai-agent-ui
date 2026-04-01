@@ -20,6 +20,15 @@ for _p in (str(_BACKEND_DIR), str(_PROJECT_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+import pytest_asyncio  # noqa: E402
+from sqlalchemy.ext.asyncio import (  # noqa: E402
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from backend.db.base import Base  # noqa: E402
+
 
 def _reset_limiter():
     """Clear slowapi limiter state between test modules."""
@@ -40,3 +49,20 @@ def _clear_rate_limiter():
     _reset_limiter()
     yield
     _reset_limiter()
+
+
+@pytest_asyncio.fixture
+async def pg_session():
+    """Async SQLite session for testing PG-backed repos."""
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(
+        engine, class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    async with factory() as session:
+        yield session
+    await engine.dispose()

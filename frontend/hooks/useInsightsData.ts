@@ -94,9 +94,10 @@ export function useSectors(
 export function useCorrelation(
   period: string = "1y",
   market: string = "all",
+  source: string = "portfolio",
 ): InsightsData<CorrelationResponse> {
   return useInsightsFetch<CorrelationResponse>(
-    `/insights/correlation?period=${period}&market=${market}`,
+    `/insights/correlation?period=${period}&market=${market}&source=${source}`,
   );
 }
 

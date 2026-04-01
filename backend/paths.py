@@ -21,17 +21,11 @@ ICEBERG_WAREHOUSE : pathlib.Path
 CACHE_DIR : pathlib.Path
     ``DATA_DIR / "cache"`` — same-day tool result cache.
 RAW_DIR : pathlib.Path
-    ``DATA_DIR / "raw"`` — legacy flat-file backup.
-FORECASTS_DIR : pathlib.Path
-    ``DATA_DIR / "forecasts"`` — legacy forecast backup.
+    ``DATA_DIR / "raw"`` — OHLCV parquet backup.
 PROCESSED_DIR : pathlib.Path
-    ``DATA_DIR / "processed"`` — placeholder.
+    ``DATA_DIR / "processed"`` — dividend parquets.
 AVATARS_DIR : pathlib.Path
     ``DATA_DIR / "avatars"`` — user profile pictures.
-CHARTS_ANALYSIS_DIR : pathlib.Path
-    ``APP_HOME / "charts" / "analysis"``.
-CHARTS_FORECASTS_DIR : pathlib.Path
-    ``APP_HOME / "charts" / "forecasts"``.
 LOGS_DIR : pathlib.Path
     ``APP_HOME / "logs"``.
 PROJECT_ROOT : pathlib.Path
@@ -57,15 +51,8 @@ ICEBERG_CATALOG: Path = ICEBERG_DIR / "catalog.db"
 ICEBERG_WAREHOUSE: Path = ICEBERG_DIR / "warehouse"
 CACHE_DIR: Path = DATA_DIR / "cache"
 RAW_DIR: Path = DATA_DIR / "raw"
-FORECASTS_DIR: Path = DATA_DIR / "forecasts"
 PROCESSED_DIR: Path = DATA_DIR / "processed"
-METADATA_DIR: Path = DATA_DIR / "metadata"
 AVATARS_DIR: Path = DATA_DIR / "avatars"
-
-# ── chart output ───────────────────────────────────────────────
-CHARTS_DIR: Path = APP_HOME / "charts"
-CHARTS_ANALYSIS_DIR: Path = CHARTS_DIR / "analysis"
-CHARTS_FORECASTS_DIR: Path = CHARTS_DIR / "forecasts"
 
 # ── logs ───────────────────────────────────────────────────────
 LOGS_DIR: Path = APP_HOME / "logs"
@@ -80,12 +67,8 @@ _ALL_DIRS: tuple[Path, ...] = (
     ICEBERG_WAREHOUSE,
     CACHE_DIR,
     RAW_DIR,
-    FORECASTS_DIR,
     PROCESSED_DIR,
-    METADATA_DIR,
     AVATARS_DIR,
-    CHARTS_ANALYSIS_DIR,
-    CHARTS_FORECASTS_DIR,
     LOGS_DIR,
 )
 

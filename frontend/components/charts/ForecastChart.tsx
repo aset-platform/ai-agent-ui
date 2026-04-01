@@ -181,10 +181,16 @@ export function ForecastChart({
       },
     );
     histSeries.setData(
-      historicalDates.map((d, i) => ({
-        time: d as Time,
-        value: historicalPrices[i],
-      })),
+      historicalDates
+        .map((d, i) => ({
+          time: d as Time,
+          value: historicalPrices[i],
+        }))
+        .filter(
+          (pt) =>
+            pt.value != null &&
+            typeof pt.value === "number",
+        ),
     );
 
     // Forecast section
@@ -206,10 +212,16 @@ export function ForecastChart({
         },
       );
       upperSeries.setData(
-        forecastDates.map((d, i) => ({
-          time: d as Time,
-          value: forecastUpper[i],
-        })),
+        forecastDates
+          .map((d, i) => ({
+            time: d as Time,
+            value: forecastUpper[i],
+          }))
+          .filter(
+            (pt) =>
+              pt.value != null &&
+              typeof pt.value === "number",
+          ),
       );
 
       // Confidence lower (erase fill below)
@@ -227,10 +239,16 @@ export function ForecastChart({
         },
       );
       lowerSeries.setData(
-        forecastDates.map((d, i) => ({
-          time: d as Time,
-          value: forecastLower[i],
-        })),
+        forecastDates
+          .map((d, i) => ({
+            time: d as Time,
+            value: forecastLower[i],
+          }))
+          .filter(
+            (pt) =>
+              pt.value != null &&
+              typeof pt.value === "number",
+          ),
       );
 
       // Forecast predicted (dashed green)
@@ -246,10 +264,16 @@ export function ForecastChart({
         },
       );
       fcSeries.setData(
-        forecastDates.map((d, i) => ({
-          time: d as Time,
-          value: forecastPredicted[i],
-        })),
+        forecastDates
+          .map((d, i) => ({
+            time: d as Time,
+            value: forecastPredicted[i],
+          }))
+          .filter(
+            (pt) =>
+              pt.value != null &&
+              typeof pt.value === "number",
+          ),
       );
     }
 
@@ -285,5 +309,5 @@ export function ForecastChart({
     handleCrosshair,
   ]);
 
-  return <div ref={containerRef} />;
+  return <div ref={containerRef} data-testid="forecast-chart-canvas" />;
 }

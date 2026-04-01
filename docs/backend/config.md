@@ -57,6 +57,30 @@ class Settings(BaseSettings):
 | `ws_ping_interval_seconds` | `WS_PING_INTERVAL_SECONDS` | `30` | Seconds between WebSocket keepalive pings |
 | `redis_url` | `REDIS_URL` | `""` | Redis connection URL (empty = use InMemoryTokenStore) |
 
+### Memory / Embedding Settings
+
+| Field | Env Var | Default | Description |
+|-------|---------|---------|-------------|
+| `embedding_model` | `EMBEDDING_MODEL` | `nomic-embed-text` | Ollama embedding model name |
+| `embedding_dim` | `EMBEDDING_DIM` | `768` | Vector dimension (must match model) |
+| `memory_enabled` | `MEMORY_ENABLED` | `true` | Enable/disable pgvector memory pipeline |
+| `memory_top_k` | `MEMORY_TOP_K` | `5` | Memories retrieved per query |
+| `memory_token_budget` | `MEMORY_TOKEN_BUDGET` | `200` | Max tokens for `[Memory context]` injection |
+
+### Round-Robin Pool Settings
+
+| Field | Env Var | Default |
+|-------|---------|---------|
+| `round_robin_enabled` | `ROUND_ROBIN_ENABLED` | `true` |
+| `tool_pool_primary` | `TOOL_POOL_PRIMARY` | `llama-3.3-70b-versatile,moonshotai/kimi-k2-instruct,qwen/qwen3-32b` |
+| `tool_pool_secondary` | `TOOL_POOL_SECONDARY` | `openai/gpt-oss-120b,openai/gpt-oss-20b` |
+| `tool_pool_tertiary` | `TOOL_POOL_TERTIARY` | `meta-llama/llama-4-scout-17b-16e-instruct` |
+| `synthesis_pool_primary` | `SYNTHESIS_POOL_PRIMARY` | `openai/gpt-oss-120b,openai/gpt-oss-20b,moonshotai/kimi-k2-instruct` |
+| `synthesis_pool_secondary` | `SYNTHESIS_POOL_SECONDARY` | `meta-llama/llama-4-scout-17b-16e-instruct` |
+| `synthesis_model_tiers` | `SYNTHESIS_MODEL_TIERS` | `openai/gpt-oss-120b,openai/gpt-oss-20b,moonshotai/kimi-k2-instruct` |
+
+Set `ROUND_ROBIN_ENABLED=false` to revert to legacy sequential cascade.
+
 All fields have defaults, so the server starts without any environment configuration. API‑dependent features (LLM inference, web search, SSO) will fail at runtime if the corresponding keys are missing.
 
 ---

@@ -16,8 +16,13 @@ from typing import Any
 
 import pyarrow as pa
 
-from auth.repo.catalog import audit_table
-from auth.repo.schemas import _AUDIT_PA_SCHEMA, _from_ts, _now_utc, _to_ts
+from auth.repo.schemas import (
+    _AUDIT_LOG_TABLE,
+    _AUDIT_PA_SCHEMA,
+    _from_ts,
+    _now_utc,
+    _to_ts,
+)
 
 # Module-level logger; kept at module scope intentionally
 # (not a mutable data global).
@@ -52,7 +57,7 @@ def append_audit_event(
     arrow_table = pa.table(
         {k: [v] for k, v in row.items()}, schema=_AUDIT_PA_SCHEMA
     )
-    audit_table(cat).append(arrow_table)
+    cat.load_table(_AUDIT_LOG_TABLE).append(arrow_table)
     logger.debug(
         "Audit event type=%s actor=%s target=%s",
         event_type,
@@ -70,7 +75,7 @@ def list_audit_events(cat) -> list[dict[str, Any]]:
     Returns:
         A list of audit event dicts sorted descending by ``event_timestamp``.
     """
-    tbl = audit_table(cat)
+    tbl = cat.load_table(_AUDIT_LOG_TABLE)
     arrow = tbl.scan().to_arrow()
     rows = arrow.to_pylist()
     result = []

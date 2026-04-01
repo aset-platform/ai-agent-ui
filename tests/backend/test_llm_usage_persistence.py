@@ -13,8 +13,21 @@ from stocks.repository import StockRepository
 
 @pytest.fixture()
 def repo():
-    """Return a fresh StockRepository."""
-    return StockRepository()
+    """Return a fresh StockRepository with seeded pricing."""
+    r = StockRepository()
+    # Seed pricing if empty (tests expect seeded data).
+    if r.get_current_pricing().empty:
+        from datetime import date as _d
+        from scripts.seed_llm_pricing import _INITIAL_RATES
+        for rate in _INITIAL_RATES:
+            r.add_pricing(
+                provider=rate["provider"],
+                model=rate["model"],
+                input_cost=rate["input_cost"],
+                output_cost=rate["output_cost"],
+                effective_from=_d(2026, 3, 1),
+            )
+    return r
 
 
 class TestLlmPricing:

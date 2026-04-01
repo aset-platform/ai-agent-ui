@@ -116,7 +116,7 @@ def register(router: APIRouter) -> None:
         "/auth/oauth/callback", response_model=TokenResponse, tags=["oauth"]
     )
     @limiter.limit(oauth_limit)
-    def oauth_callback(
+    async def oauth_callback(
         request: Request,
         body: OAuthCallbackRequest,
         service: AuthService = Depends(get_auth_service),
@@ -160,7 +160,7 @@ def register(router: APIRouter) -> None:
                 status_code=400,
                 detail="OAuth token exchange failed. Please try again.",
             )
-        user = repo.get_or_create_by_oauth(
+        user = await repo.get_or_create_by_oauth(
             provider=user_info["provider"],
             oauth_sub=user_info["sub"],
             email=user_info["email"],
@@ -171,18 +171,20 @@ def register(router: APIRouter) -> None:
             raise HTTPException(
                 status_code=403, detail="Account is deactivated."
             )
-        repo.update(
+        await repo.update(
             user["user_id"], {"last_login_at": datetime.now(timezone.utc)}
         )
+        sub_claims = _helpers._subscription_claims(user)
         access = service.create_access_token(
             user_id=user["user_id"],
             email=user["email"],
             role=user["role"],
+            **sub_claims,
         )
         refresh = service.create_refresh_token(
             user_id=user["user_id"],
         )
-        repo.append_audit_event(
+        await repo.append_audit_event(
             "OAUTH_LOGIN",
             actor_user_id=user["user_id"],
             target_user_id=user["user_id"],

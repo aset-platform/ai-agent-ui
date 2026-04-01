@@ -196,6 +196,7 @@ export function WatchlistWidget({
 
   return (
     <div
+      data-testid="dashboard-watchlist-table"
       className="
         rounded-xl
         bg-white dark:bg-gray-900
@@ -251,6 +252,7 @@ export function WatchlistWidget({
         <div className="flex items-center gap-2">
           {activeTab === "portfolio" && onAddStock && (
             <button
+              data-testid="dashboard-add-stock-btn"
               onClick={onAddStock}
               title="Add stock to portfolio"
               className="p-1 rounded-md text-gray-400 hover:text-indigo-600 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
@@ -299,6 +301,7 @@ export function WatchlistWidget({
               return (
                 <div
                   key={h.ticker}
+                  data-testid={`dashboard-watchlist-row-${h.ticker}`}
                   onClick={() =>
                     onSelectTicker?.(h.ticker)
                   }
@@ -331,6 +334,7 @@ export function WatchlistWidget({
                   {/* Refresh / Edit / Delete actions */}
                   <div className="flex items-center gap-0.5 shrink-0">
                     <button
+                      data-testid={`dashboard-watchlist-refresh-${h.ticker}`}
                       onClick={(e) =>
                         startRefresh(h.ticker, e)
                       }
@@ -456,6 +460,7 @@ export function WatchlistWidget({
             return (
               <div
                 key={t.ticker}
+                data-testid={`dashboard-watchlist-row-${t.ticker}`}
                 onClick={() =>
                   onSelectTicker?.(t.ticker)
                 }
@@ -544,6 +549,7 @@ export function WatchlistWidget({
 
                 {/* Per-ticker refresh */}
                 <button
+                  data-testid={`dashboard-watchlist-refresh-${t.ticker}`}
                   onClick={(e) =>
                     startRefresh(t.ticker, e)
                   }

@@ -1,9 +1,33 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
-import { CompareChart, COMPARE_COLORS } from "@/components/charts/CompareChart";
+import dynamic from "next/dynamic";
+
+const CompareChart = dynamic(
+  () =>
+    import("@/components/charts/CompareChart").then(
+      (m) => m.CompareChart,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center h-64 bg-gray-100 dark:bg-gray-800 rounded-lg animate-pulse">
+        <span className="text-sm text-gray-400">
+          Loading chart...
+        </span>
+      </div>
+    ),
+  },
+);
+
+// Inline color constants to avoid pulling in
+// lightweight-charts via CompareChart module.
+const COMPARE_COLORS = [
+  "#6366f1", "#8b5cf6", "#ec4899", "#f59e0b",
+  "#10b981", "#3b82f6", "#ef4444", "#06b6d4",
+];
 import { useTheme } from "@/hooks/useTheme";
 import type {
   CompareResponse,
@@ -47,6 +71,300 @@ function Skeleton() {
 
 /** Reusable compare component — used both as a
  *  standalone page and embedded in the Analysis tab. */
+// ---------------------------------------------------------------
+// Multi-select dropdown with search
+// ---------------------------------------------------------------
+
+function TickerMultiSelect({
+  tickers,
+  selected,
+  onToggle,
+  onSelectAll,
+  onClear,
+  loading: tickersLoading,
+  maxSelection,
+}: {
+  tickers: string[];
+  selected: Set<string>;
+  onToggle: (ticker: string) => void;
+  onSelectAll: () => void;
+  onClear: () => void;
+  loading: boolean;
+  maxSelection: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (
+        ref.current &&
+        !ref.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () =>
+      document.removeEventListener(
+        "mousedown", handler,
+      );
+  }, []);
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return tickers;
+    const q = search.trim().toUpperCase();
+    return tickers.filter((t) =>
+      t.toUpperCase().includes(q),
+    );
+  }, [tickers, search]);
+
+  if (tickersLoading) {
+    return (
+      <div
+        className="rounded-2xl border border-gray-200
+          bg-white p-4 dark:border-gray-800
+          dark:bg-gray-900/80"
+      >
+        <div className="h-10 w-full animate-pulse rounded-xl bg-gray-200 dark:bg-gray-700" />
+      </div>
+    );
+  }
+
+  if (tickers.length === 0) {
+    return (
+      <div
+        data-testid="compare-empty"
+        className="rounded-2xl border border-gray-200
+          bg-white p-5 text-center text-sm text-gray-400
+          dark:border-gray-800 dark:bg-gray-900/80
+          dark:text-gray-500"
+      >
+        No tickers linked. Link tickers on the
+        Analysis page first.
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={ref}
+      data-testid="compare-ticker-select"
+      className="rounded-2xl border border-gray-200
+        bg-white p-4 dark:border-gray-800
+        dark:bg-gray-900/80"
+    >
+      {/* Label row */}
+      <div className="mb-2.5 flex items-center justify-between">
+        <p className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+          Select tickers to compare
+        </p>
+        <div className="flex gap-3">
+          <button
+            onClick={onSelectAll}
+            className="text-xs font-medium text-indigo-600
+              hover:text-indigo-700 dark:text-indigo-400
+              dark:hover:text-indigo-300"
+          >
+            Select all
+          </button>
+          <button
+            onClick={onClear}
+            className="text-xs font-medium text-gray-400
+              hover:text-gray-600
+              dark:hover:text-gray-300"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+
+      {/* Search input / trigger */}
+      <div className="relative">
+        <div
+          onClick={() => setOpen((p) => !p)}
+          className={`
+            flex cursor-pointer items-center gap-2
+            rounded-xl border bg-gray-50 px-3.5
+            py-2.5 transition-all
+            ${
+              open
+                ? "border-indigo-500 ring-[3px] ring-indigo-500/25"
+                : "border-gray-200 dark:border-gray-700"
+            }
+            dark:bg-gray-800
+          `}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className="h-4 w-4 shrink-0 text-gray-400
+              dark:text-gray-500"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.35-4.35" />
+          </svg>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              if (!open) setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            placeholder={
+              selected.size > 0
+                ? `${selected.size} selected — search to add more...`
+                : "Search tickers..."
+            }
+            className="flex-1 bg-transparent font-mono
+              text-[13px] text-gray-900 placeholder-gray-400
+              outline-none dark:text-gray-100
+              dark:placeholder-gray-500"
+          />
+          <svg
+            viewBox="0 0 24 24"
+            className={`h-4 w-4 shrink-0 text-gray-400
+              transition-transform duration-200
+              ${open ? "rotate-180" : ""}
+            `}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </div>
+
+        {/* Dropdown */}
+        {open && (
+          <div
+            className="absolute left-0 right-0
+              top-[calc(100%+6px)] z-50 max-h-60
+              overflow-y-auto rounded-xl border
+              border-gray-200 bg-white p-1.5
+              shadow-[0_12px_48px_rgba(0,0,0,0.12)]
+              dark:border-gray-700 dark:bg-gray-800
+              dark:shadow-[0_12px_48px_rgba(0,0,0,0.5)]"
+          >
+            {filtered.length === 0 ? (
+              <p className="px-3 py-4 text-center text-xs text-gray-400 dark:text-gray-500">
+                No tickers match &quot;{search}&quot;
+              </p>
+            ) : (
+              filtered.map((t) => {
+                const isSelected = selected.has(t);
+                const atMax =
+                  selected.size >= maxSelection &&
+                  !isSelected;
+                return (
+                  <button
+                    key={t}
+                    disabled={atMax}
+                    onClick={() => {
+                      onToggle(t);
+                    }}
+                    className={`
+                      flex w-full items-center gap-2.5
+                      rounded-lg px-3 py-2 text-left
+                      text-[13px] font-mono
+                      transition-colors
+                      ${
+                        isSelected
+                          ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/12 dark:text-indigo-400"
+                          : atMax
+                            ? "cursor-not-allowed text-gray-300 dark:text-gray-600"
+                            : "text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700/50"
+                      }
+                    `}
+                  >
+                    <div
+                      className={`
+                        flex h-4 w-4 shrink-0
+                        items-center justify-center
+                        rounded border transition-colors
+                        ${
+                          isSelected
+                            ? "border-indigo-600 bg-indigo-600"
+                            : "border-gray-300 dark:border-gray-600"
+                        }
+                      `}
+                    >
+                      {isSelected && (
+                        <svg
+                          viewBox="0 0 24 24"
+                          className="h-3 w-3 text-white"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="3"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      )}
+                    </div>
+                    <span className="font-medium">
+                      {t}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Selected chips */}
+      {selected.size > 0 && (
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
+          {Array.from(selected).map((t) => (
+            <span
+              key={t}
+              className="inline-flex items-center gap-1
+                rounded-full bg-indigo-50 px-2.5 py-1
+                text-[11px] font-semibold text-indigo-700
+                dark:bg-indigo-500/12 dark:text-indigo-400"
+            >
+              {t}
+              <button
+                onClick={() => onToggle(t)}
+                className="ml-0.5 rounded-full p-0.5
+                  transition-colors hover:bg-indigo-200
+                  dark:hover:bg-indigo-500/25"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-3 w-3"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
+// Main compare content
+// ---------------------------------------------------------------
+
 export function CompareContent() {
   // User tickers from watchlist
   const [allTickers, setAllTickers] = useState<string[]>([]);
@@ -128,79 +446,39 @@ export function CompareContent() {
   return (
     <div className="space-y-6">
       {/* Ticker selector */}
-      <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-            Your linked tickers
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={selectAll}
-              className="text-xs text-indigo-600 hover:text-indigo-700 dark:text-indigo-400"
-            >
-              Select all
-            </button>
-            <button
-              onClick={clearAll}
-              className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-            >
-              Clear
-            </button>
-          </div>
-        </div>
+      <TickerMultiSelect
+        tickers={allTickers}
+        selected={selected}
+        onToggle={toggle}
+        onSelectAll={selectAll}
+        onClear={clearAll}
+        loading={tickersLoading}
+        maxSelection={7}
+      />
 
-        {tickersLoading ? (
-          <div className="flex gap-2 flex-wrap">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div
-                key={i}
-                className="h-8 w-20 animate-pulse rounded-lg bg-gray-200 dark:bg-gray-700"
-              />
-            ))}
-          </div>
-        ) : allTickers.length === 0 ? (
-          <p className="text-sm text-gray-400 dark:text-gray-500">
-            No tickers linked. Add tickers in the Marketplace first.
-          </p>
-        ) : (
-          <div className="flex gap-2 flex-wrap">
-            {allTickers.map((t) => {
-              const isSelected = selected.has(t);
-              return (
-                <button
-                  key={t}
-                  onClick={() => toggle(t)}
-                  className={`rounded-lg px-3 py-1.5 text-sm font-mono font-medium transition-colors ${
-                    isSelected
-                      ? "bg-indigo-600 text-white"
-                      : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-                  }`}
-                >
-                  {t}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        <div className="mt-4 flex items-center gap-3">
-          <button
-            onClick={fetchCompare}
-            disabled={selected.size < 2 || loading}
-            className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-40"
-          >
-            {loading ? "Loading..." : "Compare"}
-          </button>
-          <span className="text-xs text-gray-400 dark:text-gray-500">
-            {selected.size} selected
-            {selected.size < 2 ? " (min 2)" : ""}
-          </span>
-        </div>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={fetchCompare}
+          disabled={selected.size < 2 || loading}
+          className="rounded-[10px] bg-indigo-600 px-5
+            py-2.5 text-sm font-semibold text-white
+            transition-all hover:bg-indigo-700
+            hover:-translate-y-0.5
+            hover:shadow-[0_4px_14px_rgba(79,70,229,0.2)]
+            disabled:opacity-40 disabled:hover:translate-y-0"
+        >
+          {loading ? "Loading..." : "Compare"}
+        </button>
+        <span className="font-mono text-xs text-gray-400 dark:text-gray-500">
+          {selected.size} selected
+          {selected.size < 2 ? " (min 2)" : ""}
+          {selected.size >= 7 ? " (max 7)" : ""}
+        </span>
       </div>
 
       {/* Error */}
       {error && (
-        <div className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+        <div data-testid="compare-error" className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
           {error}
         </div>
       )}
@@ -212,7 +490,7 @@ export function CompareContent() {
       {data && !loading && (
         <>
           {/* Normalized price chart */}
-          <div className="rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900 overflow-hidden">
+          <div data-testid="compare-chart" className="rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900 overflow-hidden">
             <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 dark:border-gray-800">
               <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
                 Normalized Price (base = 100)

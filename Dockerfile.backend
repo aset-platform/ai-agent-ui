@@ -1,0 +1,54 @@
+# ── Backend: FastAPI + LangChain agent stack ─────────
+# Multi-stage build: builder (deps) → runtime (slim).
+#
+# Build:  docker build -f Dockerfile.backend -t aset-backend .
+# Run:    docker run -p 8181:8181 --env-file .env aset-backend
+
+# Stage 1: Install Python dependencies
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+
+# System deps for building wheels (numpy, pyarrow, etc.)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        gcc g++ libffi-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY backend/requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --prefix=/install -r requirements.txt
+
+# Stage 2: Runtime
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Runtime deps (curl for healthcheck)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy installed Python packages
+COPY --from=builder /install /usr/local
+
+# Copy application code
+COPY backend/ ./backend/
+COPY auth/ ./auth/
+COPY stocks/ ./stocks/
+COPY scripts/ ./scripts/
+COPY dashboard/ ./dashboard/
+
+# Python path matches the venv layout
+ENV PYTHONPATH=/app/backend:/app/auth:/app/stocks:/app/dashboard
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 8181
+
+HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
+    CMD curl -sf http://localhost:8181/v1/health || exit 1
+
+# Default: single uvicorn worker for dev.
+# Override for prod: gunicorn -w 4 -k uvicorn.workers.UvicornWorker
+CMD ["uvicorn", "main:app", \
+     "--host", "0.0.0.0", "--port", "8181"]

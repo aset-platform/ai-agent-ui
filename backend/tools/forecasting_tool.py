@@ -25,16 +25,13 @@ from datetime import date, timedelta
 import tools._forecast_shared as _sh
 from langchain_core.tools import tool
 from tools._forecast_accuracy import (
-    _calculate_forecast_accuracy,
     _generate_forecast_summary,
 )
-from tools._forecast_chart import _create_forecast_chart
 from tools._forecast_model import (
     _generate_forecast,
     _prepare_data_for_prophet,
     _train_prophet_model,
 )
-from tools._forecast_persist import _save_forecast
 from validation import validate_ticker
 
 # Module-level logger — required for LangChain @tool
@@ -43,6 +40,74 @@ _logger = logging.getLogger(__name__)
 # Re-export so tests can still monkeypatch via forecasting_tool.*
 _get_repo = _sh._get_repo
 _require_repo = _sh._require_repo
+
+
+def _rebuild_forecast_report(
+    run: dict,
+    ticker: str,
+    months: int,
+    sym: str,
+) -> str | None:
+    """Rebuild a forecast report from a stored Iceberg run.
+
+    Returns the formatted report string, or ``None`` if the
+    run dict is missing required fields.
+    """
+    current_price = run.get("current_price_at_run")
+    sentiment = run.get("sentiment")
+    if current_price is None or sentiment is None:
+        return None
+
+    sentiment_emoji = {
+        "Bullish": "🟢 BULLISH",
+        "Bearish": "🔴 BEARISH",
+        "Neutral": "🟡 NEUTRAL",
+    }.get(sentiment, sentiment)
+
+    target_lines = []
+    for key in ["3m", "6m", "9m"]:
+        price = run.get(f"target_{key}_price")
+        pct = run.get(f"target_{key}_pct_change")
+        lower = run.get(f"target_{key}_lower")
+        upper = run.get(f"target_{key}_upper")
+        if price is not None and pct is not None:
+            sign = "+" if pct >= 0 else ""
+            lo = f"{sym}{lower}" if lower else "?"
+            hi = f"{sym}{upper}" if upper else "?"
+            target_lines.append(
+                f"  {key.upper()} Target  : "
+                f"{sym}{price} ({sign}{pct:.1f}%) "
+                f"[{lo} – {hi}]"
+            )
+
+    if not target_lines:
+        return None
+
+    mae = run.get("mae")
+    rmse = run.get("rmse")
+    mape = run.get("mape")
+    if mae is not None and rmse is not None:
+        acc_line = (
+            f"  MAE             : {sym}{mae}\n"
+            f"  RMSE            : {sym}{rmse}\n"
+            f"  MAPE            : {mape:.1f}%"
+        )
+    else:
+        acc_line = "  Accuracy        : N/A"
+
+    rd = run.get("run_date", "")
+
+    return (
+        f"=== PRICE FORECAST: {ticker} "
+        f"({months}-month horizon) ===\n"
+        f"(cached from {rd})\n\n"
+        f"CURRENT PRICE     : {sym}{current_price:.2f}\n\n"
+        f"PRICE TARGETS\n"
+        + "\n".join(target_lines)
+        + f"\n\nSENTIMENT         : {sentiment_emoji}\n\n"
+        f"MODEL ACCURACY (last 12 months in-sample)\n"
+        f"{acc_line}\n"
+    )
 
 
 @tool
@@ -88,21 +153,16 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
     )
     sym = _sh._currency_symbol(_sh._load_currency(ticker))
 
-    cached = _sh._load_cache(ticker, f"forecast_{months}m")
-    if cached:
-        _logger.info(
-            "Returning cached forecast for %s (%dm)",
-            ticker,
-            months,
-        )
-        return cached
-
     # 7-day cooldown: skip re-running Prophet if a forecast
-    # was generated within the last 7 days (in Iceberg).
+    # was generated within the last 7 days.  Return the
+    # existing forecast report rebuilt from Iceberg data.
     try:
         repo_check = _sh._get_repo()
         if repo_check is not None:
-            latest_run = repo_check.get_latest_forecast_run(ticker, months)
+            latest_run = repo_check.get_latest_forecast_run(
+                ticker,
+                months,
+            )
             if latest_run is not None:
                 rd = latest_run.get("run_date")
                 if rd is not None:
@@ -110,28 +170,33 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
                         rd = rd.date()
                     cutoff = date.today() - timedelta(days=7)
                     if rd > cutoff:
-                        _logger.info(
-                            "Forecast cooldown: %s %dm"
-                            " last run on %s (<7d ago)",
+                        report = _rebuild_forecast_report(
+                            latest_run,
                             ticker,
                             months,
-                            rd,
+                            sym,
                         )
-                        return (
-                            f"Forecast for {ticker} "
-                            f"({months}-month) was last "
-                            f"run on {rd} (within 7 "
-                            f"days). Next forecast "
-                            f"available after "
-                            f"{rd + timedelta(days=7)}. "
-                            f"Use the dashboard to view "
-                            f"current forecast results."
-                        )
+                        if report:
+                            _logger.info(
+                                "Forecast cooldown: %s %dm"
+                                " — returning Iceberg "
+                                "report (run %s)",
+                                ticker,
+                                months,
+                                rd,
+                            )
+                            return report
     except Exception as exc:
-        _logger.debug("Cooldown check skipped for %s: %s", ticker, exc)
+        _logger.debug(
+            "Cooldown check skipped for %s: %s",
+            ticker,
+            exc,
+        )
 
+    # 7-day cooldown: skip re-running Prophet if a forecast
+    # was generated within the last 7 days (in Iceberg).
     try:
-        df = _sh._load_parquet(ticker)
+        df = _sh._load_ohlcv(ticker)
         if df is None:
             return (
                 f"No OHLCV data found for '{ticker}'. "
@@ -144,21 +209,106 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
         prophet_df = _prepare_data_for_prophet(df)
         current_price = float(prophet_df["y"].iloc[-1])
 
-        _logger.info("Training Prophet model for %s...", ticker)
-        model = _train_prophet_model(prophet_df)
+        # Load regressors from Iceberg (VIX, index,
+        # sentiment).  Falls back to live yfinance if
+        # Iceberg tables are empty.
+        regressors = _sh._load_regressors_from_iceberg(
+            ticker,
+            prophet_df,
+        )
 
-        forecast_df = _generate_forecast(model, prophet_df, months)
-        accuracy = _calculate_forecast_accuracy(model, prophet_df)
+        _logger.info("Training Prophet model for %s...", ticker)
+        model, train_df = _train_prophet_model(
+            prophet_df,
+            ticker=ticker,
+            regressors=regressors,
+        )
+
+        forecast_df = _generate_forecast(
+            model,
+            prophet_df,
+            months,
+            regressors=regressors,
+        )
+
+        # XGBoost ensemble correction (Phase 3b).
+        from config import get_settings as _gs
+
+        if getattr(_gs(), "ensemble_enabled", False):
+            from tools._forecast_ensemble import (
+                ensemble_forecast,
+            )
+
+            _corrected = ensemble_forecast(
+                model,
+                train_df,
+                prophet_df,
+                forecast_df,
+                ticker,
+                regressors=regressors,
+            )
+            if _corrected is not None:
+                forecast_df = _corrected
+
         summary = _generate_forecast_summary(
             forecast_df, current_price, ticker, months
         )
 
-        forecast_path = _save_forecast(forecast_df, ticker, months)
-        chart_path = _create_forecast_chart(
-            model, forecast_df, prophet_df, ticker, current_price, summary
-        )
+        # Read accuracy from last CV run in Iceberg
+        # (background refresh computes this).
+        import math
 
         repo = _sh._require_repo()
+        _prev_run = repo.get_latest_forecast_run(
+            ticker,
+            months,
+        )
+        accuracy: dict = {}
+        if _prev_run:
+            _mae = _prev_run.get("mae")
+            _rmse = _prev_run.get("rmse")
+            _mape = _prev_run.get("mape")
+            if (
+                _mae is not None
+                and not math.isnan(_mae)
+                and _rmse is not None
+                and not math.isnan(_rmse)
+            ):
+                accuracy = {
+                    "MAE": round(_mae, 2),
+                    "RMSE": round(_rmse, 2),
+                    "MAPE_pct": (
+                        round(_mape, 1)
+                        if _mape is not None
+                        and not math.isnan(_mape)
+                        else 0.0
+                    ),
+                }
+
+        # Inline backtest when no prior accuracy exists
+        # (first forecast for this ticker/horizon).
+        if not accuracy:
+            from tools._forecast_accuracy import (
+                _calculate_forecast_accuracy,
+            )
+
+            _logger.info(
+                "No prior accuracy for %s %dm — "
+                "running inline backtest",
+                ticker,
+                months,
+            )
+            _inline = _calculate_forecast_accuracy(
+                model, prophet_df,
+            )
+            if "error" not in _inline:
+                accuracy = _inline
+            else:
+                _logger.info(
+                    "Inline backtest: %s",
+                    _inline.get("error"),
+                )
+
         _run_date = date.today()
         _run_dict = {
             "run_date": _run_date,
@@ -173,7 +323,8 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
                 _run_dict[f"target_{_m_key}_pct_change"] = _t.get("pct_change")
                 _run_dict[f"target_{_m_key}_lower"] = _t.get("lower")
                 _run_dict[f"target_{_m_key}_upper"] = _t.get("upper")
-        if "error" not in accuracy:
+        # Carry forward accuracy from previous CV run.
+        if accuracy:
             _run_dict["mae"] = accuracy.get("MAE")
             _run_dict["rmse"] = accuracy.get("RMSE")
             _run_dict["mape"] = accuracy.get("MAPE_pct")
@@ -197,29 +348,36 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
                     f"[{sym}{t['lower']} – {sym}{t['upper']}]"
                 )
 
-        if "error" in accuracy:
-            acc_line = f"  Accuracy        : {accuracy['error']}"
+        if accuracy:
+            acc_line = (
+                f"  MAE             : {sym}"
+                f"{accuracy['MAE']}\n"
+                f"  RMSE            : {sym}"
+                f"{accuracy['RMSE']}\n"
+                f"  MAPE            : "
+                f"{accuracy['MAPE_pct']:.1f}%"
+            )
+            acc_header = "MODEL ACCURACY (cross-validated)"
         else:
             acc_line = (
-                f"  MAE             : {sym}{accuracy['MAE']}\n"
-                f"  RMSE            : {sym}{accuracy['RMSE']}\n"
-                f"  MAPE            : {accuracy['MAPE_pct']:.1f}%"
+                "  Insufficient data for accuracy "
+                "metrics (need 2+ years)"
             )
+            acc_header = "MODEL ACCURACY"
 
         report = (
-            f"=== PRICE FORECAST: {ticker} ({months}-month horizon) ===\n\n"
-            f"CURRENT PRICE     : {sym}{current_price:.2f}\n\n"
+            f"=== PRICE FORECAST: {ticker} "
+            f"({months}-month horizon) ===\n\n"
+            f"CURRENT PRICE     : "
+            f"{sym}{current_price:.2f}\n\n"
             f"PRICE TARGETS\n"
             + "\n".join(target_lines)
-            + f"\n\nSENTIMENT         : {sentiment_emoji}\n\n"
-            f"MODEL ACCURACY (last 12 months in-sample)\n"
-            f"{acc_line}\n\n"
-            f"FILES\n"
-            f"  Forecast data   : {forecast_path}\n"
-            f"  Chart           : {chart_path}\n"
+            + f"\n\nSENTIMENT         : "
+            f"{sentiment_emoji}\n\n"
+            f"{acc_header}\n"
+            f"{acc_line}\n"
         )
 
-        _sh._save_cache(ticker, f"forecast_{months}m", report)
         _logger.info("forecast_stock complete for %s", ticker)
         return report
 

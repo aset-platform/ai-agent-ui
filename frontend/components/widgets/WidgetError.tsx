@@ -2,11 +2,16 @@
 
 interface WidgetErrorProps {
   message: string;
+  "data-testid"?: string;
 }
 
-export function WidgetError({ message }: WidgetErrorProps) {
+export function WidgetError({
+  message,
+  "data-testid": testId,
+}: WidgetErrorProps) {
   return (
     <div
+      data-testid={testId}
       className="
         rounded-xl p-6
         bg-red-50 dark:bg-red-900/20

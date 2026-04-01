@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any
 
 import auth.password as _pw
 import auth.tokens as _tk
@@ -92,7 +92,7 @@ class AuthService:
     # Store health
     # ----------------------------------------------------------
 
-    def store_health(self) -> Dict[str, object]:
+    def store_health(self) -> dict[str, object]:
         """Return token-store backend type and ping status.
 
         Returns:
@@ -152,6 +152,9 @@ class AuthService:
         user_id: str,
         email: str,
         role: str,
+        subscription_tier: str = "free",
+        subscription_status: str = "active",
+        usage_remaining: int | None = None,
     ) -> str:
         """Delegate to :func:`auth.tokens.create_access_token`.
 
@@ -159,6 +162,10 @@ class AuthService:
             user_id: UUID string of the authenticated user.
             email: Email address to embed in the token.
             role: User role.
+            subscription_tier: ``"free"``, ``"pro"``, or
+                ``"premium"``.
+            subscription_status: Subscription state.
+            usage_remaining: Analyses left this month.
 
         Returns:
             A signed JWT string.
@@ -169,6 +176,9 @@ class AuthService:
             role,
             self._secret_key,
             self._access_expire_minutes,
+            subscription_tier=subscription_tier,
+            subscription_status=subscription_status,
+            usage_remaining=usage_remaining,
         )
 
     def create_refresh_token(self, user_id: str) -> str:
@@ -194,7 +204,7 @@ class AuthService:
         self,
         token: str,
         expected_type: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Decode and validate a JWT.
 
         Args:
@@ -307,7 +317,7 @@ class AuthService:
             jti,
         )
 
-    def list_sessions(self, user_id: str) -> List[Dict[str, Any]]:
+    def list_sessions(self, user_id: str) -> list[dict[str, Any]]:
         """Return all active sessions for a user.
 
         Args:
@@ -318,7 +328,7 @@ class AuthService:
         """
         prefix = f"session:{user_id}:"
         keys = self._store.keys_by_prefix(prefix)
-        sessions: List[Dict[str, Any]] = []
+        sessions: list[dict[str, Any]] = []
         for k in keys:
             raw = self._store.get_json(k)
             if raw:

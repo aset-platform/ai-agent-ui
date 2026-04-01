@@ -18,44 +18,117 @@ _logger = logging.getLogger(__name__)
 
 
 def _calculate_forecast_accuracy(
-    model: Prophet, prophet_df: pd.DataFrame
+    model: Prophet,
+    prophet_df: pd.DataFrame,
 ) -> dict:
-    """Evaluate model accuracy via in-sample backtesting on the last 12 months.
+    """Evaluate model accuracy via cross-validation.
 
-    Generates in-sample predictions for the entire training period, then
-    computes MAE, RMSE, and MAPE over the most recent 12 months.
+    Only called from background refresh jobs — never
+    from live chat.  Takes ~2 min for large datasets.
 
     Args:
         model: A fitted :class:`~prophet.Prophet` model.
-        prophet_df: The training data in Prophet format.
+        prophet_df: The training data (``ds``, ``y``).
 
     Returns:
-        Dictionary with keys ``MAE``, ``RMSE``, ``MAPE_pct`` (all floats),
-        or ``{"error": <message>}`` if there is insufficient data.
+        Dictionary with keys ``MAE``, ``RMSE``,
+        ``MAPE_pct`` (all floats), or
+        ``{"error": <message>}`` if evaluation fails.
     """
-    cutoff = prophet_df["ds"].max() - pd.DateOffset(months=12)
-    recent_actual = prophet_df[prophet_df["ds"] > cutoff].copy()
+    try:
+        from prophet.diagnostics import (
+            cross_validation,
+            performance_metrics,
+        )
 
-    if len(recent_actual) < 10:
-        return {"error": "Insufficient data for 12-month backtest."}
+        data_days = (prophet_df["ds"].max() - prophet_df["ds"].min()).days
+        if data_days < 730:
+            return {
+                "error": (
+                    f"Only {data_days} days data " f"(need 730+ for CV)."
+                ),
+            }
 
-    in_sample = model.predict(prophet_df[["ds"]])
-    recent_pred = in_sample[in_sample["ds"] > cutoff][["ds", "yhat"]]
-    merged = recent_actual.merge(recent_pred, on="ds", how="inner")
+        # Cap CV input to last 10 years for consistent
+        # evaluation across tickers.  Prophet trains on
+        # full history; CV evaluates recent accuracy only.
+        from datetime import timedelta
 
-    if merged.empty:
-        return {"error": "Could not align predictions with actuals."}
+        _ten_yr = prophet_df["ds"].max() - timedelta(
+            days=3650,
+        )
+        _cv_df = prophet_df[prophet_df["ds"] >= _ten_yr].copy()
+        if len(_cv_df) < 730:
+            _cv_df = prophet_df.copy()
 
-    errors = (merged["y"] - merged["yhat"]).abs()
-    mae = float(errors.mean())
-    rmse = float(math.sqrt(((merged["y"] - merged["yhat"]) ** 2).mean()))
-    mape = float((errors / merged["y"]).mean() * 100)
+        # Refit model on capped data for CV.
+        from prophet import Prophet as _P
 
-    return {
-        "MAE": round(mae, 2),
-        "RMSE": round(rmse, 2),
-        "MAPE_pct": round(mape, 2),
-    }
+        _cv_model = _P(
+            yearly_seasonality=True,
+            weekly_seasonality=True,
+            daily_seasonality=False,
+            interval_width=0.80,
+        )
+        # Copy regressor definitions from original model.
+        for reg_name in model.extra_regressors:
+            _cv_model.add_regressor(reg_name)
+        # Merge regressor columns from original history.
+        _cv_train = _cv_df.copy()
+        for reg_name in model.extra_regressors:
+            if reg_name in model.history.columns:
+                _reg_vals = model.history[["ds", reg_name]]
+                _cv_train = _cv_train.merge(
+                    _reg_vals,
+                    on="ds",
+                    how="left",
+                )
+                _cv_train[reg_name] = _cv_train[reg_name].ffill().bfill()
+        _cv_model.fit(_cv_train)
+
+        df_cv = cross_validation(
+            _cv_model,
+            initial="730 days",
+            period="90 days",
+            horizon="90 days",
+            parallel="processes",
+        )
+        metrics = performance_metrics(df_cv)
+        mae = float(metrics["mae"].mean())
+        rmse = float(metrics["rmse"].mean())
+        mape = float(metrics["mape"].mean() * 100)
+
+        # Guard against NaN/inf from edge-case
+        # numerics (e.g., zero close prices → MAPE
+        # division by zero).
+        if any(
+            math.isnan(v) or math.isinf(v)
+            for v in (mae, rmse, mape)
+        ):
+            return {
+                "error": (
+                    "Accuracy metrics could not be "
+                    "computed (numerical instability)."
+                ),
+            }
+
+        _logger.info(
+            "Cross-validation: MAE=%.2f " "RMSE=%.2f MAPE=%.1f%%",
+            mae,
+            rmse,
+            mape,
+        )
+        return {
+            "MAE": round(mae, 2),
+            "RMSE": round(rmse, 2),
+            "MAPE_pct": round(mape, 2),
+        }
+    except Exception as exc:
+        _logger.warning(
+            "Cross-validation failed: %s",
+            exc,
+        )
+        return {"error": str(exc)}
 
 
 def _generate_forecast_summary(

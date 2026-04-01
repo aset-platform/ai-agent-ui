@@ -71,15 +71,26 @@ def _load_currency(ticker: str, metadata_dir=None) -> str:
         # expired — remove stale entry
         del _CURRENCY_CACHE[ticker]
 
-    code = "USD"
+    # Default based on ticker suffix before Iceberg lookup
+    # so Indian stocks never fall back to USD.
+    if ticker.endswith((".NS", ".BO")):
+        code = "INR"
+    else:
+        code = "USD"
     try:
         from tools._stock_shared import _get_repo
 
         repo = _get_repo()
         if repo is not None:
-            code = repo.get_currency(ticker)
+            iceberg_code = repo.get_currency(ticker)
+            if iceberg_code and iceberg_code != "USD":
+                code = iceberg_code
     except Exception as exc:
-        _logger.warning("Currency lookup failed for %s: %s", ticker, exc)
+        _logger.warning(
+            "Currency lookup failed for %s: %s",
+            ticker,
+            exc,
+        )
 
     _CURRENCY_CACHE[ticker] = (code, now + _CACHE_TTL_SECONDS)
     return code

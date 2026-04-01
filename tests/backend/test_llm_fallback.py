@@ -42,8 +42,10 @@ def _make_fallback(
     budget_mock.estimate_tokens.return_value = 100
     if callable(budget_can_afford):
         budget_mock.can_afford.side_effect = budget_can_afford
+        budget_mock.reserve.side_effect = budget_can_afford
     else:
         budget_mock.can_afford.return_value = budget_can_afford
+        budget_mock.reserve.return_value = budget_can_afford
 
     compressor_mock = MagicMock()
     compressor_mock.compress.side_effect = lambda msgs, *a, **kw: msgs
@@ -336,6 +338,7 @@ class TestNoGroqKey:
         budget = MagicMock()
         budget.estimate_tokens.return_value = 100
         budget.can_afford.return_value = True
+        budget.reserve.return_value = True
         comp = MagicMock()
         comp.compress.side_effect = lambda msgs, *a, **kw: msgs
         anth = MagicMock()
@@ -362,3 +365,36 @@ class TestNoGroqKey:
 
         assert result == "anthropic_direct"
         assert len(llm._groq_tiers) == 0
+
+
+# ------------------------------------------------------------------
+# Tests — Tracing callbacks
+# ------------------------------------------------------------------
+
+
+class TestTracingCallbacksForwarded:
+    """LangFuse callbacks are forwarded to inner LLMs."""
+
+    def test_callbacks_reach_groq_invoke(self):
+        """When get_callbacks returns handlers, they appear
+        in the config dict passed to bound_llm.invoke()."""
+        t1 = MagicMock()
+        anth = MagicMock()
+        t1.invoke.return_value = "tier1_ok"
+
+        mock_handler = MagicMock()
+        llm = _make_fallback([t1], anth)
+
+        with patch(
+            "tracing.get_callbacks",
+            return_value=[mock_handler],
+        ):
+            result = llm.invoke("hello")
+
+        assert result == "tier1_ok"
+        call_kwargs = t1.invoke.call_args
+        config = call_kwargs.kwargs.get(
+            "config",
+            call_kwargs[1].get("config", {}),
+        )
+        assert config.get("callbacks") == [mock_handler]

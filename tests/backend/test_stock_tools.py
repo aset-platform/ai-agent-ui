@@ -409,7 +409,7 @@ class TestAnalyseStockPrice:
 
         monkeypatch.setattr(_ash, "_get_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_require_repo", lambda: repo)
-        monkeypatch.setattr(_ash, "_CACHE_DIR", tmp_path / "cache")
+        monkeypatch.setattr(_ash, "_auto_fetch", lambda t: None)
 
         result = price_analysis_tool.analyse_stock_price.invoke(
             {"ticker": "AAPL"}
@@ -431,7 +431,7 @@ class TestAnalyseStockPrice:
 
         monkeypatch.setattr(_ash, "_get_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_require_repo", lambda: repo)
-        monkeypatch.setattr(_ash, "_CACHE_DIR", tmp_path / "cache")
+        monkeypatch.setattr(_ash, "_auto_fetch", lambda t: None)
 
         result = price_analysis_tool.analyse_stock_price.invoke(
             {"ticker": "AAPL"}
@@ -449,8 +449,7 @@ class TestAnalyseStockPrice:
 
         monkeypatch.setattr(_ash, "_get_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_require_repo", lambda: repo)
-        monkeypatch.setattr(_ash, "_CACHE_DIR", tmp_path / "cache")
-        monkeypatch.setattr(_ash, "_CHARTS_ANALYSIS", tmp_path / "charts")
+        monkeypatch.setattr(_ash, "_auto_fetch", lambda t: None)
 
         result = price_analysis_tool.analyse_stock_price.invoke(
             {"ticker": "AAPL"}
@@ -476,8 +475,7 @@ class TestAnalyseStockPrice:
 
         monkeypatch.setattr(_ash, "_get_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_require_repo", lambda: repo)
-        monkeypatch.setattr(_ash, "_CACHE_DIR", tmp_path / "cache")
-        monkeypatch.setattr(_ash, "_CHARTS_ANALYSIS", tmp_path / "charts")
+        monkeypatch.setattr(_ash, "_auto_fetch", lambda t: None)
 
         result = price_analysis_tool.analyse_stock_price.invoke(
             {"ticker": "AAPL"}
@@ -486,7 +484,7 @@ class TestAnalyseStockPrice:
         assert "Error" in result
 
     def test_analysis_freshness_gate_today(self, tmp_path, monkeypatch):
-        """If analysis was done today, tool returns early."""
+        """If analysis was done today and OHLCV hasn't changed, return early."""
         import tools._analysis_shared as _ash
         from tools import price_analysis_tool
 
@@ -494,10 +492,12 @@ class TestAnalyseStockPrice:
         repo.get_latest_analysis_summary.return_value = {
             "analysis_date": date.today(),
         }
+        # OHLCV date <= analysis date → analysis is still fresh
+        repo.get_latest_ohlcv_date.return_value = date.today()
 
         monkeypatch.setattr(_ash, "_get_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_require_repo", lambda: repo)
-        monkeypatch.setattr(_ash, "_CACHE_DIR", tmp_path / "cache")
+        monkeypatch.setattr(_ash, "_auto_fetch", lambda t: None)
 
         result = price_analysis_tool.analyse_stock_price.invoke(
             {"ticker": "AAPL"}
@@ -524,7 +524,7 @@ class TestForecastStock:
 
         monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
-        monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
+        monkeypatch.setattr(_fsh, "_auto_fetch", lambda t: None)
 
         result = forecasting_tool.forecast_stock.invoke(
             {"ticker": "AAPL", "months": 3}
@@ -546,7 +546,7 @@ class TestForecastStock:
 
         monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
-        monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
+        monkeypatch.setattr(_fsh, "_auto_fetch", lambda t: None)
 
         result = forecasting_tool.forecast_stock.invoke(
             {"ticker": "AAPL", "months": 3}
@@ -564,9 +564,7 @@ class TestForecastStock:
 
         monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
-        monkeypatch.setattr(_fsh, "_DATA_FORECASTS", tmp_path / "forecasts")
-        monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
-        monkeypatch.setattr(_fsh, "_CHARTS_FORECASTS", tmp_path / "charts")
+        monkeypatch.setattr(_fsh, "_auto_fetch", lambda t: None)
 
         result = forecasting_tool.forecast_stock.invoke(
             {"ticker": "AAPL", "months": 3}
@@ -589,9 +587,7 @@ class TestForecastStock:
 
         monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
-        monkeypatch.setattr(_fsh, "_DATA_FORECASTS", tmp_path / "forecasts")
-        monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
-        monkeypatch.setattr(_fsh, "_CHARTS_FORECASTS", tmp_path / "charts")
+        monkeypatch.setattr(_fsh, "_auto_fetch", lambda t: None)
 
         result = forecasting_tool.forecast_stock.invoke(
             {"ticker": "AAPL", "months": 3}
@@ -600,7 +596,7 @@ class TestForecastStock:
         assert "Error" in result
 
     def test_forecast_7day_cooldown(self, tmp_path, monkeypatch):
-        """If forecast was run within 7 days, tool returns early."""
+        """If forecast was run within 7 days, return cached report."""
         from datetime import timedelta
 
         import tools._forecast_shared as _fsh
@@ -609,16 +605,36 @@ class TestForecastStock:
         repo = _mock_repo()
         repo.get_latest_forecast_run.return_value = {
             "run_date": date.today() - timedelta(days=3),
+            "current_price_at_run": 180.50,
+            "sentiment": "Bullish",
+            "target_3m_price": 195.0,
+            "target_3m_pct_change": 8.0,
+            "target_3m_lower": 175.0,
+            "target_3m_upper": 215.0,
+            "target_6m_price": 210.0,
+            "target_6m_pct_change": 16.3,
+            "target_6m_lower": 180.0,
+            "target_6m_upper": 240.0,
+            "target_9m_price": 220.0,
+            "target_9m_pct_change": 21.9,
+            "target_9m_lower": 185.0,
+            "target_9m_upper": 255.0,
+            "mae": 5.2,
+            "rmse": 7.1,
+            "mape": 3.4,
         }
 
         monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
-        monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
+        monkeypatch.setattr(_fsh, "_auto_fetch", lambda t: None)
 
         result = forecasting_tool.forecast_stock.invoke(
             {"ticker": "AAPL", "months": 9}
         )
-        assert "within 7 days" in result
+        assert "PRICE FORECAST" in result
+        assert "cached from" in result
+        assert "3M Target" in result
+        assert "BULLISH" in result
         repo.insert_forecast_run.assert_not_called()
 
     def test_forecast_cooldown_expired(self, tmp_path, monkeypatch):
@@ -636,12 +652,94 @@ class TestForecastStock:
 
         monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
-        monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
-        monkeypatch.setattr(_fsh, "_DATA_FORECASTS", tmp_path / "forecasts")
-        monkeypatch.setattr(_fsh, "_CHARTS_FORECASTS", tmp_path / "charts")
+        monkeypatch.setattr(_fsh, "_auto_fetch", lambda t: None)
 
         result = forecasting_tool.forecast_stock.invoke(
             {"ticker": "AAPL", "months": 3}
         )
         # Should proceed to run (not blocked by cooldown)
-        assert "within 7 days" not in result
+        assert "cached from" not in result
+
+    def test_forecast_inline_backtest_on_first_run(
+        self, tmp_path, monkeypatch,
+    ):
+        """First forecast runs inline backtest for accuracy."""
+        import tools._forecast_shared as _fsh
+        from tools import forecasting_tool
+        from tools import _forecast_accuracy as _fa
+
+        repo = _mock_repo()
+        # No previous run → triggers inline backtest
+        repo.get_latest_forecast_run.return_value = None
+        repo.get_ohlcv.return_value = _make_iceberg_ohlcv(
+            800, "AAPL",
+        )
+
+        monkeypatch.setattr(
+            _fsh, "_get_repo", lambda: repo,
+        )
+        monkeypatch.setattr(
+            _fsh, "_require_repo", lambda: repo,
+        )
+        monkeypatch.setattr(
+            _fsh, "_auto_fetch", lambda t: None,
+        )
+
+        # Mock the backtest to return valid accuracy
+        mock_acc = {
+            "MAE": 5.12,
+            "RMSE": 6.34,
+            "MAPE_pct": 3.2,
+        }
+        monkeypatch.setattr(
+            _fa,
+            "_calculate_forecast_accuracy",
+            lambda model, df: mock_acc,
+        )
+
+        result = forecasting_tool.forecast_stock.invoke(
+            {"ticker": "AAPL", "months": 3},
+        )
+        assert "MAE" in result
+        assert "RMSE" in result
+        assert "MAPE" in result
+        # Should NOT show "Insufficient data"
+        assert "Insufficient" not in result
+
+    def test_forecast_inline_backtest_insufficient_data(
+        self, tmp_path, monkeypatch,
+    ):
+        """Inline backtest error shows helpful message."""
+        import tools._forecast_shared as _fsh
+        from tools import forecasting_tool
+        from tools import _forecast_accuracy as _fa
+
+        repo = _mock_repo()
+        repo.get_latest_forecast_run.return_value = None
+        repo.get_ohlcv.return_value = _make_iceberg_ohlcv(
+            800, "AAPL",
+        )
+
+        monkeypatch.setattr(
+            _fsh, "_get_repo", lambda: repo,
+        )
+        monkeypatch.setattr(
+            _fsh, "_require_repo", lambda: repo,
+        )
+        monkeypatch.setattr(
+            _fsh, "_auto_fetch", lambda t: None,
+        )
+
+        # Mock backtest returning error
+        monkeypatch.setattr(
+            _fa,
+            "_calculate_forecast_accuracy",
+            lambda model, df: {
+                "error": "Only 500 days (need 730+)",
+            },
+        )
+
+        result = forecasting_tool.forecast_stock.invoke(
+            {"ticker": "AAPL", "months": 3},
+        )
+        assert "Insufficient data" in result

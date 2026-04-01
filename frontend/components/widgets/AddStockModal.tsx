@@ -142,6 +142,7 @@ export function AddStockModal({
                 )
               }
               placeholder="Search ticker..."
+              data-testid="add-stock-ticker"
               className="w-full text-sm font-mono rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
             />
             {showDropdown && filtered.length > 0 && (
@@ -184,6 +185,7 @@ export function AddStockModal({
               min="0"
               step="1"
               placeholder="10"
+              data-testid="add-stock-quantity"
               className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
             />
           </div>
@@ -200,6 +202,7 @@ export function AddStockModal({
               min="0"
               step="0.01"
               placeholder="252.82"
+              data-testid="add-stock-price"
               className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
             />
           </div>
@@ -219,6 +222,7 @@ export function AddStockModal({
             max={new Date()
               .toISOString()
               .slice(0, 10)}
+            data-testid="add-stock-date"
             className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
           />
         </div>
@@ -235,13 +239,17 @@ export function AddStockModal({
               setNotes(e.target.value)
             }
             placeholder="e.g., Long-term hold"
+            data-testid="add-stock-notes"
             className="w-full text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
           />
         </div>
 
         {/* Error */}
         {error && (
-          <p className="text-xs text-red-600 dark:text-red-400 mb-3">
+          <p
+            data-testid="add-stock-error"
+            className="text-xs text-red-600 dark:text-red-400 mb-3"
+          >
             {error}
           </p>
         )}
@@ -260,6 +268,7 @@ export function AddStockModal({
           <button
             onClick={handleSubmit}
             disabled={saving}
+            data-testid="add-stock-submit"
             className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
           >
             {saving ? "Adding..." : "Add to Portfolio"}

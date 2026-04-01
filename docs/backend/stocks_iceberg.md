@@ -1,26 +1,40 @@
-# Stocks — Iceberg Storage Layer
+# Stocks — Hybrid Storage Layer (Iceberg + PostgreSQL)
 
-The `stocks/` package provides an Apache Iceberg-backed persistence layer for all stock market data. It lives alongside the `auth/` namespace in the shared SQLite catalog (`data/iceberg/catalog.db`).
+The `stocks/` package provides an Apache Iceberg-backed persistence layer for stock analytics data. Row-level OLTP tables (`stocks.registry`, `stocks.scheduled_jobs`) have been migrated to PostgreSQL; the remaining 14 append-only tables stay on Iceberg.
 
 ## Architecture
 
 ```
 stocks/
 ├── __init__.py        — package docstring + public API note
-├── create_tables.py   — idempotent table initialisation (8 tables)
+├── create_tables.py   — idempotent Iceberg table init (14 tables)
 ├── repository.py      — StockRepository: all reads + writes
 └── backfill.py        — one-time migration of existing flat files
+
+backend/db/
+├── engine.py          — async SQLAlchemy session_factory
+├── models.py          — ORM models (users, tickers, payments,
+│                        registry, scheduled_jobs)
+├── user_repository.py — UserRepository facade (OLTP auth)
+├── pg_stocks.py       — registry + scheduler PG functions
+├── duckdb_engine.py   — DuckDB query layer (reads Iceberg parquet)
+└── migrations/        — Alembic async migrations
 ```
 
-Iceberg is the **single source of truth** for all stock data. All backend tool functions write to Iceberg; flat files in `data/raw/` and `data/forecasts/` are local backup only.
+Iceberg is the **single source of truth** for all stock analytics
+data (OHLCV, forecasts, indicators, etc.). PostgreSQL owns row-level
+CRUD for registry and scheduler. All backend tool functions write to
+Iceberg for analytics; flat files in `data/raw/` and `data/forecasts/`
+are local backup only.
 
 ---
 
 ## Tables
 
+### Iceberg tables (14 — append-only / scoped-delete)
+
 | Table | Namespace | Write strategy | Primary key |
 |-------|-----------|----------------|-------------|
-| `stocks.registry` | stocks | Upsert (copy-on-write) | ticker |
 | `stocks.company_info` | stocks | Append-only snapshots | (ticker, fetched_at) |
 | `stocks.ohlcv` | stocks | Append + deduplicate | (ticker, date) |
 | `stocks.dividends` | stocks | Append + deduplicate | (ticker, ex_date) |
@@ -28,7 +42,30 @@ Iceberg is the **single source of truth** for all stock data. All backend tool f
 | `stocks.analysis_summary` | stocks | Append-only snapshots | (ticker, analysis_date) |
 | `stocks.forecast_runs` | stocks | Append-only | (ticker, horizon_months, run_date) |
 | `stocks.forecasts` | stocks | Replace per run | (ticker, horizon_months, run_date) |
-| `auth.user_tickers` | auth | Upsert (copy-on-write) | (user_id, ticker) |
+| `stocks.quarterly_results` | stocks | Append + deduplicate | (ticker, period_end) |
+| `stocks.sentiment_scores` | stocks | Append (1 row/ticker/day) | (ticker, score_date) |
+| `stocks.llm_pricing` | stocks | Append-only | (provider, model, effective_from) |
+| `stocks.llm_usage` | stocks | Append-only | (request_id) |
+| `stocks.scheduler_runs` | stocks | Append-only | run_id |
+| `stocks.portfolio_transactions` | stocks | Append-only | (transaction_id) |
+| `auth.audit_log` | auth | Append-only | event_id |
+| `auth.usage_history` | auth | Append-only | (user_id, month) |
+
+### PostgreSQL tables (5 — migrated from Iceberg, Sprint 4)
+
+| Table | ORM model | Pattern |
+|-------|-----------|---------|
+| `stocks.registry` | `StockRegistry` | Upsert via `pg_stocks.py` |
+| `stocks.scheduled_jobs` | `ScheduledJob` | Upsert via `pg_stocks.py` |
+| `auth.users` | `User` | CRUD via `UserRepository` |
+| `auth.user_tickers` | `UserTicker` | Upsert + delete |
+| `auth.payment_transactions` | `PaymentTransaction` | Insert + read |
+| `public.user_memories` | `UserMemory` | pgvector semantic memory (768-dim embeddings) |
+
+> **pgvector:** `user_memories` uses the `vector` extension
+> (`pgvector/pgvector:pg16` Docker image). Stores per-user
+> session summaries, structured facts (JSONB), and preferences
+> with cosine-similarity retrieval via IVFFlat index.
 
 ---
 

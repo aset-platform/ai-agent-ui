@@ -7,7 +7,6 @@
  */
 
 import { useChatContext } from "@/providers/ChatProvider";
-import { AGENTS } from "@/lib/constants";
 
 interface ChatPanelHeaderProps {
   activeTab: "chat" | "history";
@@ -18,8 +17,7 @@ export function ChatPanelHeader({
   activeTab,
   onTabChange,
 }: ChatPanelHeaderProps) {
-  const { agentId, setAgentId, closePanel } =
-    useChatContext();
+  const { closePanel } = useChatContext();
 
   return (
     <div className="border-b border-gray-200 dark:border-gray-700 px-4 py-3 shrink-0">
@@ -47,23 +45,6 @@ export function ChatPanelHeader({
             <line x1="6" y1="6" x2="18" y2="18" />
           </svg>
         </button>
-      </div>
-
-      {/* Agent switcher */}
-      <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5 mb-2">
-        {AGENTS.map((a) => (
-          <button
-            key={a.id}
-            onClick={() => setAgentId(a.id)}
-            className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap flex-1 text-center ${
-              agentId === a.id
-                ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-400 shadow-sm"
-                : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-            }`}
-          >
-            {a.label}
-          </button>
-        ))}
       </div>
 
       {/* Tabs: Chat | Past Sessions */}

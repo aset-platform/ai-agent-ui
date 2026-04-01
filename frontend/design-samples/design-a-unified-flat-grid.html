@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="en" class="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Design A — Unified Flat Grid</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-surface: #f9fafb;
+    --bg-card: #ffffff;
+    --bg-toolbar: #ffffff;
+    --border: #e5e7eb;
+    --border-hover: #d1d5db;
+    --text-primary: #111827;
+    --text-secondary: #6b7280;
+    --text-muted: #9ca3af;
+    --indigo: #4f46e5;
+    --indigo-light: #e0e7ff;
+    --indigo-hover: #4338ca;
+    --emerald: #059669;
+    --emerald-bg: #d1fae5;
+    --emerald-text: #065f46;
+    --red: #dc2626;
+    --red-bg: #fee2e2;
+    --red-text: #991b1b;
+    --amber: #d97706;
+    --amber-bg: #fef3c7;
+    --amber-text: #92400e;
+    --orange-bg: #ffedd5;
+    --orange-text: #9a3412;
+    --blue-bg: #dbeafe;
+    --blue-text: #1e40af;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+    --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+    --checkbox-border: #d1d5db;
+    --input-bg: #f9fafb;
+    --dropdown-bg: #ffffff;
+    --dropdown-shadow: 0 10px 40px rgba(0,0,0,0.12);
+    --skeleton: #f3f4f6;
+    --ring: rgba(79, 70, 229, 0.3);
+  }
+
+  html.dark {
+    --bg: #0a0a0a;
+    --bg-surface: #111111;
+    --bg-card: #18181b;
+    --bg-toolbar: #18181b;
+    --border: #27272a;
+    --border-hover: #3f3f46;
+    --text-primary: #f4f4f5;
+    --text-secondary: #a1a1aa;
+    --text-muted: #71717a;
+    --indigo-light: rgba(79,70,229,0.15);
+    --emerald-bg: rgba(5,150,105,0.15);
+    --emerald-text: #34d399;
+    --red-bg: rgba(220,38,38,0.15);
+    --red-text: #f87171;
+    --amber-bg: rgba(217,119,6,0.15);
+    --amber-text: #fbbf24;
+    --orange-bg: rgba(234,88,12,0.15);
+    --orange-text: #fb923c;
+    --blue-bg: rgba(59,130,246,0.15);
+    --blue-text: #60a5fa;
+    --checkbox-border: #52525b;
+    --input-bg: #27272a;
+    --dropdown-bg: #27272a;
+    --dropdown-shadow: 0 10px 40px rgba(0,0,0,0.4);
+    --skeleton: #27272a;
+    --ring: rgba(99, 102, 241, 0.4);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text-primary);
+    min-height: 100vh;
+    transition: background 0.3s, color 0.3s;
+  }
+
+  .mono { font-family: 'IBM Plex Mono', monospace; }
+
+  /* ── Page Container ── */
+  .page {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 24px 20px;
+  }
+
+  /* ── Page Header ── */
+  .page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+  .page-title {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.3px;
+    color: var(--text-primary);
+  }
+  .theme-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px;
+    cursor: pointer;
+  }
+  .theme-toggle button {
+    background: none;
+    border: none;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .theme-toggle button.active {
+    background: var(--bg-card);
+    color: var(--indigo);
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* ── Toolbar ── */
+  .toolbar {
+    background: var(--bg-toolbar);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    transition: background 0.3s, border-color 0.3s;
+  }
+
+  .search-box {
+    flex: 1;
+    min-width: 200px;
+    position: relative;
+  }
+  .search-box svg {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    color: var(--text-muted);
+  }
+  .search-box input {
+    width: 100%;
+    padding: 9px 12px 9px 36px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--input-bg);
+    color: var(--text-primary);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .search-box input::placeholder { color: var(--text-muted); }
+  .search-box input:focus {
+    border-color: var(--indigo);
+    box-shadow: 0 0 0 3px var(--ring);
+  }
+
+  .market-pills {
+    display: flex;
+    gap: 2px;
+    background: var(--input-bg);
+    border-radius: 10px;
+    padding: 3px;
+    border: 1px solid var(--border);
+  }
+  .market-pill {
+    padding: 7px 14px;
+    border: none;
+    border-radius: 8px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: transparent;
+    color: var(--text-muted);
+  }
+  .market-pill.active {
+    background: var(--bg-card);
+    color: var(--indigo);
+    box-shadow: var(--shadow-sm);
+  }
+  .market-pill:not(.active):hover {
+    color: var(--text-secondary);
+  }
+
+  .toolbar-divider {
+    width: 1px;
+    height: 28px;
+    background: var(--border);
+  }
+
+  .select-all {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .select-all input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--indigo);
+    cursor: pointer;
+    border-radius: 4px;
+  }
+
+  .actions-wrapper { position: relative; }
+  .actions-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+  .actions-btn:hover {
+    border-color: var(--indigo);
+    color: var(--indigo);
+  }
+  .actions-btn svg { width: 14px; height: 14px; }
+  .actions-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 180px;
+    background: var(--dropdown-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--dropdown-shadow);
+    padding: 6px;
+    z-index: 50;
+    display: none;
+    animation: dropIn 0.15s ease-out;
+  }
+  .actions-dropdown.open { display: block; }
+  .actions-dropdown button {
+    width: 100%;
+    text-align: left;
+    padding: 9px 12px;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: background 0.15s;
+  }
+  .actions-dropdown button:hover { background: var(--indigo-light); }
+  .actions-dropdown button svg { width: 15px; height: 15px; color: var(--text-muted); }
+
+  .stats {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    white-space: nowrap;
+    font-family: 'IBM Plex Mono', monospace;
+    margin-left: auto;
+  }
+
+  @keyframes dropIn {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Card Grid ── */
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  @media (max-width: 1024px) {
+    .card-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 640px) {
+    .card-grid { grid-template-columns: 1fr; }
+    .toolbar { flex-direction: column; align-items: stretch; }
+    .search-box { min-width: unset; }
+    .toolbar-divider { display: none; }
+    .stats { margin-left: 0; text-align: right; }
+  }
+
+  /* ── Stock Card ── */
+  .stock-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px;
+    position: relative;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: default;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .stock-card:hover {
+    border-color: var(--border-hover);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+  }
+  .stock-card.linked {
+    border-left: 3px solid var(--indigo);
+  }
+  .stock-card.selected {
+    border-color: var(--indigo);
+    box-shadow: 0 0 0 2px var(--ring);
+  }
+
+  /* Card checkbox */
+  .card-checkbox {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    width: 18px;
+    height: 18px;
+    accent-color: var(--indigo);
+    cursor: pointer;
+    border-radius: 4px;
+    z-index: 2;
+  }
+  .stock-card.linked .card-checkbox { left: 16px; }
+
+  /* Card header */
+  .card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-left: 28px;
+  }
+  .ticker-info { flex: 1; min-width: 0; }
+  .ticker-symbol {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.3px;
+  }
+  .company-name {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+  }
+
+  .card-badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .badge-bullish { background: var(--emerald-bg); color: var(--emerald-text); }
+  .badge-bearish { background: var(--red-bg); color: var(--red-text); }
+  .badge-neutral { background: var(--amber-bg); color: var(--amber-text); }
+  .badge-india { background: var(--orange-bg); color: var(--orange-text); }
+  .badge-us { background: var(--blue-bg); color: var(--blue-text); }
+
+  /* Price section */
+  .price-section {
+    margin-top: 14px;
+    margin-left: 28px;
+  }
+  .price-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .price {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .change-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .change-positive { background: var(--emerald-bg); color: var(--emerald-text); }
+  .change-negative { background: var(--red-bg); color: var(--red-text); }
+
+  .annualized {
+    margin-top: 4px;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .annualized-value {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+  }
+  .annualized-label { color: var(--text-muted); }
+
+  .last-updated {
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: 28px;
+  }
+
+  /* Card action row */
+  .card-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 14px;
+    margin-left: 28px;
+  }
+
+  .icon-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+    color: var(--text-muted);
+  }
+  .icon-btn:hover {
+    border-color: var(--indigo);
+    color: var(--indigo);
+    background: var(--indigo-light);
+  }
+  .icon-btn svg { width: 15px; height: 15px; }
+
+  .icon-btn.linked-icon {
+    color: var(--indigo);
+    background: var(--indigo-light);
+    border-color: transparent;
+  }
+  .icon-btn.linked-icon:hover {
+    background: var(--red-bg);
+    color: var(--red-text);
+    border-color: transparent;
+  }
+
+  .icon-btn.refreshing svg { animation: spin 1s linear infinite; }
+  .icon-btn.refresh-success { color: var(--emerald); border-color: var(--emerald); }
+  .icon-btn.refresh-error { color: var(--red); border-color: var(--red); }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .analyse-btn {
+    flex: 1;
+    padding: 9px 0;
+    border: none;
+    border-radius: 10px;
+    background: var(--indigo);
+    color: white;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.2px;
+  }
+  .analyse-btn:hover { background: var(--indigo-hover); transform: scale(1.01); }
+
+  /* ── Pagination ── */
+  .pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 8px 0;
+  }
+  .page-btn {
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .page-btn:hover:not(:disabled) {
+    border-color: var(--indigo);
+    color: var(--indigo);
+  }
+  .page-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .page-info {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  /* ── Transitions ── */
+  .stock-card, .toolbar, .pagination, .page-btn, .market-pill,
+  .actions-btn, .icon-btn, .analyse-btn, .search-box input {
+    transition-property: background, border-color, color, box-shadow, transform;
+    transition-duration: 0.25s;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* ── Card load stagger ── */
+  .stock-card { animation: cardIn 0.35s ease-out backwards; }
+  .stock-card:nth-child(1) { animation-delay: 0.02s; }
+  .stock-card:nth-child(2) { animation-delay: 0.06s; }
+  .stock-card:nth-child(3) { animation-delay: 0.10s; }
+  .stock-card:nth-child(4) { animation-delay: 0.14s; }
+  .stock-card:nth-child(5) { animation-delay: 0.18s; }
+  .stock-card:nth-child(6) { animation-delay: 0.22s; }
+  @keyframes cardIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Page Header -->
+  <div class="page-header">
+    <h1 class="page-title">Stocks</h1>
+    <div class="theme-toggle">
+      <button class="active" onclick="setTheme('light')">Light</button>
+      <button onclick="setTheme('dark')">Dark</button>
+    </div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="search-box">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+      </svg>
+      <input type="text" placeholder="Search by ticker or company..." />
+    </div>
+
+    <div class="market-pills">
+      <button class="market-pill active" onclick="setMarket(this)">All</button>
+      <button class="market-pill" onclick="setMarket(this)">India</button>
+      <button class="market-pill" onclick="setMarket(this)">US</button>
+    </div>
+
+    <div class="toolbar-divider"></div>
+
+    <label class="select-all">
+      <input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)" />
+      Select All
+    </label>
+
+    <div class="actions-wrapper">
+      <button class="actions-btn" onclick="toggleActions()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 9 6 6 6-6"/>
+        </svg>
+        Actions
+      </button>
+      <div class="actions-dropdown" id="actionsDropdown">
+        <button onclick="bulkAction('refresh')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          Refresh Selected
+        </button>
+        <button onclick="bulkAction('link')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          Link Selected
+        </button>
+        <button onclick="bulkAction('unlink')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18.84 12.25 1.72-1.71a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5 5 0 0 0 7.07 7.07l1.71-1.71"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
+          Unlink Selected
+        </button>
+      </div>
+    </div>
+
+    <span class="stats">6 tickers &middot; 4 linked</span>
+  </div>
+
+  <!-- Card Grid -->
+  <div class="card-grid">
+
+    <!-- AAPL — Linked, Bullish -->
+    <div class="stock-card linked">
+      <input type="checkbox" class="card-checkbox" onchange="toggleCard(this)" />
+      <div class="card-header">
+        <div class="ticker-info">
+          <div class="ticker-symbol">AAPL</div>
+          <div class="company-name">Apple Inc.</div>
+        </div>
+        <div class="card-badges">
+          <span class="badge badge-us">US</span>
+          <span class="badge badge-bullish">Bullish</span>
+        </div>
+      </div>
+      <div class="price-section">
+        <div class="price-row">
+          <span class="price">$185.25</span>
+          <span class="change-pill change-positive">+1.8%</span>
+        </div>
+        <div class="annualized">
+          <span class="annualized-value" style="color:var(--emerald-text)">+24.3%</span>
+          <span class="annualized-label">annualized</span>
+        </div>
+      </div>
+      <div class="last-updated">Updated 2 hours ago</div>
+      <div class="card-actions">
+        <button class="icon-btn" title="Refresh data" onclick="demoRefresh(this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        </button>
+        <button class="icon-btn linked-icon" title="Unlink stock">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        </button>
+        <button class="analyse-btn">Analyse</button>
+      </div>
+    </div>
+
+    <!-- TCS.NS — Linked, Bullish -->
+    <div class="stock-card linked">
+      <input type="checkbox" class="card-checkbox" onchange="toggleCard(this)" />
+      <div class="card-header">
+        <div class="ticker-info">
+          <div class="ticker-symbol">TCS.NS</div>
+          <div class="company-name">Tata Consultancy Services</div>
+        </div>
+        <div class="card-badges">
+          <span class="badge badge-india">India</span>
+          <span class="badge badge-bullish">Bullish</span>
+        </div>
+      </div>
+      <div class="price-section">
+        <div class="price-row">
+          <span class="price">&rupee;3,842.50</span>
+          <span class="change-pill change-positive">+0.9%</span>
+        </div>
+        <div class="annualized">
+          <span class="annualized-value" style="color:var(--emerald-text)">+18.7%</span>
+          <span class="annualized-label">annualized</span>
+        </div>
+      </div>
+      <div class="last-updated">Updated 3 hours ago</div>
+      <div class="card-actions">
+        <button class="icon-btn" title="Refresh data" onclick="demoRefresh(this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        </button>
+        <button class="icon-btn linked-icon" title="Unlink stock">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        </button>
+        <button class="analyse-btn">Analyse</button>
+      </div>
+    </div>
+
+    <!-- RELIANCE.NS — Linked, Neutral -->
+    <div class="stock-card linked">
+      <input type="checkbox" class="card-checkbox" onchange="toggleCard(this)" />
+      <div class="card-header">
+        <div class="ticker-info">
+          <div class="ticker-symbol">RELIANCE.NS</div>
+          <div class="company-name">Reliance Industries Ltd</div>
+        </div>
+        <div class="card-badges">
+          <span class="badge badge-india">India</span>
+          <span class="badge badge-neutral">Neutral</span>
+        </div>
+      </div>
+      <div class="price-section">
+        <div class="price-row">
+          <span class="price">&rupee;2,456.80</span>
+          <span class="change-pill change-negative">-0.4%</span>
+        </div>
+        <div class="annualized">
+          <span class="annualized-value" style="color:var(--amber-text)">+6.2%</span>
+          <span class="annualized-label">annualized</span>
+        </div>
+      </div>
+      <div class="last-updated">Updated 1 hour ago</div>
+      <div class="card-actions">
+        <button class="icon-btn" title="Refresh data" onclick="demoRefresh(this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        </button>
+        <button class="icon-btn linked-icon" title="Unlink stock">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        </button>
+        <button class="analyse-btn">Analyse</button>
+      </div>
+    </div>
+
+    <!-- GOOGL — Unlinked -->
+    <div class="stock-card">
+      <input type="checkbox" class="card-checkbox" onchange="toggleCard(this)" />
+      <div class="card-header">
+        <div class="ticker-info">
+          <div class="ticker-symbol">GOOGL</div>
+          <div class="company-name">Alphabet Inc.</div>
+        </div>
+        <div class="card-badges">
+          <span class="badge badge-us">US</span>
+        </div>
+      </div>
+      <div class="price-section">
+        <div class="price-row">
+          <span class="price">$142.65</span>
+        </div>
+      </div>
+      <div class="last-updated">Last fetched Mar 24</div>
+      <div class="card-actions">
+        <button class="icon-btn" title="Refresh data" onclick="demoRefresh(this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        </button>
+        <button class="icon-btn" title="Link stock">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        </button>
+        <button class="analyse-btn">Analyse</button>
+      </div>
+    </div>
+
+    <!-- INFY.NS — Unlinked -->
+    <div class="stock-card">
+      <input type="checkbox" class="card-checkbox" onchange="toggleCard(this)" />
+      <div class="card-header">
+        <div class="ticker-info">
+          <div class="ticker-symbol">INFY.NS</div>
+          <div class="company-name">Infosys Limited</div>
+        </div>
+        <div class="card-badges">
+          <span class="badge badge-india">India</span>
+        </div>
+      </div>
+      <div class="price-section">
+        <div class="price-row">
+          <span class="price">&rupee;1,523.40</span>
+        </div>
+      </div>
+      <div class="last-updated">Last fetched Mar 23</div>
+      <div class="card-actions">
+        <button class="icon-btn" title="Refresh data" onclick="demoRefresh(this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        </button>
+        <button class="icon-btn" title="Link stock">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        </button>
+        <button class="analyse-btn">Analyse</button>
+      </div>
+    </div>
+
+    <!-- MSFT — Linked, Bearish -->
+    <div class="stock-card linked">
+      <input type="checkbox" class="card-checkbox" onchange="toggleCard(this)" />
+      <div class="card-header">
+        <div class="ticker-info">
+          <div class="ticker-symbol">MSFT</div>
+          <div class="company-name">Microsoft Corporation</div>
+        </div>
+        <div class="card-badges">
+          <span class="badge badge-us">US</span>
+          <span class="badge badge-bearish">Bearish</span>
+        </div>
+      </div>
+      <div class="price-section">
+        <div class="price-row">
+          <span class="price">$415.30</span>
+          <span class="change-pill change-negative">-2.1%</span>
+        </div>
+        <div class="annualized">
+          <span class="annualized-value" style="color:var(--red-text)">-3.5%</span>
+          <span class="annualized-label">annualized</span>
+        </div>
+      </div>
+      <div class="last-updated">Updated 4 hours ago</div>
+      <div class="card-actions">
+        <button class="icon-btn refreshing" title="Refreshing...">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        </button>
+        <button class="icon-btn linked-icon" title="Unlink stock">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        </button>
+        <button class="analyse-btn">Analyse</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Pagination -->
+  <div class="pagination">
+    <button class="page-btn" disabled>&larr; Previous</button>
+    <span class="page-info">Page 1 of 3</span>
+    <button class="page-btn">Next &rarr;</button>
+  </div>
+
+</div>
+
+<script>
+  function setTheme(theme) {
+    document.documentElement.className = theme;
+    document.querySelectorAll('.theme-toggle button').forEach(b => {
+      b.classList.toggle('active', b.textContent.trim().toLowerCase() === theme);
+    });
+  }
+
+  function setMarket(el) {
+    el.parentElement.querySelectorAll('.market-pill').forEach(b => b.classList.remove('active'));
+    el.classList.add('active');
+  }
+
+  function toggleActions() {
+    document.getElementById('actionsDropdown').classList.toggle('open');
+  }
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.actions-wrapper')) {
+      document.getElementById('actionsDropdown').classList.remove('open');
+    }
+  });
+
+  function toggleSelectAll(el) {
+    document.querySelectorAll('.card-checkbox').forEach(cb => {
+      cb.checked = el.checked;
+      cb.closest('.stock-card').classList.toggle('selected', el.checked);
+    });
+  }
+
+  function toggleCard(cb) {
+    cb.closest('.stock-card').classList.toggle('selected', cb.checked);
+    const all = document.querySelectorAll('.card-checkbox');
+    const checked = document.querySelectorAll('.card-checkbox:checked');
+    document.getElementById('selectAll').checked = all.length === checked.length;
+    document.getElementById('selectAll').indeterminate = checked.length > 0 && checked.length < all.length;
+  }
+
+  function demoRefresh(btn) {
+    btn.classList.add('refreshing');
+    btn.classList.remove('refresh-success', 'refresh-error');
+    setTimeout(() => {
+      btn.classList.remove('refreshing');
+      btn.classList.add('refresh-success');
+      setTimeout(() => btn.classList.remove('refresh-success'), 2500);
+    }, 1800);
+  }
+
+  function bulkAction(action) {
+    document.getElementById('actionsDropdown').classList.remove('open');
+    const selected = document.querySelectorAll('.card-checkbox:checked');
+    if (selected.length === 0) return alert('No cards selected');
+    alert(`${action} action on ${selected.length} ticker(s)`);
+  }
+</script>
+</body>
+</html>

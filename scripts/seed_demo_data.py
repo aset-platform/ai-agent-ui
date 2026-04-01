@@ -51,6 +51,18 @@ def _load_dotenv(dotenv_path: Path) -> None:
 _load_dotenv(_PROJECT_ROOT / ".env")
 _load_dotenv(_PROJECT_ROOT / "backend" / ".env")
 
+# Set PyIceberg env vars before any pyiceberg import.
+from paths import ICEBERG_CATALOG_URI, ICEBERG_WAREHOUSE_URI
+
+os.environ.setdefault(
+    "PYICEBERG_CATALOG__LOCAL__URI",
+    ICEBERG_CATALOG_URI,
+)
+os.environ.setdefault(
+    "PYICEBERG_CATALOG__LOCAL__WAREHOUSE",
+    ICEBERG_WAREHOUSE_URI,
+)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(message)s",
@@ -365,23 +377,16 @@ def _seed_users() -> None:
 
     os.chdir(str(_PROJECT_ROOT))
 
-    try:
-        from auth.repository import (
-            IcebergUserRepository,
-        )
-        from auth.service import AuthService
-    except ImportError as exc:
-        _logger.warning(
-            "Cannot import auth modules: %s  " "Skipping user seeding.",
-            exc,
-        )
-        return
+    import asyncio
 
     try:
-        repo = IcebergUserRepository()
-    except Exception as exc:
+        from auth.repo.repository import UserRepository
+        from auth.service import AuthService
+        from db.engine import get_session_factory
+    except ImportError as exc:
         _logger.warning(
-            "Cannot open auth catalog: %s  " "Skipping user seeding.",
+            "Cannot import auth modules: %s  "
+            "Skipping user seeding.",
             exc,
         )
         return
@@ -389,71 +394,77 @@ def _seed_users() -> None:
     service = AuthService(
         secret_key=jwt_secret,
         access_expire_minutes=int(
-            os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
+            os.environ.get(
+                "ACCESS_TOKEN_EXPIRE_MINUTES", "60",
+            )
         ),
         refresh_expire_days=int(
-            os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "7")
+            os.environ.get(
+                "REFRESH_TOKEN_EXPIRE_DAYS", "7",
+            )
         ),
     )
 
-    for u in DEMO_USERS:
-        existing = repo.get_by_email(u["email"])
-        if existing:
-            _logger.info(
-                "User '%s' already exists (id=%s), skip",
-                u["email"],
-                existing["user_id"],
-            )
-            user_id = existing["user_id"]
-        else:
-            hashed = service.hash_password(u["password"])
-            user = repo.create(
-                {
-                    "email": u["email"],
-                    "hashed_password": hashed,
-                    "full_name": u["full_name"],
-                    "role": u["role"],
-                }
-            )
-            repo.append_audit_event(
-                "USER_CREATED",
-                actor_user_id=user["user_id"],
-                target_user_id=user["user_id"],
-                metadata={
-                    "source": "seed_demo_data.py",
-                    "email": u["email"],
-                },
-            )
-            user_id = user["user_id"]
-            _logger.info(
-                "Created user '%s' (role=%s, id=%s)",
-                u["email"],
-                u["role"],
-                user_id,
-            )
+    repo = UserRepository(
+        session_factory=get_session_factory(),
+    )
 
-        # Link all seed tickers to this user
-        for t in SEED_TICKERS:
-            try:
-                linked = repo.link_ticker(
-                    user_id,
-                    t,
-                    "seed",
+    async def _seed():
+        for u in DEMO_USERS:
+            existing = await repo.get_by_email(
+                u["email"],
+            )
+            if existing:
+                _logger.info(
+                    "User '%s' already exists "
+                    "(id=%s), skip",
+                    u["email"],
+                    existing["user_id"],
                 )
-                if linked:
-                    _logger.info(
-                        "  Linked %s to %s",
+                user_id = existing["user_id"]
+            else:
+                hashed = service.hash_password(
+                    u["password"],
+                )
+                user = await repo.create(
+                    {
+                        "email": u["email"],
+                        "hashed_password": hashed,
+                        "full_name": u["full_name"],
+                        "role": u["role"],
+                    }
+                )
+                user_id = user["user_id"]
+                _logger.info(
+                    "Created user '%s' (role=%s,"
+                    " id=%s)",
+                    u["email"],
+                    u["role"],
+                    user_id,
+                )
+
+            # Link all seed tickers to this user
+            for t in SEED_TICKERS:
+                try:
+                    linked = await repo.link_ticker(
+                        user_id, t, "seed",
+                    )
+                    if linked:
+                        _logger.info(
+                            "  Linked %s to %s",
+                            t,
+                            u["email"],
+                        )
+                except Exception as exc:
+                    _logger.warning(
+                        "  Failed to link %s to"
+                        " %s: %s",
                         t,
                         u["email"],
+                        exc,
                     )
-            except Exception as exc:
-                _logger.warning(
-                    "  Failed to link %s to %s: %s",
-                    t,
-                    u["email"],
-                    exc,
-                )
 
+    asyncio.run(_seed())
     _logger.info("User seeding complete")
 
 
@@ -482,8 +493,7 @@ def main() -> None:
     _seed_stocks()
     _seed_users()
     _logger.info(
-        "Demo data ready. Login: admin@demo.com / "
-        "Admin123! or test@demo.com / Test1234!"
+        "Demo data ready. Login: admin@demo.com" " or test@demo.com",
     )
 
 

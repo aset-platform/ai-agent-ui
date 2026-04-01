@@ -18,4 +18,4 @@ export const WS_URL =
 
 /** Docs base URL (no trailing slash). */
 export const DOCS_URL =
-  process.env.NEXT_PUBLIC_DOCS_URL ?? "http://127.0.0.1:8000";
+  process.env.NEXT_PUBLIC_DOCS_URL ?? "http://localhost:8000";

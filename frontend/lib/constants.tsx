@@ -15,20 +15,27 @@ export type View =
   | "docs"
   | "admin";
 
+export interface ActionButton {
+  label: string;
+  prompt: string;
+}
+
 export interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
+  actions?: ActionButton[];
+  memoryUsed?: boolean;
 }
 
 // ---------------------------------------------------------------------------
 // Agent configuration
 // ---------------------------------------------------------------------------
 
-export const AGENTS = [
-  { id: "general", label: "General", hint: "Ask me anything — I can search the web or check the time." },
-  { id: "stock",   label: "Stock Analysis", hint: 'Try: "Analyse AAPL" · "Forecast TSLA for 6 months" · "Compare AAPL and MSFT"' },
-] as const;
+/** Default hint shown in the empty chat state. */
+export const CHAT_HINT =
+  'Ask me anything — I can search the web or check the time.' +
+  ' Try: "Analyse AAPL" · "Forecast TSLA for 6 months"';
 
 // ---------------------------------------------------------------------------
 // Navigation items
@@ -99,17 +106,6 @@ export const NAV_ITEMS: NavItem[] = [
         icon: (
           <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-          </svg>
-        ),
-      },
-      {
-        view: "analytics",
-        href: "/analytics/marketplace",
-        label: "Link Stock",
-        icon: (
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
           </svg>
         ),
       },

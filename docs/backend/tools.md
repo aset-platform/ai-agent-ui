@@ -15,6 +15,9 @@ The tool framework lives in `backend/tools/`. It provides a registry that decoup
 | `tools/stock_data_tool.py` | 6 stock data tools (delta fetch, parquet, registry) |
 | `tools/price_analysis_tool.py` | `analyse_stock_price` — technical indicators + chart + same-day cache |
 | `tools/forecasting_tool.py` | `forecast_stock` — Prophet forecast + chart + same-day cache |
+| `tools/_sentiment_sources.py` | Multi-source headline fetcher (yfinance, Yahoo RSS, Google RSS) with fuzzy dedup |
+| `tools/_sentiment_scorer.py` | LLM-based sentiment scoring via FallbackLLM with weighted averages |
+| `tools/sentiment_agent.py` | 3 sentiment tools: `score_ticker_sentiment`, `get_cached_sentiment`, `get_market_sentiment` |
 | `tools/__init__.py` | Empty (marks directory as a Python package) |
 | `validation.py` | Shared input validators: `validate_ticker`, `validate_search_query`, `validate_ticker_batch` |
 
@@ -209,6 +212,91 @@ self.llm_with_tools = self.llm.bind_tools(tools)
 ```
 
 At inference time, the LLM decides whether to respond directly or request a tool call based on the tool descriptions in its context. The docstring of each `@tool` function is the description the LLM reads.
+
+---
+
+## News Recency & Date Utilities
+
+### `_date_utils.py`
+
+`backend/tools/_date_utils.py` provides three pure functions used
+by all news and sentiment tools to filter and weight articles by
+publication date.
+
+```python
+def parse_published(value) -> datetime | None:
+    """Parse a publication date from any common format.
+
+    Handles:
+      - Unix timestamps (int / float)
+      - RFC 2822 strings  ("Mon, 30 Mar 2026 10:00:00 +0000")
+      - ISO 8601 strings  ("2026-03-30T10:00:00Z")
+
+    Returns None only if all parsers fail.
+    """
+
+def is_within_window(dt: datetime, days_back: int = 7) -> bool:
+    """Return True if dt falls within the last days_back days."""
+
+def time_decay_weight(dt: datetime) -> float:
+    """Return a recency weight for use in sentiment averaging."""
+```
+
+**Conservative policy:** when `parse_published` returns `None`
+(unparseable date), the calling tool **keeps** the article and
+assigns it a weight of `1.0`. Articles are never silently dropped
+due to a missing or malformed date field.
+
+### `days_back` parameter
+
+`get_ticker_news`, `search_financial_news`, and
+`score_ticker_sentiment` all accept a `days_back` keyword
+argument (default `7`). Articles whose publication date falls
+outside the window are excluded **before** any LLM scoring, which
+keeps token usage low and prevents stale headlines from influencing
+the result.
+
+```python
+# Example: only consider news from the last 3 days
+result = score_ticker_sentiment("AAPL", days_back=3)
+```
+
+### Time-decay weight table
+
+Weights are applied as multipliers when `_sentiment_scorer.py`
+computes the final weighted-average sentiment score.
+
+| Age | Weight |
+|-----|--------|
+| 0–2 days | 1.0 |
+| 3–7 days | 0.5 |
+| 8–30 days | 0.25 |
+| > 30 days | 0.1 |
+
+A recency-weighted score therefore emphasises breaking news and
+gradually discounts older background coverage without discarding
+it entirely.
+
+---
+
+## suggest_sector_stocks
+
+**File:** `backend/tools/sector_discovery_tool.py`
+
+Queries Iceberg for stocks in a given sector, with freshness
+metadata. Falls back to a curated popular stocks list (8
+sectors, ~40 tickers) when Iceberg has no sector data.
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `sector` | `str` | Sector name (e.g., "Healthcare", "Financial Services") |
+
+Returns a numbered list with ticker, company name, freshness
+status (fresh/stale/no_data), and last analysis date. Used by
+portfolio and stock_analyst agents for sector-based discovery.
+
+Sector aliases are normalised: banking → Financial Services,
+pharma → Healthcare, IT → Technology, etc.
 
 ---
 

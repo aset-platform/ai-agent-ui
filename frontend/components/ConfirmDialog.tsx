@@ -58,6 +58,7 @@ export function ConfirmDialog({
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40"
+      data-testid="confirm-dialog"
       onClick={onCancel}
     >
       <div
@@ -80,6 +81,7 @@ export function ConfirmDialog({
           <button
             type="button"
             onClick={onCancel}
+            data-testid="confirm-dialog-cancel"
             className="
               rounded-lg px-4 py-2 text-sm
               font-medium transition-colors
@@ -96,6 +98,7 @@ export function ConfirmDialog({
             ref={confirmRef}
             type="button"
             onClick={onConfirm}
+            data-testid="confirm-dialog-confirm"
             className={`
               rounded-lg px-4 py-2 text-sm
               font-medium text-white

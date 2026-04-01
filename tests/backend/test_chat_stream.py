@@ -41,6 +41,16 @@ def app():
 
 @pytest.fixture(scope="module")
 def client(app):
+    from auth.dependencies import get_current_user
+    from auth.models import UserContext
+
+    app.dependency_overrides[get_current_user] = (
+        lambda: UserContext(
+            user_id="test-user",
+            email="test@test.com",
+            role="user",
+        )
+    )
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -85,13 +95,17 @@ class TestChatStream:
             parsed = json.loads(line)  # raises if invalid JSON
             assert "type" in parsed, f"Event missing 'type': {line}"
 
-    def test_stream_unknown_agent_returns_404(self, client):
-        """Unknown agent_id must return 404."""
+    def test_stream_auto_routes_unknown_agent(self, client):
+        """Unknown agent_id is auto-resolved by the router."""
         r = client.post(
             "/v1/chat/stream",
-            json={"message": "hello", "agent_id": "nonexistent_agent_xyz"},
+            json={
+                "message": "hello",
+                "agent_id": "nonexistent_agent_xyz",
+            },
         )
-        assert r.status_code == 404, r.text
+        # Router overrides agent_id based on message content.
+        assert r.status_code == 200, r.text
 
     def test_stream_final_event_present(self, client):
         """The stream must terminate with a 'final' or 'error' event."""

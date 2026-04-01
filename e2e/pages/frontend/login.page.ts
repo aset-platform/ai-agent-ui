@@ -51,7 +51,9 @@ export class LoginPage extends BasePage {
     password: string,
   ): Promise<void> {
     await this.login(email, password);
-    await this.page.waitForURL("/", { timeout: 30_000 });
+    await this.page.waitForURL("**/dashboard**", {
+      timeout: 30_000,
+    });
   }
 
   /** Assert that an error message is visible. */

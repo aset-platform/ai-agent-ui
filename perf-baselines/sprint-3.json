@@ -1,0 +1,86 @@
+{
+  "sprint": 3,
+  "date": "2026-03-25",
+  "note": "Initial baseline — pre-optimization. Scores recorded before Track A fixes.",
+  "tool": "lighthouse-chrome-devtools",
+  "device": "desktop",
+  "routes": {
+    "/": {
+      "performance": null,
+      "accessibility": null,
+      "lcp_ms": null,
+      "tbt_ms": null,
+      "cls": null
+    },
+    "/login": {
+      "performance": null,
+      "accessibility": null,
+      "lcp_ms": null,
+      "tbt_ms": null,
+      "cls": null
+    },
+    "/dashboard": {
+      "performance": 45,
+      "accessibility": 88,
+      "lcp_ms": null,
+      "tbt_ms": null,
+      "cls": null
+    },
+    "/analytics": {
+      "performance": null,
+      "accessibility": null,
+      "lcp_ms": null,
+      "tbt_ms": null,
+      "cls": null
+    },
+    "/analytics/analysis": {
+      "performance": null,
+      "accessibility": null,
+      "lcp_ms": null,
+      "tbt_ms": null,
+      "cls": null
+    },
+    "/analytics/compare": {
+      "performance": null,
+      "accessibility": null,
+      "lcp_ms": null,
+      "tbt_ms": null,
+      "cls": null
+    },
+    "/analytics/insights": {
+      "performance": null,
+      "accessibility": null,
+      "lcp_ms": null,
+      "tbt_ms": null,
+      "cls": null
+    },
+    "/analytics/marketplace": {
+      "performance": null,
+      "accessibility": null,
+      "lcp_ms": null,
+      "tbt_ms": null,
+      "cls": null
+    },
+    "/admin": {
+      "performance": null,
+      "accessibility": null,
+      "lcp_ms": null,
+      "tbt_ms": null,
+      "cls": null
+    },
+    "/docs": {
+      "performance": null,
+      "accessibility": null,
+      "lcp_ms": null,
+      "tbt_ms": null,
+      "cls": null
+    },
+    "/insights": {
+      "performance": null,
+      "accessibility": null,
+      "lcp_ms": null,
+      "tbt_ms": null,
+      "cls": null
+    }
+  }
+}

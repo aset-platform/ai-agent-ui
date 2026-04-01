@@ -35,7 +35,7 @@ def register(router: APIRouter) -> None:
     """
 
     @router.get("/admin/audit-log", tags=["admin"])
-    def get_audit_log(
+    async def get_audit_log(
         _: UserContext = Depends(superuser_only),
     ) -> Any:
         """Return all audit events, newest-first.
@@ -60,7 +60,7 @@ def register(router: APIRouter) -> None:
                 )
 
         repo = _helpers._get_repo()
-        raw_events = repo.list_audit_events()
+        raw_events = await repo.list_audit_events()
         events = []
         for ev in raw_events:
             d = dict(ev)
@@ -84,37 +84,48 @@ def register(router: APIRouter) -> None:
         "/users/{user_id}/reset-password",
         tags=["admin"],
     )
-    def admin_reset_password(
+    async def admin_reset_password(
         user_id: str,
         body: AdminPasswordResetBody,
-        current_user: UserContext = Depends(superuser_only),
-        service: AuthService = Depends(get_auth_service),
+        current_user: UserContext = Depends(
+            superuser_only,
+        ),
+        service: AuthService = Depends(
+            get_auth_service,
+        ),
     ) -> Dict[str, str]:
         """Reset any user's password (superuser only).
 
-        Validates the new password, hashes it, and updates
-        the user record.  Also clears any pending self-service
-        reset token.
+        Validates the new password, hashes it, and
+        updates the user record.  Also clears any
+        pending self-service reset token.
 
         Args:
             user_id: UUID of the target user.
             body: Request body with ``new_password``.
-            current_user: Authenticated superuser context.
-            service: Injected :class:`~auth.service.AuthService`.
+            current_user: Authenticated superuser.
+            service: Injected AuthService.
 
         Returns:
-            A dict ``{"detail": "Password reset successfully"}``.
+            ``{"detail": "Password reset successfully"}``
 
         Raises:
-            HTTPException: 404 if the target user is not found.
+            HTTPException: 404 if not found.
         """
-        AuthService.validate_password_strength(body.new_password)
+        AuthService.validate_password_strength(
+            body.new_password,
+        )
         repo = _helpers._get_repo()
-        user = repo.get_by_id(user_id)
+        user = await repo.get_by_id(user_id)
         if user is None:
-            raise HTTPException(status_code=404, detail="User not found")
-        new_hash = service.hash_password(body.new_password)
-        repo.update(
+            raise HTTPException(
+                status_code=404,
+                detail="User not found",
+            )
+        new_hash = service.hash_password(
+            body.new_password,
+        )
+        await repo.update(
             user_id,
             {
                 "hashed_password": new_hash,
@@ -122,7 +133,7 @@ def register(router: APIRouter) -> None:
                 "password_reset_expiry": None,
             },
         )
-        repo.append_audit_event(
+        await repo.append_audit_event(
             "ADMIN_PASSWORD_RESET",
             actor_user_id=current_user.user_id,
             target_user_id=user_id,
@@ -132,4 +143,6 @@ def register(router: APIRouter) -> None:
             current_user.user_id,
             user_id,
         )
-        return {"detail": "Password reset successfully"}
+        return {
+            "detail": "Password reset successfully",
+        }

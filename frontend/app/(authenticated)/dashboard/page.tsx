@@ -239,7 +239,10 @@ export default function DashboardPage() {
           data={filteredWatchlist}
           selectedTicker={selectedTicker}
           onSelectTicker={setSelectedTicker}
-          onRefresh={refresh}
+          onRefresh={() => {
+            refresh();
+            portfolioData.refresh();
+          }}
           portfolio={filteredPortfolio}
           portfolioLoading={portfolioData.loading}
           onAddStock={() => setShowAddStock(true)}

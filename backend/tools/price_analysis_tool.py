@@ -24,7 +24,6 @@ from datetime import date
 
 import tools._analysis_shared as _sh
 from langchain_core.tools import tool
-from tools._analysis_chart import _create_analysis_chart
 from tools._analysis_indicators import _calculate_technical_indicators
 from tools._analysis_movement import _analyse_price_movement
 from tools._analysis_summary import _generate_summary_stats
@@ -86,10 +85,53 @@ def analyse_stock_price(ticker: str) -> str:
     )
     sym = _sh._currency_symbol(_sh._load_currency(ticker))
 
-    cached = _sh._load_cache(ticker, "analysis")
-    if cached:
-        _logger.info("Returning cached analysis for %s", ticker)
-        return cached
+    # Iceberg freshness gate: return cached analysis only if
+    # it was run today AND OHLCV data hasn't been updated since.
+    try:
+        repo_check = _sh._get_repo()
+        if repo_check is not None:
+            latest = repo_check.get_latest_analysis_summary(
+                ticker
+            )
+            if latest is not None:
+                ad = latest.get("analysis_date")
+                if ad is not None:
+                    if hasattr(ad, "date"):
+                        ad = ad.date()
+                    if ad == date.today():
+                        # Verify OHLCV hasn't been refreshed
+                        # since the analysis was generated.
+                        ohlcv_date = (
+                            repo_check.get_latest_ohlcv_date(
+                                ticker
+                            )
+                        )
+                        if ohlcv_date is not None:
+                            if hasattr(ohlcv_date, "date"):
+                                ohlcv_date = (
+                                    ohlcv_date.date()
+                                )
+                            if ohlcv_date <= ad:
+                                _logger.info(
+                                    "Analysis up-to-date"
+                                    " for %s (Iceberg)",
+                                    ticker,
+                                )
+                                return (
+                                    f"Analysis for "
+                                    f"{ticker} is already"
+                                    f" up-to-date (run "
+                                    f"today). Use "
+                                    f"load_stock_data or"
+                                    f" the dashboard to "
+                                    f"view results."
+                                )
+    except Exception as exc:
+        _logger.debug(
+            "Freshness check skipped for %s: %s",
+            ticker,
+            exc,
+        )
 
     # Iceberg freshness gate: if another user (or session)
     # already analysed this ticker today, return that result
@@ -97,32 +139,7 @@ def analyse_stock_price(ticker: str) -> str:
     # need to check the Iceberg analysis_date; the file cache
     # is always written alongside the Iceberg insert.
     try:
-        repo_check = _sh._get_repo()
-        if repo_check is not None:
-            latest = repo_check.get_latest_analysis_summary(ticker)
-            if latest is not None:
-                ad = latest.get("analysis_date")
-                if ad is not None:
-                    if hasattr(ad, "date"):
-                        ad = ad.date()
-                    if ad == date.today():
-                        _logger.info(
-                            "Analysis already done today"
-                            " for %s (Iceberg), skipping",
-                            ticker,
-                        )
-                        return (
-                            f"Analysis for {ticker} is "
-                            f"already up-to-date (run "
-                            f"today). Use load_stock_data "
-                            f"or the dashboard to view "
-                            f"results."
-                        )
-    except Exception as exc:
-        _logger.debug("Freshness check skipped for %s: %s", ticker, exc)
-
-    try:
-        df = _sh._load_parquet(ticker)
+        df = _sh._load_ohlcv(ticker)
         if df is None:
             return (
                 f"No OHLCV data found for '{ticker}'. "
@@ -135,7 +152,6 @@ def analyse_stock_price(ticker: str) -> str:
         df = _calculate_technical_indicators(df)
         movement = _analyse_price_movement(df)
         stats = _generate_summary_stats(df, ticker)
-        chart_path = _create_analysis_chart(df, ticker)
 
         repo = _sh._require_repo()
         repo.upsert_technical_indicators(ticker, df)
@@ -201,12 +217,9 @@ def analyse_stock_price(ticker: str) -> str:
             f"  Best Month      : {bm} ({bmr:+.1f}%)\n"
             f"  Worst Month     : {wm} ({wmr:+.1f}%)\n"
             f"  Best Year       : {by} ({byr:+.1f}%)\n"
-            f"  Worst Year      : {wy} ({wyr:+.1f}%)\n\n"
-            f"CHART\n"
-            f"  Saved to: {chart_path}\n"
+            f"  Worst Year      : {wy} ({wyr:+.1f}%)\n"
         )
 
-        _sh._save_cache(ticker, "analysis", report)
         _logger.info("analyse_stock_price complete for %s", ticker)
         return report
 

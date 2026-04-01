@@ -450,6 +450,14 @@ export interface CascadeStats {
   compression_count: number;
   cascade_log: CascadeEvent[];
   rpm_by_model: Record<string, number>;
+  prompt_tokens_by_model: Record<string, number>;
+  completion_tokens_by_model: Record<
+    string,
+    number
+  >;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_tokens: number;
 }
 
 export interface MetricsResponse {

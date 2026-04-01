@@ -87,13 +87,11 @@ class TestParseAnalysis:
         assert d["current_price"] == "₹1,365.00"
         assert d["rsi"] == "55.3"
         assert d["sharpe"] == "0.85"
-        assert d["chart"] is not None
 
     def test_partial_output(self):
         d = _parse_analysis("Current Price : $100\n")
         assert d["current_price"] == "$100"
         assert d["rsi"] is None
-        assert d["chart"] is None
 
     def test_empty_output(self):
         d = _parse_analysis("")

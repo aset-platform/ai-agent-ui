@@ -56,14 +56,24 @@ def auto_link_ticker(ticker: str) -> None:
     """
     user_id = get_current_user()
     if not user_id:
+        _logger.debug(
+            "auto_link_ticker(%s): no current user",
+            ticker,
+        )
         return
     try:
-        from auth.repo.repository import (
-            IcebergUserRepository,
-        )
+        import asyncio
 
-        repo = IcebergUserRepository()
-        linked = repo.link_ticker(user_id, ticker, source="chat")
+        from auth.endpoints.helpers import _get_repo
+
+        repo = _get_repo()
+
+        async def _link():
+            return await repo.link_ticker(
+                user_id, ticker, source="chat",
+            )
+
+        linked = asyncio.run(_link())
         if linked:
             _logger.info(
                 "Auto-linked %s to user %s",
@@ -71,7 +81,7 @@ def auto_link_ticker(ticker: str) -> None:
                 user_id,
             )
     except Exception as exc:
-        _logger.debug(
+        _logger.warning(
             "Auto-link failed for %s/%s: %s",
             user_id,
             ticker,

@@ -8,6 +8,7 @@
 
 import {
   useState,
+  useEffect,
   useMemo,
   useCallback,
 } from "react";
@@ -15,11 +16,19 @@ import {
   useAdminUsers,
   useAdminAudit,
   useObservability,
+  useAdminMaintenance,
+} from "@/hooks/useAdminData";
+import type {
+  TriageEntry,
+  RetentionResult,
+  GapResult,
+  UsageUser,
 } from "@/hooks/useAdminData";
 import type { UserFormData } from "@/components/admin/UserModal";
 import { UserModal } from "@/components/admin/UserModal";
 import { ResetPasswordModal } from "@/components/admin/ResetPasswordModal";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { SchedulerTab } from "@/components/admin/SchedulerTab";
 import {
   InsightsTable,
   type Column,
@@ -333,20 +342,26 @@ function UsersTab() {
         label: "Actions",
         sortable: false,
         render: (r) => (
-          <div className="flex gap-1">
+          <div
+            className="flex gap-1"
+            data-testid={`admin-user-row-${r.user_id}`}
+          >
             <button
+              data-testid={`admin-user-edit-${r.user_id}`}
               onClick={() => openEdit(r)}
               className="px-2 py-1 text-xs rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 hover:bg-indigo-200 dark:hover:bg-indigo-900/50 transition-colors"
             >
               Edit
             </button>
             <button
+              data-testid={`admin-user-reset-${r.user_id}`}
               onClick={() => openReset(r)}
               className="px-2 py-1 text-xs rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors"
             >
               Reset Pwd
             </button>
             <button
+              data-testid={`admin-user-toggle-${r.user_id}`}
               onClick={() =>
                 r.is_active
                   ? setDeactivateUser(r)
@@ -383,6 +398,7 @@ function UsersTab() {
           </h2>
           <input
             type="text"
+            data-testid="admin-users-search"
             value={search}
             onChange={(e) =>
               setSearch(e.target.value)
@@ -392,6 +408,7 @@ function UsersTab() {
           />
         </div>
         <button
+          data-testid="admin-users-add-btn"
           onClick={openAdd}
           className="px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors"
         >
@@ -400,6 +417,7 @@ function UsersTab() {
       </div>
 
       {/* Users table */}
+      <div data-testid="admin-users-table">
       <InsightsTable<UserResponse>
         columns={userCols}
         rows={filtered}
@@ -408,6 +426,7 @@ function UsersTab() {
           dir: "asc",
         }}
       />
+      </div>
 
       {/* Modals */}
       <UserModal
@@ -489,6 +508,7 @@ function AuditLogTab() {
         </h2>
         <input
           type="text"
+          data-testid="admin-audit-search"
           value={search}
           onChange={(e) =>
             setSearch(e.target.value)
@@ -498,6 +518,7 @@ function AuditLogTab() {
         />
       </div>
 
+      <div data-testid="admin-audit-table">
       <InsightsTable<AuditEvent>
         columns={auditCols}
         rows={filtered}
@@ -506,11 +527,198 @@ function AuditLogTab() {
           dir: "desc",
         }}
       />
+      </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------
+// Daily Token Budget Card
+interface BudgetModel {
+  total: number;
+  requests: number;
+  limit: number;
+}
+interface DailyBudgetData {
+  date: string;
+  daily_limit: number;
+  total_tokens: number;
+  remaining_tokens: number;
+  usage_pct: number;
+  by_model: Record<string, BudgetModel>;
+  estimated_queries_remaining: number;
+  reset_time_utc: string;
+}
+
+function DailyTokenBudgetCard() {
+  const [data, setData] = useState<
+    DailyBudgetData | null
+  >(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { apiFetch } = await import(
+          "@/lib/apiFetch"
+        );
+        const { API_URL } = await import(
+          "@/lib/config"
+        );
+        const res = await apiFetch(
+          `${API_URL}/admin/daily-budget`,
+        );
+        if (!res.ok) throw new Error("Failed");
+        const json = await res.json();
+        if (!cancelled) setData(json);
+      } catch (e) {
+        if (!cancelled)
+          setError(
+            e instanceof Error
+              ? e.message
+              : "Load failed",
+          );
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (loading) return <WidgetSkeleton />;
+  if (error || !data)
+    return (
+      <WidgetError
+        message={error || "No data"}
+      />
+    );
+
+  const pct = data.usage_pct;
+  const barColor =
+    pct > 85
+      ? "bg-red-500"
+      : pct > 60
+        ? "bg-amber-500"
+        : "bg-emerald-500";
+  const textColor =
+    pct > 85
+      ? "text-red-600 dark:text-red-400"
+      : pct > 60
+        ? "text-amber-600 dark:text-amber-400"
+        : "text-emerald-600 dark:text-emerald-400";
+
+  return (
+    <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          Daily Token Budget
+        </h3>
+        <span className="text-xs text-gray-400">
+          Resets{" "}
+          {new Date(
+            data.reset_time_utc,
+          ).toLocaleTimeString()}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden mb-2">
+        <div
+          className={`h-full rounded-full transition-all ${barColor}`}
+          style={{
+            width: `${Math.min(pct, 100)}%`,
+          }}
+        />
+      </div>
+      <div className="flex justify-between text-xs mb-4">
+        <span className={textColor}>
+          {pct}% used
+        </span>
+        <span className="text-gray-500 dark:text-gray-400">
+          {data.total_tokens.toLocaleString()} /{" "}
+          {data.daily_limit.toLocaleString()} tokens
+        </span>
+      </div>
+
+      {/* Stats row */}
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className="rounded-lg bg-gray-50 dark:bg-gray-800 p-2.5">
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Remaining
+          </p>
+          <p className="text-lg font-semibold text-gray-700 dark:text-gray-200">
+            {data.remaining_tokens.toLocaleString()}
+          </p>
+        </div>
+        <div className="rounded-lg bg-gray-50 dark:bg-gray-800 p-2.5">
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Est. Queries Left
+          </p>
+          <p className="text-lg font-semibold text-gray-700 dark:text-gray-200">
+            ~
+            {data.estimated_queries_remaining.toLocaleString()}
+          </p>
+        </div>
+      </div>
+
+      {/* Per-model breakdown */}
+      <div className="space-y-1.5">
+        <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+          Per-Model Breakdown
+        </p>
+        {Object.entries(data.by_model).map(
+          ([model, info]) => {
+            const modelPct =
+              info.limit > 0
+                ? Math.round(
+                    (info.total / info.limit) *
+                      100,
+                  )
+                : 0;
+            const short =
+              model.split("/").pop() ?? model;
+            return (
+              <div
+                key={model}
+                className="flex items-center gap-2 text-xs"
+              >
+                <span className="w-32 truncate text-gray-600 dark:text-gray-400">
+                  {short}
+                </span>
+                <div className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full">
+                  <div
+                    className={`h-full rounded-full ${
+                      modelPct > 85
+                        ? "bg-red-500"
+                        : modelPct > 60
+                          ? "bg-amber-500"
+                          : "bg-emerald-500"
+                    }`}
+                    style={{
+                      width: `${Math.min(modelPct, 100)}%`,
+                    }}
+                  />
+                </div>
+                <span className="w-20 text-right text-gray-500 dark:text-gray-400">
+                  {info.total.toLocaleString()} /{" "}
+                  {(
+                    info.limit / 1000
+                  ).toFixed(0)}
+                  K
+                </span>
+              </div>
+            );
+          },
+        )}
+      </div>
+    </div>
+  );
+}
+
 // LLM Observability Tab
 // ---------------------------------------------------------------
 
@@ -638,6 +846,19 @@ function ObservabilityTab() {
     ...(stats?.cascade_log ?? []),
   ].reverse().slice(0, 25);
 
+  const totalTokens =
+    stats?.total_tokens ?? 0;
+  const totalPrompt =
+    stats?.total_prompt_tokens ?? 0;
+  const totalCompletion =
+    stats?.total_completion_tokens ?? 0;
+  const promptPct =
+    totalTokens > 0
+      ? Math.round(
+          (totalPrompt / totalTokens) * 100,
+        )
+      : 0;
+
   const handleToggle = async (
     model: string,
     currentStatus: string,
@@ -658,9 +879,15 @@ function ObservabilityTab() {
 
   return (
     <div className="space-y-6">
-      {/* Summary cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div className="rounded-xl bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 p-4">
+      {/* Daily Token Budget */}
+      <DailyTokenBudgetCard />
+
+      {/* Summary cards — 5 columns */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div
+          data-testid="admin-summary-requests"
+          className="rounded-xl bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 p-4"
+        >
           <p className="text-xs font-medium text-indigo-500 dark:text-indigo-400">
             Total Requests
           </p>
@@ -670,20 +897,58 @@ function ObservabilityTab() {
             ).toLocaleString()}
           </p>
         </div>
-        <div className="rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-4">
+        <div
+          data-testid="admin-summary-tokens"
+          className="rounded-xl bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-800 p-4"
+        >
+          <p className="text-xs font-medium text-violet-500 dark:text-violet-400">
+            Total Tokens
+          </p>
+          <p className="text-2xl font-semibold text-violet-700 dark:text-violet-300 mt-1">
+            {totalTokens.toLocaleString()}
+          </p>
+        </div>
+        <div
+          data-testid="admin-summary-input"
+          className="rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4"
+        >
+          <p className="text-xs font-medium text-blue-500 dark:text-blue-400">
+            Input Tokens
+          </p>
+          <p className="text-2xl font-semibold text-blue-700 dark:text-blue-300 mt-1">
+            {totalPrompt.toLocaleString()}
+          </p>
+          <p className="text-xs text-blue-400 dark:text-blue-500 mt-0.5">
+            {promptPct}% of total
+          </p>
+        </div>
+        <div
+          data-testid="admin-summary-output"
+          className="rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 p-4"
+        >
+          <p className="text-xs font-medium text-emerald-500 dark:text-emerald-400">
+            Output Tokens
+          </p>
+          <p className="text-2xl font-semibold text-emerald-700 dark:text-emerald-300 mt-1">
+            {totalCompletion.toLocaleString()}
+          </p>
+          <p className="text-xs text-emerald-400 dark:text-emerald-500 mt-0.5">
+            {100 - promptPct}% of total
+          </p>
+        </div>
+        <div
+          data-testid="admin-summary-cascades"
+          className="rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-4"
+        >
           <p className="text-xs font-medium text-amber-500 dark:text-amber-400">
             Cascades
           </p>
           <p className="text-2xl font-semibold text-amber-700 dark:text-amber-300 mt-1">
             {stats?.cascade_count ?? 0}
           </p>
-        </div>
-        <div className="rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4">
-          <p className="text-xs font-medium text-blue-500 dark:text-blue-400">
-            Compressions
-          </p>
-          <p className="text-2xl font-semibold text-blue-700 dark:text-blue-300 mt-1">
-            {stats?.compression_count ?? 0}
+          <p className="text-xs text-amber-400 dark:text-amber-500 mt-0.5">
+            {stats?.compression_count ?? 0}{" "}
+            compressions
           </p>
         </div>
       </div>
@@ -723,6 +988,7 @@ function ObservabilityTab() {
             {tiers.map((t) => (
               <div
                 key={t.model}
+                data-testid={`admin-tier-card-${t.model}`}
                 className={`rounded-lg border border-gray-200 dark:border-gray-700 border-l-4 ${STATUS_BORDER[t.status] ?? ""} bg-white dark:bg-gray-900 p-3 space-y-2`}
               >
                 <div className="flex items-center justify-between">
@@ -730,6 +996,7 @@ function ObservabilityTab() {
                     {shortModel(t.model)}
                   </span>
                   <button
+                    data-testid={`admin-tier-toggle-${t.model}`}
                     onClick={() =>
                       handleToggle(
                         t.model,
@@ -783,55 +1050,139 @@ function ObservabilityTab() {
         </div>
       )}
 
-      {/* Model Budget Status */}
+      {/* Model Budget & Usage */}
       {Object.keys(models).length > 0 && (
         <div className="space-y-3">
           <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
-            Model Budget Status
+            Per-Model Budget & Usage
           </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {Object.entries(models).map(
               ([name, budget]) => {
                 const [tpmUsed, tpmLim] =
                   parseBudget(budget.tpm);
                 const [rpmUsed, rpmLim] =
                   parseBudget(budget.rpm);
+                const [tpdUsed, tpdLim] =
+                  parseBudget(budget.tpd);
+                const [rpdUsed, rpdLim] =
+                  parseBudget(budget.rpd);
+                const reqCount =
+                  stats?.requests_by_model?.[
+                    name
+                  ] ?? 0;
+                const inTok =
+                  stats
+                    ?.prompt_tokens_by_model?.[
+                    name
+                  ] ?? 0;
+                const outTok =
+                  stats
+                    ?.completion_tokens_by_model?.[
+                    name
+                  ] ?? 0;
+
                 return (
                   <div
                     key={name}
-                    className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-3 space-y-2"
+                    data-testid={`admin-budget-card-${name}`}
+                    className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-4 space-y-3"
                   >
-                    <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
-                      {shortModel(name)}
-                    </p>
-                    {/* TPM bar */}
-                    <div>
-                      <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
-                        <span>TPM</span>
-                        <span>{budget.tpm}</span>
-                      </div>
-                      <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all ${budgetColor(tpmUsed, tpmLim)}`}
-                          style={{
-                            width: `${tpmLim > 0 ? Math.min(100, (tpmUsed / tpmLim) * 100) : 0}%`,
-                          }}
-                        />
-                      </div>
+                    {/* Header */}
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                        {shortModel(name)}
+                      </p>
+                      <span className="text-xs font-mono text-gray-400 dark:text-gray-500">
+                        {reqCount.toLocaleString()}{" "}
+                        req
+                      </span>
                     </div>
-                    {/* RPM bar */}
-                    <div>
-                      <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
-                        <span>RPM</span>
-                        <span>{budget.rpm}</span>
+
+                    {/* Token split */}
+                    {(inTok > 0 ||
+                      outTok > 0) && (
+                      <div className="flex gap-3 text-xs">
+                        <span className="text-blue-600 dark:text-blue-400">
+                          In:{" "}
+                          {inTok.toLocaleString()}
+                        </span>
+                        <span className="text-emerald-600 dark:text-emerald-400">
+                          Out:{" "}
+                          {outTok.toLocaleString()}
+                        </span>
                       </div>
-                      <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all ${budgetColor(rpmUsed, rpmLim)}`}
-                          style={{
-                            width: `${rpmLim > 0 ? Math.min(100, (rpmUsed / rpmLim) * 100) : 0}%`,
-                          }}
-                        />
+                    )}
+
+                    {/* Rate bars */}
+                    <div className="space-y-2">
+                      {/* TPM */}
+                      <div>
+                        <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
+                          <span>TPM</span>
+                          <span>
+                            {budget.tpm}
+                          </span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${budgetColor(tpmUsed, tpmLim)}`}
+                            style={{
+                              width: `${tpmLim > 0 ? Math.min(100, (tpmUsed / tpmLim) * 100) : 0}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                      {/* TPD */}
+                      <div>
+                        <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
+                          <span>TPD</span>
+                          <span>
+                            {budget.tpd}
+                          </span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${budgetColor(tpdUsed, tpdLim)}`}
+                            style={{
+                              width: `${tpdLim > 0 ? Math.min(100, (tpdUsed / tpdLim) * 100) : 0}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                      {/* RPM */}
+                      <div>
+                        <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
+                          <span>RPM</span>
+                          <span>
+                            {budget.rpm}
+                          </span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${budgetColor(rpmUsed, rpmLim)}`}
+                            style={{
+                              width: `${rpmLim > 0 ? Math.min(100, (rpmUsed / rpmLim) * 100) : 0}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                      {/* RPD */}
+                      <div>
+                        <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
+                          <span>RPD</span>
+                          <span>
+                            {budget.rpd}
+                          </span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${budgetColor(rpdUsed, rpdLim)}`}
+                            style={{
+                              width: `${rpdLim > 0 ? Math.min(100, (rpdUsed / rpdLim) * 100) : 0}%`,
+                            }}
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -848,11 +1199,13 @@ function ObservabilityTab() {
           <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
             Recent Cascade Events
           </h2>
+          <div data-testid="admin-cascade-table">
           <InsightsTable<CascadeEvent>
             columns={cascadeCols}
             rows={cascadeLog}
             pageSize={10}
           />
+          </div>
         </div>
       )}
 
@@ -869,10 +1222,582 @@ function ObservabilityTab() {
 }
 
 // ---------------------------------------------------------------
+// Maintenance Tab
+// ---------------------------------------------------------------
+
+const RISK_COLORS = {
+  none: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+  low: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+  medium: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+  high: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+} as const;
+
+function RiskBadge({ level }: { level: keyof typeof RISK_COLORS }) {
+  return (
+    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${RISK_COLORS[level]}`}>
+      {level.charAt(0).toUpperCase() + level.slice(1)} risk
+    </span>
+  );
+}
+
+function MaintenanceTab() {
+  const m = useAdminMaintenance();
+  const [triageResult, setTriageResult] = useState<{ triage: TriageEntry[]; cleaned: number; dry_run: boolean } | null>(null);
+  const [usageResult, setUsageResult] = useState<{ reset_count: number } | null>(null);
+  const [usageUsers, setUsageUsers] = useState<UsageUser[] | null>(null);
+  const [selectedUsers, setSelectedUsers] = useState<Set<string>>(new Set());
+  const [retentionResult, setRetentionResult] = useState<RetentionResult[] | null>(null);
+  const [selectedTables, setSelectedTables] = useState<Set<string>>(new Set());
+  const [gapResult, setGapResult] = useState<GapResult | null>(null);
+  const [loading, setLoading] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
+
+  const run = async (key: string, fn: () => Promise<void>) => {
+    setLoading(key);
+    try { await fn(); } catch { /* shown in result */ }
+    setLoading(null);
+  };
+
+  return (
+    <div className="space-y-4">
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ""}
+        message={confirm?.message ?? ""}
+        confirmLabel="Execute"
+        variant="warning"
+        onConfirm={() => {
+          confirm?.onConfirm();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
+
+      {/* Subscription Cleanup */}
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Razorpay: Triage Orphaned Subscriptions</h3>
+          <RiskBadge level="medium" />
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          Scans active Razorpay subscriptions and classifies as <strong>Matched</strong> (current), <strong>Orphaned</strong> (same customer, wrong sub — safe to cancel), or <strong>Unlinked</strong> (no user — manual review).
+        </p>
+        <div className="flex gap-2 mb-3">
+          <button
+            onClick={() => run("scan", async () => { setTriageResult(await m.cleanupSubscriptions(true)); })}
+            disabled={loading === "scan"}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+          >
+            {loading === "scan" ? "Scanning\u2026" : "Scan"}
+          </button>
+          {triageResult?.triage.some((t) => t.classification === "orphaned") && (
+            <button
+              onClick={() => setConfirm({
+                title: "Cancel Orphaned Subscriptions",
+                message: `This will cancel ${triageResult.triage.filter((t) => t.classification === "orphaned").length} orphaned subscription(s) in Razorpay. Continue?`,
+                onConfirm: () => run("cleanup", async () => { setTriageResult(await m.cleanupSubscriptions(false)); }),
+              })}
+              disabled={loading === "cleanup"}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+            >
+              {loading === "cleanup" ? "Cleaning\u2026" : "Execute Cleanup"}
+            </button>
+          )}
+        </div>
+        {triageResult && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400">
+                  <th className="pb-1 pr-3">Sub ID</th>
+                  <th className="pb-1 pr-3">Customer</th>
+                  <th className="pb-1 pr-3">Status</th>
+                  <th className="pb-1 pr-3">Classification</th>
+                  <th className="pb-1">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {triageResult.triage.map((t) => (
+                  <tr key={t.sub_id} className="border-b border-gray-100 dark:border-gray-800">
+                    <td className="py-1 pr-3 font-mono">{t.sub_id.slice(0, 20)}</td>
+                    <td className="py-1 pr-3 font-mono">{t.customer_id.slice(0, 20)}</td>
+                    <td className="py-1 pr-3">{t.status}</td>
+                    <td className="py-1 pr-3">
+                      <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                        t.classification === "matched" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                        : t.classification === "orphaned" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                        : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400"
+                      }`}>
+                        {t.classification}
+                      </span>
+                    </td>
+                    <td className="py-1">{t.action}</td>
+                  </tr>
+                ))}
+                {triageResult.triage.length === 0 && (
+                  <tr><td colSpan={5} className="py-2 text-center text-gray-400">No active subscriptions found</td></tr>
+                )}
+              </tbody>
+            </table>
+            {!triageResult.dry_run && <p className="mt-2 text-xs text-emerald-600 dark:text-emerald-400 font-medium">Cleaned: {triageResult.cleaned} subscription(s)</p>}
+          </div>
+        )}
+      </div>
+
+      {/* Usage Reset */}
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Reset Monthly Usage Counters</h3>
+          <RiskBadge level="low" />
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          Scan users to see usage stats, then reset individually, selected, or all at once.
+        </p>
+        <div className="flex gap-2 mb-3">
+          <button
+            onClick={() => run("usage-scan", async () => {
+              const r = await m.getUsageStats();
+              setUsageUsers(r.users);
+              setSelectedUsers(new Set());
+              setUsageResult(null);
+            })}
+            disabled={loading === "usage-scan"}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+          >
+            {loading === "usage-scan" ? "Scanning\u2026" : "Scan"}
+          </button>
+          {usageUsers && selectedUsers.size > 0 && (
+            <button
+              onClick={() => run("usage-selected", async () => {
+                const r = await m.resetSelectedUsage([...selectedUsers]);
+                setUsageResult(r);
+                const fresh = await m.getUsageStats();
+                setUsageUsers(fresh.users);
+                setSelectedUsers(new Set());
+              })}
+              disabled={loading === "usage-selected"}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+            >
+              {loading === "usage-selected" ? "Resetting\u2026" : `Reset Selected (${selectedUsers.size})`}
+            </button>
+          )}
+          <button
+            onClick={() => setConfirm({
+              title: "Reset All Usage Counters",
+              message: "This will zero the monthly usage count for ALL users. Continue?",
+              onConfirm: () => run("usage-all", async () => {
+                const r = await m.resetUsage();
+                setUsageResult(r);
+                if (usageUsers) {
+                  const fresh = await m.getUsageStats();
+                  setUsageUsers(fresh.users);
+                }
+              }),
+            })}
+            disabled={loading === "usage-all"}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {loading === "usage-all" ? "Resetting\u2026" : "Reset All"}
+          </button>
+        </div>
+        {usageResult && (
+          <p className="mb-2 text-xs text-emerald-600 dark:text-emerald-400 font-medium">Reset: {usageResult.reset_count} user(s)</p>
+        )}
+        {usageUsers && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400">
+                  <th className="pb-1 pr-2 w-8">
+                    <input
+                      type="checkbox"
+                      checked={usageUsers.length > 0 && selectedUsers.size === usageUsers.filter((u) => u.monthly_usage_count > 0).length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedUsers(new Set(usageUsers.filter((u) => u.monthly_usage_count > 0).map((u) => u.user_id)));
+                        } else {
+                          setSelectedUsers(new Set());
+                        }
+                      }}
+                      className="rounded border-gray-300 dark:border-gray-600"
+                    />
+                  </th>
+                  <th className="pb-1 pr-3">User</th>
+                  <th className="pb-1 pr-3">Tier</th>
+                  <th className="pb-1 pr-3">Usage</th>
+                  <th className="pb-1">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {usageUsers.map((u) => (
+                  <tr key={u.user_id} className="border-b border-gray-100 dark:border-gray-800">
+                    <td className="py-1 pr-2">
+                      {u.monthly_usage_count > 0 && (
+                        <input
+                          type="checkbox"
+                          checked={selectedUsers.has(u.user_id)}
+                          onChange={(e) => {
+                            const next = new Set(selectedUsers);
+                            if (e.target.checked) next.add(u.user_id);
+                            else next.delete(u.user_id);
+                            setSelectedUsers(next);
+                          }}
+                          className="rounded border-gray-300 dark:border-gray-600"
+                        />
+                      )}
+                    </td>
+                    <td className="py-1 pr-3">
+                      <div className="font-medium text-gray-900 dark:text-gray-100">{u.full_name || "\u2014"}</div>
+                      <div className="text-gray-400">{u.email}</div>
+                    </td>
+                    <td className="py-1 pr-3 capitalize">{u.subscription_tier}</td>
+                    <td className="py-1 pr-3 font-mono">{u.monthly_usage_count}</td>
+                    <td className="py-1">
+                      {u.monthly_usage_count > 0 && (
+                        <button
+                          onClick={() => run(`reset-${u.user_id}`, async () => {
+                            await m.resetSelectedUsage([u.user_id]);
+                            const fresh = await m.getUsageStats();
+                            setUsageUsers(fresh.users);
+                          })}
+                          disabled={loading === `reset-${u.user_id}`}
+                          className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 disabled:opacity-50"
+                        >
+                          {loading === `reset-${u.user_id}` ? "Resetting\u2026" : "Reset"}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {usageUsers.length === 0 && (
+                  <tr><td colSpan={5} className="py-2 text-center text-gray-400">No users found</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Data Retention */}
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Iceberg Data Retention Cleanup</h3>
+          <RiskBadge level="high" />
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          Scan tables to see what would be deleted, then clean individually, selected, or all at once. Protected tables (stocks.registry) are never touched.
+        </p>
+        <div className="flex gap-2 mb-3">
+          <button
+            onClick={() => run("retention-scan", async () => {
+              const r = await m.runRetention(true);
+              setRetentionResult(r.results);
+              setSelectedTables(new Set());
+            })}
+            disabled={loading === "retention-scan"}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+          >
+            {loading === "retention-scan" ? "Scanning\u2026" : "Scan"}
+          </button>
+          {retentionResult && selectedTables.size > 0 && (
+            <button
+              onClick={() => setConfirm({
+                title: "Delete Selected Tables",
+                message: `This will permanently delete old rows from ${selectedTables.size} table(s). This cannot be undone. Continue?`,
+                onConfirm: () => run("retention-selected", async () => {
+                  const r = await m.retainSelected([...selectedTables]);
+                  setRetentionResult(r.results);
+                  setSelectedTables(new Set());
+                }),
+              })}
+              disabled={loading === "retention-selected"}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+            >
+              {loading === "retention-selected" ? "Deleting\u2026" : `Delete Selected (${selectedTables.size})`}
+            </button>
+          )}
+          <button
+            onClick={() => setConfirm({
+              title: "Delete All — Data Retention",
+              message: "This will permanently delete old rows from ALL tables. This cannot be undone. Continue?",
+              onConfirm: () => run("retention-all", async () => {
+                const r = await m.runRetention(false);
+                setRetentionResult(r.results);
+                setSelectedTables(new Set());
+              }),
+            })}
+            disabled={loading === "retention-all"}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            {loading === "retention-all" ? "Deleting\u2026" : "Delete All"}
+          </button>
+        </div>
+        {retentionResult && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400">
+                  <th className="pb-1 pr-2 w-8">
+                    <input
+                      type="checkbox"
+                      checked={retentionResult.length > 0 && selectedTables.size === retentionResult.filter((r) => r.rows_deleted > 0).length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedTables(new Set(retentionResult.filter((r) => r.rows_deleted > 0).map((r) => r.table)));
+                        } else {
+                          setSelectedTables(new Set());
+                        }
+                      }}
+                      className="rounded border-gray-300 dark:border-gray-600"
+                    />
+                  </th>
+                  <th className="pb-1 pr-3">Table</th>
+                  <th className="pb-1 pr-3">Cutoff</th>
+                  <th className="pb-1 pr-3">Rows</th>
+                  <th className="pb-1 pr-3">Would Delete</th>
+                  <th className="pb-1">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {retentionResult.map((r) => (
+                  <tr key={r.table} className="border-b border-gray-100 dark:border-gray-800">
+                    <td className="py-1 pr-2">
+                      {r.rows_deleted > 0 && r.dry_run && (
+                        <input
+                          type="checkbox"
+                          checked={selectedTables.has(r.table)}
+                          onChange={(e) => {
+                            const next = new Set(selectedTables);
+                            if (e.target.checked) next.add(r.table);
+                            else next.delete(r.table);
+                            setSelectedTables(next);
+                          }}
+                          className="rounded border-gray-300 dark:border-gray-600"
+                        />
+                      )}
+                    </td>
+                    <td className="py-1 pr-3 font-mono">{r.table}</td>
+                    <td className="py-1 pr-3">{r.cutoff_date}</td>
+                    <td className="py-1 pr-3">{r.rows_before}</td>
+                    <td className="py-1 pr-3">{r.dry_run ? `(${r.rows_deleted})` : r.rows_deleted}</td>
+                    <td className="py-1">
+                      {r.error ? (
+                        <span className="text-red-500">{r.error}</span>
+                      ) : r.dry_run && r.rows_deleted > 0 ? (
+                        <button
+                          onClick={() => setConfirm({
+                            title: `Delete from ${r.table}`,
+                            message: `Delete ${r.rows_deleted} rows older than ${r.cutoff_date} from ${r.table}?`,
+                            onConfirm: () => run(`retain-${r.table}`, async () => {
+                              await m.retainSelected([r.table]);
+                              const fresh = await m.runRetention(true);
+                              setRetentionResult(fresh.results);
+                            }),
+                          })}
+                          disabled={loading === `retain-${r.table}`}
+                          className="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 disabled:opacity-50"
+                        >
+                          {loading === `retain-${r.table}` ? "Deleting\u2026" : "Delete"}
+                        </button>
+                      ) : r.dry_run ? (
+                        <span className="text-gray-400">clean</span>
+                      ) : (
+                        <span className="text-emerald-600 dark:text-emerald-400">done</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Gap Analysis */}
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Query Gap Analysis</h3>
+          <RiskBadge level="none" />
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          Read-only analysis of unresolved data gaps, external API usage, and local data sufficiency.
+        </p>
+        <button
+          onClick={() => run("gaps", async () => { setGapResult(await m.analyzeGaps()); })}
+          disabled={loading === "gaps"}
+          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+        >
+          {loading === "gaps" ? "Analyzing\u2026" : "Analyze"}
+        </button>
+        {gapResult && (
+          <div className="mt-3 space-y-2 text-xs">
+            <div>
+              <span className="font-medium text-gray-700 dark:text-gray-300">Top gap tickers: </span>
+              <span className="text-gray-500 dark:text-gray-400">{gapResult.top_gap_tickers?.join(", ") || "None"}</span>
+            </div>
+            <div>
+              <span className="font-medium text-gray-700 dark:text-gray-300">Local sufficiency: </span>
+              <span className="text-gray-500 dark:text-gray-400">{((gapResult.local_sufficiency_rate ?? 0) * 100).toFixed(1)}%</span>
+            </div>
+            {gapResult.external_api_usage && (
+              <div>
+                <span className="font-medium text-gray-700 dark:text-gray-300">External API calls: </span>
+                <span className="text-gray-500 dark:text-gray-400">
+                  {Object.entries(gapResult.external_api_usage).map(([k, v]) => `${k}: ${v}`).join(", ")}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
+// Transactions Tab
+// ---------------------------------------------------------------
+
+function TransactionsTab() {
+  const m = useAdminMaintenance();
+  const [txns, setTxns] = useState<Record<string, unknown>[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [gwFilter, setGwFilter] = useState<string>("");
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const fetchTxns = async () => {
+    setLoading(true);
+    try {
+      const r = await m.getPaymentTransactions(undefined, gwFilter || undefined);
+      setTxns(r.transactions || []);
+    } catch { /* ignore */ }
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchTxns(); }, [gwFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const statusColor = (s: string) =>
+    s === "success" ? "text-emerald-600 dark:text-emerald-400"
+    : s === "failed" ? "text-red-600 dark:text-red-400"
+    : "text-amber-600 dark:text-amber-400";
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <select
+          value={gwFilter}
+          onChange={(e) => setGwFilter(e.target.value)}
+          className="text-xs border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-lg px-2 py-1.5 text-gray-700 dark:text-gray-300"
+        >
+          <option value="">All Gateways</option>
+          <option value="razorpay">Razorpay</option>
+          <option value="stripe">Stripe</option>
+        </select>
+        <button
+          onClick={fetchTxns}
+          disabled={loading}
+          className="text-xs px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+        >
+          {loading ? "Loading\u2026" : "Refresh"}
+        </button>
+        <span className="text-xs text-gray-400">{txns.length} transactions</span>
+      </div>
+
+      {txns.length === 0 && !loading && (
+        <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-8">No transactions recorded yet.</p>
+      )}
+
+      {txns.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400">
+                <th className="pb-2 pr-3">Date</th>
+                <th className="pb-2 pr-3">User</th>
+                <th className="pb-2 pr-3">Name</th>
+                <th className="pb-2 pr-3">Gateway</th>
+                <th className="pb-2 pr-3">Event</th>
+                <th className="pb-2 pr-3">Source</th>
+                <th className="pb-2 pr-3">Amount</th>
+                <th className="pb-2 pr-3">Tier Change</th>
+                <th className="pb-2 pr-3">Status</th>
+                <th className="pb-2">Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              {txns.map((t) => {
+                const tid = String(t.transaction_id ?? "");
+                const isExpanded = expanded === tid;
+                return (
+                  <tr key={tid} className="border-b border-gray-100 dark:border-gray-800 align-top">
+                    <td className="py-1.5 pr-3 whitespace-nowrap">{String(t.created_at ?? "").slice(0, 19)}</td>
+                    <td className="py-1.5 pr-3 font-mono">{String(t.user_id ?? "").slice(0, 8)}</td>
+                    <td className="py-1.5 pr-3">
+                      <div className="font-medium text-gray-900 dark:text-gray-100">{String(t.user_name ?? "")}</div>
+                      <div className="text-gray-400 text-[10px]">{String(t.user_email ?? "")}</div>
+                    </td>
+                    <td className="py-1.5 pr-3">
+                      <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                        t.gateway === "stripe" ? "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400"
+                        : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                      }`}>
+                        {String(t.gateway ?? "")}
+                      </span>
+                    </td>
+                    <td className="py-1.5 pr-3">{String(t.event_type ?? "")}</td>
+                    <td className="py-1.5 pr-3">
+                      {(() => {
+                        const evt = String(t.event_type ?? "");
+                        const isUser = evt.startsWith("user_") || evt === "upgrade";
+                        return (
+                          <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                            isUser
+                              ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400"
+                              : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400"
+                          }`}>
+                            {isUser ? "User" : "Webhook"}
+                          </span>
+                        );
+                      })()}
+                    </td>
+                    <td className="py-1.5 pr-3">{t.amount ? `${t.currency} ${t.amount}` : "\u2014"}</td>
+                    <td className="py-1.5 pr-3">{t.tier_before && t.tier_after ? `${t.tier_before} \u2192 ${t.tier_after}` : "\u2014"}</td>
+                    <td className={`py-1.5 pr-3 font-medium ${statusColor(String(t.status ?? ""))}`}>{String(t.status ?? "")}</td>
+                    <td className="py-1.5">
+                      <button
+                        onClick={() => setExpanded(isExpanded ? null : tid)}
+                        className="text-indigo-600 dark:text-indigo-400 hover:underline"
+                      >
+                        {isExpanded ? "Hide" : "View"}
+                      </button>
+                      {isExpanded && !!t.raw_payload && (
+                        <pre className="mt-1 text-[10px] bg-gray-50 dark:bg-gray-900 rounded p-2 max-h-40 overflow-auto whitespace-pre-wrap break-all">
+                          {(() => { try { return JSON.stringify(JSON.parse(String(t.raw_payload)), null, 2); } catch { return String(t.raw_payload); } })()}
+                        </pre>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------
 
-type AdminTab = "users" | "audit" | "observability";
+type AdminTab =
+  | "users"
+  | "audit"
+  | "observability"
+  | "maintenance"
+  | "transactions"
+  | "scheduler";
 
 export default function AdminPage() {
   const [tab, setTab] =
@@ -890,10 +1815,23 @@ export default function AdminPage() {
               id: "observability",
               label: "LLM Observability",
             },
+            {
+              id: "maintenance",
+              label: "Maintenance",
+            },
+            {
+              id: "transactions",
+              label: "Transactions",
+            },
+            {
+              id: "scheduler",
+              label: "Scheduler",
+            },
           ] as const
         ).map((t) => (
           <button
             key={t.id}
+            data-testid={`admin-tab-${t.id}`}
             onClick={() => setTab(t.id)}
             className={`
               whitespace-nowrap px-3 py-2 text-sm
@@ -917,6 +1855,13 @@ export default function AdminPage() {
         {tab === "observability" && (
           <ObservabilityTab />
         )}
+        {tab === "maintenance" && (
+          <MaintenanceTab />
+        )}
+        {tab === "transactions" && (
+          <TransactionsTab />
+        )}
+        {tab === "scheduler" && <SchedulerTab />}
       </div>
     </div>
   );

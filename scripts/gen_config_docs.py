@@ -21,19 +21,16 @@ import os  # noqa: E402
 
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 os.environ.setdefault(
-    "JWT_SECRET_KEY", "docgen-placeholder-key-not-real"
+    "JWT_SECRET_KEY",
+    "docgen-placeholder-key-not-real-xxx",
 )
 
 
 def _type_name(annotation) -> str:
     """Human-readable type name."""
-    name = getattr(
-        annotation, "__name__", str(annotation)
-    )
+    name = getattr(annotation, "__name__", str(annotation))
     return (
-        name.replace("typing.", "")
-        .replace("<class '", "")
-        .replace("'>", "")
+        name.replace("typing.", "").replace("<class '", "").replace("'>", "")
     )
 
 
@@ -94,9 +91,7 @@ def _generate() -> str:
         ftype = _type_name(info.annotation)
 
         # Mask secrets in defaults.
-        if default == "" and (
-            "key" in name or "secret" in name
-        ):
+        if default == "" and ("key" in name or "secret" in name):
             default_str = "*(empty — required)*"
         elif isinstance(default, str) and len(default) > 50:
             default_str = f"`{default[:40]}…`"
@@ -104,11 +99,13 @@ def _generate() -> str:
             default_str = f"`{default}`"
 
         cat = _categorise(name)
-        categorised.setdefault(cat, []).append({
-            "env_var": env_var,
-            "type": ftype,
-            "default": default_str,
-        })
+        categorised.setdefault(cat, []).append(
+            {
+                "env_var": env_var,
+                "type": ftype,
+                "default": default_str,
+            }
+        )
 
     # Render tables by category.
     order = [
@@ -131,12 +128,8 @@ def _generate() -> str:
         if not items:
             continue
         lines.append(f"## {cat}\n")
-        lines.append(
-            "| Variable | Type | Default |"
-        )
-        lines.append(
-            "|----------|------|---------|"
-        )
+        lines.append("| Variable | Type | Default |")
+        lines.append("|----------|------|---------|")
         for item in items:
             lines.append(
                 f"| `{item['env_var']}` "
@@ -146,9 +139,7 @@ def _generate() -> str:
             total += 1
         lines.append("")
 
-    lines.append(
-        f"---\n\n*{total} configuration fields total.*\n"
-    )
+    lines.append(f"---\n\n*{total} configuration fields total.*\n")
     return "\n".join(lines)
 
 
@@ -159,9 +150,7 @@ else:
         import mkdocs_gen_files  # noqa: F401
 
         content = _generate()
-        with mkdocs_gen_files.open(
-            "backend/config-reference.md", "w"
-        ) as f:
+        with mkdocs_gen_files.open("backend/config-reference.md", "w") as f:
             f.write(content)
     except ImportError:
         pass

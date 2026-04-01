@@ -45,7 +45,7 @@ def register(router: APIRouter) -> None:
     """
 
     @router.get("/auth/me", response_model=UserResponse, tags=["profile"])
-    def get_me(
+    async def get_me(
         current_user: UserContext = Depends(get_current_user),
     ) -> UserResponse:
         """Return the authenticated user's own profile.
@@ -60,13 +60,13 @@ def register(router: APIRouter) -> None:
             HTTPException: 404 if the user record is not found.
         """
         repo = _helpers._get_repo()
-        user = repo.get_by_id(current_user.user_id)
+        user = await repo.get_by_id(current_user.user_id)
         if user is None:
             raise HTTPException(status_code=404, detail="User not found")
         return _helpers._user_to_response(user)
 
     @router.patch("/auth/me", response_model=UserResponse, tags=["profile"])
-    def patch_me(
+    async def patch_me(
         body: ProfileUpdateRequest,
         current_user: UserContext = Depends(get_current_user),
     ) -> UserResponse:
@@ -83,7 +83,7 @@ def register(router: APIRouter) -> None:
             HTTPException: 404 if the user record is not found.
         """
         repo = _helpers._get_repo()
-        if repo.get_by_id(current_user.user_id) is None:
+        if await repo.get_by_id(current_user.user_id) is None:
             raise HTTPException(status_code=404, detail="User not found")
         updates: Dict[str, object] = {}
         if body.full_name is not None:
@@ -91,9 +91,13 @@ def register(router: APIRouter) -> None:
         if body.avatar_url is not None:
             updates["profile_picture_url"] = body.avatar_url
         if not updates:
-            user = repo.get_by_id(current_user.user_id)
+            user = await repo.get_by_id(
+                current_user.user_id,
+            )
             return _helpers._user_to_response(user)
-        updated = repo.update(current_user.user_id, updates)
+        updated = await repo.update(
+            current_user.user_id, updates,
+        )
         logger.info("Profile updated for user_id=%s", current_user.user_id)
         return _helpers._user_to_response(updated)
 
@@ -174,7 +178,10 @@ def register(router: APIRouter) -> None:
         dest.write_bytes(data)
         avatar_url = "/avatars/{}.{}".format(resolved_id, ext)
         repo = _helpers._get_repo()
-        repo.update(resolved_id, {"profile_picture_url": avatar_url})
+        await repo.update(
+            resolved_id,
+            {"profile_picture_url": avatar_url},
+        )
         logger.info(
             "Avatar uploaded for user_id=%s url=%s", resolved_id, avatar_url
         )

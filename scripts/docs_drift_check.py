@@ -26,7 +26,8 @@ import os  # noqa: E402
 
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 os.environ.setdefault(
-    "JWT_SECRET_KEY", "driftcheck-placeholder-not-real"
+    "JWT_SECRET_KEY",
+    "driftcheck-placeholder-not-real-xx",
 )
 
 # ANSI colours.
@@ -62,10 +63,7 @@ def _extract_code_config() -> set[str]:
     """Extract all Settings field names (uppercased)."""
     from config import Settings
 
-    return {
-        name.upper()
-        for name in Settings.model_fields
-    }
+    return {name.upper() for name in Settings.model_fields}
 
 
 def _extract_doc_routes(doc_path: Path) -> set[str]:
@@ -77,8 +75,7 @@ def _extract_doc_routes(doc_path: Path) -> set[str]:
     # Also match backtick-wrapped: `POST` | `/v1/chat`
     routes = set()
     for m in re.finditer(
-        r"(GET|POST|PUT|PATCH|DELETE)\s*[|`\s]*"
-        r"(/[^\s|`]+)",
+        r"(GET|POST|PUT|PATCH|DELETE)\s*[|`\s]*" r"(/[^\s|`]+)",
         text,
     ):
         method = m.group(1)
@@ -95,16 +92,27 @@ def _extract_doc_config(doc_path: Path) -> set[str]:
     # Match backtick-wrapped uppercase names.
     # Filter out log level names and HTTP codes.
     _skip = {
-        "DEBUG", "INFO", "WARNING", "ERROR",
-        "CRITICAL", "TRUE", "FALSE", "NONE",
-        "HTTP", "HTTPS", "POST", "GET", "PUT",
-        "PATCH", "DELETE", "HEAD", "OPTIONS",
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL",
+        "TRUE",
+        "FALSE",
+        "NONE",
+        "HTTP",
+        "HTTPS",
+        "POST",
+        "GET",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "HEAD",
+        "OPTIONS",
     }
     return {
         m.group(1)
-        for m in re.finditer(
-            r"`([A-Z][A-Z0-9_]+)`", text
-        )
+        for m in re.finditer(r"`([A-Z][A-Z0-9_]+)`", text)
         if m.group(1) not in _skip
         and "_" in m.group(1)
         and len(m.group(1)) > 5
@@ -113,10 +121,7 @@ def _extract_doc_config(doc_path: Path) -> set[str]:
 
 def main() -> int:
     """Run drift checks and print report."""
-    _out(
-        f"\n{Y}Documentation Drift Check{N}\n"
-        f"{'─' * 56}\n"
-    )
+    _out(f"\n{Y}Documentation Drift Check{N}\n" f"{'─' * 56}\n")
     issues = 0
 
     # ── API drift ──────────────────────────────
@@ -179,10 +184,7 @@ def main() -> int:
         _out(f"{G}No drift detected.{N}\n\n")
         return 0
     else:
-        _out(
-            f"{R}{issues} issue(s) detected.{N} "
-            f"Update docs or code.\n\n"
-        )
+        _out(f"{R}{issues} issue(s) detected.{N} " f"Update docs or code.\n\n")
         return 1
 
 

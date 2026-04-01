@@ -65,17 +65,6 @@ class TestDefaultPaths:
 
         assert paths.LOGS_DIR == paths.APP_HOME / "logs"
 
-    def test_charts_dirs(self):
-        """Chart dirs are under APP_HOME/charts."""
-        import paths
-
-        assert paths.CHARTS_ANALYSIS_DIR == (
-            paths.APP_HOME / "charts" / "analysis"
-        )
-        assert paths.CHARTS_FORECASTS_DIR == (
-            paths.APP_HOME / "charts" / "forecasts"
-        )
-
     def test_avatars_dir(self):
         """AVATARS_DIR is under DATA_DIR."""
         import paths
@@ -151,12 +140,8 @@ class TestEnsureDirs:
             "data/iceberg/warehouse",
             "data/cache",
             "data/raw",
-            "data/forecasts",
             "data/processed",
-            "data/metadata",
             "data/avatars",
-            "charts/analysis",
-            "charts/forecasts",
             "logs",
         ]
         for rel in expected:

@@ -11,7 +11,7 @@ Classes
 
 from dataclasses import dataclass, field
 
-MAX_ITERATIONS: int = 15
+MAX_ITERATIONS: int = 25
 
 
 @dataclass

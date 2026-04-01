@@ -26,6 +26,8 @@ import {
 } from "@/components/insights/InsightsTable";
 import { InsightsFilters } from "@/components/insights/InsightsFilters";
 import { PlotlyChart } from "@/components/charts/PlotlyChart";
+import { CorrelationHeatmap } from "@/components/charts/CorrelationHeatmap";
+import { usePortfolio } from "@/hooks/usePortfolio";
 import { WidgetSkeleton } from "@/components/widgets/WidgetSkeleton";
 import { WidgetError } from "@/components/widgets/WidgetError";
 import type {
@@ -457,7 +459,7 @@ function ScreenerTab() {
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
-    return <WidgetError message={data.error} />;
+    return <WidgetError message={data.error} data-testid="insights-error" />;
 
   return (
     <div className="space-y-4">
@@ -500,7 +502,7 @@ function TargetsTab() {
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
-    return <WidgetError message={data.error} />;
+    return <WidgetError message={data.error} data-testid="insights-error" />;
 
   return (
     <div className="space-y-4">
@@ -544,7 +546,7 @@ function DividendsTab() {
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
-    return <WidgetError message={data.error} />;
+    return <WidgetError message={data.error} data-testid="insights-error" />;
 
   return (
     <div className="space-y-4">
@@ -587,7 +589,7 @@ function RiskTab() {
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
-    return <WidgetError message={data.error} />;
+    return <WidgetError message={data.error} data-testid="insights-error" />;
 
   return (
     <div className="space-y-4">
@@ -616,7 +618,7 @@ function SectorsTab() {
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
-    return <WidgetError message={data.error} />;
+    return <WidgetError message={data.error} data-testid="insights-error" />;
 
   const rows = data.value?.rows ?? [];
 
@@ -649,6 +651,7 @@ function SectorsTab() {
         onMarketChange={setMarket}
       />
       {rows.length > 0 && (
+        <div data-testid="insights-chart">
         <PlotlyChart
           data={chartData}
           layout={{
@@ -665,6 +668,7 @@ function SectorsTab() {
           }}
           height={320}
         />
+        </div>
       )}
       <InsightsTable<SectorRow>
         columns={sectorCols}
@@ -680,69 +684,129 @@ function SectorsTab() {
 
 function CorrelationTab() {
   const [period, setPeriod] = useState("1y");
-  const [market, setMarket] = useState("all");
-  const data = useCorrelation(period, market);
+  const data = useCorrelation(
+    period, "all", "portfolio",
+  );
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
-    return <WidgetError message={data.error} />;
+    return (
+      <WidgetError
+        message={data.error}
+        data-testid="insights-error"
+      />
+    );
 
   const tickers = data.value?.tickers ?? [];
   const matrix = data.value?.matrix ?? [];
 
-  const chartData: Plotly.Data[] = [
-    {
-      type: "heatmap",
-      z: matrix,
-      x: tickers,
-      y: tickers,
-      texttemplate: "%{z:.2f}",
-      colorscale: "RdBu",
-      zmin: -1,
-      zmax: 1,
-      reversescale: true,
-    },
-  ];
+  const periodLabel = period === "1y"
+    ? "1 Year"
+    : period === "3y"
+      ? "3 Years"
+      : "All Time";
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <select
-          value={period}
-          onChange={(e) =>
-            setPeriod(e.target.value)
-          }
-          className="rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2.5 py-1.5 text-sm text-gray-700 dark:text-gray-200"
+      {/* Period filter */}
+      <div className="flex items-center gap-3">
+        <div
+          className="flex gap-0.5 rounded-[10px]
+            border border-gray-200 bg-gray-50
+            p-[3px] dark:border-gray-700
+            dark:bg-gray-800"
         >
-          <option value="1y">1 Year</option>
-          <option value="3y">3 Years</option>
-          <option value="all">All Time</option>
-        </select>
-        <InsightsFilters
-          market={market}
-          onMarketChange={setMarket}
-        />
+          {(
+            [
+              { key: "1y", label: "1 Year" },
+              { key: "3y", label: "3 Years" },
+              { key: "all", label: "All Time" },
+            ] as const
+          ).map((p) => (
+            <button
+              key={p.key}
+              onClick={() => setPeriod(p.key)}
+              className={`
+                rounded-lg px-3.5 py-[7px]
+                text-[13px] font-semibold
+                transition-all
+                ${
+                  period === p.key
+                    ? "bg-white text-indigo-600 shadow-sm dark:bg-gray-700 dark:text-indigo-400"
+                    : "text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
+                }
+              `}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <span
+          className="font-mono text-xs text-gray-400
+            dark:text-gray-500"
+        >
+          {tickers.length} portfolio stock
+          {tickers.length !== 1 ? "s" : ""}
+        </span>
       </div>
 
       {tickers.length >= 2 ? (
-        <PlotlyChart
-          data={chartData}
-          layout={{
-            title: {
-              text: `Daily Returns Correlation (${period.toUpperCase()})`,
-              font: { size: 14 },
-            },
-            xaxis: { tickangle: -45 },
-          }}
-          height={Math.max(
-            400,
-            tickers.length * 40 + 100,
-          )}
-        />
+        <div
+          data-testid="insights-chart"
+          className="rounded-2xl border border-gray-200
+            bg-white p-4 dark:border-gray-800
+            dark:bg-gray-900/80"
+        >
+          <CorrelationHeatmap
+            tickers={tickers}
+            matrix={matrix}
+            title={`Portfolio Correlation — Daily Returns (${periodLabel})`}
+          />
+        </div>
       ) : (
-        <div className="py-12 text-center text-gray-400">
-          Need at least 2 tickers with data for
-          correlation
+        <div
+          data-testid="insights-empty"
+          className="rounded-2xl border border-gray-200
+            bg-white p-12 text-center
+            dark:border-gray-800 dark:bg-gray-900/80"
+        >
+          <div
+            className="mx-auto mb-4 flex h-14 w-14
+              items-center justify-center rounded-full
+              bg-indigo-50 text-indigo-500
+              dark:bg-indigo-500/12
+              dark:text-indigo-400"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-6 w-6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect
+                x="3" y="3"
+                width="18" height="18"
+                rx="2"
+              />
+              <path d="M3 9h18M9 21V9" />
+            </svg>
+          </div>
+          <p
+            className="text-sm font-semibold
+              text-gray-700 dark:text-gray-300"
+          >
+            Not enough portfolio stocks
+          </p>
+          <p
+            className="mt-1 text-xs text-gray-400
+              dark:text-gray-500"
+          >
+            Add at least 2 stocks to your portfolio
+            to see correlation analysis.
+          </p>
         </div>
       )}
     </div>
@@ -753,23 +817,49 @@ function QuarterlyTab() {
   const [stmtType, setStmtType] =
     useState("income");
   const [market, setMarket] = useState("all");
-  const [sector, setSector] = useState("all");
+  const [sector, setSector] =
+    useState("portfolio");
   const [ticker, setTicker] = useState("all");
   const data = useQuarterly(stmtType);
+  const portfolioData = usePortfolio();
+
+  const portfolioTickerSet = useMemo(
+    () =>
+      new Set(
+        portfolioData.holdings.map(
+          (h) => h.ticker,
+        ),
+      ),
+    [portfolioData.holdings],
+  );
 
   const filtered = useMemo(() => {
     if (!data.value?.rows) return [];
+    let rows = data.value.rows;
+    // Portfolio filter — applied before other
+    // filters so it acts like a sector
+    if (sector === "portfolio") {
+      rows = rows.filter((r) =>
+        portfolioTickerSet.has(r.ticker),
+      );
+    }
     return applyFilters(
-      data.value.rows,
+      rows,
       market,
-      sector,
+      sector === "portfolio" ? "all" : sector,
       ticker,
     );
-  }, [data.value, market, sector, ticker]);
+  }, [
+    data.value,
+    market,
+    sector,
+    ticker,
+    portfolioTickerSet,
+  ]);
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
-    return <WidgetError message={data.error} />;
+    return <WidgetError message={data.error} data-testid="insights-error" />;
 
   // Dynamic columns based on statement type.
   const baseCols: Column<QuarterlyRow>[] = [
@@ -932,6 +1022,7 @@ function QuarterlyTab() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <select
+          data-testid="insights-statement-type"
           value={stmtType}
           onChange={(e) =>
             setStmtType(e.target.value)
@@ -947,7 +1038,10 @@ function QuarterlyTab() {
           onMarketChange={setMarket}
           sector={sector}
           onSectorChange={setSector}
-          sectors={data.value?.sectors ?? []}
+          sectors={[
+            "portfolio",
+            ...(data.value?.sectors ?? []),
+          ]}
           ticker={ticker}
           onTickerChange={setTicker}
           tickers={data.value?.tickers ?? []}
@@ -955,6 +1049,7 @@ function QuarterlyTab() {
       </div>
 
       {chartData.length > 0 && (
+        <div data-testid="insights-chart">
         <PlotlyChart
           data={chartData}
           layout={{
@@ -970,6 +1065,7 @@ function QuarterlyTab() {
           }}
           height={360}
         />
+        </div>
       )}
 
       <InsightsTable<QuarterlyRow>
@@ -1018,6 +1114,7 @@ export default function InsightsPage() {
         {TABS.map((tab) => (
           <button
             key={tab.id}
+            data-testid={`insights-tab-${tab.id}`}
             onClick={() => setActiveTab(tab.id)}
             className={`
               whitespace-nowrap px-3 py-2 text-sm

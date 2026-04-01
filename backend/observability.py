@@ -93,6 +93,14 @@ class ObservabilityCollector:
         self._pending_events: list[dict] = []
         self._flush_timer: threading.Timer | None = None
 
+        # Per-model token tracking (in-memory).
+        self._prompt_tokens_by_model: (
+            dict[str, int]
+        ) = {}
+        self._completion_tokens_by_model: (
+            dict[str, int]
+        ) = {}
+
         # Per-tier health tracking.
         self._failures_by_model: dict[str, deque] = {}
         self._successes_by_model: dict[str, deque] = {}
@@ -135,13 +143,17 @@ class ObservabilityCollector:
         try:
             totals = self._repo.get_usage_totals()
             with self._lock:
-                self._cascade_count = totals["cascade_count"]
-                self._compression_count = totals["compression_count"]
-                # Seed requests_total into a
-                # synthetic "_lifetime" key.
+                self._cascade_count = (
+                    totals["cascade_count"]
+                )
+                self._compression_count = (
+                    totals["compression_count"]
+                )
                 rt = totals["requests_total"]
                 if rt > 0:
-                    self._requests_by_model["_lifetime"] = rt
+                    self._requests_by_model[
+                        "_lifetime"
+                    ] = rt
             _logger.info(
                 "Seeded from Iceberg: %d requests,"
                 " %d cascades, %d compressions.",
@@ -151,7 +163,75 @@ class ObservabilityCollector:
             )
         except Exception:
             _logger.warning(
-                "Failed to seed from Iceberg" " — starting from zero.",
+                "Failed to seed from Iceberg"
+                " — starting from zero.",
+                exc_info=True,
+            )
+
+        # Seed per-model request + token counts
+        # from today's Iceberg data.
+        try:
+            from pyiceberg.expressions import (
+                GreaterThanOrEqual,
+            )
+
+            today = (
+                date.today().isoformat()
+            )
+            cat = self._repo._get_catalog()
+            tbl = cat.load_table("stocks.llm_usage")
+            df = tbl.scan(
+                row_filter=GreaterThanOrEqual(
+                    "request_date", today,
+                ),
+                selected_fields=[
+                    "model",
+                    "prompt_tokens",
+                    "completion_tokens",
+                ],
+            ).to_pandas()
+            if df.empty:
+                return
+            with self._lock:
+                for model, grp in df.groupby("model"):
+                    if model == "test-model":
+                        continue
+                    reqs = len(grp)
+                    pt = int(
+                        grp["prompt_tokens"].sum()
+                    )
+                    ct = int(
+                        grp[
+                            "completion_tokens"
+                        ].sum()
+                    )
+                    # Only seed if not already tracked
+                    if model not in (
+                        self._requests_by_model
+                    ):
+                        self._requests_by_model[
+                            model
+                        ] = reqs
+                    if model not in (
+                        self._prompt_tokens_by_model
+                    ):
+                        self._prompt_tokens_by_model[
+                            model
+                        ] = pt
+                    ct_map = (
+                        self
+                        ._completion_tokens_by_model
+                    )
+                    if model not in ct_map:
+                        ct_map[model] = ct
+            _logger.info(
+                "Seeded per-model tokens for %d "
+                "models from Iceberg",
+                len(df["model"].unique()),
+            )
+        except Exception:
+            _logger.debug(
+                "Per-model token seed failed",
                 exc_info=True,
             )
 
@@ -231,6 +311,22 @@ class ObservabilityCollector:
             if model not in self._requests_minute:
                 self._requests_minute[model] = deque()
             self._requests_minute[model].append(now)
+
+            # Accumulate token counts.
+            if prompt_tokens:
+                self._prompt_tokens_by_model[model] = (
+                    self._prompt_tokens_by_model
+                    .get(model, 0)
+                    + prompt_tokens
+                )
+            if completion_tokens:
+                self._completion_tokens_by_model[
+                    model
+                ] = (
+                    self._completion_tokens_by_model
+                    .get(model, 0)
+                    + completion_tokens
+                )
 
             # Track success for health assessment.
             if model not in self._successes_by_model:
@@ -657,11 +753,35 @@ class ObservabilityCollector:
                 for k, v in (self._requests_by_model.items())
                 if k != "_lifetime"
             }
+            prompt_by = dict(
+                self._prompt_tokens_by_model,
+            )
+            completion_by = dict(
+                self._completion_tokens_by_model,
+            )
+            total_prompt = sum(prompt_by.values())
+            total_completion = sum(
+                completion_by.values(),
+            )
+
             return {
                 "requests_total": total,
                 "requests_by_model": by_model,
                 "cascade_count": self._cascade_count,
-                "compression_count": (self._compression_count),
+                "compression_count": (
+                    self._compression_count
+                ),
                 "cascade_log": log_tail,
                 "rpm_by_model": rpm,
+                "prompt_tokens_by_model": prompt_by,
+                "completion_tokens_by_model": (
+                    completion_by
+                ),
+                "total_prompt_tokens": total_prompt,
+                "total_completion_tokens": (
+                    total_completion
+                ),
+                "total_tokens": (
+                    total_prompt + total_completion
+                ),
             }

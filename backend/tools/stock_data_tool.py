@@ -344,8 +344,15 @@ def fetch_multiple_stocks(tickers: str, period: str = "10y") -> str:
     results = []
     full_count = delta_count = skip_count = error_count = 0
     for ticker in ticker_list:
-        result = fetch_stock_data.invoke({"ticker": ticker, "period": period})
+        result = fetch_stock_data.invoke(
+            {"ticker": ticker, "period": period},
+        )
+        # Also fetch company info (sector, price, etc.)
+        info_result = get_stock_info.invoke(
+            {"ticker": ticker},
+        )
         results.append(f"  {ticker}: {result}")
+        results.append(f"  {ticker} info: {info_result}")
         if "Full fetch" in result:
             full_count += 1
         elif "Delta fetch" in result:
@@ -355,7 +362,8 @@ def fetch_multiple_stocks(tickers: str, period: str = "10y") -> str:
         else:
             skip_count += 1
     lines = [
-        f"Batch fetch complete for {len(ticker_list)} tickers:",
+        f"Batch fetch complete for {len(ticker_list)} "
+        f"tickers:",
         *results,
         f"\nSummary: {full_count} full, "
         f"{delta_count} delta, {skip_count} skipped, "

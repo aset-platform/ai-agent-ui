@@ -1,0 +1,44 @@
+# ── Dev overrides — hot-reload + source mounts ───────
+# Auto-loaded by Docker Compose alongside docker-compose.yml.
+# To run production-like (no hot-reload):
+#   docker compose -f docker-compose.yml up -d
+
+services:
+  backend:
+    volumes:
+      - ./backend:/app/backend
+      - ./auth:/app/auth
+      - ./stocks:/app/stocks
+      - ./scripts:/app/scripts
+      - ./dashboard:/app/dashboard
+      - ./fixtures:/app/fixtures
+      - ${AI_AGENT_UI_HOME:-~/.ai-agent-ui}:${AI_AGENT_UI_HOME:-/Users/abhay/.ai-agent-ui}
+    command: >
+      uvicorn main:app
+        --host 0.0.0.0 --port 8181
+        --reload
+        --reload-dir /app/backend
+        --reload-dir /app/auth
+        --reload-dir /app/stocks
+
+  docs:
+    volumes:
+      - ./docs:/docs/docs
+      - ./mkdocs.yml:/docs/mkdocs.yml
+
+  # Frontend runs natively on host (not Docker) because
+  # Turbopack's PostCSS sandbox can't resolve lightningcss
+  # native .node addons inside Alpine containers.
+  # Run: cd frontend && npm run dev
+  frontend:
+    profiles: ["native-frontend"]
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      target: deps
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npx next dev --port 3000 --hostname 0.0.0.0
+    environment:
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8181

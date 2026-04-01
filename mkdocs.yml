@@ -29,10 +29,10 @@ theme:
 
 plugins:
   - search
-  - gen-files:
-      scripts:
-        - scripts/gen_api_docs.py
-        - scripts/gen_config_docs.py
+  # gen-files removed — scripts need backend Python
+  # modules unavailable in docs container. Pre-generate
+  # via: python scripts/gen_config_docs.py > docs/backend/config-reference.md
+  #      python scripts/gen_api_docs.py > docs/backend/api-reference.md
 
 markdown_extensions:
   - pymdownx.highlight:
@@ -58,6 +58,7 @@ nav:
       - API Reference (Auto): backend/api-reference.md
       - Auth & Users: backend/auth.md
       - OAuth / SSO: backend/oauth.md
+      - Billing & Subscriptions: backend/billing.md
       - Agents: backend/agents.md
       - Tools: backend/tools.md
       - Configuration: backend/config.md
@@ -70,6 +71,12 @@ nav:
       - Overview: dashboard/overview.md
   - Frontend:
       - Overview: frontend/overview.md
+  - Design:
+      - Sentiment Agent: design/DESIGN-sentiment-agent.md
+      - Dashboard Overhaul: design/DESIGN-dashboard-overhaul.md
+  - Workflow:
+      - Sentiment Agent: workflow/WORKFLOW-sentiment-agent.md
+      - Dashboard Overhaul: workflow/WORKFLOW-dashboard-overhaul.md
   - Development:
       - How to Run: dev/how-to-run.md
       - E2E Testing: dev/e2e-testing.md

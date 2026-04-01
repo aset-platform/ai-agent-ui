@@ -4,7 +4,7 @@
 
 ### Still uses Plotly (`plotly.js-basic-dist`)
 - **Forecast chart**: Line + confidence band fill (`buildForecastChart` in `chartBuilders.ts`)
-- **Correlation heatmap**: `buildCorrelationHeatmap` in insights + compare
+- **Correlation heatmap**: Migrated to ECharts (see `shared/architecture/echarts-correlation`)
 - **Insights bar charts**: Sector averages in insights page
 - **Comparison chart**: Normalized price lines
 

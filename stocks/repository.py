@@ -48,13 +48,14 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import pandas as pd
 import pyarrow as pa
@@ -63,7 +64,6 @@ from pyiceberg.exceptions import CommitFailedException
 _logger = logging.getLogger(__name__)
 
 _NAMESPACE = "stocks"
-_REGISTRY = f"{_NAMESPACE}.registry"
 _COMPANY_INFO = f"{_NAMESPACE}.company_info"
 _OHLCV = f"{_NAMESPACE}.ohlcv"
 _DIVIDENDS = f"{_NAMESPACE}.dividends"
@@ -74,6 +74,66 @@ _FORECASTS = f"{_NAMESPACE}.forecasts"
 _QUARTERLY_RESULTS = f"{_NAMESPACE}.quarterly_results"
 _CHAT_AUDIT_LOG = f"{_NAMESPACE}.chat_audit_log"
 _PORTFOLIO = f"{_NAMESPACE}.portfolio_transactions"
+_SCHEDULER_RUNS = f"{_NAMESPACE}.scheduler_runs"
+
+
+def _run_pg(async_fn):
+    """Run an async PG function from sync context.
+
+    Accepts an async *callable* (not a coroutine) so it can
+    be safely invoked in a fresh event loop with a fresh
+    engine — avoiding the 'Future attached to a different
+    loop' error from reusing the cached asyncpg pool.
+
+    Usage::
+
+        def get_all_registry(self):
+            async def _call():
+                async with _pg_session() as s:
+                    return await pg_get(s)
+            return _run_pg(_call)
+    """
+    import asyncio
+    import concurrent.futures
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+        ) as pool:
+            return pool.submit(
+                asyncio.run, async_fn(),
+            ).result()
+    return asyncio.run(async_fn())
+
+
+def _pg_session():
+    """Create a one-shot async session (fresh engine).
+
+    Returns an async context manager. Used inside _run_pg
+    callables to avoid sharing the cached engine across
+    event loops.
+    """
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+    from config import get_settings
+
+    engine = create_async_engine(
+        get_settings().database_url,
+        pool_pre_ping=True,
+    )
+    factory = async_sessionmaker(
+        engine, class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    return factory()
 
 
 def _now_utc() -> datetime:
@@ -88,7 +148,7 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _to_date(value: Any) -> Optional[date]:
+def _to_date(value: Any) -> date | None:
     """Coerce a value to a :class:`datetime.date`, or return ``None``.
 
     Args:
@@ -109,7 +169,7 @@ def _to_date(value: Any) -> Optional[date]:
         return None
 
 
-def _safe_float(value: Any) -> Optional[float]:
+def _safe_float(value: Any) -> float | None:
     """Convert *value* to float, returning ``None`` on failure or NaN/inf.
 
     Args:
@@ -125,7 +185,7 @@ def _safe_float(value: Any) -> Optional[float]:
         return None
 
 
-def _safe_int(value: Any) -> Optional[int]:
+def _safe_int(value: Any) -> int | None:
     """Convert *value* to int, returning ``None`` on failure.
 
     Args:
@@ -281,40 +341,28 @@ class StockRepository:
             tbl = self._load_table(identifier)
             if identifier in self._dirty_tables:
                 tbl.refresh()
-                self._dirty_tables.discard(
-                    identifier
-                )
+                self._dirty_tables.discard(identifier)
             scan_kwargs: dict[str, Any] = {
                 "row_filter": In(
-                    "ticker", tickers,
+                    "ticker",
+                    tickers,
                 ),
             }
             if selected_fields:
-                scan_kwargs["selected_fields"] = (
-                    selected_fields
-                )
-            return tbl.scan(
-                **scan_kwargs
-            ).to_pandas()
+                scan_kwargs["selected_fields"] = selected_fields
+            return tbl.scan(**scan_kwargs).to_pandas()
         except Exception as exc:
             _logger.warning(
-                "Batch scan failed for %s (%s);"
-                " falling back to full scan.",
+                "Batch scan failed for %s (%s);" " falling back to full scan.",
                 identifier,
                 exc,
             )
             df = self._table_to_df(identifier)
             if df.empty:
                 return df
-            filtered = df[
-                df["ticker"].isin(tickers)
-            ].copy()
+            filtered = df[df["ticker"].isin(tickers)].copy()
             if selected_fields:
-                cols = [
-                    c
-                    for c in selected_fields
-                    if c in filtered.columns
-                ]
+                cols = [c for c in selected_fields if c in filtered.columns]
                 return filtered[cols]
             return filtered
 
@@ -339,9 +387,7 @@ class StockRepository:
         )
         if df.empty:
             return df
-        return df.sort_values(
-            ["ticker", "date"]
-        ).reset_index(drop=True)
+        return df.sort_values(["ticker", "date"]).reset_index(drop=True)
 
     def get_technical_indicators_batch(
         self,
@@ -363,9 +409,7 @@ class StockRepository:
         )
         if df.empty:
             return df
-        return df.sort_values(
-            ["ticker", "date"]
-        ).reset_index(drop=True)
+        return df.sort_values(["ticker", "date"]).reset_index(drop=True)
 
     def get_company_info_batch(
         self,
@@ -391,7 +435,8 @@ class StockRepository:
         if "fetched_at" in df.columns:
             df = df.sort_values("fetched_at")
         return df.drop_duplicates(
-            subset=["ticker"], keep="last",
+            subset=["ticker"],
+            keep="last",
         ).reset_index(drop=True)
 
     def get_analysis_summary_batch(
@@ -418,7 +463,8 @@ class StockRepository:
         if "analysis_date" in df.columns:
             df = df.sort_values("analysis_date")
         return df.drop_duplicates(
-            subset=["ticker"], keep="last",
+            subset=["ticker"],
+            keep="last",
         ).reset_index(drop=True)
 
     def _scan_two_filters(
@@ -467,7 +513,7 @@ class StockRepository:
 
     def _load_table_and_scan(
         self, identifier: str
-    ) -> Tuple[Any, pd.DataFrame]:
+    ) -> tuple[Any, pd.DataFrame]:
         """Load a table and materialise its contents, returning both.
 
         Avoids the double load that occurs when code calls ``_table_to_df()``
@@ -750,7 +796,8 @@ class StockRepository:
     }
 
     def _invalidate_cache(
-        self, identifier: str,
+        self,
+        identifier: str,
     ) -> None:
         """Invalidate Redis cache keys after write.
 
@@ -768,7 +815,8 @@ class StockRepository:
             return
         cache = get_cache()
         patterns = self._CACHE_INVALIDATION_MAP.get(
-            identifier, [],
+            identifier,
+            [],
         )
         for pattern in patterns:
             if "*" in pattern:
@@ -847,179 +895,9 @@ class StockRepository:
         """
         self._delete_rows(identifier, delete_filter)
 
-    # ------------------------------------------------------------------
-    # Registry
-    # ------------------------------------------------------------------
-
-    def upsert_registry(
-        self,
-        ticker: str,
-        last_fetch_date: date,
-        total_rows: int,
-        date_range_start: date,
-        date_range_end: date,
-        market: str,
-    ) -> None:
-        """Insert or update the registry row for *ticker*.
-
-        Uses copy-on-write: reads full table, updates or appends the row,
-        then overwrites.  Loads the table object only once to avoid a
-        second catalog round-trip.
-
-        Args:
-            ticker: Stock ticker symbol (already uppercased).
-            last_fetch_date: Date of the most recent
-                successful Yahoo Finance pull.
-            total_rows: Total OHLCV row count for this ticker.
-            date_range_start: Earliest trading date in OHLCV.
-            date_range_end: Most recent trading date in OHLCV.
-            market: ``"india"`` for .NS/.BO tickers, ``"us"`` otherwise.
-        """
-        now = _now_utc()
-        # Fix #2: load table once; scan from the same object
-        tbl, df = self._load_table_and_scan(_REGISTRY)
-
-        new_row = {
-            "ticker": ticker,
-            "last_fetch_date": last_fetch_date,
-            "total_rows": int(total_rows),
-            "date_range_start": date_range_start,
-            "date_range_end": date_range_end,
-            "market": market,
-            "created_at": now,
-            "updated_at": now,
-        }
-
-        if not df.empty and ticker in df["ticker"].values:
-            created_at = df.loc[df["ticker"] == ticker, "created_at"].iloc[0]
-            new_row["created_at"] = created_at
-            df = df[df["ticker"] != ticker]
-
-        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-
-        arrow_tbl = pa.Table.from_pandas(
-            df,
-            schema=pa.schema(
-                [
-                    pa.field("ticker", pa.string()),
-                    pa.field("last_fetch_date", pa.date32()),
-                    pa.field("total_rows", pa.int64()),
-                    pa.field("date_range_start", pa.date32()),
-                    pa.field("date_range_end", pa.date32()),
-                    pa.field("market", pa.string()),
-                    pa.field("created_at", pa.timestamp("us")),
-                    pa.field("updated_at", pa.timestamp("us")),
-                ]
-            ),
-            preserve_index=False,
-        )
-
-        self._overwrite_table(_REGISTRY, arrow_tbl)
-        _logger.debug("Registry upserted for %s", ticker)
-
-    def get_registry(self, ticker: Optional[str] = None) -> pd.DataFrame:
-        """Return registry rows, optionally filtered to a single ticker.
-
-        Args:
-            ticker: If provided, return only the row for this ticker using
-                    predicate push-down.  If ``None``, return all rows.
-
-        Returns:
-            pandas DataFrame with registry rows.
-        """
-        if ticker:
-            return self._scan_ticker(_REGISTRY, ticker.upper())
-        return self._table_to_df(_REGISTRY)
-
-    def get_all_registry(self) -> Dict[str, Dict]:
-        """Return the full registry as a dict keyed by ticker symbol.
-
-        Mirrors the shape previously stored in ``stock_registry.json`` so that
-        callers can switch from JSON reads to this method without changing
-        their downstream logic.
-
-        Returns:
-            Dict mapping ticker symbols to metadata dicts with keys:
-            ``ticker``, ``last_fetch_date``, ``total_rows``, ``date_range``
-            (containing ``start`` and ``end``), and ``file_path``.
-        """
-        df = self._table_to_df(_REGISTRY)
-        if df.empty:
-            return {}
-        result: Dict[str, Dict] = {}
-        for row in df.to_dict("records"):
-            ticker = str(row.get("ticker", ""))
-            if not ticker:
-                continue
-            lfd = row.get("last_fetch_date")
-            start = row.get("date_range_start")
-            end = row.get("date_range_end")
-            result[ticker] = {
-                "ticker": ticker,
-                "last_fetch_date": str(lfd)[:10] if lfd else "",
-                "total_rows": (
-                    int(row["total_rows"])
-                    if row.get("total_rows") is not None
-                    else 0
-                ),
-                "date_range": {
-                    "start": str(start)[:10] if start else "",
-                    "end": str(end)[:10] if end else "",
-                },
-                "market": str(row.get("market", "us")),
-                "file_path": str(
-                    Path(__file__).parent.parent
-                    / "data"
-                    / "raw"
-                    / f"{ticker}_raw.parquet"
-                ),
-            }
-        return result
-
-    def check_existing_data(self, ticker: str) -> Optional[Dict]:
-        """Look up a single ticker in the registry.
-
-        Returns a dict matching the legacy JSON shape
-        (with ``last_fetch_date``,
-        ``total_rows``, ``date_range``, ``file_path``) or ``None`` if the
-        ticker is not registered.
-
-        Args:
-            ticker: Stock ticker symbol (already uppercased).
-
-        Returns:
-            Registry entry dict, or ``None``.
-        """
-        df = self._scan_ticker(_REGISTRY, ticker.upper())
-        if df.empty:
-            return None
-        row = df.iloc[0]
-        lfd = row.get("last_fetch_date")
-        start = row.get("date_range_start")
-        end = row.get("date_range_end")
-        return {
-            "ticker": ticker,
-            "last_fetch_date": str(lfd)[:10] if lfd else "",
-            "total_rows": (
-                int(row["total_rows"])
-                if row.get("total_rows") is not None
-                else 0
-            ),
-            "date_range": {
-                "start": str(start)[:10] if start else "",
-                "end": str(end)[:10] if end else "",
-            },
-            "file_path": str(
-                Path(__file__).parent.parent
-                / "data"
-                / "raw"
-                / f"{ticker}_raw.parquet"
-            ),
-        }
-
     def get_latest_company_info_if_fresh(
         self, ticker: str, as_of_date: date
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Return the latest company info snapshot if fetched on *as_of_date*.
 
         Used as a cache check: callers can skip a Yahoo Finance call when the
@@ -1046,6 +924,59 @@ class StockRepository:
             return None
         return latest.to_dict()
 
+    def get_stocks_by_sector(
+        self,
+        sector: str,
+    ) -> pd.DataFrame:
+        """Return latest company info snapshot per ticker
+        for a given sector.
+
+        Uses ``EqualTo("sector", sector)`` predicate push-down
+        where possible, falling back to in-memory filtering.
+
+        Args:
+            sector: Sector name (e.g. ``"Financial Services"``).
+
+        Returns:
+            DataFrame with one row per ticker (latest
+            ``fetched_at``), or empty DataFrame.
+        """
+        try:
+            from pyiceberg.expressions import EqualTo
+
+            tbl = self._load_table(_COMPANY_INFO)
+            if _COMPANY_INFO in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(_COMPANY_INFO)
+            scan = tbl.scan(
+                row_filter=EqualTo("sector", sector),
+            )
+            df = scan.to_pandas()
+        except Exception as exc:
+            _logger.warning(
+                "Sector predicate push-down failed "
+                "for '%s' (%s); falling back.",
+                sector,
+                exc,
+            )
+            df = self._table_to_df(_COMPANY_INFO)
+            if not df.empty:
+                df = df[
+                    df["sector"].str.lower()
+                    == sector.lower()
+                ].copy()
+
+        if df.empty:
+            return df
+
+        # Keep only the latest snapshot per ticker
+        df = df.sort_values(
+            "fetched_at", ascending=False,
+        )
+        return df.drop_duplicates(
+            subset=["ticker"], keep="first",
+        ).reset_index(drop=True)
+
     def get_currency(self, ticker: str) -> str:
         """Return the ISO currency code for *ticker*
         from the latest company info.
@@ -1069,7 +1000,7 @@ class StockRepository:
     # Company info
     # ------------------------------------------------------------------
 
-    def insert_company_info(self, ticker: str, info: Dict[str, Any]) -> None:
+    def insert_company_info(self, ticker: str, info: dict[str, Any]) -> None:
         """Append a company metadata snapshot for *ticker*.
 
         Args:
@@ -1185,7 +1116,7 @@ class StockRepository:
         self._append_rows(_COMPANY_INFO, row)
         _logger.debug("company_info snapshot appended for %s", ticker)
 
-    def get_latest_company_info(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_latest_company_info(self, ticker: str) -> dict[str, Any] | None:
         """Return the most recent company metadata snapshot for *ticker*.
 
         Args:
@@ -1202,7 +1133,7 @@ class StockRepository:
 
     def get_all_latest_company_info(
         self,
-        limit: Optional[int] = None,
+        limit: int | None = None,
         offset: int = 0,
     ) -> pd.DataFrame:
         """Return the most recent snapshot for every ticker.
@@ -1347,8 +1278,8 @@ class StockRepository:
     def get_ohlcv(
         self,
         ticker: str,
-        start: Optional[date] = None,
-        end: Optional[date] = None,
+        start: date | None = None,
+        end: date | None = None,
     ) -> pd.DataFrame:
         """Return OHLCV data for *ticker*, optionally filtered by date range.
 
@@ -1379,7 +1310,7 @@ class StockRepository:
             return df
         return df.sort_values("date").reset_index(drop=True)
 
-    def get_latest_ohlcv_date(self, ticker: str) -> Optional[date]:
+    def get_latest_ohlcv_date(self, ticker: str) -> date | None:
         """Return the most recent OHLCV date stored for *ticker*.
 
         Used by the delta fetch logic to determine how much new data to fetch.
@@ -1560,11 +1491,11 @@ class StockRepository:
 
         now = _now_utc()
         # Fix #3: build lists directly without iterrows materialising full rows
-        tickers_out: List[str] = []
-        ex_dates_out: List[date] = []
-        amounts_out: List[Optional[float]] = []
-        currencies_out: List[str] = []
-        fetched_at_out: List[datetime] = []
+        tickers_out: list[str] = []
+        ex_dates_out: list[date] = []
+        amounts_out: list[float | None] = []
+        currencies_out: list[str] = []
+        fetched_at_out: list[datetime] = []
 
         for idx, row in df.iterrows():
             ex_dt = _to_date(row.get("date", idx))
@@ -1635,7 +1566,7 @@ class StockRepository:
         # Fix #9: pre-compute column set once (avoid repeated O(cols) lookup)
         col_set = set(df.columns)
 
-        def _get(canonical: str, alt: str) -> List[Optional[float]]:
+        def _get(canonical: str, alt: str) -> list[float | None]:
             """Extract a column by canonical or alternate name."""
             col = (
                 canonical
@@ -1696,9 +1627,11 @@ class StockRepository:
                 EqualTo("ticker", ticker),
             )
         except Exception:
-            # Table may be empty (no rows to delete) — safe
-            # to proceed with append.
-            pass
+            _logger.debug(
+                "Delete before upsert failed for " "technical_indicators/%s",
+                ticker,
+                exc_info=True,
+            )
         self._append_rows(_TECHNICAL_INDICATORS, arrow_tbl)
 
         _logger.debug(
@@ -1710,8 +1643,8 @@ class StockRepository:
     def get_technical_indicators(
         self,
         ticker: str,
-        start: Optional[date] = None,
-        end: Optional[date] = None,
+        start: date | None = None,
+        end: date | None = None,
     ) -> pd.DataFrame:
         """Return technical indicator rows for *ticker*.
 
@@ -1748,7 +1681,7 @@ class StockRepository:
     # ------------------------------------------------------------------
 
     def insert_analysis_summary(
-        self, ticker: str, summary: Dict[str, Any]
+        self, ticker: str, summary: dict[str, Any]
     ) -> None:
         """Append a daily analysis summary snapshot for *ticker*.
 
@@ -1837,7 +1770,7 @@ class StockRepository:
 
     def get_latest_analysis_summary(
         self, ticker: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Return the most recent analysis summary for *ticker*.
 
         Args:
@@ -1863,7 +1796,7 @@ class StockRepository:
 
     def get_all_latest_analysis_summary(
         self,
-        limit: Optional[int] = None,
+        limit: int | None = None,
         offset: int = 0,
     ) -> pd.DataFrame:
         """Return the most recent analysis summary snapshot for every ticker.
@@ -1914,7 +1847,7 @@ class StockRepository:
         self,
         ticker: str,
         horizon_months: int,
-        run_dict: Dict[str, Any],
+        run_dict: dict[str, Any],
     ) -> None:
         """Append a forecast run metadata row.
 
@@ -2013,7 +1946,7 @@ class StockRepository:
 
     def get_latest_forecast_run(
         self, ticker: str, horizon_months: int
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Return the most recent forecast run for
         *ticker* and *horizon_months*.
 
@@ -2143,8 +2076,11 @@ class StockRepository:
                 ),
             )
         except Exception:
-            # Table may be empty — safe to proceed.
-            pass
+            _logger.debug(
+                "Delete before upsert failed for " "forecasts/%s",
+                ticker,
+                exc_info=True,
+            )
         self._append_rows(_FORECASTS, arrow_new)
 
         _logger.debug(
@@ -2323,8 +2259,11 @@ class StockRepository:
                 EqualTo("ticker", ticker),
             )
         except Exception:
-            # Table may be empty — safe to proceed.
-            pass
+            _logger.debug(
+                "Delete before upsert failed for " "quarterly_results/%s",
+                ticker,
+                exc_info=True,
+            )
         self._append_rows(_QUARTERLY_RESULTS, arrow)
         _logger.info(
             "quarterly_results upserted %d rows for %s",
@@ -2397,7 +2336,7 @@ class StockRepository:
         "stocks.quarterly_results",
     )
 
-    def delete_ticker_data(self, ticker: str) -> Dict[str, int]:
+    def delete_ticker_data(self, ticker: str) -> dict[str, int]:
         """Remove all rows for *ticker* from every table.
 
         Uses scoped row-level delete via PyIceberg's
@@ -2413,7 +2352,7 @@ class StockRepository:
         from pyiceberg.expressions import EqualTo
 
         ticker = ticker.upper()
-        deleted: Dict[str, int] = {}
+        deleted: dict[str, int] = {}
         for table_id in self._ALL_TICKER_TABLES:
             try:
                 # Count rows before delete
@@ -2743,9 +2682,8 @@ class StockRepository:
                 return df
             df = df.sort_values("date", ascending=False)
             df = df.head(limit)
-            return (
-                df.sort_values("date", ascending=True)
-                .reset_index(drop=True)
+            return df.sort_values("date", ascending=True).reset_index(
+                drop=True
             )
         except Exception as exc:
             _logger.warning(
@@ -2773,13 +2711,13 @@ class StockRepository:
             if df.empty:
                 return None
             df = df.sort_values(
-                "fetched_at", ascending=False,
+                "fetched_at",
+                ascending=False,
             )
             return df.iloc[0].to_dict()
         except Exception as exc:
             _logger.warning(
-                "get_dashboard_company_info failed"
-                " for %s: %s",
+                "get_dashboard_company_info failed" " for %s: %s",
                 ticker,
                 exc,
             )
@@ -2803,20 +2741,16 @@ class StockRepository:
         """
         try:
             df = self._scan_tickers(
-                _FORECAST_RUNS, tickers,
+                _FORECAST_RUNS,
+                tickers,
             )
             if df.empty:
                 return df
-            idx = df.groupby("ticker")[
-                "run_date"
-            ].idxmax()
-            return (
-                df.loc[idx].reset_index(drop=True)
-            )
+            idx = df.groupby("ticker")["run_date"].idxmax()
+            return df.loc[idx].reset_index(drop=True)
         except Exception as exc:
             _logger.warning(
-                "get_dashboard_forecast_runs"
-                " failed: %s",
+                "get_dashboard_forecast_runs" " failed: %s",
                 exc,
             )
             return pd.DataFrame()
@@ -2839,16 +2773,13 @@ class StockRepository:
         """
         try:
             df = self._scan_tickers(
-                _ANALYSIS_SUMMARY, tickers,
+                _ANALYSIS_SUMMARY,
+                tickers,
             )
             if df.empty:
                 return df
-            idx = df.groupby("ticker")[
-                "analysis_date"
-            ].idxmax()
-            return (
-                df.loc[idx].reset_index(drop=True)
-            )
+            idx = df.groupby("ticker")["analysis_date"].idxmax()
+            return df.loc[idx].reset_index(drop=True)
         except Exception as exc:
             _logger.warning(
                 "get_dashboard_analysis failed: %s",
@@ -2892,11 +2823,11 @@ class StockRepository:
             )
 
             cutoff_date = (
-                datetime.now(tz=timezone.utc)
-                - timedelta(days=days)
+                datetime.now(tz=timezone.utc) - timedelta(days=days)
             ).date()
             row_filter: Any = GreaterThanOrEqual(
-                "request_date", cutoff_date,
+                "request_date",
+                cutoff_date,
             )
             if user_id is not None:
                 from pyiceberg.expressions import And
@@ -2909,13 +2840,9 @@ class StockRepository:
                 tbl = self._load_table(
                     self._LLM_USAGE,
                 )
-                if self._LLM_USAGE in (
-                    self._dirty_tables
-                ):
+                if self._LLM_USAGE in (self._dirty_tables):
                     tbl.refresh()
-                    self._dirty_tables.discard(
-                        self._LLM_USAGE
-                    )
+                    self._dirty_tables.discard(self._LLM_USAGE)
                 df = tbl.scan(
                     row_filter=row_filter,
                 ).to_pandas()
@@ -2923,55 +2850,55 @@ class StockRepository:
                 df = self._table_to_df(
                     self._LLM_USAGE,
                 )
-                if not df.empty and (
-                    user_id is not None
-                ):
-                    df = df[
-                        df["user_id"] == user_id
-                    ]
+                if not df.empty and (user_id is not None):
+                    df = df[df["user_id"] == user_id]
             if df.empty:
                 return empty
 
             total_requests = len(df)
-            total_cost = float(
-                df["estimated_cost_usd"]
-                .sum(skipna=True)
-            )
-            avg_latency = float(
-                df["latency_ms"].mean(skipna=True)
-            )
+            total_cost = float(df["estimated_cost_usd"].sum(skipna=True))
+            avg_latency = float(df["latency_ms"].mean(skipna=True))
             if math.isnan(avg_latency):
                 avg_latency = 0.0
 
-            # Per-model breakdown
+            # Per-model breakdown (include provider).
             per_model: dict = {}
+            has_provider = "provider" in df.columns
             if "model" in df.columns:
                 for model, grp in df.groupby("model"):
+                    prov = ""
+                    if has_provider:
+                        prov = (
+                            grp["provider"]
+                            .mode()
+                            .iloc[0]
+                            if not grp["provider"]
+                            .dropna()
+                            .empty
+                            else ""
+                        )
                     per_model[str(model)] = {
                         "requests": len(grp),
                         "cost": float(
-                            grp["estimated_cost_usd"]
-                            .sum(skipna=True)
+                            grp[
+                                "estimated_cost_usd"
+                            ].sum(skipna=True)
                         ),
+                        "provider": str(prov),
                     }
 
             # Daily trend (last N days)
             cutoff = (
-                datetime.now(tz=timezone.utc)
-                - timedelta(days=days)
+                datetime.now(tz=timezone.utc) - timedelta(days=days)
             ).date()
             daily_trend: list[dict] = []
             if "request_date" in df.columns:
-                recent = df[
-                    df["request_date"] >= cutoff
-                ]
+                recent = df[df["request_date"] >= cutoff]
                 if not recent.empty:
                     agg = (
                         recent.groupby("request_date")
                         .agg(
-                            requests=(
-                                "usage_id", "count"
-                            ),
+                            requests=("usage_id", "count"),
                             cost=(
                                 "estimated_cost_usd",
                                 "sum",
@@ -2981,17 +2908,13 @@ class StockRepository:
                         .sort_values("request_date")
                     )
                     for _, row in agg.iterrows():
-                        daily_trend.append({
-                            "date": str(
-                                row["request_date"]
-                            ),
-                            "requests": int(
-                                row["requests"]
-                            ),
-                            "cost": float(
-                                row["cost"]
-                            ),
-                        })
+                        daily_trend.append(
+                            {
+                                "date": str(row["request_date"]),
+                                "requests": int(row["requests"]),
+                                "cost": float(row["cost"]),
+                            }
+                        )
 
             return {
                 "total_requests": total_requests,
@@ -3012,7 +2935,8 @@ class StockRepository:
     # ------------------------------------------------------------------
 
     def get_portfolio_holdings(
-        self, user_id: str,
+        self,
+        user_id: str,
     ) -> pd.DataFrame:
         """Return current holdings for *user_id*.
 
@@ -3026,7 +2950,8 @@ class StockRepository:
         """
         try:
             from pyiceberg.expressions import (
-                And, EqualTo,
+                And,
+                EqualTo,
             )
 
             tbl = self._load_table(_PORTFOLIO)
@@ -3039,44 +2964,36 @@ class StockRepository:
         except Exception:
             df = self._table_to_df(_PORTFOLIO)
             if not df.empty:
-                df = df[
-                    (df["user_id"] == user_id)
-                    & (df["side"] == "BUY")
-                ]
+                df = df[(df["user_id"] == user_id) & (df["side"] == "BUY")]
 
         if df.empty:
             return pd.DataFrame(
                 columns=[
-                    "ticker", "quantity",
-                    "avg_price", "currency",
-                    "market", "invested",
+                    "ticker",
+                    "quantity",
+                    "avg_price",
+                    "currency",
+                    "market",
+                    "invested",
                 ],
             )
 
         # Weighted average price per ticker
-        df["invested"] = (
-            df["quantity"] * df["price"]
-        )
+        df["invested"] = df["quantity"] * df["price"]
         grouped = (
-            df.groupby(
-                ["ticker", "currency", "market"]
-            )
+            df.groupby(["ticker", "currency", "market"])
             .agg(
                 quantity=("quantity", "sum"),
                 invested=("invested", "sum"),
             )
             .reset_index()
         )
-        grouped["avg_price"] = (
-            grouped["invested"]
-            / grouped["quantity"]
-        )
-        return grouped[
-            grouped["quantity"] > 0
-        ].reset_index(drop=True)
+        grouped["avg_price"] = grouped["invested"] / grouped["quantity"]
+        return grouped[grouped["quantity"] > 0].reset_index(drop=True)
 
     def get_portfolio_transactions(
-        self, user_id: str,
+        self,
+        user_id: str,
     ) -> pd.DataFrame:
         """Return all portfolio transactions for user.
 
@@ -3091,19 +3008,19 @@ class StockRepository:
             tbl = self._load_table(_PORTFOLIO)
             return tbl.scan(
                 row_filter=EqualTo(
-                    "user_id", user_id,
+                    "user_id",
+                    user_id,
                 ),
             ).to_pandas()
         except Exception:
             df = self._table_to_df(_PORTFOLIO)
             if df.empty:
                 return df
-            return df[
-                df["user_id"] == user_id
-            ].copy()
+            return df[df["user_id"] == user_id].copy()
 
     def add_portfolio_transaction(
-        self, txn: dict,
+        self,
+        txn: dict,
     ) -> None:
         """Append a portfolio transaction.
 
@@ -3113,52 +3030,58 @@ class StockRepository:
                 price, currency, market, trade_date,
                 fees, notes.
         """
-        row = pa.table({
-            "transaction_id": pa.array(
-                [txn["transaction_id"]],
-                pa.string(),
-            ),
-            "user_id": pa.array(
-                [txn["user_id"]], pa.string(),
-            ),
-            "ticker": pa.array(
-                [txn["ticker"]], pa.string(),
-            ),
-            "side": pa.array(
-                [txn["side"]], pa.string(),
-            ),
-            "quantity": pa.array(
-                [float(txn["quantity"])],
-                pa.float64(),
-            ),
-            "price": pa.array(
-                [float(txn["price"])],
-                pa.float64(),
-            ),
-            "currency": pa.array(
-                [txn.get("currency", "USD")],
-                pa.string(),
-            ),
-            "market": pa.array(
-                [txn.get("market", "us")],
-                pa.string(),
-            ),
-            "trade_date": pa.array(
-                [txn.get("trade_date")],
-                pa.date32(),
-            ),
-            "fees": pa.array(
-                [float(txn.get("fees", 0))],
-                pa.float64(),
-            ),
-            "notes": pa.array(
-                [txn.get("notes", "")],
-                pa.string(),
-            ),
-            "created_at": pa.array(
-                [_now_utc()], pa.timestamp("us"),
-            ),
-        })
+        row = pa.table(
+            {
+                "transaction_id": pa.array(
+                    [txn["transaction_id"]],
+                    pa.string(),
+                ),
+                "user_id": pa.array(
+                    [txn["user_id"]],
+                    pa.string(),
+                ),
+                "ticker": pa.array(
+                    [txn["ticker"]],
+                    pa.string(),
+                ),
+                "side": pa.array(
+                    [txn["side"]],
+                    pa.string(),
+                ),
+                "quantity": pa.array(
+                    [float(txn["quantity"])],
+                    pa.float64(),
+                ),
+                "price": pa.array(
+                    [float(txn["price"])],
+                    pa.float64(),
+                ),
+                "currency": pa.array(
+                    [txn.get("currency", "USD")],
+                    pa.string(),
+                ),
+                "market": pa.array(
+                    [txn.get("market", "us")],
+                    pa.string(),
+                ),
+                "trade_date": pa.array(
+                    [txn.get("trade_date")],
+                    pa.date32(),
+                ),
+                "fees": pa.array(
+                    [float(txn.get("fees", 0))],
+                    pa.float64(),
+                ),
+                "notes": pa.array(
+                    [txn.get("notes", "")],
+                    pa.string(),
+                ),
+                "created_at": pa.array(
+                    [_now_utc()],
+                    pa.timestamp("us"),
+                ),
+            }
+        )
         self._append_rows(_PORTFOLIO, row)
 
     def update_portfolio_transaction(
@@ -3179,26 +3102,23 @@ class StockRepository:
         df = self._table_to_df(_PORTFOLIO)
         if df.empty:
             return False
-        mask = (
-            (df["transaction_id"] == transaction_id)
-            & (df["user_id"] == user_id)
+        mask = (df["transaction_id"] == transaction_id) & (
+            df["user_id"] == user_id
         )
         if not mask.any():
             return False
         for key in ("price", "quantity"):
             if key in updates:
-                df.loc[mask, key] = float(
-                    updates[key]
-                )
+                df.loc[mask, key] = float(updates[key])
         if "trade_date" in updates:
-            df.loc[mask, "trade_date"] = (
-                updates["trade_date"]
-            )
+            df.loc[mask, "trade_date"] = updates["trade_date"]
         arrow_tbl = pa.Table.from_pandas(
-            df, preserve_index=False,
+            df,
+            preserve_index=False,
         )
         self._overwrite_table(
-            _PORTFOLIO, arrow_tbl,
+            _PORTFOLIO,
+            arrow_tbl,
         )
         return True
 
@@ -3216,18 +3136,19 @@ class StockRepository:
         df = self._table_to_df(_PORTFOLIO)
         if df.empty:
             return False
-        mask = (
-            (df["transaction_id"] == transaction_id)
-            & (df["user_id"] == user_id)
+        mask = (df["transaction_id"] == transaction_id) & (
+            df["user_id"] == user_id
         )
         if not mask.any():
             return False
         df = df[~mask]
         arrow_tbl = pa.Table.from_pandas(
-            df, preserve_index=False,
+            df,
+            preserve_index=False,
         )
         self._overwrite_table(
-            _PORTFOLIO, arrow_tbl,
+            _PORTFOLIO,
+            arrow_tbl,
         )
         return True
 
@@ -3267,39 +3188,51 @@ class StockRepository:
                 catalog.load_table(_CHAT_AUDIT_LOG)
                 return  # already exists
             except Exception:
-                pass  # table not found — create it
+                _logger.debug(
+                    "chat_audit_log table not found" " — will create",
+                )
 
             schema = Schema(
                 NestedField(
-                    1, "session_id", StringType(),
+                    1,
+                    "session_id",
+                    StringType(),
                     required=True,
                 ),
                 NestedField(
-                    2, "user_id", StringType(),
+                    2,
+                    "user_id",
+                    StringType(),
                     required=True,
                 ),
                 NestedField(
-                    3, "started_at",
+                    3,
+                    "started_at",
                     TimestampType(),
                 ),
                 NestedField(
-                    4, "ended_at",
+                    4,
+                    "ended_at",
                     TimestampType(),
                 ),
                 NestedField(
-                    5, "message_count",
+                    5,
+                    "message_count",
                     IntegerType(),
                 ),
                 NestedField(
-                    6, "messages_json",
+                    6,
+                    "messages_json",
                     StringType(),
                 ),
                 NestedField(
-                    7, "agent_ids_used",
+                    7,
+                    "agent_ids_used",
                     StringType(),
                 ),
                 NestedField(
-                    8, "created_at",
+                    8,
+                    "created_at",
                     TimestampType(),
                 ),
             )
@@ -3317,7 +3250,8 @@ class StockRepository:
                 partition_spec=partition_spec,
             )
             _logger.info(
-                "Created table %s", _CHAT_AUDIT_LOG,
+                "Created table %s",
+                _CHAT_AUDIT_LOG,
             )
         except Exception as exc:
             _logger.error(
@@ -3346,6 +3280,23 @@ class StockRepository:
         try:
             self._ensure_chat_audit_table()
             now = _now_utc()
+
+            def _parse_ts(val):
+                """Parse ISO string or return now."""
+                if val is None or val == "":
+                    return now
+                if isinstance(val, str):
+                    return pd.Timestamp(
+                        val,
+                    ).to_pydatetime()
+                return val
+
+            started = _parse_ts(
+                session.get("started_at"),
+            )
+            ended = _parse_ts(
+                session.get("ended_at"),
+            )
             arrays = {
                 "session_id": pa.array(
                     [session["session_id"]],
@@ -3356,29 +3307,23 @@ class StockRepository:
                     type=pa.string(),
                 ),
                 "started_at": pa.array(
-                    [session.get("started_at", now)],
+                    [started],
                     type=pa.timestamp("us"),
                 ),
                 "ended_at": pa.array(
-                    [session.get("ended_at", now)],
+                    [ended],
                     type=pa.timestamp("us"),
                 ),
                 "message_count": pa.array(
-                    [session.get(
-                        "message_count", 0
-                    )],
+                    [session.get("message_count", 0)],
                     type=pa.int32(),
                 ),
                 "messages_json": pa.array(
-                    [session.get(
-                        "messages_json", "[]"
-                    )],
+                    [session.get("messages_json", "[]")],
                     type=pa.string(),
                 ),
                 "agent_ids_used": pa.array(
-                    [session.get(
-                        "agent_ids_used", "[]"
-                    )],
+                    [session.get("agent_ids_used", "[]")],
                     type=pa.string(),
                 ),
                 "created_at": pa.array(
@@ -3386,12 +3331,48 @@ class StockRepository:
                     type=pa.timestamp("us"),
                 ),
             }
+            # session_id & user_id are required (non-
+            # nullable) in the Iceberg schema — build
+            # the Arrow table with a matching schema.
+            _schema = pa.schema([
+                pa.field(
+                    "session_id", pa.string(),
+                    nullable=False,
+                ),
+                pa.field(
+                    "user_id", pa.string(),
+                    nullable=False,
+                ),
+                pa.field(
+                    "started_at",
+                    pa.timestamp("us"),
+                ),
+                pa.field(
+                    "ended_at",
+                    pa.timestamp("us"),
+                ),
+                pa.field(
+                    "message_count", pa.int32(),
+                ),
+                pa.field(
+                    "messages_json", pa.string(),
+                ),
+                pa.field(
+                    "agent_ids_used", pa.string(),
+                ),
+                pa.field(
+                    "created_at",
+                    pa.timestamp("us"),
+                ),
+            ])
             self._append_rows(
-                _CHAT_AUDIT_LOG, pa.table(arrays),
+                _CHAT_AUDIT_LOG,
+                pa.table(arrays, schema=_schema),
             )
         except Exception as exc:
             _logger.error(
-                "save_chat_session failed: %s", exc,
+                "save_chat_session failed: %s",
+                exc,
             )
             raise
 
@@ -3435,7 +3416,8 @@ class StockRepository:
                 )
             df = tbl.scan(
                 row_filter=EqualTo(
-                    "user_id", user_id,
+                    "user_id",
+                    user_id,
                 ),
             ).to_pandas()
         except Exception as exc:
@@ -3445,9 +3427,7 @@ class StockRepository:
             )
             df = self._table_to_df(_CHAT_AUDIT_LOG)
             if not df.empty:
-                df = df[
-                    df["user_id"] == user_id
-                ].copy()
+                df = df[df["user_id"] == user_id].copy()
 
         if df.empty:
             return []
@@ -3463,42 +3443,878 @@ class StockRepository:
         # Keyword filter
         if keyword is not None:
             kw = keyword.lower()
-            df = df[
-                df["messages_json"]
-                .str.lower()
-                .str.contains(kw, na=False)
-            ]
+            df = df[df["messages_json"].str.lower().str.contains(kw, na=False)]
 
         # Sort by most recent first
         df = df.sort_values(
-            "started_at", ascending=False,
+            "started_at",
+            ascending=False,
         )
 
         # Paginate
-        df = df.iloc[offset: offset + limit]
+        df = df.iloc[offset : offset + limit]
 
         results: list[dict] = []
         for _, row in df.iterrows():
-            msgs = str(
-                row.get("messages_json", "")
+            msgs_raw = str(row.get("messages_json", ""))
+            preview = ""
+            try:
+                parsed = json.loads(msgs_raw)
+                if isinstance(parsed, list):
+                    for m in parsed:
+                        if (
+                            isinstance(m, dict)
+                            and m.get("role") == "user"
+                            and m.get("content")
+                        ):
+                            preview = str(m["content"])[:200]
+                            break
+                if not preview and isinstance(parsed, list) and parsed:
+                    first = parsed[0]
+                    if isinstance(first, dict):
+                        preview = str(first.get("content", ""))[:200]
+            except (
+                json.JSONDecodeError,
+                TypeError,
+            ):
+                preview = msgs_raw[:200]
+            results.append(
+                {
+                    "session_id": str(row["session_id"]),
+                    "started_at": str(row.get("started_at", "")),
+                    "ended_at": str(row.get("ended_at", "")),
+                    "message_count": int(row.get("message_count", 0)),
+                    "preview": preview,
+                    "agent_ids_used": str(row.get("agent_ids_used", "[]")),
+                }
             )
-            preview = msgs[:200] if msgs else ""
-            results.append({
-                "session_id": str(
-                    row["session_id"]
-                ),
-                "started_at": str(
-                    row.get("started_at", "")
-                ),
-                "ended_at": str(
-                    row.get("ended_at", "")
-                ),
-                "message_count": int(
-                    row.get("message_count", 0)
-                ),
-                "preview": preview,
-                "agent_ids_used": str(
-                    row.get("agent_ids_used", "[]")
-                ),
-            })
         return results
+
+    def get_chat_session_detail(
+        self,
+        user_id: str,
+        session_id: str,
+    ) -> dict | None:
+        """Fetch a single chat session with messages.
+
+        Returns:
+            Dict with all summary fields plus a
+            ``messages`` list, or ``None`` if not found.
+        """
+        try:
+            self._ensure_chat_audit_table()
+            from pyiceberg.expressions import (
+                And,
+                EqualTo,
+            )
+
+            tbl = self._load_table(_CHAT_AUDIT_LOG)
+            if _CHAT_AUDIT_LOG in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(
+                    _CHAT_AUDIT_LOG,
+                )
+            df = tbl.scan(
+                row_filter=And(
+                    EqualTo("user_id", user_id),
+                    EqualTo("session_id", session_id),
+                ),
+            ).to_pandas()
+        except Exception as exc:
+            _logger.warning(
+                "get_chat_session_detail scan " "failed: %s",
+                exc,
+            )
+            df = self._table_to_df(
+                _CHAT_AUDIT_LOG,
+            )
+            if not df.empty:
+                df = df[
+                    (df["user_id"] == user_id)
+                    & (df["session_id"] == session_id)
+                ].copy()
+
+        if df.empty:
+            return None
+
+        row = df.iloc[0]
+        msgs_raw = str(row.get("messages_json", "[]"))
+        try:
+            messages = json.loads(msgs_raw)
+            if not isinstance(messages, list):
+                messages = []
+        except (json.JSONDecodeError, TypeError):
+            messages = []
+
+        agents_raw = str(row.get("agent_ids_used", "[]"))
+        try:
+            agent_ids = json.loads(agents_raw)
+        except (json.JSONDecodeError, TypeError):
+            agent_ids = []
+
+        # Build preview from first user message
+        preview = ""
+        for m in messages:
+            if (
+                isinstance(m, dict)
+                and m.get("role") == "user"
+                and m.get("content")
+            ):
+                preview = str(m["content"])[:200]
+                break
+
+        return {
+            "session_id": str(row["session_id"]),
+            "started_at": str(row.get("started_at", "")),
+            "ended_at": str(row.get("ended_at", "")),
+            "message_count": int(row.get("message_count", 0)),
+            "preview": preview,
+            "agent_ids_used": agent_ids,
+            "messages": messages,
+        }
+
+    # ---------------------------------------------------------------
+    # Query log (question tracking)
+    # ---------------------------------------------------------------
+
+    _QUERY_LOG = "stocks.query_log"
+
+    def insert_query_log(self, entry: dict) -> None:
+        """Insert a query log entry.
+
+        Args:
+            entry: Dict with keys: timestamp, user_id,
+                query_text, classified_intent,
+                sub_agent_invoked, tools_used (JSON),
+                data_sources_used (JSON),
+                was_local_sufficient (bool),
+                response_time_ms (int),
+                gap_tickers (JSON).
+        """
+        import json
+        import uuid
+        from datetime import datetime, timezone
+
+        row = {
+            "id": str(uuid.uuid4()),
+            "timestamp": entry.get(
+                "timestamp",
+                datetime.now(timezone.utc),
+            ),
+            "user_id": entry.get("user_id", ""),
+            "query_text": entry.get(
+                "query_text",
+                "",
+            ),
+            "classified_intent": entry.get(
+                "classified_intent",
+                "",
+            ),
+            "sub_agent_invoked": entry.get(
+                "sub_agent_invoked",
+                "",
+            ),
+            "tools_used": json.dumps(
+                entry.get("tools_used", []),
+            ),
+            "data_sources_used": json.dumps(
+                entry.get("data_sources_used", []),
+            ),
+            "was_local_sufficient": entry.get(
+                "was_local_sufficient",
+                True,
+            ),
+            "response_time_ms": entry.get(
+                "response_time_ms",
+                0,
+            ),
+            "gap_tickers": json.dumps(
+                entry.get("gap_tickers", []),
+            ),
+        }
+
+        try:
+            tbl = self._load_table(self._QUERY_LOG)
+            schema = tbl.schema().as_arrow()
+            at = pa.Table.from_pydict(
+                {k: [v] for k, v in row.items()},
+                schema=schema,
+            )
+            self._append_rows(self._QUERY_LOG, at)
+        except Exception:
+            _logger.debug(
+                "query_log table not found — " "skipping (create table first)",
+            )
+
+    def get_query_logs(
+        self,
+        user_id: str,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Get recent query logs for a user."""
+        try:
+            df = self._scan_ticker(
+                self._QUERY_LOG,
+                user_id,
+            )
+            if df.empty:
+                return []
+            df = df.sort_values(
+                "timestamp",
+                ascending=False,
+            ).head(limit)
+            return df.to_dict("records")
+        except Exception:
+            return []
+
+    # ---------------------------------------------------------------
+    # Data gaps (gap analysis)
+    # ---------------------------------------------------------------
+
+    _DATA_GAPS = "stocks.data_gaps"
+
+    def insert_data_gap(
+        self,
+        ticker: str,
+        data_type: str,
+    ) -> None:
+        """Insert or increment a data gap entry."""
+        import uuid
+        from datetime import datetime, timezone
+
+        # Check if gap already exists
+        try:
+            tbl = self._load_table(self._DATA_GAPS)
+            scan = tbl.scan()
+            df = scan.to_pandas()
+            existing = df[
+                (df["ticker"] == ticker)
+                & (df["data_type"] == data_type)
+                & (df["resolved_at"].isna())
+            ]
+            if not existing.empty:
+                # Increment count
+                self.increment_gap_count(
+                    ticker,
+                    data_type,
+                )
+                return
+        except Exception:
+            _logger.debug(
+                "data_gaps table not found — " "skipping",
+            )
+            return
+
+        row = {
+            "id": str(uuid.uuid4()),
+            "detected_at": datetime.now(timezone.utc),
+            "ticker": ticker,
+            "data_type": data_type,
+            "query_count": 1,
+            "resolved_at": None,
+            "resolution": None,
+        }
+
+        schema = tbl.schema().as_arrow()
+        at = pa.Table.from_pydict(
+            {k: [v] for k, v in row.items()},
+            schema=schema,
+        )
+        self._append_rows(self._DATA_GAPS, at)
+
+    def increment_gap_count(
+        self,
+        ticker: str,
+        data_type: str,
+    ) -> None:
+        """Increment query_count for an existing gap."""
+        try:
+            tbl = self._load_table(self._DATA_GAPS)
+            scan = tbl.scan()
+            df = scan.to_pandas()
+            mask = (
+                (df["ticker"] == ticker)
+                & (df["data_type"] == data_type)
+                & (df["resolved_at"].isna())
+            )
+            if mask.any():
+                df.loc[mask, "query_count"] += 1
+                schema = tbl.schema().as_arrow()
+                at = pa.Table.from_pandas(
+                    df,
+                    schema=schema,
+                )
+                self._overwrite_table(
+                    self._DATA_GAPS,
+                    at,
+                )
+        except Exception:
+            _logger.warning(
+                "Failed to increment gap count " "for %s/%s",
+                ticker,
+                data_type,
+                exc_info=True,
+            )
+
+    def get_unfilled_data_gaps(
+        self,
+    ) -> list[dict]:
+        """Get all unresolved data gaps."""
+        try:
+            tbl = self._load_table(self._DATA_GAPS)
+            scan = tbl.scan()
+            df = scan.to_pandas()
+            unresolved = df[df["resolved_at"].isna()]
+            return unresolved.to_dict("records")
+        except Exception:
+            return []
+
+    def resolve_data_gap(
+        self,
+        gap_id: str,
+        resolution: str,
+    ) -> None:
+        """Mark a data gap as resolved."""
+        from datetime import datetime, timezone
+
+        try:
+            tbl = self._load_table(self._DATA_GAPS)
+            scan = tbl.scan()
+            df = scan.to_pandas()
+            mask = df["id"] == gap_id
+            if mask.any():
+                df.loc[mask, "resolved_at"] = datetime.now(timezone.utc)
+                df.loc[mask, "resolution"] = resolution
+                schema = tbl.schema().as_arrow()
+                at = pa.Table.from_pandas(
+                    df,
+                    schema=schema,
+                )
+                self._overwrite_table(
+                    self._DATA_GAPS,
+                    at,
+                )
+        except Exception:
+            _logger.warning(
+                "Failed to resolve data gap %s",
+                gap_id,
+                exc_info=True,
+            )
+
+    # ── Sentiment Scores ───────────────────────────────
+
+    def insert_sentiment_score(
+        self,
+        ticker: str,
+        score_date: date,
+        avg_score: float,
+        headline_count: int = 0,
+        source: str = "llm",
+    ) -> None:
+        """Append a daily sentiment score row."""
+        row = pa.table(
+            {
+                "ticker": pa.array(
+                    [ticker.upper()],
+                    pa.string(),
+                ),
+                "score_date": pa.array(
+                    [score_date],
+                    pa.date32(),
+                ),
+                "avg_score": pa.array(
+                    [avg_score],
+                    pa.float64(),
+                ),
+                "headline_count": pa.array(
+                    [headline_count],
+                    pa.int32(),
+                ),
+                "source": pa.array(
+                    [source],
+                    pa.string(),
+                ),
+                "scored_at": pa.array(
+                    [_now_utc()],
+                    pa.timestamp("us"),
+                ),
+            }
+        )
+        self._append_rows(
+            "stocks.sentiment_scores",
+            row,
+        )
+
+    def get_sentiment_series(
+        self,
+        ticker: str,
+        start_date: date | None = None,
+    ) -> pd.DataFrame:
+        """Return sentiment score series for *ticker*."""
+        df = self._scan_ticker(
+            "stocks.sentiment_scores",
+            ticker.upper(),
+        )
+        if df.empty:
+            return df
+        if start_date is not None:
+            df = df[df["score_date"] >= start_date]
+        return (
+            df.sort_values(
+                "score_date",
+            )
+            .drop_duplicates(
+                subset=["score_date"],
+                keep="last",
+            )
+            .reset_index(drop=True)
+        )
+
+    # -- PG-backed registry wrappers --
+
+    def get_registry(
+        self, ticker: str | None = None,
+    ) -> pd.DataFrame:
+        """Return registry rows (PG-backed).
+
+        Args:
+            ticker: If given, return only that ticker's
+                row.  ``None`` returns all rows.
+
+        Returns:
+            pandas DataFrame with registry rows.
+        """
+        from backend.db.pg_stocks import (
+            get_registry as pg_get,
+        )
+        async def _call():
+            async with _pg_session() as s:
+                return await pg_get(s, ticker=ticker)
+
+        result = _run_pg(_call)
+        if isinstance(result, dict):
+            return pd.DataFrame([result])
+        if result is None:
+            return pd.DataFrame()
+        return result
+
+    def get_all_registry(self) -> dict[str, dict]:
+        """Return full registry as dict keyed by ticker.
+
+        Returns:
+            Dict mapping ticker to metadata dicts with
+            ``ticker``, ``last_fetch_date``, ``total_rows``,
+            ``date_range``, ``market``, ``file_path``.
+        """
+        from backend.db.pg_stocks import (
+            get_registry as pg_get,
+        )
+        async def _call():
+            async with _pg_session() as s:
+                return await pg_get(s)
+
+        df = _run_pg(_call)
+        if df is None or (
+            hasattr(df, "empty") and df.empty
+        ):
+            return {}
+        result: dict[str, dict] = {}
+        for row in df.to_dict("records"):
+            ticker = str(row.get("ticker", ""))
+            if not ticker:
+                continue
+            lfd = row.get("last_fetch_date")
+            start = row.get("date_range_start")
+            end = row.get("date_range_end")
+            result[ticker] = {
+                "ticker": ticker,
+                "last_fetch_date": (
+                    str(lfd)[:10] if lfd else ""
+                ),
+                "total_rows": (
+                    int(row["total_rows"])
+                    if row.get("total_rows") is not None
+                    else 0
+                ),
+                "date_range": {
+                    "start": (
+                        str(start)[:10] if start else ""
+                    ),
+                    "end": (
+                        str(end)[:10] if end else ""
+                    ),
+                },
+                "market": str(
+                    row.get("market", "us"),
+                ),
+                "file_path": str(
+                    Path(__file__).parent.parent
+                    / "data"
+                    / "raw"
+                    / f"{ticker}_raw.parquet"
+                ),
+            }
+        return result
+
+    def check_existing_data(
+        self, ticker: str,
+    ) -> dict | None:
+        """Look up a single ticker in the registry.
+
+        Returns:
+            Registry entry dict or ``None``.
+        """
+        from backend.db.pg_stocks import (
+            get_registry as pg_get,
+        )
+        async def _call():
+            async with _pg_session() as s:
+                return await pg_get(
+                    s, ticker=ticker.upper(),
+                )
+
+        result = _run_pg(_call)
+        if result is None:
+            return None
+        if isinstance(result, pd.DataFrame):
+            if result.empty:
+                return None
+            row = result.iloc[0].to_dict()
+        else:
+            row = result
+        lfd = row.get("last_fetch_date")
+        start = row.get("date_range_start")
+        end = row.get("date_range_end")
+        return {
+            "ticker": ticker.upper(),
+            "last_fetch_date": (
+                str(lfd)[:10] if lfd else ""
+            ),
+            "total_rows": (
+                int(row["total_rows"])
+                if row.get("total_rows") is not None
+                else 0
+            ),
+            "date_range": {
+                "start": (
+                    str(start)[:10] if start else ""
+                ),
+                "end": (
+                    str(end)[:10] if end else ""
+                ),
+            },
+            "file_path": str(
+                Path(__file__).parent.parent
+                / "data"
+                / "raw"
+                / f"{ticker.upper()}_raw.parquet"
+            ),
+        }
+
+    def upsert_registry(
+        self,
+        ticker: str,
+        last_fetch_date: date,
+        total_rows: int,
+        date_range_start: date,
+        date_range_end: date,
+        market: str,
+    ) -> None:
+        """Insert or update registry row (PG-backed).
+
+        Args:
+            ticker: Stock ticker symbol.
+            last_fetch_date: Date of last fetch.
+            total_rows: Total OHLCV row count.
+            date_range_start: Earliest trading date.
+            date_range_end: Most recent trading date.
+            market: ``"india"`` or ``"us"``.
+        """
+        from backend.db.pg_stocks import (
+            upsert_registry as pg_upsert,
+        )
+
+        data = {
+            "ticker": ticker,
+            "last_fetch_date": last_fetch_date,
+            "total_rows": int(total_rows),
+            "date_range_start": date_range_start,
+            "date_range_end": date_range_end,
+            "market": market,
+        }
+
+        async def _call():
+            async with _pg_session() as s:
+                await pg_upsert(s, data)
+
+        _run_pg(_call)
+        _logger.debug(
+            "Registry upserted for %s", ticker,
+        )
+
+    # -- PG-backed scheduled_jobs wrappers --
+
+    def get_scheduled_jobs(self) -> list[dict]:
+        """Return all scheduled job definitions."""
+        from backend.db.pg_stocks import (
+            get_scheduled_jobs as pg_jobs,
+        )
+        async def _call():
+            async with _pg_session() as s:
+                return await pg_jobs(s)
+
+        try:
+            return _run_pg(_call)
+        except Exception:
+            _logger.warning(
+                "get_scheduled_jobs failed",
+                exc_info=True,
+            )
+            return []
+
+    def upsert_scheduled_job(
+        self, job: dict,
+    ) -> None:
+        """Insert or update a scheduled job."""
+        from backend.db.pg_stocks import (
+            upsert_scheduled_job as pg_upsert,
+        )
+        async def _call():
+            async with _pg_session() as s:
+                await pg_upsert(s, job)
+
+        try:
+            _run_pg(_call)
+        except Exception:
+            _logger.warning(
+                "upsert_scheduled_job failed",
+                exc_info=True,
+            )
+
+    def delete_scheduled_job(
+        self, job_id: str,
+    ) -> None:
+        """Delete a scheduled job by ID."""
+        from backend.db.pg_stocks import (
+            delete_scheduled_job as pg_del,
+        )
+        async def _call():
+            async with _pg_session() as s:
+                await pg_del(s, job_id)
+
+        try:
+            _run_pg(_call)
+        except Exception:
+            _logger.warning(
+                "delete_scheduled_job %s failed",
+                job_id,
+                exc_info=True,
+            )
+
+    # -- Iceberg scheduler_runs (append-only) --
+
+    def append_scheduler_run(
+        self, run: dict,
+    ) -> None:
+        """Append a single scheduler run record."""
+        try:
+            clean = {}
+            for k, v in run.items():
+                if (
+                    hasattr(v, "tzinfo")
+                    and v.tzinfo
+                ):
+                    v = v.replace(tzinfo=None)
+                clean[k] = v
+            tbl = self._load_table(_SCHEDULER_RUNS)
+            col_names = [
+                f.name for f in tbl.schema().fields
+            ]
+            if "trigger_type" not in col_names:
+                from pyiceberg.types import StringType
+
+                with tbl.update_schema() as upd:
+                    upd.add_column(
+                        "trigger_type",
+                        StringType(),
+                    )
+                tbl = self._load_table(
+                    _SCHEDULER_RUNS,
+                )
+            schema = tbl.schema().as_arrow()
+            df = pd.DataFrame([clean])
+            at = pa.Table.from_pandas(
+                df, schema=schema,
+            )
+            self._append_rows(_SCHEDULER_RUNS, at)
+        except Exception:
+            _logger.error(
+                "append_scheduler_run failed",
+                exc_info=True,
+            )
+
+    def update_scheduler_run(
+        self,
+        run_id: str,
+        updates: dict,
+    ) -> None:
+        """Update fields on an existing run."""
+        try:
+            tbl = self._load_table(_SCHEDULER_RUNS)
+            df = tbl.scan().to_pandas()
+            mask = df["run_id"] == run_id
+            if not mask.any():
+                _logger.warning(
+                    "update_scheduler_run:"
+                    " run_id %s not found",
+                    run_id,
+                )
+                return
+            clean = {}
+            for k, v in updates.items():
+                if (
+                    hasattr(v, "tzinfo")
+                    and v.tzinfo
+                ):
+                    v = v.replace(tzinfo=None)
+                clean[k] = v
+            for k, v in clean.items():
+                df.loc[mask, k] = v
+            schema = tbl.schema().as_arrow()
+            at = pa.Table.from_pandas(
+                df, schema=schema,
+            )
+            self._overwrite_table(
+                _SCHEDULER_RUNS, at,
+            )
+        except Exception:
+            _logger.error(
+                "update_scheduler_run %s failed",
+                run_id,
+                exc_info=True,
+            )
+
+    def get_scheduler_runs(
+        self, days: int = 7,
+    ) -> list[dict]:
+        """Return scheduler runs from last N days."""
+        try:
+            df = self._table_to_df(_SCHEDULER_RUNS)
+            if df.empty:
+                return []
+            if "started_at" in df.columns:
+                df["started_at"] = pd.to_datetime(
+                    df["started_at"],
+                    utc=True,
+                    errors="coerce",
+                )
+                cutoff = pd.Timestamp.now(
+                    tz="UTC",
+                ) - pd.Timedelta(days=days)
+                df = df[
+                    df["started_at"].notna()
+                    & (df["started_at"] >= cutoff)
+                ]
+                df = df.sort_values(
+                    "started_at",
+                    ascending=False,
+                )
+            if "completed_at" in df.columns:
+                df["completed_at"] = pd.to_datetime(
+                    df["completed_at"],
+                    utc=True,
+                    errors="coerce",
+                )
+            df = df.where(df.notna(), None)
+            records = df.to_dict(orient="records")
+            for r in records:
+                for k, v in list(r.items()):
+                    if hasattr(v, "isoformat"):
+                        r[k] = v.isoformat()
+                    elif isinstance(v, float) and (
+                        v != v
+                    ):
+                        r[k] = None
+            return records
+        except Exception:
+            _logger.error(
+                "get_scheduler_runs failed",
+                exc_info=True,
+            )
+            return []
+
+    def get_scheduler_run_stats(self) -> dict:
+        """Return aggregate stats for dashboard."""
+        try:
+            runs = self.get_scheduler_runs(days=1)
+            total = len(runs)
+            success = sum(
+                1
+                for r in runs
+                if r.get("status") == "success"
+            )
+            failed = sum(
+                1
+                for r in runs
+                if r.get("status") == "failed"
+            )
+            running = sum(
+                1
+                for r in runs
+                if r.get("status") == "running"
+            )
+            return {
+                "runs_today": total,
+                "runs_today_success": success,
+                "runs_today_failed": failed,
+                "runs_today_running": running,
+            }
+        except Exception:
+            _logger.warning(
+                "get_scheduler_run_stats failed",
+                exc_info=True,
+            )
+            return {
+                "runs_today": 0,
+                "runs_today_success": 0,
+                "runs_today_failed": 0,
+                "runs_today_running": 0,
+            }
+
+    def get_last_run_for_job(
+        self, job_id: str,
+    ) -> dict | None:
+        """Return the most recent run for a job."""
+        try:
+            df = self._table_to_df(_SCHEDULER_RUNS)
+            if df.empty:
+                return None
+            df = df[df["job_id"] == job_id]
+            if df.empty:
+                return None
+            if "started_at" in df.columns:
+                df["started_at"] = pd.to_datetime(
+                    df["started_at"],
+                    utc=True,
+                    errors="coerce",
+                )
+                df = df.sort_values(
+                    "started_at",
+                    ascending=False,
+                )
+            row = df.iloc[0].to_dict()
+            for k, v in list(row.items()):
+                if hasattr(v, "isoformat"):
+                    row[k] = v.isoformat()
+                elif (
+                    isinstance(v, float) and v != v
+                ):
+                    row[k] = None
+            return row
+        except Exception:
+            _logger.error(
+                "get_last_run_for_job %s failed",
+                job_id,
+                exc_info=True,
+            )
+            return None

@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from langsmith.middleware import TracingMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from models import ChatRequest, ChatResponse
@@ -26,6 +27,8 @@ from slowapi.errors import RateLimitExceeded
 from tools._ticker_linker import set_current_user
 
 from auth.api import create_auth_router, get_ticker_router
+from auth.dependencies import get_current_user
+from auth.models import UserContext
 from auth.rate_limit import limiter, rate_limit_exceeded_handler
 
 _logger = logging.getLogger(__name__)
@@ -37,6 +40,7 @@ def create_app(
     settings,
     token_budget=None,
     obs_collector=None,
+    graph=None,
 ):
     """Build and return the configured FastAPI application.
 
@@ -54,17 +58,18 @@ def create_app(
     Returns:
         A fully configured :class:`~fastapi.FastAPI` instance.
     """
+
     @asynccontextmanager
     async def _lifespan(a):
         """Startup: warm Redis cache."""
         try:
             from cache_warmup import (
+                warm_frequent_users,
                 warm_shared,
                 warm_tickers,
-                warm_frequent_users,
             )
 
-            warm_shared()
+            await warm_shared()
 
             top_n = getattr(
                 settings,
@@ -77,8 +82,9 @@ def create_app(
                 name="cache-warmup-tickers",
             ).start()
             threading.Thread(
-                target=warm_frequent_users,
-                args=(top_n,),
+                target=lambda: asyncio.run(
+                    warm_frequent_users(top_n)
+                ),
                 daemon=True,
                 name="cache-warmup-users",
             ).start()
@@ -87,6 +93,38 @@ def create_app(
                 "cache warm-up skipped",
                 exc_info=True,
             )
+        if not settings.jwt_secret_key:
+            _logger.error(
+                "JWT_SECRET_KEY not set" " — auth will fail",
+            )
+
+        # Start scheduler service
+        if getattr(settings, "scheduler_enabled", True):
+            try:
+                from tools._stock_shared import (
+                    _require_repo,
+                )
+                from jobs.scheduler_service import (
+                    SchedulerService,
+                )
+
+                _sched_repo = _require_repo()
+                max_w = getattr(
+                    settings,
+                    "scheduler_max_workers",
+                    3,
+                )
+                svc = SchedulerService(
+                    _sched_repo, max_workers=max_w,
+                )
+                svc.start()
+                a.state.scheduler = svc
+            except Exception:
+                _logger.warning(
+                    "Scheduler startup skipped",
+                    exc_info=True,
+                )
+
         yield
 
     app = FastAPI(
@@ -127,9 +165,23 @@ def create_app(
             response.headers["Referrer-Policy"] = (
                 "strict-origin-when-cross-origin"
             )
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' "
+                "'unsafe-eval'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: blob: https:; "
+                "connect-src 'self' "
+                "http://localhost:* "
+                "ws://localhost:*; "
+                "font-src 'self';"
+            )
             return response
 
     app.add_middleware(_SecurityHeadersMiddleware)
+
+    # LangSmith: correlate HTTP requests with LLM traces.
+    app.add_middleware(TracingMiddleware)
 
     # Rate limiting (slowapi).
     app.state.limiter = limiter
@@ -139,29 +191,104 @@ def create_app(
     )
 
     # ---------------------------------------------------------------
+    # Usage tracking helper
+    # ---------------------------------------------------------------
+
+    async def _enforce_quota(user_id: str) -> None:
+        """Raise 429 if user's monthly quota is used."""
+        try:
+            from usage_tracker import is_quota_exceeded
+
+            if await is_quota_exceeded(user_id):
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "Monthly analysis quota exceeded."
+                        " Upgrade your plan for more."
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            _logger.error(
+                "Quota check failed for %s",
+                user_id,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Usage tracking unavailable",
+            )
+
+    async def _track_usage(user_id: str) -> None:
+        """Increment monthly usage count."""
+        try:
+            from usage_tracker import increment_usage
+
+            await increment_usage(user_id)
+        except Exception:
+            _logger.debug(
+                "Usage tracking skipped for %s",
+                user_id,
+            )
+
+    def _track_usage_sync(user_id: str) -> None:
+        """Sync wrapper for thread contexts."""
+        import asyncio
+
+        try:
+            from usage_tracker import increment_usage
+
+            asyncio.run(increment_usage(user_id))
+        except Exception:
+            _logger.debug(
+                "Usage tracking skipped for %s",
+                user_id,
+            )
+
+    # ---------------------------------------------------------------
     # Core route handlers — shared by root and /v1 mounts
     # ---------------------------------------------------------------
 
-    async def _chat(req: ChatRequest):
+    async def _chat(
+        req: ChatRequest,
+        current_user: UserContext = Depends(
+            get_current_user,
+        ),
+    ):
         """Sync agent dispatch (POST /chat)."""
-        agent = agent_registry.get(req.agent_id)
+        req.user_id = current_user.user_id
+        await _enforce_quota(req.user_id)
+
+        # ── LangGraph path ────────────────────────
+        if graph is not None and settings.use_langgraph:
+            return await _chat_langgraph(req)
+
+        # ── Legacy path ───────────────────────────
+        from agents.router import route as _route
+
+        resolved = _route(req.message)
+        agent = agent_registry.get(resolved)
         if agent is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"Agent '{req.agent_id}' not found",
+                detail=(f"Agent '{req.agent_id}' " "not found"),
             )
-        set_current_user(req.user_id)
         try:
-            loop = asyncio.get_event_loop()
+
+            def _run_with_user():
+                set_current_user(req.user_id)
+                return agent.run(
+                    req.message, req.history,
+                )
+
+            loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
-                executor,
-                agent.run,
-                req.message,
-                req.history,
+                executor, _run_with_user,
             )
             result = await asyncio.wait_for(
                 future,
-                timeout=settings.agent_timeout_seconds,
+                timeout=(settings.agent_timeout_seconds),
             )
         except asyncio.TimeoutError:
             _logger.warning(
@@ -183,18 +310,73 @@ def create_app(
                 status_code=500,
                 detail="Agent execution failed",
             )
+        await _track_usage(req.user_id)
         return ChatResponse(
             response=result,
             agent_id=req.agent_id,
         )
 
-    async def _chat_stream(req: ChatRequest):
+    async def _chat_langgraph(req: ChatRequest):
+        """Sync chat via LangGraph supervisor graph."""
+        input_state = _build_graph_input(req)
+        try:
+
+            def _invoke_with_user():
+                set_current_user(req.user_id)
+                return graph.invoke(input_state)
+
+            loop = asyncio.get_running_loop()
+            future = loop.run_in_executor(
+                executor, _invoke_with_user,
+            )
+            result = await asyncio.wait_for(
+                future,
+                timeout=(settings.agent_timeout_seconds),
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail="Agent timed out",
+            )
+        except Exception as e:
+            _logger.error(
+                "LangGraph error: %s",
+                e,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Agent execution failed",
+            )
+        await _track_usage(req.user_id)
+        return ChatResponse(
+            response=result.get("final_response", ""),
+            agent_id=result.get("current_agent", "graph"),
+        )
+
+    async def _chat_stream(
+        req: ChatRequest,
+        current_user: UserContext = Depends(
+            get_current_user,
+        ),
+    ):
         """NDJSON streaming (POST /chat/stream)."""
-        agent = agent_registry.get(req.agent_id)
+        req.user_id = current_user.user_id
+        await _enforce_quota(req.user_id)
+
+        # ── LangGraph path ────────────────────────
+        if graph is not None and settings.use_langgraph:
+            return _stream_langgraph(req)
+
+        # ── Legacy path ───────────────────────────
+        from agents.router import route as _route
+
+        resolved = _route(req.message)
+        agent = agent_registry.get(resolved)
         if agent is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"Agent '{req.agent_id}' not found",
+                detail=(f"Agent '{req.agent_id}' " "not found"),
             )
 
         timeout = settings.agent_timeout_seconds
@@ -211,8 +393,22 @@ def create_app(
                         req.history,
                     ):
                         event_queue.put(event)
-                except Exception:
-                    pass
+                    _track_usage_sync(req.user_id)
+                except Exception as exc:
+                    _logger.warning(
+                        "Stream worker error: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    event_queue.put(
+                        json.dumps(
+                            {
+                                "type": "error",
+                                "message": str(exc),
+                            }
+                        )
+                        + "\n"
+                    )
                 finally:
                     event_queue.put(None)
 
@@ -221,40 +417,10 @@ def create_app(
                 daemon=True,
             )
             worker.start()
-
-            start = time.time()
-            while True:
-                elapsed = time.time() - start
-                if elapsed >= timeout:
-                    yield json.dumps(
-                        {
-                            "type": "timeout",
-                            "message": (
-                                "Agent timed out" f" after {timeout}s"
-                            ),
-                        }
-                    ) + "\n"
-                    break
-                remaining = timeout - elapsed
-                try:
-                    item = event_queue.get(
-                        timeout=remaining,
-                    )
-                    if item is None:
-                        break
-                    yield item
-                except queue.Empty:
-                    if time.time() - start >= timeout:
-                        yield json.dumps(
-                            {
-                                "type": "timeout",
-                                "message": (
-                                    "Agent timed out" f" after {timeout}s"
-                                ),
-                            }
-                        ) + "\n"
-                        break
-
+            yield from _drain_queue(
+                event_queue,
+                timeout,
+            )
             worker.join(timeout=2)
 
         return StreamingResponse(
@@ -262,9 +428,259 @@ def create_app(
             media_type="application/x-ndjson",
         )
 
+    # ---------------------------------------------------------------
+    # Shared stream-queue drain
+    # ---------------------------------------------------------------
+
+    def _drain_queue(
+        event_queue: queue.Queue,
+        timeout: float,
+    ):
+        """Yield items from *event_queue* until done
+        or *timeout* seconds elapse."""
+        start = time.time()
+        while True:
+            elapsed = time.time() - start
+            if elapsed >= timeout:
+                yield json.dumps(
+                    {
+                        "type": "timeout",
+                        "message": (f"Agent timed out" f" after {timeout}s"),
+                    }
+                ) + "\n"
+                break
+            remaining = timeout - elapsed
+            try:
+                item = event_queue.get(
+                    timeout=min(remaining, 1.0),
+                )
+                if item is None:
+                    break
+                yield item
+            except queue.Empty:
+                continue
+
+    # ---------------------------------------------------------------
+    # LangGraph helpers
+    # ---------------------------------------------------------------
+
+    from user_context import build_user_context
+
+    _build_user_context = build_user_context
+
+    def _build_graph_input(req: ChatRequest) -> dict:
+        """Build LangGraph AgentState input from req."""
+        from langchain_core.messages import (
+            AIMessage,
+            HumanMessage,
+        )
+
+        msgs = []
+        for h in req.history or []:
+            role = h.get("role", "user")
+            content = h.get("content", "")
+            if role == "assistant":
+                msgs.append(AIMessage(content=content))
+            else:
+                msgs.append(
+                    HumanMessage(content=content),
+                )
+        msgs.append(
+            HumanMessage(content=req.message),
+        )
+
+        user_ctx = _build_user_context(
+            req.user_id or "",
+        )
+
+        return {
+            "messages": msgs,
+            "user_input": req.message,
+            "user_id": req.user_id or "",
+            "session_id": req.session_id or "",
+            "history": req.history or [],
+            "user_context": user_ctx,
+            "intent": "",
+            "next_agent": "",
+            "current_agent": "",
+            "tickers": [],
+            "data_sources_used": [],
+            "was_local_sufficient": True,
+            "tool_events": [],
+            "retrieved_memories": [],
+            "final_response": "",
+            "error": None,
+            "start_time_ns": 0,
+        }
+
+    def _update_conversation_context(
+        session_id: str,
+        user_input: str,
+        response: str,
+        agent: str,
+        intent: str,
+        tickers: list[str],
+        user_id: str,
+    ) -> None:
+        """Update or create conversation context."""
+        if not session_id:
+            return
+
+        try:
+            from agents.conversation_context import (
+                ConversationContext,
+                context_store,
+                update_summary,
+            )
+
+            ctx = context_store.get(session_id)
+            if ctx is None:
+                ctx = ConversationContext(
+                    session_id=session_id,
+                )
+                # Populate user profile on first turn.
+                try:
+                    user_ctx = _build_user_context(
+                        user_id,
+                    )
+                    ctx.user_tickers = user_ctx.get(
+                        "tickers", [],
+                    )
+                    ctx.market_preference = user_ctx.get(
+                        "market", "",
+                    )
+                    ctx.subscription_tier = user_ctx.get(
+                        "tier", "",
+                    )
+                except Exception:
+                    pass
+
+            ctx.last_agent = agent
+            ctx.last_intent = intent
+            ctx.current_topic = (
+                f"{', '.join(tickers)} {intent}"
+                if tickers else intent
+            )
+            for t in tickers:
+                if t not in ctx.tickers_mentioned:
+                    ctx.tickers_mentioned.append(t)
+
+            # Update summary (non-blocking).
+            try:
+                update_summary(ctx, user_input, response)
+            except Exception:
+                ctx.turn_count += 1
+
+            context_store.upsert(session_id, ctx)
+        except Exception:
+            _logger.debug(
+                "Context update failed",
+                exc_info=True,
+            )
+
+    def _stream_langgraph(req: ChatRequest):
+        """NDJSON streaming via LangGraph graph."""
+        timeout = settings.agent_timeout_seconds
+        input_state = _build_graph_input(req)
+
+        def generate():
+            event_queue: queue.Queue = queue.Queue()
+
+            def run() -> None:
+                set_current_user(req.user_id)
+                try:
+                    from agents.sub_agents import (
+                        set_event_sink,
+                    )
+
+                    def _sink(ev):
+                        event_queue.put(json.dumps(ev) + "\n")
+
+                    set_event_sink(_sink)
+                    try:
+                        result = graph.invoke(
+                            input_state,
+                        )
+                    finally:
+                        set_event_sink(None)
+                    # Update conversation context.
+                    _update_conversation_context(
+                        session_id=(
+                            req.session_id or ""
+                        ),
+                        user_input=req.message,
+                        response=result.get(
+                            "final_response", "",
+                        ),
+                        agent=result.get(
+                            "current_agent", "",
+                        ),
+                        intent=result.get(
+                            "intent", "",
+                        ),
+                        tickers=result.get(
+                            "tickers", [],
+                        ),
+                        user_id=req.user_id or "",
+                    )
+                    # Emit final
+                    event_queue.put(
+                        json.dumps(
+                            {
+                                "type": "final",
+                                "response": result.get("final_response", ""),
+                                "agent": result.get("current_agent", ""),
+                            }
+                        )
+                        + "\n"
+                    )
+                    _track_usage_sync(req.user_id)
+                except Exception as exc:
+                    event_queue.put(
+                        json.dumps(
+                            {
+                                "type": "error",
+                                "message": str(exc),
+                            }
+                        )
+                        + "\n"
+                    )
+                finally:
+                    event_queue.put(None)
+
+            worker = threading.Thread(
+                target=run,
+                daemon=True,
+            )
+            worker.start()
+            yield from _drain_queue(
+                event_queue,
+                timeout,
+            )
+            worker.join(timeout=2)
+
+        return StreamingResponse(
+            generate(),
+            media_type="application/x-ndjson",
+        )
+
+    async def _pg_health() -> dict:
+        """Check PostgreSQL connectivity."""
+        try:
+            from sqlalchemy import text
+
+            from db.engine import get_engine
+
+            async with get_engine().connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            return {"postgresql": "ok"}
+        except Exception as exc:
+            return {"postgresql": f"error: {exc}"}
+
     async def _health():
         """GET /health."""
-        return {"status": "ok"}
+        pg = await _pg_health()
+        return {"status": "ok", **pg}
 
     async def _list_agents():
         """GET /agents."""
@@ -306,16 +722,125 @@ def create_app(
 
             repo = _require_repo()
             usage = repo.get_dashboard_llm_usage(
-                user_id=None, days=30,
+                user_id=None,
+                days=30,
             )
             cascade_stats["requests_total"] = int(
                 usage.get("total_requests", 0)
             )
         except Exception:
-            pass  # keep in-memory count as fallback
+            _logger.debug(
+                "Iceberg LLM usage fallback",
+                exc_info=True,
+            )
 
         result["cascade_stats"] = cascade_stats
         return result
+
+    async def _admin_query_gaps(
+        current_user=None,
+    ):
+        """GET /admin/query-gaps — data gap analysis."""
+        try:
+            from tools._stock_shared import (
+                _require_repo,
+            )
+
+            repo = _require_repo()
+        except Exception:
+            return {
+                "top_gap_tickers": [],
+                "external_api_usage": {},
+                "intent_distribution": {},
+                "local_sufficiency_rate": 0,
+            }
+
+        # Top unresolved gaps
+        gaps = repo.get_unfilled_data_gaps()
+        top_gaps = sorted(
+            gaps,
+            key=lambda g: g.get(
+                "query_count",
+                0,
+            ),
+            reverse=True,
+        )[:10]
+
+        # Query log stats
+        logs = []
+        try:
+            # Read recent logs (all users)
+            tbl = repo._load_table(
+                repo._QUERY_LOG,
+            )
+            scan = tbl.scan()
+            df = scan.to_pandas()
+            if not df.empty:
+                logs = df.to_dict("records")
+        except Exception:
+            _logger.debug(
+                "Query log scan failed",
+                exc_info=True,
+            )
+
+        # External API usage
+        yf_today = sum(
+            1
+            for rec in logs
+            if "yfinance"
+            in str(
+                rec.get("data_sources_used", ""),
+            )
+        )
+        serp_today = sum(
+            1
+            for rec in logs
+            if "serpapi"
+            in str(
+                rec.get("data_sources_used", ""),
+            )
+        )
+
+        # Intent distribution
+        intents: dict[str, int] = {}
+        for rec in logs:
+            intent = rec.get(
+                "classified_intent",
+                "unknown",
+            )
+            intents[intent] = intents.get(intent, 0) + 1
+
+        # Local sufficiency
+        total = len(logs) or 1
+        local_ok = sum(
+            1 for rec in logs if rec.get("was_local_sufficient", False)
+        )
+
+        return {
+            "top_gap_tickers": [
+                {
+                    "ticker": g.get("ticker", ""),
+                    "query_count": g.get(
+                        "query_count",
+                        0,
+                    ),
+                    "data_type": g.get(
+                        "data_type",
+                        "",
+                    ),
+                }
+                for g in top_gaps
+            ],
+            "external_api_usage": {
+                "yfinance_calls": yf_today,
+                "serpapi_calls": serp_today,
+            },
+            "intent_distribution": intents,
+            "local_sufficiency_rate": round(
+                local_ok / total,
+                2,
+            ),
+        }
 
     # ---------------------------------------------------------------
     # All API endpoints under /v1 (ASETPLTFRM-20)
@@ -446,7 +971,19 @@ def create_app(
             "enabled": enabled,
         }
 
+    async def _admin_daily_budget():
+        """GET /admin/daily-budget — Groq token usage."""
+        if token_budget is None:
+            return {"error": "Token budget not available"}
+        return token_budget.get_daily_budget()
+
     admin_router = APIRouter(prefix="/v1")
+    admin_router.add_api_route(
+        "/admin/daily-budget",
+        _admin_daily_budget,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
     admin_router.add_api_route(
         "/admin/metrics",
         _admin_metrics,
@@ -465,17 +1002,467 @@ def create_app(
         methods=["POST"],
         dependencies=[Depends(superuser_only)],
     )
+
+    async def _admin_retention_selected(
+        request: Request,
+    ):
+        """POST /admin/retention/selected."""
+        body = await request.json()
+        table_ids = body.get("table_ids", [])
+        if not table_ids:
+            return {"results": []}
+        from stocks.retention import RetentionManager
+
+        mgr = RetentionManager()
+        results = mgr.run_cleanup_tables(
+            table_ids,
+            dry_run=False,
+        )
+        return {
+            "results": [
+                {
+                    "table": r.table_id,
+                    "cutoff_date": str(r.cutoff_date),
+                    "rows_before": r.rows_before,
+                    "rows_deleted": r.rows_deleted,
+                    "dry_run": r.dry_run,
+                    "error": r.error,
+                }
+                for r in results
+            ],
+        }
+
     admin_router.add_api_route(
         "/admin/retention",
         _admin_retention,
         methods=["POST"],
         dependencies=[Depends(superuser_only)],
     )
+    admin_router.add_api_route(
+        "/admin/retention/selected",
+        _admin_retention_selected,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/query-gaps",
+        _admin_query_gaps,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    async def _admin_reset_usage():
+        """POST /admin/reset-usage — zero monthly counts."""
+        from usage_tracker import reset_monthly_usage
+
+        count = await reset_monthly_usage()
+        return {"reset_count": count}
+
+    async def _admin_usage_stats():
+        """GET /admin/usage-stats — all users + counts."""
+        from usage_tracker import get_usage_stats
+
+        return {"users": await get_usage_stats()}
+
+    async def _admin_reset_selected(
+        request: Request,
+    ):
+        """POST /admin/reset-usage/selected."""
+        body = await request.json()
+        user_ids = body.get("user_ids", [])
+        if not user_ids:
+            return {"reset_count": 0}
+        from usage_tracker import reset_user_usage
+
+        count = await reset_user_usage(user_ids)
+        return {"reset_count": count}
+
+    admin_router.add_api_route(
+        "/admin/reset-usage",
+        _admin_reset_usage,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/usage-stats",
+        _admin_usage_stats,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/reset-usage/selected",
+        _admin_reset_selected,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    async def _admin_usage_history(
+        user_id: str | None = None,
+        limit: int = 12,
+    ):
+        """GET /admin/usage-history."""
+        from usage_tracker import get_usage_history
+
+        return {
+            "history": get_usage_history(
+                user_id=user_id,
+                limit=limit,
+            ),
+        }
+
+    admin_router.add_api_route(
+        "/admin/usage-history",
+        _admin_usage_history,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    async def _admin_payment_txns(
+        user_id: str | None = None,
+        gateway: str | None = None,
+        limit: int = 50,
+    ):
+        """GET /admin/payment-transactions."""
+        from auth.endpoints.helpers import _get_repo
+        from auth.repo import payment_repo
+        from backend.db.engine import get_session_factory
+
+        repo = _get_repo()
+
+        # Build user_id → name/email lookup
+        all_users = await repo.list_all()
+        user_map: dict[str, dict] = {}
+        for u in all_users:
+            uid = u.get("user_id", "")
+            user_map[uid] = {
+                "name": u.get("full_name", ""),
+                "email": u.get("email", ""),
+            }
+
+        # Read from PostgreSQL
+        factory = get_session_factory()
+        async with factory() as session:
+            from sqlalchemy import select
+            from backend.db.models.payment import (
+                PaymentTransaction,
+            )
+
+            q = select(PaymentTransaction)
+            if user_id:
+                q = q.where(
+                    PaymentTransaction.user_id == user_id
+                )
+            if gateway:
+                q = q.where(
+                    PaymentTransaction.gateway == gateway
+                )
+            q = q.order_by(
+                PaymentTransaction.created_at.desc()
+            ).limit(limit)
+            result = await session.execute(q)
+            txns = result.scalars().all()
+
+        rows = []
+        for t in txns:
+            r = {
+                c.name: getattr(t, c.name)
+                for c in t.__table__.columns
+            }
+            if hasattr(r.get("created_at"), "isoformat"):
+                r["created_at"] = (
+                    r["created_at"].isoformat()
+                )
+            uid = r.get("user_id", "")
+            info = user_map.get(uid, {})
+            r["user_name"] = info.get("name", "")
+            r["user_email"] = info.get("email", "")
+            rows.append(r)
+        return {"transactions": rows}
+
+    admin_router.add_api_route(
+        "/admin/payment-transactions",
+        _admin_payment_txns,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    # ── Scheduler endpoints ─────────────────────────
+
+    async def _scheduler_list_jobs(request: Request):
+        """GET /admin/scheduler/jobs."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            return {"jobs": []}
+        return {"jobs": svc.list_jobs()}
+
+    async def _scheduler_create_job(
+        request: Request,
+    ):
+        """POST /admin/scheduler/jobs."""
+        body = await request.json()
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        cron_days = body.get("cron_days", [])
+        if isinstance(cron_days, list):
+            cron_days = ",".join(cron_days)
+        cron_dates = body.get("cron_dates", [])
+        if isinstance(cron_dates, list):
+            cron_dates = ",".join(
+                str(d) for d in cron_dates
+            )
+        job = {
+            "name": body.get("name", "Untitled"),
+            "job_type": body.get(
+                "job_type", "data_refresh",
+            ),
+            "cron_days": cron_days,
+            "cron_dates": cron_dates or "",
+            "cron_time": body.get("cron_time", "18:00"),
+            "scope": body.get("scope", "all"),
+        }
+        job_id = svc.add_job(job)
+        return {"job_id": job_id, "detail": "created"}
+
+    async def _scheduler_update_job(
+        request: Request, job_id: str,
+    ):
+        """PATCH /admin/scheduler/jobs/{job_id}."""
+        body = await request.json()
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        if "enabled" in body:
+            svc.toggle_job(job_id, body["enabled"])
+        else:
+            updates = {}
+            for k in (
+                "name", "cron_days", "cron_dates",
+                "cron_time", "scope",
+            ):
+                if k in body:
+                    v = body[k]
+                    if k == "cron_days" and isinstance(
+                        v, list,
+                    ):
+                        v = ",".join(v)
+                    if k == "cron_dates" and isinstance(
+                        v, list,
+                    ):
+                        v = ",".join(
+                            str(d) for d in v
+                        )
+                    updates[k] = v
+            if updates:
+                svc.update_job(job_id, updates)
+        return {"detail": "updated"}
+
+    async def _scheduler_delete_job(
+        request: Request, job_id: str,
+    ):
+        """DELETE /admin/scheduler/jobs/{job_id}."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        svc.remove_job(job_id)
+        return {"detail": "deleted"}
+
+    async def _scheduler_trigger_job(
+        request: Request, job_id: str,
+    ):
+        """POST /admin/scheduler/jobs/{job_id}/trigger."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        run_id = svc.trigger_now(job_id)
+        if not run_id:
+            raise HTTPException(
+                404, "Job not found or no executor",
+            )
+        return {"run_id": run_id, "detail": "triggered"}
+
+    async def _scheduler_list_runs(request: Request):
+        """GET /admin/scheduler/runs."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            return {"runs": []}
+        runs = svc._repo.get_scheduler_runs(days=7)
+        # Sanitise for JSON (NaN, NaT, datetimes)
+        import math as _math
+
+        for r in runs:
+            for k, v in list(r.items()):
+                if hasattr(v, "isoformat"):
+                    r[k] = v.isoformat()
+                elif isinstance(v, float) and (
+                    _math.isnan(v) or _math.isinf(v)
+                ):
+                    r[k] = None
+        return {"runs": runs}
+
+    async def _scheduler_stats(request: Request):
+        """GET /admin/scheduler/stats."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            return {
+                "active_jobs": 0,
+                "next_run_label": None,
+                "next_run_seconds": None,
+                "last_run_status": None,
+                "last_run_ago": None,
+                "last_run_tickers": None,
+                "runs_today": 0,
+                "runs_today_success": 0,
+                "runs_today_failed": 0,
+                "runs_today_running": 0,
+            }
+        stats = svc.get_stats()
+        # Sanitise NaN for JSON
+        import math as _math
+
+        for k, v in list(stats.items()):
+            if isinstance(v, float) and (
+                _math.isnan(v) or _math.isinf(v)
+            ):
+                stats[k] = None
+            elif hasattr(v, "isoformat"):
+                stats[k] = v.isoformat()
+        return stats
+
+    admin_router.add_api_route(
+        "/admin/scheduler/jobs",
+        _scheduler_list_jobs,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/jobs",
+        _scheduler_create_job,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/jobs/{job_id}",
+        _scheduler_update_job,
+        methods=["PATCH"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/jobs/{job_id}",
+        _scheduler_delete_job,
+        methods=["DELETE"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/jobs/{job_id}/trigger",
+        _scheduler_trigger_job,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/runs",
+        _scheduler_list_runs,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/stats",
+        _scheduler_stats,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    # ── Ollama local-LLM management ────────────
+
+    async def _admin_ollama_status():
+        """GET /admin/ollama/status."""
+        from ollama_manager import (
+            get_ollama_manager,
+        )
+
+        return get_ollama_manager().get_status()
+
+    async def _admin_ollama_load(
+        request: Request,
+    ):
+        """POST /admin/ollama/load."""
+        from ollama_manager import (
+            get_ollama_manager,
+        )
+
+        body = await request.json()
+        profile = body.get(
+            "profile",
+            "reasoning",
+        )
+        mgr = get_ollama_manager()
+        if not mgr.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Ollama server not reachable",
+            )
+        return mgr.load_profile(profile)
+
+    async def _admin_ollama_unload():
+        """POST /admin/ollama/unload."""
+        from ollama_manager import (
+            get_ollama_manager,
+        )
+
+        mgr = get_ollama_manager()
+        if not mgr.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Ollama server not reachable",
+            )
+        return mgr.unload_all()
+
+    admin_router.add_api_route(
+        "/admin/ollama/status",
+        _admin_ollama_status,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/ollama/load",
+        _admin_ollama_load,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/ollama/unload",
+        _admin_ollama_unload,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+
     app.include_router(admin_router)
 
     # Dashboard + audit + insights endpoints.
-    from dashboard_routes import create_dashboard_router
     from audit_routes import create_audit_router
+    from dashboard_routes import create_dashboard_router
     from insights_routes import create_insights_router
 
     app.include_router(
@@ -502,7 +1489,13 @@ def create_app(
     # WebSocket streaming endpoint.
     from ws import register_ws_routes
 
-    register_ws_routes(app, agent_registry, executor, settings)
+    register_ws_routes(
+        app,
+        agent_registry,
+        executor,
+        settings,
+        graph=graph,
+    )
 
     # Serve uploaded avatars.
     from paths import AVATARS_DIR, ensure_dirs

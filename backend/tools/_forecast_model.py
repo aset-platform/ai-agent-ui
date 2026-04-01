@@ -52,22 +52,46 @@ def _prepare_data_for_prophet(df: pd.DataFrame) -> pd.DataFrame:
     return prophet_df
 
 
-def _train_prophet_model(prophet_df: pd.DataFrame) -> Prophet:
+def _train_prophet_model(
+    prophet_df: pd.DataFrame,
+    ticker: str = "",
+    regressors: pd.DataFrame | None = None,
+) -> Prophet:
     """Fit a Prophet model on the prepared price data.
 
-    Enables yearly and weekly seasonality, disables daily seasonality, and
-    adds US federal holidays as special events.
+    Enables yearly and weekly seasonality, disables daily
+    seasonality, and adds market-specific holidays.
+    Optional external regressors (VIX, index return) are
+    added when provided.
 
     Args:
-        prophet_df: DataFrame in Prophet format (``ds``, ``y``) as returned
-            by :func:`_prepare_data_for_prophet`.
+        prophet_df: DataFrame in Prophet format (``ds``,
+            ``y``) as returned by
+            :func:`_prepare_data_for_prophet`.
+        ticker: Stock ticker — used for market-specific
+            holidays and logging.
+        regressors: Optional DataFrame aligned to
+            ``prophet_df["ds"]`` with named columns to
+            add as Prophet regressors (e.g. ``vix``,
+            ``index_return``).
 
     Returns:
         A fitted :class:`~prophet.Prophet` model instance.
     """
     year_start = int(prophet_df["ds"].dt.year.min())
     year_end = int(prophet_df["ds"].dt.year.max()) + 2
-    hols = _sh._build_holidays_df(range(year_start, year_end))
+    hols = _sh._build_holidays_df(
+        range(year_start, year_end),
+        ticker=ticker,
+    )
+
+    # Merge earnings dates as holidays (±2 day window).
+    earnings_hols = _sh._fetch_earnings_holidays(ticker)
+    if not earnings_hols.empty:
+        hols = pd.concat(
+            [hols, earnings_hols],
+            ignore_index=True,
+        )
 
     model = Prophet(
         yearly_seasonality=True,
@@ -76,27 +100,73 @@ def _train_prophet_model(prophet_df: pd.DataFrame) -> Prophet:
         holidays=hols if not hols.empty else None,
         interval_width=0.80,
     )
-    model.fit(prophet_df)
-    _logger.info("Prophet model fitted on %d rows", len(prophet_df))
-    return model
+
+    # Add external regressors (VIX, index return, etc.)
+    train_df = prophet_df.copy()
+    if regressors is not None and not regressors.empty:
+        for col in regressors.columns:
+            if col == "ds":
+                continue
+            model.add_regressor(col)
+            train_df = train_df.merge(
+                regressors[["ds", col]],
+                on="ds",
+                how="left",
+            )
+            train_df[col] = train_df[col].ffill().bfill()
+        _logger.info(
+            "Added regressors: %s",
+            list(regressors.columns.drop("ds", errors="ignore")),
+        )
+
+    model.fit(train_df)
+    _logger.info(
+        "Prophet model fitted on %d rows (%s)",
+        len(train_df),
+        ticker or "unknown",
+    )
+    return model, train_df
 
 
 def _generate_forecast(
-    model: Prophet, prophet_df: pd.DataFrame, months: int
+    model: Prophet,
+    prophet_df: pd.DataFrame,
+    months: int,
+    regressors: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Generate a price forecast for a given number of months ahead.
+    """Generate a price forecast for a given number of months.
 
     Args:
         model: A fitted :class:`~prophet.Prophet` model.
         prophet_df: The training data in Prophet format.
-        months: Number of months to forecast into the future.
+        months: Number of months to forecast.
+        regressors: Optional regressor DataFrame. For future
+            dates, values are forward-filled from the last
+            known observation.
 
     Returns:
         DataFrame of **future-only** rows with columns ``ds``,
         ``yhat``, ``yhat_lower``, ``yhat_upper``.
     """
     periods = int(months * 30)
-    future = model.make_future_dataframe(periods=periods, freq="D")
+    future = model.make_future_dataframe(
+        periods=periods,
+        freq="D",
+    )
+
+    # Merge regressors into future dataframe.
+    if regressors is not None and not regressors.empty:
+        for col in regressors.columns:
+            if col == "ds":
+                continue
+            future = future.merge(
+                regressors[["ds", col]],
+                on="ds",
+                how="left",
+            )
+            # Forward-fill known values into future dates.
+            future[col] = future[col].ffill().bfill()
+
     forecast = model.predict(future)
 
     last_date = prophet_df["ds"].max()

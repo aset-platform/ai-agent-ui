@@ -4,13 +4,32 @@ A fullstack agentic chat application built with Next.js and FastAPI. The LLM run
 
 ---
 
+## Feature Highlights
+
+- **5 specialized AI agents** — Portfolio, Stock Analyst, Forecaster, Research, and Sentiment agents, each with purpose-built tool sets, routed by a LangGraph supervisor
+- **Context-aware multi-turn conversations** — rolling summary window maintains coherent long conversations without overflowing the context budget
+- **Recency-aware news** — 7-day default window with time-decay scoring surfaces the most relevant recent headlines first
+- **Dual payment gateways** — Razorpay (INR modal) and Stripe (USD hosted checkout) with pro-rata billing and webhook-verified transaction ledger
+- **Prophet forecasting with ensemble correction** — 3/6/9-month price targets with 80% confidence bands, cached same-day
+- **Real-time WebSocket streaming** — live `tool_start` / `tool_done` events give users visibility into the agentic loop as it runs
+- **Ollama local LLM support** — zero-cost inference as Tier 0 in the cascade; gracefully skipped when unavailable
+- **Docker Compose 5-service orchestration** — `docker compose up -d` starts backend (8181), frontend (3000), PostgreSQL (5432), Redis (6379), and docs (8000)
+- **Memory-augmented chat** — pgvector semantic memory retrieval across sessions; facts + summaries persist and auto-inject into sub-agent prompts
+- **Round-robin model pools** — load-balanced Groq daily token budgets across 6 models (~2.3M TPD combined)
+- **LLM Observability dashboard** — real-time token tracking, daily budget monitoring, per-model TPD/RPD bars
+- **Lighthouse performance monitoring** — 94/100 score; LHCI gate enforced pre-PR via `npm run perf:check`
+
+---
+
 ## Stack
 
 | Layer | Technology |
 |-------|------------|
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS 4 |
 | Backend | Python 3.12, FastAPI, LangChain |
-| LLM | N-tier Groq cascade (4 models) + Anthropic Claude Sonnet 4.6 fallback |
+| LLM | Round-robin Groq cascade (6 models) + Anthropic Claude Sonnet 4.6 fallback |
+| Vector DB | pgvector (PostgreSQL extension, 768-dim embeddings) |
+| Embeddings | Ollama nomic-embed-text (local, zero API cost) |
 | Web search tool | SerpAPI via `langchain-community` |
 | Package management | npm (frontend), pip + virtualenv (backend) |
 

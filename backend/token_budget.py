@@ -11,9 +11,12 @@ Typical usage::
 
     budget = TokenBudget()
     est = budget.estimate_tokens(messages)
-    if budget.can_afford("my-model", est):
-        # ... invoke LLM ...
-        budget.record("my-model", est)
+    if budget.reserve("my-model", est):
+        try:
+            result = llm.invoke(messages)
+        except Exception:
+            budget.release("my-model", est)
+            raise
 """
 
 from __future__ import annotations
@@ -23,7 +26,10 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from langsmith import traceable
 
 _logger = logging.getLogger(__name__)
 
@@ -53,7 +59,7 @@ class ModelLimits:
 
 
 # Hardcoded free-tier defaults (March 2026).
-_DEFAULT_LIMITS: Dict[str, ModelLimits] = {
+_DEFAULT_LIMITS: dict[str, ModelLimits] = {
     "meta-llama/llama-4-scout-17b-16e-instruct": ModelLimits(
         rpm=30,
         tpm=30_000,
@@ -90,10 +96,46 @@ _DEFAULT_LIMITS: Dict[str, ModelLimits] = {
         rpd=1_000,
         tpd=300_000,
     ),
+    "openai/gpt-oss-20b": ModelLimits(
+        rpm=30,
+        tpm=8_000,
+        rpd=1_000,
+        tpd=200_000,
+    ),
 }
 
 # Safety margin multiplier applied to token estimates.
 _ESTIMATE_MARGIN = 1.20
+
+
+class RoundRobinPool:
+    """A named pool of models with a round-robin counter.
+
+    Thread-safe — counter incremented under lock.
+    """
+
+    def __init__(
+        self, name: str, models: list[str],
+    ) -> None:
+        self.name = name
+        self.models = list(models)
+        self._counter = 0
+        self._lock = threading.Lock()
+
+    def ordered_models(self) -> list[str]:
+        """Return models starting from the next
+        round-robin position, wrapping around.
+        """
+        with self._lock:
+            n = len(self.models)
+            if n == 0:
+                return []
+            idx = self._counter % n
+            self._counter += 1
+        return [
+            self.models[(idx + i) % n]
+            for i in range(n)
+        ]
 
 
 @dataclass
@@ -134,16 +176,115 @@ class TokenBudget:
 
     def __init__(
         self,
-        limits: Dict[str, ModelLimits] | None = None,
+        limits: dict[str, ModelLimits] | None = None,
     ) -> None:
-        self._limits: Dict[str, ModelLimits] = {
+        self._limits: dict[str, ModelLimits] = {
             **_DEFAULT_LIMITS,
             **(limits or {}),
         }
         # Pre-allocate state for all known models.
-        self._state: Dict[str, _ModelState] = {
+        self._state: dict[str, _ModelState] = {
             model: _ModelState() for model in self._limits
         }
+        self._pools: dict[str, RoundRobinPool] = {}
+
+    def seed_daily_from_iceberg(self) -> None:
+        """Seed TPD/RPD from today's Iceberg usage.
+
+        Called once at startup so daily counters
+        survive backend restarts. Only seeds models
+        that have zero current usage (avoids double
+        counting in a running process).
+        """
+        try:
+            from tools._stock_shared import _get_repo
+            from pyiceberg.expressions import (
+                GreaterThanOrEqual,
+            )
+
+            repo = _get_repo()
+            if repo is None:
+                return
+            cat = repo._get_catalog()
+            tbl = cat.load_table("stocks.llm_usage")
+            today = (
+                datetime.now(timezone.utc)
+                .date()
+                .isoformat()
+            )
+            df = tbl.scan(
+                row_filter=GreaterThanOrEqual(
+                    "request_date", today,
+                ),
+                selected_fields=[
+                    "model",
+                    "total_tokens",
+                ],
+            ).to_pandas()
+            if df.empty:
+                return
+
+            now = time.monotonic()
+            grp = df.groupby("model").agg(
+                tokens=("total_tokens", "sum"),
+                requests=("model", "count"),
+            )
+            seeded = 0
+            for model, row in grp.iterrows():
+                tokens = int(row["tokens"])
+                requests = int(row["requests"])
+                if tokens <= 0 and requests <= 0:
+                    continue
+                state = self._get_state(model)
+                with state.lock:
+                    # Only seed if day deques are empty
+                    if (
+                        state.day_tokens_total > 0
+                        or state.day_requests_total > 0
+                    ):
+                        continue
+                    state.day_tokens.append(
+                        (now, tokens),
+                    )
+                    state.day_tokens_total = tokens
+                    state.day_requests.append(
+                        (now, requests),
+                    )
+                    state.day_requests_total = (
+                        requests
+                    )
+                    seeded += 1
+            if seeded:
+                _logger.info(
+                    "Seeded TPD/RPD for %d models "
+                    "from Iceberg",
+                    seeded,
+                )
+        except Exception:
+            _logger.debug(
+                "Iceberg TPD seed failed",
+                exc_info=True,
+            )
+
+    def register_pool(
+        self, name: str, models: list[str],
+    ) -> RoundRobinPool:
+        """Register a round-robin pool (idempotent).
+
+        Returns the existing pool if already registered
+        with the same name.
+        """
+        if name in self._pools:
+            return self._pools[name]
+        pool = RoundRobinPool(name, models)
+        self._pools[name] = pool
+        return pool
+
+    def get_pool(
+        self, name: str,
+    ) -> RoundRobinPool | None:
+        """Return a registered pool by name."""
+        return self._pools.get(name)
 
     def get_tpm(self, model: str) -> int | None:
         """Return the TPM limit for *model*, or ``None``.
@@ -163,7 +304,7 @@ class TokenBudget:
 
     @staticmethod
     def estimate_tokens(
-        messages: List[Any],
+        messages: list[Any],
     ) -> int:
         """Estimate token count for a message list.
 
@@ -254,6 +395,120 @@ class TokenBudget:
             return False
         return True
 
+    @traceable(name="TokenBudget.reserve")
+    def reserve(
+        self,
+        model: str,
+        estimated_tokens: int,
+    ) -> bool:
+        """Atomically check budget AND record a tentative spend.
+
+        Eliminates the TOCTOU race between separate
+        :meth:`can_afford` / :meth:`record` calls by holding the
+        lock for both operations.  On LLM failure, call
+        :meth:`release` to roll back.
+
+        Args:
+            model: Groq model identifier.
+            estimated_tokens: Pre-computed token estimate.
+
+        Returns:
+            ``True`` if the reservation succeeded.
+        """
+        lim = self._limits.get(model)
+        if lim is None:
+            return True
+
+        state = self._get_state(model)
+        with state.lock:
+            now = time.monotonic()
+
+            tpm_used, _ = self._window_total(
+                state.minute_tokens,
+                _MINUTE,
+                now,
+                state.minute_tokens_total,
+            )
+            state.minute_tokens_total = tpm_used
+
+            rpm_used, _ = self._window_total(
+                state.minute_requests,
+                _MINUTE,
+                now,
+                state.minute_requests_total,
+            )
+            state.minute_requests_total = rpm_used
+
+            tpd_used, _ = self._window_total(
+                state.day_tokens,
+                _DAY,
+                now,
+                state.day_tokens_total,
+            )
+            state.day_tokens_total = tpd_used
+
+            rpd_used, _ = self._window_total(
+                state.day_requests,
+                _DAY,
+                now,
+                state.day_requests_total,
+            )
+            state.day_requests_total = rpd_used
+
+            # Budget check (same thresholds as can_afford).
+            if tpm_used + estimated_tokens > lim.tpm * _THRESHOLD:
+                return False
+            if rpm_used + 1 > lim.rpm * _THRESHOLD:
+                return False
+            if tpd_used + estimated_tokens > lim.tpd * _THRESHOLD:
+                return False
+            if rpd_used + 1 > lim.rpd * _THRESHOLD:
+                return False
+
+            # Tentatively record the spend while still
+            # holding the lock — no other thread can
+            # double-spend.
+            state.minute_tokens.append(
+                (now, estimated_tokens),
+            )
+            state.minute_tokens_total += estimated_tokens
+            state.minute_requests.append((now, 1))
+            state.minute_requests_total += 1
+            state.day_tokens.append(
+                (now, estimated_tokens),
+            )
+            state.day_tokens_total += estimated_tokens
+            state.day_requests.append((now, 1))
+            state.day_requests_total += 1
+
+        return True
+
+    def release(
+        self,
+        model: str,
+        estimated_tokens: int,
+    ) -> None:
+        """Roll back a prior :meth:`reserve` on LLM failure.
+
+        Subtracts the tentative spend so the budget is available
+        for the next tier.  Safe to call even if the model has
+        no limits entry.
+
+        Args:
+            model: Groq model identifier.
+            estimated_tokens: Same value passed to
+                :meth:`reserve`.
+        """
+        if model not in self._limits:
+            return
+
+        state = self._get_state(model)
+        with state.lock:
+            state.minute_tokens_total -= estimated_tokens
+            state.minute_requests_total -= 1
+            state.day_tokens_total -= estimated_tokens
+            state.day_requests_total -= 1
+
     def record(self, model: str, tokens_used: int) -> None:
         """Record a completed request for *model*.
 
@@ -277,7 +532,7 @@ class TokenBudget:
         self,
         estimated_tokens: int,
         prefer: str,
-        fallbacks: List[str] | None = None,
+        fallbacks: list[str] | None = None,
     ) -> str | None:
         """Return the first model that can afford *estimated_tokens*.
 
@@ -297,13 +552,13 @@ class TokenBudget:
                 return model
         return None
 
-    def get_status(self) -> Dict[str, Dict[str, str]]:
+    def get_status(self) -> dict[str, dict[str, str]]:
         """Return human-readable utilization per model.
 
         Returns:
             ``{model: {tpm: "1234/8000", ...}}``.
         """
-        result: Dict[str, Dict[str, str]] = {}
+        result: dict[str, dict[str, str]] = {}
         now = time.monotonic()
         for model, lim in self._limits.items():
             state = self._get_state(model)
@@ -344,6 +599,94 @@ class TokenBudget:
             }
         return result
 
+    def get_daily_budget(self) -> dict[str, Any]:
+        """Aggregate daily token usage across all models.
+
+        Returns:
+            Dict with ``date``, ``daily_limit``,
+            ``total_tokens``, ``remaining_tokens``,
+            ``usage_pct``, ``by_model``,
+            ``estimated_queries_remaining``,
+            ``reset_time_utc``.
+        """
+        now = time.monotonic()
+        total_tokens = 0
+        daily_limit = 0
+        total_requests = 0
+        by_model: dict[str, dict[str, Any]] = {}
+
+        for model, lim in self._limits.items():
+            state = self._get_state(model)
+            with state.lock:
+                tpd, _ = self._window_total(
+                    state.day_tokens, _DAY, now,
+                    state.day_tokens_total,
+                )
+                state.day_tokens_total = tpd
+                rpd, _ = self._window_total(
+                    state.day_requests, _DAY, now,
+                    state.day_requests_total,
+                )
+                state.day_requests_total = rpd
+
+            by_model[model] = {
+                "total": tpd,
+                "requests": rpd,
+                "limit": lim.tpd,
+            }
+            total_tokens += tpd
+            total_requests += rpd
+            daily_limit += lim.tpd
+
+        remaining = max(0, daily_limit - total_tokens)
+        usage_pct = round(
+            (total_tokens / daily_limit * 100)
+            if daily_limit else 0,
+            1,
+        )
+        # Estimate remaining queries per model, then
+        # sum.  Uses per-model avg or global default.
+        global_avg = (
+            total_tokens // total_requests
+            if total_requests > 0
+            else 800
+        )
+        est_remaining = 0
+        for model, info in by_model.items():
+            model_remaining = max(
+                0, info["limit"] - info["total"],
+            )
+            model_avg = (
+                info["total"] // info["requests"]
+                if info["requests"] > 0
+                else global_avg
+            )
+            if model_avg > 0:
+                est_remaining += (
+                    model_remaining // model_avg
+                )
+        tomorrow = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0,
+            microsecond=0,
+        ) + timedelta(days=1)
+
+        return {
+            "date": (
+                datetime.now(timezone.utc)
+                .date()
+                .isoformat()
+            ),
+            "daily_limit": daily_limit,
+            "total_tokens": total_tokens,
+            "remaining_tokens": remaining,
+            "usage_pct": usage_pct,
+            "by_model": by_model,
+            "estimated_queries_remaining": (
+                est_remaining
+            ),
+            "reset_time_utc": tomorrow.isoformat(),
+        }
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -381,3 +724,28 @@ class TokenBudget:
             _, count = log.popleft()
             expired += count
         return running_total - expired, expired
+
+
+# ------------------------------------------------------------------
+# Module-level singleton
+# ------------------------------------------------------------------
+
+_singleton_lock = threading.Lock()
+_singleton: TokenBudget | None = None
+
+
+def get_token_budget() -> TokenBudget:
+    """Return the process-wide TokenBudget singleton.
+
+    Thread-safe lazy initialization.  All components
+    should use this instead of ``TokenBudget()`` so
+    that budget tracking and round-robin counters are
+    shared across the application.
+    """
+    global _singleton
+    if _singleton is None:
+        with _singleton_lock:
+            if _singleton is None:
+                _singleton = TokenBudget()
+                _singleton.seed_daily_from_iceberg()
+    return _singleton

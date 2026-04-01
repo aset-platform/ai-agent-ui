@@ -11,7 +11,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useChatContext } from "@/providers/ChatProvider";
 import { useSendMessage } from "@/hooks/useSendMessage";
 import { useResizePanel } from "@/hooks/useResizePanel";
-import { AGENTS } from "@/lib/constants";
+import { CHAT_HINT } from "@/lib/constants";
 import { StatusBadge } from "@/components/StatusBadge";
 import { MessageBubble } from "@/components/MessageBubble";
 import { ChatInput } from "@/components/ChatInput";
@@ -30,16 +30,30 @@ export function ChatPanel() {
     isOpen,
     closePanel,
     agentId,
+    sessionId,
     ws,
+    startFromSession,
   } = useChatContext();
 
   const [activeTab, setActiveTab] = useState<
     "chat" | "history"
   >("chat");
+
+  const handleStartFromSession = useCallback(
+    (oldSessionId: string, preview: string) => {
+      startFromSession(oldSessionId, preview);
+      setActiveTab("chat");
+    },
+    [startFromSession],
+  );
+
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [statusLine, setStatusLine] = useState("");
+  const [quotaExceeded, setQuotaExceeded] =
+    useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Compute max width from viewport
@@ -59,9 +73,10 @@ export function ChatPanel() {
     defaultWidth,
   );
 
-  const { sendMessage, handleKeyDown, handleInput } =
+  const { sendMessage, sendDirect, handleKeyDown, handleInput } =
     useSendMessage({
       agentId,
+      sessionId,
       messages,
       setMessages,
       setLoading,
@@ -72,12 +87,47 @@ export function ChatPanel() {
       ws,
     });
 
-  // Scroll to bottom on new messages
+  // Scroll to bottom on new messages / status changes.
+  // Uses scrollTop on the container which is more
+  // reliable than scrollIntoView in React 19.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({
-      behavior: "smooth",
-    });
-  }, [messages, loading]);
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const id = setTimeout(() => {
+      el.scrollTop = el.scrollHeight;
+    }, 30);
+    return () => clearTimeout(id);
+  }, [messages, loading, statusLine]);
+
+  // Re-focus textarea when loading finishes (the
+  // textarea was disabled during loading, which
+  // drops browser focus).
+  const prevLoadingRef = useRef(false);
+  useEffect(() => {
+    if (prevLoadingRef.current && !loading) {
+      setTimeout(
+        () => textareaRef.current?.focus(),
+        100,
+      );
+    }
+    prevLoadingRef.current = loading;
+  }, [loading]);
+
+  // Detect quota exceeded from error messages
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const last = messages[messages.length - 1];
+    if (
+      last.role === "assistant" &&
+      typeof last.content === "string" &&
+      last.content.toLowerCase().includes(
+        "quota exceeded",
+      )
+    ) {
+      /* eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: detecting error state from message */
+      setQuotaExceeded(true);
+    }
+  }, [messages]);
 
   // ESC to close
   useEffect(() => {
@@ -90,17 +140,25 @@ export function ChatPanel() {
       document.removeEventListener("keydown", handleEsc);
   }, [isOpen, closePanel]);
 
-  // Focus textarea when panel opens
+  // Focus textarea when panel opens.
+  // Retry twice — the panel animation (300ms) and React
+  // concurrent rendering can delay textarea mount.
   useEffect(() => {
     if (isOpen) {
-      setTimeout(() => textareaRef.current?.focus(), 300);
+      const tryFocus = (delay: number) =>
+        setTimeout(() => {
+          textareaRef.current?.focus();
+        }, delay);
+      const t1 = tryFocus(350);
+      const t2 = tryFocus(600);
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
     }
   }, [isOpen]);
 
-  const agentHint = useMemo(
-    () => AGENTS.find((a) => a.id === agentId)?.hint,
-    [agentId],
-  );
+  const agentHint = CHAT_HINT;
 
   // Internal link handler for markdown links
   const handleInternalLink = useCallback(
@@ -139,7 +197,7 @@ export function ChatPanel() {
             {activeTab === "chat" ? (
               <>
                 {/* Messages */}
-                <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+                <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
                   {messages.length === 0 && !loading && (
                     <div className="flex flex-col items-center justify-center h-full text-center gap-3">
                       <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-lg shadow-md">
@@ -161,6 +219,7 @@ export function ChatPanel() {
                       key={`${msg.timestamp.getTime()}-${msg.role}-${i}`}
                       message={msg}
                       onInternalLink={handleInternalLink}
+                      onActionClick={sendDirect}
                     />
                   ))}
 
@@ -183,6 +242,13 @@ export function ChatPanel() {
                 <ChatInput
                   input={input}
                   loading={loading}
+                  quotaExceeded={quotaExceeded}
+                  onUpgrade={() => {
+                    closePanel();
+                    window.dispatchEvent(
+                      new CustomEvent("open-billing"),
+                    );
+                  }}
                   textareaRef={textareaRef}
                   onInput={handleInput}
                   onKeyDown={handleKeyDown}
@@ -190,7 +256,11 @@ export function ChatPanel() {
                 />
               </>
             ) : (
-              <PastSessionsTab />
+              <PastSessionsTab
+                onStartFromSession={
+                  handleStartFromSession
+                }
+              />
             )}
           </>
         )}
@@ -226,6 +296,7 @@ export function ChatPanel() {
                     key={`${msg.timestamp.getTime()}-${msg.role}-${i}`}
                     message={msg}
                     onInternalLink={handleInternalLink}
+                    onActionClick={sendDirect}
                   />
                 ))}
 

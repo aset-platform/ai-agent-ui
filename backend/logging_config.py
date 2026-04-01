@@ -20,10 +20,14 @@ Typical usage::
     setup_logging(level="INFO", log_to_file=True, log_dir="logs")
 """
 
+import datetime
 import logging
 import os
 import sys
 from logging.handlers import TimedRotatingFileHandler
+
+# IST (UTC+05:30) for all log timestamps.
+_IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 
 
 def setup_logging(
@@ -71,6 +75,9 @@ def setup_logging(
     log_level = getattr(logging, level.upper(), logging.DEBUG)
     fmt = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
     formatter = logging.Formatter(fmt)
+    formatter.converter = lambda *_: (
+        datetime.datetime.now(_IST).timetuple()
+    )
 
     root_logger = logging.getLogger()
     root_logger.setLevel(log_level)

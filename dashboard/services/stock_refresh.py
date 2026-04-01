@@ -1,6 +1,6 @@
 """Dash-agnostic full stock data refresh pipeline.
 
-Runs the same 6-step pipeline that the Stock Agent uses:
+Runs the same 8-step pipeline that the Stock Agent uses:
 
 1. **Full OHLCV re-fetch** -- fetches the entire date range
    from yfinance (not a delta) so that any gaps in the middle
@@ -12,13 +12,14 @@ Runs the same 6-step pipeline that the Stock Agent uses:
    ``stocks.analysis_summary``) — non-critical
 5. Quarterly results (``stocks.quarterly_results``)
    — non-critical
-6. Prophet forecast (``stocks.forecast_runs``,
+6. Market indices (VIX + benchmark) — non-critical
+7. Sentiment scoring (LLM headlines) — non-critical
+8. Prophet forecast (``stocks.forecast_runs``,
    ``stocks.forecasts``)
 
-All 9 Iceberg tables are refreshed.  Steps 2-5 are
-non-critical: failures are recorded but do not abort the
-pipeline.  Only the OHLCV fetch (step 1) and Prophet forecast
-(step 6) are critical.
+Steps 2-7 are non-critical: failures are recorded but do not
+abort the pipeline.  Only the OHLCV fetch (step 1) and Prophet
+forecast (step 8) are critical.
 
 Usage::
 
@@ -208,7 +209,7 @@ def _full_ohlcv_refresh(ticker: str) -> str:
 
 
 def run_full_refresh(ticker: str, horizon_months: int = 9) -> RefreshResult:
-    """Execute the full 6-step stock data refresh pipeline.
+    """Execute the full 8-step stock data refresh pipeline.
 
     Step 1 performs a **full** re-fetch (not a delta) so that any
     gaps in the OHLCV data are filled.
@@ -236,8 +237,7 @@ def run_full_refresh(ticker: str, horizon_months: int = 9) -> RefreshResult:
         _repo = _require_repo()
         _latest_date = _repo.get_latest_ohlcv_date(ticker)
         _ohlcv_fresh = (
-            _latest_date is not None
-            and _latest_date >= date.today()
+            _latest_date is not None and _latest_date >= date.today()
         )
         if _ohlcv_fresh:
             fetch_msg = (
@@ -319,7 +319,53 @@ def run_full_refresh(ticker: str, horizon_months: int = 9) -> RefreshResult:
                 str(exc)[:120],
             )
 
-        # ── Step 6: Prophet forecast (skip if <7 days old) ──
+        # ── Step 6: Market indices (non-critical) ──────────
+        try:
+            from jobs.gap_filler import (
+                refresh_market_indices,
+            )
+
+            mi_count = refresh_market_indices()
+            _record(
+                result,
+                "Market indices",
+                True,
+                f"{mi_count} index rows refreshed",
+            )
+        except Exception as exc:
+            _record(
+                result,
+                "Market indices",
+                False,
+                str(exc)[:120],
+            )
+
+        # ── Step 7: Sentiment scoring (non-critical) ───────
+        try:
+            from jobs.gap_filler import (
+                refresh_sentiment,
+            )
+
+            sent_score = refresh_sentiment(ticker)
+            if sent_score is not None:
+                _sent_msg = f"Score: {sent_score:.2f}"
+            else:
+                _sent_msg = "No headlines available"
+            _record(
+                result,
+                "Sentiment",
+                True,
+                _sent_msg,
+            )
+        except Exception as exc:
+            _record(
+                result,
+                "Sentiment",
+                False,
+                str(exc)[:120],
+            )
+
+        # ── Step 8: Prophet forecast (skip if <7 days old) ──
         _fc_run = _repo.get_latest_forecast_run(
             ticker,
             horizon_months,
@@ -362,40 +408,72 @@ def run_full_refresh(ticker: str, horizon_months: int = 9) -> RefreshResult:
                 _prepare_data_for_prophet,
                 _train_prophet_model,
             )
-            from tools._forecast_persist import (
-                _save_forecast,
+            from tools._forecast_shared import (
+                _load_ohlcv,
+                _load_regressors_from_iceberg,
             )
-            from tools._forecast_shared import _load_parquet
 
-            df = _load_parquet(ticker)
+            df = _load_ohlcv(ticker)
             if df is None:
                 raise ValueError(
                     f"No data loaded for {ticker} " f"after fetch."
                 )
 
             prophet_df = _prepare_data_for_prophet(df)
-            model = _train_prophet_model(prophet_df)
+            current_price = float(
+                prophet_df["y"].iloc[-1],
+            )
+
+            # Load regressors (VIX, index, sentiment).
+            regressors = _load_regressors_from_iceberg(
+                ticker,
+                prophet_df,
+            )
+
+            model, train_df = _train_prophet_model(
+                prophet_df,
+                ticker=ticker,
+                regressors=regressors,
+            )
             forecast_df = _generate_forecast(
                 model,
                 prophet_df,
                 horizon_months,
+                regressors=regressors,
             )
+
+            # XGBoost ensemble correction (Phase 3b).
+            from config import get_settings as _gs
+
+            if getattr(
+                _gs(),
+                "ensemble_enabled",
+                False,
+            ):
+                from tools._forecast_ensemble import (
+                    ensemble_forecast,
+                )
+
+                _corrected = ensemble_forecast(
+                    model,
+                    train_df,
+                    prophet_df,
+                    forecast_df,
+                    ticker,
+                    regressors=regressors,
+                )
+                if _corrected is not None:
+                    forecast_df = _corrected
+
             accuracy = _calculate_forecast_accuracy(
                 model,
                 prophet_df,
             )
-            _save_forecast(
-                forecast_df,
-                ticker,
-                horizon_months,
-            )
-
             # Persist forecast run + series to Iceberg
             from tools._forecast_accuracy import (
                 _generate_forecast_summary,
             )
 
-            current_price = float(prophet_df["y"].iloc[-1])
             summary = _generate_forecast_summary(
                 forecast_df,
                 current_price,

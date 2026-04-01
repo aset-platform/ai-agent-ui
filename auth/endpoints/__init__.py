@@ -17,6 +17,7 @@ from auth.endpoints import (
     oauth_routes,
     profile_routes,
     session_routes,
+    subscription_routes,
     ticker_routes,
     user_routes,
 )
@@ -50,7 +51,11 @@ def create_auth_router() -> APIRouter:
     oauth_routes.register(router)
     admin_routes.register(router)
     session_routes.register(router)
-    logger.debug("Auth router created with all sub-routes registered.")
+    subscription_routes.register(router)
+    logger.debug(
+        "Auth router created with all"
+        " sub-routes registered.",
+    )
     return router
 
 

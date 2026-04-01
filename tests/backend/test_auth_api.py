@@ -31,7 +31,7 @@ os.environ.setdefault(
 
 
 class _FakeRepo:
-    """In-memory stand-in for IcebergUserRepository."""
+    """In-memory stand-in for UserRepository."""
 
     def __init__(self):
         self._users: Dict[str, Dict[str, Any]] = {}
@@ -40,21 +40,55 @@ class _FakeRepo:
     def _now(self):
         return datetime.now(timezone.utc)
 
-    def get_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+    def seed(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Sync insert for test fixtures (no await)."""
+        now = self._now()
+        row = {
+            "user_id": data.get(
+                "user_id", str(uuid.uuid4()),
+            ),
+            "email": data["email"],
+            "hashed_password": data["hashed_password"],
+            "full_name": data["full_name"],
+            "role": data.get("role", "general"),
+            "is_active": data.get("is_active", True),
+            "created_at": now,
+            "updated_at": now,
+            "last_login_at": None,
+            "password_reset_token": None,
+            "password_reset_expiry": None,
+            "oauth_provider": data.get(
+                "oauth_provider",
+            ),
+            "oauth_sub": data.get("oauth_sub"),
+            "profile_picture_url": data.get(
+                "profile_picture_url",
+            ),
+        }
+        self._users[row["user_id"]] = row
+        return dict(row)
+
+    async def get_by_email(
+        self, email: str,
+    ) -> Optional[Dict[str, Any]]:
         for u in self._users.values():
             if u["email"] == email:
                 return dict(u)
         return None
 
-    def get_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+    async def get_by_id(
+        self, user_id: str,
+    ) -> Optional[Dict[str, Any]]:
         u = self._users.get(user_id)
         return dict(u) if u else None
 
-    def list_all(self) -> List[Dict[str, Any]]:
+    async def list_all(self) -> List[Dict[str, Any]]:
         return [dict(u) for u in self._users.values()]
 
-    def create(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        if self.get_by_email(data["email"]):
+    async def create(
+        self, data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if await self.get_by_email(data["email"]):
             raise ValueError(
                 f"User with email '{data['email']}' already exists."
             )
@@ -78,7 +112,9 @@ class _FakeRepo:
         self._users[row["user_id"]] = row
         return dict(row)
 
-    def update(self, user_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    async def update(
+        self, user_id: str, updates: Dict[str, Any],
+    ) -> Dict[str, Any]:
         if user_id not in self._users:
             raise ValueError(f"User '{user_id}' not found.")
         row = self._users[user_id]
@@ -89,11 +125,13 @@ class _FakeRepo:
         row["updated_at"] = self._now()
         return dict(row)
 
-    def delete(self, user_id: str) -> None:
-        self.update(user_id, {"is_active": False})
+    async def delete(self, user_id: str) -> None:
+        await self.update(
+            user_id, {"is_active": False},
+        )
 
-    def get_by_oauth_sub(
-        self, provider: str, sub: str
+    async def get_by_oauth_sub(
+        self, provider: str, sub: str,
     ) -> Optional[Dict[str, Any]]:
         for u in self._users.values():
             if (
@@ -103,19 +141,22 @@ class _FakeRepo:
                 return dict(u)
         return None
 
-    def get_or_create_by_oauth(
-        self, provider, oauth_sub, email, full_name, picture_url=None
+    async def get_or_create_by_oauth(
+        self, provider, oauth_sub, email,
+        full_name, picture_url=None,
     ) -> Dict[str, Any]:
-        existing = self.get_by_oauth_sub(provider, oauth_sub)
+        existing = await self.get_by_oauth_sub(
+            provider, oauth_sub,
+        )
         if existing:
-            return self.update(
+            return await self.update(
                 existing["user_id"],
                 {
                     "profile_picture_url": picture_url,
                     "last_login_at": self._now(),
                 },
             )
-        return self.create(
+        return await self.create(
             {
                 "email": email,
                 "hashed_password": "!sso_only",
@@ -127,7 +168,9 @@ class _FakeRepo:
             }
         )
 
-    def append_audit_event(self, *args, **kwargs) -> None:
+    async def append_audit_event(
+        self, *args, **kwargs,
+    ) -> None:
         self._audit.append({"args": args, "kwargs": kwargs})
 
     def list_audit_events(self) -> List[Dict[str, Any]]:
@@ -151,18 +194,22 @@ def fake_repo():
         access_expire_minutes=60,
         refresh_expire_days=7,
     )
-    repo.create(
+    repo.seed(
         {
             "email": "alice@example.com",
-            "hashed_password": svc.hash_password("Password1!"),
+            "hashed_password": svc.hash_password(
+                "Password1!",
+            ),
             "full_name": "Alice Smith",
             "role": "general",
         }
     )
-    repo.create(
+    repo.seed(
         {
             "email": "superadmin@example.com",
-            "hashed_password": svc.hash_password("AdminPass1!"),
+            "hashed_password": svc.hash_password(
+                "AdminPass1!",
+            ),
             "full_name": "Super Admin",
             "role": "superuser",
         }
@@ -181,10 +228,18 @@ def client(fake_repo):
 
     with patch("auth.endpoints.helpers._get_repo", return_value=fake_repo):
         from auth.api import create_auth_router
+        from auth.rate_limit import limiter
 
+        limiter.reset()
         app = FastAPI()
+        app.state.limiter = limiter
+        # Exempt test client from rate limits so
+        # test ordering doesn't cause flaky 429s.
+        limiter.enabled = False
         app.include_router(create_auth_router())
         yield TestClient(app, raise_server_exceptions=False)
+        limiter.enabled = True
+        limiter.reset()
 
     deps._get_service.cache_clear()
 
@@ -391,8 +446,10 @@ class TestAdminPasswordReset:
         return tokens["access_token"]
 
     def _alice_id(self, fake_repo) -> str:
-        user = fake_repo.get_by_email("alice@example.com")
-        return user["user_id"]
+        for u in fake_repo._users.values():
+            if u["email"] == "alice@example.com":
+                return u["user_id"]
+        raise ValueError("alice not found")
 
     def test_admin_reset_password_success(self, client, fake_repo):
         """Superuser can reset another user's password."""

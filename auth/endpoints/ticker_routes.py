@@ -11,6 +11,7 @@ Endpoints
 """
 
 import logging
+import threading
 import uuid
 from datetime import date
 from typing import Any, Dict, List
@@ -33,6 +34,30 @@ router = APIRouter(
 )
 
 
+def _fetch_company_info_bg(ticker: str) -> None:
+    """Background: fetch yfinance info and store in Iceberg."""
+    try:
+        import yfinance as yf
+        from tools._stock_shared import _get_repo
+
+        repo = _get_repo()
+        if repo is None:
+            return
+        info = yf.Ticker(ticker).info
+        if info:
+            repo.insert_company_info(ticker, info)
+            _logger.info(
+                "Company info fetched for %s (bg)",
+                ticker,
+            )
+    except Exception:
+        _logger.debug(
+            "BG company info fetch failed: %s",
+            ticker,
+            exc_info=True,
+        )
+
+
 class LinkTickerRequest(BaseModel):
     """Request body for linking a ticker to the user.
 
@@ -53,7 +78,7 @@ class LinkTickerRequest(BaseModel):
 
 
 @router.get("/tickers")
-def get_user_tickers(
+async def get_user_tickers(
     user: UserContext = Depends(get_current_user),
 ) -> Dict[str, List[str]]:
     """Return the current user's linked tickers.
@@ -66,7 +91,7 @@ def get_user_tickers(
         sorted ticker symbols.
     """
     repo = _helpers._get_repo()
-    tickers = repo.get_user_tickers(user.user_id)
+    tickers = await repo.get_user_tickers(user.user_id)
     _logger.debug(
         "Listed %d tickers for user_id=%s",
         len(tickers),
@@ -76,7 +101,7 @@ def get_user_tickers(
 
 
 @router.post("/tickers")
-def link_ticker(
+async def link_ticker(
     body: LinkTickerRequest,
     user: UserContext = Depends(get_current_user),
 ) -> Dict[str, object]:
@@ -108,7 +133,7 @@ def link_ticker(
     ticker = body.ticker.upper().strip()
     repo = _helpers._get_repo()
     try:
-        linked = repo.link_ticker(
+        linked = await repo.link_ticker(
             user.user_id,
             ticker,
             body.source,
@@ -130,6 +155,12 @@ def link_ticker(
             ticker,
             body.source,
         )
+        # Populate company_info in background.
+        threading.Thread(
+            target=_fetch_company_info_bg,
+            args=(ticker,),
+            daemon=True,
+        ).start()
         return {"linked": True, "ticker": ticker}
 
     return {
@@ -139,7 +170,7 @@ def link_ticker(
 
 
 @router.delete("/tickers/{ticker}")
-def unlink_ticker(
+async def unlink_ticker(
     ticker: str,
     user: UserContext = Depends(get_current_user),
 ) -> Dict[str, str]:
@@ -158,7 +189,7 @@ def unlink_ticker(
     normalised = ticker.upper().strip()
     repo = _helpers._get_repo()
     try:
-        removed = repo.unlink_ticker(
+        removed = await repo.unlink_ticker(
             user.user_id,
             normalised,
         )
@@ -173,9 +204,13 @@ def unlink_ticker(
         ) from exc
 
     if not removed:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Ticker '{normalised}' not linked",
+        # Ticker may exist only in portfolio_transactions
+        # (added before auto-link was in place).  Still
+        # return success so the UI can proceed.
+        _logger.debug(
+            "Ticker %s not in user_tickers for %s " "(may be portfolio-only)",
+            normalised,
+            user.user_id,
         )
 
     _logger.info(
@@ -274,7 +309,9 @@ def put_preferences(
             existing[section] = values
 
     cache.set(
-        key, json.dumps(existing), _PREFS_TTL,
+        key,
+        json.dumps(existing),
+        _PREFS_TTL,
     )
     _logger.info(
         "Preferences saved for user %s",
@@ -287,20 +324,32 @@ def put_preferences(
 # Portfolio holdings (CRUD)
 # ---------------------------------------------------------------
 
+
 def _get_stock_repo():
     """Lazy import to avoid circular deps."""
     from tools._stock_shared import _require_repo
+
     return _require_repo()
 
 
 class AddPortfolioRequest(BaseModel):
     """Add a stock to the portfolio."""
 
-    ticker: str
-    quantity: float
-    price: float
-    trade_date: str  # YYYY-MM-DD
-    notes: str = ""
+    ticker: str = Field(
+        ...,
+        max_length=15,
+    )
+    quantity: float = Field(..., gt=0, le=1_000_000)
+    price: float = Field(
+        ...,
+        gt=0,
+        le=1_000_000_000,
+    )
+    trade_date: str = Field(
+        ...,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+    )
+    notes: str = Field("", max_length=500)
 
 
 class EditPortfolioRequest(BaseModel):
@@ -327,13 +376,9 @@ def get_portfolio(
     )
     # Map ticker → latest transaction_id
     txn_id_map: Dict[str, str] = {}
-    if not txn_df.empty and (
-        "transaction_id" in txn_df.columns
-    ):
+    if not txn_df.empty and ("transaction_id" in txn_df.columns):
         for _, t in txn_df.iterrows():
-            txn_id_map[str(t["ticker"])] = str(
-                t["transaction_id"]
-            )
+            txn_id_map[str(t["ticker"])] = str(t["transaction_id"])
 
     # Enrich with current prices from OHLCV
     holdings = []
@@ -343,51 +388,41 @@ def get_portfolio(
         try:
             ohlcv = stock_repo.get_ohlcv(ticker)
             if not ohlcv.empty:
-                current_price = float(
-                    ohlcv.iloc[-1]["close"]
+                valid = ohlcv.dropna(
+                    subset=["close"],
                 )
+                if not valid.empty:
+                    current_price = float(valid.iloc[-1]["close"])
         except Exception:
             pass
 
         qty = float(row["quantity"])
         avg = float(row["avg_price"])
         invested = round(qty * avg, 2)
-        current_val = (
-            round(qty * current_price, 2)
-            if current_price
-            else None
-        )
+        current_val = round(qty * current_price, 2) if current_price else None
         gain_pct = (
             round(
-                (
-                    (current_price - avg)
-                    / avg
-                    * 100
-                ),
+                ((current_price - avg) / avg * 100),
                 2,
             )
             if current_price and avg
             else None
         )
 
-        holdings.append({
-            "ticker": ticker,
-            "transaction_id": txn_id_map.get(
-                ticker, ""
-            ),
-            "quantity": qty,
-            "avg_price": round(avg, 2),
-            "current_price": current_price,
-            "currency": str(
-                row.get("currency", "USD")
-            ),
-            "market": str(
-                row.get("market", "us")
-            ),
-            "invested": invested,
-            "current_value": current_val,
-            "gain_loss_pct": gain_pct,
-        })
+        holdings.append(
+            {
+                "ticker": ticker,
+                "transaction_id": txn_id_map.get(ticker, ""),
+                "quantity": qty,
+                "avg_price": round(avg, 2),
+                "current_price": current_price,
+                "currency": str(row.get("currency", "USD")),
+                "market": str(row.get("market", "us")),
+                "invested": invested,
+                "current_value": current_val,
+                "gain_loss_pct": gain_pct,
+            }
+        )
 
     # Portfolio totals per currency
     totals: Dict[str, float] = {}
@@ -403,17 +438,13 @@ def get_portfolio(
 
 
 @router.post("/portfolio")
-def add_portfolio_holding(
+async def add_portfolio_holding(
     body: AddPortfolioRequest,
     user: UserContext = Depends(get_current_user),
 ) -> Dict[str, str]:
     """Add a stock to the user's portfolio."""
     ticker = body.ticker.upper().strip()
-    mkt = (
-        "india"
-        if ticker.endswith((".NS", ".BO"))
-        else "us"
-    )
+    mkt = "india" if ticker.endswith((".NS", ".BO")) else "us"
     ccy = "INR" if mkt == "india" else "USD"
 
     stock_repo = _get_stock_repo()
@@ -434,27 +465,40 @@ def add_portfolio_holding(
     }
     stock_repo.add_portfolio_transaction(txn)
 
+    # Auto-link to watchlist so the ticker appears
+    # in both Portfolio and Watchlist views.
+    repo = _helpers._get_repo()
+    try:
+        await repo.link_ticker(
+            user.user_id,
+            ticker,
+            "portfolio",
+        )
+    except Exception:
+        _logger.debug(
+            "Auto-link failed for %s (may already exist)",
+            ticker,
+        )
+
     # Invalidate portfolio caches
     try:
         from cache import get_cache
+
         cache = get_cache()
         cache.invalidate(
             f"cache:portfolio:{user.user_id}",
         )
         cache.invalidate(
-            f"cache:portfolio:perf:"
-            f"{user.user_id}:*",
+            f"cache:portfolio:perf:" f"{user.user_id}:*",
         )
         cache.invalidate(
-            f"cache:portfolio:forecast:"
-            f"{user.user_id}:*",
+            f"cache:portfolio:forecast:" f"{user.user_id}:*",
         )
     except ImportError:
         pass
 
     _logger.info(
-        "Portfolio: user %s added %s qty=%.2f"
-        " price=%.2f",
+        "Portfolio: user %s added %s qty=%.2f" " price=%.2f",
         user.user_id,
         ticker,
         body.quantity,
@@ -479,9 +523,7 @@ def edit_portfolio_holding(
     if body.price is not None:
         updates["price"] = body.price
     if body.trade_date is not None:
-        updates["trade_date"] = (
-            date.fromisoformat(body.trade_date)
-        )
+        updates["trade_date"] = date.fromisoformat(body.trade_date)
 
     if not updates:
         raise HTTPException(
@@ -491,7 +533,9 @@ def edit_portfolio_holding(
 
     stock_repo = _get_stock_repo()
     ok = stock_repo.update_portfolio_transaction(
-        transaction_id, user.user_id, updates,
+        transaction_id,
+        user.user_id,
+        updates,
     )
     if not ok:
         raise HTTPException(
@@ -502,14 +546,13 @@ def edit_portfolio_holding(
     # Invalidate portfolio caches
     try:
         from cache import get_cache
+
         cache = get_cache()
         cache.invalidate(
-            f"cache:portfolio:perf:"
-            f"{user.user_id}:*",
+            f"cache:portfolio:perf:" f"{user.user_id}:*",
         )
         cache.invalidate(
-            f"cache:portfolio:forecast:"
-            f"{user.user_id}:*",
+            f"cache:portfolio:forecast:" f"{user.user_id}:*",
         )
     except ImportError:
         pass
@@ -525,7 +568,8 @@ def delete_portfolio_holding(
     """Delete a portfolio transaction."""
     stock_repo = _get_stock_repo()
     ok = stock_repo.delete_portfolio_transaction(
-        transaction_id, user.user_id,
+        transaction_id,
+        user.user_id,
     )
     if not ok:
         raise HTTPException(
@@ -536,14 +580,13 @@ def delete_portfolio_holding(
     # Invalidate portfolio caches
     try:
         from cache import get_cache
+
         cache = get_cache()
         cache.invalidate(
-            f"cache:portfolio:perf:"
-            f"{user.user_id}:*",
+            f"cache:portfolio:perf:" f"{user.user_id}:*",
         )
         cache.invalidate(
-            f"cache:portfolio:forecast:"
-            f"{user.user_id}:*",
+            f"cache:portfolio:forecast:" f"{user.user_id}:*",
         )
     except ImportError:
         pass

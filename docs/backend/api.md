@@ -331,6 +331,30 @@ curl -X POST http://127.0.0.1:8181/v1/admin/tier-health/llama-3.3-70b-versatile/
 }
 ```
 
+### GET /v1/admin/daily-budget
+
+Returns aggregated daily Groq token usage across all models.
+
+```json
+{
+  "date": "2026-04-01",
+  "daily_limit": 2300000,
+  "total_tokens": 55062,
+  "remaining_tokens": 2244938,
+  "usage_pct": 2.4,
+  "by_model": {
+    "llama-3.3-70b-versatile": {
+      "total": 29497, "requests": 9, "limit": 100000
+    },
+    "qwen/qwen3-32b": {
+      "total": 12451, "requests": 5, "limit": 500000
+    }
+  },
+  "estimated_queries_remaining": 1250,
+  "reset_time_utc": "2026-04-02T00:00:00+00:00"
+}
+```
+
 ---
 
 ## WebSocket — /ws/chat

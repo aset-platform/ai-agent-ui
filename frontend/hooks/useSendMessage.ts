@@ -16,6 +16,7 @@ import type { UseWebSocketReturn, WsEvent } from "@/hooks/useWebSocket";
 
 interface UseSendMessageOptions {
   agentId: string;
+  sessionId: string;
   messages: Message[];
   setMessages: (updater: Message[] | ((prev: Message[]) => Message[])) => void;
   setLoading: (v: boolean) => void;
@@ -28,6 +29,7 @@ interface UseSendMessageOptions {
 
 export function useSendMessage({
   agentId,
+  sessionId,
   messages,
   setMessages,
   setLoading,
@@ -39,6 +41,9 @@ export function useSendMessage({
 }: UseSendMessageOptions) {
   // Fix #1: track in-flight stream so it can be aborted on unmount or new send
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Collect tool calls during streaming to prepend to the final response.
+  const toolCallsRef = useRef<string[]>([]);
 
   // Abort any in-flight request when the component unmounts
   useEffect(() => {
@@ -56,19 +61,41 @@ export function useSendMessage({
         const iter = event.iteration as number;
         setStatusLine(iter > 1 ? `Thinking... (step ${iter})` : "Thinking...");
       } else if (event.type === "tool_start") {
-        setStatusLine(`${toolLabel(event.tool as string)}...`);
+        const tool = event.tool as string;
+        if (!toolCallsRef.current.includes(tool)) {
+          toolCallsRef.current.push(tool);
+        }
+        setStatusLine(`${toolLabel(tool)}...`);
       } else if (event.type === "tool_done") {
         setStatusLine(`Got result from ${event.tool as string}...`);
       } else if (event.type === "warning") {
         setStatusLine("Max iterations reached, finalising...");
       } else if (event.type === "final") {
-        setMessages([
-          ...updatedMessages,
-          { role: "assistant", content: event.response as string, timestamp: new Date() },
-        ]);
+        // Prepend tool calls as a compact header.
+        let response = event.response as string;
+        const tools = toolCallsRef.current;
+        if (tools.length > 0) {
+          const toolLine = tools
+            .map((t) => `\`${t}\``)
+            .join(" → ");
+          response = `**Tools used:** ${toolLine}\n\n---\n\n${response}`;
+        }
+        toolCallsRef.current = [];
+        const actions = (event.actions as { label: string; prompt: string }[]) || [];
+        const memUsed = Boolean(
+          event.memory_used,
+        );
+        const msg: Message = {
+          role: "assistant",
+          content: response,
+          timestamp: new Date(),
+          ...(actions.length > 0 ? { actions } : {}),
+          ...(memUsed ? { memoryUsed: true } : {}),
+        };
+        setMessages([...updatedMessages, msg]);
         setStatusLine("");
         setLoading(false);
-        textareaRef.current?.focus();
+        setTimeout(() => textareaRef.current?.focus(), 150);
       } else if (event.type === "error" || event.type === "timeout") {
         setMessages([
           ...updatedMessages,
@@ -76,7 +103,7 @@ export function useSendMessage({
         ]);
         setStatusLine("");
         setLoading(false);
-        textareaRef.current?.focus();
+        setTimeout(() => textareaRef.current?.focus(), 150);
       }
     },
     [setLoading, setMessages, setStatusLine, textareaRef],
@@ -103,9 +130,10 @@ export function useSendMessage({
         history: messages.map((m) => ({ role: m.role, content: m.content })),
         agent_id: agentId,
         user_id: getUserIdFromToken(),
+        session_id: sessionId,
       });
     },
-    [ws, handleEvent, messages, agentId],
+    [ws, handleEvent, messages, agentId, sessionId],
   );
 
   // ---------------------------------------------------------------
@@ -122,9 +150,13 @@ export function useSendMessage({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             message: userMessage.content,
-            history: messages.map((m) => ({ role: m.role, content: m.content })),
+            history: messages.map((m) => ({
+              role: m.role,
+              content: m.content,
+            })),
             agent_id: agentId,
             user_id: getUserIdFromToken(),
+            session_id: sessionId,
           }),
           signal: controller.signal,
         });
@@ -172,10 +204,10 @@ export function useSendMessage({
       } finally {
         setLoading(false);
         setStatusLine("");
-        textareaRef.current?.focus();
+        setTimeout(() => textareaRef.current?.focus(), 150);
       }
     },
-    [agentId, handleEvent, messages, setLoading, setMessages, setStatusLine, textareaRef],
+    [agentId, sessionId, handleEvent, messages, setLoading, setMessages, setStatusLine, textareaRef],
   );
 
   // ---------------------------------------------------------------
@@ -185,6 +217,7 @@ export function useSendMessage({
     if (!input.trim()) return;
 
     abortControllerRef.current?.abort();
+    toolCallsRef.current = [];
 
     const userMessage: Message = {
       role: "user",
@@ -223,5 +256,35 @@ export function useSendMessage({
     e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
   }, [setInput]);
 
-  return { sendMessage, handleKeyDown, handleInput };
+  // ---------------------------------------------------------------
+  // sendDirect — inject a prompt and send without using input state
+  // ---------------------------------------------------------------
+  const sendDirect = useCallback(
+    async (prompt: string) => {
+      if (!prompt.trim()) return;
+
+      abortControllerRef.current?.abort();
+      toolCallsRef.current = [];
+
+      const userMessage: Message = {
+        role: "user",
+        content: prompt.trim(),
+        timestamp: new Date(),
+      };
+
+      const updatedMessages = [...messages, userMessage];
+      setMessages(updatedMessages);
+      setLoading(true);
+      setStatusLine("Thinking...");
+
+      if (ws?.isConnected) {
+        sendViaWs(userMessage, updatedMessages);
+      } else {
+        await sendViaHttp(userMessage, updatedMessages);
+      }
+    },
+    [messages, setLoading, setMessages, setStatusLine, ws, sendViaWs, sendViaHttp],
+  );
+
+  return { sendMessage, sendDirect, handleKeyDown, handleInput };
 }

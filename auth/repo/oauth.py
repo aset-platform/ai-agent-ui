@@ -1,117 +1,113 @@
-"""OAuth user lookup and upsert helpers for the ``auth.users`` Iceberg table.
-
-Functions
----------
-- :func:`get_by_oauth_sub`
-- :func:`get_or_create_by_oauth`
-"""
-
-from __future__ import annotations
-
+"""OAuth user operations — PostgreSQL via SQLAlchemy."""
 import logging
-import secrets as _secrets
+import secrets
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 
-from auth.repo.catalog import scan_all_users
-from auth.repo.schemas import _now_utc
-from auth.repo.user_reads import get_by_email, get_by_id
-from auth.repo.user_writes import create, update
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# Module-level logger; kept at module scope as logging
-# configuration is immutable.
-_logger = logging.getLogger(__name__)
+from backend.db.models.user import User
+
+log = logging.getLogger(__name__)
 
 
-def get_by_oauth_sub(
-    cat, provider: str, oauth_sub: str
+async def get_by_oauth_sub(
+    session: AsyncSession,
+    provider: str,
+    oauth_sub: str,
 ) -> dict[str, Any] | None:
-    """Fetch a user matched by OAuth provider + subject ID.
-
-    Args:
-        cat: The loaded Iceberg catalog.
-        provider: OAuth provider name, e.g. ``"google"``.
-        oauth_sub: Provider-specific unique user ID.
-
-    Returns:
-        A user dict if a matching account is found, otherwise ``None``.
-    """
-    for row in scan_all_users(cat):
-        if (
-            row.get("oauth_provider") == provider
-            and row.get("oauth_sub") == oauth_sub
-        ):
-            return row
-    return None
+    """Find user by (oauth_provider, oauth_sub)."""
+    result = await session.execute(
+        select(User).where(
+            User.oauth_provider == provider,
+            User.oauth_sub == oauth_sub,
+        )
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        return None
+    return {
+        c.name: getattr(user, c.name)
+        for c in user.__table__.columns
+    }
 
 
-def get_or_create_by_oauth(
-    cat,
+async def get_or_create_by_oauth(
+    session: AsyncSession,
     provider: str,
     oauth_sub: str,
     email: str,
     full_name: str,
     picture_url: str | None = None,
 ) -> dict[str, Any]:
-    """Return an existing user or create a new SSO-only account.
+    """Find or create user by OAuth identity.
 
     Lookup order:
-    1. Match on ``(oauth_sub, oauth_provider)`` — returning SSO user.
-    2. Match on ``email`` — link OAuth to existing email account.
-    3. No match — create a new account with a sentinel password hash.
-
-    Args:
-        cat: The loaded Iceberg catalog.
-        provider: OAuth provider name (``"google"`` or ``"facebook"``).
-        oauth_sub: Provider-specific unique user ID.
-        email: Email address returned by the provider.
-        full_name: Display name returned by the provider.
-        picture_url: Avatar URL from the provider, or ``None``.
-
-    Returns:
-        The full user dict after upsert.
+    1. Match on (oauth_provider, oauth_sub) -> return
+    2. Match on email -> link OAuth to existing account
+    3. No match -> create new user with sentinel password
     """
-    now = _now_utc()
-
-    existing = get_by_oauth_sub(cat, provider, oauth_sub)
-    if existing is not None:
-        # Only refresh the SSO avatar if the user has
-        # not uploaded a custom one.
-        sso_updates = {"last_login_at": now}
-        if not existing.get("profile_picture_url") and picture_url:
-            sso_updates["profile_picture_url"] = picture_url
-        update(cat, existing["user_id"], sso_updates)
-        refreshed = get_by_id(cat, existing["user_id"])
-        return refreshed or existing
-
-    by_email = get_by_email(cat, email)
-    if by_email is not None:
-        email_updates: dict[str, Any] = {
-            "oauth_provider": provider,
-            "oauth_sub": oauth_sub,
-            "last_login_at": now,
+    # 1. Check by OAuth sub
+    result = await session.execute(
+        select(User).where(
+            User.oauth_provider == provider,
+            User.oauth_sub == oauth_sub,
+        )
+    )
+    user = result.scalar_one_or_none()
+    if user:
+        return {
+            c.name: getattr(user, c.name)
+            for c in user.__table__.columns
         }
-        if not by_email.get("profile_picture_url") and picture_url:
-            email_updates["profile_picture_url"] = picture_url
-        update(cat, by_email["user_id"], email_updates)
-        refreshed = get_by_id(cat, by_email["user_id"])
-        return refreshed or by_email
 
-    sentinel = "!sso_only_" + _secrets.token_hex(32)
-    new_user = create(
-        cat,
-        {
-            "email": email,
-            "hashed_password": sentinel,
-            "full_name": full_name,
-            "role": "general",
-            "oauth_provider": provider,
-            "oauth_sub": oauth_sub,
-            "profile_picture_url": picture_url,
-        },
+    # 2. Check by email
+    result = await session.execute(
+        select(User).where(User.email == email)
     )
-    _logger.info(
-        "Created SSO account: user_id=%s provider=%s",
-        new_user["user_id"],
-        provider,
+    user = result.scalar_one_or_none()
+    if user:
+        user.oauth_provider = provider
+        user.oauth_sub = oauth_sub
+        if picture_url:
+            user.profile_picture_url = picture_url
+        user.updated_at = datetime.now(timezone.utc)
+        await session.commit()
+        await session.refresh(user)
+        log.info(
+            "Linked OAuth %s to existing user %s",
+            provider, user.user_id,
+        )
+        return {
+            c.name: getattr(user, c.name)
+            for c in user.__table__.columns
+        }
+
+    # 3. Create new user
+    now = datetime.now(timezone.utc)
+    sentinel = "!sso_only_" + secrets.token_hex(32)
+    user = User(
+        user_id=str(uuid.uuid4()),
+        email=email,
+        hashed_password=sentinel,
+        full_name=full_name,
+        role="user",
+        is_active=True,
+        oauth_provider=provider,
+        oauth_sub=oauth_sub,
+        profile_picture_url=picture_url,
+        created_at=now,
+        updated_at=now,
     )
-    return new_user
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    log.info(
+        "Created OAuth user %s (%s)", user.user_id, email,
+    )
+    return {
+        c.name: getattr(user, c.name)
+        for c in user.__table__.columns
+    }

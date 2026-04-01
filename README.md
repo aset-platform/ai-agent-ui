@@ -1,6 +1,24 @@
 # AI Agent UI
 
-A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js. The backend runs an LLM in a tool-calling loop; the frontend is a single-page app with portfolio management, stock analysis (TradingView charts), and a chat side panel. JWT authentication and role-based access control protect all surfaces. Redis provides caching and session management.
+A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js. The backend runs an LLM in a tool-calling loop; the frontend is a single-page app with portfolio management, stock analysis (TradingView charts), and a chat side panel. JWT authentication and role-based access control protect all surfaces. Redis provides caching and session management. Data layer uses a hybrid architecture: PostgreSQL (SQLAlchemy 2.0 async) for OLTP and Apache Iceberg for OLAP analytics.
+
+---
+
+## Features
+
+- **5 specialized AI sub-agents** — Portfolio, Stock Analyst, Forecaster, Research, and Sentiment agents routed by a LangGraph supervisor
+- **Memory-augmented chat** — pgvector semantic memory retrieval across sessions; per-user facts + summaries persist and auto-inject into sub-agent prompts
+- **Round-robin model pools** — load-balanced Groq daily token budgets across 6 models (~2.3M TPD combined); configurable tool + synthesis pools
+- **Context-aware multi-turn conversations** — intent-aware routing, rolling summary, follow-up detection, summary-based context injection
+- **Synthesis pass** — final responses re-invoked with quality-optimized models (gpt-oss-120b tier) after tool calls complete
+- **LLM Observability dashboard** — real-time token tracking (input/output split), per-model TPD/RPD bars, daily budget monitoring, cascade event log
+- **Recency-aware news** — 7-day default window with time-decay scoring surfaces the most relevant recent headlines
+- **Ollama local LLM (Tier 0)** — zero-cost inference via host-native Ollama; cascade falls back to Groq → Anthropic when unavailable
+- **Prophet forecasting with ensemble correction** — 3/6/9-month price targets with 80% confidence bands, inline backtest accuracy
+- **Real-time WebSocket streaming** — live tool event visibility (`tool_start` / `tool_done`) during agentic loop execution
+- **Dual payment gateways** — Razorpay (INR modal) and Stripe (USD hosted checkout) with pro-rata billing
+- **Docker Compose 5-service orchestration** — single command spins up backend, frontend, PostgreSQL (pgvector), Redis, and docs
+- **Lighthouse performance monitoring** — 94/100 score; LHCI gate enforced pre-PR
 
 ---
 
@@ -9,13 +27,30 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 | Service | Stack | Port | Purpose |
 |---------|-------|------|---------|
 | **Frontend** | Next.js 16 + React 19 + Tailwind 4 + lightweight-charts v5 | `3000` | Portfolio dashboard, TradingView charts, collapsible sidebar, chat side panel |
-| **Backend** | FastAPI + LangChain + N-tier Groq/Anthropic | `8181` | Agentic loop + REST/WebSocket API + Auth + Redis cache |
+| **Backend** | FastAPI + LangChain + SQLAlchemy 2.0 async + N-tier Groq/Anthropic | `8181` | Agentic loop + REST/WebSocket API + Auth + Redis cache |
+| **PostgreSQL** | pgvector/pgvector:pg16 | `5432` | OLTP: users, tickers, payments, registry, scheduled jobs, **user_memories** (pgvector) |
 | **Redis** | Redis 7 | `6379` | Token deny-list, user preferences, API cache (write-through) |
 | **Docs** | MkDocs Material | `8000` | Project documentation |
 
 ---
 
 ## First-Time Setup (Recommended)
+
+### Docker Compose (preferred — mirrors production)
+
+```bash
+git clone git@github.com:asequitytrading-design/ai-agent-ui.git
+cd ai-agent-ui
+cp .env.example .env          # fill in API keys
+docker compose up -d          # start all 5 services
+
+# Seed demo data (required for first E2E run / demo login)
+docker compose exec backend python scripts/seed_demo_data.py
+```
+
+Open [http://localhost:3000](http://localhost:3000). Demo credentials: `admin@demo.com` / `Admin123!`
+
+### Native Setup
 
 ```bash
 git clone git@github.com:asequitytrading-design/ai-agent-ui.git
@@ -75,7 +110,10 @@ cp frontend/.env.local.example frontend/.env.local
 #    On first run: Iceberg tables are created and superuser is seeded automatically
 ./run.sh start
 
-# 4. Log in and open the chat
+# 4. (Optional) Seed demo data for testing
+PYTHONPATH=backend python scripts/seed_demo_data.py
+
+# 5. Log in and open the chat
 open http://localhost:3000/login
 ```
 
@@ -88,124 +126,189 @@ Stop all services: `./run.sh stop` · Status: `./run.sh status`
 ```mermaid
 graph TD
     subgraph Browser["Browser — localhost:3000"]
-        UI["Next.js SPA<br/><i>page.tsx</i>"]
-        Login["Login Page<br/><i>login/page.tsx</i>"]
-        IF_DASH["iframe — Dashboard<br/><i>:8050</i>"]
-        IF_DOCS["iframe — Docs<br/><i>:8000</i>"]
+        UI["Next.js SPA<br/><i>Portfolio, Analytics, Admin</i>"]
+        Chat["Chat Side Panel<br/><i>resizable drawer + FAB</i>"]
+        Login["Login Page"]
     end
 
     subgraph Backend["Backend — :8181"]
-        API["FastAPI<br/>POST /v1/chat/stream<br/>WS /ws/chat<br/>GET /v1/agents<br/>POST /v1/auth/login<br/>GET /v1/admin/tier-health"]
-        CS["ChatServer"]
-        AR["AgentRegistry"]
-        TR["ToolRegistry"]
-        AUTH["Auth Router<br/>12 endpoints"]
-        ICE["IcebergUserRepository<br/>(SQLite catalog)"]
+        API["FastAPI<br/>WS /ws/chat<br/>POST /v1/chat/stream<br/>GET /v1/admin/daily-budget"]
+        AUTH["Auth Router<br/>JWT + OAuth PKCE"]
+        OBS["ObservabilityCollector<br/><i>token tracking, tier health</i>"]
     end
 
-    subgraph Agents["Agents"]
-        GA["GeneralAgent<br/><i>N-tier Groq → Anthropic</i>"]
-        SA["StockAgent<br/><i>N-tier Groq → Anthropic</i>"]
+    subgraph LLM["LLM Cascade (Round-Robin Pools)"]
+        TB["TokenBudget Singleton<br/><i>Iceberg-seeded TPD/RPD</i>"]
+        subgraph ToolPool["Tool Pool (round-robin)"]
+            M1["llama-3.3-70b"]
+            M2["kimi-k2"]
+            M3["qwen3-32b"]
+        end
+        subgraph QualPool["Quality Pool"]
+            M4["gpt-oss-120b"]
+            M5["gpt-oss-20b"]
+        end
+        M6["scout-17b<br/><i>fast fallback</i>"]
+        ANT["Anthropic Claude<br/><i>paid fallback</i>"]
     end
 
-    subgraph Tools["Tools"]
-        T1["get_current_time"]
-        T2["search_web<br/><i>SerpAPI</i>"]
-        T3["search_market_news<br/><i>wraps GeneralAgent</i>"]
-        T4["fetch_stock_data<br/>load_stock_data<br/>get_stock_info …"]
-        T5["analyse_stock_price<br/><i>ta + Plotly</i>"]
-        T6["forecast_stock<br/><i>Prophet + Plotly</i>"]
+    subgraph Graph["LangGraph Supervisor"]
+        GD["Guardrail<br/><i>intent-aware routing<br/>keyword → LLM classifier</i>"]
+        subgraph SubAgents["Sub-Agents (ReAct Loop)"]
+            PA["Portfolio<br/><i>currency-aware</i>"]
+            SA["Stock Analyst<br/><i>5-step pipeline</i>"]
+            FC["Forecaster<br/><i>Prophet + backtest</i>"]
+            RA["Research<br/><i>news + discovery</i>"]
+            SE["Sentiment<br/><i>multi-source</i>"]
+        end
+        SYN["Synthesis Pass<br/><i>gpt-oss-120b tier</i>"]
     end
 
-    subgraph Data["Data"]
-        IC["Iceberg<br/>~/.ai-agent-ui/data/iceberg/<br/><i>single source of truth</i>"]
-        C["Cache<br/>~/.ai-agent-ui/data/cache/"]
-        P["Parquet backup<br/>~/.ai-agent-ui/data/{raw,forecasts}/"]
+    subgraph Memory["Memory Layer"]
+        EMB["EmbeddingService<br/><i>Ollama nomic-embed-text<br/>768 dim</i>"]
+        PGV["pgvector<br/><i>user_memories table<br/>cosine similarity top-K</i>"]
+        CTX["ConversationContext<br/><i>rolling summary<br/>topic tracking</i>"]
+    end
+
+    subgraph Data["Data Layer"]
+        PG["PostgreSQL 16<br/><i>6 OLTP tables + pgvector</i>"]
+        IC["Iceberg<br/><i>14 OLAP tables<br/>+ chat_audit_log</i>"]
+        RD["Redis 7<br/><i>token deny-list, cache</i>"]
     end
 
     Login -->|"POST /auth/login"| AUTH
-    AUTH --> ICE --> IC
-    UI -->|"WS /ws/chat · POST /chat/stream<br/>Bearer token"| API
-    API --> CS --> AR
-    AR --> GA & SA
-    GA --> T1 & T2
-    SA --> T3 & T4 & T5 & T6
-    T4 --> IC
-    T5 --> IC & C
-    T6 --> IC & C
-    IF_DASH -->|"reads Iceberg"| IC
-    UI -->|"view=dashboard ?token=jwt"| IF_DASH
-    UI -->|"view=docs"| IF_DOCS
+    AUTH --> PG
+    Chat -->|"WS /ws/chat"| API
+    UI -->|"REST API"| API
+
+    API -->|"1. retrieve memories"| PGV
+    PGV -->|"query vectors"| EMB
+    API -->|"2. route"| GD
+    GD --> PA & SA & FC & RA & SE
+    SubAgents -->|"3. tool calls"| TB
+    TB --> ToolPool
+    ToolPool -.->|"cascade"| QualPool -.->|"cascade"| M6 -.-> ANT
+    SubAgents -->|"4. synthesis"| SYN
+    SYN --> QualPool
+
+    API -->|"5. post-response"| Memory
+    EMB -->|"embed facts"| PGV
+    CTX -->|"update summary"| CTX
+    API -->|"persist turn"| IC
+
+    OBS -->|"flush events"| IC
+    TB -->|"seed TPD on restart"| IC
+    PGV --> PG
 ```
 
 ---
 
-## Agentic Loop
+## ReAct Agent Loop (with Memory + Synthesis)
 
-Every message goes through an LLM-driven tool-calling loop before a response is returned. The frontend prefers a persistent **WebSocket** connection (`/ws/chat`) for lower latency and server-initiated events. If the WebSocket is unavailable, it falls back to **HTTP NDJSON** streaming (`POST /chat/stream`).
-
-### WebSocket (primary)
+Every message flows through a memory-augmented, tool-calling loop with a synthesis quality pass. The frontend uses a persistent **WebSocket** (`/ws/chat`) with HTTP NDJSON fallback (`POST /chat/stream`).
 
 ```mermaid
 sequenceDiagram
     participant U as User
     participant FE as Frontend
     participant BE as FastAPI /ws/chat
-    participant LLM as FallbackLLM<br/>Groq → Anthropic
-    participant T as Tool(s)
-
-    FE->>BE: WebSocket upgrade
-    FE->>BE: {"type":"auth","token":"<jwt>"}
-    BE-->>FE: {"type":"auth_ok"}
+    participant MEM as pgvector<br/>Memory
+    participant EMB as Ollama<br/>nomic-embed-text
+    participant GD as Guardrail<br/>+ Router
+    participant LLM as FallbackLLM<br/>Round-Robin Pools
+    participant T as Tools
+    participant SYN as Synthesis LLM<br/>gpt-oss-120b
+    participant ICE as Iceberg
 
     U->>FE: sends message
-    FE->>BE: {"type":"chat","message":"...","agent_id":"..."}
-    BE->>LLM: invoke(messages + tools)
+    FE->>BE: WS {"type":"chat","message":"...","session_id":"..."}
 
-    loop Agentic Loop (max 15 iterations)
-        LLM-->>BE: AIMessage {tool_calls: [...]}
-        BE-->>FE: {"type":"tool_start", ...}
-        BE->>T: ToolRegistry.invoke(name, args)
-        T-->>BE: ToolMessage result
-        BE-->>FE: {"type":"tool_done", ...}
-        BE->>LLM: invoke(messages + tool results)
+    rect rgb(240, 245, 255)
+        Note over BE,MEM: 1. Memory Retrieval
+        BE->>EMB: embed(user_message)
+        EMB-->>BE: 768-dim vector
+        BE->>MEM: cosine similarity top-5
+        MEM-->>BE: [{content, score}, ...]
     end
 
-    LLM-->>BE: AIMessage {content: "final answer"}
-    BE-->>FE: {"type":"final","response":"..."}
-    FE-->>U: renders markdown response
+    rect rgb(245, 255, 240)
+        Note over BE,GD: 2. Intent-Aware Routing
+        BE->>GD: message + context
+        GD->>GD: keyword score → best_intent()
+        alt same-intent follow-up
+            GD-->>BE: reuse last agent
+        else intent switch
+            GD-->>BE: route to new agent
+        else ambiguous
+            GD->>LLM: classify_followup()
+            LLM-->>GD: follow_up | new_topic
+        end
+    end
 
-    Note over FE,BE: Ping/pong keepalive every 30s
-    Note over FE,BE: Reconnect with exponential backoff on close
+    rect rgb(255, 245, 240)
+        Note over BE,T: 3. ReAct Tool Loop (max 25 iterations)
+        BE->>LLM: invoke([Memory context] + [Prior conversation] + query)
+        loop Tool Calling
+            LLM-->>BE: AIMessage {tool_calls: [...]}
+            BE-->>FE: {"type":"tool_start", ...}
+            BE->>T: ToolRegistry.invoke(name, args)
+            T-->>BE: ToolMessage result
+            BE-->>FE: {"type":"tool_done", ...}
+            BE->>LLM: invoke(messages + compressed tool results)
+        end
+        LLM-->>BE: AIMessage {content: "draft answer"}
+    end
+
+    rect rgb(250, 240, 255)
+        Note over BE,SYN: 4. Synthesis Pass
+        BE->>SYN: re-invoke with synthesis-tier model
+        SYN-->>BE: polished final response
+    end
+
+    BE-->>FE: {"type":"final","response":"...","memory_used":true}
+    FE-->>U: renders markdown + "memory" indicator
+
+    rect rgb(245, 245, 245)
+        Note over BE,ICE: 5. Post-Response (async, fire-and-forget)
+        BE->>EMB: embed(summary + facts)
+        BE->>MEM: upsert summary + insert facts
+        BE->>ICE: persist chat turn
+        BE->>BE: update ConversationContext
+    end
 ```
 
-### HTTP NDJSON (fallback)
+### Round-Robin Model Selection
 
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant FE as Frontend
-    participant BE as FastAPI
-    participant LLM as FallbackLLM<br/>Groq → Anthropic
-    participant T as Tool(s)
+```
+Tool Pool (primary):  llama-3.3-70b → kimi-k2 → qwen3-32b  (round-robin)
+Quality Pool:         gpt-oss-120b → gpt-oss-20b             (round-robin)
+Fast Pool:            scout-17b                               (single)
+Anthropic:            claude-sonnet-4-6                        (paid fallback)
 
-    U->>FE: sends message
-    FE->>BE: POST /v1/chat/stream {message, history, agent_id}
-    Note over FE,BE: Authorization: Bearer <access_token>
-    BE->>LLM: invoke(messages + tools)
+Each invoke(): pool counter++ → start at next model → wrap around
+Budget exhausted? → cascade to next pool → progressive compression
+```
 
-    loop Agentic Loop (max 15 iterations)
-        LLM-->>BE: AIMessage {tool_calls: [...]}
-        BE-->>FE: event: tool_start
-        BE->>T: ToolRegistry.invoke(name, args)
-        T-->>BE: ToolMessage result
-        BE-->>FE: event: tool_done
-        BE->>LLM: invoke(messages + tool results)
-    end
+### Compression Pipeline
 
-    LLM-->>BE: AIMessage {content: "final answer"}
-    BE-->>FE: event: final {response: "..."}
-    FE-->>U: renders markdown response
+| Stage | Trigger | Action |
+|-------|---------|--------|
+| 1 | iteration ≥ 2 | System prompt condensed (~15% reduction) |
+| 2 | budget tight | Tool results truncated (800 → 500 → 300 chars) |
+| 3 | pool exhaustion | Progressive compression to 70% of next model's TPM |
+
+### Memory Context Injection
+
+```
+[Memory context]                    ← pgvector top-5 (~200 tokens)
+- User tracks RELIANCE.NS and INFY.NS (Indian market)
+- Portfolio beta 0.91 vs ^NSEI, Sharpe -1.26
+- Last session: discussed sector rebalancing
+
+[Prior conversation]                ← rolling summary (~100 tokens)
+Discussed portfolio health. 4 stocks, -11.15% loss on ₹166K.
+
+{user query}                        ← current message
 ```
 
 ---
@@ -370,29 +473,42 @@ ai-agent-ui/
 │   ├── main.py               # ChatServer, routes, auth router mount
 │   ├── config.py             # Pydantic Settings (.env support)
 │   ├── logging_config.py     # Rotating file + console logging
-│   ├── llm_fallback.py       # FallbackLLM — N-tier Groq cascade + Anthropic fallback
-│   ├── token_budget.py       # Sliding-window TPM/RPM budget tracker
-│   ├── message_compressor.py # 3-stage message compression
-│   ├── observability.py      # Thread-safe metrics + tier health monitoring
-│   ├── routes.py             # Route registration (/v1/ prefix) + admin endpoints
-│   ├── ws.py                 # WebSocket /ws/chat endpoint (auth + streaming)
+│   ├── llm_fallback.py       # FallbackLLM — round-robin pool cascade + _try_model
+│   ├── token_budget.py       # RoundRobinPool, TokenBudget singleton, Iceberg seeding
+│   ├── message_compressor.py # 3-stage progressive message compression
+│   ├── observability.py      # Token tracking, tier health, Iceberg flush + seeding
+│   ├── embedding_service.py  # Ollama nomic-embed-text wrapper (768 dim)
+│   ├── memory_extractor.py   # Per-turn summary upsert + fact extraction → pgvector
+│   ├── memory_retriever.py   # Cosine similarity top-K retrieval + prompt formatting
+│   ├── audit_persistence.py  # Per-answer Iceberg chat_audit_log write
+│   ├── routes.py             # Route registration (/v1/) + admin endpoints
+│   ├── ws.py                 # WebSocket /ws/chat (memory retrieval + extraction hooks)
+│   ├── db/
+│   │   ├── engine.py         # Async SQLAlchemy engine + session factory
+│   │   ├── base.py           # DeclarativeBase for ORM
+│   │   ├── models/           # 6 ORM models (User, UserTicker, Payment, Registry,
+│   │   │                     #   ScheduledJob, UserMemory)
+│   │   └── migrations/       # Alembic async migrations (pgvector extension + tables)
 │   ├── agents/
-│   │   ├── base.py           # BaseAgent ABC
-│   │   ├── config.py         # AgentConfig dataclass
-│   │   ├── loop.py           # Agentic loop logic
-│   │   ├── stream.py         # NDJSON streaming support
-│   │   ├── registry.py       # AgentRegistry
-│   │   ├── general_agent.py  # GeneralAgent (Claude Sonnet 4.6)
-│   │   └── stock_agent.py    # StockAgent (Claude Sonnet 4.6)
+│   │   ├── base.py           # BaseAgent ABC (tool + synthesis LLM)
+│   │   ├── config.py         # AgentConfig + SubAgentConfig
+│   │   ├── sub_agents.py     # LangGraph sub-agent node factory (ReAct + synthesis pass)
+│   │   ├── graph_state.py    # AgentState TypedDict (incl. retrieved_memories)
+│   │   ├── conversation_context.py  # Rolling summary, topic tracking, TTL store
+│   │   ├── nodes/
+│   │   │   ├── guardrail.py  # Intent-aware routing (keyword + LLM classifier)
+│   │   │   ├── router_node.py # score_intents(), best_intent()
+│   │   │   ├── synthesis.py   # Graph synthesis node (hallucination guard + actions)
+│   │   │   └── topic_classifier.py  # Follow-up vs new-topic detection
+│   │   └── configs/          # Per-agent configs (portfolio, stock_analyst, forecaster, etc.)
 │   └── tools/
-│       ├── registry.py       # ToolRegistry
-│       ├── time_tool.py      # get_current_time
-│       ├── search_tool.py    # search_web (SerpAPI)
-│       ├── agent_tool.py     # search_market_news (wraps GeneralAgent)
-│       ├── stock_data_tool.py      # 7 Yahoo Finance tools (incl. fetch_quarterly_results)
-│       ├── price_analysis_tool.py  # analyse_stock_price
-│       ├── forecasting_tool.py     # forecast_stock (Prophet)
-│       └── _ticker_linker.py      # Auto-link tickers to users from chat
+│       ├── registry.py             # ToolRegistry (27 tools)
+│       ├── stock_data_tool.py      # fetch_stock_data, get_stock_info, etc.
+│       ├── price_analysis_tool.py  # analyse_stock_price (SMA/RSI/MACD/BB)
+│       ├── forecasting_tool.py     # forecast_stock (Prophet + inline backtest)
+│       ├── sector_discovery_tool.py # suggest_sector_stocks (Iceberg + popular fallback)
+│       ├── sentiment_agent.py      # score_ticker_sentiment (multi-source)
+│       └── _ticker_linker.py       # Auto-link tickers to users from chat
 │
 ├── stocks/                   # Iceberg persistence — single source of truth
 │   ├── create_tables.py      # Idempotent init of 9 tables (called by run.sh)
@@ -427,10 +543,10 @@ ai-agent-ui/
 │   └── assets/custom.css     # Light theme styles
 │
 ├── e2e/                      # Playwright E2E tests
-│   ├── playwright.config.ts  # 6 projects (setup, auth, frontend, dashboard, admin, errors)
-│   ├── pages/                # Page Object Models (10 classes)
-│   ├── tests/                # 14+ spec files, ~91 tests
-│   ├── fixtures/             # Auth token fixtures for Dash
+│   ├── playwright.config.ts  # 7 projects (setup, auth, frontend, analytics, admin, errors, performance)
+│   ├── pages/                # Page Object Models (11 classes)
+│   ├── tests/                # 34 spec files, ~219 tests
+│   ├── fixtures/             # Auth, portfolio, subscription fixtures
 │   └── utils/                # Selectors, wait helpers, API helpers
 │
 ├── docs/                     # MkDocs source
@@ -473,6 +589,8 @@ ai-agent-ui/
 | Plotly | Interactive HTML charts |
 | pyarrow | Parquet read/write |
 | pandas / numpy | Data manipulation |
+| razorpay | Razorpay payment gateway SDK |
+| stripe | Stripe payment gateway SDK |
 
 ### Dashboard
 | Package | Role |
@@ -499,10 +617,10 @@ Project knowledge is shared via git-committed Serena memories:
 ```
 .serena/memories/
 ├── shared/              # Git-tracked, PR-reviewed
-│   ├── architecture/    # System design (5 files)
-│   ├── conventions/     # Coding standards (6 files)
-│   ├── debugging/       # Gotchas & workarounds (2 files)
-│   ├── onboarding/      # Setup guide (1 file)
+│   ├── architecture/    # System design (16 files)
+│   ├── conventions/     # Coding standards (10 files)
+│   ├── debugging/       # Gotchas & workarounds (12 files)
+│   ├── onboarding/      # Setup guides (3 files)
 │   └── api/             # Protocol docs (1 file)
 ├── session/             # Gitignored — daily progress
 └── personal/            # Gitignored — individual notes
@@ -595,6 +713,15 @@ GET  /v1/health              # Health check
 GET  /v1/agents              # List agents
 GET  /v1/auth/*              # Auth endpoints
 GET  /v1/admin/tier-health   # LLM tier health (superuser)
+POST /v1/admin/reset-usage   # Zero monthly usage (superuser)
+GET  /v1/admin/usage-stats   # User usage stats (superuser)
+GET  /v1/admin/usage-history # Month-on-month history (superuser)
+POST /v1/subscription/checkout   # Checkout (Razorpay or Stripe)
+GET  /v1/subscription            # Current tier + usage
+POST /v1/subscription/cancel     # Cancel subscription
+POST /v1/webhooks/razorpay       # Razorpay webhook (signature required)
+POST /v1/subscription/webhooks/stripe  # Stripe webhook (signature required)
+GET  /v1/admin/payment-transactions    # Transaction ledger (superuser)
 WS   /ws/chat                # WebSocket (not versioned)
 GET  /avatars/*              # Static files (not versioned)
 ```
@@ -609,6 +736,22 @@ GET  /avatars/*              # Static files (not versioned)
 | `FACEBOOK_APP_SECRET` | Placeholder |
 | `OAUTH_REDIRECT_URI` | Default: `http://localhost:3000/auth/oauth/callback` |
 
+### Subscription & Payments (Razorpay + Stripe)
+
+| Variable | Notes |
+|----------|-------|
+| `RAZORPAY_KEY_ID` | Test mode key from Razorpay Dashboard |
+| `RAZORPAY_KEY_SECRET` | Test mode secret |
+| `RAZORPAY_WEBHOOK_SECRET` | Webhook secret (**required** — unsigned webhooks rejected) |
+| `RAZORPAY_PLAN_PRO` | Plan ID for Pro tier (₹499/mo) |
+| `RAZORPAY_PLAN_PREMIUM` | Plan ID for Premium tier (₹1,499/mo) |
+| `STRIPE_SECRET_KEY` | Stripe secret key (test mode) |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook secret (**required**) |
+| `STRIPE_PRICE_PRO` | Stripe Price ID for Pro tier ($5.99/mo) |
+| `STRIPE_PRICE_PREMIUM` | Stripe Price ID for Premium tier ($17.99/mo) |
+
+Subscription tiers: **Free** (3 analyses/mo), **Pro** (30/mo), **Premium** (unlimited). Dual-gateway: Razorpay (INR, modal) + Stripe (USD, hosted checkout). Upgrades use pro-rata billing. Usage counters auto-reset on month boundary via lazy reset. Payment transaction ledger tracks all events in Iceberg.
+
 ---
 
 ## Testing
@@ -616,7 +759,7 @@ GET  /avatars/*              # Static files (not versioned)
 ```bash
 # Backend (Python 3.12 — always activate venv first)
 source ~/.ai-agent-ui/venv/bin/activate
-python -m pytest tests/backend/ -v        # ~416 tests
+python -m pytest tests/backend/ -v        # ~548 tests
 
 # Frontend (vitest)
 cd frontend && npx vitest run             # 61 tests
@@ -624,9 +767,9 @@ cd frontend && npx vitest run             # 61 tests
 
 | Suite | Tests | Coverage |
 |-------|-------|----------|
-| Backend unit | 416+ | Auth, dashboard, portfolio CRUD, cache, agents, WS, analytics |
+| Backend unit | 548 | Auth, dashboard, portfolio CRUD, cache, agents, WS, analytics, billing, security |
 | Frontend unit | 61 | Auth, apiFetch, WebSocket, types, ConfirmDialog, hooks |
-| E2E (Playwright) | 49 | Full user flows across all pages |
+| E2E (Playwright) | ~219 | Full user flows, business workflows, payment flows, performance |
 
 ## E2E Testing (Playwright)
 
@@ -636,24 +779,34 @@ The `e2e/` directory contains a Playwright test suite covering all app surfaces.
 cd e2e && npm install               # first time only
 npx playwright install chromium     # first time only
 
-npm test                            # run all ~91 tests (headless)
+npm test                            # run all ~219 tests (headless)
 npx playwright test --headed        # watch tests in a visible browser
 npx playwright test --ui            # interactive UI mode (best for exploration)
 npx playwright test --project=frontend-chromium   # frontend only
-npx playwright test --project=dashboard-chromium  # dashboard only
+npx playwright test --project=analytics-chromium  # analytics/dashboard only
+npx playwright test --project=admin-chromium      # admin only
+npx playwright test --project=performance         # Lighthouse/Core Web Vitals
 ```
 
 | Area | Tests | Coverage |
 |------|-------|----------|
-| Auth (login, logout, OAuth, token refresh) | 8 | Login flow, RBAC, token expiry |
-| Frontend chat | 8 | Send, stream, agent switch, clear, Enter key |
-| Frontend navigation + profile | 5 | Menu, iframe, modals |
-| Dashboard home | 6 | Cards, search, dropdown, pagination, filter |
-| Dashboard analysis + forecast | 8 | Tabs, charts, refresh, accuracy |
-| Dashboard marketplace + admin | 6 | Add/remove tickers, user table, RBAC |
-| Error handling | 5 | Network errors, auth expiry, 500s |
-| Dashboard admin (deep) | 3 | LLM observability tier health, budget, cascade |
-| **Total** | **~91** | |
+| Auth (login, logout, OAuth, token refresh) | 11 | Login flow, RBAC, token expiry |
+| Chat (UI, agents, keyboard, streaming) | 17 | Send, stream, agent switch, Enter key, tools |
+| Chat tool invocations | 4 | Stock analysis, forecast, portfolio, error handling |
+| WebSocket lifecycle | 6 | Connect, stream, reconnect, HTTP fallback |
+| Navigation + profile + sessions | 16 | Menu, modals, session management |
+| Dashboard home | 11 | Cards, filters, watchlist, add stock |
+| Portfolio CRUD | 8 | Add/edit/delete holdings, ConfirmDialog |
+| Analytics (5 tabs) | 67 | Candlestick, indicators, forecast, compare |
+| Insights (7 tabs) | 17 | Screener, filters, Plotly charts, quarterly |
+| Marketplace | 11 | Search, link/unlink, pagination |
+| Admin + admin CRUD | 25 | Users, audit, observability, create/edit/delete |
+| Billing + subscription | 17 | Pricing, gateway toggle, paywall, lifecycle |
+| Payment flows | 7 | Razorpay/Stripe mocked checkout, cancel |
+| Theme / dark mode | 14 | Persistence, chart sync, TradingView + Plotly |
+| Error handling | 4 | Network errors, auth expiry, 500s |
+| Performance (Lighthouse) | 4 | LCP, FCP, TBT, CLS on 4 key pages |
+| **Total** | **~219** | |
 
 CI runs automatically on PRs via `.github/workflows/e2e.yml` (chromium-only, caches browsers).
 

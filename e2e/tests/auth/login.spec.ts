@@ -33,7 +33,9 @@ test.describe("Login page", () => {
     for (let attempt = 0; attempt < 3; attempt++) {
       await loginPage.login(VALID_EMAIL, VALID_PASSWORD);
       try {
-        await page.waitForURL("/", { timeout: 15_000 });
+        await page.waitForURL("**/dashboard**", {
+          timeout: 15_000,
+        });
         break;
       } catch {
         // Likely 429 — wait for rate limit to ease, then retry

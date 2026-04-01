@@ -35,7 +35,7 @@ def register(router: APIRouter) -> None:
     """
 
     @router.get("/users", response_model=List[UserResponse], tags=["users"])
-    def list_users(
+    async def list_users(
         _: UserContext = Depends(superuser_only),
     ) -> List[UserResponse]:
         """Return all users in the system.
@@ -47,12 +47,16 @@ def register(router: APIRouter) -> None:
             A list of :class:`~auth.models.UserResponse` objects.
         """
         repo = _helpers._get_repo()
-        return [_helpers._user_to_response(u) for u in repo.list_all()]
+        users = await repo.list_all()
+        return [
+            _helpers._user_to_response(u)
+            for u in users
+        ]
 
     @router.post(
         "/users", response_model=UserResponse, status_code=201, tags=["users"]
     )
-    def create_user(
+    async def create_user(
         body: UserCreateRequest,
         caller: UserContext = Depends(superuser_only),
         service: AuthService = Depends(get_auth_service),
@@ -73,7 +77,7 @@ def register(router: APIRouter) -> None:
         """
         AuthService.validate_password_strength(body.password)
         repo = _helpers._get_repo()
-        if repo.get_by_email(str(body.email)) is not None:
+        if await repo.get_by_email(str(body.email)) is not None:
             raise HTTPException(
                 status_code=409,
                 detail="A user with email '{}' already exists.".format(
@@ -82,7 +86,7 @@ def register(router: APIRouter) -> None:
             )
         # Enforce max 5 active superusers on creation
         if body.role == "superuser":
-            all_users = repo.list_all()
+            all_users = await repo.list_all()
             su_count = sum(
                 1
                 for u in all_users
@@ -95,7 +99,7 @@ def register(router: APIRouter) -> None:
                     detail="Maximum 5 superusers are allowed.",
                 )
         hashed = service.hash_password(body.password)
-        user = repo.create(
+        user = await repo.create(
             {
                 "email": str(body.email),
                 "hashed_password": hashed,
@@ -103,7 +107,7 @@ def register(router: APIRouter) -> None:
                 "role": body.role,
             }
         )
-        repo.append_audit_event(
+        await repo.append_audit_event(
             "USER_CREATED",
             actor_user_id=caller.user_id,
             target_user_id=user["user_id"],
@@ -119,7 +123,7 @@ def register(router: APIRouter) -> None:
     @router.get(
         "/users/{user_id}", response_model=UserResponse, tags=["users"]
     )
-    def get_user(
+    async def get_user(
         user_id: str, _: UserContext = Depends(superuser_only)
     ) -> UserResponse:
         """Fetch a single user by UUID.
@@ -135,7 +139,7 @@ def register(router: APIRouter) -> None:
             HTTPException: 404 if no user with that ID exists.
         """
         repo = _helpers._get_repo()
-        user = repo.get_by_id(user_id)
+        user = await repo.get_by_id(user_id)
         if user is None:
             raise HTTPException(
                 status_code=404, detail="User '{}' not found".format(user_id)
@@ -145,7 +149,7 @@ def register(router: APIRouter) -> None:
     @router.patch(
         "/users/{user_id}", response_model=UserResponse, tags=["users"]
     )
-    def update_user(
+    async def update_user(
         user_id: str,
         body: UserUpdateRequest,
         caller: UserContext = Depends(superuser_only),
@@ -165,7 +169,7 @@ def register(router: APIRouter) -> None:
             HTTPException: 409 if the new email is already in use.
         """
         repo = _helpers._get_repo()
-        if repo.get_by_id(user_id) is None:
+        if await repo.get_by_id(user_id) is None:
             raise HTTPException(
                 status_code=404, detail="User '{}' not found".format(user_id)
             )
@@ -173,7 +177,9 @@ def register(router: APIRouter) -> None:
             k: v for k, v in body.model_dump().items() if v is not None
         }
         if "email" in updates:
-            existing = repo.get_by_email(str(updates["email"]))
+            existing = await repo.get_by_email(
+                str(updates["email"]),
+            )
             if existing is not None and existing["user_id"] != user_id:
                 raise HTTPException(
                     status_code=409,
@@ -183,7 +189,7 @@ def register(router: APIRouter) -> None:
                 )
         # Enforce max 5 active superusers
         if updates.get("role") == "superuser":
-            all_users = repo.list_all()
+            all_users = await repo.list_all()
             su_count = sum(
                 1
                 for u in all_users
@@ -203,8 +209,8 @@ def register(router: APIRouter) -> None:
             updates["page_permissions"] = _json.dumps(
                 updates["page_permissions"]
             )
-        updated = repo.update(user_id, updates)
-        repo.append_audit_event(
+        updated = await repo.update(user_id, updates)
+        await repo.append_audit_event(
             "USER_UPDATED",
             actor_user_id=caller.user_id,
             target_user_id=user_id,
@@ -216,7 +222,7 @@ def register(router: APIRouter) -> None:
         return _helpers._user_to_response(updated)
 
     @router.delete("/users/{user_id}", tags=["users"])
-    def delete_user(
+    async def delete_user(
         user_id: str, caller: UserContext = Depends(superuser_only)
     ) -> Dict[str, str]:
         """Soft-delete a user by setting ``is_active = False``.
@@ -238,12 +244,12 @@ def register(router: APIRouter) -> None:
                 detail="Superusers cannot deactivate their own account.",
             )
         repo = _helpers._get_repo()
-        if repo.get_by_id(user_id) is None:
+        if await repo.get_by_id(user_id) is None:
             raise HTTPException(
                 status_code=404, detail="User '{}' not found".format(user_id)
             )
-        repo.delete(user_id)
-        repo.append_audit_event(
+        await repo.delete(user_id)
+        await repo.append_audit_event(
             "USER_DELETED",
             actor_user_id=caller.user_id,
             target_user_id=user_id,

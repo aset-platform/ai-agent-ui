@@ -333,5 +333,5 @@ export function PortfolioForecastChart({
     handleCrosshair,
   ]);
 
-  return <div ref={containerRef} />;
+  return <div ref={containerRef} data-testid="portfolio-forecast-chart-canvas" />;
 }

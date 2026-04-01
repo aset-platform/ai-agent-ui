@@ -9,7 +9,7 @@
 
 import { useState, useRef, useEffect, useMemo } from "react";
 import Image from "next/image";
-import { useRouter, usePathname } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { clearTokens } from "@/lib/auth";
 import { useChatContext } from "@/providers/ChatProvider";
 import { useLayoutContext } from "@/providers/LayoutProvider";
@@ -21,6 +21,7 @@ interface AppHeaderProps {
   onEditProfile: () => void;
   onChangePassword: () => void;
   onManageSessions: () => void;
+  onBilling?: () => void;
   onActivityLog?: () => void;
 }
 
@@ -29,9 +30,9 @@ export function AppHeader({
   onEditProfile,
   onChangePassword,
   onManageSessions,
+  onBilling,
   onActivityLog,
 }: AppHeaderProps) {
-  const router = useRouter();
   const pathname = usePathname();
   const chatContext = useChatContext();
   const layoutContext = useLayoutContext();
@@ -74,7 +75,6 @@ export function AppHeader({
     const subTitles: Record<string, string> = {
       analysis: "Analysis",
       insights: "Insights",
-      marketplace: "Link Stock",
     };
 
     const rootTitle = rootTitles[root] ?? "Home";
@@ -90,7 +90,7 @@ export function AppHeader({
   const handleSignOut = async () => {
     await chatContext.flush();
     clearTokens();
-    router.replace("/login");
+    window.location.href = "/login";
   };
 
   // Avatar: real image if available, else initials circle
@@ -320,6 +320,30 @@ export function AppHeader({
                   <line x1="12" y1="17" x2="12" y2="21" />
                 </svg>
                 Manage Sessions
+              </button>
+
+              {/* Billing */}
+              <button
+                onClick={() => {
+                  setDropdownOpen(false);
+                  onBilling?.();
+                }}
+                className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors text-left"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="w-4 h-4 shrink-0"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
+                  <line x1="1" y1="10" x2="23" y2="10" />
+                </svg>
+                Billing
               </button>
 
               {/* Activity Log */}

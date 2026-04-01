@@ -66,7 +66,8 @@ class TestV1EndpointsRespond:
         client = _make_client()
         resp = client.get("/v1/health")
         assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
+        body = resp.json()
+        assert body["status"] == "ok"
 
     def test_agents_v1(self):
         """GET /v1/agents returns 200."""
@@ -75,8 +76,8 @@ class TestV1EndpointsRespond:
         assert resp.status_code == 200
         assert "agents" in resp.json()
 
-    def test_chat_v1_404_unknown_agent(self):
-        """POST /v1/chat with unknown agent → 404."""
+    def test_chat_v1_requires_auth(self):
+        """POST /v1/chat without token → 401."""
         client = _make_client()
         resp = client.post(
             "/v1/chat",
@@ -86,7 +87,7 @@ class TestV1EndpointsRespond:
                 "history": [],
             },
         )
-        assert resp.status_code == 404
+        assert resp.status_code == 401
 
 
 class TestRootEndpointsRemoved:

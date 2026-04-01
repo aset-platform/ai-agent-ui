@@ -133,6 +133,7 @@ export function UserModal({
             onChange={(e) =>
               setName(e.target.value)
             }
+            data-testid="user-modal-name"
             className={inputClass}
             placeholder="Jane Doe"
           />
@@ -147,6 +148,7 @@ export function UserModal({
             onChange={(e) =>
               setEmail(e.target.value)
             }
+            data-testid="user-modal-email"
             className={inputClass}
             placeholder="jane@example.com"
           />
@@ -164,6 +166,7 @@ export function UserModal({
               onChange={(e) =>
                 setPassword(e.target.value)
               }
+              data-testid="user-modal-password"
               className={inputClass}
               placeholder="Min 8 chars, 1 digit, 1 uppercase"
             />
@@ -182,6 +185,7 @@ export function UserModal({
                   | "general",
               )
             }
+            data-testid="user-modal-role"
             className={inputClass}
           >
             <option value="general">
@@ -253,6 +257,7 @@ export function UserModal({
           <button
             onClick={handleSave}
             disabled={saving}
+            data-testid="user-modal-submit"
             className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50"
           >
             {saving

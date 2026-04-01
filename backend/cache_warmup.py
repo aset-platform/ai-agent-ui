@@ -26,14 +26,14 @@ import time
 _logger = logging.getLogger(__name__)
 
 
-def warm_shared() -> None:
+async def warm_shared() -> None:
     """Warm shared (non-user-scoped) cache keys.
 
     Currently warms:
     - ``cache:dash:registry`` — all registered tickers
     - ``cache:admin:audit`` — audit event log
 
-    Runs synchronously; typically completes in < 1 s.
+    Runs as a coroutine; typically completes in < 1 s.
     """
     from cache import get_cache, TTL_STABLE, TTL_VOLATILE
 
@@ -101,7 +101,7 @@ def warm_shared() -> None:
         import auth.endpoints.helpers as _helpers
 
         repo = _helpers._get_repo()
-        raw = repo.list_audit_events()
+        raw = await repo.list_audit_events()
         events = []
         for ev in raw:
             d = dict(ev)
@@ -305,7 +305,7 @@ def warm_tickers() -> None:
     )
 
 
-def warm_frequent_users(
+async def warm_frequent_users(
     top_n: int = 5,
     days: int = 7,
 ) -> None:
@@ -394,7 +394,7 @@ def warm_frequent_users(
 
         for uid in active_users:
             try:
-                tickers = repo.get_user_tickers(uid)
+                tickers = await repo.get_user_tickers(uid)
                 if not tickers:
                     continue
 

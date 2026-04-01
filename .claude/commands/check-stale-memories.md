@@ -1,6 +1,10 @@
 ---
 description: Check shared Serena memories for stale references to renamed/deleted code
 allowed-tools: [Read, Glob, Grep, Bash, mcp__serena__list_memories, mcp__serena__read_memory, mcp__serena__find_symbol, mcp__serena__search_for_pattern, mcp__serena__write_memory]
+version: 1.0.0
+rollback: revert to previous SKILL.md commit
+observe: log stale memory count and fix actions to session output
+feedback: user confirms or rejects each suggested fix before applying
 ---
 
 # /check-stale-memories — Detect Stale Shared Memories

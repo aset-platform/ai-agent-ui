@@ -39,11 +39,20 @@ class UserContext(BaseModel):
         user_id: UUID string of the authenticated user.
         email: Email address extracted from the JWT payload.
         role: Either ``"superuser"`` or ``"general"``.
+        subscription_tier: ``"free"``, ``"pro"``, or
+            ``"premium"``.
+        subscription_status: ``"active"``, ``"past_due"``,
+            ``"cancelled"``, or ``"expired"``.
+        usage_remaining: Monthly analyses remaining, or
+            ``None`` for unlimited (premium).
     """
 
     user_id: str
     email: str
     role: str
+    subscription_tier: str = "free"
+    subscription_status: str = "active"
+    usage_remaining: int | None = None
 
 
 class UserResponse(BaseModel):

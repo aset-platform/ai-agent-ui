@@ -26,7 +26,8 @@ _logger = logging.getLogger(__name__)
 
 
 def _extract(
-    text: str | None, label: str,
+    text: str | None,
+    label: str,
 ) -> str | None:
     """Extract a value after ``Label : value``."""
     if not text:
@@ -49,9 +50,7 @@ def _parse_analysis(
     d["all_time_high"] = _extract(text, "All Time High")
     d["all_time_low"] = _extract(text, "All Time Low")
     d["total_return"] = _extract(text, "10Y Total Return")
-    d["avg_annual_return"] = _extract(
-        text, "Avg Annual Ret"
-    )
+    d["avg_annual_return"] = _extract(text, "Avg Annual Ret")
     d["sma_50"] = _extract(text, "SMA 50")
     d["sma_200"] = _extract(text, "SMA 200")
     d["rsi"] = _extract(text, "RSI (14)")
@@ -61,16 +60,13 @@ def _parse_analysis(
     d["bull_phase"] = _extract(text, "Bull phase")
     d["bear_phase"] = _extract(text, "Bear phase")
     d["max_drawdown"] = _extract(text, "Max Drawdown")
-    d["max_dd_duration"] = _extract(
-        text, "Max DD Duration"
-    )
+    d["max_dd_duration"] = _extract(text, "Max DD Duration")
     d["support"] = _extract(text, "Support")
     d["resistance"] = _extract(text, "Resistance")
     d["best_month"] = _extract(text, "Best Month")
     d["worst_month"] = _extract(text, "Worst Month")
     d["best_year"] = _extract(text, "Best Year")
     d["worst_year"] = _extract(text, "Worst Year")
-    d["chart"] = _extract(text, "Saved to")
     return d
 
 
@@ -83,8 +79,6 @@ def _parse_forecast(
     d: dict[str, Any] = {}
     d["current_price"] = _extract(text, "CURRENT PRICE")
     d["sentiment"] = _extract(text, "SENTIMENT")
-    d["chart"] = _extract(text, "Chart")
-
     # Extract targets: "3M Target : $250 (+5.2%) [$230 – $270]"
     d["targets"] = {}
     for horizon in ["3M", "6M", "9M"]:
@@ -207,9 +201,7 @@ def _section_forecast(f: dict[str, Any]) -> str:
         if f.get("mape"):
             lines.append(f"- MAPE: {f['mape']}")
     elif f.get("accuracy_error"):
-        lines.append(
-            f"**Accuracy**: {f['accuracy_error']}"
-        )
+        lines.append(f"**Accuracy**: {f['accuracy_error']}")
 
     return "\n".join(lines) + "\n"
 
@@ -236,23 +228,6 @@ def _section_calendar(a: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _section_charts(
-    analysis: dict[str, Any],
-    forecast: dict[str, Any],
-) -> str:
-    """Section 5: Chart links."""
-    lines = ["\n### Charts\n"]
-    a_chart = analysis.get("chart")
-    f_chart = forecast.get("chart")
-    if a_chart:
-        lines.append(f"- Analysis: `{a_chart}`")
-    if f_chart:
-        lines.append(f"- Forecast: `{f_chart}`")
-    if not a_chart and not f_chart:
-        return ""
-    return "\n".join(lines) + "\n"
-
-
 def build_report(
     tool_results: dict[str, str],
     ticker: str = "",
@@ -271,12 +246,8 @@ def build_report(
         Markdown string with 5 data sections.
     """
     info_text = tool_results.get("get_stock_info", "")
-    analysis_text = tool_results.get(
-        "analyse_stock_price", ""
-    )
-    forecast_text = tool_results.get(
-        "forecast_stock", ""
-    )
+    analysis_text = tool_results.get("analyse_stock_price", "")
+    forecast_text = tool_results.get("forecast_stock", "")
 
     info = _parse_stock_info(info_text)
     analysis = _parse_analysis(analysis_text)
@@ -290,7 +261,6 @@ def build_report(
         _section_technicals(analysis),
         _section_forecast(forecast),
         _section_calendar(analysis),
-        _section_charts(analysis, forecast),
     ]
 
     report = "\n".join(s for s in sections if s)

@@ -111,10 +111,14 @@ export function CompareChart({
         },
       );
       lineSeries.setData(
-        s.dates.map((d, j) => ({
-          time: d as Time,
-          value: s.normalized[j],
-        })),
+        s.dates
+          .map((d, j) => ({
+            time: d as Time,
+            value: s.normalized[j],
+          }))
+          .filter(
+            (pt) => pt.value != null,
+          ) as { time: Time; value: number }[],
       );
     }
 
@@ -136,5 +140,5 @@ export function CompareChart({
     };
   }, [series, isDark, height]);
 
-  return <div ref={containerRef} />;
+  return <div ref={containerRef} data-testid="compare-chart-canvas" />;
 }
