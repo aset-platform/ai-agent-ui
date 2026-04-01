@@ -299,6 +299,12 @@ class FallbackLLM:
             bound = raw.bind_tools(tools, **kwargs)
             self._groq_tiers[i] = (name, raw, bound)
 
+        # Rebuild model lookup with bound LLMs.
+        self._model_lookup = {
+            name: (name, raw, bound)
+            for name, raw, bound in self._groq_tiers
+        }
+
         if self._anthropic_llm is not None:
             self._anthropic_bound = self._anthropic_llm.bind_tools(
                 tools, **kwargs

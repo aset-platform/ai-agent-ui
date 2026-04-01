@@ -188,6 +188,84 @@ class TokenBudget:
         }
         self._pools: dict[str, RoundRobinPool] = {}
 
+    def seed_daily_from_iceberg(self) -> None:
+        """Seed TPD/RPD from today's Iceberg usage.
+
+        Called once at startup so daily counters
+        survive backend restarts. Only seeds models
+        that have zero current usage (avoids double
+        counting in a running process).
+        """
+        try:
+            from tools._stock_shared import _get_repo
+            from pyiceberg.expressions import (
+                GreaterThanOrEqual,
+            )
+
+            repo = _get_repo()
+            if repo is None:
+                return
+            cat = repo._get_catalog()
+            tbl = cat.load_table("stocks.llm_usage")
+            today = (
+                datetime.now(timezone.utc)
+                .date()
+                .isoformat()
+            )
+            df = tbl.scan(
+                row_filter=GreaterThanOrEqual(
+                    "request_date", today,
+                ),
+                selected_fields=[
+                    "model",
+                    "total_tokens",
+                ],
+            ).to_pandas()
+            if df.empty:
+                return
+
+            now = time.monotonic()
+            grp = df.groupby("model").agg(
+                tokens=("total_tokens", "sum"),
+                requests=("model", "count"),
+            )
+            seeded = 0
+            for model, row in grp.iterrows():
+                tokens = int(row["tokens"])
+                requests = int(row["requests"])
+                if tokens <= 0 and requests <= 0:
+                    continue
+                state = self._get_state(model)
+                with state.lock:
+                    # Only seed if day deques are empty
+                    if (
+                        state.day_tokens_total > 0
+                        or state.day_requests_total > 0
+                    ):
+                        continue
+                    state.day_tokens.append(
+                        (now, tokens),
+                    )
+                    state.day_tokens_total = tokens
+                    state.day_requests.append(
+                        (now, requests),
+                    )
+                    state.day_requests_total = (
+                        requests
+                    )
+                    seeded += 1
+            if seeded:
+                _logger.info(
+                    "Seeded TPD/RPD for %d models "
+                    "from Iceberg",
+                    seeded,
+                )
+        except Exception:
+            _logger.debug(
+                "Iceberg TPD seed failed",
+                exc_info=True,
+            )
+
     def register_pool(
         self, name: str, models: list[str],
     ) -> RoundRobinPool:
@@ -566,16 +644,27 @@ class TokenBudget:
             if daily_limit else 0,
             1,
         )
-        avg_per_query = (
+        # Estimate remaining queries per model, then
+        # sum.  Uses per-model avg or global default.
+        global_avg = (
             total_tokens // total_requests
             if total_requests > 0
             else 800
         )
-        est_remaining = (
-            remaining // avg_per_query
-            if avg_per_query
-            else 0
-        )
+        est_remaining = 0
+        for model, info in by_model.items():
+            model_remaining = max(
+                0, info["limit"] - info["total"],
+            )
+            model_avg = (
+                info["total"] // info["requests"]
+                if info["requests"] > 0
+                else global_avg
+            )
+            if model_avg > 0:
+                est_remaining += (
+                    model_remaining // model_avg
+                )
         tomorrow = datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0,
             microsecond=0,
@@ -658,4 +747,5 @@ def get_token_budget() -> TokenBudget:
         with _singleton_lock:
             if _singleton is None:
                 _singleton = TokenBudget()
+                _singleton.seed_daily_from_iceberg()
     return _singleton

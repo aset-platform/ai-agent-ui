@@ -71,4 +71,5 @@ class UserMemory(Base):
             "user_id",
             "session_id",
         ),
+        {"extend_existing": True},
     )

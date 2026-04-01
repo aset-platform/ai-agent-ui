@@ -135,6 +135,16 @@ async def extract_and_store_memories(
     if not s.memory_enabled:
         return
 
+    # Skip if response is too short (no real content
+    # to extract — e.g., "I will call tool X").
+    if len(response.strip()) < 50:
+        _logger.debug(
+            "Skipping memory extraction: "
+            "response too short (%d chars)",
+            len(response),
+        )
+        return
+
     from embedding_service import (
         get_embedding_service,
     )

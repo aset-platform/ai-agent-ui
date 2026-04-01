@@ -109,7 +109,10 @@ class TestExtractAndStoreMemories:
                 memory_enabled=True,
             )
             await extract_and_store_memories(
-                "u1", "s1", "hi", "hello",
-                "discussed RELIANCE", 1,
+                "u1", "s1",
+                "what is my portfolio?",
+                "Your portfolio has 4 stocks worth "
+                "INR 147,703. TCS is down 18.7%.",
+                "discussed portfolio health", 1,
             )
             mock_upsert.assert_awaited_once()

@@ -190,6 +190,45 @@ def _make_sub_agent_node(
             agent_id.
     """
 
+    def _build_synthesis_llm():
+        """Create synthesis-tier FallbackLLM."""
+        try:
+            from config import (
+                get_pool_groups,
+                get_settings,
+            )
+            from llm_fallback import FallbackLLM
+            from message_compressor import (
+                MessageCompressor,
+            )
+            from token_budget import get_token_budget
+
+            s = get_settings()
+            if s.ai_agent_ui_env == "test":
+                return None
+            tiers = [
+                t.strip()
+                for t in (
+                    s.synthesis_model_tiers
+                    or s.groq_model_tiers
+                ).split(",")
+                if t.strip()
+            ]
+            return FallbackLLM(
+                groq_models=tiers,
+                anthropic_model="claude-sonnet-4-6",
+                temperature=0,
+                agent_id=config.agent_id,
+                token_budget=get_token_budget(),
+                compressor=MessageCompressor(),
+                cascade_profile="synthesis",
+                pool_groups=get_pool_groups(
+                    "synthesis",
+                ),
+            )
+        except Exception:
+            return None
+
     def node(state: dict) -> dict:
         """Execute the sub-agent tool-calling loop."""
         llm = llm_factory(agent_id=config.agent_id)
@@ -375,6 +414,33 @@ def _make_sub_agent_node(
                         tool_call_id=tc["id"],
                     )
                 )
+
+        # Synthesis pass: if tools were called, re-invoke
+        # with synthesis-tier models for higher quality
+        # final text (gpt-oss-120b > llama-3.3-70b).
+        _had_tools = any(
+            e.get("type") == "tool_done"
+            for e in events
+        )
+        if _had_tools and response is not None:
+            syn_llm = _build_synthesis_llm()
+            if syn_llm is not None:
+                try:
+                    _logger.debug(
+                        "Synthesis pass for %s",
+                        config.agent_id,
+                    )
+                    response = syn_llm.invoke(
+                        messages,
+                        iteration=iteration + 2,
+                    )
+                    messages.append(response)
+                except Exception:
+                    _logger.debug(
+                        "Synthesis pass failed, "
+                        "using tool-tier response",
+                        exc_info=True,
+                    )
 
         # Extract final text
         final = ""
