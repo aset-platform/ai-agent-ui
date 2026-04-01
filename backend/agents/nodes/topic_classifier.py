@@ -57,7 +57,7 @@ def _get_classifier_llm():
         from message_compressor import (
             MessageCompressor,
         )
-        from token_budget import TokenBudget
+        from token_budget import get_token_budget
 
         s = get_settings()
         tiers = [
@@ -74,7 +74,7 @@ def _get_classifier_llm():
             anthropic_model=None,
             temperature=0,
             agent_id="classifier",
-            token_budget=TokenBudget(),
+            token_budget=get_token_budget(),
             compressor=MessageCompressor(),
             cascade_profile="tool",
             ollama_model=ollama,

@@ -170,7 +170,7 @@ def synthesis(state: dict) -> dict:
         from message_compressor import (
             MessageCompressor,
         )
-        from token_budget import TokenBudget
+        from token_budget import get_token_budget
 
         settings = get_settings()
         tiers = [
@@ -181,14 +181,19 @@ def synthesis(state: dict) -> dict:
             ).split(",")
             if t.strip()
         ]
+        from config import get_pool_groups
+
         llm = FallbackLLM(
             groq_models=tiers,
             anthropic_model=None,
             temperature=0,
             agent_id="synthesis",
-            token_budget=TokenBudget(),
+            token_budget=get_token_budget(),
             compressor=MessageCompressor(),
             cascade_profile="synthesis",
+            pool_groups=get_pool_groups(
+                "synthesis",
+            ),
         )
 
         messages = list(state.get("messages", []))

@@ -274,14 +274,17 @@ def create_app(
                 status_code=404,
                 detail=(f"Agent '{req.agent_id}' " "not found"),
             )
-        set_current_user(req.user_id)
         try:
+
+            def _run_with_user():
+                set_current_user(req.user_id)
+                return agent.run(
+                    req.message, req.history,
+                )
+
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
-                executor,
-                agent.run,
-                req.message,
-                req.history,
+                executor, _run_with_user,
             )
             result = await asyncio.wait_for(
                 future,
@@ -316,13 +319,15 @@ def create_app(
     async def _chat_langgraph(req: ChatRequest):
         """Sync chat via LangGraph supervisor graph."""
         input_state = _build_graph_input(req)
-        set_current_user(req.user_id)
         try:
+
+            def _invoke_with_user():
+                set_current_user(req.user_id)
+                return graph.invoke(input_state)
+
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
-                executor,
-                graph.invoke,
-                input_state,
+                executor, _invoke_with_user,
             )
             result = await asyncio.wait_for(
                 future,
@@ -965,7 +970,19 @@ def create_app(
             "enabled": enabled,
         }
 
+    async def _admin_daily_budget():
+        """GET /admin/daily-budget — Groq token usage."""
+        if token_budget is None:
+            return {"error": "Token budget not available"}
+        return token_budget.get_daily_budget()
+
     admin_router = APIRouter(prefix="/v1")
+    admin_router.add_api_route(
+        "/admin/daily-budget",
+        _admin_daily_budget,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
     admin_router.add_api_route(
         "/admin/metrics",
         _admin_metrics,

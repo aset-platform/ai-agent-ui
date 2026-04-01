@@ -26,6 +26,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from langsmith import traceable
@@ -95,10 +96,46 @@ _DEFAULT_LIMITS: dict[str, ModelLimits] = {
         rpd=1_000,
         tpd=300_000,
     ),
+    "openai/gpt-oss-20b": ModelLimits(
+        rpm=30,
+        tpm=8_000,
+        rpd=1_000,
+        tpd=200_000,
+    ),
 }
 
 # Safety margin multiplier applied to token estimates.
 _ESTIMATE_MARGIN = 1.20
+
+
+class RoundRobinPool:
+    """A named pool of models with a round-robin counter.
+
+    Thread-safe — counter incremented under lock.
+    """
+
+    def __init__(
+        self, name: str, models: list[str],
+    ) -> None:
+        self.name = name
+        self.models = list(models)
+        self._counter = 0
+        self._lock = threading.Lock()
+
+    def ordered_models(self) -> list[str]:
+        """Return models starting from the next
+        round-robin position, wrapping around.
+        """
+        with self._lock:
+            n = len(self.models)
+            if n == 0:
+                return []
+            idx = self._counter % n
+            self._counter += 1
+        return [
+            self.models[(idx + i) % n]
+            for i in range(n)
+        ]
 
 
 @dataclass
@@ -149,6 +186,27 @@ class TokenBudget:
         self._state: dict[str, _ModelState] = {
             model: _ModelState() for model in self._limits
         }
+        self._pools: dict[str, RoundRobinPool] = {}
+
+    def register_pool(
+        self, name: str, models: list[str],
+    ) -> RoundRobinPool:
+        """Register a round-robin pool (idempotent).
+
+        Returns the existing pool if already registered
+        with the same name.
+        """
+        if name in self._pools:
+            return self._pools[name]
+        pool = RoundRobinPool(name, models)
+        self._pools[name] = pool
+        return pool
+
+    def get_pool(
+        self, name: str,
+    ) -> RoundRobinPool | None:
+        """Return a registered pool by name."""
+        return self._pools.get(name)
 
     def get_tpm(self, model: str) -> int | None:
         """Return the TPM limit for *model*, or ``None``.
@@ -463,6 +521,83 @@ class TokenBudget:
             }
         return result
 
+    def get_daily_budget(self) -> dict[str, Any]:
+        """Aggregate daily token usage across all models.
+
+        Returns:
+            Dict with ``date``, ``daily_limit``,
+            ``total_tokens``, ``remaining_tokens``,
+            ``usage_pct``, ``by_model``,
+            ``estimated_queries_remaining``,
+            ``reset_time_utc``.
+        """
+        now = time.monotonic()
+        total_tokens = 0
+        daily_limit = 0
+        total_requests = 0
+        by_model: dict[str, dict[str, Any]] = {}
+
+        for model, lim in self._limits.items():
+            state = self._get_state(model)
+            with state.lock:
+                tpd, _ = self._window_total(
+                    state.day_tokens, _DAY, now,
+                    state.day_tokens_total,
+                )
+                state.day_tokens_total = tpd
+                rpd, _ = self._window_total(
+                    state.day_requests, _DAY, now,
+                    state.day_requests_total,
+                )
+                state.day_requests_total = rpd
+
+            by_model[model] = {
+                "total": tpd,
+                "requests": rpd,
+                "limit": lim.tpd,
+            }
+            total_tokens += tpd
+            total_requests += rpd
+            daily_limit += lim.tpd
+
+        remaining = max(0, daily_limit - total_tokens)
+        usage_pct = round(
+            (total_tokens / daily_limit * 100)
+            if daily_limit else 0,
+            1,
+        )
+        avg_per_query = (
+            total_tokens // total_requests
+            if total_requests > 0
+            else 800
+        )
+        est_remaining = (
+            remaining // avg_per_query
+            if avg_per_query
+            else 0
+        )
+        tomorrow = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0,
+            microsecond=0,
+        ) + timedelta(days=1)
+
+        return {
+            "date": (
+                datetime.now(timezone.utc)
+                .date()
+                .isoformat()
+            ),
+            "daily_limit": daily_limit,
+            "total_tokens": total_tokens,
+            "remaining_tokens": remaining,
+            "usage_pct": usage_pct,
+            "by_model": by_model,
+            "estimated_queries_remaining": (
+                est_remaining
+            ),
+            "reset_time_utc": tomorrow.isoformat(),
+        }
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -500,3 +635,27 @@ class TokenBudget:
             _, count = log.popleft()
             expired += count
         return running_total - expired, expired
+
+
+# ------------------------------------------------------------------
+# Module-level singleton
+# ------------------------------------------------------------------
+
+_singleton_lock = threading.Lock()
+_singleton: TokenBudget | None = None
+
+
+def get_token_budget() -> TokenBudget:
+    """Return the process-wide TokenBudget singleton.
+
+    Thread-safe lazy initialization.  All components
+    should use this instead of ``TokenBudget()`` so
+    that budget tracking and round-robin counters are
+    shared across the application.
+    """
+    global _singleton
+    if _singleton is None:
+        with _singleton_lock:
+            if _singleton is None:
+                _singleton = TokenBudget()
+    return _singleton

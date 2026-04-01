@@ -138,6 +138,9 @@ class FallbackLLM:
         cascade_profile: str = "tool",
         ollama_model: str | None = None,
         ollama_first: bool = False,
+        pool_groups: list[
+            list[str]
+        ] | None = None,
     ) -> None:
         """Construct Ollama + Groq + Anthropic LLM cascade.
 
@@ -234,6 +237,36 @@ class FallbackLLM:
                 agent_id,
             )
 
+        # Build model lookup for pool-aware routing.
+        self._model_lookup: dict[str, tuple] = {
+            name: (name, raw, bound)
+            for name, raw, bound in self._groq_tiers
+        }
+
+        # Register round-robin pools.
+        from token_budget import RoundRobinPool
+
+        self._pool_groups: list[
+            RoundRobinPool
+        ] = []
+        if pool_groups:
+            for i, models in enumerate(pool_groups):
+                pool_name = (
+                    f"{cascade_profile}:{i}"
+                )
+                pool = self._budget.register_pool(
+                    pool_name, models,
+                )
+                self._pool_groups.append(pool)
+            _logger.info(
+                "FallbackLLM [%s]: pools %s",
+                cascade_profile,
+                [
+                    (p.name, p.models)
+                    for p in self._pool_groups
+                ],
+            )
+
         # Anthropic fallback (None = disabled for test).
         self._anthropic_model = anthropic_model
         if anthropic_model:
@@ -271,6 +304,156 @@ class FallbackLLM:
                 tools, **kwargs
             )
         return self
+
+    def _try_model(
+        self,
+        model_name: str,
+        bound_llm: Any,
+        compressed: list,
+        est: int,
+        messages: list,
+        iteration: int,
+        tier_index: int,
+        trace_cbs: list | None,
+        user: str | None,
+        **kwargs: Any,
+    ) -> Any | None:
+        """Attempt a single Groq model.
+
+        Returns the AIMessage on success, or ``None``
+        on budget exhaustion or retriable API error.
+        Re-raises non-retriable exceptions.
+        """
+        from tracing import get_callbacks as _get_cbs
+
+        cur_compressed = compressed
+        cur_est = est
+
+        if not self._budget.reserve(model_name, cur_est):
+            tpm = self._budget.get_tpm(model_name)
+            if tpm is not None:
+                target = int(tpm * 0.70)
+                cur_compressed = (
+                    self._compressor.compress(
+                        messages,
+                        iteration,
+                        target_tokens=target,
+                    )
+                )
+                cur_est = (
+                    self._budget.estimate_tokens(
+                        cur_compressed,
+                    )
+                )
+                if self._obs:
+                    self._obs.record_compression(
+                        agent_id=self._agent_id,
+                        user_id=user,
+                    )
+                _logger.info(
+                    "Progressive compress for %s: "
+                    "%d → %d tokens (agent=%s)",
+                    model_name,
+                    est,
+                    cur_est,
+                    self._agent_id,
+                )
+
+            if not self._budget.reserve(
+                model_name, cur_est,
+            ):
+                if self._obs:
+                    self._obs.record_cascade(
+                        model_name,
+                        "budget_exhausted",
+                        provider="groq",
+                        agent_id=self._agent_id,
+                        tier_index=tier_index,
+                        user_id=user,
+                    )
+                _logger.info(
+                    "Skip %s: budget exhausted "
+                    "(est=%d, agent=%s)",
+                    model_name,
+                    cur_est,
+                    self._agent_id,
+                )
+                return None
+
+        _t0 = time.monotonic()
+        try:
+            _kw = dict(kwargs)
+            if trace_cbs:
+                _kw.setdefault("config", {})
+                _kw["config"]["callbacks"] = trace_cbs
+            result = bound_llm.invoke(
+                cur_compressed, **_kw,
+            )
+            _ms = int(
+                (time.monotonic() - _t0) * 1000,
+            )
+            _pt = _ct = None
+            _umeta = getattr(
+                result, "usage_metadata", None,
+            )
+            if _umeta:
+                _pt = _umeta.get("input_tokens")
+                _ct = _umeta.get("output_tokens")
+            if self._obs:
+                self._obs.record_request(
+                    model_name,
+                    provider="groq",
+                    agent_id=self._agent_id,
+                    tier_index=tier_index,
+                    user_id=user,
+                    prompt_tokens=_pt,
+                    completion_tokens=_ct,
+                    latency_ms=_ms,
+                )
+            _logger.info(
+                "Route → %s | iter=%d "
+                "tokens≈%d (agent=%s)",
+                model_name,
+                iteration,
+                cur_est,
+                self._agent_id,
+            )
+            return result
+        except Exception as exc:
+            if not trace_cbs:
+                trace_cbs = _get_cbs(
+                    f"cascade.{self._agent_id}",
+                    is_error=True,
+                )
+            self._budget.release(
+                model_name, cur_est,
+            )
+            if _GROQ_AVAILABLE and isinstance(
+                exc,
+                (
+                    RateLimitError,
+                    APIConnectionError,
+                    APIStatusError,
+                ),
+            ):
+                if self._obs:
+                    self._obs.record_cascade(
+                        model_name,
+                        "api_error",
+                        provider="groq",
+                        agent_id=self._agent_id,
+                        tier_index=tier_index,
+                        user_id=user,
+                    )
+                _logger.warning(
+                    "Groq %s failed (%s), "
+                    "cascading — agent=%s",
+                    model_name,
+                    exc,
+                    self._agent_id,
+                )
+                return None
+            raise
 
     def invoke(
         self,
@@ -431,144 +614,55 @@ class FallbackLLM:
                         self._agent_id,
                     )
 
-        # Step 3: Try each Groq tier in order.
+        # Step 3: Try Groq tiers — pool-aware or flat.
         _tier_offset = 1 if self._ollama_tier else 0
-        for idx, (model_name, _raw, bound_llm) in enumerate(
-            self._groq_tiers,
-        ):
-            cur_compressed = compressed
-            cur_est = est
+        _tier_idx = _tier_offset
 
-            # If default compression exceeds budget, try
-            # progressive compression targeting 70% of TPM.
-            if not self._budget.reserve(model_name, cur_est):
-                tpm = self._budget.get_tpm(model_name)
-                if tpm is not None:
-                    target = int(tpm * 0.70)
-                    cur_compressed = self._compressor.compress(
+        if self._pool_groups:
+            # Round-robin within pools, cascade between.
+            for pool in self._pool_groups:
+                ordered = pool.ordered_models()
+                for model_name in ordered:
+                    info = self._model_lookup.get(
+                        model_name,
+                    )
+                    if info is None:
+                        continue
+                    _, _, bound_llm = info
+                    result = self._try_model(
+                        model_name,
+                        bound_llm,
+                        compressed,
+                        est,
                         messages,
                         iteration,
-                        target_tokens=target,
+                        _tier_idx,
+                        _trace_cbs,
+                        _user,
+                        **kwargs,
                     )
-                    cur_est = self._budget.estimate_tokens(
-                        cur_compressed,
-                    )
-                    if self._obs:
-                        self._obs.record_compression(
-                            agent_id=self._agent_id,
-                            user_id=_user,
-                        )
-                    _logger.info(
-                        "Progressive compress for %s: "
-                        "%d → %d tokens (agent=%s)",
-                        model_name,
-                        est,
-                        cur_est,
-                        self._agent_id,
-                    )
-
-                # Try reserve after progressive compression.
-                if not self._budget.reserve(
+                    if result is not None:
+                        return result
+                    _tier_idx += 1
+        else:
+            # Legacy flat sequential.
+            for idx, (
+                model_name, _raw, bound_llm,
+            ) in enumerate(self._groq_tiers):
+                result = self._try_model(
                     model_name,
-                    cur_est,
-                ):
-                    if self._obs:
-                        self._obs.record_cascade(
-                            model_name,
-                            "budget_exhausted",
-                            provider="groq",
-                            agent_id=self._agent_id,
-                            tier_index=idx + _tier_offset,
-                            user_id=_user,
-                        )
-                    _logger.info(
-                        "Skip %s: budget exhausted " "(est=%d, agent=%s)",
-                        model_name,
-                        cur_est,
-                        self._agent_id,
-                    )
-                    continue
-
-            # Budget is now reserved atomically — invoke LLM.
-            _t0 = time.monotonic()
-            try:
-                _kw = dict(kwargs)
-                if _trace_cbs:
-                    _kw.setdefault("config", {})
-                    _kw["config"]["callbacks"] = _trace_cbs
-                result = bound_llm.invoke(
-                    cur_compressed,
-                    **_kw,
-                )
-                _ms = int(
-                    (time.monotonic() - _t0) * 1000,
-                )
-                # Extract token usage from response.
-                _pt = _ct = None
-                _umeta = getattr(
-                    result,
-                    "usage_metadata",
-                    None,
-                )
-                if _umeta:
-                    _pt = _umeta.get("input_tokens")
-                    _ct = _umeta.get("output_tokens")
-                if self._obs:
-                    self._obs.record_request(
-                        model_name,
-                        provider="groq",
-                        agent_id=self._agent_id,
-                        tier_index=idx + _tier_offset,
-                        user_id=_user,
-                        prompt_tokens=_pt,
-                        completion_tokens=_ct,
-                        latency_ms=_ms,
-                    )
-                _logger.info(
-                    "Route → %s | iter=%d " "tokens≈%d (agent=%s)",
-                    model_name,
+                    bound_llm,
+                    compressed,
+                    est,
+                    messages,
                     iteration,
-                    cur_est,
-                    self._agent_id,
+                    idx + _tier_offset,
+                    _trace_cbs,
+                    _user,
+                    **kwargs,
                 )
-                return result
-            except Exception as exc:
-                # Ensure error is always traced.
-                if not _trace_cbs:
-                    _trace_cbs = _get_cbs(
-                        f"cascade.{self._agent_id}",
-                        is_error=True,
-                    )
-                # Roll back the reservation on failure.
-                self._budget.release(
-                    model_name,
-                    cur_est,
-                )
-                if _GROQ_AVAILABLE and isinstance(
-                    exc,
-                    (
-                        RateLimitError,
-                        APIConnectionError,
-                        APIStatusError,
-                    ),
-                ):
-                    if self._obs:
-                        self._obs.record_cascade(
-                            model_name,
-                            "api_error",
-                            provider="groq",
-                            agent_id=self._agent_id,
-                            tier_index=idx + _tier_offset,
-                            user_id=_user,
-                        )
-                    _logger.warning(
-                        "Groq %s failed (%s), " "cascading — agent=%s",
-                        model_name,
-                        exc,
-                        self._agent_id,
-                    )
-                    continue
-                raise
+                if result is not None:
+                    return result
 
         # Step 3b: Try Ollama AFTER Groq if not ollama_first.
         if (

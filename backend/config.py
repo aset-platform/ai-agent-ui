@@ -99,14 +99,18 @@ class Settings(BaseSettings):
     groq_model_tiers: str = (
         "llama-3.3-70b-versatile,"
         "moonshotai/kimi-k2-instruct,"
+        "qwen/qwen3-32b,"
         "openai/gpt-oss-120b,"
+        "openai/gpt-oss-20b,"
         "meta-llama/llama-4-scout-17b-16e-instruct"
     )
 
     # Synthesis tiers — used for final response (no tool calls).
     # Reserves gpt-oss-120b for quality output.
     synthesis_model_tiers: str = (
-        "openai/gpt-oss-120b," "moonshotai/kimi-k2-instruct"
+        "openai/gpt-oss-120b,"
+        "openai/gpt-oss-20b,"
+        "moonshotai/kimi-k2-instruct"
     )
 
     # Test tiers — free models only, zero paid exposure.
@@ -114,6 +118,35 @@ class Settings(BaseSettings):
         "llama-3.3-70b-versatile,"
         "moonshotai/kimi-k2-instruct,"
         "meta-llama/llama-4-scout-17b-16e-instruct"
+    )
+
+    # ── Round-robin model pools ──────────────────
+    # When enabled, models are grouped into pools
+    # and rotated within each pool to spread load
+    # across daily token budgets.
+    round_robin_enabled: bool = True
+
+    tool_pool_primary: str = (
+        "llama-3.3-70b-versatile,"
+        "moonshotai/kimi-k2-instruct,"
+        "qwen/qwen3-32b"
+    )
+    tool_pool_secondary: str = (
+        "openai/gpt-oss-120b,"
+        "openai/gpt-oss-20b"
+    )
+    tool_pool_tertiary: str = (
+        "meta-llama/"
+        "llama-4-scout-17b-16e-instruct"
+    )
+    synthesis_pool_primary: str = (
+        "openai/gpt-oss-120b,"
+        "openai/gpt-oss-20b,"
+        "moonshotai/kimi-k2-instruct"
+    )
+    synthesis_pool_secondary: str = (
+        "meta-llama/"
+        "llama-4-scout-17b-16e-instruct"
     )
 
     # Message compression settings.
@@ -225,3 +258,41 @@ def get_settings() -> Settings:
         True
     """
     return Settings()
+
+
+def _parse_csv(val: str) -> list[str]:
+    """Split comma-separated string, strip blanks."""
+    return [t.strip() for t in val.split(",") if t.strip()]
+
+
+def get_pool_groups(
+    profile: str,
+    settings: Settings | None = None,
+) -> list[list[str]] | None:
+    """Return pool groups for a cascade profile.
+
+    Returns ``None`` when round-robin is disabled
+    (legacy sequential mode).
+
+    Args:
+        profile: ``"tool"`` or ``"synthesis"``.
+        settings: Override settings (uses singleton
+            if ``None``).
+
+    Returns:
+        Ordered list of model-name lists, or ``None``.
+    """
+    s = settings or get_settings()
+    if not s.round_robin_enabled:
+        return None
+    if profile == "synthesis":
+        return [
+            _parse_csv(s.synthesis_pool_primary),
+            _parse_csv(s.synthesis_pool_secondary),
+        ]
+    # Default: tool profile
+    return [
+        _parse_csv(s.tool_pool_primary),
+        _parse_csv(s.tool_pool_secondary),
+        _parse_csv(s.tool_pool_tertiary),
+    ]

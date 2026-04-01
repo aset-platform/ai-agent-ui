@@ -56,6 +56,10 @@ def auto_link_ticker(ticker: str) -> None:
     """
     user_id = get_current_user()
     if not user_id:
+        _logger.debug(
+            "auto_link_ticker(%s): no current user",
+            ticker,
+        )
         return
     try:
         import asyncio
@@ -77,7 +81,7 @@ def auto_link_ticker(ticker: str) -> None:
                 user_id,
             )
     except Exception as exc:
-        _logger.debug(
+        _logger.warning(
             "Auto-link failed for %s/%s: %s",
             user_id,
             ticker,

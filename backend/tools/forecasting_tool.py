@@ -254,6 +254,8 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
 
         # Read accuracy from last CV run in Iceberg
         # (background refresh computes this).
+        import math
+
         repo = _sh._require_repo()
         _prev_run = repo.get_latest_forecast_run(
             ticker,
@@ -264,9 +266,6 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             _mae = _prev_run.get("mae")
             _rmse = _prev_run.get("rmse")
             _mape = _prev_run.get("mape")
-            # Guard against NaN values from Iceberg
-            import math
-
             if (
                 _mae is not None
                 and not math.isnan(_mae)
@@ -283,6 +282,30 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
                         else 0.0
                     ),
                 }
+
+        # Inline backtest when no prior accuracy exists
+        # (first forecast for this ticker/horizon).
+        if not accuracy:
+            from tools._forecast_accuracy import (
+                _calculate_forecast_accuracy,
+            )
+
+            _logger.info(
+                "No prior accuracy for %s %dm — "
+                "running inline backtest",
+                ticker,
+                months,
+            )
+            _inline = _calculate_forecast_accuracy(
+                model, prophet_df,
+            )
+            if "error" not in _inline:
+                accuracy = _inline
+            else:
+                _logger.info(
+                    "Inline backtest: %s",
+                    _inline.get("error"),
+                )
 
         _run_date = date.today()
         _run_dict = {
@@ -334,7 +357,10 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             )
             acc_header = "MODEL ACCURACY (cross-validated)"
         else:
-            acc_line = "  Pending — available after " "background refresh"
+            acc_line = (
+                "  Insufficient data for accuracy "
+                "metrics (need 2+ years)"
+            )
             acc_header = "MODEL ACCURACY"
 
         report = (

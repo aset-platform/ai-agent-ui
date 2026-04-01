@@ -76,9 +76,9 @@ class BaseAgent(ABC):
 
         # Set dependencies BEFORE _setup() calls _build_llm().
         if token_budget is None:
-            from token_budget import TokenBudget
+            from token_budget import get_token_budget
 
-            token_budget = TokenBudget()
+            token_budget = get_token_budget()
         if compressor is None:
             from message_compressor import MessageCompressor
 
@@ -141,20 +141,30 @@ class BaseAgent(ABC):
         def _parse(csv: str) -> list[str]:
             return [t.strip() for t in csv.split(",") if t.strip()]
 
+        from config import get_pool_groups
+
         tiers = (
             _parse(settings.test_model_tiers)
             if is_test
             else self.config.groq_model_tiers
         )
+        profile = "test" if is_test else "tool"
         return FallbackLLM(
             groq_models=tiers,
-            anthropic_model=(None if is_test else "claude-sonnet-4-6"),
+            anthropic_model=(
+                None if is_test
+                else "claude-sonnet-4-6"
+            ),
             temperature=self.config.temperature,
             agent_id=self.config.agent_id,
             token_budget=self.token_budget,
             compressor=self.compressor,
             obs_collector=self.obs_collector,
-            cascade_profile=("test" if is_test else "tool"),
+            cascade_profile=profile,
+            pool_groups=(
+                None if is_test
+                else get_pool_groups("tool", settings)
+            ),
         )
 
     def _build_synthesis_llm(self):
@@ -176,6 +186,8 @@ class BaseAgent(ABC):
         def _parse(csv: str) -> list[str]:
             return [t.strip() for t in csv.split(",") if t.strip()]
 
+        from config import get_pool_groups
+
         return FallbackLLM(
             groq_models=_parse(
                 settings.synthesis_model_tiers,
@@ -187,6 +199,9 @@ class BaseAgent(ABC):
             compressor=self.compressor,
             obs_collector=self.obs_collector,
             cascade_profile="synthesis",
+            pool_groups=get_pool_groups(
+                "synthesis", settings,
+            ),
         )
 
     def _build_messages(

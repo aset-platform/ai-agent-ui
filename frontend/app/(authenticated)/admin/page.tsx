@@ -533,6 +533,192 @@ function AuditLogTab() {
 }
 
 // ---------------------------------------------------------------
+// Daily Token Budget Card
+interface BudgetModel {
+  total: number;
+  requests: number;
+  limit: number;
+}
+interface DailyBudgetData {
+  date: string;
+  daily_limit: number;
+  total_tokens: number;
+  remaining_tokens: number;
+  usage_pct: number;
+  by_model: Record<string, BudgetModel>;
+  estimated_queries_remaining: number;
+  reset_time_utc: string;
+}
+
+function DailyTokenBudgetCard() {
+  const [data, setData] = useState<
+    DailyBudgetData | null
+  >(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { apiFetch } = await import(
+          "@/lib/apiFetch"
+        );
+        const { API_URL } = await import(
+          "@/lib/config"
+        );
+        const res = await apiFetch(
+          `${API_URL}/admin/daily-budget`,
+        );
+        if (!res.ok) throw new Error("Failed");
+        const json = await res.json();
+        if (!cancelled) setData(json);
+      } catch (e) {
+        if (!cancelled)
+          setError(
+            e instanceof Error
+              ? e.message
+              : "Load failed",
+          );
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (loading) return <WidgetSkeleton />;
+  if (error || !data)
+    return (
+      <WidgetError
+        message={error || "No data"}
+      />
+    );
+
+  const pct = data.usage_pct;
+  const barColor =
+    pct > 85
+      ? "bg-red-500"
+      : pct > 60
+        ? "bg-amber-500"
+        : "bg-emerald-500";
+  const textColor =
+    pct > 85
+      ? "text-red-600 dark:text-red-400"
+      : pct > 60
+        ? "text-amber-600 dark:text-amber-400"
+        : "text-emerald-600 dark:text-emerald-400";
+
+  return (
+    <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          Daily Token Budget
+        </h3>
+        <span className="text-xs text-gray-400">
+          Resets{" "}
+          {new Date(
+            data.reset_time_utc,
+          ).toLocaleTimeString()}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden mb-2">
+        <div
+          className={`h-full rounded-full transition-all ${barColor}`}
+          style={{
+            width: `${Math.min(pct, 100)}%`,
+          }}
+        />
+      </div>
+      <div className="flex justify-between text-xs mb-4">
+        <span className={textColor}>
+          {pct}% used
+        </span>
+        <span className="text-gray-500 dark:text-gray-400">
+          {data.total_tokens.toLocaleString()} /{" "}
+          {data.daily_limit.toLocaleString()} tokens
+        </span>
+      </div>
+
+      {/* Stats row */}
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className="rounded-lg bg-gray-50 dark:bg-gray-800 p-2.5">
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Remaining
+          </p>
+          <p className="text-lg font-semibold text-gray-700 dark:text-gray-200">
+            {data.remaining_tokens.toLocaleString()}
+          </p>
+        </div>
+        <div className="rounded-lg bg-gray-50 dark:bg-gray-800 p-2.5">
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Est. Queries Left
+          </p>
+          <p className="text-lg font-semibold text-gray-700 dark:text-gray-200">
+            ~
+            {data.estimated_queries_remaining.toLocaleString()}
+          </p>
+        </div>
+      </div>
+
+      {/* Per-model breakdown */}
+      <div className="space-y-1.5">
+        <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+          Per-Model Breakdown
+        </p>
+        {Object.entries(data.by_model).map(
+          ([model, info]) => {
+            const modelPct =
+              info.limit > 0
+                ? Math.round(
+                    (info.total / info.limit) *
+                      100,
+                  )
+                : 0;
+            const short =
+              model.split("/").pop() ?? model;
+            return (
+              <div
+                key={model}
+                className="flex items-center gap-2 text-xs"
+              >
+                <span className="w-32 truncate text-gray-600 dark:text-gray-400">
+                  {short}
+                </span>
+                <div className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full">
+                  <div
+                    className={`h-full rounded-full ${
+                      modelPct > 85
+                        ? "bg-red-500"
+                        : modelPct > 60
+                          ? "bg-amber-500"
+                          : "bg-emerald-500"
+                    }`}
+                    style={{
+                      width: `${Math.min(modelPct, 100)}%`,
+                    }}
+                  />
+                </div>
+                <span className="w-20 text-right text-gray-500 dark:text-gray-400">
+                  {info.total.toLocaleString()} /{" "}
+                  {(
+                    info.limit / 1000
+                  ).toFixed(0)}
+                  K
+                </span>
+              </div>
+            );
+          },
+        )}
+      </div>
+    </div>
+  );
+}
+
 // LLM Observability Tab
 // ---------------------------------------------------------------
 
@@ -660,6 +846,19 @@ function ObservabilityTab() {
     ...(stats?.cascade_log ?? []),
   ].reverse().slice(0, 25);
 
+  const totalTokens =
+    stats?.total_tokens ?? 0;
+  const totalPrompt =
+    stats?.total_prompt_tokens ?? 0;
+  const totalCompletion =
+    stats?.total_completion_tokens ?? 0;
+  const promptPct =
+    totalTokens > 0
+      ? Math.round(
+          (totalPrompt / totalTokens) * 100,
+        )
+      : 0;
+
   const handleToggle = async (
     model: string,
     currentStatus: string,
@@ -680,8 +879,11 @@ function ObservabilityTab() {
 
   return (
     <div className="space-y-6">
-      {/* Summary cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      {/* Daily Token Budget */}
+      <DailyTokenBudgetCard />
+
+      {/* Summary cards — 5 columns */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <div
           data-testid="admin-summary-requests"
           className="rounded-xl bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 p-4"
@@ -696,6 +898,45 @@ function ObservabilityTab() {
           </p>
         </div>
         <div
+          data-testid="admin-summary-tokens"
+          className="rounded-xl bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-800 p-4"
+        >
+          <p className="text-xs font-medium text-violet-500 dark:text-violet-400">
+            Total Tokens
+          </p>
+          <p className="text-2xl font-semibold text-violet-700 dark:text-violet-300 mt-1">
+            {totalTokens.toLocaleString()}
+          </p>
+        </div>
+        <div
+          data-testid="admin-summary-input"
+          className="rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4"
+        >
+          <p className="text-xs font-medium text-blue-500 dark:text-blue-400">
+            Input Tokens
+          </p>
+          <p className="text-2xl font-semibold text-blue-700 dark:text-blue-300 mt-1">
+            {totalPrompt.toLocaleString()}
+          </p>
+          <p className="text-xs text-blue-400 dark:text-blue-500 mt-0.5">
+            {promptPct}% of total
+          </p>
+        </div>
+        <div
+          data-testid="admin-summary-output"
+          className="rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 p-4"
+        >
+          <p className="text-xs font-medium text-emerald-500 dark:text-emerald-400">
+            Output Tokens
+          </p>
+          <p className="text-2xl font-semibold text-emerald-700 dark:text-emerald-300 mt-1">
+            {totalCompletion.toLocaleString()}
+          </p>
+          <p className="text-xs text-emerald-400 dark:text-emerald-500 mt-0.5">
+            {100 - promptPct}% of total
+          </p>
+        </div>
+        <div
           data-testid="admin-summary-cascades"
           className="rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-4"
         >
@@ -705,16 +946,9 @@ function ObservabilityTab() {
           <p className="text-2xl font-semibold text-amber-700 dark:text-amber-300 mt-1">
             {stats?.cascade_count ?? 0}
           </p>
-        </div>
-        <div
-          data-testid="admin-summary-compressions"
-          className="rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4"
-        >
-          <p className="text-xs font-medium text-blue-500 dark:text-blue-400">
-            Compressions
-          </p>
-          <p className="text-2xl font-semibold text-blue-700 dark:text-blue-300 mt-1">
-            {stats?.compression_count ?? 0}
+          <p className="text-xs text-amber-400 dark:text-amber-500 mt-0.5">
+            {stats?.compression_count ?? 0}{" "}
+            compressions
           </p>
         </div>
       </div>
@@ -816,56 +1050,139 @@ function ObservabilityTab() {
         </div>
       )}
 
-      {/* Model Budget Status */}
+      {/* Model Budget & Usage */}
       {Object.keys(models).length > 0 && (
         <div className="space-y-3">
           <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
-            Model Budget Status
+            Per-Model Budget & Usage
           </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {Object.entries(models).map(
               ([name, budget]) => {
                 const [tpmUsed, tpmLim] =
                   parseBudget(budget.tpm);
                 const [rpmUsed, rpmLim] =
                   parseBudget(budget.rpm);
+                const [tpdUsed, tpdLim] =
+                  parseBudget(budget.tpd);
+                const [rpdUsed, rpdLim] =
+                  parseBudget(budget.rpd);
+                const reqCount =
+                  stats?.requests_by_model?.[
+                    name
+                  ] ?? 0;
+                const inTok =
+                  stats
+                    ?.prompt_tokens_by_model?.[
+                    name
+                  ] ?? 0;
+                const outTok =
+                  stats
+                    ?.completion_tokens_by_model?.[
+                    name
+                  ] ?? 0;
+
                 return (
                   <div
                     key={name}
                     data-testid={`admin-budget-card-${name}`}
-                    className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-3 space-y-2"
+                    className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-4 space-y-3"
                   >
-                    <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
-                      {shortModel(name)}
-                    </p>
-                    {/* TPM bar */}
-                    <div>
-                      <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
-                        <span>TPM</span>
-                        <span>{budget.tpm}</span>
-                      </div>
-                      <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all ${budgetColor(tpmUsed, tpmLim)}`}
-                          style={{
-                            width: `${tpmLim > 0 ? Math.min(100, (tpmUsed / tpmLim) * 100) : 0}%`,
-                          }}
-                        />
-                      </div>
+                    {/* Header */}
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                        {shortModel(name)}
+                      </p>
+                      <span className="text-xs font-mono text-gray-400 dark:text-gray-500">
+                        {reqCount.toLocaleString()}{" "}
+                        req
+                      </span>
                     </div>
-                    {/* RPM bar */}
-                    <div>
-                      <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
-                        <span>RPM</span>
-                        <span>{budget.rpm}</span>
+
+                    {/* Token split */}
+                    {(inTok > 0 ||
+                      outTok > 0) && (
+                      <div className="flex gap-3 text-xs">
+                        <span className="text-blue-600 dark:text-blue-400">
+                          In:{" "}
+                          {inTok.toLocaleString()}
+                        </span>
+                        <span className="text-emerald-600 dark:text-emerald-400">
+                          Out:{" "}
+                          {outTok.toLocaleString()}
+                        </span>
                       </div>
-                      <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all ${budgetColor(rpmUsed, rpmLim)}`}
-                          style={{
-                            width: `${rpmLim > 0 ? Math.min(100, (rpmUsed / rpmLim) * 100) : 0}%`,
-                          }}
-                        />
+                    )}
+
+                    {/* Rate bars */}
+                    <div className="space-y-2">
+                      {/* TPM */}
+                      <div>
+                        <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
+                          <span>TPM</span>
+                          <span>
+                            {budget.tpm}
+                          </span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${budgetColor(tpmUsed, tpmLim)}`}
+                            style={{
+                              width: `${tpmLim > 0 ? Math.min(100, (tpmUsed / tpmLim) * 100) : 0}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                      {/* TPD */}
+                      <div>
+                        <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
+                          <span>TPD</span>
+                          <span>
+                            {budget.tpd}
+                          </span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${budgetColor(tpdUsed, tpdLim)}`}
+                            style={{
+                              width: `${tpdLim > 0 ? Math.min(100, (tpdUsed / tpdLim) * 100) : 0}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                      {/* RPM */}
+                      <div>
+                        <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
+                          <span>RPM</span>
+                          <span>
+                            {budget.rpm}
+                          </span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${budgetColor(rpmUsed, rpmLim)}`}
+                            style={{
+                              width: `${rpmLim > 0 ? Math.min(100, (rpmUsed / rpmLim) * 100) : 0}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                      {/* RPD */}
+                      <div>
+                        <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
+                          <span>RPD</span>
+                          <span>
+                            {budget.rpd}
+                          </span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${budgetColor(rpdUsed, rpdLim)}`}
+                            style={{
+                              width: `${rpdLim > 0 ? Math.min(100, (rpdUsed / rpdLim) * 100) : 0}%`,
+                            }}
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>

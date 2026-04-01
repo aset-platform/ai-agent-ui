@@ -7,6 +7,7 @@ Functions
 """
 
 import logging
+import math
 from datetime import date
 
 import pandas as pd
@@ -96,6 +97,20 @@ def _calculate_forecast_accuracy(
         mae = float(metrics["mae"].mean())
         rmse = float(metrics["rmse"].mean())
         mape = float(metrics["mape"].mean() * 100)
+
+        # Guard against NaN/inf from edge-case
+        # numerics (e.g., zero close prices → MAPE
+        # division by zero).
+        if any(
+            math.isnan(v) or math.isinf(v)
+            for v in (mae, rmse, mape)
+        ):
+            return {
+                "error": (
+                    "Accuracy metrics could not be "
+                    "computed (numerical instability)."
+                ),
+            }
 
         _logger.info(
             "Cross-validation: MAE=%.2f " "RMSE=%.2f MAPE=%.1f%%",

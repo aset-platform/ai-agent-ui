@@ -266,7 +266,7 @@ def _get_scoring_llm():
         from message_compressor import (
             MessageCompressor,
         )
-        from token_budget import TokenBudget
+        from token_budget import get_token_budget
 
         settings = get_settings()
 
@@ -292,7 +292,7 @@ def _get_scoring_llm():
             anthropic_model=anthropic,
             temperature=0,
             agent_id="sentiment_batch",
-            token_budget=TokenBudget(),
+            token_budget=get_token_budget(),
             compressor=MessageCompressor(),
             cascade_profile="tool",
             ollama_model=ollama,

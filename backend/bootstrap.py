@@ -239,6 +239,8 @@ def setup_graph(
             else None
         )
 
+        from config import get_pool_groups
+
         return FallbackLLM(
             groq_models=tiers,
             anthropic_model=anthropic,
@@ -250,6 +252,10 @@ def setup_graph(
             cascade_profile="tool",
             ollama_model=ollama,
             ollama_first=False,
+            pool_groups=(
+                None if env == "test"
+                else get_pool_groups("tool")
+            ),
         )
 
     graph = build_supervisor_graph(
