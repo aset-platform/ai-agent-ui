@@ -26,7 +26,12 @@ services:
       - ./docs:/docs/docs
       - ./mkdocs.yml:/docs/mkdocs.yml
 
+  # Frontend runs natively on host (not Docker) because
+  # Turbopack's PostCSS sandbox can't resolve lightningcss
+  # native .node addons inside Alpine containers.
+  # Run: cd frontend && npm run dev
   frontend:
+    profiles: ["native-frontend"]
     build:
       context: .
       dockerfile: Dockerfile.frontend

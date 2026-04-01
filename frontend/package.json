@@ -11,7 +11,8 @@
     "perf:check": "bash ../scripts/perf-check.sh",
     "perf:audit": "node ../scripts/perf-check-auth.js",
     "perf:full": "node ../scripts/perf-audit-full.js",
-    "perf:sweep": "npx unlighthouse --site http://localhost:3000 --output-path perf-reports"
+    "perf:sweep": "npx unlighthouse --site http://localhost:3000 --output-path perf-reports",
+    "postinstall": "node scripts/patch-lightningcss.js"
   },
   "dependencies": {
     "axios": "^1.13.5",
