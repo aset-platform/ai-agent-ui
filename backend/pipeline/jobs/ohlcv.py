@@ -399,7 +399,8 @@ async def run_daily() -> dict:
     async with session_factory() as session:
         for stock in all_stocks:
             reg = await get_registry(
-                session, ticker=stock.symbol,
+                session,
+                ticker=stock.yf_ticker or stock.symbol,
             )
             if reg and reg.get("date_range_end"):
                 eligible.append(stock)

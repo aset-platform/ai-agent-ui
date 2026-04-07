@@ -547,11 +547,15 @@ def _load_ohlcv(ticker: str) -> pd.DataFrame | None:
             "adj_close" in df.columns
             and df["adj_close"].notna().mean() > 0.5
         )
-        adj_col = df["adj_close"] if use_adj else df["close"]
         # Drop rows with NaN close — happens when
         # yfinance returns today's intraday placeholder
         # row before market close.
         df = df.dropna(subset=["close"])
+        # Assign adj_col AFTER dropna to avoid stale
+        # index reference that reintroduces NaN.
+        adj_col = (
+            df["adj_close"] if use_adj else df["close"]
+        )
 
         result = pd.DataFrame(
             {
