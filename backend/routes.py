@@ -127,6 +127,11 @@ def create_app(
 
         yield
 
+        # Shutdown: flush pending observability events
+        # so no LLM usage data is lost on restart.
+        if obs_collector is not None:
+            obs_collector.flush_sync()
+
     app = FastAPI(
         title="AI Agent API",
         lifespan=_lifespan,
@@ -232,14 +237,27 @@ def create_app(
                 user_id,
             )
 
-    def _track_usage_sync(user_id: str) -> None:
-        """Sync wrapper for thread contexts."""
+    def _track_usage_sync(
+        user_id: str,
+        loop=None,
+    ) -> None:
+        """Sync wrapper for thread contexts.
+
+        Uses ``run_coroutine_threadsafe`` on the uvicorn
+        loop to avoid creating a separate event loop
+        (which causes asyncpg connection pool errors).
+        """
         import asyncio
 
         try:
             from usage_tracker import increment_usage
 
-            asyncio.run(increment_usage(user_id))
+            if loop is not None and loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    increment_usage(user_id), loop,
+                )
+            else:
+                asyncio.run(increment_usage(user_id))
         except Exception:
             _logger.debug(
                 "Usage tracking skipped for %s",
@@ -363,10 +381,13 @@ def create_app(
         """NDJSON streaming (POST /chat/stream)."""
         req.user_id = current_user.user_id
         await _enforce_quota(req.user_id)
+        _loop = asyncio.get_running_loop()
 
         # ── LangGraph path ────────────────────────
         if graph is not None and settings.use_langgraph:
-            return _stream_langgraph(req)
+            return _stream_langgraph(
+                req, loop=_loop,
+            )
 
         # ── Legacy path ───────────────────────────
         from agents.router import route as _route
@@ -393,7 +414,9 @@ def create_app(
                         req.history,
                     ):
                         event_queue.put(event)
-                    _track_usage_sync(req.user_id)
+                    _track_usage_sync(
+                        req.user_id, loop=_loop,
+                    )
                 except Exception as exc:
                     _logger.warning(
                         "Stream worker error: %s",
@@ -578,7 +601,9 @@ def create_app(
                 exc_info=True,
             )
 
-    def _stream_langgraph(req: ChatRequest):
+    def _stream_langgraph(
+        req: ChatRequest, loop=None,
+    ):
         """NDJSON streaming via LangGraph graph."""
         timeout = settings.agent_timeout_seconds
         input_state = _build_graph_input(req)
@@ -634,7 +659,9 @@ def create_app(
                         )
                         + "\n"
                     )
-                    _track_usage_sync(req.user_id)
+                    _track_usage_sync(
+                        req.user_id, loop=loop,
+                    )
                 except Exception as exc:
                     event_queue.put(
                         json.dumps(
@@ -1299,6 +1326,24 @@ def create_app(
             )
         return {"run_id": run_id, "detail": "triggered"}
 
+    async def _scheduler_cancel_run(
+        request: Request, run_id: str,
+    ):
+        """POST /admin/scheduler/runs/{run_id}/cancel."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        ok = svc.cancel_run(run_id)
+        if not ok:
+            raise HTTPException(
+                404, "Run not found or already finished",
+            )
+        return {"detail": "cancel signal sent"}
+
     async def _scheduler_list_runs(request: Request):
         """GET /admin/scheduler/runs."""
         svc = getattr(
@@ -1378,6 +1423,12 @@ def create_app(
     admin_router.add_api_route(
         "/admin/scheduler/jobs/{job_id}/trigger",
         _scheduler_trigger_job,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/runs/{run_id}/cancel",
+        _scheduler_cancel_run,
         methods=["POST"],
         dependencies=[Depends(superuser_only)],
     )

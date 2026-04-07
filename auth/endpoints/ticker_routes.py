@@ -444,8 +444,9 @@ async def add_portfolio_holding(
 ) -> Dict[str, str]:
     """Add a stock to the user's portfolio."""
     ticker = body.ticker.upper().strip()
-    mkt = "india" if ticker.endswith((".NS", ".BO")) else "us"
-    ccy = "INR" if mkt == "india" else "USD"
+    from market_utils import detect_currency, detect_market
+    mkt = detect_market(ticker)
+    ccy = detect_currency(mkt)
 
     stock_repo = _get_stock_repo()
     txn = {

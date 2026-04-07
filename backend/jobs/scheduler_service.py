@@ -167,6 +167,7 @@ class SchedulerService:
             max_workers=max_workers,
         )
         self._futures: dict[str, Future] = {}
+        self._cancel_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
         self._jobs: dict[str, dict] = {}
         self._scheduler = schedule.Scheduler()
@@ -520,11 +521,16 @@ class SchedulerService:
         self._repo.append_scheduler_run(run)
 
         scope = job.get("scope", "all")
+        cancel_event = threading.Event()
+        self._cancel_events[run_id] = cancel_event
 
         def _run():
             start = datetime.now(UTC)
             try:
-                executor_fn(scope, run_id, self._repo)
+                executor_fn(
+                    scope, run_id, self._repo,
+                    cancel_event=cancel_event,
+                )
             except Exception as exc:
                 _logger.warning(
                     "Job %s run %s failed: %s",
@@ -557,11 +563,31 @@ class SchedulerService:
                     {"duration_secs": elapsed},
                 )
 
+        def _run_and_cleanup():
+            try:
+                _run()
+            finally:
+                self._cancel_events.pop(run_id, None)
+
         with self._lock:
-            future = self._pool.submit(_run)
+            future = self._pool.submit(_run_and_cleanup)
             self._futures[job_id] = future
 
         return run_id
+
+    def cancel_run(self, run_id: str) -> bool:
+        """Signal a running job to stop.
+
+        Returns True if the cancel signal was sent.
+        """
+        event = self._cancel_events.get(run_id)
+        if event is None:
+            return False
+        event.set()
+        _logger.info(
+            "Cancel signal sent for run %s", run_id,
+        )
+        return True
 
     # ----------------------------------------------------------
     # Query helpers (for API)

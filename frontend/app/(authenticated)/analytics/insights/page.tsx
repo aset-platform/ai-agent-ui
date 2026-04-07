@@ -54,10 +54,10 @@ type TabId =
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "screener", label: "Screener" },
-  { id: "targets", label: "Price Targets" },
-  { id: "dividends", label: "Dividends" },
   { id: "risk", label: "Risk Metrics" },
   { id: "sectors", label: "Sectors" },
+  { id: "targets", label: "Price Targets" },
+  { id: "dividends", label: "Dividends" },
   { id: "correlation", label: "Correlation" },
   { id: "quarterly", label: "Quarterly" },
 ];
@@ -256,6 +256,73 @@ const screenerCols: Column<ScreenerRow>[] = [
     numeric: true,
     render: (r) => fmtNum(r.sharpe_ratio),
   },
+  {
+    key: "action",
+    label: "Action",
+    sortable: false,
+    render: (r) => (
+      <div className="flex items-center gap-1.5">
+        <button
+          title="Stock Analysis"
+          onClick={() =>
+            window.open(
+              `/analytics/analysis?ticker=${encodeURIComponent(r.ticker)}&tab=analysis`,
+              "_blank",
+            )
+          }
+          className="flex h-7 w-7 items-center
+            justify-center rounded-md border
+            border-gray-200 text-gray-400
+            transition-all hover:border-indigo-400
+            hover:bg-indigo-50 hover:text-indigo-600
+            dark:border-gray-700 dark:text-gray-500
+            dark:hover:border-indigo-500
+            dark:hover:bg-indigo-500/10
+            dark:hover:text-indigo-400"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className="h-3.5 w-3.5"
+          >
+            <path d="M15.5 2A1.5 1.5 0 0014 3.5v13a1.5 1.5 0 001.5 1.5h1a1.5 1.5 0 001.5-1.5v-13A1.5 1.5 0 0016.5 2h-1zM9.5 6A1.5 1.5 0 008 7.5v9A1.5 1.5 0 009.5 18h1a1.5 1.5 0 001.5-1.5v-9A1.5 1.5 0 0010.5 6h-1zM3.5 10A1.5 1.5 0 002 11.5v5A1.5 1.5 0 003.5 18h1A1.5 1.5 0 006 16.5v-5A1.5 1.5 0 004.5 10h-1z" />
+          </svg>
+        </button>
+        <button
+          title="Stock Forecast"
+          onClick={() =>
+            window.open(
+              `/analytics/analysis?ticker=${encodeURIComponent(r.ticker)}&tab=forecast`,
+              "_blank",
+            )
+          }
+          className="flex h-7 w-7 items-center
+            justify-center rounded-md border
+            border-gray-200 text-gray-400
+            transition-all hover:border-indigo-400
+            hover:bg-indigo-50 hover:text-indigo-600
+            dark:border-gray-700 dark:text-gray-500
+            dark:hover:border-indigo-500
+            dark:hover:bg-indigo-500/10
+            dark:hover:text-indigo-400"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className="h-3.5 w-3.5"
+          >
+            <path
+              fillRule="evenodd"
+              d="M12.577 4.878a.75.75 0 01.919-.53l4.78 1.281a.75.75 0 01.531.919l-1.281 4.78a.75.75 0 01-1.449-.387l.81-3.022a19.407 19.407 0 00-5.594 5.203.75.75 0 01-1.139.093L7 10.06l-4.72 4.72a.75.75 0 01-1.06-1.06l5.25-5.25a.75.75 0 011.06 0l3.046 3.046a20.902 20.902 0 015.441-5.185l-2.752.736a.75.75 0 01-.919-.53z"
+              clipRule="evenodd"
+            />
+          </svg>
+        </button>
+      </div>
+    ),
+  },
 ];
 
 const targetCols: Column<TargetRow>[] = [
@@ -402,6 +469,59 @@ const riskCols: Column<RiskRow>[] = [
     label: "Bear %",
     numeric: true,
     render: (r) => fmtNum(r.bear_phase_pct),
+  },
+  {
+    key: "action",
+    label: "Action",
+    sortable: false,
+    render: (r) => (
+      <div className="flex items-center gap-1.5">
+        <button
+          title="Stock Analysis"
+          onClick={() =>
+            window.open(
+              `/analytics/analysis?ticker=${encodeURIComponent(r.ticker)}&tab=analysis`,
+              "_blank",
+            )
+          }
+          className="flex h-7 w-7 items-center
+            justify-center rounded-md border
+            border-gray-200 text-gray-400
+            transition-all hover:border-indigo-400
+            hover:bg-indigo-50 hover:text-indigo-600
+            dark:border-gray-700 dark:text-gray-500
+            dark:hover:border-indigo-500
+            dark:hover:bg-indigo-500/10
+            dark:hover:text-indigo-400"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+            <path d="M15.5 2A1.5 1.5 0 0014 3.5v13a1.5 1.5 0 001.5 1.5h1a1.5 1.5 0 001.5-1.5v-13A1.5 1.5 0 0016.5 2h-1zM9.5 6A1.5 1.5 0 008 7.5v9A1.5 1.5 0 009.5 18h1a1.5 1.5 0 001.5-1.5v-9A1.5 1.5 0 0010.5 6h-1zM3.5 10A1.5 1.5 0 002 11.5v5A1.5 1.5 0 003.5 18h1A1.5 1.5 0 006 16.5v-5A1.5 1.5 0 004.5 10h-1z" />
+          </svg>
+        </button>
+        <button
+          title="Stock Forecast"
+          onClick={() =>
+            window.open(
+              `/analytics/analysis?ticker=${encodeURIComponent(r.ticker)}&tab=forecast`,
+              "_blank",
+            )
+          }
+          className="flex h-7 w-7 items-center
+            justify-center rounded-md border
+            border-gray-200 text-gray-400
+            transition-all hover:border-indigo-400
+            hover:bg-indigo-50 hover:text-indigo-600
+            dark:border-gray-700 dark:text-gray-500
+            dark:hover:border-indigo-500
+            dark:hover:bg-indigo-500/10
+            dark:hover:text-indigo-400"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+            <path fillRule="evenodd" d="M12.577 4.878a.75.75 0 01.919-.53l4.78 1.281a.75.75 0 01.531.919l-1.281 4.78a.75.75 0 01-1.449-.387l.81-3.022a19.407 19.407 0 00-5.594 5.203.75.75 0 01-1.139.093L7 10.06l-4.72 4.72a.75.75 0 01-1.06-1.06l5.25-5.25a.75.75 0 011.06 0l3.046 3.046a20.902 20.902 0 015.441-5.185l-2.752.736a.75.75 0 01-.919-.53z" clipRule="evenodd" />
+          </svg>
+        </button>
+      </div>
+    ),
   },
 ];
 

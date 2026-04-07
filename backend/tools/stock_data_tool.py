@@ -14,6 +14,8 @@ Typical usage::
     result = fetch_stock_data.invoke({"ticker": "AAPL"})
 """
 
+import asyncio
+import concurrent.futures
 import json
 import logging
 from datetime import date, datetime, timedelta
@@ -49,6 +51,75 @@ _DATA_PROCESSED = _ss._DATA_PROCESSED
 
 
 # ---------------------------------------------------------------------------
+# Pipeline integration: stock_master lookup helpers
+# ---------------------------------------------------------------------------
+
+
+async def _async_lookup(symbol: str) -> dict | None:
+    """Async lookup of stock_master by symbol or yf_ticker."""
+    from backend.db.engine import get_session_factory
+    from backend.db.models.stock_master import StockMaster
+    from sqlalchemy import or_, select
+
+    canonical = (
+        symbol.replace(".NS", "").replace(".BO", "").upper()
+    )
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(
+            select(StockMaster).where(
+                or_(
+                    StockMaster.symbol == canonical,
+                    StockMaster.yf_ticker == symbol.upper(),
+                )
+            )
+        )
+        stock = result.scalar_one_or_none()
+        if stock is None:
+            return None
+        return {
+            "id": stock.id,
+            "symbol": stock.symbol,
+            "nse_symbol": stock.nse_symbol,
+            "yf_ticker": stock.yf_ticker,
+            "exchange": stock.exchange,
+        }
+
+
+def _lookup_stock_master(symbol: str) -> dict | None:
+    """Synchronous lookup of stock_master by symbol.
+
+    Returns dict with stock_master fields if found,
+    None otherwise. Uses a one-shot async session via
+    asyncio with a thread-pool bridge when an event loop
+    is already running (e.g. inside FastAPI).
+    """
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None:
+            # Inside an async context — run in a thread
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+            ) as pool:
+                return pool.submit(
+                    asyncio.run,
+                    _async_lookup(symbol),
+                ).result()
+        return asyncio.run(_async_lookup(symbol))
+    except Exception:
+        _logger.debug(
+            "stock_master lookup failed for %s, "
+            "falling through to yfinance",
+            symbol,
+        )
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Public @tool functions
 # ---------------------------------------------------------------------------
 
@@ -81,6 +152,21 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
     from tools._ticker_linker import auto_link_ticker
 
     auto_link_ticker(ticker)
+
+    # Pipeline integration: try canonical symbol lookup
+    master = _lookup_stock_master(ticker)
+    if master:
+        _logger.info(
+            "stock_master hit for %s (canonical=%s)",
+            ticker,
+            master["symbol"],
+        )
+        canonical = master["symbol"]
+        existing = _check_existing_data(canonical)
+        if existing is not None:
+            # Use canonical for rest of function
+            ticker = canonical
+
     _logger.info(
         "fetch_stock_data | ticker=%s | period=%s",
         ticker,

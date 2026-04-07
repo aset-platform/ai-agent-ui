@@ -392,7 +392,7 @@ function PortfolioStockCard({
   onRefresh: () => void;
   onUnlink: () => void;
   linkBusy: boolean;
-  onAnalyse: () => void;
+  onAnalyse: (tab: string) => void;
   onAddToPortfolio: () => void;
 }) {
   const ss = sentimentStyles[card.sentiment];
@@ -658,8 +658,8 @@ function PortfolioStockCard({
 
           <button
             data-testid={`analyse-${card.ticker}`}
-            title="Analyse"
-            onClick={onAnalyse}
+            title="Stock Analysis"
+            onClick={() => onAnalyse("analysis")}
             className="flex h-[34px] w-[34px] shrink-0
               items-center justify-center rounded-[10px]
               border border-emerald-600 bg-emerald-600
@@ -668,7 +668,25 @@ function PortfolioStockCard({
               hover:scale-105
               hover:shadow-[0_2px_10px_rgba(16,185,129,0.2)]"
           >
-            <AnalyseIcon />
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+              <path d="M15.5 2A1.5 1.5 0 0014 3.5v13a1.5 1.5 0 001.5 1.5h1a1.5 1.5 0 001.5-1.5v-13A1.5 1.5 0 0016.5 2h-1zM9.5 6A1.5 1.5 0 008 7.5v9A1.5 1.5 0 009.5 18h1a1.5 1.5 0 001.5-1.5v-9A1.5 1.5 0 0010.5 6h-1zM3.5 10A1.5 1.5 0 002 11.5v5A1.5 1.5 0 003.5 18h1A1.5 1.5 0 006 16.5v-5A1.5 1.5 0 004.5 10h-1z" />
+            </svg>
+          </button>
+          <button
+            data-testid={`forecast-${card.ticker}`}
+            title="Stock Forecast"
+            onClick={() => onAnalyse("forecast")}
+            className="flex h-[34px] w-[34px] shrink-0
+              items-center justify-center rounded-[10px]
+              border border-emerald-600 bg-emerald-600
+              text-white transition-all duration-200
+              hover:bg-emerald-700 hover:border-emerald-700
+              hover:scale-105
+              hover:shadow-[0_2px_10px_rgba(16,185,129,0.2)]"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+              <path fillRule="evenodd" d="M12.577 4.878a.75.75 0 01.919-.53l4.78 1.281a.75.75 0 01.531.919l-1.281 4.78a.75.75 0 01-1.449-.387l.81-3.022a19.407 19.407 0 00-5.594 5.203.75.75 0 01-1.139.093L7 10.06l-4.72 4.72a.75.75 0 01-1.06-1.06l5.25-5.25a.75.75 0 011.06 0l3.046 3.046a20.902 20.902 0 015.441-5.185l-2.752.736a.75.75 0 01-.919-.53z" clipRule="evenodd" />
+            </svg>
           </button>
         </div>
       </div>
@@ -719,7 +737,7 @@ function LinkedStockCard({
   onRefresh: () => void;
   onUnlink: () => void;
   linkBusy: boolean;
-  onAnalyse: () => void;
+  onAnalyse: (tab: string) => void;
   onAddToPortfolio: () => void;
 }) {
   const ss = sentimentStyles[card.sentiment];
@@ -950,11 +968,11 @@ function LinkedStockCard({
             <PlusIcon />
           </button>
 
-          {/* Analyse */}
+          {/* Analysis */}
           <button
             data-testid={`analyse-${card.ticker}`}
-            title="Analyse"
-            onClick={onAnalyse}
+            title="Stock Analysis"
+            onClick={() => onAnalyse("analysis")}
             className="flex h-[34px] w-[34px] shrink-0
               items-center justify-center rounded-[10px]
               border border-indigo-600 bg-indigo-600
@@ -963,7 +981,26 @@ function LinkedStockCard({
               hover:scale-105
               hover:shadow-[0_2px_10px_rgba(79,70,229,0.2)]"
           >
-            <AnalyseIcon />
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+              <path d="M15.5 2A1.5 1.5 0 0014 3.5v13a1.5 1.5 0 001.5 1.5h1a1.5 1.5 0 001.5-1.5v-13A1.5 1.5 0 0016.5 2h-1zM9.5 6A1.5 1.5 0 008 7.5v9A1.5 1.5 0 009.5 18h1a1.5 1.5 0 001.5-1.5v-9A1.5 1.5 0 0010.5 6h-1zM3.5 10A1.5 1.5 0 002 11.5v5A1.5 1.5 0 003.5 18h1A1.5 1.5 0 006 16.5v-5A1.5 1.5 0 004.5 10h-1z" />
+            </svg>
+          </button>
+          {/* Forecast */}
+          <button
+            data-testid={`forecast-${card.ticker}`}
+            title="Stock Forecast"
+            onClick={() => onAnalyse("forecast")}
+            className="flex h-[34px] w-[34px] shrink-0
+              items-center justify-center rounded-[10px]
+              border border-indigo-600 bg-indigo-600
+              text-white transition-all duration-200
+              hover:bg-indigo-700 hover:border-indigo-700
+              hover:scale-105
+              hover:shadow-[0_2px_10px_rgba(79,70,229,0.2)]"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+              <path fillRule="evenodd" d="M12.577 4.878a.75.75 0 01.919-.53l4.78 1.281a.75.75 0 01.531.919l-1.281 4.78a.75.75 0 01-1.449-.387l.81-3.022a19.407 19.407 0 00-5.594 5.203.75.75 0 01-1.139.093L7 10.06l-4.72 4.72a.75.75 0 01-1.06-1.06l5.25-5.25a.75.75 0 011.06 0l3.046 3.046a20.902 20.902 0 015.441-5.185l-2.752.736a.75.75 0 01-.919-.53z" clipRule="evenodd" />
+            </svg>
           </button>
         </div>
       </div>
@@ -1002,12 +1039,18 @@ function UnlinkedStockCard({
   onToggleSelect,
   onLink,
   linkBusy,
+  onAnalyse,
+  refreshState,
+  onRefresh,
 }: {
   card: UnifiedCardData;
   isSelected: boolean;
   onToggleSelect: () => void;
   onLink: () => void;
   linkBusy: boolean;
+  onAnalyse: (tab: string) => void;
+  refreshState: RefreshState;
+  onRefresh: () => void;
 }) {
   return (
     <div
@@ -1069,21 +1112,50 @@ function UnlinkedStockCard({
           </div>
         </div>
 
-        {/* Price */}
-        <div className="mt-4">
-          <span
-            className="font-mono text-[26px] font-bold
-              tracking-tighter
-              text-gray-900/65 dark:text-gray-100/50
-              group-hover:text-gray-900
-              dark:group-hover:text-gray-100
-              transition-colors"
-            style={{ fontVariantNumeric: "tabular-nums" }}
-          >
-            {card.price != null
-              ? `${currencySymbol(card.currency)}${card.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-              : "\u2014"}
-          </span>
+        {/* Sparkline */}
+        {card.sparkline.length > 1 && (
+          <div className="mt-3.5 opacity-65 group-hover:opacity-100 transition-opacity">
+            <SparklineSVG
+              data={card.sparkline}
+              sentiment={card.sentiment}
+            />
+          </div>
+        )}
+
+        {/* Price + change */}
+        <div className="mt-2">
+          <div className="flex items-baseline gap-2">
+            <span
+              className="font-mono text-[26px] font-bold
+                tracking-tighter
+                text-gray-900/65 dark:text-gray-100/50
+                group-hover:text-gray-900
+                dark:group-hover:text-gray-100
+                transition-colors"
+              style={{ fontVariantNumeric: "tabular-nums" }}
+            >
+              {card.price != null
+                ? `${currencySymbol(card.currency)}${card.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                : "\u2014"}
+            </span>
+            {card.changePct != null && (
+              <span
+                className={`
+                  inline-flex items-center rounded-full
+                  px-2 py-[3px] font-mono text-[11px]
+                  font-semibold
+                  ${
+                    card.changePct >= 0
+                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400"
+                      : "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400"
+                  }
+                `}
+              >
+                {card.changePct >= 0 ? "+" : ""}
+                {card.changePct.toFixed(1)}%
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Last fetched */}
@@ -1097,24 +1169,96 @@ function UnlinkedStockCard({
           Last fetched {card.lastFetchDate ?? "N/A"}
         </p>
 
-        {/* Link CTA */}
-        <button
-          data-testid={`link-${card.ticker}`}
-          disabled={linkBusy}
-          onClick={onLink}
-          className="mt-3.5 flex w-full items-center
-            justify-center gap-2 rounded-[10px]
-            bg-indigo-600 py-[11px] text-[13px]
-            font-bold tracking-wide text-white
-            transition-all duration-200
-            hover:bg-indigo-700
-            hover:scale-[1.01]
-            hover:shadow-[0_4px_14px_rgba(79,70,229,0.15)]
-            disabled:opacity-50"
-        >
-          <LinkIcon />
-          {linkBusy ? "Linking..." : "Link to Watchlist"}
-        </button>
+        {/* Action buttons */}
+        <div className="mt-3.5 flex items-center gap-2">
+          {/* Refresh */}
+          <button
+            data-testid={`refresh-${card.ticker}`}
+            title="Refresh data"
+            onClick={onRefresh}
+            disabled={refreshState === "pending"}
+            className={`flex h-[34px] w-[34px] shrink-0
+              items-center justify-center rounded-[10px]
+              border transition-all duration-200
+              ${
+                refreshState === "pending"
+                  ? "border-indigo-300 text-indigo-400 animate-spin"
+                  : refreshState === "success"
+                    ? "border-emerald-400 text-emerald-500"
+                    : refreshState === "error"
+                      ? "border-red-400 text-red-500"
+                      : "border-gray-300/60 text-gray-400/70 hover:border-indigo-500 hover:bg-indigo-50 hover:text-indigo-600 dark:border-gray-600/40 dark:text-gray-500/50 dark:hover:border-indigo-400 dark:hover:bg-indigo-500/10 dark:hover:text-indigo-400"
+              }
+              disabled:cursor-wait`}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+              <path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.387zm-10.624-2.85a5.5 5.5 0 019.201-2.466l.312.311H11.77a.75.75 0 000 1.5h3.634a.75.75 0 00.75-.75V3.535a.75.75 0 00-1.5 0v2.033l-.312-.311A7 7 0 002.63 8.386a.75.75 0 001.449.387z" clipRule="evenodd" />
+            </svg>
+          </button>
+          {/* Link to Watchlist */}
+          <button
+            data-testid={`link-${card.ticker}`}
+            disabled={linkBusy}
+            onClick={onLink}
+            title="Link to Watchlist"
+            className="flex h-[34px] w-[34px] shrink-0
+              items-center justify-center rounded-[10px]
+              border border-indigo-400/50 text-indigo-400/60
+              transition-all duration-200
+              hover:border-indigo-500 hover:bg-indigo-50
+              hover:text-indigo-600
+              dark:border-indigo-500/30
+              dark:text-indigo-400/40
+              dark:hover:border-indigo-400
+              dark:hover:bg-indigo-500/10
+              dark:hover:text-indigo-400
+              disabled:opacity-40"
+          >
+            <LinkIcon />
+          </button>
+          {/* Analysis */}
+          <button
+            data-testid={`analyse-${card.ticker}`}
+            title="Stock Analysis"
+            onClick={() => onAnalyse("analysis")}
+            className="flex h-[34px] w-[34px] shrink-0
+              items-center justify-center rounded-[10px]
+              border border-gray-300/60 text-gray-400/70
+              transition-all duration-200
+              hover:border-indigo-500 hover:bg-indigo-50
+              hover:text-indigo-600
+              dark:border-gray-600/40
+              dark:text-gray-500/50
+              dark:hover:border-indigo-400
+              dark:hover:bg-indigo-500/10
+              dark:hover:text-indigo-400"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+              <path d="M15.5 2A1.5 1.5 0 0014 3.5v13a1.5 1.5 0 001.5 1.5h1a1.5 1.5 0 001.5-1.5v-13A1.5 1.5 0 0016.5 2h-1zM9.5 6A1.5 1.5 0 008 7.5v9A1.5 1.5 0 009.5 18h1a1.5 1.5 0 001.5-1.5v-9A1.5 1.5 0 0010.5 6h-1zM3.5 10A1.5 1.5 0 002 11.5v5A1.5 1.5 0 003.5 18h1A1.5 1.5 0 006 16.5v-5A1.5 1.5 0 004.5 10h-1z" />
+            </svg>
+          </button>
+          {/* Forecast */}
+          <button
+            data-testid={`forecast-${card.ticker}`}
+            title="Stock Forecast"
+            onClick={() => onAnalyse("forecast")}
+            className="flex h-[34px] w-[34px] shrink-0
+              items-center justify-center rounded-[10px]
+              border border-gray-300/60 text-gray-400/70
+              transition-all duration-200
+              hover:border-indigo-500 hover:bg-indigo-50
+              hover:text-indigo-600
+              dark:border-gray-600/40
+              dark:text-gray-500/50
+              dark:hover:border-indigo-400
+              dark:hover:bg-indigo-500/10
+              dark:hover:text-indigo-400"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+              <path fillRule="evenodd" d="M12.577 4.878a.75.75 0 01.919-.53l4.78 1.281a.75.75 0 01.531.919l-1.281 4.78a.75.75 0 01-1.449-.387l.81-3.022a19.407 19.407 0 00-5.594 5.203.75.75 0 01-1.139.093L7 10.06l-4.72 4.72a.75.75 0 01-1.06-1.06l5.25-5.25a.75.75 0 011.06 0l3.046 3.046a20.902 20.902 0 015.441-5.185l-2.752.736a.75.75 0 01-.919-.53z" clipRule="evenodd" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* Checkbox — bottom-right, show on hover */}
@@ -1256,9 +1400,9 @@ export default function AnalyticsPage() {
           market: reg.market,
           isLinked: isLinked || inPortfolio,
           tier,
-          change: wp?.change ?? null,
-          changePct: wp?.change_pct ?? null,
-          sparkline: wp?.sparkline ?? [],
+          change: wp?.change ?? reg.change ?? null,
+          changePct: wp?.change_pct ?? reg.change_pct ?? null,
+          sparkline: wp?.sparkline ?? reg.sparkline ?? [],
           sentiment: deriveSentiment(an),
           annualizedReturnPct:
             an?.annualized_return_pct ?? null,
@@ -1443,9 +1587,9 @@ export default function AnalyticsPage() {
 
   // Navigation
   const navigateToAnalysis = useCallback(
-    (ticker: string) => {
+    (ticker: string, tab: string = "analysis") => {
       router.push(
-        `/analytics/analysis?ticker=${encodeURIComponent(ticker)}`,
+        `/analytics/analysis?ticker=${encodeURIComponent(ticker)}&tab=${tab}`,
       );
     },
     [router],
@@ -1765,8 +1909,8 @@ export default function AnalyticsPage() {
                   setUnlinkConfirm(card.ticker)
                 }
                 linkBusy={isLinkBusy(card.ticker)}
-                onAnalyse={() =>
-                  navigateToAnalysis(card.ticker)
+                onAnalyse={(tab) =>
+                  navigateToAnalysis(card.ticker, tab)
                 }
                 onAddToPortfolio={() =>
                   setAddStockTicker(card.ticker)
@@ -1790,8 +1934,8 @@ export default function AnalyticsPage() {
                   setUnlinkConfirm(card.ticker)
                 }
                 linkBusy={isLinkBusy(card.ticker)}
-                onAnalyse={() =>
-                  navigateToAnalysis(card.ticker)
+                onAnalyse={(tab) =>
+                  navigateToAnalysis(card.ticker, tab)
                 }
                 onAddToPortfolio={() =>
                   setAddStockTicker(card.ticker)
@@ -1809,6 +1953,13 @@ export default function AnalyticsPage() {
                 }
                 onLink={() => linkTicker(card.ticker)}
                 linkBusy={isLinkBusy(card.ticker)}
+                onAnalyse={(tab) =>
+                  navigateToAnalysis(card.ticker, tab)
+                }
+                refreshState={getState(card.ticker)}
+                onRefresh={() =>
+                  startRefresh(card.ticker)
+                }
               />
             ),
           )}

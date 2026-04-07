@@ -49,11 +49,7 @@ def _get_stock_repo():
     return _require_repo()
 
 
-def _market(ticker: str) -> str:
-    """Return 'india' or 'us' based on ticker suffix."""
-    if ticker.endswith(".NS") or ticker.endswith(".BO"):
-        return "india"
-    return "us"
+from market_utils import detect_market as _market  # noqa: E402
 
 
 def _safe(val) -> float | None:
@@ -85,9 +81,28 @@ def _safe_int(val) -> int | None:
 
 
 async def _get_user_tickers(user: UserContext) -> list[str]:
-    """Fetch user's linked tickers."""
+    """Fetch tickers visible to user.
+
+    Superusers see all registry tickers (full universe).
+    Other roles see only their linked watchlist tickers.
+    """
     repo = _helpers._get_repo()
-    return await repo.get_user_tickers(user.user_id)
+    user_list = await repo.get_user_tickers(user.user_id)
+
+    if user.role != "superuser":
+        return user_list
+
+    # Superuser: merge with full registry
+    stock_repo = _get_stock_repo()
+    registry = stock_repo.get_all_registry()
+
+    seen = set(t.upper() for t in user_list)
+    merged = list(user_list)
+    for t in registry:
+        if t.upper() not in seen:
+            merged.append(t)
+            seen.add(t.upper())
+    return merged
 
 
 def _get_company_info_df(
@@ -770,16 +785,14 @@ def create_insights_router() -> APIRouter:
         if not tickers:
             return CorrelationResponse(period=period)
 
-        # Market filter on tickers.
-        if market == "india":
+        # Market filter on tickers — check registry too.
+        if market in ("india", "us"):
+            reg = stock_repo.get_all_registry()
             tickers = [
                 t for t in tickers
-                if t.endswith((".NS", ".BO"))
-            ]
-        elif market == "us":
-            tickers = [
-                t for t in tickers
-                if not t.endswith((".NS", ".BO"))
+                if _market(
+                    t, reg.get(t, {}).get("market"),
+                ) == market
             ]
 
         if len(tickers) < 2:

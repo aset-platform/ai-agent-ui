@@ -117,6 +117,9 @@ export interface RegistryTicker {
   market: string;
   currency: string;
   current_price: number | null;
+  change: number | null;
+  change_pct: number | null;
+  sparkline: number[];
   last_fetch_date: string | null;
 }
 
@@ -298,6 +301,7 @@ export interface ScreenerRow {
   sharpe_ratio: number | null;
   sector: string | null;
   market: string;
+  action?: string;
 }
 
 export interface ScreenerResponse {
@@ -353,6 +357,7 @@ export interface RiskRow {
   bear_phase_pct: number | null;
   market: string;
   sector: string | null;
+  action?: string;
 }
 
 export interface RiskResponse {

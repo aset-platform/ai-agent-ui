@@ -121,17 +121,33 @@ def _section_header(
     price = info.get("current_price", "—")
 
     mcap_str = "—"
-    if mcap and isinstance(mcap, (int, float)):
-        if mcap >= 1e12:
-            mcap_str = f"{mcap / 1e12:.2f}T"
-        elif mcap >= 1e9:
-            mcap_str = f"{mcap / 1e9:.2f}B"
-        elif mcap >= 1e6:
-            mcap_str = f"{mcap / 1e6:.1f}M"
-        else:
-            mcap_str = f"{mcap:,.0f}"
+    if mcap:
+        try:
+            mcap_f = float(mcap)
+            if mcap_f >= 1e12:
+                mcap_str = f"{mcap_f / 1e12:.2f}T"
+            elif mcap_f >= 1e9:
+                mcap_str = f"{mcap_f / 1e9:.2f}B"
+            elif mcap_f >= 1e6:
+                mcap_str = f"{mcap_f / 1e6:.1f}M"
+            else:
+                mcap_str = f"{mcap_f:,.0f}"
+        except (ValueError, TypeError):
+            mcap_str = str(mcap)
 
-    pe_str = f"{pe:.1f}" if pe else "—"
+    try:
+        pe_str = f"{float(pe):.1f}" if pe else "—"
+    except (ValueError, TypeError):
+        pe_str = str(pe)
+
+    try:
+        price_str = (
+            f"{float(price):,.2f}"
+            if price and price != "—"
+            else "—"
+        )
+    except (ValueError, TypeError):
+        price_str = str(price)
 
     return (
         f"## {name} ({ticker})\n\n"
@@ -139,7 +155,7 @@ def _section_header(
         f"|--------|-------|\n"
         f"| Sector | {sector} |\n"
         f"| Industry | {industry} |\n"
-        f"| Current Price | {currency} {price} |\n"
+        f"| Current Price | {currency} {price_str} |\n"
         f"| Market Cap | {currency} {mcap_str} |\n"
         f"| P/E Ratio | {pe_str} |\n"
     )

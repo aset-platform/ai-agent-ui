@@ -42,7 +42,7 @@ All pages fully migrated from Dash to Next.js.
 |---------|------|-------------|-------|
 | Backend | 8181 | `backend/main.py` | Python 3.12, FastAPI, LangChain 1.x, SQLAlchemy 2.0 async |
 | Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19, lightweight-charts |
-| PostgreSQL | 5432 | Docker | pgvector/pgvector:pg16 (OLTP: 6 tables + pgvector) |
+| PostgreSQL | 5432 | Docker | pgvector/pgvector:pg16 (OLTP: 10 tables + pgvector) |
 | Redis | 6379 | Docker | Redis 7 Alpine |
 | Docs | 8000 | Docker | MkDocs Material 9 (squidfunk) |
 | Alembic | — | `backend/db/migrations/` | Schema migrations for PostgreSQL |
@@ -67,7 +67,7 @@ ollama-profile embedding                    # load nomic-embed-text (memory vect
 ollama-profile status                       # check loaded model
 ```
 
-**Key dirs**: `backend/` (agents, tools, config), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 14 OLAP tables), `frontend/` (SPA), `dashboard/` (Dash callbacks, imported by backend), `hooks/` (pre-commit, pre-push).
+**Key dirs**: `backend/` (agents, tools, config), `backend/pipeline/` (stock data pipeline, 12 CLI commands), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 14 OLAP tables), `frontend/` (SPA), `dashboard/` (Dash callbacks, imported by backend), `hooks/` (pre-commit, pre-push).
 
 **Docker files**: `Dockerfile.backend`, `Dockerfile.frontend`,
 `Dockerfile.docs`, `docker-compose.yml`,
@@ -102,6 +102,22 @@ ollama-profile status                       # check loaded model
 
 ---
 
+## Stock Data Pipeline
+
+- **Module:** `backend/pipeline/` — 12 CLI commands via
+  `PYTHONPATH=.:backend python -m backend.pipeline.runner`
+- **Source strategy:** yfinance primary (bulk/daily),
+  jugaad-data fallback (retry/correct), racing (chat).
+- **Ticker format:** ALL Indian stocks use `.NS` suffix
+  everywhere (Iceberg, PG, frontend, scheduler). Never
+  store canonical format (no suffix) for data operations.
+- **Market detection:** Import `detect_market` from
+  `backend/market_utils.py`. NEVER add local suffix checks.
+- **Docs:** `docs/backend/stock-pipeline.md` (usage guide),
+  spec at `docs/superpowers/specs/2026-04-02-stock-pipeline-design.md`.
+
+---
+
 ## Hybrid DB Architecture
 
 OLTP/OLAP split — PostgreSQL for row-level CRUD, Iceberg for
@@ -117,6 +133,10 @@ append-only analytics.
 | `stocks.registry` | `backend/db/pg_stocks.py` | Upsert |
 | `stocks.scheduled_jobs` | `backend/db/pg_stocks.py` | Upsert |
 | `public.user_memories` | `backend/db/models/memory.py` | pgvector semantic memory (768-dim) |
+| `stock_master` | `backend/db/models/stock_master.py` | Pipeline universe (symbol, yf_ticker, ISIN) |
+| `stock_tags` | `backend/db/models/stock_tag.py` | Temporal tagging (nifty50/100/500) |
+| `ingestion_cursor` | `backend/db/models/ingestion_cursor.py` | Keyset pagination cursor |
+| `ingestion_skipped` | `backend/db/models/ingestion_skipped.py` | Failed ticker log + retry |
 
 ### Iceberg tables (14 — append / scoped-delete)
 
@@ -129,7 +149,7 @@ append-only analytics.
 
 - `backend/db/engine.py` — async `session_factory` (asyncpg driver,
   `pool_pre_ping=True`)
-- `backend/db/models/` — 6 SQLAlchemy ORM models (FK cascade,
+- `backend/db/models/` — 10 SQLAlchemy ORM models (FK cascade,
   JSONB, composite PK, indexes, pgvector)
 - `backend/db/migrations/` — Alembic async migrations
 - `auth/repo/repository.py` — `UserRepository` facade
@@ -184,9 +204,9 @@ see all available topics.
 
 | Category | Topics |
 |----------|--------|
-| `shared/architecture/` | system-overview, agent-init-pattern, groq-chunking, iceberg-data-layer, auth-jwt-flow, langsmith-observability, lighthouse-performance-workflow, subscription-billing, portfolio-analytics, currency-aware-agent, token-budget-concurrency, payment-transaction-ledger, sentiment-agent, iceberg-column-projection, llm-cascade-profiles, docker-containerization, redis-cache-layer, per-ticker-refresh, api-versioning, security-hardening-patterns, hybrid-db-postgresql-iceberg, context-aware-chat, intent-aware-routing, summary-based-context, interactive-stock-discovery, memory-augmented-chat, round-robin-cascade, ollama-local-llm |
-| `shared/conventions/` | python-style, typescript-style, git-workflow, testing-patterns, performance, error-handling, llm-tool-forcing, jira-mcp-usage, security-hardening, e2e-test-patterns, isort-black-exclude-virtualenv, git-push-workflow |
-| `shared/debugging/` | common-issues, mock-patching-gotchas, chat-session-recording, cookie-hostname-mismatch, ohlcv-nan-close-price, razorpay-integration-gotchas, iceberg-epoch-dates, portfolio-watchlist-sync, iceberg-table-corruption-recovery, razorpay-customer-exists, playwright-react19-dash-patterns, asyncpg-sync-async-bridge, llm-hallucination-guardrail, sync-async-migration-patterns, payment-cookie-redirect, bind-tools-model-lookup |
+| `shared/architecture/` | system-overview, agent-init-pattern, groq-chunking, iceberg-data-layer, auth-jwt-flow, langsmith-observability, lighthouse-performance-workflow, subscription-billing, portfolio-analytics, currency-aware-agent, token-budget-concurrency, payment-transaction-ledger, sentiment-agent, iceberg-column-projection, llm-cascade-profiles, docker-containerization, redis-cache-layer, per-ticker-refresh, api-versioning, security-hardening-patterns, hybrid-db-postgresql-iceberg, context-aware-chat, intent-aware-routing, summary-based-context, interactive-stock-discovery, memory-augmented-chat, round-robin-cascade, ollama-local-llm, **stock-data-pipeline** |
+| `shared/conventions/` | python-style, typescript-style, git-workflow, testing-patterns, performance, error-handling, llm-tool-forcing, jira-mcp-usage, security-hardening, e2e-test-patterns, isort-black-exclude-virtualenv, git-push-workflow, **ticker-format-standard** |
+| `shared/debugging/` | common-issues, mock-patching-gotchas, chat-session-recording, cookie-hostname-mismatch, ohlcv-nan-close-price, razorpay-integration-gotchas, iceberg-epoch-dates, portfolio-watchlist-sync, iceberg-table-corruption-recovery, razorpay-customer-exists, playwright-react19-dash-patterns, asyncpg-sync-async-bridge, llm-hallucination-guardrail, sync-async-migration-patterns, payment-cookie-redirect, bind-tools-model-lookup, **pipeline-common-issues** |
 | `shared/onboarding/` | setup-guide, test-venv-setup, tooling |
 | `shared/api/` | streaming-protocol |
 
@@ -292,6 +312,24 @@ Load any memory with `read_memory` when you need the details.
 - **`ollama-profile embedding`**: Uses `/api/embed` (not
   `/api/generate`) for warmup. Only 274MB — coexists with larger
   models in theory but gets evicted under memory pressure.
+- **Redis cache poisoning**: `cache_warmup.py` caches bare
+  registry on startup (no prices/sparkline). Registry warmup
+  is disabled — real endpoint caches enriched data. After code
+  changes: `docker compose exec redis redis-cli FLUSHALL`.
+- **`.pyiceberg.yaml` in Docker**: Must be mounted at
+  `/app/.pyiceberg.yaml:ro` in `docker-compose.override.yml`.
+  Without it, Iceberg reads fail silently in the container.
+- **FastAPI Query default in internal calls**: When calling
+  an endpoint function internally (not via HTTP), pass
+  `Query()` params explicitly (e.g., `ticker=None`).
+  Otherwise FastAPI injects the Query object, not None.
+- **jugaad-data timeout**: `stock_df()` has no timeout.
+  NseSource wraps it in `asyncio.wait_for(timeout=60.0)`.
+- **Iceberg concurrent writes**: SQLite catalog conflicts
+  under Semaphore(10). Fundamentals job uses Semaphore(1).
+- **Superuser insights visibility**: `_get_user_tickers()`
+  in `insights_routes.py` shows all registry tickers for
+  superusers, watchlist-only for general users.
 
 ---
 
@@ -318,6 +356,13 @@ PYTHONPATH=backend python scripts/migrate_iceberg_to_pg.py  # one-time data migr
 PYTHONPATH=backend python scripts/seed_demo_data.py
 # Docker seed (when running via Docker Compose)
 docker compose exec backend python scripts/seed_demo_data.py
+
+# Stock Data Pipeline
+PYTHONPATH=.:backend python -m backend.pipeline.runner download    # fetch Nifty 500 CSV
+PYTHONPATH=.:backend python -m backend.pipeline.runner seed --csv data/universe/nifty500.csv
+PYTHONPATH=.:backend python -m backend.pipeline.runner bulk-download  # yfinance batch OHLCV
+PYTHONPATH=.:backend python -m backend.pipeline.runner fill-gaps   # patch company_info gaps
+PYTHONPATH=.:backend python -m backend.pipeline.runner status      # check cursor progress
 
 # Performance (run from frontend/)
 npm run perf:check                # LHCI on /login (pre-PR gate)

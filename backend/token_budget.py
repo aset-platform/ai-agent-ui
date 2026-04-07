@@ -503,10 +503,25 @@ class TokenBudget:
             return
 
         state = self._get_state(model)
+        now = time.monotonic()
         with state.lock:
+            # Append compensating negative entries so
+            # that when the original reserve() entries
+            # expire, _window_total subtracts both the
+            # positive and negative amounts → net zero.
+            # Without these, the running total goes
+            # permanently negative after expiry.
+            state.minute_tokens.append(
+                (now, -estimated_tokens),
+            )
             state.minute_tokens_total -= estimated_tokens
+            state.minute_requests.append((now, -1))
             state.minute_requests_total -= 1
+            state.day_tokens.append(
+                (now, -estimated_tokens),
+            )
             state.day_tokens_total -= estimated_tokens
+            state.day_requests.append((now, -1))
             state.day_requests_total -= 1
 
     def record(self, model: str, tokens_used: int) -> None:
@@ -592,10 +607,10 @@ class TokenBudget:
                 )
                 state.day_requests_total = rpd
             result[model] = {
-                "tpm": f"{tpm}/{lim.tpm}",
-                "rpm": f"{rpm}/{lim.rpm}",
-                "tpd": f"{tpd}/{lim.tpd}",
-                "rpd": f"{rpd}/{lim.rpd}",
+                "tpm": f"{max(0, tpm)}/{lim.tpm}",
+                "rpm": f"{max(0, rpm)}/{lim.rpm}",
+                "tpd": f"{max(0, tpd)}/{lim.tpd}",
+                "rpd": f"{max(0, rpd)}/{lim.rpd}",
             }
         return result
 
@@ -629,13 +644,15 @@ class TokenBudget:
                 )
                 state.day_requests_total = rpd
 
+            clamped_tpd = max(0, tpd)
+            clamped_rpd = max(0, rpd)
             by_model[model] = {
-                "total": tpd,
-                "requests": rpd,
+                "total": clamped_tpd,
+                "requests": clamped_rpd,
                 "limit": lim.tpd,
             }
-            total_tokens += tpd
-            total_requests += rpd
+            total_tokens += clamped_tpd
+            total_requests += clamped_rpd
             daily_limit += lim.tpd
 
         remaining = max(0, daily_limit - total_tokens)

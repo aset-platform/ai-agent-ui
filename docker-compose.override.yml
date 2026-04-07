@@ -12,6 +12,7 @@ services:
       - ./scripts:/app/scripts
       - ./dashboard:/app/dashboard
       - ./fixtures:/app/fixtures
+      - ./.pyiceberg.yaml:/app/.pyiceberg.yaml:ro
       - ${AI_AGENT_UI_HOME:-~/.ai-agent-ui}:${AI_AGENT_UI_HOME:-/Users/abhay/.ai-agent-ui}
     command: >
       uvicorn main:app

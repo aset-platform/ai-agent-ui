@@ -71,10 +71,14 @@ type TabId =
 // Helpers
 // ---------------------------------------------------------------
 
-/** Currency symbol based on ticker suffix. */
-function tickerCurrency(ticker: string): string {
+/** Currency symbol — checks suffix + registry market. */
+function tickerCurrency(
+  ticker: string,
+  registryMarket?: string,
+): string {
   if (ticker.endsWith(".NS") || ticker.endsWith(".BO"))
     return "₹";
+  if (registryMarket === "india") return "₹";
   return "$";
 }
 
@@ -512,7 +516,7 @@ function ForecastTab({ ticker }: { ticker: string }) {
         return r.json() as Promise<ForecastSeriesResponse>;
       }),
       apiFetch(
-        `${API_URL}/dashboard/forecasts/summary`,
+        `${API_URL}/dashboard/forecasts/summary?ticker=${encodeURIComponent(q)}`,
       ).then((r) => {
         if (!r.ok) {
           throw new Error(`Summary: HTTP ${r.status}`);
@@ -1766,23 +1770,47 @@ function AnalysisPageInner() {
   const [tickersLoading, setTickersLoading] =
     useState(true);
 
-  // Fetch user tickers
+  // Fetch user tickers + registry tickers (merged)
   useEffect(() => {
     let cancelled = false;
 
-    apiFetch(`${API_URL}/users/me/tickers`)
-      .then((r) => {
-        if (!r.ok) {
-          throw new Error(`Tickers: HTTP ${r.status}`);
-        }
-        return r.json();
-      })
-      .then((data: { tickers: string[] }) => {
+    Promise.all([
+      apiFetch(`${API_URL}/users/me/tickers`)
+        .then((r) =>
+          r.ok ? r.json() : { tickers: [] },
+        )
+        .catch(() => ({ tickers: [] })),
+      apiFetch(`${API_URL}/dashboard/registry`)
+        .then((r) =>
+          r.ok ? r.json() : { tickers: [] },
+        )
+        .catch(() => ({ tickers: [] })),
+    ])
+      .then(([userData, regData]) => {
         if (cancelled) return;
-        const list = data.tickers ?? [];
-        setTickers(list);
-        // Priority: URL param > saved pref > first ticker
-        const upper = list.map(
+        const userList: string[] =
+          userData.tickers ?? [];
+        const regList: string[] = (
+          regData.tickers ?? []
+        ).map(
+          (t: { ticker: string }) => t.ticker,
+        );
+        // Merge: user tickers first, then registry
+        const seen = new Set(
+          userList.map((t: string) =>
+            t.toUpperCase(),
+          ),
+        );
+        const merged = [...userList];
+        for (const t of regList) {
+          if (!seen.has(t.toUpperCase())) {
+            merged.push(t);
+            seen.add(t.toUpperCase());
+          }
+        }
+        setTickers(merged);
+        // Priority: URL param > saved pref > first
+        const upper = merged.map(
           (t: string) => t.toUpperCase(),
         );
         const savedTicker = chartPrefs.ticker as
@@ -1802,12 +1830,9 @@ function AnalysisPageInner() {
           setSelectedTicker(
             savedTicker.toUpperCase(),
           );
-        } else if (list.length > 0) {
-          setSelectedTicker(list[0]);
+        } else if (merged.length > 0) {
+          setSelectedTicker(merged[0]);
         }
-      })
-      .catch(() => {
-        // Silently fall back — user may have no tickers
       })
       .finally(() => {
         if (!cancelled) setTickersLoading(false);

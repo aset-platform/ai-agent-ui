@@ -169,7 +169,7 @@ def create_dashboard_router() -> APIRouter:
 
             info = info_map.get(t)
             ccy = info.get("currency", "USD") if info else "USD"
-            mkt = "india" if (t.endswith(".NS") or t.endswith(".BO")) else "us"
+            mkt = detect_market(t)
 
             items.append(
                 TickerPrice(
@@ -209,10 +209,23 @@ def create_dashboard_router() -> APIRouter:
     )
     async def get_forecasts_summary(
         user: UserContext = Depends(get_current_user),
+        ticker: str | None = Query(
+            None,
+            description=(
+                "Include this ticker even if unlinked"
+            ),
+        ),
     ):
-        """Latest forecast runs per linked ticker."""
+        """Latest forecast runs per linked ticker.
+
+        If *ticker* is provided, its forecast is included
+        even when the ticker is not in the user's watchlist.
+        """
         cache = get_cache()
-        cache_key = f"cache:dash:forecasts:{user.user_id}"
+        cache_key = (
+            f"cache:dash:forecasts:{user.user_id}"
+            f":{ticker or ''}"
+        )
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -222,7 +235,20 @@ def create_dashboard_router() -> APIRouter:
 
         repo = _helpers._get_repo()
         stock_repo = _get_stock_repo()
-        tickers = await repo.get_user_tickers(user.user_id)
+        tickers = await repo.get_user_tickers(
+            user.user_id,
+        )
+
+        if not tickers:
+            tickers = []
+
+        # Include the requested ticker even if unlinked
+        if ticker and isinstance(ticker, str):
+            t_upper = ticker.upper().strip()
+            if t_upper not in [
+                t.upper() for t in tickers
+            ]:
+                tickers = list(tickers) + [t_upper]
 
         if not tickers:
             return ForecastsResponse()
@@ -498,10 +524,8 @@ def create_dashboard_router() -> APIRouter:
         items: list[RegistryTicker] = []
         for ticker, meta in registry.items():
             info = info_map.get(ticker)
-            mkt = (
-                "india"
-                if (ticker.endswith(".NS") or ticker.endswith(".BO"))
-                else "us"
+            mkt = detect_market(
+                ticker, meta.get("market"),
             )
             ccy = "INR" if mkt == "india" else "USD"
             company = None
@@ -509,11 +533,19 @@ def create_dashboard_router() -> APIRouter:
 
             if info:
                 company = info.get("company_name")
-                ccy = str(info.get("currency", ccy) or ccy)
+                # Market-derived ccy takes precedence for
+                # Indian stocks (yfinance sometimes returns
+                # USD for NSE tickers).
+                if mkt != "india":
+                    info_ccy = info.get("currency")
+                    if info_ccy and str(info_ccy) != "nan":
+                        ccy = str(info_ccy)
                 raw = info.get("current_price")
                 if raw is not None:
                     try:
-                        price = round(float(raw), 2)
+                        p = float(raw)
+                        if p == p:  # not NaN
+                            price = round(p, 2)
                     except (ValueError, TypeError):
                         pass
 
@@ -527,6 +559,65 @@ def create_dashboard_router() -> APIRouter:
                     last_fetch_date=meta.get("last_fetch_date", "") or None,
                 )
             )
+
+        # Enrich with OHLCV: sparkline, change, price
+        try:
+            ohlcv_df = stock_repo.get_ohlcv_batch(
+                reg_tickers,
+            )
+            if ohlcv_df is not None and not ohlcv_df.empty:
+                _ohlcv_map: dict[str, dict] = {}
+                for t in reg_tickers:
+                    t_df = ohlcv_df[
+                        ohlcv_df["ticker"] == t
+                    ]
+                    if t_df.empty:
+                        continue
+                    t30 = t_df.tail(30).dropna(
+                        subset=["close"],
+                    )
+                    if t30.empty:
+                        continue
+                    closes = [
+                        round(float(v), 2)
+                        for v in t30["close"]
+                        if v == v
+                    ]
+                    cur = closes[-1] if closes else None
+                    prev = (
+                        closes[-2]
+                        if len(closes) > 1
+                        else cur
+                    )
+                    chg = (
+                        round(cur - prev, 2)
+                        if cur and prev
+                        else None
+                    )
+                    pct = (
+                        round(chg / prev * 100, 2)
+                        if chg is not None and prev
+                        else None
+                    )
+                    _ohlcv_map[t] = {
+                        "sparkline": closes,
+                        "price": cur,
+                        "change": chg,
+                        "change_pct": pct,
+                    }
+                for it in items:
+                    od = _ohlcv_map.get(it.ticker)
+                    if not od:
+                        continue
+                    it.sparkline = od["sparkline"]
+                    if od["change"] is not None:
+                        it.change = od["change"]
+                    if od["change_pct"] is not None:
+                        it.change_pct = od["change_pct"]
+                    if it.current_price is None:
+                        it.current_price = od["price"]
+        except Exception:
+            pass
 
         items.sort(key=lambda t: t.ticker)
         result = RegistryResponse(tickers=items)
@@ -759,7 +850,7 @@ def create_dashboard_router() -> APIRouter:
         # Reuse existing endpoint functions — they
         # each check their own cache internally.
         wl = await get_watchlist(user)
-        fc = await get_forecasts_summary(user)
+        fc = await get_forecasts_summary(user, ticker=None)
         an = await get_analysis_latest(user)
         lu = await get_llm_usage(user)
 
@@ -1213,15 +1304,19 @@ _PERIOD_DAYS = {
 }
 
 
+from market_utils import detect_currency, detect_market
+
+
 def _is_currency_match(
     ticker: str,
     currency: str,
 ) -> bool:
     """True if ticker belongs to *currency*."""
-    india = ticker.endswith(
-        (".NS", ".BO"),
+    mkt = detect_market(ticker)
+    return (
+        (currency == "INR" and mkt == "india")
+        or (currency == "USD" and mkt == "us")
     )
-    return (currency == "INR" and india) or (currency == "USD" and not india)
 
 
 def _safe_float(val) -> float:

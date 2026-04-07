@@ -374,21 +374,55 @@ export function CompareContent() {
   const [tickersLoading, setTickersLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch user's linked tickers
+  // Fetch user's linked tickers + registry tickers
   useEffect(() => {
     const controller = new AbortController();
-    apiFetch(`${API_URL}/dashboard/watchlist`, {
-      signal: controller.signal,
-    })
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((wl: WatchlistResponse) => {
-        setAllTickers(wl.tickers.map((t) => t.ticker));
+    const opts = { signal: controller.signal };
+    Promise.all([
+      apiFetch(
+        `${API_URL}/dashboard/watchlist`,
+        opts,
+      )
+        .then((r) =>
+          r.ok ? r.json() : { tickers: [] },
+        )
+        .catch(() => ({ tickers: [] })),
+      apiFetch(
+        `${API_URL}/dashboard/registry`,
+        opts,
+      )
+        .then((r) =>
+          r.ok ? r.json() : { tickers: [] },
+        )
+        .catch(() => ({ tickers: [] })),
+    ])
+      .then(([wl, reg]) => {
+        const wlList = (wl.tickers ?? []).map(
+          (t: { ticker: string }) => t.ticker,
+        );
+        const regList = (reg.tickers ?? []).map(
+          (t: { ticker: string }) => t.ticker,
+        );
+        const seen = new Set(
+          wlList.map((t: string) =>
+            t.toUpperCase(),
+          ),
+        );
+        const merged = [...wlList];
+        for (const t of regList) {
+          if (!seen.has(t.toUpperCase())) {
+            merged.push(t);
+            seen.add(t.toUpperCase());
+          }
+        }
+        setAllTickers(merged);
       })
       .catch((err: unknown) => {
-        if (err instanceof Error && err.name === "AbortError") return;
+        if (
+          err instanceof Error &&
+          err.name === "AbortError"
+        )
+          return;
       })
       .finally(() => setTickersLoading(false));
     return () => controller.abort();

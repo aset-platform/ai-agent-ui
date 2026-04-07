@@ -1,6 +1,6 @@
 # AI Agent UI
 
-A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js. The backend runs an LLM in a tool-calling loop; the frontend is a single-page app with portfolio management, stock analysis (TradingView charts), and a chat side panel. JWT authentication and role-based access control protect all surfaces. Redis provides caching and session management. Data layer uses a hybrid architecture: PostgreSQL (SQLAlchemy 2.0 async) for OLTP and Apache Iceberg for OLAP analytics.
+A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js. The backend runs an LLM in a tool-calling loop; the frontend is a single-page app with portfolio management, stock analysis (TradingView charts), and a chat side panel. JWT authentication and role-based access control protect all surfaces. Redis provides caching and session management. Data layer uses a hybrid architecture: PostgreSQL (SQLAlchemy 2.0 async) for OLTP and Apache Iceberg for OLAP analytics. A built-in stock data pipeline covers 499 Nifty 500 stocks with 12 CLI commands for seeding, bulk ingestion, daily deltas, and error recovery.
 
 ---
 
@@ -17,6 +17,8 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 - **Prophet forecasting with ensemble correction** — 3/6/9-month price targets with 80% confidence bands, inline backtest accuracy
 - **Real-time WebSocket streaming** — live tool event visibility (`tool_start` / `tool_done`) during agentic loop execution
 - **Dual payment gateways** — Razorpay (INR modal) and Stripe (USD hosted checkout) with pro-rata billing
+- **Stock data pipeline (499 Nifty 500 stocks)** — 12 CLI commands: seed universe, bulk OHLCV (yfinance batch, ~2 min), fundamentals, daily deltas, fill gaps, retry/correct with crash-safe cursor tracking
+- **3-source data architecture** — yfinance (bulk/daily), jugaad-data NSE (retry/correct), racing source (chat); shared `market_utils.py` for unified market detection
 - **Docker Compose 5-service orchestration** — single command spins up backend, frontend, PostgreSQL (pgvector), Redis, and docs
 - **Lighthouse performance monitoring** — 94/100 score; LHCI gate enforced pre-PR
 
@@ -28,7 +30,7 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 |---------|-------|------|---------|
 | **Frontend** | Next.js 16 + React 19 + Tailwind 4 + lightweight-charts v5 | `3000` | Portfolio dashboard, TradingView charts, collapsible sidebar, chat side panel |
 | **Backend** | FastAPI + LangChain + SQLAlchemy 2.0 async + N-tier Groq/Anthropic | `8181` | Agentic loop + REST/WebSocket API + Auth + Redis cache |
-| **PostgreSQL** | pgvector/pgvector:pg16 | `5432` | OLTP: users, tickers, payments, registry, scheduled jobs, **user_memories** (pgvector) |
+| **PostgreSQL** | pgvector/pgvector:pg16 | `5432` | OLTP: users, tickers, payments, registry, scheduled jobs, user_memories (pgvector), **stock_master**, **stock_tags**, **ingestion_cursor**, **ingestion_skipped** |
 | **Redis** | Redis 7 | `6379` | Token deny-list, user preferences, API cache (write-through) |
 | **Docs** | MkDocs Material | `8000` | Project documentation |
 
@@ -171,7 +173,7 @@ graph TD
     end
 
     subgraph Data["Data Layer"]
-        PG["PostgreSQL 16<br/><i>6 OLTP tables + pgvector</i>"]
+        PG["PostgreSQL 16<br/><i>10 OLTP tables + pgvector</i>"]
         IC["Iceberg<br/><i>14 OLAP tables<br/>+ chat_audit_log</i>"]
         RD["Redis 7<br/><i>token deny-list, cache</i>"]
     end
@@ -432,7 +434,10 @@ ai-agent-ui/
 │   └── pre-push              # Bash entry — blocks pushes with print()/failing mkdocs build
 │
 ├── scripts/
-│   └── seed_admin.py         # Bootstrap first superuser from env vars
+│   ├── seed_admin.py         # Bootstrap first superuser from env vars
+│   ├── download_nifty500.py  # Download Nifty 500 constituents from NSE
+│   ├── bulk_download_ohlcv.py # Batch yfinance OHLCV download (499 tickers, ~2 min)
+│   └── backfill_company_names.py # Fill missing company names in stock_master
 │
 ├── frontend/                 # Next.js 16
 │   ├── app/
@@ -486,9 +491,19 @@ ai-agent-ui/
 │   ├── db/
 │   │   ├── engine.py         # Async SQLAlchemy engine + session factory
 │   │   ├── base.py           # DeclarativeBase for ORM
-│   │   ├── models/           # 6 ORM models (User, UserTicker, Payment, Registry,
-│   │   │                     #   ScheduledJob, UserMemory)
+│   │   ├── models/           # 10 ORM models (User, UserTicker, Payment, Registry,
+│   │   │                     #   ScheduledJob, UserMemory, StockMaster, StockTags,
+│   │   │                     #   IngestionCursor, IngestionSkipped)
 │   │   └── migrations/       # Alembic async migrations (pgvector extension + tables)
+│   ├── agents/
+│   ├── pipeline/             # Stock data pipeline (17 files)
+│   │   ├── runner.py         # CLI entry point (12 commands)
+│   │   ├── config.py         # Pipeline constants (batch size, concurrency, backoff)
+│   │   ├── sources/          # NseSource, YfinanceSource, RacingSource
+│   │   ├── jobs/             # ohlcv, fundamentals, fill_gaps, seed_universe
+│   │   ├── cursor.py         # Crash-safe cursor tracking
+│   │   ├── observability.py  # Pipeline-specific metrics
+│   │   └── router.py         # Source routing logic
 │   ├── agents/
 │   │   ├── base.py           # BaseAgent ABC (tool + synthesis LLM)
 │   │   ├── config.py         # AgentConfig + SubAgentConfig

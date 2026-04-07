@@ -1,8 +1,10 @@
 """Tests for RoundRobinPool and get_token_budget singleton."""
 
 import threading
+import time
 
 from token_budget import (
+    ModelLimits,
     RoundRobinPool,
     TokenBudget,
     get_token_budget,
@@ -117,3 +119,68 @@ class TestPoolRegistration:
         """get_pool returns None for unknown name."""
         tb = TokenBudget()
         assert tb.get_pool("nope") is None
+
+
+class TestReserveRelease:
+    """Verify reserve/release keeps counters non-negative."""
+
+    def _make_budget(self) -> TokenBudget:
+        return TokenBudget(
+            limits={
+                "test-model": ModelLimits(
+                    rpm=30, tpm=8000,
+                    rpd=1000, tpd=200000,
+                ),
+            },
+        )
+
+    def test_release_zeroes_usage(self):
+        """reserve + release → usage back to 0."""
+        tb = self._make_budget()
+        assert tb.reserve("test-model", 1000)
+        tb.release("test-model", 1000)
+
+        status = tb.get_status()["test-model"]
+        # TPM/RPM should be 0 after release
+        assert status["tpm"] == "0/8000"
+        assert status["rpm"] == "0/30"
+
+    def test_release_no_negative_after_expiry(self):
+        """After deque entries expire, totals stay >= 0.
+
+        Regression test: old release() only decremented
+        running totals without compensating deque entries,
+        causing permanent negative values after expiry.
+        """
+        tb = self._make_budget()
+        assert tb.reserve("test-model", 1500)
+        tb.release("test-model", 1500)
+
+        # Simulate minute-window expiry by advancing
+        # all deque timestamps into the past.
+        state = tb._get_state("test-model")
+        past = time.monotonic() - 120  # 2 min ago
+        with state.lock:
+            for dq in (
+                state.minute_tokens,
+                state.minute_requests,
+            ):
+                for i in range(len(dq)):
+                    _, val = dq[i]
+                    dq[i] = (past, val)
+
+        status = tb.get_status()["test-model"]
+        # Must NOT be negative
+        assert status["tpm"] == "0/8000"
+        assert status["rpm"] == "0/30"
+
+    def test_daily_budget_non_negative(self):
+        """get_daily_budget clamps negative to 0."""
+        tb = self._make_budget()
+        assert tb.reserve("test-model", 500)
+        tb.release("test-model", 500)
+
+        daily = tb.get_daily_budget()
+        model_info = daily["by_model"]["test-model"]
+        assert model_info["total"] >= 0
+        assert model_info["requests"] >= 0

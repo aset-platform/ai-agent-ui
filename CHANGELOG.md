@@ -5,6 +5,37 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.6.0] — 2026-04-08: Stock Data Pipeline — Nifty 500 (Sprint 5, Epic ASETPLTFRM-267)
+
+### Added
+
+- Stock Data Pipeline module (`backend/pipeline/`, 17 files) with 12 CLI commands
+- 4 new PostgreSQL tables: `stock_master`, `stock_tags`, `ingestion_cursor`, `ingestion_skipped` (Alembic migration)
+- 499 Nifty 500 stocks seeded from NSE with auto-tags (nifty50, nifty100, nifty500, largecap, midcap)
+- Data sources: `NseSource` (jugaad-data), `YfinanceSource` (batch download), `RacingSource` (fastest-wins)
+- Pipeline jobs: `ohlcv`, `fundamentals`, `fill_gaps`, `seed_universe` with crash-safe cursor tracking
+- CLI commands: `download`, `seed`, `bulk`, `bulk-download`, `fundamentals`, `daily`, `fill-gaps`, `status`, `skipped`, `retry`, `correct`, `reset`
+- Scripts: `download_nifty500.py`, `bulk_download_ohlcv.py`, `backfill_company_names.py`
+- Shared `market_utils.py` for unified market detection (replaces 20+ ad-hoc checks)
+- Frontend: analytics sparklines, merged ticker dropdowns (500+), Insights Screener for superusers, Stop button for scheduler jobs
+- Forecast summary `?ticker=` param for unlinked tickers
+- `docs/backend/stock-pipeline.md` usage guide
+
+### Fixed
+
+- `cache_warmup` poisoning from inconsistent ticker formats (registry disabled in Docker)
+- Ticker standardization: all Indian stocks use `.NS` format across registry, Iceberg, scheduler, and frontend
+
+### Changed
+
+- Scheduler: `yf_map` resolution for `.NS` tickers, 519 India tickers visible
+- Docker: `.pyiceberg.yaml` mounted, OHLCV price/sparkline enrichment on registry endpoint
+- Analytics cards redesigned with sparkline, change%, action buttons (refresh, link, analysis, forecast)
+- Analysis/Compare dropdowns merge registry + user tickers
+- Dashboard: `indiaTickerSet` for market filtering
+
+---
+
 ## [0.5.0] — 2026-04-01: Memory-Augmented Chat + Round-Robin + Observability
 
 ### Added

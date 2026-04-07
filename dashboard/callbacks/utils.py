@@ -87,15 +87,13 @@ def _check_input_safety(
 
 
 def _get_market(ticker: str) -> str:
-    """Return ``'india'`` for NSE/BSE tickers (.NS / .BO), ``'us'`` otherwise.
+    """Return ``'india'`` or ``'us'`` for a ticker.
 
-    Args:
-        ticker: Stock ticker symbol.
-
-    Returns:
-        ``'india'`` or ``'us'``.
+    Uses shared ``market_utils.detect_market`` with
+    registry fallback for canonical symbols.
     """
-    return "india" if ticker.upper().endswith((".NS", ".BO")) else "us"
+    from market_utils import detect_market
+    return detect_market(ticker)
 
 
 def _currency_symbol(code: str) -> str:

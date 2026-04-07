@@ -186,6 +186,8 @@ function StatusBadge({ status }: { status: string }) {
       "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400",
     failed:
       "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400",
+    cancelled:
+      "bg-orange-100 text-orange-700 dark:bg-orange-500/15 dark:text-orange-400",
     paused:
       "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400",
   };
@@ -193,6 +195,7 @@ function StatusBadge({ status }: { status: string }) {
     success: "bg-emerald-500",
     running: "bg-indigo-500 animate-pulse",
     failed: "bg-red-500",
+    cancelled: "bg-orange-500",
     paused: "bg-amber-500",
   };
   return (
@@ -337,9 +340,11 @@ function StatCards() {
 function JobList({
   onCreateClick,
   onEditClick,
+  runs,
 }: {
   onCreateClick: () => void;
   onEditClick: (job: SchedulerJob) => void;
+  runs: SchedulerRun[];
 }) {
   const { jobs, mutate } = useSchedulerJobs();
 
@@ -380,6 +385,23 @@ function JobList({
       mutate();
     },
     [mutate],
+  );
+
+  const handleStop = useCallback(
+    async (jobId: string) => {
+      const running = runs.find(
+        (r) =>
+          r.job_id === jobId &&
+          r.status === "running",
+      );
+      if (!running) return;
+      await apiFetch(
+        `${API_URL}/admin/scheduler/runs/${running.run_id}/cancel`,
+        { method: "POST" },
+      );
+      mutate();
+    },
+    [runs, mutate],
   );
 
   return (
@@ -481,24 +503,41 @@ function JobList({
                   />
                 )}
               </div>
-              <button
-                onClick={() => handleTrigger(j.job_id)}
-                disabled={
-                  j.last_run_status === "running"
-                }
-                className="shrink-0 rounded-lg border
-                  border-gray-200 px-2.5 py-1.5
-                  text-[11px] font-semibold
-                  text-indigo-600 transition-all
-                  hover:bg-indigo-600 hover:text-white
-                  disabled:opacity-40
-                  dark:border-gray-700
-                  dark:text-indigo-400
-                  dark:hover:bg-indigo-500
-                  dark:hover:text-white"
-              >
-                Run Now
-              </button>
+              {j.last_run_status === "running" ? (
+                <button
+                  onClick={() => handleStop(j.job_id)}
+                  className="shrink-0 rounded-lg border
+                    border-red-300 bg-red-50 px-2.5
+                    py-1.5 text-[11px] font-semibold
+                    text-red-600 transition-all
+                    hover:bg-red-600 hover:text-white
+                    dark:border-red-700
+                    dark:bg-red-500/10
+                    dark:text-red-400
+                    dark:hover:bg-red-500
+                    dark:hover:text-white"
+                >
+                  Stop
+                </button>
+              ) : (
+                <button
+                  onClick={() =>
+                    handleTrigger(j.job_id)
+                  }
+                  className="shrink-0 rounded-lg border
+                    border-gray-200 px-2.5 py-1.5
+                    text-[11px] font-semibold
+                    text-indigo-600 transition-all
+                    hover:bg-indigo-600
+                    hover:text-white
+                    dark:border-gray-700
+                    dark:text-indigo-400
+                    dark:hover:bg-indigo-500
+                    dark:hover:text-white"
+                >
+                  Run Now
+                </button>
+              )}
               <button
                 onClick={() => onEditClick(j)}
                 className="shrink-0 flex h-[30px]
@@ -994,7 +1033,18 @@ function NewScheduleForm({
 // ---------------------------------------------------------------
 
 function RunTimeline() {
-  const { runs } = useSchedulerRuns();
+  const { runs, mutate } = useSchedulerRuns();
+
+  const handleCancel = useCallback(
+    async (runId: string) => {
+      await apiFetch(
+        `${API_URL}/admin/scheduler/runs/${runId}/cancel`,
+        { method: "POST" },
+      );
+      mutate();
+    },
+    [mutate],
+  );
 
   if (runs.length === 0) {
     return (
@@ -1014,6 +1064,7 @@ function RunTimeline() {
     success: "bg-emerald-500",
     running: "bg-indigo-500 animate-pulse",
     failed: "bg-red-500",
+    cancelled: "bg-orange-500",
   };
 
   return (
@@ -1091,6 +1142,23 @@ function RunTimeline() {
                     {r.tickers_done}/{r.tickers_total}{" "}
                     tickers
                   </span>
+                  {r.status === "running" && (
+                    <button
+                      onClick={() =>
+                        handleCancel(r.run_id)
+                      }
+                      className="ml-1 rounded-full
+                        bg-red-100 px-2.5 py-0.5
+                        text-[10px] font-semibold
+                        text-red-700 transition-all
+                        hover:bg-red-200
+                        dark:bg-red-500/15
+                        dark:text-red-400
+                        dark:hover:bg-red-500/25"
+                    >
+                      Stop
+                    </button>
+                  )}
                 </div>
               </div>
             ),
@@ -1107,7 +1175,8 @@ function RunTimeline() {
 
 export function SchedulerTab() {
   const { mutate: mutateJobs } = useSchedulerJobs();
-  const { mutate: mutateRuns } = useSchedulerRuns();
+  const { runs, mutate: mutateRuns } =
+    useSchedulerRuns();
   const { mutate: mutateStats } = useSchedulerStats();
   const [showForm, setShowForm] = useState(true);
   const [editingJob, setEditingJob] =
@@ -1144,6 +1213,7 @@ export function SchedulerTab() {
             setEditingJob(job);
             setShowForm(true);
           }}
+          runs={runs}
         />
         {showForm && (
           <NewScheduleForm

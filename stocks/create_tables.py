@@ -26,6 +26,10 @@ Tables created
 - ``stocks.quarterly_results``
 - ``stocks.llm_pricing``
 - ``stocks.llm_usage``
+- ``stocks.sentiment_scores``
+- ``stocks.portfolio_transactions``
+- ``stocks.query_log``
+- ``stocks.data_gaps``
 
 Migrated to PostgreSQL (no longer created here)
 ------------------------------------------------
@@ -85,6 +89,8 @@ _QUARTERLY_RESULTS_TABLE = f"{_NAMESPACE}.quarterly_results"
 _LLM_PRICING_TABLE = f"{_NAMESPACE}.llm_pricing"
 _LLM_USAGE_TABLE = f"{_NAMESPACE}.llm_usage"
 _SENTIMENT_SCORES_TABLE = f"{_NAMESPACE}.sentiment_scores"
+_QUERY_LOG_TABLE = f"{_NAMESPACE}.query_log"
+_DATA_GAPS_TABLE = f"{_NAMESPACE}.data_gaps"
 
 
 def _get_catalog() -> SqlCatalog:
@@ -1336,6 +1342,136 @@ def _sentiment_scores_schema() -> Schema:
     )
 
 
+def _query_log_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.query_log``.
+
+    Returns:
+        Schema: Per-query metadata for analytics and
+            data-gap detection.
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=2,
+            name="timestamp",
+            field_type=TimestampType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=3,
+            name="user_id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=4,
+            name="query_text",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=5,
+            name="classified_intent",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=6,
+            name="sub_agent_invoked",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=7,
+            name="tools_used",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=8,
+            name="data_sources_used",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=9,
+            name="was_local_sufficient",
+            field_type=BooleanType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=10,
+            name="response_time_ms",
+            field_type=IntegerType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=11,
+            name="gap_tickers",
+            field_type=StringType(),
+            required=False,
+        ),
+    )
+
+
+def _data_gaps_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.data_gaps``.
+
+    Returns:
+        Schema: Tracks tickers with stale or missing
+            data detected during query processing.
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=2,
+            name="detected_at",
+            field_type=TimestampType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=3,
+            name="ticker",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=4,
+            name="data_type",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=5,
+            name="query_count",
+            field_type=IntegerType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=6,
+            name="resolved_at",
+            field_type=TimestampType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=7,
+            name="resolution",
+            field_type=StringType(),
+            required=False,
+        ),
+    )
+
+
 def _create_table(
     catalog: SqlCatalog,
     identifier: str,
@@ -1362,7 +1498,7 @@ def _create_table(
 
 
 def create_tables() -> None:
-    """Create all 11 ``stocks`` Iceberg tables.
+    """Create all ``stocks`` Iceberg tables.
 
     This function is idempotent — calling it on an already-initialised
     catalog simply logs and returns.  Creates the ``stocks`` namespace
@@ -1468,6 +1604,22 @@ def create_tables() -> None:
         _SENTIMENT_SCORES_TABLE,
         ss_schema,
         _ticker_partition_spec(ss_schema),
+    )
+
+    # Query log (no partition — moderate volume)
+    _create_table(
+        catalog,
+        _QUERY_LOG_TABLE,
+        _query_log_schema(),
+        empty_spec,
+    )
+
+    # Data gaps (no partition — small table)
+    _create_table(
+        catalog,
+        _DATA_GAPS_TABLE,
+        _data_gaps_schema(),
+        empty_spec,
     )
 
     _logger.info("Stocks Iceberg table initialisation complete.")

@@ -52,6 +52,16 @@ export default function DashboardPage() {
       ) ?? [],
     [registryData.value],
   );
+  // India ticker set from registry (for filtering)
+  const indiaTickerSet = useMemo(
+    () =>
+      new Set(
+        (registryData.value?.tickers ?? [])
+          .filter((t) => t.market === "india")
+          .map((t) => t.ticker.toUpperCase()),
+      ),
+    [registryData.value],
+  );
   const [showAddStock, setShowAddStock] =
     useState(false);
   const [editingTicker, setEditingTicker] =
@@ -115,7 +125,8 @@ export default function DashboardPage() {
       (f) => {
         const isIndia =
           f.ticker.endsWith(".NS") ||
-          f.ticker.endsWith(".BO");
+          f.ticker.endsWith(".BO") ||
+          indiaTickerSet.has(f.ticker.toUpperCase());
         return marketFilter === "india"
           ? isIndia
           : !isIndia;
@@ -125,7 +136,7 @@ export default function DashboardPage() {
       ...forecasts,
       value: { forecasts: filtered },
     };
-  }, [forecasts, marketFilter]);
+  }, [forecasts, marketFilter, indiaTickerSet]);
 
   const filteredAnalysis = useMemo<
     DashboardData<AnalysisResponse>
@@ -135,7 +146,8 @@ export default function DashboardPage() {
       (a) => {
         const isIndia =
           a.ticker.endsWith(".NS") ||
-          a.ticker.endsWith(".BO");
+          a.ticker.endsWith(".BO") ||
+          indiaTickerSet.has(a.ticker.toUpperCase());
         return marketFilter === "india"
           ? isIndia
           : !isIndia;
@@ -145,7 +157,7 @@ export default function DashboardPage() {
       ...analysis,
       value: { analyses: filtered },
     };
-  }, [analysis, marketFilter]);
+  }, [analysis, marketFilter, indiaTickerSet]);
 
   // Auto-select first ticker from portfolio or watchlist
   const filteredPortfolio = useMemo(

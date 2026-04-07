@@ -67,7 +67,16 @@ def _update_registry(ticker: str, df: pd.DataFrame, file_path: Path) -> None:
     """
     from tools._stock_shared import _require_repo
 
-    market = "india" if ticker.upper().endswith((".NS", ".BO")) else "us"
+    from market_utils import detect_market
+
+    # Preserve existing market if present — don't
+    # overwrite "india" with "us".
+    existing_reg = _check_existing_data(ticker)
+    existing_mkt = None
+    if existing_reg:
+        existing_mkt = existing_reg.get("market")
+
+    market = detect_market(ticker, existing_mkt)
     _require_repo().upsert_registry(
         ticker=ticker,
         last_fetch_date=date.today(),

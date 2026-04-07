@@ -1,0 +1,11 @@
+symbol,name,isin,exchange,series,sector,industry,tags
+RELIANCE,Reliance Industries Limited,INE002A01018,NSE,EQ,Energy,Oil Gas & Consumable Fuels,nifty50|nifty100|nifty500|largecap
+TCS,Tata Consultancy Services Limited,INE467B01029,NSE,EQ,Information Technology,IT Services & Consulting,nifty50|nifty100|nifty500|largecap
+HDFCBANK,HDFC Bank Limited,INE040A01034,NSE,EQ,Financial Services,Banks,nifty50|nifty100|nifty500|largecap
+INFY,Infosys Limited,INE009A01021,NSE,EQ,Information Technology,IT Services & Consulting,nifty50|nifty100|nifty500|largecap
+ICICIBANK,ICICI Bank Limited,INE090A01021,NSE,EQ,Financial Services,Banks,nifty50|nifty100|nifty500|largecap
+HINDUNILVR,Hindustan Unilever Limited,INE030A01027,NSE,EQ,Fast Moving Consumer Goods,Personal Products,nifty50|nifty100|nifty500|largecap
+ITC,ITC Limited,INE154A01025,NSE,EQ,Fast Moving Consumer Goods,Cigarettes,nifty50|nifty100|nifty500|largecap
+BHARTIARTL,Bharti Airtel Limited,INE397D01024,NSE,EQ,Communication Services,Telecom Services,nifty50|nifty100|nifty500|largecap
+SBIN,State Bank of India,INE062A01020,NSE,EQ,Financial Services,Banks,nifty50|nifty100|nifty500|largecap
+KOTAKBANK,Kotak Mahindra Bank Limited,INE237A01028,NSE,EQ,Financial Services,Banks,nifty50|nifty100|nifty500|largecap

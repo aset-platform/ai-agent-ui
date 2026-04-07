@@ -547,7 +547,16 @@ def _load_ohlcv(ticker: str) -> pd.DataFrame | None:
             "adj_close" in df.columns
             and df["adj_close"].notna().mean() > 0.5
         )
-        adj_col = df["adj_close"] if use_adj else df["close"]
+        # Drop rows with NaN close — happens when
+        # yfinance returns today's intraday placeholder
+        # row before market close.
+        df = df.dropna(subset=["close"])
+        # Assign adj_col AFTER dropna to avoid stale
+        # index reference that reintroduces NaN.
+        adj_col = (
+            df["adj_close"] if use_adj else df["close"]
+        )
+
         result = pd.DataFrame(
             {
                 "Open": df["open"],
@@ -571,8 +580,25 @@ def _load_ohlcv(ticker: str) -> pd.DataFrame | None:
 
 
 def _is_indian_ticker(ticker: str) -> bool:
-    """Return True for NSE/BSE tickers."""
-    return ticker.endswith((".NS", ".BO"))
+    """Return True for NSE/BSE tickers.
+
+    Checks suffix first, then falls back to
+    stock_registry market field for canonical symbols.
+    """
+    if ticker.endswith((".NS", ".BO")):
+        return True
+    try:
+        from backend.tools._stock_shared import (
+            _require_repo,
+        )
+        reg = _require_repo().check_existing_data(ticker)
+        if reg and reg.get("market", "").upper() in (
+            "NSE", "BSE", "INDIA",
+        ):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _build_holidays_df(

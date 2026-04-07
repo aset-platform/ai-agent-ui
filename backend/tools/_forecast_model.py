@@ -175,5 +175,14 @@ def _generate_forecast(
         future_mask, ["ds", "yhat", "yhat_lower", "yhat_upper"]
     ].copy()
     result = result.reset_index(drop=True)
+
+    # Clamp negative predictions — stock prices cannot
+    # go below zero.  Prophet's additive model can produce
+    # negatives on stocks with sharp recent declines
+    # (e.g., demergers, structural breaks).
+    for col in ("yhat", "yhat_lower", "yhat_upper"):
+        if col in result.columns:
+            result[col] = result[col].clip(lower=0.01)
+
     _logger.debug("Forecast generated: %d future rows", len(result))
     return result

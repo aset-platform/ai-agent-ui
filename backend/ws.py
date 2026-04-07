@@ -302,6 +302,7 @@ async def _handle_chat(
                     agent_registry,
                     event_queue,
                     user_id,
+                    main_loop=_main_loop,
                 )
         except Exception as exc:
             _logger.warning(
@@ -578,13 +579,14 @@ def _run_graph(
     event_queue.put(final_event)
 
     # Track usage
-    if user_id:
+    if user_id and main_loop:
         try:
-            import asyncio
-
             from usage_tracker import increment_usage
 
-            asyncio.run(increment_usage(user_id))
+            asyncio.run_coroutine_threadsafe(
+                increment_usage(user_id),
+                main_loop,
+            )
         except Exception:
             _logger.debug(
                 "Usage tracking failed for %s",
@@ -599,6 +601,7 @@ def _run_legacy(
     agent_registry,
     event_queue,
     user_id=None,
+    main_loop=None,
 ):
     """Run legacy agent in worker thread."""
     from agents.router import route as _route
@@ -610,13 +613,16 @@ def _run_legacy(
     for event in agent.stream(message, history):
         event_queue.put(event)
 
-    if user_id:
+    if user_id and main_loop:
         try:
             import asyncio
 
             from usage_tracker import increment_usage
 
-            asyncio.run(increment_usage(user_id))
+            asyncio.run_coroutine_threadsafe(
+                increment_usage(user_id),
+                main_loop,
+            )
         except Exception:
             _logger.debug(
                 "Usage tracking failed for %s",

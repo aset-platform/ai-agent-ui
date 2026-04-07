@@ -2,6 +2,69 @@
 
 ---
 
+# Session: Apr 2–8, 2026 — Sprint 5: Stock Data Pipeline (Epic ASETPLTFRM-267)
+
+## Branch: `feature/sprint5` | Biggest sprint to date
+
+### Data Model (Alembic migration)
+
+- 4 new PostgreSQL tables: `stock_master`, `stock_tags`, `ingestion_cursor`, `ingestion_skipped`
+- Full Alembic migration applied; tables support soft-delete tags, crash-safe cursor tracking, and categorized skip/retry
+
+### Pipeline Module — `backend/pipeline/` (17 files)
+
+- **Sources:** `NseSource` (jugaad-data), `YfinanceSource` (yf.download batch), `RacingSource` (fastest-wins)
+- **Jobs:** `ohlcv`, `fundamentals`, `fill_gaps`, `seed_universe`
+- **Infrastructure:** cursor management, observability hooks, config, router, runner CLI
+- 12 CLI commands: `download`, `seed`, `bulk`, `bulk-download`, `fundamentals`, `daily`, `fill-gaps`, `status`, `skipped`, `retry`, `correct`, `reset`
+
+### Nifty 500 Universe
+
+- 499 stocks seeded from NSE index data (Nifty 50/100/500 with auto-tags: nifty50, nifty100, nifty500, largecap, midcap)
+- OHLCV loaded via yfinance batch (~2 min for all 499 tickers, 10-year history)
+- Fundamentals: company info + dividends fetched from yfinance
+- Company name gaps auto-filled via `backfill_company_names.py`
+
+### Scripts
+
+- `download_nifty500.py` — live NSE index download with merge + tagging
+- `bulk_download_ohlcv.py` — yfinance batch download (chunked, cursor-aware)
+- `backfill_company_names.py` — fills missing company names in stock_master
+
+### Market Detection + Ticker Standardization
+
+- Shared `market_utils.py` replaces 20+ scattered suffix-only checks across codebase
+- All Indian stocks standardized to `.NS` format (registry, Iceberg, scheduler, frontend)
+- Fixed `cache_warmup` poisoning from inconsistent ticker formats
+
+### Scheduler Integration
+
+- `yf_map` resolution for `.NS` tickers in scheduled jobs
+- Job cancellation (Stop button) for running scheduler jobs
+- 519 India tickers now visible in scheduler
+
+### Frontend Enhancements
+
+- Analytics cards: sparkline chart, change%, 4 action buttons (refresh, link, analysis, forecast)
+- Analysis/Compare dropdowns: merged registry + user tickers (all 500+ visible)
+- Dashboard: `indiaTickerSet` for market filtering
+- Insights Screener: superuser sees all registry tickers, Action column with Analysis/Forecast links
+- Stop button for running scheduler jobs
+- Forecast summary: accepts `?ticker=` param for unlinked tickers
+
+### Docker + Infrastructure
+
+- `.pyiceberg.yaml` mounted in container
+- `cache_warmup` registry disabled (avoids startup poisoning)
+- OHLCV price/sparkline enrichment on registry endpoint
+
+### Documentation
+
+- `docs/backend/stock-pipeline.md` — full usage guide (seed → bulk → daily → retry)
+- `mkdocs.yml` nav updated with pipeline docs
+
+---
+
 # Session: Apr 1, 2026 — Round-Robin Cascade, Memory Layer, Observability Redesign
 
 ## Branch: `feature/sprint4` | 7 commits | ~3,300 lines added | 755 tests

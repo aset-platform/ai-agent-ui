@@ -136,6 +136,9 @@ class RegistryTicker(BaseModel):
     market: str = "us"
     currency: str = "USD"
     current_price: float | None = None
+    change: float | None = None
+    change_pct: float | None = None
+    sparkline: list[float] = Field(default_factory=list)
     last_fetch_date: str | None = None
 
 

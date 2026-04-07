@@ -67,6 +67,7 @@ nav:
   - Stock Agent:
       - Overview: stock_agent.md
       - Iceberg Storage: backend/stocks_iceberg.md
+      - Data Pipeline: backend/stock-pipeline.md
   - Dashboard:
       - Overview: dashboard/overview.md
   - Frontend:

@@ -14,9 +14,13 @@ if _backend not in sys.path:
 
 from backend.db.base import Base
 from backend.db.models import (  # noqa: F401
+    IngestionCursor,
+    IngestionSkipped,
     PaymentTransaction,
     ScheduledJob,
+    StockMaster,
     StockRegistry,
+    StockTag,
     User,
     UserMemory,
     UserTicker,
