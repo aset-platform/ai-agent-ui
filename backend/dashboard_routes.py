@@ -43,6 +43,12 @@ from dashboard_models import (
     TickerForecast,
     TickerPrice,
     WatchlistResponse,
+    AllocationItem,
+    AllocationResponse,
+    NewsHeadline,
+    PortfolioNewsResponse,
+    Recommendation,
+    RecommendationsResponse,
 )
 from fastapi import APIRouter, Depends, Query, Response
 
@@ -1291,6 +1297,535 @@ def create_dashboard_router() -> APIRouter:
         )
         return result
 
+    # ── W1: Sector Allocation (ASETPLTFRM-287) ────────
+
+    @router.get(
+        "/portfolio/allocation",
+        response_model=AllocationResponse,
+    )
+    async def get_portfolio_allocation(
+        market: str = Query(
+            "india",
+            description="india|us",
+        ),
+        user: UserContext = Depends(get_current_user),
+    ):
+        """Sector allocation breakdown for portfolio."""
+        cache = get_cache()
+        cache_key = (
+            f"cache:portfolio:alloc"
+            f":{user.user_id}:{market}"
+        )
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        stock_repo = _get_stock_repo()
+        holdings = stock_repo.get_portfolio_holdings(
+            user.user_id,
+        )
+        if holdings.empty:
+            return AllocationResponse()
+
+        # Filter by market
+        holdings = holdings[
+            holdings["ticker"].apply(
+                lambda t: detect_market(t) == market,
+            )
+        ]
+        if holdings.empty:
+            return AllocationResponse()
+
+        tickers = holdings["ticker"].unique().tolist()
+        info_df = stock_repo.get_company_info_batch(
+            tickers,
+        )
+        ohlcv_df = stock_repo.get_ohlcv_batch(tickers)
+
+        info_map: dict = {}
+        if not info_df.empty:
+            for _, row in info_df.iterrows():
+                info_map[row["ticker"]] = row.to_dict()
+
+        # Build sector → holdings map
+        sector_data: dict[str, dict] = {}
+        total_value = 0.0
+
+        for _, h in holdings.iterrows():
+            ticker = h["ticker"]
+            qty = float(h.get("quantity", 0))
+            info = info_map.get(ticker, {})
+            sector = info.get("sector") or "Unknown"
+
+            # Current price from OHLCV
+            cur = 0.0
+            t_df = ohlcv_df[
+                ohlcv_df["ticker"] == ticker
+            ] if not ohlcv_df.empty else ohlcv_df
+            t_valid = t_df.dropna(subset=["close"])
+            if not t_valid.empty:
+                cur = float(t_valid.iloc[-1]["close"])
+
+            mkt_val = qty * cur
+            total_value += mkt_val
+
+            if sector not in sector_data:
+                sector_data[sector] = {
+                    "value": 0.0,
+                    "tickers": [],
+                }
+            sector_data[sector]["value"] += mkt_val
+            sector_data[sector]["tickers"].append(
+                ticker,
+            )
+
+        sectors = []
+        for sec, data in sorted(
+            sector_data.items(),
+            key=lambda x: x[1]["value"],
+            reverse=True,
+        ):
+            weight = (
+                (data["value"] / total_value * 100)
+                if total_value > 0 else 0.0
+            )
+            sectors.append(
+                AllocationItem(
+                    sector=sec,
+                    value=round(data["value"], 2),
+                    weight_pct=round(weight, 2),
+                    stock_count=len(data["tickers"]),
+                    tickers=data["tickers"],
+                )
+            )
+
+        currency = detect_market(tickers[0])
+        currency_str = (
+            "INR" if currency == "india" else "USD"
+        )
+        result = AllocationResponse(
+            sectors=sectors,
+            total_value=round(total_value, 2),
+            currency=currency_str,
+        )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_STABLE,
+        )
+        return result
+
+    # ── W4: News & Sentiment (ASETPLTFRM-290) ─────────
+
+    @router.get(
+        "/portfolio/news",
+        response_model=PortfolioNewsResponse,
+    )
+    async def get_portfolio_news(
+        market: str = Query(
+            "india",
+            description="india|us",
+        ),
+        user: UserContext = Depends(get_current_user),
+    ):
+        """Recent news headlines for portfolio holdings
+        with aggregated sentiment."""
+        cache = get_cache()
+        cache_key = (
+            f"cache:portfolio:news"
+            f":{user.user_id}:{market}"
+        )
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        stock_repo = _get_stock_repo()
+        holdings = stock_repo.get_portfolio_holdings(
+            user.user_id,
+        )
+        if holdings.empty:
+            return PortfolioNewsResponse()
+
+        holdings = holdings[
+            holdings["ticker"].apply(
+                lambda t: detect_market(t) == market,
+            )
+        ]
+        if holdings.empty:
+            return PortfolioNewsResponse()
+
+        tickers = holdings["ticker"].unique().tolist()
+
+        import yfinance as yf
+        from datetime import datetime, timezone
+
+        all_headlines: list[NewsHeadline] = []
+        for ticker in tickers[:10]:
+            try:
+                t = yf.Ticker(ticker)
+                news = t.news or []
+                for item in news[:3]:
+                    c = item.get("content", item)
+                    prov = c.get("provider", {})
+                    canon = c.get("canonicalUrl", {})
+                    title = (
+                        c.get("title")
+                        or item.get("title", "")
+                    )
+                    if not title:
+                        continue
+                    pub = (
+                        c.get("pubDate")
+                        or item.get(
+                            "providerPublishTime", "",
+                        )
+                    )
+                    if isinstance(pub, (int, float)):
+                        pub = datetime.fromtimestamp(
+                            pub, tz=timezone.utc,
+                        ).isoformat()
+                    all_headlines.append(
+                        NewsHeadline(
+                            title=title,
+                            url=(
+                                canon.get("url")
+                                or item.get("link", "")
+                            ),
+                            source=(
+                                prov.get("displayName")
+                                or item.get(
+                                    "publisher", "",
+                                )
+                            ),
+                            published_at=str(pub),
+                            ticker=ticker,
+                        )
+                    )
+            except Exception:
+                _logger.debug(
+                    "News fetch failed for %s",
+                    ticker,
+                )
+
+        # Sort by date descending, take top 10
+        all_headlines.sort(
+            key=lambda h: h.published_at,
+            reverse=True,
+        )
+        all_headlines = all_headlines[:10]
+
+        # Aggregate portfolio sentiment from Iceberg
+        total_weight = 0.0
+        weighted_score = 0.0
+        for _, h in holdings.iterrows():
+            ticker = h["ticker"]
+            qty = float(h.get("quantity", 0))
+            try:
+                series = (
+                    stock_repo.get_sentiment_series(
+                        ticker,
+                    )
+                )
+                if not series.empty:
+                    score = float(
+                        series["avg_score"].iloc[-1],
+                    )
+                    weighted_score += score * qty
+                    total_weight += qty
+            except Exception:
+                pass
+
+        port_sentiment = (
+            (weighted_score / total_weight)
+            if total_weight > 0 else 0.0
+        )
+        port_label = _sentiment_label(port_sentiment)
+
+        result = PortfolioNewsResponse(
+            headlines=all_headlines,
+            portfolio_sentiment=round(
+                port_sentiment, 2,
+            ),
+            portfolio_sentiment_label=port_label,
+        )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            900,  # 15 min TTL for news
+        )
+        return result
+
+    # ── W5: Recommendations (ASETPLTFRM-291) ──────────
+
+    @router.get(
+        "/portfolio/recommendations",
+        response_model=RecommendationsResponse,
+    )
+    async def get_portfolio_recommendations(
+        market: str = Query(
+            "india",
+            description="india|us",
+        ),
+        user: UserContext = Depends(get_current_user),
+    ):
+        """Actionable rebalancing and risk suggestions."""
+        cache = get_cache()
+        cache_key = (
+            f"cache:portfolio:recs"
+            f":{user.user_id}:{market}"
+        )
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        stock_repo = _get_stock_repo()
+        holdings = stock_repo.get_portfolio_holdings(
+            user.user_id,
+        )
+        if holdings.empty:
+            return RecommendationsResponse()
+
+        holdings = holdings[
+            holdings["ticker"].apply(
+                lambda t: detect_market(t) == market,
+            )
+        ]
+        if holdings.empty:
+            return RecommendationsResponse()
+
+        tickers = holdings["ticker"].unique().tolist()
+        info_df = stock_repo.get_company_info_batch(
+            tickers,
+        )
+        ohlcv_df = stock_repo.get_ohlcv_batch(tickers)
+        analysis_df = (
+            stock_repo.get_dashboard_analysis(tickers)
+        )
+
+        info_map: dict = {}
+        if not info_df.empty:
+            for _, row in info_df.iterrows():
+                info_map[row["ticker"]] = row.to_dict()
+
+        # Build holdings with current values
+        recs: list[Recommendation] = []
+        total_value = 0.0
+        holding_data: list[dict] = []
+        sector_totals: dict[str, float] = {}
+
+        for _, h in holdings.iterrows():
+            ticker = h["ticker"]
+            qty = float(h.get("quantity", 0))
+            avg = float(h.get("avg_price", 0))
+            info = info_map.get(ticker, {})
+            sector = info.get("sector") or "Unknown"
+
+            cur = 0.0
+            t_df = ohlcv_df[
+                ohlcv_df["ticker"] == ticker
+            ] if not ohlcv_df.empty else ohlcv_df
+            t_valid = t_df.dropna(subset=["close"])
+            if not t_valid.empty:
+                cur = float(t_valid.iloc[-1]["close"])
+
+            mkt_val = qty * cur
+            total_value += mkt_val
+            pnl_pct = (
+                ((cur - avg) / avg * 100)
+                if avg > 0 else 0.0
+            )
+
+            holding_data.append({
+                "ticker": ticker,
+                "qty": qty,
+                "avg": avg,
+                "current": cur,
+                "value": mkt_val,
+                "pnl_pct": pnl_pct,
+                "sector": sector,
+            })
+            sector_totals[sector] = (
+                sector_totals.get(sector, 0.0)
+                + mkt_val
+            )
+
+        # Rule 1: Single stock overweight (>20%)
+        for hd in holding_data:
+            weight = (
+                (hd["value"] / total_value * 100)
+                if total_value > 0 else 0.0
+            )
+            if weight > 20:
+                recs.append(Recommendation(
+                    type="overweight",
+                    severity="high",
+                    title=(
+                        f"{hd['ticker']} is "
+                        f"overweight ({weight:.0f}%)"
+                    ),
+                    description=(
+                        "Single stock exceeds 20% "
+                        "of portfolio. Consider "
+                        "trimming to reduce "
+                        "concentration risk."
+                    ),
+                    ticker=hd["ticker"],
+                    metric_value=round(weight, 1),
+                    threshold=20.0,
+                ))
+
+        # Rule 2: Sector concentration (>35%)
+        for sec, sec_val in sector_totals.items():
+            sec_wt = (
+                (sec_val / total_value * 100)
+                if total_value > 0 else 0.0
+            )
+            if sec_wt > 35:
+                recs.append(Recommendation(
+                    type="sector_concentration",
+                    severity="high",
+                    title=(
+                        f"{sec} sector is "
+                        f"concentrated ({sec_wt:.0f}%)"
+                    ),
+                    description=(
+                        "Sector exceeds 35% of "
+                        "portfolio. Diversify "
+                        "across sectors to reduce "
+                        "sector-specific risk."
+                    ),
+                    metric_value=round(sec_wt, 1),
+                    threshold=35.0,
+                ))
+
+        # Rule 3: Missing major sectors
+        # Use yfinance sector names (not custom labels)
+        major = {
+            "Technology",
+            "Financial Services",
+            "Healthcare",
+        }
+        present = set(sector_totals.keys())
+        for sec in major - present:
+            recs.append(Recommendation(
+                type="missing_sector",
+                severity="medium",
+                title=f"No exposure to {sec}",
+                description=(
+                    f"Consider adding {sec} "
+                    f"stocks for broader "
+                    f"diversification."
+                ),
+                metric_value=0.0,
+                threshold=0.0,
+            ))
+
+        # Rule 4: Underperformers (<-15% + bearish)
+        analysis_map: dict = {}
+        if not analysis_df.empty:
+            for _, row in analysis_df.iterrows():
+                analysis_map[
+                    str(row["ticker"])
+                ] = row.to_dict()
+
+        for hd in holding_data:
+            if hd["pnl_pct"] < -15:
+                an = analysis_map.get(
+                    hd["ticker"], {},
+                )
+                rsi_sig = str(
+                    an.get("rsi_signal", ""),
+                ).lower()
+                macd_sig = str(
+                    an.get("macd_signal_text", ""),
+                ).lower()
+                bearish = (
+                    "bear" in rsi_sig
+                    or "below" in rsi_sig
+                    or "bear" in macd_sig
+                )
+                if bearish:
+                    recs.append(Recommendation(
+                        type="underperformer",
+                        severity="medium",
+                        title=(
+                            f"{hd['ticker']} down "
+                            f"{hd['pnl_pct']:.1f}% "
+                            f"with bearish signals"
+                        ),
+                        description=(
+                            "Stock has significant "
+                            "unrealized loss and "
+                            "bearish technical "
+                            "indicators. Review "
+                            "position."
+                        ),
+                        ticker=hd["ticker"],
+                        metric_value=round(
+                            hd["pnl_pct"], 1,
+                        ),
+                        threshold=-15.0,
+                    ))
+
+        # Rule 5: Low diversification (<5 holdings)
+        if len(holding_data) < 5:
+            recs.append(Recommendation(
+                type="low_diversification",
+                severity="low",
+                title=(
+                    f"Only {len(holding_data)} "
+                    f"holdings"
+                ),
+                description=(
+                    "Portfolio has fewer than 5 "
+                    "stocks. Consider adding "
+                    "more for diversification."
+                ),
+                metric_value=float(
+                    len(holding_data),
+                ),
+                threshold=5.0,
+            ))
+
+        # Sort by severity
+        sev_order = {"high": 0, "medium": 1, "low": 2}
+        recs.sort(
+            key=lambda r: sev_order.get(
+                r.severity, 3,
+            ),
+        )
+        recs = recs[:6]
+
+        # Portfolio health
+        high_count = sum(
+            1 for r in recs if r.severity == "high"
+        )
+        health = (
+            "At Risk" if high_count >= 2
+            else "Needs Attention" if high_count >= 1
+            else "Healthy"
+        )
+
+        result = RecommendationsResponse(
+            recommendations=recs,
+            portfolio_health=health,
+        )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_STABLE,
+        )
+        return result
+
     return router
 
 
@@ -1318,6 +1853,15 @@ def _is_currency_match(
         (currency == "INR" and mkt == "india")
         or (currency == "USD" and mkt == "us")
     )
+
+
+def _sentiment_label(score: float) -> str:
+    """Map sentiment score to label."""
+    if score >= 0.2:
+        return "Bullish"
+    if score <= -0.2:
+        return "Bearish"
+    return "Neutral"
 
 
 def _safe_float(val) -> float:

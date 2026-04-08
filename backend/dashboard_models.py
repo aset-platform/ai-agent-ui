@@ -292,6 +292,63 @@ class PortfolioPerformanceResponse(BaseModel):
     currency: str = "USD"
 
 
+# ----------------------------------------------------------
+# Portfolio Analytics (Sprint 6 — W1, W4, W5)
+# ----------------------------------------------------------
+
+
+class AllocationItem(BaseModel):
+    sector: str
+    value: float
+    weight_pct: float
+    stock_count: int
+    tickers: list[str] = Field(default_factory=list)
+
+
+class AllocationResponse(BaseModel):
+    sectors: list[AllocationItem] = Field(
+        default_factory=list,
+    )
+    total_value: float = 0.0
+    currency: str = "INR"
+
+
+class NewsHeadline(BaseModel):
+    title: str
+    url: str
+    source: str
+    published_at: str
+    ticker: str | None = None
+    sentiment: float = 0.0
+
+
+class PortfolioNewsResponse(BaseModel):
+    headlines: list[NewsHeadline] = Field(
+        default_factory=list,
+    )
+    portfolio_sentiment: float = 0.0
+    portfolio_sentiment_label: str = "Neutral"
+    market_sentiment: float = 0.0
+    market_sentiment_label: str = "Neutral"
+
+
+class Recommendation(BaseModel):
+    type: str
+    severity: str
+    title: str
+    description: str
+    ticker: str | None = None
+    metric_value: float = 0.0
+    threshold: float = 0.0
+
+
+class RecommendationsResponse(BaseModel):
+    recommendations: list[Recommendation] = Field(
+        default_factory=list,
+    )
+    portfolio_health: str = "Healthy"
+
+
 class PortfolioForecastPoint(BaseModel):
     date: str
     predicted: float
