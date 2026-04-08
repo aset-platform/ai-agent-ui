@@ -45,6 +45,8 @@ from dashboard_models import (
     WatchlistResponse,
     AllocationItem,
     AllocationResponse,
+    BacktestPoint,
+    ForecastBacktestResponse,
     NewsHeadline,
     PortfolioNewsResponse,
     Recommendation,
@@ -1092,6 +1094,73 @@ def create_dashboard_router() -> APIRouter:
         result = ForecastSeriesResponse(
             ticker=t_upper,
             horizon_months=horizon,
+            data=points,
+        )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_STABLE,
+        )
+        return result
+
+    # ── Forecast Backtest Overlay (ASETPLTFRM-280) ───
+
+    @router.get(
+        "/chart/forecast-backtest",
+        response_model=ForecastBacktestResponse,
+    )
+    async def get_chart_forecast_backtest(
+        ticker: str = Query(
+            ...,
+            description="Ticker symbol",
+        ),
+        user: UserContext = Depends(get_current_user),
+    ):
+        """Backtest predictions vs actuals for overlay."""
+        cache = get_cache()
+        t_upper = ticker.upper()
+        cache_key = (
+            f"cache:chart:backtest:{t_upper}"
+        )
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        stock_repo = _get_stock_repo()
+        # horizon_months=0 is the backtest convention
+        df = stock_repo.get_latest_forecast_series(
+            t_upper, 0,
+        )
+
+        if df.empty:
+            return ForecastBacktestResponse(
+                ticker=t_upper,
+            )
+
+        points: list[BacktestPoint] = []
+        for _, row in df.iterrows():
+            predicted = float(
+                row.get("predicted_price", 0),
+            )
+            # actual stored in lower_bound column
+            actual = float(
+                row.get("lower_bound", 0),
+            )
+            points.append(
+                BacktestPoint(
+                    date=str(
+                        row.get("forecast_date", ""),
+                    ),
+                    predicted=round(predicted, 2),
+                    actual=round(actual, 2),
+                )
+            )
+
+        result = ForecastBacktestResponse(
+            ticker=t_upper,
             data=points,
         )
         cache.set(

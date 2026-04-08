@@ -349,6 +349,19 @@ class RecommendationsResponse(BaseModel):
     portfolio_health: str = "Healthy"
 
 
+class BacktestPoint(BaseModel):
+    date: str
+    predicted: float
+    actual: float
+
+
+class ForecastBacktestResponse(BaseModel):
+    ticker: str = ""
+    data: list[BacktestPoint] = Field(
+        default_factory=list,
+    )
+
+
 class PortfolioForecastPoint(BaseModel):
     date: str
     predicted: float

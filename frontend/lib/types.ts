@@ -541,6 +541,21 @@ export interface RecommendationsResponse {
   portfolio_health: string;
 }
 
+// ---------------------------------------------------------------
+// Forecast Backtest Overlay
+// ---------------------------------------------------------------
+
+export interface BacktestPoint {
+  date: string;
+  predicted: number;
+  actual: number;
+}
+
+export interface ForecastBacktestResponse {
+  ticker: string;
+  data: BacktestPoint[];
+}
+
 export interface TierHealthResponse {
   timestamp: number;
   health: {

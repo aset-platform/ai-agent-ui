@@ -18,6 +18,7 @@ import type {
   RegistryResponse,
   DashboardHomeResponse,
   AllocationResponse,
+  ForecastBacktestResponse,
   PortfolioNewsResponse,
   PortfolioPerformanceResponse,
   RecommendationsResponse,
@@ -122,6 +123,28 @@ export function useRecommendations(
   return useDashboardData<RecommendationsResponse>(
     `/dashboard/portfolio/recommendations?market=${market}`,
   );
+}
+
+export function useForecastBacktest(
+  ticker: string | null,
+): DashboardData<ForecastBacktestResponse> {
+  const url = ticker
+    ? `${API_URL}/dashboard/chart/forecast-backtest?ticker=${ticker}`
+    : null;
+  const { data, error, isLoading } =
+    useSWR<ForecastBacktestResponse>(url, fetcher, {
+      revalidateOnFocus: false,
+      dedupingInterval: 120_000,
+    });
+  return {
+    value: data ?? null,
+    loading: isLoading,
+    error: error
+      ? error instanceof Error
+        ? error.message
+        : "Failed to load"
+      : null,
+  };
 }
 
 /**

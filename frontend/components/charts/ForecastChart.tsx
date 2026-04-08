@@ -29,6 +29,8 @@ interface ForecastChartProps {
   forecastPredicted: number[];
   forecastUpper: number[];
   forecastLower: number[];
+  backtestDates?: string[];
+  backtestPredicted?: number[];
   isDark: boolean;
   height?: number;
   onCrosshairMove?: (info: {
@@ -47,6 +49,8 @@ export function ForecastChart({
   forecastPredicted,
   forecastUpper,
   forecastLower,
+  backtestDates,
+  backtestPredicted,
   isDark: isDarkProp,
   height = 550,
   onCrosshairMove,
@@ -268,6 +272,36 @@ export function ForecastChart({
           .map((d, i) => ({
             time: d as Time,
             value: forecastPredicted[i],
+          }))
+          .filter(
+            (pt) =>
+              pt.value != null &&
+              typeof pt.value === "number",
+          ),
+      );
+    }
+
+    // Backtest overlay (orange dashed)
+    if (
+      backtestDates?.length &&
+      backtestPredicted?.length
+    ) {
+      const btSeries = chart.addSeries(
+        LineSeries,
+        {
+          color: "#f97316",
+          lineWidth: 2,
+          lineStyle: 2,
+          priceScaleId: "right",
+          lastValueVisible: false,
+          priceLineVisible: false,
+        },
+      );
+      btSeries.setData(
+        backtestDates
+          .map((d, i) => ({
+            time: d as Time,
+            value: backtestPredicted[i],
           }))
           .filter(
             (pt) =>

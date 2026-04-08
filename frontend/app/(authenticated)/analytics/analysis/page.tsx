@@ -49,6 +49,7 @@ const PortfolioForecastChart = dynamic(
 import type {
   OHLCVResponse,
   IndicatorsResponse,
+  ForecastBacktestResponse,
   ForecastSeriesResponse,
   ForecastsResponse,
   TickerForecast,
@@ -489,6 +490,8 @@ function ForecastTab({ ticker }: { ticker: string }) {
     useState<ForecastSeriesResponse | null>(null);
   const [summary, setSummary] =
     useState<TickerForecast | null>(null);
+  const [backtest, setBacktest] =
+    useState<ForecastBacktestResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [horizon, setHorizon] =
@@ -523,11 +526,18 @@ function ForecastTab({ ticker }: { ticker: string }) {
         }
         return r.json() as Promise<ForecastsResponse>;
       }),
+      apiFetch(
+        `${API_URL}/dashboard/chart/forecast-backtest?ticker=${q}`,
+      ).then((r) => {
+        if (!r.ok) return null;
+        return r.json() as Promise<ForecastBacktestResponse>;
+      }).catch(() => null),
     ])
-      .then(([o, fs, sum]) => {
+      .then(([o, fs, sum, bt]) => {
         if (cancelled) return;
         setOhlcv(o);
         setSeries(fs);
+        setBacktest(bt);
         const match = sum.forecasts.find(
           (f) =>
             f.ticker.toUpperCase() ===
@@ -715,6 +725,16 @@ function ForecastTab({ ticker }: { ticker: string }) {
           forecastLower={
             truncatedSeries?.data.map(
               (d) => d.lower,
+            ) ?? []
+          }
+          backtestDates={
+            backtest?.data.map(
+              (d) => d.date,
+            ) ?? []
+          }
+          backtestPredicted={
+            backtest?.data.map(
+              (d) => d.predicted,
             ) ?? []
           }
           isDark={fcIsDark}

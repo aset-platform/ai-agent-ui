@@ -118,10 +118,21 @@ def _calculate_forecast_accuracy(
             rmse,
             mape,
         )
+        # Deduplicate backtest: keep last prediction
+        # per date (multiple folds may predict same ds).
+        bt = (
+            df_cv[["ds", "yhat", "y"]]
+            .groupby("ds")
+            .last()
+            .reset_index()
+            .sort_values("ds")
+        )
+
         return {
             "MAE": round(mae, 2),
             "RMSE": round(rmse, 2),
             "MAPE_pct": round(mape, 2),
+            "backtest_df": bt,
         }
     except Exception as exc:
         _logger.warning(

@@ -285,6 +285,7 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
 
         # Inline backtest when no prior accuracy exists
         # (first forecast for this ticker/horizon).
+        backtest_df = None
         if not accuracy:
             from tools._forecast_accuracy import (
                 _calculate_forecast_accuracy,
@@ -301,6 +302,9 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             )
             if "error" not in _inline:
                 accuracy = _inline
+                backtest_df = _inline.get(
+                    "backtest_df",
+                )
             else:
                 _logger.info(
                     "Inline backtest: %s",
@@ -327,7 +331,31 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             _run_dict["rmse"] = accuracy.get("RMSE")
             _run_dict["mape"] = accuracy.get("MAPE_pct")
         repo.insert_forecast_run(ticker, months, _run_dict)
-        repo.insert_forecast_series(ticker, months, _run_date, forecast_df)
+        repo.insert_forecast_series(
+            ticker, months, _run_date, forecast_df,
+        )
+
+        # Persist backtest overlay (horizon_months=0)
+        if backtest_df is not None and not backtest_df.empty:
+            _bt = backtest_df.copy()
+            # Map df_cv columns to forecasts schema:
+            # ds → ds, yhat → yhat, y stored in
+            # yhat_lower (actual price for overlay)
+            _bt = _bt.rename(columns={"y": "yhat_lower"})
+            _bt["yhat_upper"] = _bt["yhat"]
+            try:
+                repo.insert_forecast_series(
+                    ticker, 0, _run_date, _bt,
+                )
+                _logger.info(
+                    "Saved %d backtest points for %s",
+                    len(_bt), ticker,
+                )
+            except Exception:
+                _logger.debug(
+                    "Backtest save failed for %s",
+                    ticker, exc_info=True,
+                )
 
         sentiment_emoji = {
             "Bullish": "🟢 BULLISH",
