@@ -11,7 +11,7 @@
  * previous state when it closes.
  */
 
-import {
+import React, {
   useEffect,
   useMemo,
   useRef,
@@ -253,6 +253,39 @@ export function Sidebar({ profile }: SidebarProps) {
 
   const collapsed = sidebarCollapsed;
 
+  // Flyout popover state for collapsed nav groups
+  const [flyoutTop, setFlyoutTop] = useState(0);
+  const [flyoutVisible, setFlyoutVisible] = useState(false);
+  const flyoutTimeout = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+
+  function showFlyout(e: React.MouseEvent) {
+    if (flyoutTimeout.current) {
+      clearTimeout(flyoutTimeout.current);
+      flyoutTimeout.current = null;
+    }
+    const rect = (
+      e.currentTarget as HTMLElement
+    ).getBoundingClientRect();
+    setFlyoutTop(rect.top);
+    setFlyoutVisible(true);
+  }
+
+  function hideFlyout() {
+    flyoutTimeout.current = setTimeout(
+      () => setFlyoutVisible(false),
+      150,
+    );
+  }
+
+  function cancelHideFlyout() {
+    if (flyoutTimeout.current) {
+      clearTimeout(flyoutTimeout.current);
+      flyoutTimeout.current = null;
+    }
+  }
+
   // ---- Shared nav item renderer ----
 
   function renderNavItem(
@@ -316,10 +349,105 @@ export function Sidebar({ profile }: SidebarProps) {
     const isActive =
       isAnyChildActive || isParentExact;
 
-    // In collapsed desktop mode, render as a
-    // simple link (no expand/collapse).
+    // In collapsed desktop mode, show icon with
+    // a hover flyout for child links.
     if (!mobile && collapsed) {
-      return renderNavItem(item, false);
+      const parentIconClasses = [
+        "flex items-center gap-3 text-sm",
+        "rounded-lg transition-colors px-3 py-2.5",
+        isActive
+          ? [
+              "bg-indigo-50 dark:bg-indigo-900/30",
+              "text-indigo-600 dark:text-indigo-400",
+              "font-medium",
+              "border-l-2 border-indigo-500",
+            ].join(" ")
+          : [
+              "text-gray-600 dark:text-gray-400",
+              "hover:bg-gray-100",
+              "dark:hover:bg-gray-800",
+            ].join(" "),
+      ].join(" ");
+
+      return (
+        <React.Fragment key={item.view + "-group"}>
+          <div
+            onMouseEnter={showFlyout}
+            onMouseLeave={hideFlyout}
+          >
+            <Link
+              href={item.href}
+              className={parentIconClasses}
+              data-testid={`sidebar-group-${item.view}`}
+            >
+              <span className="shrink-0">
+                {item.icon}
+              </span>
+            </Link>
+          </div>
+
+          {/* Flyout popover — fixed position to escape
+              overflow-y-auto clipping on <nav> */}
+          {flyoutVisible && (
+            <div
+              className={[
+                "fixed left-[62px]",
+                "bg-white dark:bg-gray-800",
+                "rounded-lg shadow-lg shadow-black/20",
+                "border border-gray-200",
+                "dark:border-gray-700",
+                "py-1.5 min-w-[160px] z-50",
+              ].join(" ")}
+              style={{ top: flyoutTop }}
+              onMouseEnter={cancelHideFlyout}
+              onMouseLeave={hideFlyout}
+            >
+              {children.map((child) => {
+                const childActive =
+                  pathname === child.href;
+                const flyoutClasses = [
+                  "flex items-center gap-3 text-sm",
+                  "px-3 py-2 mx-1.5 rounded-md",
+                  "transition-colors",
+                  childActive
+                    ? [
+                        "bg-indigo-50",
+                        "dark:bg-indigo-900/30",
+                        "text-indigo-600",
+                        "dark:text-indigo-400",
+                        "font-medium",
+                      ].join(" ")
+                    : [
+                        "text-gray-600",
+                        "dark:text-gray-400",
+                        "hover:bg-gray-100",
+                        "dark:hover:bg-gray-800",
+                      ].join(" "),
+                ].join(" ");
+
+                return (
+                  <Link
+                    key={child.href}
+                    href={child.href}
+                    className={flyoutClasses}
+                    onClick={() =>
+                      setFlyoutVisible(false)
+                    }
+                    data-testid={`sidebar-flyout-${child.label.toLowerCase().replace(/\s+/g, "-")}`}
+                  >
+                    <span className="shrink-0">
+                      {child.icon}
+                    </span>
+                    <span className="truncate">
+                      {child.label}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </React.Fragment>
+      );
     }
 
     const parentClasses = [
