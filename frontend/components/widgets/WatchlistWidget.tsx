@@ -9,7 +9,7 @@ import type { PortfolioHolding } from "@/hooks/usePortfolio";
 import { WidgetSkeleton } from "./WidgetSkeleton";
 import { WidgetError } from "./WidgetError";
 
-const PAGE_SIZE = 18;
+const PAGE_SIZE = 10;
 
 interface WatchlistWidgetProps {
   data: DashboardData<WatchlistResponse>;

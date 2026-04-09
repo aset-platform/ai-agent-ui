@@ -55,6 +55,9 @@ All pages fully migrated from Dash to Next.js.
 ./run.sh restart frontend                   # restart only frontend
 ./run.sh restart backend                    # restart only backend
 ./run.sh stop redis                         # stop only redis
+./run.sh rebuild frontend                   # rebuild image + restart (after code changes)
+./run.sh rebuild backend                    # rebuild image + restart
+./run.sh build                              # build all images (no restart)
 ./run.sh status                             # service health table
 ./run.sh logs backend                       # Docker service logs
 ./run.sh logs backend -f                    # follow Docker logs
@@ -74,7 +77,7 @@ ollama-profile embedding                    # load nomic-embed-text (memory vect
 ollama-profile status                       # check loaded model
 ```
 
-**Key dirs**: `backend/` (agents, tools, config), `backend/pipeline/` (stock data pipeline, 12 CLI commands), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 14 OLAP tables), `frontend/` (SPA), `dashboard/` (Dash callbacks, imported by backend), `hooks/` (pre-commit, pre-push).
+**Key dirs**: `backend/` (agents, tools, config), `backend/pipeline/` (stock data pipeline, 12 CLI commands), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 14 OLAP tables), `frontend/` (SPA), `dashboard/` (legacy Dash callbacks — all pages migrated to Next.js), `hooks/` (pre-commit, pre-push).
 
 **Docker files**: `Dockerfile.backend`, `Dockerfile.frontend`,
 `Dockerfile.docs`, `docker-compose.yml`,
@@ -205,19 +208,9 @@ These rules MUST be followed in every interaction:
 
 ## Serena Shared Memories
 
-For detailed architecture, conventions, debugging, and onboarding
-knowledge, use Serena's shared memories. Run `list_memories` to
-see all available topics.
-
-| Category | Topics |
-|----------|--------|
-| `shared/architecture/` | system-overview, agent-init-pattern, groq-chunking, iceberg-data-layer, auth-jwt-flow, langsmith-observability, lighthouse-performance-workflow, subscription-billing, portfolio-analytics, currency-aware-agent, token-budget-concurrency, payment-transaction-ledger, sentiment-agent, iceberg-column-projection, llm-cascade-profiles, docker-containerization, redis-cache-layer, per-ticker-refresh, api-versioning, security-hardening-patterns, hybrid-db-postgresql-iceberg, context-aware-chat, intent-aware-routing, summary-based-context, interactive-stock-discovery, memory-augmented-chat, round-robin-cascade, ollama-local-llm, **stock-data-pipeline** |
-| `shared/conventions/` | python-style, typescript-style, git-workflow, testing-patterns, performance, error-handling, llm-tool-forcing, jira-mcp-usage, security-hardening, e2e-test-patterns, isort-black-exclude-virtualenv, git-push-workflow, **ticker-format-standard** |
-| `shared/debugging/` | common-issues, mock-patching-gotchas, chat-session-recording, cookie-hostname-mismatch, ohlcv-nan-close-price, razorpay-integration-gotchas, iceberg-epoch-dates, portfolio-watchlist-sync, iceberg-table-corruption-recovery, razorpay-customer-exists, playwright-react19-dash-patterns, asyncpg-sync-async-bridge, llm-hallucination-guardrail, sync-async-migration-patterns, payment-cookie-redirect, bind-tools-model-lookup, **pipeline-common-issues** |
-| `shared/onboarding/` | setup-guide, test-venv-setup, tooling |
-| `shared/api/` | streaming-protocol |
-
-Load any memory with `read_memory` when you need the details.
+Run `list_memories` to browse all topics. Key categories:
+`shared/architecture/`, `shared/conventions/`,
+`shared/debugging/`, `shared/onboarding/`.
 
 ---
 
@@ -237,7 +230,8 @@ Load any memory with `read_memory` when you need the details.
 - **StockRepository**: Always use `_require_repo()` from
   `tools/_stock_shared.py` — never instantiate directly.
 - **E2E demo passwords**: Run `seed_demo_data.py` if login
-  fails. Previous test runs may have changed passwords.
+  fails. Default: `admin@demo.com` / `Admin123!`.
+  Previous test runs may have changed passwords.
 - **Iceberg table corruption**: If `FileNotFoundError` on
   parquet files, run `scripts/check_tables.py` to identify
   corrupted tables. Fix: drop + recreate via `create_tables.py`.
@@ -312,6 +306,9 @@ Load any memory with `read_memory` when you need the details.
   Standalone server needs `HOSTNAME=0.0.0.0` to bind all interfaces.
   Restart with `./run.sh restart frontend` (doesn't touch other
   services).
+- **Sidebar collapsed by default**: `LayoutProvider.tsx` defaults
+  `sidebarCollapsed` to `true`. Dashboard submenus accessible
+  via hover flyout popover (state-based, not CSS group-hover).
 - **Iceberg flush window**: `ObservabilityCollector` flushes every
   30s. Restarts within that window lose unflushed events.
   `seed_daily_from_iceberg()` on `TokenBudget` and
@@ -338,6 +335,25 @@ Load any memory with `read_memory` when you need the details.
 - **Superuser insights visibility**: `_get_user_tickers()`
   in `insights_routes.py` shows all registry tickers for
   superusers, watchlist-only for general users.
+- **ECharts dark/light in Next.js**: `useTheme()` hook's
+  `resolvedTheme` lags behind DOM class toggle. For ECharts
+  widgets, use `MutationObserver` on `<html>` class attribute
+  instead. Always set `notMerge={true}` + `key` prop on
+  `ReactECharts` wrapped by `next/dynamic`.
+- **Prophet CV multiprocessing**: `cross_validation(parallel=
+  "processes")` fails when run from stdin or heredoc. Must run
+  from a `.py` file with `if __name__ == "__main__"` guard.
+- **Forecast backtest convention**: Backtest data stored in
+  `forecasts` Iceberg table with `horizon_months=0`. Actual
+  price in `lower_bound` column. No schema changes needed.
+- **yfinance sector names**: Uses "Technology" (not "IT"),
+  "Financial Services" (not "Financials"), "Consumer Defensive"
+  (not "FMCG"). Always verify with `get_company_info_batch()`.
+- **Chat clarification follow-up**: When the bot's last
+  response was a question (ends with `?`, has numbered
+  options), the next user message bypasses the financial
+  keyword gate and routes to the same agent. See
+  `_is_clarification()` in `guardrail.py`.
 
 ---
 

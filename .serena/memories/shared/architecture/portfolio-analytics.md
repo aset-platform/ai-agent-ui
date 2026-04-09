@@ -1,34 +1,59 @@
-# Portfolio Analytics — Performance & Forecast Endpoints
+# Portfolio Analytics Dashboard Architecture
 
-## Endpoints
-- `GET /v1/dashboard/portfolio/performance?period=6M&currency=INR` — daily returns, P&L, cash-flow-adjusted metrics
-- `GET /v1/dashboard/portfolio/forecast?horizon=9&currency=INR` — Prophet-based portfolio forecast
+## Dashboard Layout (Sprint 6)
 
-## Cash-Flow-Adjusted Metrics
-Portfolio returns strip capital contributions to avoid inflating performance:
-- Daily return = (value_today - value_yesterday - cash_in_today) / (value_yesterday + cash_in_today)
-- Uses `_safe_float()` with `math.isnan()` guard for Iceberg NULL prices
+```
+Row 1: [Sector Allocation] [Asset Performance] [Recommendations]  ← 3-col grid
+Row 2: [P&L Trend + News (2 cols)] [LLM Usage (1 col)]
+Row 3: [Watchlist (wider)] [Analysis Signals]
+Row 4: [Forecast Chart — full width]
+```
 
-## Forecast Architecture
-- Always fetches 9M from Prophet; client truncates for 3M/6M via horizon picker
-- Per-ticker forecasts weighted by portfolio quantity
-- Falls back to OHLCV current price if avg_price is missing/zero
+Responsive: xl:3 cols, md:2 cols, sm:1 col stack.
+Sidebar defaults to collapsed (62px). Dashboard submenus accessible via hover flyout.
 
-## Refresh Flow
-- Portfolio Analysis tab: refreshes all holdings in parallel
-- Portfolio Forecast tab: refreshes all holdings
-- Stock Analysis/Forecast: refreshes selected ticker
-- WatchlistWidget: per-ticker refresh button on portfolio rows
-- After refresh: both `/dashboard/home` AND `/users/me/portfolio` SWR keys invalidated
+## Backend Endpoints
 
-## TradingView Chart Components
-- `PortfolioChart` — daily P&L line + area
-- `PortfolioForecastChart` — forecast with confidence bands
-- `ForecastChart` — single-ticker Prophet forecast
-- `CompareChart` — multi-ticker normalized comparison
-- `useDomDark.ts` — MutationObserver hook for dark mode sync (SSR hydration safe)
+| Endpoint | Auth | Cache | Market Filter |
+|----------|------|-------|---------------|
+| `GET /dashboard/portfolio/allocation?market=` | JWT | 300s | Yes |
+| `GET /dashboard/portfolio/performance?currency=&period=` | JWT | 60s | Yes (via currency) |
+| `GET /dashboard/portfolio/news?market=` | JWT | 900s | Yes |
+| `GET /dashboard/portfolio/recommendations?market=` | JWT | 300s | Yes |
+| `GET /dashboard/chart/forecast-backtest?ticker=` | JWT | 300s | N/A (per-ticker) |
 
-## Key Files
-- `backend/dashboard_routes.py` — `_build_portfolio_performance()`, `_build_portfolio_forecast()`
-- `backend/tools/portfolio_tools.py` — `_current_price()` (NaN-safe)
-- `frontend/components/charts/` — TradingView chart components
+All new endpoints follow existing dashboard_routes.py patterns: Redis caching, user-scoped keys, Pydantic response models.
+
+## Frontend Components
+
+| Widget | File | Chart Lib | Data Source |
+|--------|------|-----------|-------------|
+| SectorAllocationWidget | `components/widgets/` | ECharts donut | `/portfolio/allocation` |
+| AssetPerformanceWidget | `components/widgets/` | ECharts bar | Portfolio holdings (existing) |
+| PLTrendWidget | `components/widgets/` | ECharts area | `/portfolio/performance` (SWR refetch on period change) |
+| NewsWidget | `components/widgets/` | None (list) | `/portfolio/news` |
+| RecommendationsWidget | `components/widgets/` | None (cards) | `/portfolio/recommendations` |
+
+## ECharts Setup
+- Tree-shaken: `frontend/lib/echarts.ts` registers pie, bar, line only (~200KB vs 800KB)
+- Dark/light: Asset Performance uses `MutationObserver` on `<html>` class (fixes useTheme hydration lag)
+- All charts use `notMerge={true}` + `key` prop for reliable updates via `next/dynamic`
+
+## Forecast Backtest Overlay
+- Prophet `df_cv` cross-validation pairs persisted as `horizon_months=0` in existing `forecasts` Iceberg table
+- Actual price stored in `lower_bound` column (avoids schema changes)
+- Orange dashed line on ForecastChart (TradingView lightweight-charts LineSeries)
+- Crosshair tooltip shows backtest predicted + deviation %
+- Extended metrics: directional accuracy %, P50/P90 error %, max error %
+
+## Recommendation Engine (Current: Rule-Based)
+Uses yfinance sector names (Technology, Financial Services, Healthcare — NOT IT/Financials).
+Thresholds: overweight >20%, sector concentration >35%, underperformer <-15% + bearish signals.
+To be replaced by LLM-powered engine (ASETPLTFRM-298).
+
+## SWR Hooks (`frontend/hooks/useDashboardData.ts`)
+- `useSectorAllocation(market)` 
+- `usePortfolioPerformance(market, period)` — period changes trigger refetch
+- `usePortfolioNews(market)`
+- `useRecommendations(market)`
+- `useForecastBacktest(ticker)` — null-key SWR (skips when no ticker)
