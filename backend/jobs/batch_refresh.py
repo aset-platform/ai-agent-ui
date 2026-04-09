@@ -45,12 +45,18 @@ def _fetch_one_ticker(
     Keys: ticker, ohlcv_df, info, dividends_df,
           quarterly_rows, error.
     """
-    result = {"ticker": ticker, "error": None}
+    result = {
+        "ticker": ticker,
+        "error": None,
+        "timings": {},
+    }
     try:
+        t0 = time.monotonic()
         yt = yf.Ticker(ticker)
 
         # OHLCV (skip / delta / full)
         try:
+            t1 = time.monotonic()
             if ohlcv_start == "__skip__":
                 result["ohlcv_df"] = pd.DataFrame()
             elif ohlcv_start:
@@ -73,23 +79,37 @@ def _fetch_one_ticker(
                         ohlcv.index,
                     ).tz_localize(None)
                 result["ohlcv_df"] = ohlcv
+            result["timings"]["ohlcv"] = round(
+                time.monotonic() - t1,
+                2,
+            )
         except Exception:
             result["ohlcv_df"] = pd.DataFrame()
 
         # Company info
         try:
+            t1 = time.monotonic()
             result["info"] = yt.info or {}
+            result["timings"]["info"] = round(
+                time.monotonic() - t1,
+                2,
+            )
         except Exception:
             result["info"] = {}
 
         # Dividends
         try:
+            t1 = time.monotonic()
             divs = yt.dividends
             if not divs.empty:
                 divs.index = pd.to_datetime(
                     divs.index,
                 ).tz_localize(None)
             result["dividends_df"] = divs
+            result["timings"]["dividends"] = round(
+                time.monotonic() - t1,
+                2,
+            )
         except Exception:
             result["dividends_df"] = pd.Series(
                 dtype=float,
@@ -97,6 +117,7 @@ def _fetch_one_ticker(
 
         # Quarterly statements
         try:
+            t1 = time.monotonic()
             from tools.stock_data_tool import (
                 _BALANCE_MAP,
                 _CASHFLOW_MAP,
@@ -139,8 +160,17 @@ def _fetch_one_ticker(
                         r["fiscal_quarter"] = "FY"
                     all_rows.extend(annual_cf)
             result["quarterly_rows"] = all_rows
+            result["timings"]["quarterly"] = round(
+                time.monotonic() - t1,
+                2,
+            )
         except Exception:
             result["quarterly_rows"] = []
+
+        result["timings"]["total"] = round(
+            time.monotonic() - t0,
+            2,
+        )
 
     except Exception as exc:
         result["error"] = str(exc)
@@ -263,15 +293,69 @@ def batch_data_refresh(
                 else:
                     with lock:
                         results.append(r)
+                    timings = r.get("timings", {})
+                    if timings.get("total", 0) > 5:
+                        _logger.info(
+                            "[batch] slow: %s %.1fs "
+                            "(ohlcv=%.1f info=%.1f "
+                            "div=%.1f qtr=%.1f)",
+                            t,
+                            timings.get("total", 0),
+                            timings.get("ohlcv", 0),
+                            timings.get("info", 0),
+                            timings.get(
+                                "dividends",
+                                0,
+                            ),
+                            timings.get(
+                                "quarterly",
+                                0,
+                            ),
+                        )
             except Exception as exc:
                 with lock:
                     errors.append(f"{t}: {exc}")
             with lock:
                 done += 1
+            if done % 50 == 0 or done == total:
+                _logger.info(
+                    "[batch] Phase 1 progress: " "%d/%d fetched",
+                    done,
+                    total,
+                )
             repo.update_scheduler_run(
                 run_id,
                 {"tickers_done": done},
             )
+
+    # Phase 1 timing summary
+    if results:
+        all_timings = [r.get("timings", {}) for r in results]
+        avg_total = sum(t.get("total", 0) for t in all_timings) / len(
+            all_timings
+        )
+        avg_ohlcv = sum(t.get("ohlcv", 0) for t in all_timings) / len(
+            all_timings
+        )
+        avg_info = sum(t.get("info", 0) for t in all_timings) / len(
+            all_timings
+        )
+        avg_div = sum(t.get("dividends", 0) for t in all_timings) / len(
+            all_timings
+        )
+        avg_qtr = sum(t.get("quarterly", 0) for t in all_timings) / len(
+            all_timings
+        )
+        _logger.info(
+            "[batch] Phase 1 avg per ticker: "
+            "total=%.1fs ohlcv=%.1fs info=%.1fs "
+            "div=%.1fs qtr=%.1fs",
+            avg_total,
+            avg_ohlcv,
+            avg_info,
+            avg_div,
+            avg_qtr,
+        )
 
     if cancelled:
         return _finalize(
