@@ -80,6 +80,20 @@ def _safe_int(val) -> int | None:
         return None
 
 
+def _safe_str(val) -> str | None:
+    """Convert to str or return None for NaN."""
+    if val is None:
+        return None
+    try:
+        import math
+
+        if isinstance(val, float) and math.isnan(val):
+            return None
+        return str(val)
+    except (ValueError, TypeError):
+        return None
+
+
 async def _get_user_tickers(user: UserContext) -> list[str]:
     """Fetch tickers visible to user.
 
@@ -930,11 +944,14 @@ def create_insights_router() -> APIRouter:
             rows.append(
                 PiotroskiRow(
                     ticker=r["ticker"],
-                    company_name=r.get(
-                        "company_name",
+                    company_name=_safe_str(
+                        r.get("company_name"),
                     ),
                     total_score=int(r.get("total_score", 0)),
-                    label=r.get("label", "Weak"),
+                    label=_safe_str(
+                        r.get("label"),
+                    )
+                    or "Weak",
                     roa_positive=bool(r.get("roa_positive", False)),
                     operating_cf_positive=bool(
                         r.get(
@@ -977,8 +994,10 @@ def create_insights_router() -> APIRouter:
                     market_cap=_safe_int(r.get("market_cap")),
                     revenue=_safe(r.get("revenue")),
                     avg_volume=_safe_int(r.get("avg_volume")),
-                    sector=r.get("sector"),
-                    industry=r.get("industry"),
+                    sector=_safe_str(r.get("sector")),
+                    industry=_safe_str(
+                        r.get("industry"),
+                    ),
                     score_date=str(latest_date),
                 )
             )
