@@ -221,9 +221,7 @@ def create_dashboard_router() -> APIRouter:
         user: UserContext = Depends(get_current_user),
         ticker: str | None = Query(
             None,
-            description=(
-                "Include this ticker even if unlinked"
-            ),
+            description=("Include this ticker even if unlinked"),
         ),
     ):
         """Latest forecast runs per linked ticker.
@@ -232,10 +230,7 @@ def create_dashboard_router() -> APIRouter:
         even when the ticker is not in the user's watchlist.
         """
         cache = get_cache()
-        cache_key = (
-            f"cache:dash:forecasts:{user.user_id}"
-            f":{ticker or ''}"
-        )
+        cache_key = f"cache:dash:forecasts:{user.user_id}" f":{ticker or ''}"
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -255,9 +250,7 @@ def create_dashboard_router() -> APIRouter:
         # Include the requested ticker even if unlinked
         if ticker and isinstance(ticker, str):
             t_upper = ticker.upper().strip()
-            if t_upper not in [
-                t.upper() for t in tickers
-            ]:
+            if t_upper not in [t.upper() for t in tickers]:
                 tickers = list(tickers) + [t_upper]
 
         if not tickers:
@@ -459,16 +452,10 @@ def create_dashboard_router() -> APIRouter:
         models = [
             ModelUsage(
                 model=name,
-                provider=str(
-                    info.get("provider", "") or "groq"
-                ),
-                request_count=int(
-                    info.get("requests", 0)
-                ),
+                provider=str(info.get("provider", "") or "groq"),
+                request_count=int(info.get("requests", 0)),
                 total_tokens=0,
-                estimated_cost_usd=float(
-                    info.get("cost", 0) or 0
-                ),
+                estimated_cost_usd=float(info.get("cost", 0) or 0),
             )
             for name, info in per_model.items()
         ]
@@ -535,7 +522,8 @@ def create_dashboard_router() -> APIRouter:
         for ticker, meta in registry.items():
             info = info_map.get(ticker)
             mkt = detect_market(
-                ticker, meta.get("market"),
+                ticker,
+                meta.get("market"),
             )
             ccy = "INR" if mkt == "india" else "USD"
             company = None
@@ -578,9 +566,7 @@ def create_dashboard_router() -> APIRouter:
             if ohlcv_df is not None and not ohlcv_df.empty:
                 _ohlcv_map: dict[str, dict] = {}
                 for t in reg_tickers:
-                    t_df = ohlcv_df[
-                        ohlcv_df["ticker"] == t
-                    ]
+                    t_df = ohlcv_df[ohlcv_df["ticker"] == t]
                     if t_df.empty:
                         continue
                     t30 = t_df.tail(30).dropna(
@@ -589,21 +575,11 @@ def create_dashboard_router() -> APIRouter:
                     if t30.empty:
                         continue
                     closes = [
-                        round(float(v), 2)
-                        for v in t30["close"]
-                        if v == v
+                        round(float(v), 2) for v in t30["close"] if v == v
                     ]
                     cur = closes[-1] if closes else None
-                    prev = (
-                        closes[-2]
-                        if len(closes) > 1
-                        else cur
-                    )
-                    chg = (
-                        round(cur - prev, 2)
-                        if cur and prev
-                        else None
-                    )
+                    prev = closes[-2] if len(closes) > 1 else cur
+                    chg = round(cur - prev, 2) if cur and prev else None
                     pct = (
                         round(chg / prev * 100, 2)
                         if chg is not None and prev
@@ -1120,9 +1096,7 @@ def create_dashboard_router() -> APIRouter:
         """Backtest predictions vs actuals for overlay."""
         cache = get_cache()
         t_upper = ticker.upper()
-        cache_key = (
-            f"cache:chart:backtest:{t_upper}"
-        )
+        cache_key = f"cache:chart:backtest:{t_upper}"
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -1133,7 +1107,8 @@ def create_dashboard_router() -> APIRouter:
         stock_repo = _get_stock_repo()
         # horizon_months=0 is the backtest convention
         df = stock_repo.get_latest_forecast_series(
-            t_upper, 0,
+            t_upper,
+            0,
         )
 
         if df.empty:
@@ -1185,13 +1160,16 @@ def create_dashboard_router() -> APIRouter:
 
             accuracy = BacktestAccuracy(
                 directional_accuracy_pct=round(
-                    dir_acc, 1,
+                    dir_acc,
+                    1,
                 ),
                 max_error_pct=round(
-                    float(np.max(err_pct)), 1,
+                    float(np.max(err_pct)),
+                    1,
                 ),
                 p50_error_pct=round(
-                    float(np.median(err_pct)), 1,
+                    float(np.median(err_pct)),
+                    1,
                 ),
                 p90_error_pct=round(
                     float(np.percentile(err_pct, 90)),
@@ -1422,10 +1400,7 @@ def create_dashboard_router() -> APIRouter:
     ):
         """Sector allocation breakdown for portfolio."""
         cache = get_cache()
-        cache_key = (
-            f"cache:portfolio:alloc"
-            f":{user.user_id}:{market}"
-        )
+        cache_key = f"cache:portfolio:alloc" f":{user.user_id}:{market}"
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -1472,9 +1447,11 @@ def create_dashboard_router() -> APIRouter:
 
             # Current price from OHLCV
             cur = 0.0
-            t_df = ohlcv_df[
-                ohlcv_df["ticker"] == ticker
-            ] if not ohlcv_df.empty else ohlcv_df
+            t_df = (
+                ohlcv_df[ohlcv_df["ticker"] == ticker]
+                if not ohlcv_df.empty
+                else ohlcv_df
+            )
             t_valid = t_df.dropna(subset=["close"])
             if not t_valid.empty:
                 cur = float(t_valid.iloc[-1]["close"])
@@ -1499,8 +1476,7 @@ def create_dashboard_router() -> APIRouter:
             reverse=True,
         ):
             weight = (
-                (data["value"] / total_value * 100)
-                if total_value > 0 else 0.0
+                (data["value"] / total_value * 100) if total_value > 0 else 0.0
             )
             sectors.append(
                 AllocationItem(
@@ -1513,9 +1489,7 @@ def create_dashboard_router() -> APIRouter:
             )
 
         currency = detect_market(tickers[0])
-        currency_str = (
-            "INR" if currency == "india" else "USD"
-        )
+        currency_str = "INR" if currency == "india" else "USD"
         result = AllocationResponse(
             sectors=sectors,
             total_value=round(total_value, 2),
@@ -1544,10 +1518,7 @@ def create_dashboard_router() -> APIRouter:
         """Recent news headlines for portfolio holdings
         with aggregated sentiment."""
         cache = get_cache()
-        cache_key = (
-            f"cache:portfolio:news"
-            f":{user.user_id}:{market}"
-        )
+        cache_key = f"cache:portfolio:news" f":{user.user_id}:{market}"
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -1584,33 +1555,27 @@ def create_dashboard_router() -> APIRouter:
                     c = item.get("content", item)
                     prov = c.get("provider", {})
                     canon = c.get("canonicalUrl", {})
-                    title = (
-                        c.get("title")
-                        or item.get("title", "")
-                    )
+                    title = c.get("title") or item.get("title", "")
                     if not title:
                         continue
-                    pub = (
-                        c.get("pubDate")
-                        or item.get(
-                            "providerPublishTime", "",
-                        )
+                    pub = c.get("pubDate") or item.get(
+                        "providerPublishTime",
+                        "",
                     )
                     if isinstance(pub, (int, float)):
                         pub = datetime.fromtimestamp(
-                            pub, tz=timezone.utc,
+                            pub,
+                            tz=timezone.utc,
                         ).isoformat()
                     all_headlines.append(
                         NewsHeadline(
                             title=title,
-                            url=(
-                                canon.get("url")
-                                or item.get("link", "")
-                            ),
+                            url=(canon.get("url") or item.get("link", "")),
                             source=(
                                 prov.get("displayName")
                                 or item.get(
-                                    "publisher", "",
+                                    "publisher",
+                                    "",
                                 )
                             ),
                             published_at=str(pub),
@@ -1637,10 +1602,8 @@ def create_dashboard_router() -> APIRouter:
             ticker = h["ticker"]
             qty = float(h.get("quantity", 0))
             try:
-                series = (
-                    stock_repo.get_sentiment_series(
-                        ticker,
-                    )
+                series = stock_repo.get_sentiment_series(
+                    ticker,
                 )
                 if not series.empty:
                     score = float(
@@ -1652,15 +1615,15 @@ def create_dashboard_router() -> APIRouter:
                 pass
 
         port_sentiment = (
-            (weighted_score / total_weight)
-            if total_weight > 0 else 0.0
+            (weighted_score / total_weight) if total_weight > 0 else 0.0
         )
         port_label = _sentiment_label(port_sentiment)
 
         result = PortfolioNewsResponse(
             headlines=all_headlines,
             portfolio_sentiment=round(
-                port_sentiment, 2,
+                port_sentiment,
+                2,
             ),
             portfolio_sentiment_label=port_label,
         )
@@ -1686,10 +1649,7 @@ def create_dashboard_router() -> APIRouter:
     ):
         """Actionable rebalancing and risk suggestions."""
         cache = get_cache()
-        cache_key = (
-            f"cache:portfolio:recs"
-            f":{user.user_id}:{market}"
-        )
+        cache_key = f"cache:portfolio:recs" f":{user.user_id}:{market}"
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -1717,9 +1677,7 @@ def create_dashboard_router() -> APIRouter:
             tickers,
         )
         ohlcv_df = stock_repo.get_ohlcv_batch(tickers)
-        analysis_df = (
-            stock_repo.get_dashboard_analysis(tickers)
-        )
+        analysis_df = stock_repo.get_dashboard_analysis(tickers)
 
         info_map: dict = {}
         if not info_df.empty:
@@ -1740,82 +1698,78 @@ def create_dashboard_router() -> APIRouter:
             sector = info.get("sector") or "Unknown"
 
             cur = 0.0
-            t_df = ohlcv_df[
-                ohlcv_df["ticker"] == ticker
-            ] if not ohlcv_df.empty else ohlcv_df
+            t_df = (
+                ohlcv_df[ohlcv_df["ticker"] == ticker]
+                if not ohlcv_df.empty
+                else ohlcv_df
+            )
             t_valid = t_df.dropna(subset=["close"])
             if not t_valid.empty:
                 cur = float(t_valid.iloc[-1]["close"])
 
             mkt_val = qty * cur
             total_value += mkt_val
-            pnl_pct = (
-                ((cur - avg) / avg * 100)
-                if avg > 0 else 0.0
-            )
+            pnl_pct = ((cur - avg) / avg * 100) if avg > 0 else 0.0
 
-            holding_data.append({
-                "ticker": ticker,
-                "qty": qty,
-                "avg": avg,
-                "current": cur,
-                "value": mkt_val,
-                "pnl_pct": pnl_pct,
-                "sector": sector,
-            })
-            sector_totals[sector] = (
-                sector_totals.get(sector, 0.0)
-                + mkt_val
+            holding_data.append(
+                {
+                    "ticker": ticker,
+                    "qty": qty,
+                    "avg": avg,
+                    "current": cur,
+                    "value": mkt_val,
+                    "pnl_pct": pnl_pct,
+                    "sector": sector,
+                }
             )
+            sector_totals[sector] = sector_totals.get(sector, 0.0) + mkt_val
 
         # Rule 1: Single stock overweight (>20%)
         for hd in holding_data:
             weight = (
-                (hd["value"] / total_value * 100)
-                if total_value > 0 else 0.0
+                (hd["value"] / total_value * 100) if total_value > 0 else 0.0
             )
             if weight > 20:
-                recs.append(Recommendation(
-                    type="overweight",
-                    severity="high",
-                    title=(
-                        f"{hd['ticker']} is "
-                        f"overweight ({weight:.0f}%)"
-                    ),
-                    description=(
-                        "Single stock exceeds 20% "
-                        "of portfolio. Consider "
-                        "trimming to reduce "
-                        "concentration risk."
-                    ),
-                    ticker=hd["ticker"],
-                    metric_value=round(weight, 1),
-                    threshold=20.0,
-                ))
+                recs.append(
+                    Recommendation(
+                        type="overweight",
+                        severity="high",
+                        title=(
+                            f"{hd['ticker']} is " f"overweight ({weight:.0f}%)"
+                        ),
+                        description=(
+                            "Single stock exceeds 20% "
+                            "of portfolio. Consider "
+                            "trimming to reduce "
+                            "concentration risk."
+                        ),
+                        ticker=hd["ticker"],
+                        metric_value=round(weight, 1),
+                        threshold=20.0,
+                    )
+                )
 
         # Rule 2: Sector concentration (>35%)
         for sec, sec_val in sector_totals.items():
-            sec_wt = (
-                (sec_val / total_value * 100)
-                if total_value > 0 else 0.0
-            )
+            sec_wt = (sec_val / total_value * 100) if total_value > 0 else 0.0
             if sec_wt > 35:
-                recs.append(Recommendation(
-                    type="sector_concentration",
-                    severity="high",
-                    title=(
-                        f"{sec} sector is "
-                        f"concentrated ({sec_wt:.0f}%)"
-                    ),
-                    description=(
-                        "Sector exceeds 35% of "
-                        "portfolio. Diversify "
-                        "across sectors to reduce "
-                        "sector-specific risk."
-                    ),
-                    metric_value=round(sec_wt, 1),
-                    threshold=35.0,
-                ))
+                recs.append(
+                    Recommendation(
+                        type="sector_concentration",
+                        severity="high",
+                        title=(
+                            f"{sec} sector is " f"concentrated ({sec_wt:.0f}%)"
+                        ),
+                        description=(
+                            "Sector exceeds 35% of "
+                            "portfolio. Diversify "
+                            "across sectors to reduce "
+                            "sector-specific risk."
+                        ),
+                        metric_value=round(sec_wt, 1),
+                        threshold=35.0,
+                    )
+                )
 
         # Rule 3: Missing major sectors
         # Use yfinance sector names (not custom labels)
@@ -1826,31 +1780,32 @@ def create_dashboard_router() -> APIRouter:
         }
         present = set(sector_totals.keys())
         for sec in major - present:
-            recs.append(Recommendation(
-                type="missing_sector",
-                severity="medium",
-                title=f"No exposure to {sec}",
-                description=(
-                    f"Consider adding {sec} "
-                    f"stocks for broader "
-                    f"diversification."
-                ),
-                metric_value=0.0,
-                threshold=0.0,
-            ))
+            recs.append(
+                Recommendation(
+                    type="missing_sector",
+                    severity="medium",
+                    title=f"No exposure to {sec}",
+                    description=(
+                        f"Consider adding {sec} "
+                        f"stocks for broader "
+                        f"diversification."
+                    ),
+                    metric_value=0.0,
+                    threshold=0.0,
+                )
+            )
 
         # Rule 4: Underperformers (<-15% + bearish)
         analysis_map: dict = {}
         if not analysis_df.empty:
             for _, row in analysis_df.iterrows():
-                analysis_map[
-                    str(row["ticker"])
-                ] = row.to_dict()
+                analysis_map[str(row["ticker"])] = row.to_dict()
 
         for hd in holding_data:
             if hd["pnl_pct"] < -15:
                 an = analysis_map.get(
-                    hd["ticker"], {},
+                    hd["ticker"],
+                    {},
                 )
                 rsi_sig = str(
                     an.get("rsi_signal", ""),
@@ -1864,65 +1819,66 @@ def create_dashboard_router() -> APIRouter:
                     or "bear" in macd_sig
                 )
                 if bearish:
-                    recs.append(Recommendation(
-                        type="underperformer",
-                        severity="medium",
-                        title=(
-                            f"{hd['ticker']} down "
-                            f"{hd['pnl_pct']:.1f}% "
-                            f"with bearish signals"
-                        ),
-                        description=(
-                            "Stock has significant "
-                            "unrealized loss and "
-                            "bearish technical "
-                            "indicators. Review "
-                            "position."
-                        ),
-                        ticker=hd["ticker"],
-                        metric_value=round(
-                            hd["pnl_pct"], 1,
-                        ),
-                        threshold=-15.0,
-                    ))
+                    recs.append(
+                        Recommendation(
+                            type="underperformer",
+                            severity="medium",
+                            title=(
+                                f"{hd['ticker']} down "
+                                f"{hd['pnl_pct']:.1f}% "
+                                f"with bearish signals"
+                            ),
+                            description=(
+                                "Stock has significant "
+                                "unrealized loss and "
+                                "bearish technical "
+                                "indicators. Review "
+                                "position."
+                            ),
+                            ticker=hd["ticker"],
+                            metric_value=round(
+                                hd["pnl_pct"],
+                                1,
+                            ),
+                            threshold=-15.0,
+                        )
+                    )
 
         # Rule 5: Low diversification (<5 holdings)
         if len(holding_data) < 5:
-            recs.append(Recommendation(
-                type="low_diversification",
-                severity="low",
-                title=(
-                    f"Only {len(holding_data)} "
-                    f"holdings"
-                ),
-                description=(
-                    "Portfolio has fewer than 5 "
-                    "stocks. Consider adding "
-                    "more for diversification."
-                ),
-                metric_value=float(
-                    len(holding_data),
-                ),
-                threshold=5.0,
-            ))
+            recs.append(
+                Recommendation(
+                    type="low_diversification",
+                    severity="low",
+                    title=(f"Only {len(holding_data)} " f"holdings"),
+                    description=(
+                        "Portfolio has fewer than 5 "
+                        "stocks. Consider adding "
+                        "more for diversification."
+                    ),
+                    metric_value=float(
+                        len(holding_data),
+                    ),
+                    threshold=5.0,
+                )
+            )
 
         # Sort by severity
         sev_order = {"high": 0, "medium": 1, "low": 2}
         recs.sort(
             key=lambda r: sev_order.get(
-                r.severity, 3,
+                r.severity,
+                3,
             ),
         )
         recs = recs[:6]
 
         # Portfolio health
-        high_count = sum(
-            1 for r in recs if r.severity == "high"
-        )
+        high_count = sum(1 for r in recs if r.severity == "high")
         health = (
-            "At Risk" if high_count >= 2
-            else "Needs Attention" if high_count >= 1
-            else "Healthy"
+            "At Risk"
+            if high_count >= 2
+            else "Needs Attention" if high_count >= 1 else "Healthy"
         )
 
         result = RecommendationsResponse(
@@ -1959,9 +1915,8 @@ def _is_currency_match(
 ) -> bool:
     """True if ticker belongs to *currency*."""
     mkt = detect_market(ticker)
-    return (
-        (currency == "INR" and mkt == "india")
-        or (currency == "USD" and mkt == "us")
+    return (currency == "INR" and mkt == "india") or (
+        currency == "USD" and mkt == "us"
     )
 
 
@@ -2256,13 +2211,36 @@ def _build_portfolio_forecast(
     current_value = 0.0
     total_invested = 0.0
 
+    # Batch reads: 2 DuckDB queries instead of
+    # 2*N per-holding scans.
+    import pandas as pd
+
+    holding_tickers = [str(r["ticker"]) for _, r in holdings_df.iterrows()]
+    ohlcv_all = stock_repo.get_ohlcv_batch(
+        holding_tickers,
+    )
+    ohlcv_grouped: dict[str, pd.DataFrame] = {}
+    if not ohlcv_all.empty:
+        ohlcv_grouped = dict(tuple(ohlcv_all.groupby("ticker")))
+
+    fc_all = stock_repo._scan_tickers(
+        "stocks.forecasts",
+        holding_tickers,
+    )
+    # Filter to horizon_months=9 once for all tickers
+    if not fc_all.empty and "horizon_months" in (fc_all.columns):
+        fc_all = fc_all[fc_all["horizon_months"] == 9]
+    fc_grouped: dict[str, pd.DataFrame] = {}
+    if not fc_all.empty:
+        fc_grouped = dict(tuple(fc_all.groupby("ticker")))
+
     for _, row in holdings_df.iterrows():
         t = str(row["ticker"])
         qty = float(row["quantity"])
         avg_p = _safe_float(row.get("avg_price"))
 
         # Current price from OHLCV (skip NaN rows)
-        ohlcv = stock_repo.get_ohlcv(t)
+        ohlcv = ohlcv_grouped.get(t, pd.DataFrame())
         if ohlcv.empty:
             continue
         valid = ohlcv.dropna(subset=["close"])
@@ -2277,13 +2255,16 @@ def _build_portfolio_forecast(
         total_invested += qty * avg_p
         weights[t] = qty
 
-        # Always fetch 9M; client truncates
-        fc_df = stock_repo.get_latest_forecast_series(
-            t,
-            9,
-        )
+        # Latest forecast run for this ticker
+        fc_df = fc_grouped.get(t, pd.DataFrame())
         if fc_df.empty:
             continue
+        latest_run = fc_df["run_date"].max()
+        fc_df = (
+            fc_df[fc_df["run_date"] == latest_run]
+            .sort_values("forecast_date")
+            .reset_index(drop=True)
+        )
         forecasts[t] = [
             (
                 str(r["forecast_date"]),

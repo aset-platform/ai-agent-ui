@@ -40,8 +40,7 @@ async def warm_shared() -> None:
     cache = get_cache()
     if not cache.ping():
         _logger.info(
-            "cache_warmup: Redis unavailable; "
-            "skipping warm-up.",
+            "cache_warmup: Redis unavailable; " "skipping warm-up.",
         )
         return
 
@@ -62,9 +61,7 @@ async def warm_shared() -> None:
         for ev in raw:
             d = dict(ev)
             ts = d.get("event_timestamp")
-            if ts is not None and hasattr(
-                ts, "isoformat"
-            ):
+            if ts is not None and hasattr(ts, "isoformat"):
                 d["event_timestamp"] = ts.isoformat()
             events.append(d)
         cache.set(
@@ -81,8 +78,7 @@ async def warm_shared() -> None:
 
     elapsed = (time.monotonic() - t0) * 1000
     _logger.info(
-        "cache_warmup: warmed %d shared keys "
-        "in %.0f ms",
+        "cache_warmup: warmed %d shared keys " "in %.0f ms",
         warmed,
         elapsed,
     )
@@ -116,16 +112,34 @@ def warm_tickers() -> None:
             IndicatorsResponse,
         )
 
+        import pandas as pd
+
         stock_repo = _require_repo()
         registry = stock_repo.get_all_registry()
         tickers = list(registry.keys())
+
+        # Batch reads: 2 DuckDB queries instead of
+        # 2*N per-ticker scans.
+        ohlcv_all = stock_repo.get_ohlcv_batch(
+            tickers,
+        )
+        ohlcv_grouped: dict[str, pd.DataFrame] = {}
+        if not ohlcv_all.empty:
+            ohlcv_grouped = dict(tuple(ohlcv_all.groupby("ticker")))
+
+        ti_all = stock_repo.get_technical_indicators_batch(
+            tickers,
+        )
+        ti_grouped: dict[str, pd.DataFrame] = {}
+        if not ti_all.empty:
+            ti_grouped = dict(tuple(ti_all.groupby("ticker")))
 
         for ticker in tickers:
             try:
                 # OHLCV
                 ck = f"cache:chart:ohlcv:{ticker}"
                 if cache.get(ck) is None:
-                    df = stock_repo.get_ohlcv(ticker)
+                    df = ohlcv_grouped.get(ticker, pd.DataFrame())
                     if not df.empty:
                         points = [
                             OHLCVPoint(
@@ -133,16 +147,10 @@ def warm_tickers() -> None:
                                 open=float(r["open"]),
                                 high=float(r["high"]),
                                 low=float(r["low"]),
-                                close=float(
-                                    r["close"]
-                                ),
-                                volume=int(
-                                    r["volume"]
-                                ),
+                                close=float(r["close"]),
+                                volume=int(r["volume"]),
                             )
-                            for _, r in (
-                                df.iterrows()
-                            )
+                            for _, r in (df.iterrows())
                         ]
                         result = OHLCVResponse(
                             ticker=ticker,
@@ -162,17 +170,9 @@ def warm_tickers() -> None:
 
             try:
                 # Indicators
-                ck = (
-                    f"cache:chart:indicators:"
-                    f"{ticker}"
-                )
+                ck = f"cache:chart:indicators:" f"{ticker}"
                 if cache.get(ck) is None:
-                    df = (
-                        stock_repo
-                        .get_technical_indicators(
-                            ticker,
-                        )
-                    )
+                    df = ti_grouped.get(ticker, pd.DataFrame())
                     if not df.empty:
                         pts = []
                         for _, r in df.iterrows():
@@ -184,49 +184,15 @@ def warm_tickers() -> None:
                                             "",
                                         )
                                     ),
-                                    sma_50=_sf(
-                                        r.get(
-                                            "sma_50"
-                                        )
-                                    ),
-                                    sma_200=_sf(
-                                        r.get(
-                                            "sma_200"
-                                        )
-                                    ),
-                                    ema_20=_sf(
-                                        r.get(
-                                            "ema_20"
-                                        )
-                                    ),
-                                    rsi_14=_sf(
-                                        r.get(
-                                            "rsi_14"
-                                        )
-                                    ),
-                                    macd=_sf(
-                                        r.get("macd")
-                                    ),
-                                    macd_signal=_sf(
-                                        r.get(
-                                            "macd_signal"
-                                        )
-                                    ),
-                                    macd_hist=_sf(
-                                        r.get(
-                                            "macd_hist"
-                                        )
-                                    ),
-                                    bb_upper=_sf(
-                                        r.get(
-                                            "bb_upper"
-                                        )
-                                    ),
-                                    bb_lower=_sf(
-                                        r.get(
-                                            "bb_lower"
-                                        )
-                                    ),
+                                    sma_50=_sf(r.get("sma_50")),
+                                    sma_200=_sf(r.get("sma_200")),
+                                    ema_20=_sf(r.get("ema_20")),
+                                    rsi_14=_sf(r.get("rsi_14")),
+                                    macd=_sf(r.get("macd")),
+                                    macd_signal=_sf(r.get("macd_signal")),
+                                    macd_hist=_sf(r.get("macd_hist")),
+                                    bb_upper=_sf(r.get("bb_upper")),
+                                    bb_lower=_sf(r.get("bb_lower")),
                                 )
                             )
                         result = IndicatorsResponse(
@@ -241,8 +207,7 @@ def warm_tickers() -> None:
                         warmed += 1
             except Exception:
                 _logger.debug(
-                    "cache_warmup: indicators"
-                    " %s failed",
+                    "cache_warmup: indicators" " %s failed",
                     ticker,
                 )
 
@@ -254,8 +219,7 @@ def warm_tickers() -> None:
 
     elapsed = (time.monotonic() - t0) * 1000
     _logger.info(
-        "cache_warmup: warmed %d ticker keys "
-        "in %.0f ms",
+        "cache_warmup: warmed %d ticker keys " "in %.0f ms",
         warmed,
         elapsed,
     )
@@ -292,13 +256,11 @@ async def warm_frequent_users(
 
         import pandas as pd
 
-        cutoff = (
-            datetime.now(tz=timezone.utc)
-            - timedelta(days=days)
-        ).date()
+        cutoff = (datetime.now(tz=timezone.utc) - timedelta(days=days)).date()
         try:
             df = stock_repo._scan_tickers(
-                stock_repo._LLM_USAGE, [],
+                stock_repo._LLM_USAGE,
+                [],
             )
             # _scan_tickers with empty list returns
             # empty — use _table_to_df instead.
@@ -320,8 +282,7 @@ async def warm_frequent_users(
 
         if df.empty:
             _logger.info(
-                "cache_warmup: no active users"
-                " in last %d days",
+                "cache_warmup: no active users" " in last %d days",
                 days,
             )
             return
@@ -336,8 +297,7 @@ async def warm_frequent_users(
         active_users = counts.index.tolist()
 
         _logger.info(
-            "cache_warmup: warming %d frequent"
-            " users: %s",
+            "cache_warmup: warming %d frequent" " users: %s",
             len(active_users),
             active_users,
         )
@@ -369,15 +329,13 @@ async def warm_frequent_users(
                 warmed += 1
             except Exception:
                 _logger.debug(
-                    "cache_warmup: failed for"
-                    " user %s",
+                    "cache_warmup: failed for" " user %s",
                     uid,
                 )
 
         elapsed = (time.monotonic() - t0) * 1000
         _logger.info(
-            "cache_warmup: warmed %d/%d frequent"
-            " users in %.0f ms",
+            "cache_warmup: warmed %d/%d frequent" " users in %.0f ms",
             warmed,
             len(active_users),
             elapsed,
@@ -385,8 +343,7 @@ async def warm_frequent_users(
 
     except Exception:
         _logger.warning(
-            "cache_warmup: frequent user"
-            " warm-up failed",
+            "cache_warmup: frequent user" " warm-up failed",
             exc_info=True,
         )
 
