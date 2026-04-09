@@ -7,6 +7,7 @@ Usage::
 Commands: seed, bulk, fundamentals, daily, status, skipped,
 retry, reset.
 """
+
 import argparse
 import asyncio
 import logging
@@ -29,23 +30,29 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # seed ---------------------------------------------------------
     p_seed = sub.add_parser(
-        "seed", help="Seed stock_master from CSV",
+        "seed",
+        help="Seed stock_master from CSV",
     )
     p_seed.add_argument("--csv", required=True)
     p_seed.add_argument(
-        "--update", action="store_true",
+        "--update",
+        action="store_true",
         help="Update existing stocks and reconcile tags",
     )
 
     # bulk ---------------------------------------------------------
     p_bulk = sub.add_parser(
-        "bulk", help="Run one OHLCV bulk batch",
+        "bulk",
+        help="Run one OHLCV bulk batch",
     )
     p_bulk.add_argument(
-        "--cursor", default="nifty500_sample_bulk",
+        "--cursor",
+        default="nifty500_sample_bulk",
     )
     p_bulk.add_argument(
-        "--batch-size", type=int, default=None,
+        "--batch-size",
+        type=int,
+        default=None,
     )
 
     # fundamentals -------------------------------------------------
@@ -54,47 +61,59 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run one fundamentals batch",
     )
     p_fund.add_argument(
-        "--cursor", default="nifty500_fundamentals",
+        "--cursor",
+        default="nifty500_fundamentals",
     )
     p_fund.add_argument(
-        "--batch-size", type=int, default=None,
+        "--batch-size",
+        type=int,
+        default=None,
     )
 
     # daily --------------------------------------------------------
     sub.add_parser(
-        "daily", help="Run daily OHLCV delta",
+        "daily",
+        help="Run daily OHLCV delta",
     )
 
     # status -------------------------------------------------------
     p_status = sub.add_parser(
-        "status", help="Show cursor progress",
+        "status",
+        help="Show cursor progress",
     )
     p_status.add_argument(
-        "--cursor", default="nifty500_sample_bulk",
+        "--cursor",
+        default="nifty500_sample_bulk",
     )
 
     # skipped ------------------------------------------------------
     p_skip = sub.add_parser(
-        "skipped", help="List failed tickers",
+        "skipped",
+        help="List failed tickers",
     )
     p_skip.add_argument(
-        "--cursor", default="nifty500_sample_bulk",
+        "--cursor",
+        default="nifty500_sample_bulk",
     )
 
     # retry --------------------------------------------------------
     p_retry = sub.add_parser(
-        "retry", help="Retry failed tickers",
+        "retry",
+        help="Retry failed tickers",
     )
     p_retry.add_argument(
-        "--cursor", default="nifty500_sample_bulk",
+        "--cursor",
+        default="nifty500_sample_bulk",
     )
     p_retry.add_argument(
-        "--all", action="store_true",
+        "--all",
+        action="store_true",
         dest="all_categories",
         help="Retry all categories, not just transient",
     )
     p_retry.add_argument(
-        "--ticker", default=None,
+        "--ticker",
+        default=None,
         help="Retry a specific ticker symbol",
     )
 
@@ -115,15 +134,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Fast yfinance batch OHLCV + fill gaps",
     )
     p_bd.add_argument(
-        "--batch", type=int, default=None,
+        "--batch",
+        type=int,
+        default=None,
         help="Limit to first N tickers",
     )
     p_bd.add_argument(
-        "--tickers", default=None,
+        "--tickers",
+        default=None,
         help="Comma-separated tickers (skip DB)",
     )
     p_bd.add_argument(
-        "--period", default="10y",
+        "--period",
+        default="10y",
         help="History period (default: 10y)",
     )
 
@@ -139,20 +162,35 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Re-fetch from NSE for a specific ticker",
     )
     p_correct.add_argument(
-        "--ticker", required=True,
+        "--ticker",
+        required=True,
         help="Ticker symbol to correct",
     )
 
     # reset --------------------------------------------------------
     p_reset = sub.add_parser(
-        "reset", help="Reset cursor to start",
+        "reset",
+        help="Reset cursor to start",
     )
     p_reset.add_argument(
-        "--cursor", default="nifty500_sample_bulk",
+        "--cursor",
+        default="nifty500_sample_bulk",
     )
     p_reset.add_argument(
-        "--yes", action="store_true",
+        "--yes",
+        action="store_true",
         help="Skip confirmation prompt",
+    )
+
+    # screen -------------------------------------------------------
+    p_screen = sub.add_parser(
+        "screen",
+        help=("Compute Piotroski F-Score for" " stock_master"),
+    )
+    p_screen.add_argument(
+        "--tickers",
+        default=None,
+        help=("Comma-separated tickers (default: all)"),
     )
 
     return parser
@@ -178,6 +216,7 @@ async def _dispatch(args: argparse.Namespace) -> None:
         "fill-gaps": _cmd_fill_gaps,
         "correct": _cmd_correct,
         "reset": _cmd_reset,
+        "screen": _cmd_screen,
     }
     handler = handlers.get(args.command)
     if handler is None:
@@ -197,7 +236,8 @@ async def _cmd_seed(args: argparse.Namespace) -> None:
     )
 
     result = await seed_from_csv(
-        args.csv, update=args.update,
+        args.csv,
+        update=args.update,
     )
     _logger.info(
         "Seed complete: inserted=%d updated=%d "
@@ -245,8 +285,7 @@ async def _cmd_fundamentals(
         batch_size=args.batch_size,
     )
     _logger.info(
-        "Fundamentals complete: cursor=%s status=%s "
-        "processed=%d failed=%d",
+        "Fundamentals complete: cursor=%s status=%s " "processed=%d failed=%d",
         result["cursor"],
         result["status"],
         result["processed"],
@@ -261,8 +300,7 @@ async def _cmd_daily(
 
     result = await run_daily()
     _logger.info(
-        "Daily complete: processed=%d skipped=%d "
-        "failed=%d",
+        "Daily complete: processed=%d skipped=%d " "failed=%d",
         result["processed"],
         result["skipped"],
         result["failed"],
@@ -279,11 +317,13 @@ async def _cmd_status(args: argparse.Namespace) -> None:
     factory = get_session_factory()
     async with factory() as session:
         cursor = await get_cursor(
-            session, args.cursor,
+            session,
+            args.cursor,
         )
         if cursor is None:
             _logger.error(
-                "Cursor not found: %s", args.cursor,
+                "Cursor not found: %s",
+                args.cursor,
             )
             sys.exit(1)
 
@@ -295,17 +335,19 @@ async def _cmd_status(args: argparse.Namespace) -> None:
 
     total = cursor.total_tickers
     pos = cursor.last_processed_id
-    pct = (
-        (pos / total * 100.0) if total > 0 else 0.0
-    )
+    pct = (pos / total * 100.0) if total > 0 else 0.0
     _logger.info("Cursor: %s", cursor.cursor_name)
     _logger.info("Status: %s", cursor.status)
     _logger.info(
-        "Progress: %d/%d (%.1f%%)", pos, total, pct,
+        "Progress: %d/%d (%.1f%%)",
+        pos,
+        total,
+        pct,
     )
     _logger.info("Batch size: %d", cursor.batch_size)
     _logger.info(
-        "Skipped (unresolved): %d", len(unresolved),
+        "Skipped (unresolved): %d",
+        len(unresolved),
     )
 
 
@@ -331,8 +373,11 @@ async def _cmd_skipped(args: argparse.Namespace) -> None:
     # Header
     _logger.info(
         "%-12s %-14s %-14s %8s  %s",
-        "Ticker", "Job", "Category",
-        "Attempts", "Last Attempt",
+        "Ticker",
+        "Job",
+        "Category",
+        "Attempts",
+        "Last Attempt",
     )
     _logger.info("-" * 68)
 
@@ -397,7 +442,8 @@ async def _cmd_retry(args: argparse.Namespace) -> None:
         return
 
     _logger.info(
-        "Retrying %d ticker(s)...", len(records),
+        "Retrying %d ticker(s)...",
+        len(records),
     )
 
     ok = 0
@@ -435,17 +481,21 @@ async def _cmd_retry(args: argparse.Namespace) -> None:
             ok += 1
             _logger.info(
                 "Retried OK: %s (%s)",
-                rec.ticker, outcome,
+                rec.ticker,
+                outcome,
             )
         else:
             failed += 1
             _logger.warning(
                 "Retry failed: %s (%s)",
-                rec.ticker, outcome,
+                rec.ticker,
+                outcome,
             )
 
     _logger.info(
-        "Retry complete: ok=%d failed=%d", ok, failed,
+        "Retry complete: ok=%d failed=%d",
+        ok,
+        failed,
     )
 
 
@@ -472,6 +522,7 @@ async def _cmd_download(
         sys.path.insert(0, proj_root)
 
     from scripts.download_nifty500 import main as dl_main
+
     dl_main()
 
 
@@ -479,6 +530,7 @@ async def _cmd_bulk_download(
     args: argparse.Namespace,
 ) -> None:
     from scripts.bulk_download_ohlcv import run
+
     await run(
         batch=args.batch,
         tickers_csv=args.tickers,
@@ -492,10 +544,10 @@ async def _cmd_fill_gaps(
     from backend.pipeline.jobs.fill_gaps import (
         fill_company_info_gaps,
     )
+
     result = fill_company_info_gaps()
     _logger.info(
-        "Fill gaps: patched=%d skipped=%d "
-        "no_master=%d total=%d",
+        "Fill gaps: patched=%d skipped=%d " "no_master=%d total=%d",
         result["patched"],
         result["skipped"],
         result["no_master"],
@@ -548,7 +600,9 @@ async def _cmd_correct(args: argparse.Namespace) -> None:
         rate_tracker=rate_tracker,
     )
     _logger.info(
-        "Correct %s: %s", ticker, outcome,
+        "Correct %s: %s",
+        ticker,
+        outcome,
     )
 
 
@@ -579,6 +633,30 @@ async def _cmd_reset(args: argparse.Namespace) -> None:
     _logger.info("Cursor '%s' reset to 0", args.cursor)
 
 
+async def _cmd_screen(
+    args: argparse.Namespace,
+) -> None:
+    from backend.pipeline.screener.screen import (
+        run_screen,
+    )
+
+    tickers = None
+    if args.tickers:
+        tickers = [t.strip() for t in args.tickers.split(",")]
+    result = await run_screen(tickers=tickers)
+    _logger.info(
+        "Screen: scored=%d skipped=%d failed=%d "
+        "strong=%d moderate=%d weak=%d (%.1fs)",
+        result["scored"],
+        result["skipped"],
+        result["failed"],
+        result["strong"],
+        result["moderate"],
+        result["weak"],
+        result["elapsed_s"],
+    )
+
+
 # ------------------------------------------------------------------
 # Entry point
 # ------------------------------------------------------------------
@@ -588,10 +666,7 @@ def main() -> None:
     """Parse args and dispatch to the appropriate command."""
     logging.basicConfig(
         level=logging.INFO,
-        format=(
-            "%(asctime)s %(levelname)s "
-            "%(name)s %(message)s"
-        ),
+        format=("%(asctime)s %(levelname)s " "%(name)s %(message)s"),
     )
 
     parser = _build_parser()
