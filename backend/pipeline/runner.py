@@ -182,6 +182,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip confirmation prompt",
     )
 
+    # quarterly ----------------------------------------------------
+    p_qtr = sub.add_parser(
+        "quarterly",
+        help="Fetch quarterly statements (batch)",
+    )
+    p_qtr.add_argument(
+        "--cursor",
+        default="nse_universe_quarterly",
+    )
+    p_qtr.add_argument(
+        "--batch-size",
+        type=int,
+        default=50,
+    )
+    p_qtr.add_argument(
+        "--force",
+        action="store_true",
+        help="Skip 7-day freshness check",
+    )
+
     # screen -------------------------------------------------------
     p_screen = sub.add_parser(
         "screen",
@@ -216,6 +236,7 @@ async def _dispatch(args: argparse.Namespace) -> None:
         "fill-gaps": _cmd_fill_gaps,
         "correct": _cmd_correct,
         "reset": _cmd_reset,
+        "quarterly": _cmd_quarterly,
         "screen": _cmd_screen,
     }
     handler = handlers.get(args.command)
@@ -631,6 +652,119 @@ async def _cmd_reset(args: argparse.Namespace) -> None:
     async with factory() as session:
         await reset_cursor(session, args.cursor)
     _logger.info("Cursor '%s' reset to 0", args.cursor)
+
+
+async def _cmd_quarterly(
+    args: argparse.Namespace,
+) -> None:
+    from backend.db.engine import get_session_factory
+    from backend.db.models.stock_master import (
+        StockMaster,
+    )
+    from backend.pipeline.cursor import (
+        advance_cursor,
+        create_cursor,
+        get_cursor,
+        get_next_batch,
+        set_cursor_status,
+    )
+    from sqlalchemy import func, select
+    from tools._stock_shared import _require_repo
+    from tools.stock_data_tool import (
+        _fetch_and_store_quarterly,
+    )
+
+    cursor_name = args.cursor
+    batch_size = args.batch_size
+    force = args.force
+    factory = get_session_factory()
+    repo = _require_repo()
+
+    # Ensure cursor exists
+    async with factory() as session:
+        cursor = await get_cursor(
+            session,
+            cursor_name,
+        )
+        if cursor is None:
+            total = await session.execute(
+                select(func.count(StockMaster.id)).where(
+                    StockMaster.is_active.is_(True),
+                )
+            )
+            total_count = total.scalar() or 0
+            cursor = await create_cursor(
+                session,
+                cursor_name,
+                total_count,
+                batch_size,
+            )
+        if cursor.status == "completed":
+            _logger.info(
+                "Cursor %s already completed",
+                cursor_name,
+            )
+            return
+
+    async with factory() as session:
+        await set_cursor_status(
+            session,
+            cursor_name,
+            "in_progress",
+        )
+
+    # Fetch batch
+    async with factory() as session:
+        batch = await get_next_batch(
+            session,
+            cursor_name,
+        )
+
+    if not batch:
+        async with factory() as session:
+            await set_cursor_status(
+                session,
+                cursor_name,
+                "completed",
+            )
+        _logger.info(
+            "Quarterly cursor %s completed",
+            cursor_name,
+        )
+        return
+
+    processed = 0
+    failed = 0
+    for stock in batch:
+        ticker = stock.yf_ticker
+        try:
+            msg = _fetch_and_store_quarterly(
+                ticker,
+                repo,
+                force=force,
+            )
+            _logger.info("quarterly | %s | %s", ticker, msg)
+        except Exception:
+            _logger.warning(
+                "quarterly | %s failed",
+                ticker,
+                exc_info=True,
+            )
+            failed += 1
+        processed += 1
+        async with factory() as session:
+            await advance_cursor(
+                session,
+                cursor_name,
+                stock.id,
+            )
+
+    _logger.info(
+        "Quarterly batch: cursor=%s processed=%d " "failed=%d",
+        cursor_name,
+        processed,
+        failed,
+    )
 
 
 async def _cmd_screen(
