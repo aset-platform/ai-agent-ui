@@ -8,7 +8,7 @@ from backend.paths import ICEBERG_WAREHOUSE
 
 log = logging.getLogger(__name__)
 
-_iceberg_loaded = False
+_extensions_installed = False
 
 
 def get_connection() -> duckdb.DuckDBPyConnection:
@@ -17,13 +17,16 @@ def get_connection() -> duckdb.DuckDBPyConnection:
     Each connection is short-lived — create per query batch,
     close after use. DuckDB handles its own caching.
     ``INSTALL`` runs once per process; ``LOAD`` per connection.
+    Avro extension required for Iceberg manifest files.
     """
-    global _iceberg_loaded
+    global _extensions_installed
     conn = duckdb.connect(":memory:")
-    if not _iceberg_loaded:
+    if not _extensions_installed:
         conn.execute("INSTALL iceberg;")
-        _iceberg_loaded = True
+        conn.execute("INSTALL avro;")
+        _extensions_installed = True
     conn.execute("LOAD iceberg;")
+    conn.execute("LOAD avro;")
     log.debug("DuckDB connection created")
     return conn
 
