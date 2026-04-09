@@ -34,6 +34,7 @@ def _fetch_one_ticker(
     ticker: str,
     ohlcv_start: str | None = None,
     skip_quarterly: bool = False,
+    skip_dividends: bool = False,
 ) -> dict:
     """Fetch yfinance data for a single ticker.
 
@@ -98,23 +99,29 @@ def _fetch_one_ticker(
         except Exception:
             result["info"] = {}
 
-        # Dividends
-        try:
-            t1 = time.monotonic()
-            divs = yt.dividends
-            if not divs.empty:
-                divs.index = pd.to_datetime(
-                    divs.index,
-                ).tz_localize(None)
-            result["dividends_df"] = divs
-            result["timings"]["dividends"] = round(
-                time.monotonic() - t1,
-                2,
-            )
-        except Exception:
+        # Dividends (skip if fresh < 30d)
+        if skip_dividends:
             result["dividends_df"] = pd.Series(
                 dtype=float,
             )
+            result["timings"]["dividends"] = 0.0
+        else:
+            try:
+                t1 = time.monotonic()
+                divs = yt.dividends
+                if not divs.empty:
+                    divs.index = pd.to_datetime(
+                        divs.index,
+                    ).tz_localize(None)
+                result["dividends_df"] = divs
+                result["timings"]["dividends"] = round(
+                    time.monotonic() - t1,
+                    2,
+                )
+            except Exception:
+                result["dividends_df"] = pd.Series(
+                    dtype=float,
+                )
 
         # Quarterly statements (skip if fresh < 7d)
         if skip_quarterly:
@@ -265,6 +272,30 @@ def batch_data_refresh(
         total - len(qtr_fresh),
     )
 
+    # Check dividend freshness (30-day threshold)
+    div_cutoff = today - timedelta(days=30)
+    div_fresh: set[str] = set()
+    try:
+        div_df = query_iceberg_df(
+            "stocks.dividends",
+            "SELECT ticker, MAX(fetched_at) AS latest "
+            "FROM dividends GROUP BY ticker",
+        )
+        if not div_df.empty:
+            for _, row in div_df.iterrows():
+                d = row["latest"]
+                if hasattr(d, "date"):
+                    d = d.date()
+                if d >= div_cutoff:
+                    div_fresh.add(row["ticker"])
+    except Exception:
+        pass
+    _logger.info(
+        "[batch] Dividend freshness: %d fresh " "(skip), %d need fetch",
+        len(div_fresh),
+        total - len(div_fresh),
+    )
+
     for t in tickers:
         latest = latest_map.get(t)
         if latest is not None and latest >= yesterday:
@@ -296,16 +327,12 @@ def batch_data_refresh(
     def _submit_fetch(t):
         start = ohlcv_starts.get(t)
         skip_qtr = t in qtr_fresh
-        if start == "__skip__":
-            return _fetch_one_ticker(
-                t,
-                "__skip__",
-                skip_qtr,
-            )
+        skip_div = t in div_fresh
         return _fetch_one_ticker(
             t,
             start,
             skip_qtr,
+            skip_div,
         )
 
     with ThreadPoolExecutor(
