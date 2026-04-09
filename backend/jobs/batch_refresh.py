@@ -35,6 +35,7 @@ def _fetch_one_ticker(
     ohlcv_start: str | None = None,
     skip_quarterly: bool = False,
     skip_dividends: bool = False,
+    skip_info: bool = False,
 ) -> dict:
     """Fetch yfinance data for a single ticker.
 
@@ -88,16 +89,20 @@ def _fetch_one_ticker(
         except Exception:
             result["ohlcv_df"] = pd.DataFrame()
 
-        # Company info
-        try:
-            t1 = time.monotonic()
-            result["info"] = yt.info or {}
-            result["timings"]["info"] = round(
-                time.monotonic() - t1,
-                2,
-            )
-        except Exception:
+        # Company info (skip if fresh today)
+        if skip_info:
             result["info"] = {}
+            result["timings"]["info"] = 0.0
+        else:
+            try:
+                t1 = time.monotonic()
+                result["info"] = yt.info or {}
+                result["timings"]["info"] = round(
+                    time.monotonic() - t1,
+                    2,
+                )
+            except Exception:
+                result["info"] = {}
 
         # Dividends (skip if fresh < 30d)
         if skip_dividends:
@@ -296,6 +301,29 @@ def batch_data_refresh(
         total - len(div_fresh),
     )
 
+    # Check company_info freshness (1-day threshold)
+    info_fresh: set[str] = set()
+    try:
+        info_df = query_iceberg_df(
+            "stocks.company_info",
+            "SELECT ticker, MAX(fetched_at) AS latest "
+            "FROM company_info GROUP BY ticker",
+        )
+        if not info_df.empty:
+            for _, row in info_df.iterrows():
+                d = row["latest"]
+                if hasattr(d, "date"):
+                    d = d.date()
+                if d >= yesterday:
+                    info_fresh.add(row["ticker"])
+    except Exception:
+        pass
+    _logger.info(
+        "[batch] Company info freshness: %d fresh " "(skip), %d need fetch",
+        len(info_fresh),
+        total - len(info_fresh),
+    )
+
     for t in tickers:
         latest = latest_map.get(t)
         if latest is not None and latest >= yesterday:
@@ -328,11 +356,13 @@ def batch_data_refresh(
         start = ohlcv_starts.get(t)
         skip_qtr = t in qtr_fresh
         skip_div = t in div_fresh
+        skip_ci = t in info_fresh
         return _fetch_one_ticker(
             t,
             start,
             skip_qtr,
             skip_div,
+            skip_ci,
         )
 
     with ThreadPoolExecutor(
