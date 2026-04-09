@@ -129,19 +129,21 @@ def execute_data_refresh(
     repo,  # StockRepository
     cancel_event=None,
 ) -> None:
-    """Refresh all tickers matching *scope*.
+    """Batch refresh all tickers matching *scope*.
 
-    Calls ``run_full_refresh(ticker)`` for each ticker
-    in the registry, filtering by market scope.
-    Updates the scheduler run record as tickers complete.
+    Uses ``batch_data_refresh`` for parallel yfinance
+    fetch with sequential Iceberg writes (no commit
+    conflicts). Skips technical analysis, sentiment,
+    and Prophet forecast (compute-heavy; handled by
+    interactive ``run_full_refresh`` or separate jobs).
 
     Args:
         cancel_event: Optional ``threading.Event``.
-            When set, the loop stops after the current
-            ticker and marks the run as ``cancelled``.
+            When set, the fetch phase stops and marks
+            the run as ``cancelled``.
     """
-    from dashboard.services.stock_refresh import (
-        run_full_refresh,
+    from backend.jobs.batch_refresh import (
+        batch_data_refresh,
     )
 
     registry = repo.get_all_registry()
@@ -151,7 +153,10 @@ def execute_data_refresh(
         tickers = [
             t
             for t in tickers
-            if is_indian_market(t, registry.get(t, {}).get("market"))
+            if is_indian_market(
+                t,
+                registry.get(t, {}).get("market"),
+            )
         ]
     elif scope == "us":
         tickers = [
@@ -163,66 +168,29 @@ def execute_data_refresh(
             )
         ]
 
-    # Resolve canonical symbols to yfinance tickers.
-    # For Indian stocks without .NS suffix, append .NS.
-    # Registry already tells us the market.
-    yf_map: dict[str, str] = {}
+    # Resolve canonical symbols to yfinance tickers
+    yf_tickers = []
     for t in tickers:
         if t.endswith((".NS", ".BO")):
-            continue  # already has suffix
-        meta = registry.get(t, {})
-        mkt = meta.get("market", "")
-        if mkt.upper() in ("NSE", "BSE", "INDIA"):
-            yf_map[t] = f"{t}.NS"
+            yf_tickers.append(t)
+        else:
+            meta = registry.get(t, {})
+            mkt = meta.get("market", "")
+            if mkt.upper() in (
+                "NSE",
+                "BSE",
+                "INDIA",
+            ):
+                yf_tickers.append(f"{t}.NS")
+            else:
+                yf_tickers.append(t)
 
-    total = len(tickers)
-    repo.update_scheduler_run(
-        run_id,
-        {"tickers_total": total},
-    )
-
-    def _refresh_one(ticker):
-        refresh_ticker = yf_map.get(ticker, ticker)
-        _logger.info(
-            "[scheduler] Refreshing %s",
-            refresh_ticker,
-        )
-        result = run_full_refresh(refresh_ticker)
-        if not result.success:
-            raise RuntimeError(result.error)
-
-    done, errors, cancelled = _parallel_fetch(
-        tickers,
-        _refresh_one,
+    batch_data_refresh(
+        yf_tickers,
         repo,
         run_id,
-        cancel_event,
+        cancel_event=cancel_event,
         max_workers=5,
-    )
-
-    # Final status
-    if cancelled:
-        status = "cancelled"
-    elif errors:
-        status = "failed"
-    else:
-        status = "success"
-    now = datetime.now(timezone.utc)
-    repo.update_scheduler_run(
-        run_id,
-        {
-            "status": status,
-            "completed_at": now,
-            "tickers_done": done,
-            "error_message": ("; ".join(errors[:5]) if errors else None),
-        },
-    )
-    _logger.info(
-        "[scheduler] Run %s finished: %s (%d/%d)",
-        run_id,
-        status,
-        done,
-        total,
     )
 
 
