@@ -20,6 +20,7 @@ from datetime import date
 
 import pandas as pd
 
+from backend.db.duckdb_engine import query_iceberg_table
 from backend.pipeline.screener.piotroski import (
     compute_piotroski,
 )
@@ -129,11 +130,31 @@ async def run_screen(
         len(tickers),
     )
 
-    # Load company_info for enrichment
+    # Bulk read ALL quarterly results via DuckDB
+    _use_bulk = True
     try:
-        ci_df = repo._table_to_df(
-            "stocks.company_info",
+        all_qr_rows = query_iceberg_table(
+            "stocks.quarterly_results",
+            "SELECT * FROM quarterly_results",
         )
+        all_qr_df = pd.DataFrame(all_qr_rows)
+    except Exception:
+        _logger.warning(
+            "DuckDB bulk read failed for "
+            "quarterly_results, falling back "
+            "to per-ticker reads",
+            exc_info=True,
+        )
+        all_qr_df = pd.DataFrame()
+        _use_bulk = False
+
+    # Bulk read company_info via DuckDB
+    try:
+        ci_rows = query_iceberg_table(
+            "stocks.company_info",
+            "SELECT * FROM company_info",
+        )
+        ci_df = pd.DataFrame(ci_rows)
         if not ci_df.empty:
             ci_df = (
                 ci_df.sort_values(
@@ -144,7 +165,17 @@ async def run_screen(
                 .first()
             )
     except Exception:
+        _logger.warning(
+            "DuckDB bulk read failed for " "company_info",
+            exc_info=True,
+        )
         ci_df = pd.DataFrame()
+
+    # Group quarterly results by ticker
+    if not all_qr_df.empty:
+        grouped = dict(tuple(all_qr_df.groupby("ticker")))
+    else:
+        grouped = {}
 
     today = date.today()
     scores: list[dict] = []
@@ -153,7 +184,15 @@ async def run_screen(
 
     for ticker in tickers:
         try:
-            qr_df = repo.get_quarterly_results(ticker)
+            if _use_bulk:
+                qr_df = grouped.get(
+                    ticker,
+                    pd.DataFrame(),
+                )
+            else:
+                qr_df = repo.get_quarterly_results(
+                    ticker,
+                )
             if qr_df.empty:
                 skipped += 1
                 continue
