@@ -107,7 +107,7 @@ function RefreshIcon({ className = "h-4 w-4" }) {
   );
 }
 
-function ClockIcon({ className = "h-4 w-4" }) {
+function BarChartIcon({ className = "h-4 w-4" }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -118,8 +118,9 @@ function ClockIcon({ className = "h-4 w-4" }) {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <circle cx="12" cy="12" r="10" />
-      <polyline points="12 6 12 12 16 14" />
+      <line x1="18" y1="20" x2="18" y2="10" />
+      <line x1="12" y1="20" x2="12" y2="4" />
+      <line x1="6" y1="20" x2="6" y2="14" />
     </svg>
   );
 }
@@ -626,6 +627,7 @@ function NewScheduleForm({
     "weekly" | "monthly"
   >("weekly");
   const [scope, setScope] = useState("all");
+  const [jobType, setJobType] = useState("data_refresh");
   const [saving, setSaving] = useState(false);
   const [activePreset, setActivePreset] = useState(0);
 
@@ -635,6 +637,7 @@ function NewScheduleForm({
       setName(editingJob.name);
       setTime(editingJob.cron_time);
       setScope(editingJob.scope);
+      setJobType(editingJob.job_type || "data_refresh");
       if (
         editingJob.cron_dates &&
         editingJob.cron_dates.length > 0
@@ -658,6 +661,7 @@ function NewScheduleForm({
       setCronDates([]);
       setScheduleType("weekly");
       setScope("all");
+      setJobType("data_refresh");
       setActivePreset(0);
     }
   }, [editingJob]);
@@ -677,11 +681,14 @@ function NewScheduleForm({
         scheduleType === "monthly"
           ? `Monthly ${cronDates.join(",")} at ${time}`
           : scheduleLabel(days, time);
+      const typeLabel = jobType === "fetch_quarterly"
+        ? "Fetch Quarterly"
+        : "Data Refresh";
       const jobName = name.trim() ||
-        `Data Refresh - ${label}`;
+        `${typeLabel} - ${label}`;
       const payload = {
         name: jobName,
-        job_type: "data_refresh",
+        job_type: jobType,
         cron_days:
           scheduleType === "weekly" ? days : [],
         cron_dates:
@@ -721,7 +728,7 @@ function NewScheduleForm({
     }
   }, [
     name, days, cronDates, scheduleType,
-    time, scope, editingJob, onCreated,
+    time, scope, jobType, editingJob, onCreated,
   ]);
 
   return (
@@ -775,11 +782,16 @@ function NewScheduleForm({
             Job Type
           </label>
           <div className="grid grid-cols-2 gap-2">
-            <div
-              className="flex items-center gap-2.5
-                rounded-xl border border-indigo-500
-                bg-indigo-50 p-3
-                dark:bg-indigo-500/12"
+            <button
+              type="button"
+              onClick={() => setJobType("data_refresh")}
+              className={`flex items-center gap-2.5
+                rounded-xl border p-3 text-left
+                transition-all ${
+                  jobType === "data_refresh"
+                    ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-500/12"
+                    : "border-gray-200 dark:border-gray-700"
+                }`}
             >
               <div
                 className="flex h-9 w-9 items-center
@@ -798,30 +810,36 @@ function NewScheduleForm({
                   Refresh all tickers
                 </p>
               </div>
-            </div>
-            <div
-              className="flex cursor-not-allowed
-                items-center gap-2.5 rounded-xl border
-                border-gray-200 p-3 opacity-40
-                dark:border-gray-700"
+            </button>
+            <button
+              type="button"
+              onClick={() => setJobType("fetch_quarterly")}
+              className={`flex items-center gap-2.5
+                rounded-xl border p-3 text-left
+                transition-all ${
+                  jobType === "fetch_quarterly"
+                    ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-500/12"
+                    : "border-gray-200 dark:border-gray-700"
+                }`}
             >
               <div
                 className="flex h-9 w-9 items-center
                   justify-center rounded-[10px]
-                  bg-gray-100 text-gray-400
-                  dark:bg-gray-800 dark:text-gray-500"
+                  bg-emerald-100 text-emerald-700
+                  dark:bg-emerald-500/15
+                  dark:text-emerald-400"
               >
-                <ClockIcon />
+                <BarChartIcon />
               </div>
               <div>
-                <p className="text-xs font-semibold text-gray-500">
-                  More coming
+                <p className="text-xs font-semibold text-gray-900 dark:text-gray-100">
+                  Fetch Quarterly
                 </p>
-                <p className="text-[10px] text-gray-400">
-                  Additional job types
+                <p className="text-[10px] text-gray-400 dark:text-gray-500">
+                  Quarterly financials
                 </p>
               </div>
-            </div>
+            </button>
           </div>
         </div>
 

@@ -607,51 +607,34 @@ def _extract_statement(
     return rows
 
 
-@tool
-def fetch_quarterly_results(ticker: str) -> str:
-    """Fetch quarterly financial statements from Yahoo Finance.
-
-    Retrieves quarterly income statement, balance sheet, and
-    cash flow data and persists to the Iceberg
-    ``stocks.quarterly_results`` table. Data is cached for 7 days.
+def _fetch_and_store_quarterly(
+    ticker: str,
+    repo,
+    force: bool = False,
+) -> str:
+    """Fetch quarterly statements and persist to Iceberg.
 
     Args:
-        ticker: Stock ticker symbol, e.g. ``"AAPL"``.
+        ticker: Uppercase ticker with suffix (e.g. RELIANCE.NS).
+        repo: StockRepository instance.
+        force: If True, skip 7-day freshness check.
 
     Returns:
-        Summary string describing fetched quarters.
-
-    Example:
-        >>> result = fetch_quarterly_results.invoke(
-        ...     {"ticker": "AAPL"}
-        ... )
-        >>> "AAPL" in result
-        True
+        Summary string.
     """
-    err = validate_ticker(ticker)
-    if err:
-        return f"Error: {err}"
-    ticker = ticker.upper().strip()
-    from tools._ticker_linker import auto_link_ticker
-
-    auto_link_ticker(ticker)
-    _logger.info(
-        "fetch_quarterly_results | ticker=%s",
-        ticker,
-    )
-
     try:
-        repo = _require_repo()
-
-        # Check freshness (7-day cache)
-        cached = repo.get_quarterly_results_if_fresh(ticker, days=7)
-        if cached is not None:
-            n = len(cached)
-            return (
-                f"Quarterly results for {ticker} are "
-                f"up-to-date ({n} records, fetched "
-                f"within last 7 days)."
+        if not force:
+            cached = repo.get_quarterly_results_if_fresh(
+                ticker,
+                days=7,
             )
+            if cached is not None:
+                n = len(cached)
+                return (
+                    f"Quarterly results for {ticker} are "
+                    f"up-to-date ({n} records, fetched "
+                    f"within last 7 days)."
+                )
 
         yt = yf.Ticker(ticker)
         all_rows: list[dict] = []
@@ -736,6 +719,46 @@ def fetch_quarterly_results(ticker: str) -> str:
             exc_info=True,
         )
         return f"Error fetching quarterly results " f"for '{ticker}': {e}"
+
+
+@tool
+def fetch_quarterly_results(ticker: str) -> str:
+    """Fetch quarterly financial statements from Yahoo Finance.
+
+    Retrieves quarterly income statement, balance sheet, and
+    cash flow data and persists to the Iceberg
+    ``stocks.quarterly_results`` table. Data is cached for 7 days.
+
+    Args:
+        ticker: Stock ticker symbol, e.g. ``"AAPL"``.
+
+    Returns:
+        Summary string describing fetched quarters.
+
+    Example:
+        >>> result = fetch_quarterly_results.invoke(
+        ...     {"ticker": "AAPL"}
+        ... )
+        >>> "AAPL" in result
+        True
+    """
+    err = validate_ticker(ticker)
+    if err:
+        return f"Error: {err}"
+    ticker = ticker.upper().strip()
+    from tools._ticker_linker import auto_link_ticker
+
+    auto_link_ticker(ticker)
+    _logger.info(
+        "fetch_quarterly_results | ticker=%s",
+        ticker,
+    )
+    repo = _require_repo()
+    return _fetch_and_store_quarterly(
+        ticker,
+        repo,
+        force=False,
+    )
 
 
 @tool
