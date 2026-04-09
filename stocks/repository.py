@@ -246,14 +246,36 @@ class StockRepository:
         return self._get_catalog().load_table(identifier)
 
     def _table_to_df(self, identifier: str) -> pd.DataFrame:
-        """Read an entire Iceberg table into a pandas DataFrame.
+        """Read an entire Iceberg table into a DataFrame.
+
+        DuckDB primary path with PyIceberg fallback.
 
         Args:
             identifier: Fully-qualified table name.
 
         Returns:
-            pandas DataFrame with all rows, or an empty DataFrame on error.
+            pandas DataFrame with all rows, or empty on
+            error.
         """
+        # DuckDB fast path
+        try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            view = identifier.split(".")[-1]
+            df = query_iceberg_df(
+                identifier,
+                f"SELECT * FROM {view}",
+            )
+            return df
+        except Exception as exc:
+            _logger.debug(
+                "DuckDB read failed for %s: %s; " "falling back to PyIceberg",
+                identifier,
+                exc,
+            )
+        # PyIceberg fallback (original code)
         try:
             tbl = self._load_table(identifier)
             if identifier in self._dirty_tables:
@@ -261,7 +283,11 @@ class StockRepository:
                 self._dirty_tables.discard(identifier)
             return tbl.scan().to_pandas()
         except Exception as exc:
-            _logger.warning("Could not read table %s: %s", identifier, exc)
+            _logger.warning(
+                "Could not read table %s: %s",
+                identifier,
+                exc,
+            )
             return pd.DataFrame()
 
     def _scan_ticker(
@@ -270,22 +296,46 @@ class StockRepository:
         ticker: str,
         selected_fields: list[str] | None = None,
     ) -> pd.DataFrame:
-        """Scan a table filtered to a single ticker using predicate push-down.
+        """Scan a table filtered to a single ticker.
 
-        Attempts a server-side ``EqualTo("ticker", ticker)`` predicate first;
-        falls back to a full table scan with Python-level filtering on failure.
+        DuckDB primary path with PyIceberg fallback.
 
         Args:
             identifier: Fully-qualified table name
                 (e.g. ``"stocks.ohlcv"``).
-            ticker: Stock ticker symbol (already uppercased).
-            selected_fields: Optional list of column names to
-                project.  ``None`` selects all columns.
+            ticker: Stock ticker symbol (already
+                uppercased).
+            selected_fields: Optional column projection.
+                ``None`` selects all columns.
 
         Returns:
             DataFrame containing only rows for *ticker*,
             or an empty DataFrame.
         """
+        # DuckDB fast path
+        try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            view = identifier.split(".")[-1]
+            df = query_iceberg_df(
+                identifier,
+                f"SELECT * FROM {view}" f" WHERE ticker = ?",
+                [ticker],
+            )
+            if selected_fields and not df.empty:
+                cols = [c for c in selected_fields if c in df.columns]
+                return df[cols]
+            return df
+        except Exception as exc:
+            _logger.debug(
+                "DuckDB scan_ticker failed for " "%s/%s: %s",
+                identifier,
+                ticker,
+                exc,
+            )
+        # PyIceberg fallback (original code)
         try:
             from pyiceberg.expressions import EqualTo
 
@@ -293,7 +343,9 @@ class StockRepository:
             if identifier in self._dirty_tables:
                 tbl.refresh()
                 self._dirty_tables.discard(identifier)
-            scan_kwargs = {"row_filter": EqualTo("ticker", ticker)}
+            scan_kwargs = {
+                "row_filter": EqualTo("ticker", ticker),
+            }
             if selected_fields:
                 scan_kwargs["selected_fields"] = selected_fields
             scan = tbl.scan(**scan_kwargs)
@@ -323,9 +375,7 @@ class StockRepository:
     ) -> pd.DataFrame:
         """Scan a table for multiple tickers in one query.
 
-        Uses ``In("ticker", tickers)`` predicate for
-        Iceberg-level partition pruning.  Falls back to
-        full scan with pandas ``isin()`` on error.
+        DuckDB primary path with PyIceberg fallback.
 
         Args:
             identifier: Fully-qualified table name.
@@ -338,6 +388,32 @@ class StockRepository:
         """
         if not tickers:
             return pd.DataFrame()
+        # DuckDB fast path
+        try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            view = identifier.split(".")[-1]
+            placeholders = ",".join(
+                ["?"] * len(tickers),
+            )
+            df = query_iceberg_df(
+                identifier,
+                f"SELECT * FROM {view}" f" WHERE ticker IN ({placeholders})",
+                tickers,
+            )
+            if selected_fields and not df.empty:
+                cols = [c for c in selected_fields if c in df.columns]
+                return df[cols]
+            return df
+        except Exception as exc:
+            _logger.debug(
+                "DuckDB scan_tickers failed for " "%s: %s",
+                identifier,
+                exc,
+            )
+        # PyIceberg fallback (original code)
         try:
             from pyiceberg.expressions import In
 
