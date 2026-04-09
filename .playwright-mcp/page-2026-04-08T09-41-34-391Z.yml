@@ -1,0 +1,30 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - img "ASET" [ref=e5]
+      - paragraph [ref=e6]: Sign in to continue
+    - generic [ref=e7]:
+      - generic [ref=e8]:
+        - generic [ref=e9]:
+          - generic [ref=e10]: Email
+          - textbox "Email" [ref=e11]:
+            - /placeholder: you@example.com
+            - text: admin@demo.com
+        - generic [ref=e12]:
+          - generic [ref=e13]: Password
+          - textbox "Password" [ref=e14]:
+            - /placeholder: ••••••••
+            - text: Admin@demo1234
+        - generic [ref=e30]:
+          - img [ref=e31]
+          - paragraph [ref=e33]: Invalid email or password.
+        - button "Sign in" [ref=e15]
+      - generic [ref=e16]:
+        - separator [ref=e17]
+        - generic [ref=e18]: or continue with
+        - separator [ref=e19]
+      - button "Sign in with Google" [ref=e21]:
+        - img [ref=e22]
+        - text: Sign in with Google
+    - paragraph [ref=e28]: AI Agent UI · Powered by Claude
+  - alert [ref=e29]

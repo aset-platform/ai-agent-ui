@@ -1,0 +1,475 @@
+- generic [active] [ref=e1]:
+  - alert [ref=e2]
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - generic [ref=e5]:
+        - img "ASET" [ref=e6]
+        - generic [ref=e7]: ASET Platform
+      - navigation [ref=e8]:
+        - link "Portfolio" [ref=e9] [cursor=pointer]:
+          - /url: /dashboard
+          - img [ref=e11]
+          - generic [ref=e14]: Portfolio
+        - generic [ref=e15]:
+          - button "Dashboard" [ref=e16] [cursor=pointer]:
+            - img [ref=e18]
+            - generic [ref=e19]: Dashboard
+            - img [ref=e20]
+          - generic [ref=e23]:
+            - link "Home" [ref=e24] [cursor=pointer]:
+              - /url: /analytics
+              - img [ref=e26]
+              - generic [ref=e29]: Home
+            - link "Analysis" [ref=e30] [cursor=pointer]:
+              - /url: /analytics/analysis
+              - img [ref=e32]
+              - generic [ref=e34]: Analysis
+            - link "Insights" [ref=e95] [cursor=pointer]:
+              - /url: /analytics/insights
+              - img [ref=e97]
+              - generic [ref=e99]: Insights
+        - link "Docs" [ref=e35] [cursor=pointer]:
+          - /url: /docs
+          - img [ref=e37]
+          - generic [ref=e40]: Docs
+        - link "Admin" [ref=e100] [cursor=pointer]:
+          - /url: /admin
+          - img [ref=e102]
+          - generic [ref=e104]: Admin
+      - generic [ref=e41]:
+        - button "Light Mode" [ref=e42]:
+          - img [ref=e43]
+          - generic [ref=e49]: Light Mode
+        - button "Collapse" [ref=e50]:
+          - img [ref=e51]
+          - generic [ref=e53]: Collapse
+    - generic [ref=e54]:
+      - banner [ref=e55]:
+        - heading "Portfolio" [level=1] [ref=e57]
+        - generic [ref=e58]:
+          - button "Toggle chat panel" [ref=e59]:
+            - img [ref=e60]
+          - button "Admin User" [ref=e105]:
+            - generic [ref=e106]: Admin User
+            - img [ref=e65]
+      - main [ref=e67]:
+        - generic [ref=e68]:
+          - generic [ref=e108]:
+            - generic [ref=e109]:
+              - generic [ref=e110]:
+                - paragraph [ref=e111]: Welcome back, Admin!
+                - paragraph [ref=e112]: ₹92,592.00
+                - generic [ref=e113]: ₹3,868.00 (-4.01%)
+              - generic [ref=e114]:
+                - generic [ref=e115]:
+                  - button "🇮🇳 India" [ref=e116]
+                  - button "🇺🇸 US" [ref=e117]
+                - generic [ref=e118]:
+                  - generic [ref=e119]: 2 Stocks
+                  - generic [ref=e120]: Active
+            - generic [ref=e122]:
+              - button "Portfolio Analysis" [ref=e123]
+              - button "Portfolio Forecast" [ref=e124]
+          - generic [ref=e72]:
+            - heading "Sector Allocation" [level=3] [ref=e127]
+            - heading "Asset Performance" [level=3] [ref=e134]
+            - generic [ref=e139]:
+              - generic [ref=e141]:
+                - heading "Recommendations" [level=3] [ref=e142]
+                - generic [ref=e143]:
+                  - generic [ref=e144]: At Risk
+                  - generic [ref=e145]: 6 suggestions
+              - generic [ref=e146]:
+                - generic [ref=e147]:
+                  - generic "High" [ref=e149]:
+                    - img [ref=e150]
+                  - generic [ref=e152]:
+                    - paragraph [ref=e153]: INFY.NS is overweight (72%)
+                    - paragraph [ref=e154]: Single stock exceeds 20% of portfolio. Consider trimming to reduce concentration risk.
+                - generic [ref=e155]:
+                  - generic "High" [ref=e157]:
+                    - img [ref=e158]
+                  - generic [ref=e160]:
+                    - paragraph [ref=e161]: RELIANCE.NS is overweight (28%)
+                    - paragraph [ref=e162]: Single stock exceeds 20% of portfolio. Consider trimming to reduce concentration risk.
+                - generic [ref=e163]:
+                  - generic "High" [ref=e165]:
+                    - img [ref=e166]
+                  - generic [ref=e168]:
+                    - paragraph [ref=e169]: Technology sector is concentrated (72%)
+                    - paragraph [ref=e170]: Sector exceeds 35% of portfolio. Diversify across sectors to reduce sector-specific risk.
+                - generic [ref=e171]:
+                  - generic "Medium" [ref=e173]:
+                    - img [ref=e174]
+                  - generic [ref=e176]:
+                    - paragraph [ref=e177]: No exposure to IT
+                    - paragraph [ref=e178]: Consider adding IT stocks for broader diversification.
+                - generic [ref=e179]:
+                  - generic "Medium" [ref=e181]:
+                    - img [ref=e182]
+                  - generic [ref=e184]:
+                    - paragraph [ref=e185]: No exposure to Healthcare
+                    - paragraph [ref=e186]: Consider adding Healthcare stocks for broader diversification.
+                - generic [ref=e187]:
+                  - generic "Medium" [ref=e189]:
+                    - img [ref=e190]
+                  - generic [ref=e192]:
+                    - paragraph [ref=e193]: No exposure to Financials
+                    - paragraph [ref=e194]: Consider adding Financials stocks for broader diversification.
+          - generic [ref=e79]:
+            - generic [ref=e80]:
+              - generic [ref=e195]:
+                - generic [ref=e196]:
+                  - heading "Portfolio P&L Trend" [level=3] [ref=e197]
+                  - generic [ref=e198]:
+                    - button "1M" [ref=e199]
+                    - button "3M" [ref=e200]
+                    - button "6M" [ref=e201]
+                    - button "1Y" [ref=e202]
+                    - button "ALL" [ref=e203]
+                - generic [ref=e204]:
+                  - generic [ref=e205]:
+                    - paragraph [ref=e206]: Total Return
+                    - paragraph [ref=e207]: "-4.0%"
+                  - generic [ref=e208]:
+                    - paragraph [ref=e209]: Sharpe Ratio
+                    - paragraph [ref=e210]: "-1.37"
+                  - generic [ref=e211]:
+                    - paragraph [ref=e212]: Max Drawdown
+                    - paragraph [ref=e213]: "-7.6%"
+                  - generic [ref=e214]:
+                    - paragraph [ref=e215]: Annualized
+                    - paragraph [ref=e216]: "-30.8%"
+              - generic [ref=e221]:
+                - generic [ref=e223]:
+                  - heading "News & Sentiment" [level=3] [ref=e224]
+                  - generic [ref=e226]: "Portfolio: Bullish (+0.23)"
+                - generic [ref=e227]:
+                  - link "Asian Equities Traded in the US as American Depositary Receipts Decline in Tuesday Trading MT Newswires INFY.NS 18h ago" [ref=e228] [cursor=pointer]:
+                    - /url: https://finance.yahoo.com/markets/world-indices/articles/asian-equities-traded-us-american-144446055.html
+                    - generic [ref=e229]:
+                      - paragraph [ref=e230]: Asian Equities Traded in the US as American Depositary Receipts Decline in Tuesday Trading
+                      - generic [ref=e231]:
+                        - generic [ref=e232]: MT Newswires
+                        - generic [ref=e233]: INFY.NS
+                        - generic [ref=e234]: 18h ago
+                  - link "India's Reliance buys Venezuelan oil directly from PDVSA, document and data say Reuters RELIANCE.NS Yesterday" [ref=e235] [cursor=pointer]:
+                    - /url: https://sg.finance.yahoo.com/news/indias-reliance-buys-venezuelan-oil-140723293.html
+                    - generic [ref=e236]:
+                      - paragraph [ref=e237]: India's Reliance buys Venezuelan oil directly from PDVSA, document and data say
+                      - generic [ref=e238]:
+                        - generic [ref=e239]: Reuters
+                        - generic [ref=e240]: RELIANCE.NS
+                        - generic [ref=e241]: Yesterday
+                  - link "Indian IT firms face subdued fourth quarter as war, AI concerns persist; weak rupee helps earnings Reuters INFY.NS 2d ago" [ref=e242] [cursor=pointer]:
+                    - /url: https://finance.yahoo.com/markets/stocks/articles/indian-firms-face-subdued-fourth-082316822.html
+                    - generic [ref=e243]:
+                      - paragraph [ref=e244]: Indian IT firms face subdued fourth quarter as war, AI concerns persist; weak rupee helps earnings
+                      - generic [ref=e245]:
+                        - generic [ref=e246]: Reuters
+                        - generic [ref=e247]: INFY.NS
+                        - generic [ref=e248]: 2d ago
+                  - link "How The Investment Story For Reliance Industries (NSEI:RELIANCE) Is Quietly Shifting On New Assumptions Simply Wall St. RELIANCE.NS 4d ago" [ref=e249] [cursor=pointer]:
+                    - /url: https://finance.yahoo.com/markets/stocks/articles/investment-story-reliance-industries-nsei-140715800.html
+                    - generic [ref=e250]:
+                      - paragraph [ref=e251]: How The Investment Story For Reliance Industries (NSEI:RELIANCE) Is Quietly Shifting On New Assumptions
+                      - generic [ref=e252]:
+                        - generic [ref=e253]: Simply Wall St.
+                        - generic [ref=e254]: RELIANCE.NS
+                        - generic [ref=e255]: 4d ago
+                  - link "Asian Equities Traded in the US as American Depositary Receipts Fall Sharply in Thursday Trading MT Newswires INFY.NS 5d ago" [ref=e256] [cursor=pointer]:
+                    - /url: https://finance.yahoo.com/markets/world-indices/articles/asian-equities-traded-us-american-143607057.html
+                    - generic [ref=e257]:
+                      - paragraph [ref=e258]: Asian Equities Traded in the US as American Depositary Receipts Fall Sharply in Thursday Trading
+                      - generic [ref=e259]:
+                        - generic [ref=e260]: MT Newswires
+                        - generic [ref=e261]: INFY.NS
+                        - generic [ref=e262]: 5d ago
+                  - link "India diesel exports to SE Asia hit 7-year high in March due to Iran war, data shows Reuters RELIANCE.NS 7d ago" [ref=e263] [cursor=pointer]:
+                    - /url: https://sg.finance.yahoo.com/news/india-diesel-exports-se-asia-091604646.html
+                    - generic [ref=e264]:
+                      - paragraph [ref=e265]: India diesel exports to SE Asia hit 7-year high in March due to Iran war, data shows
+                      - generic [ref=e266]:
+                        - generic [ref=e267]: Reuters
+                        - generic [ref=e268]: RELIANCE.NS
+                        - generic [ref=e269]: 7d ago
+            - generic [ref=e270]:
+              - generic [ref=e271]:
+                - generic [ref=e272]:
+                  - button "Portfolio" [ref=e273]
+                  - button "Watchlist" [ref=e274]
+                - generic [ref=e275]:
+                  - button "Add stock to portfolio" [ref=e276]:
+                    - img [ref=e277]
+                  - generic [ref=e278]: 2 stocks
+              - generic [ref=e279]:
+                - generic [ref=e280] [cursor=pointer]:
+                  - generic [ref=e282]:
+                    - paragraph [ref=e283]: INFY.NS
+                    - paragraph [ref=e284]: 50 shares @ ₹1362.00
+                  - generic [ref=e285]:
+                    - paragraph [ref=e286]: ₹66,500.00
+                    - paragraph [ref=e287]: "Inv: ₹68,100.00"
+                  - generic [ref=e288]: "-2.35%"
+                  - generic [ref=e289]:
+                    - button "Refresh ticker data" [ref=e290]:
+                      - img [ref=e291]
+                    - button "Edit holding" [ref=e294]:
+                      - img [ref=e295]
+                    - button "Remove from portfolio" [ref=e297]:
+                      - img [ref=e298]
+                - generic [ref=e300] [cursor=pointer]:
+                  - generic [ref=e302]:
+                    - paragraph [ref=e303]: RELIANCE.NS
+                    - paragraph [ref=e304]: 20 shares @ ₹1418.00
+                  - generic [ref=e305]:
+                    - paragraph [ref=e306]: ₹26,092.00
+                    - paragraph [ref=e307]: "Inv: ₹28,360.00"
+                  - generic [ref=e308]: "-8.00%"
+                  - generic [ref=e309]:
+                    - button "Refresh ticker data" [ref=e310]:
+                      - img [ref=e311]
+                    - button "Edit holding" [ref=e314]:
+                      - img [ref=e315]
+                    - button "Remove from portfolio" [ref=e317]:
+                      - img [ref=e318]
+          - generic [ref=e87]:
+            - generic [ref=e320]:
+              - heading "Analysis Signals" [level=3] [ref=e322]
+              - generic [ref=e324]:
+                - generic [ref=e325]:
+                  - generic [ref=e326]: INFY.NS
+                  - text: 2026-04-07
+                - generic [ref=e327]:
+                  - generic [ref=e328]:
+                    - generic [ref=e329]:
+                      - paragraph [ref=e330]:
+                        - generic [ref=e331]:
+                          - text: RSI 14
+                          - img [ref=e332]
+                      - paragraph [ref=e334]: "54.15"
+                    - generic [ref=e336]: Neutral
+                  - generic [ref=e337]:
+                    - generic [ref=e338]:
+                      - paragraph [ref=e339]:
+                        - generic [ref=e340]:
+                          - text: MACD
+                          - img [ref=e341]
+                      - paragraph [ref=e343]: "-26.96"
+                    - generic [ref=e345]: Bullish
+                  - generic [ref=e346]:
+                    - generic [ref=e347]:
+                      - paragraph [ref=e348]:
+                        - generic [ref=e349]:
+                          - text: SMA 50
+                          - img [ref=e350]
+                      - paragraph [ref=e352]: nan
+                    - generic [ref=e354]: Neutral
+                  - generic [ref=e355]:
+                    - generic [ref=e356]:
+                      - paragraph [ref=e357]:
+                        - generic [ref=e358]:
+                          - text: SMA 200
+                          - img [ref=e359]
+                      - paragraph [ref=e361]: nan
+                    - generic [ref=e363]: Neutral
+                - generic [ref=e364]:
+                  - generic [ref=e365]:
+                    - paragraph [ref=e366]:
+                      - generic [ref=e367]:
+                        - text: Sharpe Ratio
+                        - img [ref=e368]
+                    - paragraph [ref=e370]: "0.290"
+                  - generic [ref=e371]:
+                    - paragraph [ref=e372]:
+                      - generic [ref=e373]:
+                        - text: Ann. Return
+                        - img [ref=e374]
+                    - paragraph [ref=e376]: +11.79%
+                  - generic [ref=e377]:
+                    - paragraph [ref=e378]:
+                      - generic [ref=e379]:
+                        - text: Volatility
+                        - img [ref=e380]
+                    - paragraph [ref=e382]: +26.47%
+                  - generic [ref=e383]:
+                    - paragraph [ref=e384]:
+                      - generic [ref=e385]:
+                        - text: Max Drawdown
+                        - img [ref=e386]
+                    - paragraph [ref=e388]: "-38.95%"
+            - generic [ref=e389]:
+              - generic [ref=e391]:
+                - heading "LLM Usage" [level=3] [ref=e392]
+                - generic [ref=e393]: (30 days)
+              - generic [ref=e394]:
+                - generic [ref=e395]:
+                  - paragraph [ref=e396]: Total Requests
+                  - paragraph [ref=e397]: "644"
+                - generic [ref=e398]:
+                  - paragraph [ref=e399]: Total Cost
+                  - paragraph [ref=e400]: $0.30
+                - generic [ref=e401]:
+                  - paragraph [ref=e402]: Avg Latency
+                  - paragraph [ref=e403]: 1591ms
+              - generic [ref=e405]:
+                - img [ref=e407]:
+                  - generic [ref=e417]: "644"
+                - generic [ref=e418]:
+                  - generic [ref=e419]:
+                    - generic [ref=e421]: Gpt Oss:20b
+                    - generic [ref=e422]: 2%
+                  - generic [ref=e423]:
+                    - generic [ref=e425]: Llama 3.3 70B
+                    - generic [ref=e426]: 46%
+                  - generic [ref=e427]:
+                    - generic [ref=e429]: Llama 4 Scout 17b 16e Instruct
+                    - generic [ref=e430]: 2%
+                  - generic [ref=e431]:
+                    - generic [ref=e433]: Kimi K2
+                    - generic [ref=e434]: 21%
+                  - generic [ref=e435]:
+                    - generic [ref=e437]: A
+                    - generic [ref=e438]: 3%
+                  - generic [ref=e439]:
+                    - generic [ref=e441]: GPT OSS 120B
+                    - generic [ref=e442]: 3%
+                  - generic [ref=e443]:
+                    - generic [ref=e445]: Qwen3 32b
+                    - generic [ref=e446]: 3%
+                  - generic [ref=e447]:
+                    - generic [ref=e449]: Test
+                    - generic [ref=e450]: 21%
+              - generic [ref=e451]:
+                - paragraph [ref=e452]: Model Breakdown
+                - generic [ref=e453]:
+                  - generic [ref=e455]:
+                    - generic [ref=e456]:
+                      - generic [ref=e457]: Gpt Oss:20b
+                      - generic [ref=e458]: ollama
+                    - generic [ref=e459]:
+                      - generic [ref=e460]: 14 req
+                      - generic [ref=e461]: $0.00
+                  - generic [ref=e465]:
+                    - generic [ref=e466]:
+                      - generic [ref=e467]: Llama 3.3 70B
+                      - generic [ref=e468]: groq
+                    - generic [ref=e469]:
+                      - generic [ref=e470]: 296 req
+                      - generic [ref=e471]: $0.17
+                  - generic [ref=e475]:
+                    - generic [ref=e476]:
+                      - generic [ref=e477]: Llama 4 Scout 17b 16e Instruct
+                      - generic [ref=e478]: groq
+                    - generic [ref=e479]:
+                      - generic [ref=e480]: 10 req
+                      - generic [ref=e481]: $0.01
+                  - generic [ref=e485]:
+                    - generic [ref=e486]:
+                      - generic [ref=e487]: Kimi K2
+                      - generic [ref=e488]: groq
+                    - generic [ref=e489]:
+                      - generic [ref=e490]: 134 req
+                      - generic [ref=e491]: $0.11
+                  - generic [ref=e495]:
+                    - generic [ref=e496]:
+                      - generic [ref=e497]: A
+                      - generic [ref=e498]: n/a
+                    - generic [ref=e499]:
+                      - generic [ref=e500]: 17 req
+                      - generic [ref=e501]: $0.00
+                  - generic [ref=e505]:
+                    - generic [ref=e506]:
+                      - generic [ref=e507]: GPT OSS 120B
+                      - generic [ref=e508]: groq
+                    - generic [ref=e509]:
+                      - generic [ref=e510]: 20 req
+                      - generic [ref=e511]: $0.00
+                  - generic [ref=e515]:
+                    - generic [ref=e516]:
+                      - generic [ref=e517]: Qwen3 32b
+                      - generic [ref=e518]: groq
+                    - generic [ref=e519]:
+                      - generic [ref=e520]: 18 req
+                      - generic [ref=e521]: $0.02
+                  - generic [ref=e525]:
+                    - generic [ref=e526]:
+                      - generic [ref=e527]: Test
+                      - generic [ref=e528]: groq
+                    - generic [ref=e529]:
+                      - generic [ref=e530]: 135 req
+                      - generic [ref=e531]: $0.00
+          - generic [ref=e534]:
+            - generic [ref=e535]:
+              - generic [ref=e536]:
+                - heading "Forecast" [level=3] [ref=e537]
+                - generic [ref=e538]: as of 2026-04-05
+              - combobox [ref=e539]:
+                - option "HCLTECH.NS"
+                - option "HDFCBANK.NS"
+                - option "HINDUNILVR.NS"
+                - option "INFY.NS" [selected]
+                - option "RELIANCE.NS"
+                - option "TCS.NS"
+            - generic [ref=e540]:
+              - generic [ref=e541]:
+                - text: Current Price
+                - paragraph [ref=e542]:
+                  - text: ₹1300.80
+                  - generic [ref=e543]: "Sentiment: Neutral"
+              - generic [ref=e544]:
+                - img [ref=e546]:
+                  - generic [ref=e547]: ₹989
+                  - generic [ref=e548]: ₹1099
+                  - generic [ref=e549]: ₹1209
+                  - generic [ref=e550]: ₹1320
+                  - generic [ref=e551]: ₹1430
+                  - generic [ref=e552]: Now
+                  - generic [ref=e553]: 3m
+                  - generic [ref=e554]: 6m
+                  - generic [ref=e555]: 9m
+                  - generic [ref=e560]:
+                    - generic:
+                      - generic: Current
+                      - generic: ₹1300.80
+                  - generic [ref=e563]:
+                    - generic:
+                      - generic: 2026-07-05
+                      - generic: ₹1136.62
+                  - generic [ref=e566]:
+                    - generic:
+                      - generic: 2026-10-05
+                      - generic: ₹1212.69
+                  - generic [ref=e569]:
+                    - generic:
+                      - generic: 2026-12-28
+                      - generic: ₹1208.60
+                - generic [ref=e572]:
+                  - generic [ref=e573]:
+                    - paragraph [ref=e574]: 3-month
+                    - paragraph [ref=e575]: 2026-07-05
+                    - paragraph [ref=e576]: ₹1136.62
+                    - generic [ref=e577]: "-12.62%"
+                    - paragraph [ref=e578]: ₹1030.25 — ₹1241.77
+                  - generic [ref=e579]:
+                    - paragraph [ref=e580]: 6-month
+                    - paragraph [ref=e581]: 2026-10-05
+                    - paragraph [ref=e582]: ₹1212.69
+                    - generic [ref=e583]: "-6.77%"
+                    - paragraph [ref=e584]: ₹1083.20 — ₹1340.64
+                  - generic [ref=e585]:
+                    - paragraph [ref=e586]: 9-month
+                    - paragraph [ref=e587]: 2026-12-28
+                    - paragraph [ref=e588]: ₹1208.60
+                    - generic [ref=e589]: "-7.09%"
+                    - paragraph [ref=e590]: ₹1039.00 — ₹1374.89
+                - generic [ref=e591]:
+                  - generic [ref=e592]:
+                    - generic [ref=e593]: MAE
+                    - generic [ref=e594]: "122.38"
+                  - generic [ref=e595]:
+                    - generic [ref=e596]: RMSE
+                    - generic [ref=e597]: "167.51"
+                  - generic [ref=e598]:
+                    - generic [ref=e599]: MAPE
+                    - generic [ref=e600]: 9.71%

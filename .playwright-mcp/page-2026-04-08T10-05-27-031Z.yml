@@ -1,0 +1,81 @@
+- generic [ref=e1]:
+  - generic [active]:
+    - generic [ref=e87]:
+      - generic [ref=e88]:
+        - generic [ref=e89]:
+          - navigation [ref=e90]:
+            - button "previous" [disabled] [ref=e91]:
+              - img "previous" [ref=e92]
+            - generic [ref=e94]:
+              - generic [ref=e95]: 1/
+              - text: "1"
+            - button "next" [disabled] [ref=e96]:
+              - img "next" [ref=e97]
+          - img
+        - generic [ref=e99]:
+          - link "Next.js 16.1.6 (stale) Turbopack" [ref=e100] [cursor=pointer]:
+            - /url: https://nextjs.org/docs/messages/version-staleness
+            - img [ref=e101]
+            - generic "There is a newer version (16.2.2) available, upgrade recommended!" [ref=e103]: Next.js 16.1.6 (stale)
+            - generic [ref=e104]: Turbopack
+          - img
+      - dialog "Runtime ReferenceError" [ref=e106]:
+        - generic [ref=e109]:
+          - generic [ref=e110]:
+            - generic [ref=e111]:
+              - generic [ref=e113]: Runtime ReferenceError
+              - generic [ref=e114]:
+                - button "Copy Error Info" [ref=e115] [cursor=pointer]:
+                  - img [ref=e116]
+                - button "No related documentation found" [disabled] [ref=e118]:
+                  - img [ref=e119]
+                - button "Attach Node.js inspector" [ref=e121] [cursor=pointer]:
+                  - img [ref=e122]
+            - generic [ref=e131]: isDark is not defined
+          - generic [ref=e132]:
+            - generic [ref=e133]:
+              - paragraph [ref=e135]:
+                - img [ref=e137]
+                - generic [ref=e140]: components/widgets/AssetPerformanceWidget.tsx (126:17) @ AssetPerformanceWidget
+                - button "Open in editor" [ref=e141] [cursor=pointer]:
+                  - img [ref=e143]
+              - generic [ref=e146]:
+                - generic [ref=e147]: 124 | ],
+                - generic [ref=e148]: "125 | };"
+                - generic [ref=e149]: "> 126 | }, [holdings, isDark]);"
+                - generic [ref=e150]: "| ^"
+                - generic [ref=e151]: 127 |
+                - generic [ref=e152]: 128 | if (loading) return <WidgetSkeleton className="h-72" />;
+                - generic [ref=e153]: "129 | if (error) return <WidgetError message={error} />;"
+            - generic [ref=e154]:
+              - generic [ref=e155]:
+                - paragraph [ref=e156]:
+                  - text: Call Stack
+                  - generic [ref=e157]: "14"
+                - button "Show 12 ignore-listed frame(s)" [ref=e158] [cursor=pointer]:
+                  - text: Show 12 ignore-listed frame(s)
+                  - img [ref=e159]
+              - generic [ref=e161]:
+                - generic [ref=e162]:
+                  - text: AssetPerformanceWidget
+                  - button "Open AssetPerformanceWidget in editor" [ref=e163] [cursor=pointer]:
+                    - img [ref=e164]
+                - text: components/widgets/AssetPerformanceWidget.tsx (126:17)
+              - generic [ref=e166]:
+                - generic [ref=e167]:
+                  - text: DashboardPage
+                  - button "Open DashboardPage in editor" [ref=e168] [cursor=pointer]:
+                    - img [ref=e169]
+                - text: app/(authenticated)/dashboard/page.tsx (268:9)
+        - generic [ref=e171]: "1"
+        - generic [ref=e172]: "2"
+    - generic [ref=e178] [cursor=pointer]:
+      - button "Open issues overlay" [ref=e179]:
+        - img [ref=e181]
+        - generic [ref=e183]:
+          - generic [ref=e184]: "0"
+          - generic [ref=e185]: "1"
+        - generic [ref=e186]: Issue
+      - button "Collapse issues badge" [ref=e187]:
+        - img [ref=e188]
+  - 'heading "Application error: a client-side exception has occurred while loading localhost (see the browser console for more information)." [level=2] [ref=e192]'
