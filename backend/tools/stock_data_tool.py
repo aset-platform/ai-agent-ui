@@ -60,9 +60,7 @@ async def _async_lookup(symbol: str) -> dict | None:
     from backend.db.models.stock_master import StockMaster
     from sqlalchemy import or_, select
 
-    canonical = (
-        symbol.replace(".NS", "").replace(".BO", "").upper()
-    )
+    canonical = symbol.replace(".NS", "").replace(".BO", "").upper()
     factory = get_session_factory()
     async with factory() as session:
         result = await session.execute(
@@ -103,7 +101,8 @@ def _lookup_stock_master(symbol: str) -> dict | None:
             # Inside an async context — schedule on the
             # running loop instead of creating a new one
             fut = asyncio.run_coroutine_threadsafe(
-                _async_lookup(symbol), loop,
+                _async_lookup(symbol),
+                loop,
             )
             return fut.result(timeout=5.0)
         return asyncio.run(_async_lookup(symbol))
@@ -445,8 +444,7 @@ def fetch_multiple_stocks(tickers: str, period: str = "10y") -> str:
         else:
             skip_count += 1
     lines = [
-        f"Batch fetch complete for {len(ticker_list)} "
-        f"tickers:",
+        f"Batch fetch complete for {len(ticker_list)} " f"tickers:",
         *results,
         f"\nSummary: {full_count} full, "
         f"{delta_count} delta, {skip_count} skipped, "
@@ -534,6 +532,9 @@ _BALANCE_MAP = {
     "Stockholders Equity": "total_equity",
     "Total Debt": "total_debt",
     "Cash And Cash Equivalents": "cash_and_equivalents",
+    "Current Assets": "current_assets",
+    "Current Liabilities": "current_liabilities",
+    "Ordinary Shares Number": "shares_outstanding",
 }
 
 _CASHFLOW_MAP = {
