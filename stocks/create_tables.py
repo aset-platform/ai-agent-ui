@@ -1,6 +1,6 @@
 """One-time Iceberg table initialisation for the stocks namespace.
 
-Creates all 11 Iceberg tables in the ``stocks`` namespace using the
+Creates all 15 Iceberg tables in the ``stocks`` namespace using the
 shared SQLite catalog (``data/iceberg/catalog.db``).  The script is
 idempotent — if tables already exist it exits without error.
 
@@ -30,6 +30,7 @@ Tables created
 - ``stocks.portfolio_transactions``
 - ``stocks.query_log``
 - ``stocks.data_gaps``
+- ``stocks.piotroski_scores``
 
 Migrated to PostgreSQL (no longer created here)
 ------------------------------------------------
@@ -91,6 +92,7 @@ _LLM_USAGE_TABLE = f"{_NAMESPACE}.llm_usage"
 _SENTIMENT_SCORES_TABLE = f"{_NAMESPACE}.sentiment_scores"
 _QUERY_LOG_TABLE = f"{_NAMESPACE}.query_log"
 _DATA_GAPS_TABLE = f"{_NAMESPACE}.data_gaps"
+_PIOTROSKI_SCORES_TABLE = f"{_NAMESPACE}.piotroski_scores"
 
 
 def _get_catalog() -> SqlCatalog:
@@ -908,8 +910,162 @@ def _quarterly_results_schema() -> Schema:
             required=False,
         ),
         NestedField(
+            field_id=22,
+            name="current_assets",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=23,
+            name="current_liabilities",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=24,
+            name="shares_outstanding",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
             field_id=21,
             name="updated_at",
+            field_type=TimestampType(),
+            required=False,
+        ),
+    )
+
+
+def _piotroski_scores_schema() -> Schema:
+    """Return Iceberg schema for ``stocks.piotroski_scores``.
+
+    Returns:
+        Schema: One row per (ticker, score_date).
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="score_id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=2,
+            name="ticker",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=3,
+            name="score_date",
+            field_type=DateType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=4,
+            name="total_score",
+            field_type=IntegerType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=5,
+            name="label",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=6,
+            name="roa_positive",
+            field_type=BooleanType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=7,
+            name="operating_cf_positive",
+            field_type=BooleanType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=8,
+            name="roa_increasing",
+            field_type=BooleanType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=9,
+            name="cf_gt_net_income",
+            field_type=BooleanType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=10,
+            name="leverage_decreasing",
+            field_type=BooleanType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=11,
+            name="current_ratio_increasing",
+            field_type=BooleanType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=12,
+            name="no_dilution",
+            field_type=BooleanType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=13,
+            name="gross_margin_increasing",
+            field_type=BooleanType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=14,
+            name="asset_turnover_increasing",
+            field_type=BooleanType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=15,
+            name="market_cap",
+            field_type=LongType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=16,
+            name="revenue",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=17,
+            name="avg_volume",
+            field_type=LongType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=18,
+            name="sector",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=19,
+            name="industry",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=20,
+            name="company_name",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=21,
+            name="computed_at",
             field_type=TimestampType(),
             required=False,
         ),
@@ -1546,6 +1702,12 @@ def create_tables() -> None:
         _quarterly_results_schema(),
         empty_spec,
     )
+    _create_table(
+        catalog,
+        _PIOTROSKI_SCORES_TABLE,
+        _piotroski_scores_schema(),
+        empty_spec,
+    )
 
     # Partitioned tables
     ohlcv_schema = _ohlcv_schema()
@@ -1623,6 +1785,55 @@ def create_tables() -> None:
     )
 
     _logger.info("Stocks Iceberg table initialisation complete.")
+
+
+def evolve_quarterly_results_schema() -> None:
+    """Add Piotroski fields to existing quarterly_results.
+
+    Adds current_assets, current_liabilities,
+    shares_outstanding (field_id 22-24). Idempotent --
+    skips if columns already exist.
+    """
+    catalog = _get_catalog()
+    tbl = catalog.load_table(_QUARTERLY_RESULTS_TABLE)
+    existing = {f.name for f in tbl.schema().fields}
+    new_fields = [
+        NestedField(
+            field_id=22,
+            name="current_assets",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=23,
+            name="current_liabilities",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=24,
+            name="shares_outstanding",
+            field_type=DoubleType(),
+            required=False,
+        ),
+    ]
+    to_add = [f for f in new_fields if f.name not in existing]
+    if not to_add:
+        _logger.info(
+            "quarterly_results already has Piotroski "
+            "columns — skipping evolution."
+        )
+        return
+    with tbl.update_schema() as update:
+        for field in to_add:
+            update.add_column(
+                path=field.name,
+                field_type=field.field_type,
+            )
+    _logger.info(
+        "Evolved quarterly_results schema: added %s",
+        [f.name for f in to_add],
+    )
 
 
 if __name__ == "__main__":
