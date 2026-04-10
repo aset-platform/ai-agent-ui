@@ -218,7 +218,13 @@ def create_insights_router() -> APIRouter:
             ph = ",".join(f"'{t}'" for t in tickers)
             df = query_iceberg_df(
                 "stocks.analysis_summary",
-                "SELECT * FROM analysis_summary "
+                "SELECT ticker, rsi_signal, "
+                "macd_signal_text, "
+                "sma_200_signal, "
+                "annualized_return_pct, "
+                "annualized_volatility_pct, "
+                "sharpe_ratio "
+                "FROM analysis_summary "
                 f"WHERE ticker IN ({ph})",
             )
         except Exception as exc:
@@ -540,7 +546,15 @@ def create_insights_router() -> APIRouter:
             ph = ",".join(f"'{t}'" for t in tickers)
             df = query_iceberg_df(
                 "stocks.analysis_summary",
-                "SELECT * FROM analysis_summary "
+                "SELECT ticker, "
+                "annualized_return_pct, "
+                "annualized_volatility_pct, "
+                "sharpe_ratio, "
+                "max_drawdown_pct, "
+                "max_drawdown_duration_days, "
+                "bull_phase_pct, "
+                "bear_phase_pct "
+                "FROM analysis_summary "
                 f"WHERE ticker IN ({ph})",
             )
         except Exception as exc:
@@ -635,12 +649,18 @@ def create_insights_router() -> APIRouter:
             ph = ",".join(f"'{t}'" for t in tickers)
             analysis_df = query_iceberg_df(
                 "stocks.analysis_summary",
-                "SELECT * FROM analysis_summary "
+                "SELECT ticker, "
+                "annualized_return_pct, "
+                "sharpe_ratio, "
+                "annualized_volatility_pct "
+                "FROM analysis_summary "
                 f"WHERE ticker IN ({ph})",
             )
-            company_df = _get_company_info_df(
-                stock_repo,
-                tickers,
+            company_df = query_iceberg_df(
+                "stocks.company_info",
+                "SELECT ticker, sector "
+                "FROM company_info "
+                f"WHERE ticker IN ({ph})",
             )
         except Exception as exc:
             _logger.error("sectors read: %s", exc)
