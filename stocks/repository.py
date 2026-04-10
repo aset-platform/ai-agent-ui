@@ -4632,6 +4632,54 @@ class StockRepository:
     ) -> list[dict]:
         """Return scheduler runs with filters."""
         try:
+            # Try DuckDB first (fast path).
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            cutoff = (
+                pd.Timestamp.now(tz="UTC")
+                - pd.Timedelta(days=days)
+            ).strftime("%Y-%m-%d %H:%M:%S")
+            wheres = [
+                f"started_at >= '{cutoff}'",
+            ]
+            if job_type:
+                wheres.append(
+                    f"job_type = '{job_type}'",
+                )
+            if status:
+                wheres.append(
+                    f"status = '{status}'",
+                )
+            if pipeline_run_id:
+                wheres.append(
+                    f"pipeline_run_id = "
+                    f"'{pipeline_run_id}'",
+                )
+            where_sql = " AND ".join(wheres)
+            df = query_iceberg_df(
+                _SCHEDULER_RUNS,
+                "SELECT * FROM scheduler_runs "
+                f"WHERE {where_sql} "
+                "ORDER BY started_at DESC",
+            )
+            if df.empty:
+                return []
+            if "started_at" in df.columns:
+                df["started_at"] = pd.to_datetime(
+                    df["started_at"],
+                    utc=True,
+                    errors="coerce",
+                )
+            if "completed_at" in df.columns:
+                df["completed_at"] = pd.to_datetime(
+                    df["completed_at"],
+                    utc=True,
+                    errors="coerce",
+                )
+        except Exception:
+            # Fallback to PyIceberg.
             df = self._table_to_df(_SCHEDULER_RUNS)
             if df.empty:
                 return []
