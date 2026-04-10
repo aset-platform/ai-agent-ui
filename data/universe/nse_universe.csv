@@ -1,0 +1,748 @@
+symbol,name,isin,exchange,series,sector,industry,tags
+360ONE,360 ONE WAM LIMITED,INE466L01038,NSE,EQ,,Stockbroking & Allied,nifty500|niftymidcap150|midcap
+3MINDIA,3M India Limited,INE470A01017,NSE,EQ,,Diversified,nifty500|niftymidcap150|midcap
+AADHARHFC,Aadhar Housing Finance Limited,INE883F01010,NSE,EQ,,Housing Finance Company,nifty500|niftysmallcap250|midcap
+AARTIDRUGS,Aarti Drugs Limited,INE767A01016,NSE,EQ,,Pharmaceuticals,niftymicrocap250|smallcap
+AARTIIND,Aarti Industries Limited,INE769A01020,NSE,EQ,,Specialty Chemicals,nifty500|niftysmallcap250|midcap
+AARTIPHARM,Aarti Pharmalabs Limited,INE0LRU01027,NSE,EQ,,Pharmaceuticals,niftymicrocap250|smallcap
+AAVAS,Aavas Financiers Limited,INE216P01012,NSE,EQ,,Housing Finance Company,nifty500|niftysmallcap250|midcap
+ABB,ABB India Limited,INE117A01022,NSE,EQ,,Heavy Electrical Equipment,nifty100|nifty500|largecap
+ABBOTINDIA,Abbott India Limited,INE358A01014,NSE,EQ,,Pharmaceuticals,nifty500|niftymidcap150|midcap
+ABCAPITAL,Aditya Birla Capital Limited,INE674K01013,NSE,EQ,,Investment Company,nifty500|niftymidcap150|midcap
+ABDL,Allied Blenders and Distillers Limited,INE552Z01027,NSE,EQ,,Breweries & Distilleries,nifty500|niftysmallcap250|midcap
+ABFRL,Aditya Birla Fashion and Retail Limited,INE647O01011,NSE,EQ,,Speciality Retail,nifty500|niftysmallcap250|midcap
+ABLBL,Aditya Birla Lifestyle Brands Limited,INE14LE01019,NSE,EQ,,Speciality Retail,nifty500|niftysmallcap250|midcap
+ABREL,Aditya Birla Real Estate Limited,INE055A01016,NSE,EQ,,Residential Commercial Projects,nifty500|niftysmallcap250|midcap
+ABSLAMC,Aditya Birla Sun Life AMC Limited,INE404A01024,NSE,EQ,,Asset Management Company,nifty500|niftysmallcap250|midcap
+ACC,ACC Limited,INE012A01025,NSE,EQ,,Cement & Cement Products,nifty500|niftymidcap150|midcap
+ACE,Action Construction Equipment Limited,INE731H01025,NSE,EQ,,Construction Vehicles,nifty500|niftysmallcap250|midcap
+ACI,Archean Chemical Industries Limited,INE128X01021,NSE,EQ,,Specialty Chemicals,niftymicrocap250|smallcap
+ACMESOLAR,Acme Solar Holdings Limited,INE622W01025,NSE,EQ,,Power Generation,nifty500|niftysmallcap250|midcap
+ACUTAAS,Acutaas Chemicals Limited,INE00FF01025,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+ADANIENSOL,Adani Energy Solutions Limited,INE931S01010,NSE,EQ,,Power Distribution,nifty100|nifty500|largecap
+ADANIENT,Adani Enterprises Limited,INE423A01024,NSE,EQ,,Trading - Minerals,nifty50|nifty100|nifty500|largecap
+ADANIGREEN,Adani Green Energy Limited,INE364U01010,NSE,EQ,,Power Generation,nifty100|nifty500|largecap
+ADANIPORTS,Adani Ports and Special Economic Zone Limited,INE742F01042,NSE,EQ,,Port & Port services,nifty50|nifty100|nifty500|largecap
+ADANIPOWER,Adani Power Limited,INE814H01029,NSE,EQ,,Integrated Power Utilities,nifty100|nifty500|largecap
+ADVENZYMES,Advanced Enzyme Technologies Limited,INE837H01020,NSE,EQ,,Biotechnology,niftymicrocap250|smallcap
+AEGISLOG,Aegis Logistics Limited,INE208C01025,NSE,EQ,,Trading - Gas,nifty500|niftysmallcap250|midcap
+AEGISVOPAK,Aegis Vopak Terminals Limited,INE0INX01018,NSE,EQ,,Oil Storage & Transportation,nifty500|niftysmallcap250|midcap
+AEQUS,Aequs Limited,INE947N01017,NSE,EQ,,Aerospace & Defense,niftymicrocap250|smallcap
+AETHER,Aether Industries Limited,INE0BWX01014,NSE,EQ,,Specialty Chemicals,niftymicrocap250|smallcap
+AFCONS,Afcons Infrastructure Limited,INE101I01011,NSE,EQ,,Civil Construction,nifty500|niftysmallcap250|midcap
+AFFLE,Affle 3i Limited,INE00WC01027,NSE,EQ,,IT Enabled Services,nifty500|niftysmallcap250|midcap
+AGARWALEYE,Dr. Agarwal's Health Care Limited,INE943P01029,NSE,EQ,,Hospital,niftymicrocap250|smallcap
+AHLUCONT,Ahluwalia Contracts (India) Limited,INE758C01029,NSE,EQ,,Civil Construction,niftymicrocap250|smallcap
+AIAENG,AIA Engineering Limited,INE212H01026,NSE,EQ,,Castings & Forgings,nifty500|niftymidcap150|midcap
+AIIL,Authum Investment & Infrastructure Limited,INE206F01022,NSE,EQ,,Non Banking Financial Company (NBFC),nifty500|niftymidcap150|midcap
+AJANTPHARM,Ajanta Pharma Limited,INE031B01049,NSE,EQ,,Pharmaceuticals,nifty500|niftymidcap150|midcap
+AKUMS,Akums Drugs and Pharmaceuticals Limited,INE09XN01023,NSE,EQ,,Pharmaceuticals,niftymicrocap250|smallcap
+AKZOINDIA,Akzo Nobel India Limited,INE133A01011,NSE,EQ,,Paints,nifty500|niftysmallcap250|midcap
+ALIVUS,Alivus Life Sciences Limited,INE03Q201024,NSE,EQ,,Pharmaceuticals,niftymicrocap250|smallcap
+ALKEM,Alkem Laboratories Limited,INE540L01014,NSE,EQ,,Pharmaceuticals,nifty500|niftymidcap150|midcap
+ALKYLAMINE,Alkyl Amines Chemicals Limited,INE150B01039,NSE,EQ,,Specialty Chemicals,niftymicrocap250|smallcap
+ALOKINDS,Alok Industries Limited,INE270A01029,NSE,EQ,,Other Textile Products,niftymicrocap250|smallcap
+AMBER,Amber Enterprises India Limited,INE371P01015,NSE,EQ,,Household Appliances,nifty500|niftysmallcap250|midcap
+AMBUJACEM,Ambuja Cements Limited,INE079A01024,NSE,EQ,,Cement & Cement Products,nifty100|nifty500|largecap
+ANANDRATHI,Anand Rathi Wealth Limited,INE463V01026,NSE,EQ,,Financial Products Distributor,nifty500|niftysmallcap250|midcap
+ANANTRAJ,Anant Raj Limited,INE242C01024,NSE,EQ,,Residential Commercial Projects,nifty500|niftysmallcap250|midcap
+ANGELONE,Angel One Limited,INE732I01021,NSE,EQ,,Stockbroking & Allied,nifty500|niftysmallcap250|midcap
+ANTHEM,Anthem Biosciences Limited,INE0CZ201020,NSE,EQ,,Biotechnology,nifty500|niftymidcap150|midcap
+ANUP,The Anup Engineering Limited,INE294Z01018,NSE,EQ,,Industrial Products,niftymicrocap250|smallcap
+ANURAS,Anupam Rasayan India Limited,INE930P01018,NSE,EQ,,Specialty Chemicals,nifty500|niftysmallcap250|midcap
+APARINDS,Apar Industries Limited,INE372A01015,NSE,EQ,,Other Electrical Equipment,nifty500|niftymidcap150|midcap
+APLAPOLLO,APL Apollo Tubes Limited,INE702C01027,NSE,EQ,,Iron & Steel Products,nifty500|niftymidcap150|midcap
+APLLTD,Alembic Pharmaceuticals Limited,INE901L01018,NSE,EQ,,Pharmaceuticals,niftymicrocap250|smallcap
+APOLLO,Apollo Micro Systems Limited,INE713T01028,NSE,EQ,,Aerospace & Defense,niftymicrocap250|smallcap
+APOLLOHOSP,Apollo Hospitals Enterprise Limited,INE437A01024,NSE,EQ,,Hospital,nifty50|nifty100|nifty500|largecap
+APOLLOTYRE,Apollo Tyres Limited,INE438A01022,NSE,EQ,,Tyres & Rubber Products,nifty500|niftymidcap150|midcap
+APTUS,Aptus Value Housing Finance India Limited,INE852O01025,NSE,EQ,,Housing Finance Company,nifty500|niftysmallcap250|midcap
+ARE&M,Amara Raja Energy & Mobility Limited,INE885A01032,NSE,EQ,,Auto Components & Equipments,nifty500|niftysmallcap250|midcap
+ARVIND,Arvind Limited,INE034A01011,NSE,EQ,,Garments & Apparels,niftymicrocap250|smallcap
+ARVINDFASN,Arvind Fashions Limited,INE955V01021,NSE,EQ,,Speciality Retail,niftymicrocap250|smallcap
+ASAHIINDIA,Asahi India Glass Limited,INE439A01020,NSE,EQ,,Auto Components & Equipments,nifty500|niftysmallcap250|midcap
+ASHAPURMIN,Ashapura Minechem Limited,INE348A01023,NSE,EQ,,Industrial Minerals,niftymicrocap250|smallcap
+ASHOKA,Ashoka Buildcon Limited,INE442H01029,NSE,EQ,,Civil Construction,niftymicrocap250|smallcap
+ASHOKLEY,Ashok Leyland Limited,INE208A01029,NSE,EQ,,Commercial Vehicles,nifty500|niftymidcap150|midcap
+ASIANPAINT,Asian Paints Limited,INE021A01026,NSE,EQ,,Paints,nifty50|nifty100|nifty500|largecap
+ASKAUTOLTD,ASK Automotive Limited,INE491J01022,NSE,EQ,,Auto Components & Equipments,niftymicrocap250|smallcap
+ASTERDM,Aster DM Healthcare Limited,INE914M01019,NSE,EQ,,Hospital,nifty500|niftysmallcap250|midcap
+ASTRAL,Astral Limited,INE006I01046,NSE,EQ,,Plastic Products - Industrial,nifty500|niftymidcap150|midcap
+ASTRAMICRO,Astra Microwave Products Limited,INE386C01029,NSE,EQ,,Aerospace & Defense,niftymicrocap250|smallcap
+ATGL,Adani Total Gas Limited,INE399L01023,NSE,EQ,,LPG/CNG/PNG/LNG Supplier,nifty500|niftymidcap150|midcap
+ATHERENERG,Ather Energy Limited,INE0LEZ01016,NSE,EQ,,2/3 Wheelers,nifty500|niftysmallcap250|midcap
+ATLANTAELE,Atlanta Electricals Limited,INE0Z4F01028,NSE,EQ,,Heavy Electrical Equipment,niftymicrocap250|smallcap
+ATUL,Atul Limited,INE100A01010,NSE,EQ,,Specialty Chemicals,nifty500|niftysmallcap250|midcap
+AUBANK,AU Small Finance Bank Limited,INE949L01017,NSE,EQ,,Other Bank,nifty500|niftymidcap150|midcap
+AURIONPRO,Aurionpro Solutions Limited,INE132H01018,NSE,EQ,,Computers - Software & Consulting,niftymicrocap250|smallcap
+AUROPHARMA,Aurobindo Pharma Limited,INE406A01037,NSE,EQ,,Pharmaceuticals,nifty500|niftymidcap150|midcap
+AVALON,Avalon Technologies Limited,INE0LCL01028,NSE,EQ,,Other Electrical Equipment,niftymicrocap250|smallcap
+AVANTIFEED,Avanti Feeds Limited,INE871C01038,NSE,EQ,,Animal Feed,niftymicrocap250|smallcap
+AVL,Aditya Vision Limited,INE679V01027,NSE,EQ,,Speciality Retail,niftymicrocap250|smallcap
+AWFIS,Awfis Space Solutions Limited,INE108V01019,NSE,EQ,,Diversified Commercial Services,niftymicrocap250|smallcap
+AWL,AWL Agri Business Limited,INE699H01024,NSE,EQ,,Edible Oil,nifty500|niftymidcap150|midcap
+AXISBANK,Axis Bank Limited,INE238A01034,NSE,EQ,,Private Sector Bank,nifty50|nifty100|nifty500|largecap
+AXISCADES,AXISCADES Technologies Limited,INE555B01013,NSE,EQ,,Aerospace & Defense,niftymicrocap250|smallcap
+AZAD,Azad Engineering Limited,INE02IJ01035,NSE,EQ,,Heavy Electrical Equipment,niftymicrocap250|smallcap
+BAJAJ-AUTO,Bajaj Auto Limited,INE917I01010,NSE,EQ,,2/3 Wheelers,nifty50|nifty100|nifty500|largecap
+BAJAJELEC,Bajaj Electricals Limited,INE193E01025,NSE,EQ,,Household Appliances,niftymicrocap250|smallcap
+BAJAJFINSV,Bajaj Finserv Limited,INE918I01026,NSE,EQ,,Holding Company,nifty50|nifty100|nifty500|largecap
+BAJAJHFL,Bajaj Housing Finance Limited,INE377Y01014,NSE,EQ,,Housing Finance Company,nifty500|niftymidcap150|midcap
+BAJAJHLDNG,Bajaj Holdings & Investment Limited,INE118A01012,NSE,EQ,,Holding Company,nifty100|nifty500|largecap
+BAJFINANCE,Bajaj Finance Limited,INE296A01032,NSE,EQ,,Non Banking Financial Company (NBFC),nifty50|nifty100|nifty500|largecap
+BALAMINES,Balaji Amines Limited,INE050E01027,NSE,EQ,,Specialty Chemicals,niftymicrocap250|smallcap
+BALKRISIND,Balkrishna Industries Limited,INE787D01026,NSE,EQ,,Tyres & Rubber Products,nifty500|niftymidcap150|midcap
+BALRAMCHIN,Balrampur Chini Mills Limited,INE119A01028,NSE,EQ,,Sugar,nifty500|niftysmallcap250|midcap
+BALUFORGE,Balu Forge Industries Limited,INE011E01029,NSE,EQ,,Castings & Forgings,niftymicrocap250|smallcap
+BANCOINDIA,Banco Products (I) Limited,INE213C01025,NSE,EQ,,Auto Components & Equipments,niftymicrocap250|smallcap
+BANDHANBNK,Bandhan Bank Limited,INE545U01014,NSE,EQ,,Private Sector Bank,nifty500|niftysmallcap250|midcap
+BANKBARODA,Bank of Baroda,INE028A01039,NSE,EQ,,Public Sector Bank,nifty100|nifty500|largecap
+BANKINDIA,Bank of India,INE084A01016,NSE,EQ,,Public Sector Bank,nifty500|niftymidcap150|midcap
+BATAINDIA,Bata India Limited,INE176A01028,NSE,EQ,,Footwear,nifty500|niftysmallcap250|midcap
+BAYERCROP,Bayer Cropscience Limited,INE462A01022,NSE,EQ,,Pesticides & Agrochemicals,nifty500|niftysmallcap250|midcap
+BBOX,Black Box Limited,INE676A01027,NSE,EQ,,IT Enabled Services,niftymicrocap250|smallcap
+BBTC,The Bombay Burmah Trading Corporation Limited,INE050A01025,NSE,EQ,,Packaged Foods,nifty500|niftysmallcap250|midcap
+BDL,Bharat Dynamics Limited,INE171Z01026,NSE,EQ,,Aerospace & Defense,nifty500|niftymidcap150|midcap
+BECTORFOOD,Mrs. Bectors Food Specialities Limited,INE495P01020,NSE,EQ,,Packaged Foods,niftymicrocap250|smallcap
+BEL,Bharat Electronics Limited,INE263A01024,NSE,EQ,,Aerospace & Defense,nifty50|nifty100|nifty500|largecap
+BELRISE,Belrise Industries Limited,INE894V01022,NSE,EQ,,Auto Components & Equipments,nifty500|niftysmallcap250|midcap
+BEML,BEML Limited,INE258A01024,NSE,EQ,,Construction Vehicles,nifty500|niftysmallcap250|midcap
+BERGEPAINT,Berger Paints (I) Limited,INE463A01038,NSE,EQ,,Paints,nifty500|niftymidcap150|midcap
+BHARATFORG,Bharat Forge Limited,INE465A01025,NSE,EQ,,Auto Components & Equipments,nifty500|niftymidcap150|midcap
+BHARTIARTL,Bharti Airtel Limited,INE397D01024,NSE,EQ,,Telecom - Cellular & Fixed line services,nifty50|nifty100|nifty500|largecap
+BHARTIHEXA,Bharti Hexacom Limited,INE343G01021,NSE,EQ,,Telecom - Cellular & Fixed line services,nifty500|niftymidcap150|midcap
+BHEL,Bharat Heavy Electricals Limited,INE257A01026,NSE,EQ,,Heavy Electrical Equipment,nifty500|niftymidcap150|midcap
+BIKAJI,Bikaji Foods International Limited,INE00E101023,NSE,EQ,,Packaged Foods,nifty500|niftysmallcap250|midcap
+BIOCON,Biocon Limited,INE376G01013,NSE,EQ,,Pharmaceuticals,nifty500|niftymidcap150|midcap
+BIRLACORPN,Birla Corporation Limited,INE340A01012,NSE,EQ,,Cement & Cement Products,niftymicrocap250|smallcap
+BLACKBUCK,BLACKBUCK LIMITED,INE0UIZ01018,NSE,EQ,,Transport Related Services,niftymicrocap250|smallcap
+BLS,BLS International Services Limited,INE153T01027,NSE,EQ,,Tour Travel Related Services,nifty500|niftysmallcap250|midcap
+BLUEDART,Blue Dart Express Limited,INE233B01017,NSE,EQ,,Logistics Solution Provider,nifty500|niftysmallcap250|midcap
+BLUEJET,Blue Jet Healthcare Limited,INE0KBH01020,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+BLUESTARCO,Blue Star Limited,INE472A01039,NSE,EQ,,Household Appliances,nifty500|niftymidcap150|midcap
+BLUESTONE,BlueStone Jewellery and Lifestyle Limited,INE304W01038,NSE,EQ,,Gems Jewellery And Watches,niftymicrocap250|smallcap
+BORORENEW,BOROSIL RENEWABLES LIMITED,INE666D01022,NSE,EQ,,Glass - Industrial,niftymicrocap250|smallcap
+BOSCHLTD,Bosch Limited,INE323A01026,NSE,EQ,,Auto Components & Equipments,nifty100|nifty500|largecap
+BPCL,Bharat Petroleum Corporation Limited,INE029A01011,NSE,EQ,,Refineries & Marketing,nifty100|nifty500|largecap
+BRIGADE,Brigade Enterprises Limited,INE791I01019,NSE,EQ,,Residential Commercial Projects,nifty500|niftysmallcap250|midcap
+BRITANNIA,Britannia Industries Limited,INE216A01030,NSE,EQ,,Packaged Foods,nifty100|nifty500|largecap
+BSE,BSE Limited,INE118H01025,NSE,EQ,,Exchange and Data Platform,nifty500|niftymidcap150|midcap
+BSOFT,BIRLASOFT LIMITED,INE836A01035,NSE,EQ,,Computers - Software & Consulting,nifty500|niftysmallcap250|midcap
+CAMPUS,Campus Activewear Limited,INE278Y01022,NSE,EQ,,Footwear,niftymicrocap250|smallcap
+CAMS,Computer Age Management Services Limited,INE596I01020,NSE,EQ,,Depositories Clearing Houses and Other Intermediaries,nifty500|niftysmallcap250|midcap
+CANBK,Canara Bank,INE476A01022,NSE,EQ,,Public Sector Bank,nifty100|nifty500|largecap
+CANFINHOME,Can Fin Homes Limited,INE477A01020,NSE,EQ,,Housing Finance Company,nifty500|niftysmallcap250|midcap
+CANHLIFE,Canara HSBC Life Insurance Company Limited,INE01TY01017,NSE,EQ,,Life Insurance,nifty500|niftysmallcap250|midcap
+CAPILLARY,Capillary Technologies India Limited,INE0ILV01024,NSE,EQ,,Software Products,niftymicrocap250|smallcap
+CAPLIPOINT,Caplin Point Laboratories Limited,INE475E01026,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+CARBORUNIV,Carborundum Universal Limited,INE120A01034,NSE,EQ,,Abrasives & Bearings,nifty500|niftysmallcap250|midcap
+CARTRADE,Cartrade Tech Limited,INE290S01011,NSE,EQ,,E-Retail/ E-Commerce,nifty500|niftysmallcap250|midcap
+CASTROLIND,Castrol India Limited,INE172A01027,NSE,EQ,,Lubricants,nifty500|niftysmallcap250|midcap
+CCAVENUE,AvenuesAI Limited,INE483S01020,NSE,EQ,,Financial Technology (Fintech),niftymicrocap250|smallcap
+CCL,CCL Products (India) Limited,INE421D01022,NSE,EQ,,Tea & Coffee,nifty500|niftysmallcap250|midcap
+CDSL,Central Depository Services (India) Limited,INE736A01011,NSE,EQ,,Depositories Clearing Houses and Other Intermediaries,nifty500|niftysmallcap250|midcap
+CEATLTD,CEAT Limited,INE482A01020,NSE,EQ,,Tyres & Rubber Products,nifty500|niftysmallcap250|midcap
+CELLO,Cello World Limited,INE0LMW01024,NSE,EQ,,Houseware,niftymicrocap250|smallcap
+CEMPRO,Cemindia Projects Limited,INE686A01026,NSE,EQ,,Civil Construction,nifty500|niftysmallcap250|midcap
+CENTRALBK,Central Bank of India,INE483A01010,NSE,EQ,,Public Sector Bank,nifty500|niftysmallcap250|midcap
+CENTURYPLY,Century Plyboards (India) Limited,INE348B01021,NSE,EQ,,Plywood Boards/ Laminates,niftymicrocap250|smallcap
+CERA,Cera Sanitaryware Limited,INE739E01017,NSE,EQ,,Sanitary Ware,niftymicrocap250|smallcap
+CESC,CESC Limited,INE486A01021,NSE,EQ,,Integrated Power Utilities,nifty500|niftysmallcap250|midcap
+CGCL,Capri Global Capital Limited,INE180C01042,NSE,EQ,,Non Banking Financial Company (NBFC),nifty500|niftysmallcap250|midcap
+CGPOWER,CG Power and Industrial Solutions Limited,INE067A01029,NSE,EQ,,Heavy Electrical Equipment,nifty100|nifty500|largecap
+CHALET,Chalet Hotels Limited,INE427F01016,NSE,EQ,,Hotels & Resorts,nifty500|niftysmallcap250|midcap
+CHAMBLFERT,Chambal Fertilizers & Chemicals Limited,INE085A01013,NSE,EQ,,Fertilizers,nifty500|niftysmallcap250|midcap
+CHENNPETRO,Chennai Petroleum Corporation Limited,INE178A01016,NSE,EQ,,Refineries & Marketing,nifty500|niftysmallcap250|midcap
+CHOICEIN,Choice International Limited,INE102B01014,NSE,EQ,,Holding Company,nifty500|niftysmallcap250|midcap
+CHOLAFIN,Cholamandalam Investment and Finance Company Limited,INE121A01024,NSE,EQ,,Non Banking Financial Company (NBFC),nifty100|nifty500|largecap
+CHOLAHLDNG,Cholamandalam Financial Holdings Limited,INE149A01033,NSE,EQ,,Investment Company,nifty500|niftysmallcap250|midcap
+CIEINDIA,CIE Automotive India Limited,INE536H01010,NSE,EQ,,Auto Components & Equipments,niftymicrocap250|smallcap
+CIGNITITEC,Cigniti Technologies Limited,INE675C01017,NSE,EQ,,IT Enabled Services,niftymicrocap250|smallcap
+CIPLA,Cipla Limited,INE059A01026,NSE,EQ,,Pharmaceuticals,nifty50|nifty100|nifty500|largecap
+CLEAN,Clean Science and Technology Limited,INE227W01023,NSE,EQ,,Specialty Chemicals,nifty500|niftysmallcap250|midcap
+CMSINFO,CMS Info Systems Limited,INE925R01014,NSE,EQ,,Diversified Commercial Services,niftymicrocap250|smallcap
+COALINDIA,Coal India Limited,INE522F01014,NSE,EQ,,Coal,nifty50|nifty100|nifty500|largecap
+COCHINSHIP,Cochin Shipyard Limited,INE704P01025,NSE,EQ,,Ship Building & Allied Services,nifty500|niftymidcap150|midcap
+COFORGE,Coforge Limited,INE591G01025,NSE,EQ,,Computers - Software & Consulting,nifty500|niftymidcap150|midcap
+COHANCE,Cohance Lifesciences Limited,INE03QK01018,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+COLPAL,Colgate Palmolive (India) Limited,INE259A01022,NSE,EQ,,Personal Care,nifty500|niftymidcap150|midcap
+CONCOR,Container Corporation of India Limited,INE111A01025,NSE,EQ,,Logistics Solution Provider,nifty500|niftymidcap150|midcap
+CONCORDBIO,Concord Biotech Limited,INE338H01029,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+COROMANDEL,Coromandel International Limited,INE169A01031,NSE,EQ,,Fertilizers,nifty500|niftymidcap150|midcap
+CORONA,CORONA Remedies Limited,INE02ZQ01018,NSE,EQ,,Pharmaceuticals,niftymicrocap250|smallcap
+CPPLUS,Aditya Infotech Limited,INE819V01029,NSE,EQ,,Industrial Products,nifty500|niftysmallcap250|midcap
+CRAFTSMAN,Craftsman Automation Limited,INE00LO01017,NSE,EQ,,Auto Components & Equipments,nifty500|niftysmallcap250|midcap
+CRAMC,Canara Robeco Asset Management Company Limited,INE218I01013,NSE,EQ,,Asset Management Company,niftymicrocap250|smallcap
+CREDITACC,CREDITACCESS GRAMEEN LIMITED,INE741K01010,NSE,EQ,,Microfinance Institutions,nifty500|niftysmallcap250|midcap
+CRISIL,CRISIL Limited,INE007A01025,NSE,EQ,,Other Financial Services,nifty500|niftymidcap150|midcap
+CRIZAC,Crizac Limited,INE0S4R01014,NSE,EQ,,Internet & Catalogue Retail,niftymicrocap250|smallcap
+CROMPTON,Crompton Greaves Consumer Electricals Limited,INE299U01018,NSE,EQ,,Household Appliances,nifty500|niftysmallcap250|midcap
+CSBBANK,CSB Bank Limited,INE679A01013,NSE,EQ,,Private Sector Bank,niftymicrocap250|smallcap
+CUB,City Union Bank Limited,INE491A01021,NSE,EQ,,Private Sector Bank,nifty500|niftysmallcap250|midcap
+CUMMINSIND,Cummins India Limited,INE298A01020,NSE,EQ,,Compressors Pumps & Diesel Engines,nifty100|nifty500|largecap
+CUPID,Cupid Limited,INE509F01029,NSE,EQ,,Personal Care,niftymicrocap250|smallcap
+CYIENT,Cyient Limited,INE136B01020,NSE,EQ,,IT Enabled Services,nifty500|niftysmallcap250|midcap
+DABUR,Dabur India Limited,INE016A01026,NSE,EQ,,Personal Care,nifty500|niftymidcap150|midcap
+DALBHARAT,Dalmia Bharat Limited,INE00R701025,NSE,EQ,,Cement & Cement Products,nifty500|niftymidcap150|midcap
+DATAMATICS,Datamatics Global Services Limited,INE365B01017,NSE,EQ,,IT Enabled Services,niftymicrocap250|smallcap
+DATAPATTNS,Data Patterns (India) Limited,INE0IX101010,NSE,EQ,,Aerospace & Defense,nifty500|niftysmallcap250|midcap
+DBL,Dilip Buildcon Limited,INE917M01012,NSE,EQ,,Civil Construction,niftymicrocap250|smallcap
+DBREALTY,Valor Estate Limited,INE879I01012,NSE,EQ,,Residential Commercial Projects,niftymicrocap250|smallcap
+DCBBANK,DCB Bank Limited,INE503A01015,NSE,EQ,,Private Sector Bank,niftymicrocap250|smallcap
+DCMSHRIRAM,DCM Shriram Limited,INE499A01024,NSE,EQ,,Diversified,nifty500|niftysmallcap250|midcap
+DEEPAKFERT,Deepak Fertilizers and Petrochemicals Corporation Limited,INE501A01019,NSE,EQ,,Commodity Chemicals,nifty500|niftysmallcap250|midcap
+DEEPAKNTR,Deepak Nitrite Limited,INE288B01029,NSE,EQ,,Specialty Chemicals,nifty500|niftysmallcap250|midcap
+DELHIVERY,Delhivery Limited,INE148O01028,NSE,EQ,,Logistics Solution Provider,nifty500|niftysmallcap250|midcap
+DEVYANI,Devyani International Limited,INE872J01023,NSE,EQ,,Restaurants,nifty500|niftysmallcap250|midcap
+DIACABS,Diamond Power Infrastructure Limited,INE989C01038,NSE,EQ,,Other Electrical Equipment,niftymicrocap250|smallcap
+DIVISLAB,Divi's Laboratories Limited,INE361B01024,NSE,EQ,,Pharmaceuticals,nifty100|nifty500|largecap
+DIXON,Dixon Technologies (India) Limited,INE935N01020,NSE,EQ,,Consumer Electronics,nifty500|niftymidcap150|midcap
+DLF,DLF Limited,INE271C01023,NSE,EQ,,Residential Commercial Projects,nifty100|nifty500|largecap
+DMART,Avenue Supermarts Limited,INE192R01011,NSE,EQ,,Diversified Retail,nifty100|nifty500|largecap
+DOMS,DOMS Industries Limited,INE321T01012,NSE,EQ,,Stationary,nifty500|niftysmallcap250|midcap
+DRREDDY,Dr. Reddy's Laboratories Limited,INE089A01031,NSE,EQ,,Pharmaceuticals,nifty50|nifty100|nifty500|largecap
+DYNAMATECH,Dynamatic Technologies Limited,INE221B01012,NSE,EQ,,Industrial Products,niftymicrocap250|smallcap
+ECLERX,eClerx Services Limited,INE738I01010,NSE,EQ,,Business Process Outsourcing (BPO)/ Knowledge Process Outsourcing (KPO),nifty500|niftysmallcap250|midcap
+EDELWEISS,Edelweiss Financial Services Limited,INE532F01054,NSE,EQ,,Holding Company,niftymicrocap250|smallcap
+EICHERMOT,Eicher Motors Limited,INE066A01021,NSE,EQ,,2/3 Wheelers,nifty50|nifty100|nifty500|largecap
+EIDPARRY,EID Parry India Limited,INE126A01031,NSE,EQ,,Other Food Products,nifty500|niftysmallcap250|midcap
+EIEL,Enviro Infra Engineers Limited,INE0LLY01014,NSE,EQ,,Water Supply & Management,niftymicrocap250|smallcap
+EIHOTEL,EIH Limited,INE230A01023,NSE,EQ,,Hotels & Resorts,nifty500|niftysmallcap250|midcap
+ELECON,Elecon Engineering Company Limited,INE205B01031,NSE,EQ,,Heavy Electrical Equipment,nifty500|niftysmallcap250|midcap
+ELECTCAST,Electrosteel Castings Limited,INE086A01029,NSE,EQ,,Iron & Steel Products,niftymicrocap250|smallcap
+ELGIEQUIP,Elgi Equipments Limited,INE285A01027,NSE,EQ,,Compressors Pumps & Diesel Engines,nifty500|niftysmallcap250|midcap
+ELLEN,Ellenbarrie Industrial Gases Limited,INE236E01022,NSE,EQ,,Industrial Gases,niftymicrocap250|smallcap
+EMAMILTD,Emami Limited,INE548C01032,NSE,EQ,,Personal Care,nifty500|niftysmallcap250|midcap
+EMCURE,Emcure Pharmaceuticals Limited,INE168P01015,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+EMIL,Electronics Mart India Limited,INE02YR01019,NSE,EQ,,Diversified Retail,niftymicrocap250|smallcap
+EMMVEE,Emmvee Photovoltaic Power Limited,INE1C6T01020,NSE,EQ,,Other Electrical Equipment,nifty500|niftysmallcap250|midcap
+ENDURANCE,Endurance Technologies Limited,INE913H01037,NSE,EQ,,Auto Components & Equipments,nifty500|niftymidcap150|midcap
+ENGINERSIN,Engineers India Limited,INE510A01028,NSE,EQ,,Civil Construction,nifty500|niftysmallcap250|midcap
+ENRIN,Siemens Energy India Limited,INE1NPP01017,NSE,EQ,,Heavy Electrical Equipment,nifty100|nifty500|largecap
+ENTERO,Entero Healthcare Solutions Limited,INE010601016,NSE,EQ,,Pharmacy Retail,niftymicrocap250|smallcap
+EPL,EPL Limited,INE255A01020,NSE,EQ,,Packaging,niftymicrocap250|smallcap
+EQUITASBNK,Equitas Small Finance Bank Limited,INE063P01018,NSE,EQ,,Other Bank,niftymicrocap250|smallcap
+ERIS,Eris Lifesciences Limited,INE406M01024,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+ESCORTS,Escorts Kubota Limited,INE042A01014,NSE,EQ,,Tractors,nifty500|niftymidcap150|midcap
+ETERNAL,ETERNAL LIMITED,INE758T01015,NSE,EQ,,E-Retail/ E-Commerce,nifty50|nifty100|nifty500|largecap
+ETHOSLTD,Ethos Limited,INE04TZ01018,NSE,EQ,,Gems Jewellery And Watches,niftymicrocap250|smallcap
+EUREKAFORB,Eureka Forbes Limited,INE0KCE01017,NSE,EQ,,Household Appliances,niftymicrocap250|smallcap
+EXIDEIND,Exide Industries Limited,INE302A01020,NSE,EQ,,Auto Components & Equipments,nifty500|niftymidcap150|midcap
+FACT,Fertilizers and Chemicals Travancore Limited,INE188A01015,NSE,EQ,,Fertilizers,nifty500|niftysmallcap250|midcap
+FEDERALBNK,The Federal Bank  Limited,INE171A01029,NSE,EQ,,Private Sector Bank,nifty500|niftymidcap150|midcap
+FEDFINA,Fedbank Financial Services Limited,INE007N01010,NSE,EQ,,Non Banking Financial Company (NBFC),niftymicrocap250|smallcap
+FIEMIND,Fiem Industries Limited,INE737H01014,NSE,EQ,,Auto Components & Equipments,niftymicrocap250|smallcap
+FINCABLES,Finolex Cables Limited,INE235A01022,NSE,EQ,,Cables - Electricals,nifty500|niftysmallcap250|midcap
+FINPIPE,Finolex Industries Limited,INE183A01024,NSE,EQ,,Plastic Products - Industrial,niftymicrocap250|smallcap
+FIRSTCRY,Brainbees Solutions Limited,INE02RE01045,NSE,EQ,,E-Retail/ E-Commerce,nifty500|niftysmallcap250|midcap
+FIVESTAR,Five-Star Business Finance Limited,INE128S01021,NSE,EQ,,Non Banking Financial Company (NBFC),nifty500|niftysmallcap250|midcap
+FLUOROCHEM,Gujarat Fluorochemicals Limited,INE09N301011,NSE,EQ,,Specialty Chemicals,nifty500|niftymidcap150|midcap
+FORCEMOT,FORCE MOTORS LTD,INE451A01017,NSE,EQ,,Passenger Cars & Utility Vehicles,nifty500|niftysmallcap250|midcap
+FORTIS,Fortis Healthcare Limited,INE061F01013,NSE,EQ,,Hospital,nifty500|niftymidcap150|midcap
+FSL,Firstsource Solutions Limited,INE684F01012,NSE,EQ,,Business Process Outsourcing (BPO)/ Knowledge Process Outsourcing (KPO),nifty500|niftysmallcap250|midcap
+GABRIEL,Gabriel India Limited,INE524A01029,NSE,EQ,,Auto Components & Equipments,nifty500|niftysmallcap250|midcap
+GAEL,Gujarat Ambuja Exports Limited,INE036B01030,NSE,EQ,,Other Agricultural Products,niftymicrocap250|smallcap
+GAIL,GAIL (India) Limited,INE129A01019,NSE,EQ,,Gas Transmission/Marketing,nifty100|nifty500|largecap
+GALLANTT,Gallantt Ispat Limited,INE297H01019,NSE,EQ,,Iron & Steel Products,nifty500|niftysmallcap250|midcap
+GESHIP,The Great Eastern Shipping Company Limited,INE017A01032,NSE,EQ,,Shipping,nifty500|niftysmallcap250|midcap
+GHCL,GHCL Limited,INE539A01019,NSE,EQ,,Commodity Chemicals,niftymicrocap250|smallcap
+GICRE,General Insurance Corporation of India,INE481Y01014,NSE,EQ,,General Insurance,nifty500|niftymidcap150|midcap
+GILLETTE,Gillette India Limited,INE322A01010,NSE,EQ,,Personal Care,nifty500|niftysmallcap250|midcap
+GLAND,Gland Pharma Limited,INE068V01023,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+GLAXO,GlaxoSmithKline Pharmaceuticals Limited,INE159A01016,NSE,EQ,,Pharmaceuticals,nifty500|niftymidcap150|midcap
+GLENMARK,Glenmark Pharmaceuticals Limited,INE935A01035,NSE,EQ,,Pharmaceuticals,nifty500|niftymidcap150|midcap
+GMDCLTD,Gujarat Mineral Development Corporation Limited,INE131A01031,NSE,EQ,,Industrial Minerals,nifty500|niftysmallcap250|midcap
+GMMPFAUDLR,GMM Pfaudler Limited,INE541A01023,NSE,EQ,,Industrial Products,niftymicrocap250|smallcap
+GMRAIRPORT,GMR AIRPORTS LIMITED,INE776C01039,NSE,EQ,,Airport & Airport services,nifty500|niftymidcap150|midcap
+GMRP&UI,GMR Power and Urban Infra Limited,INE0CU601026,NSE,EQ,,Power Generation,niftymicrocap250|smallcap
+GNFC,Gujarat Narmada Valley Fertilizers and Chemicals Limited,INE113A01013,NSE,EQ,,Commodity Chemicals,niftymicrocap250|smallcap
+GODFRYPHLP,Godfrey Phillips India Limited,INE260B01028,NSE,EQ,,Cigarettes & Tobacco Products,nifty500|niftymidcap150|midcap
+GODIGIT,Go Digit General Insurance Limited,INE03JT01014,NSE,EQ,,General Insurance,nifty500|niftysmallcap250|midcap
+GODREJAGRO,Godrej Agrovet Limited,INE850D01014,NSE,EQ,,Animal Feed,niftymicrocap250|smallcap
+GODREJCP,Godrej Consumer Products Limited,INE102D01028,NSE,EQ,,Personal Care,nifty100|nifty500|largecap
+GODREJIND,Godrej Industries Limited,INE233A01035,NSE,EQ,,Diversified,nifty500|niftymidcap150|midcap
+GODREJPROP,Godrej Properties Limited,INE484J01027,NSE,EQ,,Residential Commercial Projects,nifty500|niftymidcap150|midcap
+GOKEX,Gokaldas Exports Limited,INE887G01027,NSE,EQ,,Garments & Apparels,niftymicrocap250|smallcap
+GOKULAGRO,Gokul Agro Resources Limited,INE314T01033,NSE,EQ,,Edible Oil,niftymicrocap250|smallcap
+GPIL,Godawari Power And Ispat limited,INE177H01039,NSE,EQ,,Iron & Steel Products,nifty500|niftysmallcap250|midcap
+GPPL,Gujarat Pipavav Port Limited,INE517F01014,NSE,EQ,,Port & Port services,niftymicrocap250|smallcap
+GRANULES,Granules India Limited,INE101D01020,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+GRAPHITE,Graphite India Limited,INE371A01025,NSE,EQ,,Electrodes & Refractories,nifty500|niftysmallcap250|midcap
+GRASIM,Grasim Industries Limited,INE047A01021,NSE,EQ,,Cement & Cement Products,nifty50|nifty100|nifty500|largecap
+GRAVITA,Gravita India Limited,INE024L01027,NSE,EQ,,Industrial Minerals,nifty500|niftysmallcap250|midcap
+GREAVESCOT,Greaves Cotton Limited,INE224A01026,NSE,EQ,,Compressors Pumps & Diesel Engines,niftymicrocap250|smallcap
+GROWW,Billionbrains Garage Ventures Limited,INE0HOQ01053,NSE,EQ,,Stockbroking & Allied,nifty500|niftymidcap150|midcap
+GRSE,Garden Reach Shipbuilders & Engineers Limited,INE382Z01011,NSE,EQ,,Aerospace & Defense,nifty500|niftysmallcap250|midcap
+GRWRHITECH,Garware Hi-Tech Films Limited,INE291A01017,NSE,EQ,,Plastic Products - Industrial,niftymicrocap250|smallcap
+GSFC,Gujarat State Fertilizers & Chemicals Limited,INE026A01025,NSE,EQ,,Fertilizers,niftymicrocap250|smallcap
+GSPL,Gujarat State Petronet Limited,INE246F01010,NSE,EQ,,Gas Transmission/Marketing,nifty500|niftysmallcap250|midcap
+GVT&D,GE Vernova T&D India Limited,INE200A01026,NSE,EQ,,Heavy Electrical Equipment,nifty500|niftymidcap150|midcap
+HAL,Hindustan Aeronautics Limited,INE066F01020,NSE,EQ,,Aerospace & Defense,nifty100|nifty500|largecap
+HAPPSTMNDS,Happiest Minds Technologies Limited,INE419U01012,NSE,EQ,,Computers - Software & Consulting,niftymicrocap250|smallcap
+HAVELLS,Havells India Limited,INE176B01034,NSE,EQ,,Consumer Electronics,nifty500|niftymidcap150|midcap
+HBLENGINE,HBL Engineering Limited,INE292B01021,NSE,EQ,,Other Industrial Products,nifty500|niftysmallcap250|midcap
+HCC,Hindustan Construction Company Limited,INE549A01026,NSE,EQ,,Civil Construction,niftymicrocap250|smallcap
+HCG,Healthcare Global Enterprises Limited,INE075I01017,NSE,EQ,,Hospital,niftymicrocap250|smallcap
+HCLTECH,HCL Technologies Limited,INE860A01027,NSE,EQ,,Computers - Software & Consulting,nifty50|nifty100|nifty500|largecap
+HDBFS,HDB Financial Services Limited,INE756I01012,NSE,EQ,,Non Banking Financial Company (NBFC),nifty500|niftymidcap150|midcap
+HDFCAMC,HDFC Asset Management Company Limited,INE127D01025,NSE,EQ,,Asset Management Company,nifty100|nifty500|largecap
+HDFCBANK,HDFC Bank Limited,INE040A01034,NSE,EQ,,Private Sector Bank,nifty50|nifty100|nifty500|largecap
+HDFCLIFE,HDFC Life Insurance Company Limited,INE795G01014,NSE,EQ,,Life Insurance,nifty50|nifty100|nifty500|largecap
+HEG,HEG Limited,INE545A01024,NSE,EQ,,Electrodes & Refractories,nifty500|niftysmallcap250|midcap
+HEMIPROP,Hemisphere Properties India Limited,INE0AJG01018,NSE,EQ,,Diversified Commercial Services,niftymicrocap250|smallcap
+HERITGFOOD,Heritage Foods Limited,INE978A01027,NSE,EQ,,Dairy Products,niftymicrocap250|smallcap
+HEROMOTOCO,Hero MotoCorp Limited,INE158A01026,NSE,EQ,,2/3 Wheelers,nifty500|niftymidcap150|midcap
+HEXT,Hexaware Technologies Limited,INE093A01041,NSE,EQ,,Computers - Software & Consulting,nifty500|niftymidcap150|midcap
+HFCL,HFCL Limited,INE548A01028,NSE,EQ,,Telecom - Infrastructure,nifty500|niftysmallcap250|midcap
+HGINFRA,H.G. Infra Engineering Limited,INE926X01010,NSE,EQ,,Civil Construction,niftymicrocap250|smallcap
+HINDALCO,Hindalco Industries Limited,INE038A01020,NSE,EQ,,Aluminium,nifty50|nifty100|nifty500|largecap
+HINDCOPPER,Hindustan Copper Limited,INE531E01026,NSE,EQ,,Copper,nifty500|niftysmallcap250|midcap
+HINDPETRO,Hindustan Petroleum Corporation Limited,INE094A01015,NSE,EQ,,Refineries & Marketing,nifty500|niftymidcap150|midcap
+HINDUNILVR,Hindustan Unilever Limited,INE030A01027,NSE,EQ,,Diversified FMCG,nifty50|nifty100|nifty500|largecap
+HINDZINC,Hindustan Zinc Limited,INE267A01025,NSE,EQ,,Zinc,nifty100|nifty500|largecap
+HOMEFIRST,Home First Finance Company India Limited,INE481N01025,NSE,EQ,,Housing Finance Company,nifty500|niftysmallcap250|midcap
+HONASA,Honasa Consumer Limited,INE0J5401028,NSE,EQ,,Personal Care,nifty500|niftysmallcap250|midcap
+HONAUT,Honeywell Automation India Limited,INE671A01010,NSE,EQ,,Industrial Products,nifty500|niftymidcap150|midcap
+HSCL,Himadri Speciality Chemical Limited,INE019C01026,NSE,EQ,,Carbon Black,nifty500|niftysmallcap250|midcap
+HUDCO,Housing & Urban Development Corporation Limited,INE031A01017,NSE,EQ,,Financial Institution,nifty500|niftymidcap150|midcap
+HYUNDAI,Hyundai Motor India Limited,INE0V6F01027,NSE,EQ,,Passenger Cars & Utility Vehicles,nifty100|nifty500|largecap
+ICICIAMC,ICICI Prudential Asset Management Company Limited,INE346A01027,NSE,EQ,,Asset Management Company,nifty500|niftymidcap150|midcap
+ICICIBANK,ICICI Bank Limited,INE090A01021,NSE,EQ,,Private Sector Bank,nifty50|nifty100|nifty500|largecap
+ICICIGI,ICICI Lombard General Insurance Company Limited,INE765G01017,NSE,EQ,,General Insurance,nifty500|niftymidcap150|midcap
+ICICIPRULI,ICICI Prudential Life Insurance Company Limited,INE726G01019,NSE,EQ,,Life Insurance,nifty500|niftymidcap150|midcap
+ICIL,Indo Count Industries Limited,INE483B01026,NSE,EQ,,Other Textile Products,niftymicrocap250|smallcap
+IDBI,IDBI Bank Limited,INE008A01015,NSE,EQ,,Private Sector Bank,nifty500|niftysmallcap250|midcap
+IDEA,Vodafone Idea Limited,INE669E01016,NSE,EQ,,Telecom - Cellular & Fixed line services,nifty500|niftymidcap150|midcap
+IDFCFIRSTB,IDFC First Bank Limited,INE092T01019,NSE,EQ,,Private Sector Bank,nifty500|niftymidcap150|midcap
+IEX,Indian Energy Exchange Limited,INE022Q01020,NSE,EQ,,Exchange and Data Platform,nifty500|niftysmallcap250|midcap
+IFBIND,IFB Industries Limited,INE559A01017,NSE,EQ,,Household Appliances,niftymicrocap250|smallcap
+IFCI,IFCI Limited,INE039A01010,NSE,EQ,,Financial Institution,nifty500|niftysmallcap250|midcap
+IGIL,International Gemmological Institute (India) Limited,INE0Q9301021,NSE,EQ,,Diversified Commercial Services,nifty500|niftysmallcap250|midcap
+IGL,Indraprastha Gas Limited,INE203G01027,NSE,EQ,,LPG/CNG/PNG/LNG Supplier,nifty500|niftysmallcap250|midcap
+IIFL,IIFL Finance Limited,INE530B01024,NSE,EQ,,Non Banking Financial Company (NBFC),nifty500|niftysmallcap250|midcap
+IIFLCAPS,IIFL Capital Services Limited,INE489L01022,NSE,EQ,,Stockbroking & Allied,niftymicrocap250|smallcap
+IKS,Inventurus Knowledge Solutions Limited,INE115Q01022,NSE,EQ,,IT Enabled Services,nifty500|niftysmallcap250|midcap
+IMFA,Indian Metals & Ferro Alloys Limited,INE919H01018,NSE,EQ,,Ferro & Silica Manganese,niftymicrocap250|smallcap
+INDGN,Indegene Limited,INE065X01017,NSE,EQ,,Healthcare Research Analytics & Technology,nifty500|niftysmallcap250|midcap
+INDHOTEL,The Indian Hotels Company Limited,INE053A01029,NSE,EQ,,Hotels & Resorts,nifty100|nifty500|largecap
+INDIACEM,The India Cements Limited,INE383A01012,NSE,EQ,,Cement & Cement Products,nifty500|niftysmallcap250|midcap
+INDIAGLYCO,India Glycols Limited,INE560A01023,NSE,EQ,,Breweries & Distilleries,niftymicrocap250|smallcap
+INDIAMART,Indiamart Intermesh Limited,INE933S01016,NSE,EQ,,Internet & Catalogue Retail,nifty500|niftysmallcap250|midcap
+INDIANB,Indian Bank,INE562A01011,NSE,EQ,,Public Sector Bank,nifty500|niftymidcap150|midcap
+INDIASHLTR,India Shelter Finance Corporation Limited,INE922K01024,NSE,EQ,,Housing Finance Company,niftymicrocap250|smallcap
+INDIGO,InterGlobe Aviation Limited,INE646L01027,NSE,EQ,,Airline,nifty50|nifty100|nifty500|largecap
+INDIGOPNTS,Indigo Paints Limited,INE09VQ01012,NSE,EQ,,Paints,niftymicrocap250|smallcap
+INDUSINDBK,IndusInd Bank Limited,INE095A01012,NSE,EQ,,Private Sector Bank,nifty500|niftymidcap150|midcap
+INDUSTOWER,Indus Towers Limited,INE121J01017,NSE,EQ,,Telecom - Infrastructure,nifty500|niftymidcap150|midcap
+INFY,Infosys Limited,INE009A01021,NSE,EQ,,Computers - Software & Consulting,nifty50|nifty100|nifty500|largecap
+INOXGREEN,Inox Green Energy Services Limited,INE510W01014,NSE,EQ,,Diversified Commercial Services,niftymicrocap250|smallcap
+INOXINDIA,INOX India Limited,INE616N01034,NSE,EQ,,Other Industrial Products,niftymicrocap250|smallcap
+INOXWIND,Inox Wind Limited,INE066P01011,NSE,EQ,,Heavy Electrical Equipment,nifty500|niftysmallcap250|midcap
+INTELLECT,Intellect Design Arena Limited,INE306R01017,NSE,EQ,,Computers - Software & Consulting,nifty500|niftysmallcap250|midcap
+IOB,Indian Overseas Bank,INE565A01014,NSE,EQ,,Public Sector Bank,nifty500|niftysmallcap250|midcap
+IOC,Indian Oil Corporation Limited,INE242A01010,NSE,EQ,,Refineries & Marketing,nifty100|nifty500|largecap
+IONEXCHANG,ION Exchange (India) Limited,INE570A01022,NSE,EQ,,Water Supply & Management,niftymicrocap250|smallcap
+IPCALAB,IPCA Laboratories Limited,INE571A01038,NSE,EQ,,Pharmaceuticals,nifty500|niftymidcap150|midcap
+IRB,IRB Infrastructure Developers Limited,INE821I01022,NSE,EQ,,Civil Construction,nifty500|niftysmallcap250|midcap
+IRCON,Ircon International Limited,INE962Y01021,NSE,EQ,,Civil Construction,nifty500|niftysmallcap250|midcap
+IRCTC,Indian Railway Catering And Tourism Corporation Limited,INE335Y01020,NSE,EQ,,Tour Travel Related Services,nifty500|niftymidcap150|midcap
+IREDA,Indian Renewable Energy Development Agency Limited,INE202E01016,NSE,EQ,,Financial Institution,nifty500|niftymidcap150|midcap
+IRFC,Indian Railway Finance Corporation Limited,INE053F01010,NSE,EQ,,Financial Institution,nifty100|nifty500|largecap
+ITC,ITC Limited,INE154A01025,NSE,EQ,,Diversified FMCG,nifty50|nifty100|nifty500|largecap
+ITCHOTELS,ITC Hotels Limited,INE379A01028,NSE,EQ,,Hotels & Resorts,nifty500|niftymidcap150|midcap
+ITI,ITI Limited,INE248A01017,NSE,EQ,,Telecom - Equipment & Accessories,nifty500|niftysmallcap250|midcap
+IXIGO,Le Travenues Technology Limited,INE0HV901016,NSE,EQ,,Tour Travel Related Services,niftymicrocap250|smallcap
+J&KBANK,The Jammu & Kashmir Bank Limited,INE168A01041,NSE,EQ,,Private Sector Bank,nifty500|niftysmallcap250|midcap
+JAIBALAJI,Jai Balaji Industries Limited,INE091G01026,NSE,EQ,,Iron & Steel,niftymicrocap250|smallcap
+JAINREC,Jain Resource Recycling Limited,INE0YD401026,NSE,EQ,,Diversified Metals,nifty500|niftysmallcap250|midcap
+JAMNAAUTO,Jamna Auto Industries Limited,INE039C01032,NSE,EQ,,Auto Components & Equipments,niftymicrocap250|smallcap
+JAYNECOIND,Jayaswal Neco Industries Limited,INE854B01010,NSE,EQ,,Iron & Steel Products,niftymicrocap250|smallcap
+JBCHEPHARM,JB Chemicals & Pharmaceuticals Limited,INE572A01036,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+JBMA,JBM Auto Limited,INE927D01051,NSE,EQ,,Auto Components & Equipments,nifty500|niftysmallcap250|midcap
+JINDALSAW,Jindal Saw Limited,INE324A01032,NSE,EQ,,Iron & Steel Products,nifty500|niftysmallcap250|midcap
+JINDALSTEL,JINDAL STEEL LIMITED,INE749A01030,NSE,EQ,,Iron & Steel,nifty100|nifty500|largecap
+JIOFIN,Jio Financial Services Limited,INE758E01017,NSE,EQ,,Investment Company,nifty50|nifty100|nifty500|largecap
+JKCEMENT,JK Cement Limited,INE823G01014,NSE,EQ,,Cement & Cement Products,nifty500|niftymidcap150|midcap
+JKLAKSHMI,JK Lakshmi Cement Limited,INE786A01032,NSE,EQ,,Cement & Cement Products,niftymicrocap250|smallcap
+JKPAPER,JK Paper Limited,INE789E01012,NSE,EQ,,Paper & Paper Products,niftymicrocap250|smallcap
+JKTYRE,JK Tyre & Industries Limited,INE573A01042,NSE,EQ,,Tyres & Rubber Products,nifty500|niftysmallcap250|midcap
+JLHL,Jupiter Life Line Hospitals Limited,INE682M01012,NSE,EQ,,Hospital,niftymicrocap250|smallcap
+JMFINANCIL,JM Financial Limited,INE780C01023,NSE,EQ,,Holding Company,nifty500|niftysmallcap250|midcap
+JPPOWER,Jaiprakash Power Ventures Limited,INE351F01018,NSE,EQ,,Power Generation,nifty500|niftysmallcap250|midcap
+JSFB,Jana Small Finance Bank Limited,INE953L01027,NSE,EQ,,Other Bank,niftymicrocap250|smallcap
+JSL,Jindal Stainless Limited,INE220G01021,NSE,EQ,,Iron & Steel,nifty500|niftymidcap150|midcap
+JSLL,Jeena Sikho Lifecare Limited,INE0J5801029,NSE,EQ,,Wellness,niftymicrocap250|smallcap
+JSWCEMENT,JSW Cement Limited,INE718I01012,NSE,EQ,,Cement & Cement Products,nifty500|niftysmallcap250|midcap
+JSWENERGY,JSW Energy Limited,INE121E01018,NSE,EQ,,Power Generation,nifty500|niftymidcap150|midcap
+JSWINFRA,JSW Infrastructure Limited,INE880J01026,NSE,EQ,,Port & Port services,nifty500|niftymidcap150|midcap
+JSWSTEEL,JSW Steel Limited,INE019A01038,NSE,EQ,,Iron & Steel,nifty50|nifty100|nifty500|largecap
+JUBLFOOD,Jubilant Foodworks Limited,INE797F01020,NSE,EQ,,Restaurants,nifty500|niftymidcap150|midcap
+JUBLINGREA,Jubilant Ingrevia Limited,INE0BY001018,NSE,EQ,,Specialty Chemicals,nifty500|niftysmallcap250|midcap
+JUBLPHARMA,Jubilant Pharmova Limited,INE700A01033,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+JUSTDIAL,Just Dial Limited,INE599M01018,NSE,EQ,,Internet & Catalogue Retail,niftymicrocap250|smallcap
+JWL,Jupiter Wagons Limited,INE209L01016,NSE,EQ,,Railway Wagons,nifty500|niftysmallcap250|midcap
+JYOTHYLAB,Jyothy Labs Limited,INE668F01031,NSE,EQ,,Household Products,niftymicrocap250|smallcap
+JYOTICNC,Jyoti CNC Automation Limited,INE980O01024,NSE,EQ,,Industrial Products,nifty500|niftysmallcap250|midcap
+KAJARIACER,Kajaria Ceramics Limited,INE217B01036,NSE,EQ,,Ceramics,nifty500|niftysmallcap250|midcap
+KALYANKJIL,Kalyan Jewellers India Limited,INE303R01014,NSE,EQ,,Gems Jewellery And Watches,nifty500|niftymidcap150|midcap
+KANSAINER,Kansai Nerolac Paints Limited,INE531A01024,NSE,EQ,,Paints,niftymicrocap250|smallcap
+KARURVYSYA,Karur Vysya Bank Limited,INE036D01028,NSE,EQ,,Private Sector Bank,nifty500|niftysmallcap250|midcap
+KAYNES,Kaynes Technology India Limited,INE918Z01012,NSE,EQ,,Industrial Products,nifty500|niftysmallcap250|midcap
+KEC,KEC International Limited,INE389H01022,NSE,EQ,,Civil Construction,nifty500|niftysmallcap250|midcap
+KEI,KEI Industries Limited,INE878B01027,NSE,EQ,,Cables - Electricals,nifty500|niftymidcap150|midcap
+KFINTECH,Kfin Technologies Limited,INE138Y01010,NSE,EQ,,Depositories Clearing Houses and Other Intermediaries,nifty500|niftysmallcap250|midcap
+KIMS,Krishna Institute of Medical Sciences Limited,INE967H01025,NSE,EQ,,Hospital,nifty500|niftysmallcap250|midcap
+KIRLOSBROS,Kirloskar Brothers Limited,INE732A01036,NSE,EQ,,Compressors Pumps & Diesel Engines,niftymicrocap250|smallcap
+KIRLOSENG,Kirloskar Oil Engines Limited,INE146L01010,NSE,EQ,,Compressors Pumps & Diesel Engines,nifty500|niftysmallcap250|midcap
+KIRLPNU,Kirloskar Pneumatic Company Limited,INE811A01020,NSE,EQ,,Compressors Pumps & Diesel Engines,niftymicrocap250|smallcap
+KITEX,Kitex Garments Limited,INE602G01020,NSE,EQ,,Garments & Apparels,niftymicrocap250|smallcap
+KNRCON,KNR Constructions Limited,INE634I01029,NSE,EQ,,Civil Construction,niftymicrocap250|smallcap
+KOTAKBANK,Kotak Mahindra Bank Limited,INE237A01036,NSE,EQ,,Private Sector Bank,nifty50|nifty100|nifty500|largecap
+KPIGREEN,KPI Green Energy Limited,INE542W01025,NSE,EQ,,Power Generation,niftymicrocap250|smallcap
+KPIL,Kalpataru Projects International Limited,INE220B01022,NSE,EQ,,Civil Construction,nifty500|niftysmallcap250|midcap
+KPITTECH,KPIT Technologies Limited,INE04I401011,NSE,EQ,,Computers - Software & Consulting,nifty500|niftymidcap150|midcap
+KPRMILL,K.P.R. Mill Limited,INE930H01031,NSE,EQ,,Other Textile Products,nifty500|niftymidcap150|midcap
+KRBL,KRBL Limited,INE001B01026,NSE,EQ,,Other Agricultural Products,niftymicrocap250|smallcap
+KRN,KRN Heat Exchanger and Refrigeration Limited,INE0Q3J01015,NSE,EQ,,Other Industrial Products,niftymicrocap250|smallcap
+KSB,Ksb Limited,INE999A01023,NSE,EQ,,Compressors Pumps & Diesel Engines,niftymicrocap250|smallcap
+KSCL,Kaveri Seed Company Limited,INE455I01029,NSE,EQ,,Other Agricultural Products,niftymicrocap250|smallcap
+KTKBANK,The Karnataka Bank Limited,INE614B01018,NSE,EQ,,Private Sector Bank,niftymicrocap250|smallcap
+LALPATHLAB,Dr. Lal Path Labs Ltd.,INE600L01024,NSE,EQ,,Healthcare Service Provider,nifty500|niftysmallcap250|midcap
+LATENTVIEW,Latent View Analytics Limited,INE0I7C01011,NSE,EQ,,Computers - Software & Consulting,nifty500|niftysmallcap250|midcap
+LAURUSLABS,Laurus Labs Limited,INE947Q01028,NSE,EQ,,Pharmaceuticals,nifty500|niftymidcap150|midcap
+LEMONTREE,Lemon Tree Hotels Limited,INE970X01018,NSE,EQ,,Hotels & Resorts,nifty500|niftysmallcap250|midcap
+LENSKART,Lenskart Solutions Limited,INE956O01016,NSE,EQ,,Speciality Retail,nifty500|niftymidcap150|midcap
+LGEINDIA,LG Electronics India Limited,INE324D01010,NSE,EQ,,Household Appliances,nifty500|niftymidcap150|midcap
+LICHSGFIN,LIC Housing Finance Limited,INE115A01026,NSE,EQ,,Housing Finance Company,nifty500|niftymidcap150|midcap
+LICI,Life Insurance Corporation Of India,INE0J1Y01017,NSE,EQ,,Life Insurance,nifty500|niftymidcap150|midcap
+LINDEINDIA,Linde India Limited,INE473A01011,NSE,EQ,,Industrial Gases,nifty500|niftymidcap150|midcap
+LLOYDSENGG,LLOYDS ENGINEERING WORKS LIMITED,INE093R01011,NSE,EQ,,Industrial Products,niftymicrocap250|smallcap
+LLOYDSENT,Lloyds Enterprises Limited,INE080I01025,NSE,EQ,,Trading - Metals,niftymicrocap250|smallcap
+LLOYDSME,Lloyds Metals And Energy Limited,INE281B01032,NSE,EQ,,Industrial Minerals,nifty500|niftymidcap150|midcap
+LODHA,Lodha Developers Limited,INE670K01029,NSE,EQ,,Residential Commercial Projects,nifty100|nifty500|largecap
+LOTUSDEV,Sri Lotus Developers and Realty Limited,INE0V9Q01010,NSE,EQ,,Residential Commercial Projects,niftymicrocap250|smallcap
+LT,Larsen & Toubro Limited,INE018A01030,NSE,EQ,,Civil Construction,nifty50|nifty100|nifty500|largecap
+LTF,L&T Finance Limited,INE498L01015,NSE,EQ,,Investment Company,nifty500|niftymidcap150|midcap
+LTFOODS,LT Foods Limited,INE818H01020,NSE,EQ,,Other Agricultural Products,nifty500|niftysmallcap250|midcap
+LTM,LTIMindtree Limited,INE214T01019,NSE,EQ,,Computers - Software & Consulting,nifty100|nifty500|largecap
+LTTS,L&T Technology Services Limited,INE010V01017,NSE,EQ,,IT Enabled Services,nifty500|niftymidcap150|midcap
+LUMAXTECH,Lumax Auto Technologies Limited,INE872H01027,NSE,EQ,,Auto Components & Equipments,niftymicrocap250|smallcap
+LUPIN,Lupin Limited,INE326A01037,NSE,EQ,,Pharmaceuticals,nifty500|niftymidcap150|midcap
+LXCHEM,Laxmi Organic Industries Limited,INE576O01020,NSE,EQ,,Specialty Chemicals,niftymicrocap250|smallcap
+M&M,Mahindra & Mahindra Limited,INE101A01026,NSE,EQ,,Passenger Cars & Utility Vehicles,nifty50|nifty100|nifty500|largecap
+M&MFIN,Mahindra & Mahindra Financial Services Limited,INE774D01024,NSE,EQ,,Non Banking Financial Company (NBFC),nifty500|niftymidcap150|midcap
+MAHABANK,Bank of Maharashtra,INE457A01014,NSE,EQ,,Public Sector Bank,nifty500|niftymidcap150|midcap
+MAHSCOOTER,Maharashtra Scooters Limited,INE288A01013,NSE,EQ,,Investment Company,niftymicrocap250|smallcap
+MAHSEAMLES,Maharashtra Seamless Limited,INE271B01025,NSE,EQ,,Iron & Steel Products,niftymicrocap250|smallcap
+MANAPPURAM,Manappuram Finance Limited,INE522D01027,NSE,EQ,,Non Banking Financial Company (NBFC),nifty500|niftysmallcap250|midcap
+MANKIND,Mankind Pharma Limited,INE634S01028,NSE,EQ,,Pharmaceuticals,nifty500|niftymidcap150|midcap
+MANORAMA,Manorama Industries Limited,INE00VM01036,NSE,EQ,,Other Food Products,niftymicrocap250|smallcap
+MANYAVAR,Vedant Fashions Limited,INE825V01034,NSE,EQ,,Speciality Retail,niftymicrocap250|smallcap
+MAPMYINDIA,C.E. Info Systems Limited,INE0BV301023,NSE,EQ,,Software Products,nifty500|niftysmallcap250|midcap
+MARICO,Marico Limited,INE196A01026,NSE,EQ,,Edible Oil,nifty500|niftymidcap150|midcap
+MARKSANS,Marksans Pharma Limited,INE750C01026,NSE,EQ,,Pharmaceuticals,niftymicrocap250|smallcap
+MARUTI,Maruti Suzuki India Limited,INE585B01010,NSE,EQ,,Passenger Cars & Utility Vehicles,nifty50|nifty100|nifty500|largecap
+MASTEK,Mastek Limited,INE759A01021,NSE,EQ,,Computers - Software & Consulting,niftymicrocap250|smallcap
+MAXHEALTH,Max Healthcare Institute Limited,INE027H01010,NSE,EQ,,Hospital,nifty50|nifty100|nifty500|largecap
+MAZDOCK,Mazagon Dock Shipbuilders Limited,INE249Z01020,NSE,EQ,,Ship Building & Allied Services,nifty100|nifty500|largecap
+MCX,Multi Commodity Exchange of India Limited,INE745G01043,NSE,EQ,,Exchange and Data Platform,nifty500|niftymidcap150|midcap
+MEDANTA,Global Health Limited,INE474Q01031,NSE,EQ,,Hospital,nifty500|niftymidcap150|midcap
+MEDPLUS,Medplus Health Services Limited,INE804L01022,NSE,EQ,,Pharmacy Retail,niftymicrocap250|smallcap
+MEESHO,Meesho Limited,INE0VDM01015,NSE,EQ,,E-Retail/ E-Commerce,nifty500|niftysmallcap250|midcap
+METROPOLIS,Metropolis Healthcare Limited,INE112L01020,NSE,EQ,,Healthcare Service Provider,niftymicrocap250|smallcap
+MFSL,Max Financial Services Limited,INE180A01020,NSE,EQ,,Life Insurance,nifty500|niftymidcap150|midcap
+MGL,Mahanagar Gas Limited,INE002S01010,NSE,EQ,,LPG/CNG/PNG/LNG Supplier,nifty500|niftysmallcap250|midcap
+MIDHANI,Mishra Dhatu Nigam Limited,INE099Z01011,NSE,EQ,,Aerospace & Defense,niftymicrocap250|smallcap
+MINDACORP,Minda Corporation Limited,INE842C01021,NSE,EQ,,Auto Components & Equipments,nifty500|niftysmallcap250|midcap
+MMTC,MMTC Limited,INE123F01029,NSE,EQ,,Trading & Distributors,nifty500|niftysmallcap250|midcap
+MOIL,MOIL Limited,INE490G01020,NSE,EQ,,Industrial Minerals,niftymicrocap250|smallcap
+MOTHERSON,Samvardhana Motherson International Limited,INE775A01035,NSE,EQ,,Auto Components & Equipments,nifty100|nifty500|largecap
+MOTILALOFS,Motilal Oswal Financial Services Limited,INE338I01027,NSE,EQ,,Stockbroking & Allied,nifty500|niftymidcap150|midcap
+MPHASIS,MphasiS Limited,INE356A01018,NSE,EQ,,Computers - Software & Consulting,nifty500|niftymidcap150|midcap
+MRF,MRF Limited,INE883A01011,NSE,EQ,,Tyres & Rubber Products,nifty500|niftymidcap150|midcap
+MRPL,Mangalore Refinery and Petrochemicals Limited,INE103A01014,NSE,EQ,,Refineries & Marketing,nifty500|niftysmallcap250|midcap
+MSTCLTD,Mstc Limited,INE255X01014,NSE,EQ,,Trading & Distributors,niftymicrocap250|smallcap
+MSUMI,Motherson Sumi Wiring India Limited,INE0FS801015,NSE,EQ,,Auto Components & Equipments,nifty500|niftysmallcap250|midcap
+MTARTECH,Mtar Technologies Limited,INE864I01014,NSE,EQ,,Other Electrical Equipment,niftymicrocap250|smallcap
+MUTHOOTFIN,Muthoot Finance Limited,INE414G01012,NSE,EQ,,Non Banking Financial Company (NBFC),nifty100|nifty500|largecap
+NAM-INDIA,Nippon Life India Asset Management Limited,INE298J01013,NSE,EQ,,Asset Management Company,nifty500|niftymidcap150|midcap
+NATCOPHARM,Natco Pharma Limited,INE987B01026,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+NATIONALUM,National Aluminium Company Limited,INE139A01034,NSE,EQ,,Aluminium,nifty500|niftymidcap150|midcap
+NAUKRI,Info Edge (India) Limited,INE663F01032,NSE,EQ,,Internet & Catalogue Retail,nifty500|niftymidcap150|midcap
+NAVA,NAVA LIMITED,INE725A01030,NSE,EQ,,Power Generation,nifty500|niftysmallcap250|midcap
+NAVINFLUOR,Navin Fluorine International Limited,INE048G01026,NSE,EQ,,Specialty Chemicals,nifty500|niftysmallcap250|midcap
+NAZARA,Nazara Technologies Limited,INE418L01047,NSE,EQ,,Digital Entertainment,niftymicrocap250|smallcap
+NBCC,NBCC (India) Limited,INE095N01031,NSE,EQ,,Civil Construction,nifty500|niftysmallcap250|midcap
+NCC,NCC Limited,INE868B01028,NSE,EQ,,Civil Construction,nifty500|niftysmallcap250|midcap
+NEOGEN,Neogen Chemicals Limited,INE136S01016,NSE,EQ,,Specialty Chemicals,niftymicrocap250|smallcap
+NESCO,Nesco Limited,INE317F01035,NSE,EQ,,Diversified Commercial Services,niftymicrocap250|smallcap
+NESTLEIND,Nestle India Limited,INE239A01024,NSE,EQ,,Packaged Foods,nifty50|nifty100|nifty500|largecap
+NETWEB,Netweb Technologies India Limited,INE0NT901020,NSE,EQ,,IT Enabled Services,nifty500|niftysmallcap250|midcap
+NETWORK18,Network18 Media & Investments Limited,INE870H01013,NSE,EQ,,Media & Entertainment,niftymicrocap250|smallcap
+NEULANDLAB,Neuland Laboratories Limited,INE794A01010,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+NEWGEN,Newgen Software Technologies Limited,INE619B01017,NSE,EQ,,Computers - Software & Consulting,nifty500|niftysmallcap250|midcap
+NFL,National Fertilizers Limited,INE870D01012,NSE,EQ,,Fertilizers,niftymicrocap250|smallcap
+NH,Narayana Hrudayalaya Ltd.,INE410P01011,NSE,EQ,,Hospital,nifty500|niftysmallcap250|midcap
+NHPC,NHPC Limited,INE848E01016,NSE,EQ,,Power Generation,nifty500|niftymidcap150|midcap
+NIACL,The New India Assurance Company Limited,INE470Y01017,NSE,EQ,,General Insurance,nifty500|niftymidcap150|midcap
+NIVABUPA,Niva Bupa Health Insurance Company Limited,INE995S01015,NSE,EQ,,General Insurance,nifty500|niftysmallcap250|midcap
+NLCINDIA,NLC India Limited,INE589A01014,NSE,EQ,,Power Generation,nifty500|niftymidcap150|midcap
+NMDC,NMDC Limited,INE584A01023,NSE,EQ,,Industrial Minerals,nifty500|niftymidcap150|midcap
+NSLNISP,NMDC Steel Limited,INE0NNS01018,NSE,EQ,,Iron & Steel,nifty500|niftysmallcap250|midcap
+NTPC,NTPC Limited,INE733E01010,NSE,EQ,,Power Generation,nifty50|nifty100|nifty500|largecap
+NTPCGREEN,NTPC Green Energy Limited,INE0ONG01011,NSE,EQ,,Power Generation,nifty500|niftymidcap150|midcap
+NUVAMA,Nuvama Wealth Management Limited,INE531F01023,NSE,EQ,,Stockbroking & Allied,nifty500|niftysmallcap250|midcap
+NUVOCO,Nuvoco Vistas Corporation Limited,INE118D01016,NSE,EQ,,Cement & Cement Products,nifty500|niftysmallcap250|midcap
+NYKAA,FSN E-Commerce Ventures Limited,INE388Y01029,NSE,EQ,,E-Retail/ E-Commerce,nifty500|niftymidcap150|midcap
+OBEROIRLTY,Oberoi Realty Limited,INE093I01010,NSE,EQ,,Residential Commercial Projects,nifty500|niftymidcap150|midcap
+OFSS,Oracle Financial Services Software Limited,INE881D01027,NSE,EQ,,Software Products,nifty500|niftymidcap150|midcap
+OIL,Oil India Limited,INE274J01014,NSE,EQ,,Oil Exploration & Production,nifty500|niftymidcap150|midcap
+OLAELEC,Ola Electric Mobility Limited,INE0LXG01040,NSE,EQ,,2/3 Wheelers,nifty500|niftysmallcap250|midcap
+OLECTRA,Olectra Greentech Limited,INE260D01016,NSE,EQ,,Passenger Cars & Utility Vehicles,nifty500|niftysmallcap250|midcap
+ONESOURCE,Onesource Specialty Pharma Limited,INE013P01021,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+ONGC,Oil & Natural Gas Corporation Limited,INE213A01029,NSE,EQ,,Oil Exploration & Production,nifty50|nifty100|nifty500|largecap
+OPTIEMUS,Optiemus Infracom Limited,INE350C01017,NSE,EQ,,Telecom - Equipment & Accessories,niftymicrocap250|smallcap
+ORIENTCEM,Orient Cement Limited,INE876N01018,NSE,EQ,,Cement & Cement Products,niftymicrocap250|smallcap
+ORKLAINDIA,Orkla India Limited,INE16NZ01023,NSE,EQ,,Other Food Products,niftymicrocap250|smallcap
+OSWALPUMPS,Oswal Pumps Limited,INE0BYP01024,NSE,EQ,,Compressors Pumps & Diesel Engines,niftymicrocap250|smallcap
+PAGEIND,Page Industries Limited,INE761H01022,NSE,EQ,,Garments & Apparels,nifty500|niftymidcap150|midcap
+PARADEEP,Paradeep Phosphates Limited,INE088F01024,NSE,EQ,,Fertilizers,nifty500|niftysmallcap250|midcap
+PARAS,Paras Defence and Space Technologies Limited,INE045601023,NSE,EQ,,Aerospace & Defense,niftymicrocap250|smallcap
+PARKHOSPS,Park Medi World Limited,INE119201023,NSE,EQ,,Hospital,niftymicrocap250|smallcap
+PATANJALI,Patanjali Foods Limited,INE619A01035,NSE,EQ,,Edible Oil,nifty500|niftymidcap150|midcap
+PAYTM,One 97 Communications Limited,INE982J01020,NSE,EQ,,Financial Technology (Fintech),nifty500|niftymidcap150|midcap
+PCBL,PCBL Chemical Limited,INE602A01031,NSE,EQ,,Carbon Black,nifty500|niftysmallcap250|midcap
+PCJEWELLER,PC Jeweller Limited,INE785M01021,NSE,EQ,,Gems Jewellery And Watches,niftymicrocap250|smallcap
+PERSISTENT,Persistent Systems Limited,INE262H01021,NSE,EQ,,Computers - Software & Consulting,nifty500|niftymidcap150|midcap
+PETRONET,Petronet LNG Limited,INE347G01014,NSE,EQ,,LPG/CNG/PNG/LNG Supplier,nifty500|niftymidcap150|midcap
+PFC,Power Finance Corporation Limited,INE134E01011,NSE,EQ,,Financial Institution,nifty100|nifty500|largecap
+PFIZER,Pfizer Limited,INE182A01018,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+PFOCUS,Prime Focus Limited,INE367G01038,NSE,EQ,,Media & Entertainment,niftymicrocap250|smallcap
+PGEL,PG Electroplast Limited,INE457L01029,NSE,EQ,,Consumer Electronics,nifty500|niftysmallcap250|midcap
+PGIL,Pearl Global Industries Limited,INE940H01022,NSE,EQ,,Garments & Apparels,niftymicrocap250|smallcap
+PHOENIXLTD,The Phoenix Mills Limited,INE211B01039,NSE,EQ,,Residential Commercial Projects,nifty500|niftymidcap150|midcap
+PICCADIL,Piccadily Agro Industries Limited,INE546C01010,NSE,EQ,,Breweries & Distilleries,niftymicrocap250|smallcap
+PIDILITIND,Pidilite Industries Limited,INE318A01026,NSE,EQ,,Specialty Chemicals,nifty100|nifty500|largecap
+PIIND,PI Industries Limited,INE603J01030,NSE,EQ,,Pesticides & Agrochemicals,nifty500|niftymidcap150|midcap
+PINELABS,Pine Labs Limited,INE15B701018,NSE,EQ,,Financial Technology (Fintech),nifty500|niftysmallcap250|midcap
+PIRAMALFIN,Piramal Finance Limited,INE202B01038,NSE,EQ,,Non Banking Financial Company (NBFC),nifty500|niftysmallcap250|midcap
+PNB,Punjab National Bank,INE160A01022,NSE,EQ,,Public Sector Bank,nifty100|nifty500|largecap
+PNBHOUSING,PNB Housing Finance Limited,INE572E01012,NSE,EQ,,Housing Finance Company,nifty500|niftysmallcap250|midcap
+PNCINFRA,PNC Infratech Limited,INE195J01029,NSE,EQ,,Civil Construction,niftymicrocap250|smallcap
+PNGJL,P N Gadgil Jewellers Limited,INE953R01016,NSE,EQ,,Gems Jewellery And Watches,niftymicrocap250|smallcap
+POLICYBZR,PB Fintech Limited,INE417T01026,NSE,EQ,,Financial Technology (Fintech),nifty500|niftymidcap150|midcap
+POLYCAB,Polycab India Limited,INE455K01017,NSE,EQ,,Cables - Electricals,nifty500|niftymidcap150|midcap
+POLYMED,Poly Medicure Limited,INE205C01021,NSE,EQ,,Medical Equipment & Supplies,nifty500|niftysmallcap250|midcap
+POONAWALLA,Poonawalla Fincorp Limited,INE511C01022,NSE,EQ,,Non Banking Financial Company (NBFC),nifty500|niftysmallcap250|midcap
+POWERGRID,Power Grid Corporation of India Limited,INE752E01010,NSE,EQ,,Power - Transmission,nifty50|nifty100|nifty500|largecap
+POWERINDIA,Hitachi Energy India Limited,INE07Y701011,NSE,EQ,,Heavy Electrical Equipment,nifty500|niftymidcap150|midcap
+POWERMECH,Power Mech Projects Limited,INE211R01019,NSE,EQ,,Civil Construction,niftymicrocap250|smallcap
+PPLPHARMA,Piramal Pharma Limited,INE0DK501011,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+PRAJIND,Praj Industries Limited,INE074A01025,NSE,EQ,,Industrial Products,niftymicrocap250|smallcap
+PREMIERENE,Premier Energies Limited,INE0BS701011,NSE,EQ,,Other Electrical Equipment,nifty500|niftymidcap150|midcap
+PRESTIGE,Prestige Estates Projects Limited,INE811K01011,NSE,EQ,,Residential Commercial Projects,nifty500|niftymidcap150|midcap
+PRICOLLTD,Pricol Limited,INE726V01018,NSE,EQ,,Auto Components & Equipments,niftymicrocap250|smallcap
+PRIVISCL,Privi Speciality Chemicals Limited,INE959A01019,NSE,EQ,,Specialty Chemicals,niftymicrocap250|smallcap
+PRSMJOHNSN,Prism Johnson Limited,INE010A01011,NSE,EQ,,Cement & Cement Products,niftymicrocap250|smallcap
+PRUDENT,Prudent Corporate Advisory Services Limited,INE00F201020,NSE,EQ,,Financial Products Distributor,niftymicrocap250|smallcap
+PTC,PTC India Limited,INE877F01012,NSE,EQ,,Power Trading,niftymicrocap250|smallcap
+PTCIL,PTC Industries Limited,INE596F01018,NSE,EQ,,Other Industrial Products,nifty500|niftysmallcap250|midcap
+PURVA,Puravankara Limited,INE323I01011,NSE,EQ,,Residential Commercial Projects,niftymicrocap250|smallcap
+PVRINOX,PVR INOX Limited,INE191H01014,NSE,EQ,,Film Production Distribution & Exhibition,nifty500|niftysmallcap250|midcap
+PWL,Physicswallah Limited,INE0LP301011,NSE,EQ,,E-Learning,nifty500|niftysmallcap250|midcap
+QPOWER,Quality Power Electrical Equipments Limited,INE0SII01026,NSE,EQ,,Heavy Electrical Equipment,niftymicrocap250|smallcap
+QUESS,Quess Corp Limited,INE615P01015,NSE,EQ,,Diversified Commercial Services,niftymicrocap250|smallcap
+RADICO,Radico Khaitan Limited,INE944F01028,NSE,EQ,,Breweries & Distilleries,nifty500|niftymidcap150|midcap
+RAILTEL,Railtel Corporation Of India Limited,INE0DD101019,NSE,EQ,,Other Telecom Services,nifty500|niftysmallcap250|midcap
+RAIN,Rain Industries Limited,INE855B01025,NSE,EQ,,Petrochemicals,niftymicrocap250|smallcap
+RAINBOW,Rainbow Childrens Medicare Limited,INE961O01016,NSE,EQ,,Hospital,nifty500|niftysmallcap250|midcap
+RALLIS,Rallis India Limited,INE613A01020,NSE,EQ,,Pesticides & Agrochemicals,niftymicrocap250|smallcap
+RAMCOCEM,The Ramco Cements Limited,INE331A01037,NSE,EQ,,Cement & Cement Products,nifty500|niftysmallcap250|midcap
+RATEGAIN,Rategain Travel Technologies Limited,INE0CLI01024,NSE,EQ,,Computers - Software & Consulting,niftymicrocap250|smallcap
+RAYMONDLSL,Raymond Lifestyle Limited,INE02ID01020,NSE,EQ,,Other Textile Products,niftymicrocap250|smallcap
+RBA,Restaurant Brands Asia Limited,INE07T201019,NSE,EQ,,Restaurants,niftymicrocap250|smallcap
+RBLBANK,RBL Bank Limited,INE976G01028,NSE,EQ,,Private Sector Bank,nifty500|niftysmallcap250|midcap
+RCF,Rashtriya Chemicals and Fertilizers Limited,INE027A01015,NSE,EQ,,Fertilizers,niftymicrocap250|smallcap
+RECLTD,REC Limited,INE020B01018,NSE,EQ,,Financial Institution,nifty100|nifty500|largecap
+REDINGTON,Redington Limited,INE891D01026,NSE,EQ,,Trading & Distributors,nifty500|niftysmallcap250|midcap
+REDTAPE,Redtape Limited,INE0LXT01019,NSE,EQ,,Footwear,niftymicrocap250|smallcap
+REFEX,Refex Industries Limited,INE056I01025,NSE,EQ,,Industrial Gases,niftymicrocap250|smallcap
+RELAXO,Relaxo Footwears Limited,INE131B01039,NSE,EQ,,Footwear,niftymicrocap250|smallcap
+RELIANCE,Reliance Industries Limited,INE002A01018,NSE,EQ,,Refineries & Marketing,nifty50|nifty100|nifty500|largecap
+RELIGARE,Religare Enterprises Limited,INE621H01010,NSE,EQ,,Investment Company,niftymicrocap250|smallcap
+RENUKA,Shree Renuka Sugars Limited,INE087H01022,NSE,EQ,,Sugar,niftymicrocap250|smallcap
+RHIM,RHI MAGNESITA INDIA LIMITED,INE743M01012,NSE,EQ,,Electrodes & Refractories,nifty500|niftysmallcap250|midcap
+RITES,RITES Limited,INE320J01015,NSE,EQ,,Civil Construction,nifty500|niftysmallcap250|midcap
+RKFORGE,Ramkrishna Forgings Limited,INE399G01023,NSE,EQ,,Auto Components & Equipments,nifty500|niftysmallcap250|midcap
+ROUTE,ROUTE MOBILE LIMITED,INE450U01017,NSE,EQ,,Other Telecom Services,niftymicrocap250|smallcap
+RPOWER,Reliance Power Limited,INE614G01033,NSE,EQ,,Power Generation,nifty500|niftysmallcap250|midcap
+RRKABEL,R R Kabel Limited,INE777K01022,NSE,EQ,,Cables - Electricals,nifty500|niftysmallcap250|midcap
+RTNINDIA,RattanIndia Enterprises Limited,INE834M01019,NSE,EQ,,E-Retail/ E-Commerce,niftymicrocap250|smallcap
+RTNPOWER,RattanIndia Power Limited,INE399K01017,NSE,EQ,,Power Generation,niftymicrocap250|smallcap
+RUBICON,Rubicon Research Limited,INE506V01022,NSE,EQ,,Pharmaceuticals,niftymicrocap250|smallcap
+RVNL,Rail Vikas Nigam Limited,INE415G01027,NSE,EQ,,Civil Construction,nifty500|niftymidcap150|midcap
+SAATVIKGL,Saatvik Green Energy Limited,INE13B501022,NSE,EQ,,Other Electrical Equipment,niftymicrocap250|smallcap
+SAFARI,Safari Industries (India) Limited,INE429E01023,NSE,EQ,,Plastic Products - Consumer,niftymicrocap250|smallcap
+SAGILITY,SAGILITY LIMITED,INE0W2G01015,NSE,EQ,,IT Enabled Services,nifty500|niftysmallcap250|midcap
+SAIL,Steel Authority of India Limited,INE114A01011,NSE,EQ,,Iron & Steel,nifty500|niftymidcap150|midcap
+SAILIFE,Sai Life Sciences Limited,INE570L01029,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+SAMHI,Samhi Hotels Limited,INE08U801020,NSE,EQ,,Hotels & Resorts,niftymicrocap250|smallcap
+SAMMAANCAP,Sammaan Capital Limited,INE148I01020,NSE,EQ,,Housing Finance Company,nifty500|niftysmallcap250|midcap
+SANDUMA,Sandur Manganese & Iron Ores Limited,INE149K01016,NSE,EQ,,Coal,niftymicrocap250|smallcap
+SANSERA,Sansera Engineering Limited,INE953O01021,NSE,EQ,,Auto Components & Equipments,niftymicrocap250|smallcap
+SAPPHIRE,Sapphire Foods India Limited,INE806T01020,NSE,EQ,,Restaurants,nifty500|niftysmallcap250|midcap
+SARDAEN,Sarda Energy & Minerals Limited,INE385C01021,NSE,EQ,,Iron & Steel,nifty500|niftysmallcap250|midcap
+SAREGAMA,Saregama India Limited,INE979A01025,NSE,EQ,,Media & Entertainment,nifty500|niftysmallcap250|midcap
+SBFC,SBFC Finance Limited,INE423Y01016,NSE,EQ,,Non Banking Financial Company (NBFC),nifty500|niftysmallcap250|midcap
+SBICARD,SBI Cards and Payment Services Limited,INE018E01016,NSE,EQ,,Non Banking Financial Company (NBFC),nifty500|niftymidcap150|midcap
+SBILIFE,SBI Life Insurance Company Limited,INE123W01016,NSE,EQ,,Life Insurance,nifty50|nifty100|nifty500|largecap
+SBIN,State Bank of India,INE062A01020,NSE,EQ,,Public Sector Bank,nifty50|nifty100|nifty500|largecap
+SCHAEFFLER,Schaeffler India Limited,INE513A01022,NSE,EQ,,Auto Components & Equipments,nifty500|niftymidcap150|midcap
+SCI,Shipping Corporation Of India Limited,INE109A01011,NSE,EQ,,Shipping,nifty500|niftysmallcap250|midcap
+SENCO,Senco Gold Limited,INE602W01027,NSE,EQ,,Gems Jewellery And Watches,niftymicrocap250|smallcap
+SFL,Sheela Foam Limited,INE916U01025,NSE,EQ,,Furniture Home Furnishing,niftymicrocap250|smallcap
+SHAILY,Shaily Engineering Plastics Limited,INE151G01028,NSE,EQ,,Plastic Products - Consumer,niftymicrocap250|smallcap
+SHAKTIPUMP,Shakti Pumps (India) Limited,INE908D01010,NSE,EQ,,Compressors Pumps & Diesel Engines,niftymicrocap250|smallcap
+SHARDACROP,Sharda Cropchem Limited,INE221J01015,NSE,EQ,,Pesticides & Agrochemicals,niftymicrocap250|smallcap
+SHAREINDIA,Share India Securities Limited,INE932X01026,NSE,EQ,,Stockbroking & Allied,niftymicrocap250|smallcap
+SHILPAMED,Shilpa Medicare Limited,INE790G01031,NSE,EQ,,Pharmaceuticals,niftymicrocap250|smallcap
+SHREECEM,SHREE CEMENT LIMITED,INE070A01015,NSE,EQ,,Cement & Cement Products,nifty100|nifty500|largecap
+SHRIPISTON,Shriram Pistons & Rings Limited,INE526E01018,NSE,EQ,,Auto Components & Equipments,niftymicrocap250|smallcap
+SHRIRAMFIN,Shriram Finance Limited,INE721A01047,NSE,EQ,,Non Banking Financial Company (NBFC),nifty50|nifty100|nifty500|largecap
+SHYAMMETL,Shyam Metalics and Energy Limited,INE810G01011,NSE,EQ,,Iron & Steel Products,nifty500|niftysmallcap250|midcap
+SIEMENS,Siemens Limited,INE003A01024,NSE,EQ,,Heavy Electrical Equipment,nifty100|nifty500|largecap
+SIGNATURE,Signatureglobal (India) Limited,INE903U01023,NSE,EQ,,Residential Commercial Projects,nifty500|niftysmallcap250|midcap
+SJVN,SJVN Limited,INE002L01015,NSE,EQ,,Power Generation,nifty500|niftymidcap150|midcap
+SKFINDIA,SKF India Limited,INE640A01023,NSE,EQ,,Auto Components & Equipments,niftymicrocap250|smallcap
+SKFINDUS,SKF India (Industrial) Limited,INE2J8701016,NSE,EQ,,Abrasives & Bearings,niftymicrocap250|smallcap
+SKIPPER,Skipper Limited,INE439E01022,NSE,EQ,,Heavy Electrical Equipment,niftymicrocap250|smallcap
+SKYGOLD,SKY GOLD AND DIAMONDS LIMITED,INE01IU01018,NSE,EQ,,Gems Jewellery And Watches,niftymicrocap250|smallcap
+SMARTWORKS,Smartworks Coworking Spaces Limited,INE0NAZ01010,NSE,EQ,,Diversified Commercial Services,niftymicrocap250|smallcap
+SMLMAH,SML Mahindra Limited,INE294B01019,NSE,EQ,,Commercial Vehicles,niftymicrocap250|smallcap
+SOBHA,Sobha Limited,INE671H01015,NSE,EQ,,Residential Commercial Projects,nifty500|niftysmallcap250|midcap
+SOLARINDS,Solar Industries India Limited,INE343H01029,NSE,EQ,,Explosives,nifty100|nifty500|largecap
+SONACOMS,Sona BLW Precision Forgings Limited,INE073K01018,NSE,EQ,,Auto Components & Equipments,nifty500|niftysmallcap250|midcap
+SONATSOFTW,Sonata Software Limited,INE269A01021,NSE,EQ,,Computers - Software & Consulting,nifty500|niftysmallcap250|midcap
+SOUTHBANK,The South Indian Bank Limited,INE683A01023,NSE,EQ,,Private Sector Bank,niftymicrocap250|smallcap
+SPARC,Sun Pharma Advanced Research Company Limited,INE232I01014,NSE,EQ,,Pharmaceuticals,niftymicrocap250|smallcap
+SPLPETRO,Supreme Petrochem Limited,INE663A01033,NSE,EQ,,Petrochemicals,nifty500|niftysmallcap250|midcap
+SRF,SRF Limited,INE647A01010,NSE,EQ,,Specialty Chemicals,nifty500|niftymidcap150|midcap
+STAR,Strides Pharma Science Limited,INE939A01011,NSE,EQ,,Pharmaceuticals,niftymicrocap250|smallcap
+STARCEMENT,Star Cement Limited,INE460H01021,NSE,EQ,,Cement & Cement Products,niftymicrocap250|smallcap
+STARHEALTH,Star Health and Allied Insurance Company Limited,INE575P01011,NSE,EQ,,General Insurance,nifty500|niftysmallcap250|midcap
+STLTECH,Sterlite Technologies Limited,INE089C01029,NSE,EQ,,Telecom - Equipment & Accessories,niftymicrocap250|smallcap
+STYL,Seshaasai Technologies Limited,INE04VU01023,NSE,EQ,,Financial Technology (Fintech),niftymicrocap250|smallcap
+STYRENIX,Styrenix Performance Materials Limited,INE189B01011,NSE,EQ,,Specialty Chemicals,niftymicrocap250|smallcap
+SUBROS,Subros Limited,INE287B01021,NSE,EQ,,Other Industrial Products,niftymicrocap250|smallcap
+SUDARSCHEM,Sudarshan Chemical Industries Limited,INE659A01023,NSE,EQ,,Dyes And Pigments,niftymicrocap250|smallcap
+SUDEEPPHRM,Sudeep Pharma Limited,INE0QPI01025,NSE,EQ,,Pharmaceuticals,niftymicrocap250|smallcap
+SUMICHEM,Sumitomo Chemical India Limited,INE258G01013,NSE,EQ,,Pesticides & Agrochemicals,nifty500|niftysmallcap250|midcap
+SUNDARMFIN,Sundaram Finance Limited,INE660A01013,NSE,EQ,,Non Banking Financial Company (NBFC),nifty500|niftymidcap150|midcap
+SUNPHARMA,Sun Pharmaceutical Industries Limited,INE044A01036,NSE,EQ,,Pharmaceuticals,nifty50|nifty100|nifty500|largecap
+SUNTECK,Sunteck Realty Limited,INE805D01034,NSE,EQ,,Residential Commercial Projects,niftymicrocap250|smallcap
+SUNTV,Sun TV Network Limited,INE424H01027,NSE,EQ,,TV Broadcasting & Software Production,nifty500|niftysmallcap250|midcap
+SUPREMEIND,Supreme Industries Limited,INE195A01028,NSE,EQ,,Plastic Products - Industrial,nifty500|niftymidcap150|midcap
+SUPRIYA,Supriya Lifescience Limited,INE07RO01027,NSE,EQ,,Pharmaceuticals,niftymicrocap250|smallcap
+SURYAROSNI,Surya Roshni Limited,INE335A01020,NSE,EQ,,Iron & Steel Products,niftymicrocap250|smallcap
+SUZLON,Suzlon Energy Limited,INE040H01021,NSE,EQ,,Heavy Electrical Equipment,nifty500|niftymidcap150|midcap
+SWANCORP,SWAN CORP LIMITED,INE665A01038,NSE,EQ,,Petrochemicals,nifty500|niftysmallcap250|midcap
+SWIGGY,Swiggy Limited,INE00H001014,NSE,EQ,,E-Retail/ E-Commerce,nifty500|niftymidcap150|midcap
+SWSOLAR,Sterling and Wilson Renewable Energy Limited,INE00M201021,NSE,EQ,,Civil Construction,niftymicrocap250|smallcap
+SYNGENE,Syngene International Limited,INE398R01022,NSE,EQ,,Healthcare Research Analytics & Technology,nifty500|niftysmallcap250|midcap
+SYRMA,Syrma SGS Technology Limited,INE0DYJ01015,NSE,EQ,,Industrial Products,nifty500|niftysmallcap250|midcap
+TANLA,Tanla Platforms Limited,INE483C01032,NSE,EQ,,Software Products,niftymicrocap250|smallcap
+TARC,TARC Limited,INE0EK901012,NSE,EQ,,Residential Commercial Projects,niftymicrocap250|smallcap
+TARIL,Transformers And Rectifiers (India) Limited,INE763I01026,NSE,EQ,,Heavy Electrical Equipment,nifty500|niftysmallcap250|midcap
+TATACAP,Tata Capital Limited,INE976I01016,NSE,EQ,,Non Banking Financial Company (NBFC),nifty100|nifty500|largecap
+TATACHEM,Tata Chemicals Limited,INE092A01019,NSE,EQ,,Commodity Chemicals,nifty500|niftysmallcap250|midcap
+TATACOMM,Tata Communications Limited,INE151A01013,NSE,EQ,,Telecom - Cellular & Fixed line services,nifty500|niftymidcap150|midcap
+TATACONSUM,TATA CONSUMER PRODUCTS LIMITED,INE192A01025,NSE,EQ,,Tea & Coffee,nifty50|nifty100|nifty500|largecap
+TATAELXSI,Tata Elxsi Limited,INE670A01012,NSE,EQ,,Computers - Software & Consulting,nifty500|niftymidcap150|midcap
+TATAINVEST,Tata Investment Corporation Limited,INE672A01026,NSE,EQ,,Investment Company,nifty500|niftymidcap150|midcap
+TATAPOWER,Tata Power Company Limited,INE245A01021,NSE,EQ,,Integrated Power Utilities,nifty100|nifty500|largecap
+TATASTEEL,Tata Steel Limited,INE081A01020,NSE,EQ,,Iron & Steel,nifty50|nifty100|nifty500|largecap
+TATATECH,Tata Technologies Limited,INE142M01025,NSE,EQ,,IT Enabled Services,nifty500|niftysmallcap250|midcap
+TBOTEK,TBO Tek Limited,INE673O01025,NSE,EQ,,Tour Travel Related Services,nifty500|niftysmallcap250|midcap
+TCS,Tata Consultancy Services Limited,INE467B01029,NSE,EQ,,Computers - Software & Consulting,nifty50|nifty100|nifty500|largecap
+TDPOWERSYS,TD Power Systems Limited,INE419M01027,NSE,EQ,,Heavy Electrical Equipment,niftymicrocap250|smallcap
+TECHM,Tech Mahindra Limited,INE669C01036,NSE,EQ,,Computers - Software & Consulting,nifty50|nifty100|nifty500|largecap
+TECHNOE,Techno Electric & Engineering Company Limited,INE285K01026,NSE,EQ,,Civil Construction,nifty500|niftysmallcap250|midcap
+TEGA,Tega Industries Limited,INE011K01018,NSE,EQ,,Industrial Products,nifty500|niftysmallcap250|midcap
+TEJASNET,Tejas Networks Limited,INE010J01012,NSE,EQ,,Telecom - Equipment & Accessories,nifty500|niftysmallcap250|midcap
+TENNIND,Tenneco Clean Air India Limited,INE19RI01016,NSE,EQ,,Auto Components & Equipments,nifty500|niftysmallcap250|midcap
+TEXRAIL,Texmaco Rail & Engineering Limited,INE621L01012,NSE,EQ,,Railway Wagons,niftymicrocap250|smallcap
+THANGAMAYL,Thangamayil Jewellery Limited,INE085J01014,NSE,EQ,,Gems Jewellery And Watches,niftymicrocap250|smallcap
+THELEELA,Leela Palaces Hotels & Resorts Limited,INE0AQ201015,NSE,EQ,,Hotels & Resorts,nifty500|niftysmallcap250|midcap
+THERMAX,Thermax Limited,INE152A01029,NSE,EQ,,Heavy Electrical Equipment,nifty500|niftymidcap150|midcap
+THOMASCOOK,Thomas Cook  (India)  Limited,INE332A01027,NSE,EQ,,Tour Travel Related Services,niftymicrocap250|smallcap
+THYROCARE,Thyrocare Technologies Limited,INE594H01019,NSE,EQ,,Healthcare Service Provider,niftymicrocap250|smallcap
+TI,Tilaknagar Industries Limited,INE133E01013,NSE,EQ,,Breweries & Distilleries,niftymicrocap250|smallcap
+TIINDIA,Tube Investments of India Limited,INE974X01010,NSE,EQ,,Auto Components & Equipments,nifty500|niftymidcap150|midcap
+TIMETECHNO,Time Technoplast Limited,INE508G01029,NSE,EQ,,Plastic Products - Industrial,niftymicrocap250|smallcap
+TIMKEN,Timken India Limited,INE325A01013,NSE,EQ,,Abrasives & Bearings,nifty500|niftysmallcap250|midcap
+TIPSMUSIC,Tips Music Limited,INE716B01029,NSE,EQ,,Media & Entertainment,niftymicrocap250|smallcap
+TITAGARH,TITAGARH RAIL SYSTEMS LIMITED,INE615H01020,NSE,EQ,,Railway Wagons,nifty500|niftysmallcap250|midcap
+TITAN,Titan Company Limited,INE280A01028,NSE,EQ,,Gems Jewellery And Watches,nifty50|nifty100|nifty500|largecap
+TMB,Tamilnad Mercantile Bank Limited,INE668A01016,NSE,EQ,,Private Sector Bank,niftymicrocap250|smallcap
+TMCV,Tata Motors Limited,INE1TAE01010,NSE,EQ,,Commercial Vehicles,nifty100|nifty500|largecap
+TMPV,Tata Motors Passenger Vehicles Limited,INE155A01022,NSE,EQ,,Passenger Cars & Utility Vehicles,nifty50|nifty100|nifty500|largecap
+TORNTPHARM,Torrent Pharmaceuticals Limited,INE685A01028,NSE,EQ,,Pharmaceuticals,nifty100|nifty500|largecap
+TORNTPOWER,Torrent Power Limited,INE813H01021,NSE,EQ,,Integrated Power Utilities,nifty500|niftymidcap150|midcap
+TRANSRAILL,Transrail Lighting Limited,INE454P01035,NSE,EQ,,Heavy Electrical Equipment,niftymicrocap250|smallcap
+TRAVELFOOD,Travel Food Services Limited,INE103V01028,NSE,EQ,,Restaurants,nifty500|niftysmallcap250|midcap
+TRENT,Trent Limited,INE849A01020,NSE,EQ,,Speciality Retail,nifty50|nifty100|nifty500|largecap
+TRIDENT,Trident Limited,INE064C01022,NSE,EQ,,Other Textile Products,nifty500|niftysmallcap250|midcap
+TRITURBINE,Triveni Turbine Limited,INE152M01016,NSE,EQ,,Heavy Electrical Equipment,nifty500|niftysmallcap250|midcap
+TRIVENI,Triveni Engineering & Industries Limited,INE256C01024,NSE,EQ,,Sugar,niftymicrocap250|smallcap
+TSFINV,TSF INVESTMENTS LIMITED,INE202Z01029,NSE,EQ,,Investment Company,niftymicrocap250|smallcap
+TTML,Tata Teleservices (Maharashtra) Limited,INE517B01013,NSE,EQ,,Telecom - Cellular & Fixed line services,nifty500|niftysmallcap250|midcap
+TVSMOTOR,TVS Motor Company Limited,INE494B01023,NSE,EQ,,2/3 Wheelers,nifty100|nifty500|largecap
+UBL,United Breweries Limited,INE686F01025,NSE,EQ,,Breweries & Distilleries,nifty500|niftymidcap150|midcap
+UCOBANK,UCO Bank,INE691A01018,NSE,EQ,,Public Sector Bank,nifty500|niftysmallcap250|midcap
+UJJIVANSFB,Ujjivan Small Finance Bank Limited,INE551W01018,NSE,EQ,,Other Bank,niftymicrocap250|smallcap
+ULTRACEMCO,UltraTech Cement Limited,INE481G01011,NSE,EQ,,Cement & Cement Products,nifty50|nifty100|nifty500|largecap
+UNIONBANK,Union Bank of India,INE692A01016,NSE,EQ,,Public Sector Bank,nifty100|nifty500|largecap
+UNITDSPR,United Spirits Limited,INE854D01024,NSE,EQ,,Breweries & Distilleries,nifty100|nifty500|largecap
+UNOMINDA,UNO Minda Limited,INE405E01023,NSE,EQ,,Auto Components & Equipments,nifty500|niftymidcap150|midcap
+UPL,UPL Limited,INE628A01036,NSE,EQ,,Pesticides & Agrochemicals,nifty500|niftymidcap150|midcap
+URBANCO,Urban Company Limited,INE0CAZ01013,NSE,EQ,,E-Retail/ E-Commerce,nifty500|niftysmallcap250|midcap
+USHAMART,Usha Martin Limited,INE228A01035,NSE,EQ,,Iron & Steel Products,nifty500|niftysmallcap250|midcap
+UTIAMC,UTI Asset Management Company Limited,INE094J01016,NSE,EQ,,Asset Management Company,nifty500|niftysmallcap250|midcap
+UTLSOLAR,Fujiyama Power Systems Limited,INE12UR01024,NSE,EQ,,Other Electrical Equipment,niftymicrocap250|smallcap
+V2RETAIL,V2 Retail Limited,INE945H01021,NSE,EQ,,Speciality Retail,niftymicrocap250|smallcap
+VAIBHAVGBL,Vaibhav Global Limited,INE884A01027,NSE,EQ,,Gems Jewellery And Watches,niftymicrocap250|smallcap
+VARROC,Varroc Engineering Limited,INE665L01035,NSE,EQ,,Auto Components & Equipments,niftymicrocap250|smallcap
+VBL,Varun Beverages Limited,INE200M01039,NSE,EQ,,Other Beverages,nifty100|nifty500|largecap
+VEDL,Vedanta Limited,INE205A01025,NSE,EQ,,Diversified Metals,nifty100|nifty500|largecap
+VGUARD,V-Guard Industries Limited,INE951I01027,NSE,EQ,,Household Appliances,niftymicrocap250|smallcap
+VIJAYA,Vijaya Diagnostic Centre Limited,INE043W01024,NSE,EQ,,Healthcare Service Provider,nifty500|niftysmallcap250|midcap
+VIKRAMSOLR,Vikram Solar Limited,INE078V01014,NSE,EQ,,Other Electrical Equipment,niftymicrocap250|smallcap
+VIPIND,VIP Industries Limited,INE054A01027,NSE,EQ,,Plastic Products - Consumer,niftymicrocap250|smallcap
+VIYASH,Viyash Scientific Limited,INE807F01027,NSE,EQ,,Pharmaceuticals,niftymicrocap250|smallcap
+VMART,V-Mart Retail Limited,INE665J01013,NSE,EQ,,Diversified Retail,niftymicrocap250|smallcap
+VMM,Vishal Mega Mart Limited,INE01EA01019,NSE,EQ,,Diversified Retail,nifty500|niftymidcap150|midcap
+VOLTAMP,Voltamp Transformers Limited,INE540H01012,NSE,EQ,,Heavy Electrical Equipment,niftymicrocap250|smallcap
+VOLTAS,Voltas Limited,INE226A01021,NSE,EQ,,Household Appliances,nifty500|niftymidcap150|midcap
+VTL,Vardhman Textiles Limited,INE825A01020,NSE,EQ,,Other Textile Products,nifty500|niftysmallcap250|midcap
+WAAREEENER,Waaree Energies Limited,INE377N01017,NSE,EQ,,Other Electrical Equipment,nifty500|niftymidcap150|midcap
+WAAREERTL,Waaree Renewable Technologies Limited,INE299N01021,NSE,EQ,,Other Electrical Equipment,niftymicrocap250|smallcap
+WABAG,VA Tech Wabag Limited,INE956G01038,NSE,EQ,,Water Supply & Management,niftymicrocap250|smallcap
+WAKEFIT,Wakefit Innovations Limited,INE0E7301029,NSE,EQ,,Furniture Home Furnishing,niftymicrocap250|smallcap
+WEBELSOLAR,Websol Energy System Limited,INE855C01023,NSE,EQ,,Other Electrical Equipment,niftymicrocap250|smallcap
+WELCORP,Welspun Corp Limited,INE191B01025,NSE,EQ,,Iron & Steel Products,nifty500|niftysmallcap250|midcap
+WELENT,Welspun Enterprises Limited,INE625G01013,NSE,EQ,,Civil Construction,niftymicrocap250|smallcap
+WELSPUNLIV,Welspun Living Limited,INE192B01031,NSE,EQ,,Other Textile Products,nifty500|niftysmallcap250|midcap
+WESTLIFE,WESTLIFE FOODWORLD LIMITED,INE274F01020,NSE,EQ,,Restaurants,niftymicrocap250|smallcap
+WEWORK,WeWork India Management Limited,INE085001019,NSE,EQ,,Diversified Commercial Services,niftymicrocap250|smallcap
+WHIRLPOOL,Whirlpool of India Limited,INE716A01013,NSE,EQ,,Household Appliances,nifty500|niftysmallcap250|midcap
+WIPRO,Wipro Limited,INE075A01022,NSE,EQ,,Computers - Software & Consulting,nifty50|nifty100|nifty500|largecap
+WOCKPHARMA,Wockhardt Limited,INE049B01025,NSE,EQ,,Pharmaceuticals,nifty500|niftysmallcap250|midcap
+YATHARTH,Yatharth Hospital & Trauma Care Services Limited,INE0JO301016,NSE,EQ,,Hospital,niftymicrocap250|smallcap
+YESBANK,Yes Bank Limited,INE528G01035,NSE,EQ,,Private Sector Bank,nifty500|niftymidcap150|midcap
+ZAGGLE,Zaggle Prepaid Ocean Services Limited,INE07K301024,NSE,EQ,,IT Enabled Services,niftymicrocap250|smallcap
+ZEEL,Zee Entertainment Enterprises Limited,INE256A01028,NSE,EQ,,TV Broadcasting & Software Production,nifty500|niftysmallcap250|midcap
+ZENSARTECH,Zensar Technologies Limited,INE520A01027,NSE,EQ,,Computers - Software & Consulting,nifty500|niftysmallcap250|midcap
+ZENTEC,Zen Technologies Limited,INE251B01027,NSE,EQ,,Aerospace & Defense,nifty500|niftysmallcap250|midcap
+ZFCVINDIA,ZF Commercial Vehicle Control Systems India Limited,INE342J01019,NSE,EQ,,Auto Components & Equipments,nifty500|niftysmallcap250|midcap
+ZYDUSLIFE,Zydus Lifesciences Limited,INE010B01027,NSE,EQ,,Pharmaceuticals,nifty100|nifty500|largecap
+ZYDUSWELL,Zydus Wellness Limited,INE768C01028,NSE,EQ,,Packaged Foods,nifty500|niftysmallcap250|midcap

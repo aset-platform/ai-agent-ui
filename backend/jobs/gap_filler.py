@@ -60,6 +60,8 @@ def fill_data_gaps() -> int:
 
         if not ticker or not gap_id:
             continue
+        if not ticker.endswith((".NS", ".BO")):
+            ticker = f"{ticker}.NS"
 
         try:
             if data_type == "ohlcv":
@@ -281,11 +283,7 @@ def _get_scoring_llm():
             tiers = _parse(settings.groq_model_tiers)
             anthropic = "claude-sonnet-4-6"
 
-        ollama = (
-            settings.ollama_model
-            if settings.ollama_enabled
-            else None
-        )
+        ollama = settings.ollama_model if settings.ollama_enabled else None
 
         return FallbackLLM(
             groq_models=tiers,
@@ -368,8 +366,7 @@ def refresh_all_sentiment() -> int:
                 _mgr.load_profile("reasoning")
                 _auto_loaded = True
                 _logger.info(
-                    "Batch: auto-loaded "
-                    "reasoning model",
+                    "Batch: auto-loaded " "reasoning model",
                 )
     except Exception:
         _logger.debug(
@@ -413,8 +410,7 @@ def refresh_all_sentiment() -> int:
             try:
                 _mgr.unload_all()
                 _logger.info(
-                    "Batch: unloaded reasoning "
-                    "model (auto-cleanup)",
+                    "Batch: unloaded reasoning " "model (auto-cleanup)",
                 )
             except Exception:
                 _logger.debug(

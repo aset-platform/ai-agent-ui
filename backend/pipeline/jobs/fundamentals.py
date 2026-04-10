@@ -3,6 +3,7 @@
 Fetches yfinance .info and .dividends for each ticker in the
 stock_master universe using keyset cursor pagination.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -98,7 +99,9 @@ def _write_dividends(
     """Write dividends to Iceberg (blocking)."""
     try:
         return repo.insert_dividends(
-            ticker, df, currency=currency,
+            ticker,
+            df,
+            currency=currency,
         )
     except Exception as exc:
         cat = classify_error(exc)
@@ -132,25 +135,31 @@ async def _process_ticker(
         async with semaphore:
             # 1. Fetch info
             info = await loop.run_in_executor(
-                None, partial(_fetch_info, yf_sym),
+                None,
+                partial(_fetch_info, yf_sym),
             )
             await asyncio.sleep(REQUEST_DELAY_S)
 
             # 2. Fetch dividends
             div_df = await loop.run_in_executor(
-                None, partial(_fetch_dividends, yf_sym),
+                None,
+                partial(_fetch_dividends, yf_sym),
             )
             return info, div_df
 
     try:
         info, div_df = await retry_with_backoff(
-            _do_fetch, ticker, logger=_plog,
+            _do_fetch,
+            ticker,
+            logger=_plog,
         )
     except SourceError as exc:
         if exc.category == SourceErrorCategory.RATE_LIMIT:
             await rate_tracker.record_rate_limit()
         _plog.ticker_failed(
-            ticker, exc.category.value, str(exc),
+            ticker,
+            exc.category.value,
+            str(exc),
         )
         async with session_factory() as sess:
             await log_skipped(
@@ -162,7 +171,9 @@ async def _process_ticker(
                 exc.category.value,
             )
             await advance_cursor(
-                sess, cursor_name, stock.id,
+                sess,
+                cursor_name,
+                stock.id,
             )
         return "failed"
 
@@ -170,7 +181,7 @@ async def _process_ticker(
     try:
         await loop.run_in_executor(
             None,
-            partial(_write_company_info, repo, ticker, info),
+            partial(_write_company_info, repo, yf_sym, info),
         )
         currency = stock.currency or "INR"
         rows_added = 0
@@ -178,13 +189,18 @@ async def _process_ticker(
             rows_added = await loop.run_in_executor(
                 None,
                 partial(
-                    _write_dividends, repo,
-                    ticker, div_df, currency,
+                    _write_dividends,
+                    repo,
+                    yf_sym,
+                    div_df,
+                    currency,
                 ),
             )
     except SourceError as exc:
         _plog.ticker_failed(
-            ticker, exc.category.value, str(exc),
+            ticker,
+            exc.category.value,
+            str(exc),
         )
         async with session_factory() as sess:
             await log_skipped(
@@ -196,7 +212,9 @@ async def _process_ticker(
                 exc.category.value,
             )
             await advance_cursor(
-                sess, cursor_name, stock.id,
+                sess,
+                cursor_name,
+                stock.id,
             )
         return "failed"
 
@@ -217,16 +235,10 @@ async def _process_ticker(
                         sm.sector = new_sector
                         changed = True
                     new_industry = info.get("industry")
-                    if (
-                        new_industry
-                        and sm.industry != new_industry
-                    ):
+                    if new_industry and sm.industry != new_industry:
                         sm.industry = new_industry
                         changed = True
-                    new_mcap = (
-                        info.get("marketCap")
-                        or info.get("market_cap")
-                    )
+                    new_mcap = info.get("marketCap") or info.get("market_cap")
                     if new_mcap and sm.market_cap != new_mcap:
                         sm.market_cap = int(new_mcap)
                         changed = True
@@ -237,13 +249,16 @@ async def _process_ticker(
     except Exception as exc:
         _logger.warning(
             "stock_master update failed for %s: %s",
-            ticker, exc,
+            ticker,
+            exc,
         )
 
     # -- advance cursor --------------------------------------------
     async with session_factory() as sess:
         await advance_cursor(
-            sess, cursor_name, stock.id,
+            sess,
+            cursor_name,
+            stock.id,
         )
 
     elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -252,7 +267,8 @@ async def _process_ticker(
 
     _logger.debug(
         "Fundamentals OK ticker=%s divs_added=%d",
-        ticker, rows_added,
+        ticker,
+        rows_added,
     )
     return "ok"
 
@@ -300,7 +316,10 @@ async def run_fundamentals(
             total_count = total.scalar() or 0
             bs = batch_size or DEFAULT_BATCH_SIZE
             cursor = await create_cursor(
-                session, cursor_name, total_count, bs,
+                session,
+                cursor_name,
+                total_count,
+                bs,
             )
         elif batch_size and cursor.batch_size != batch_size:
             cursor.batch_size = batch_size
@@ -309,7 +328,9 @@ async def run_fundamentals(
     # -- set status in_progress ------------------------------------
     async with factory() as session:
         await set_cursor_status(
-            session, cursor_name, "in_progress",
+            session,
+            cursor_name,
+            "in_progress",
         )
 
     # -- fetch batch -----------------------------------------------
@@ -321,16 +342,21 @@ async def run_fundamentals(
     if not batch:
         async with factory() as session:
             await set_cursor_status(
-                session, cursor_name, "completed",
+                session,
+                cursor_name,
+                "completed",
             )
         summary["status"] = "completed"
         _logger.info(
-            "Fundamentals cursor %s completed", cursor_name,
+            "Fundamentals cursor %s completed",
+            cursor_name,
         )
         return summary
 
     _plog.batch_started(
-        cursor_name, len(batch), last_id,
+        cursor_name,
+        len(batch),
+        last_id,
     )
 
     # -- process tickers concurrently ------------------------------
@@ -342,20 +368,26 @@ async def run_fundamentals(
 
     tasks = [
         _process_ticker(
-            stock, repo, factory,
-            cursor_name, sem, rate_tracker,
+            stock,
+            repo,
+            factory,
+            cursor_name,
+            sem,
+            rate_tracker,
         )
         for stock in batch
     ]
     results = await asyncio.gather(
-        *tasks, return_exceptions=True,
+        *tasks,
+        return_exceptions=True,
     )
 
     for r in results:
         if isinstance(r, Exception):
             summary["failed"] += 1
             _logger.error(
-                "Unexpected error in fundamentals: %s", r,
+                "Unexpected error in fundamentals: %s",
+                r,
             )
         elif r == "ok":
             summary["processed"] += 1
@@ -375,7 +407,9 @@ async def run_fundamentals(
     if rate_tracker.should_pause:
         async with factory() as session:
             await set_cursor_status(
-                session, cursor_name, "paused",
+                session,
+                cursor_name,
+                "paused",
             )
         summary["status"] = "paused"
         _logger.warning(

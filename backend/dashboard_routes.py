@@ -78,9 +78,17 @@ def _backfill_company_info(tickers, repo) -> None:
 
         for ticker in tickers:
             try:
-                info = yf.Ticker(ticker).info
+                yf_sym = ticker
+                if not yf_sym.endswith(
+                    (".NS", ".BO"),
+                ):
+                    yf_sym = f"{yf_sym}.NS"
+                info = yf.Ticker(yf_sym).info
                 if info:
-                    repo.insert_company_info(ticker, info)
+                    repo.insert_company_info(
+                        yf_sym,
+                        info,
+                    )
                     _logger.info(
                         "Backfilled company info: %s",
                         ticker,

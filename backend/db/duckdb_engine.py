@@ -115,10 +115,32 @@ def query_iceberg_df(
         _create_view(conn, table_name)
         result = conn.execute(sql, params or [])
         try:
-            return result.fetchdf()
+            df = result.fetchdf()
         except Exception:
             columns = [desc[0] for desc in result.description]
             rows = result.fetchall()
-            return pd.DataFrame(rows, columns=columns)
+            df = pd.DataFrame(rows, columns=columns)
+        # Normalize date columns: DuckDB returns
+        # datetime64 for Iceberg DateType, but
+        # downstream code expects date objects.
+        # Convert columns ending in _date, or named
+        # "date", "quarter_end", "ex_date" etc.
+        # Exclude timestamp columns like fetched_at,
+        # updated_at, computed_at, created_at.
+        _TS_SUFFIXES = (
+            "_at",
+            "timestamp",
+            "started_at",
+            "completed_at",
+        )
+        for col in df.columns:
+            if not pd.api.types.is_datetime64_any_dtype(
+                df[col],
+            ):
+                continue
+            if any(col.endswith(s) for s in _TS_SUFFIXES):
+                continue  # keep as timestamp
+            df[col] = df[col].dt.date
+        return df
     finally:
         conn.close()

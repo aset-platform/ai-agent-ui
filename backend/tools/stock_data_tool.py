@@ -157,11 +157,10 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
             ticker,
             master["symbol"],
         )
-        canonical = master["symbol"]
-        existing = _check_existing_data(canonical)
-        if existing is not None:
-            # Use canonical for rest of function
-            ticker = canonical
+        existing = _check_existing_data(
+            master["symbol"],
+        )
+        # Keep ticker as-is (.NS) for yfinance/Iceberg
 
     _logger.info(
         "fetch_stock_data | ticker=%s | period=%s",

@@ -15,19 +15,69 @@ Usage::
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
+import uuid
 from concurrent.futures import (
     ThreadPoolExecutor,
     as_completed,
 )
-from datetime import date, timedelta, timezone
+from datetime import date
 from datetime import datetime as dt
+from datetime import timedelta, timezone
 
 import pandas as pd
+import pyarrow as pa
 import yfinance as yf
 
 _logger = logging.getLogger(__name__)
+
+
+# ── Safe-conversion helpers (match repository.py) ────
+def _sf(val) -> float | None:
+    """Safe float -- match repository._safe_float."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        return None if math.isnan(f) else f
+    except (ValueError, TypeError):
+        return None
+
+
+def _si(val) -> int | None:
+    """Safe int -- match repository._safe_int."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        if math.isnan(f):
+            return None
+        return int(f)
+    except (ValueError, TypeError):
+        return None
+
+
+def _to_dt(val):
+    """Convert value to datetime.date for Arrow date32."""
+    if val is None:
+        return None
+    if isinstance(val, date) and not isinstance(val, dt):
+        return val
+    if isinstance(val, dt):
+        return val.date()
+    if isinstance(val, pd.Timestamp):
+        return val.date()
+    try:
+        return pd.Timestamp(val).date()
+    except Exception:
+        return None
+
+
+def _now_utc():
+    """UTC now without tzinfo (Iceberg timestamp)."""
+    return dt.now(timezone.utc).replace(tzinfo=None)
 
 
 def _fetch_one_ticker(
@@ -472,74 +522,730 @@ def batch_data_refresh(
 
     # ── Phase 2: Bulk OHLCV write ────────────────────
     _logger.info("[batch] Phase 2: bulk OHLCV write")
-    ohlcv_count = 0
+    t_phase2 = time.monotonic()
+    all_ohlcv: list[pd.DataFrame] = []
     for r in results:
         ohlcv_df = r.get("ohlcv_df")
-        ticker = r["ticker"]
         if ohlcv_df is not None and not ohlcv_df.empty:
-            try:
-                n = stock_repo.insert_ohlcv(
-                    ticker,
-                    ohlcv_df,
+            ticker = r["ticker"]
+            df = ohlcv_df.copy().reset_index()
+            col_map = {
+                "Date": "date",
+                "Open": "open",
+                "High": "high",
+                "Low": "low",
+                "Close": "close",
+                "Adj Close": "adj_close",
+                "Volume": "volume",
+            }
+            df = df.rename(columns=col_map)
+            df["ticker"] = ticker
+            all_ohlcv.append(df)
+
+    ohlcv_count = 0
+    if all_ohlcv:
+        combined = pd.concat(
+            all_ohlcv,
+            ignore_index=True,
+        )
+        # Dedup: load existing (ticker, date) pairs
+        try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            existing = query_iceberg_df(
+                "stocks.ohlcv",
+                "SELECT ticker, date FROM ohlcv",
+            )
+            if not existing.empty:
+                existing_keys = set(
+                    zip(
+                        existing["ticker"],
+                        existing["date"],
+                    )
                 )
-                ohlcv_count += n
-            except Exception as exc:
-                _logger.warning(
-                    "[batch] OHLCV write failed " "for %s: %s",
-                    ticker,
-                    exc,
+                combined["_date"] = pd.to_datetime(
+                    combined["date"],
+                ).dt.date
+                mask = ~combined.apply(
+                    lambda row: (
+                        row["ticker"],
+                        row["_date"],
+                    )
+                    in existing_keys,
+                    axis=1,
                 )
+                new_only = combined[mask].drop(
+                    columns=["_date"],
+                )
+            else:
+                new_only = combined
+        except Exception:
+            new_only = combined
+
+        if not new_only.empty:
+            now = _now_utc()
+            dates = pd.to_datetime(new_only["date"])
+            adj = (
+                new_only["adj_close"]
+                if "adj_close" in new_only.columns
+                else new_only["close"]
+            )
+            arrow = pa.table(
+                {
+                    "ticker": pa.array(
+                        new_only["ticker"].tolist(),
+                        pa.string(),
+                    ),
+                    "date": pa.array(
+                        [d.date() if hasattr(d, "date") else d for d in dates],
+                        pa.date32(),
+                    ),
+                    "open": pa.array(
+                        [_sf(v) for v in new_only["open"]],
+                        pa.float64(),
+                    ),
+                    "high": pa.array(
+                        [_sf(v) for v in new_only["high"]],
+                        pa.float64(),
+                    ),
+                    "low": pa.array(
+                        [_sf(v) for v in new_only["low"]],
+                        pa.float64(),
+                    ),
+                    "close": pa.array(
+                        [_sf(v) for v in new_only["close"]],
+                        pa.float64(),
+                    ),
+                    "adj_close": pa.array(
+                        [_sf(v) for v in adj],
+                        pa.float64(),
+                    ),
+                    "volume": pa.array(
+                        [_si(v) for v in new_only["volume"]],
+                        pa.int64(),
+                    ),
+                    "fetched_at": pa.array(
+                        [now] * len(new_only),
+                        pa.timestamp("us"),
+                    ),
+                }
+            )
+            stock_repo._append_rows(
+                "stocks.ohlcv",
+                arrow,
+            )
+            ohlcv_count = len(new_only)
+
     _logger.info(
-        "[batch] OHLCV: %d rows written",
+        "[batch] OHLCV: %d new rows in %.1fs",
         ohlcv_count,
+        time.monotonic() - t_phase2,
     )
 
-    # ── Phase 3: Bulk company_info + dividends ────────
+    # ── Phase 3: Bulk company_info + dividends + qtr ─
     _logger.info(
-        "[batch] Phase 3: bulk company_info + " "dividends + quarterly",
+        "[batch] Phase 3: bulk company_info" " + dividends + quarterly",
     )
+    t_phase3 = time.monotonic()
+
+    # --- 3a: company_info (concat all, single append) -
+    ci_tables: list[pa.Table] = []
     for r in results:
-        ticker = r["ticker"]
-
-        # Company info
         info = r.get("info", {})
-        if info:
-            try:
-                stock_repo.insert_company_info(
-                    ticker,
-                    info,
-                )
-            except Exception:
-                pass
-
-        # Dividends
-        divs = r.get("dividends_df")
-        if divs is not None and not divs.empty:
-            try:
-                div_df = pd.DataFrame(
+        if not info:
+            continue
+        ticker = r["ticker"]
+        now = _now_utc()
+        try:
+            ci_tables.append(
+                pa.table(
                     {
-                        "ex_date": divs.index,
-                        "dividend": divs.values,
+                        "info_id": pa.array(
+                            [str(uuid.uuid4())],
+                            pa.string(),
+                        ),
+                        "ticker": pa.array(
+                            [ticker],
+                            pa.string(),
+                        ),
+                        "company_name": pa.array(
+                            [
+                                str(
+                                    info.get(
+                                        "company_name",
+                                    )
+                                    or info.get(
+                                        "longName",
+                                    )
+                                    or ""
+                                )
+                            ],
+                            pa.string(),
+                        ),
+                        "sector": pa.array(
+                            [info.get("sector")],
+                            pa.string(),
+                        ),
+                        "industry": pa.array(
+                            [info.get("industry")],
+                            pa.string(),
+                        ),
+                        "market_cap": pa.array(
+                            [
+                                _si(
+                                    info.get(
+                                        "market_cap",
+                                    )
+                                    or info.get(
+                                        "marketCap",
+                                    )
+                                )
+                            ],
+                            pa.int64(),
+                        ),
+                        "pe_ratio": pa.array(
+                            [
+                                _sf(
+                                    info.get(
+                                        "pe_ratio",
+                                    )
+                                    or info.get(
+                                        "trailingPE",
+                                    )
+                                )
+                            ],
+                            pa.float64(),
+                        ),
+                        "week_52_high": pa.array(
+                            [
+                                _sf(
+                                    info.get(
+                                        "52w_high",
+                                    )
+                                    or info.get(
+                                        "fiftyTwoWeekHigh",
+                                    )
+                                )
+                            ],
+                            pa.float64(),
+                        ),
+                        "week_52_low": pa.array(
+                            [
+                                _sf(
+                                    info.get(
+                                        "52w_low",
+                                    )
+                                    or info.get(
+                                        "fiftyTwoWeekLow",
+                                    )
+                                )
+                            ],
+                            pa.float64(),
+                        ),
+                        "current_price": pa.array(
+                            [
+                                _sf(
+                                    info.get(
+                                        "current_price",
+                                    )
+                                    or info.get(
+                                        "currentPrice",
+                                    )
+                                )
+                            ],
+                            pa.float64(),
+                        ),
+                        "currency": pa.array(
+                            [
+                                str(
+                                    info.get(
+                                        "currency",
+                                    )
+                                    or "USD"
+                                )
+                            ],
+                            pa.string(),
+                        ),
+                        "fetched_at": pa.array(
+                            [now],
+                            pa.timestamp("us"),
+                        ),
+                        "exchange": pa.array(
+                            [info.get("exchange")],
+                            pa.string(),
+                        ),
+                        "country": pa.array(
+                            [info.get("country")],
+                            pa.string(),
+                        ),
+                        "employees": pa.array(
+                            [
+                                _si(
+                                    info.get(
+                                        "fullTimeEmployees",
+                                    )
+                                )
+                            ],
+                            pa.int64(),
+                        ),
+                        "dividend_yield": pa.array(
+                            [
+                                _sf(
+                                    info.get(
+                                        "dividendYield",
+                                    )
+                                )
+                            ],
+                            pa.float64(),
+                        ),
+                        "beta": pa.array(
+                            [_sf(info.get("beta"))],
+                            pa.float64(),
+                        ),
+                        "book_value": pa.array(
+                            [
+                                _sf(
+                                    info.get(
+                                        "bookValue",
+                                    )
+                                )
+                            ],
+                            pa.float64(),
+                        ),
+                        "price_to_book": pa.array(
+                            [
+                                _sf(
+                                    info.get(
+                                        "priceToBook",
+                                    )
+                                )
+                            ],
+                            pa.float64(),
+                        ),
+                        "earnings_growth": pa.array(
+                            [
+                                _sf(
+                                    info.get(
+                                        "earningsGrowth",
+                                    )
+                                )
+                            ],
+                            pa.float64(),
+                        ),
+                        "revenue_growth": pa.array(
+                            [
+                                _sf(
+                                    info.get(
+                                        "revenueGrowth",
+                                    )
+                                )
+                            ],
+                            pa.float64(),
+                        ),
+                        "profit_margins": pa.array(
+                            [
+                                _sf(
+                                    info.get(
+                                        "profitMargins",
+                                    )
+                                )
+                            ],
+                            pa.float64(),
+                        ),
+                        "avg_volume": pa.array(
+                            [
+                                _si(
+                                    info.get(
+                                        "averageVolume",
+                                    )
+                                )
+                            ],
+                            pa.int64(),
+                        ),
+                        "float_shares": pa.array(
+                            [
+                                _si(
+                                    info.get(
+                                        "floatShares",
+                                    )
+                                )
+                            ],
+                            pa.int64(),
+                        ),
+                        "short_ratio": pa.array(
+                            [
+                                _sf(
+                                    info.get(
+                                        "shortRatio",
+                                    )
+                                )
+                            ],
+                            pa.float64(),
+                        ),
+                        "analyst_target": pa.array(
+                            [
+                                _sf(
+                                    info.get(
+                                        "targetMeanPrice",
+                                    )
+                                )
+                            ],
+                            pa.float64(),
+                        ),
+                        "recommendation": pa.array(
+                            [
+                                _sf(
+                                    info.get(
+                                        "recommendationMean",
+                                    )
+                                )
+                            ],
+                            pa.float64(),
+                        ),
                     }
                 )
-                stock_repo.insert_dividends(
-                    ticker,
-                    div_df,
-                )
-            except Exception:
-                pass
+            )
+        except Exception:
+            _logger.warning(
+                "[batch] company_info build " "failed for %s",
+                ticker,
+                exc_info=True,
+            )
 
-        # Quarterly
+    ci_count = 0
+    if ci_tables:
+        ci_arrow = pa.concat_tables(ci_tables)
+        stock_repo._append_rows(
+            "stocks.company_info",
+            ci_arrow,
+        )
+        ci_count = len(ci_arrow)
+    _logger.info(
+        "[batch] company_info: %d rows",
+        ci_count,
+    )
+
+    # --- 3b: dividends (concat all, dedup, append) ----
+    all_divs: list[dict] = []
+    for r in results:
+        divs = r.get("dividends_df")
+        ticker = r["ticker"]
+        if divs is None or divs.empty:
+            continue
+        for idx, val in divs.items():
+            all_divs.append(
+                {
+                    "ticker": ticker,
+                    "ex_date": idx,
+                    "dividend_amount": val,
+                }
+            )
+
+    div_count = 0
+    if all_divs:
+        div_df = pd.DataFrame(all_divs)
+        # Dedup against existing
+        try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            ex_div = query_iceberg_df(
+                "stocks.dividends",
+                "SELECT ticker, ex_date " "FROM dividends",
+            )
+            if not ex_div.empty:
+                ex_keys = set(
+                    zip(
+                        ex_div["ticker"],
+                        ex_div["ex_date"],
+                    )
+                )
+                div_df["_dt"] = pd.to_datetime(
+                    div_df["ex_date"],
+                ).dt.date
+                mask = ~div_df.apply(
+                    lambda row: (
+                        row["ticker"],
+                        row["_dt"],
+                    )
+                    in ex_keys,
+                    axis=1,
+                )
+                div_df = div_df[mask].drop(
+                    columns=["_dt"],
+                )
+        except Exception:
+            pass
+
+        if not div_df.empty:
+            now = _now_utc()
+            dates = pd.to_datetime(
+                div_df["ex_date"],
+            )
+            arrow = pa.table(
+                {
+                    "ticker": pa.array(
+                        div_df["ticker"].tolist(),
+                        pa.string(),
+                    ),
+                    "ex_date": pa.array(
+                        [d.date() if hasattr(d, "date") else d for d in dates],
+                        pa.date32(),
+                    ),
+                    "dividend_amount": pa.array(
+                        [_sf(v) for v in div_df["dividend_amount"]],
+                        pa.float64(),
+                    ),
+                    "currency": pa.array(
+                        ["INR"] * len(div_df),
+                        pa.string(),
+                    ),
+                    "fetched_at": pa.array(
+                        [now] * len(div_df),
+                        pa.timestamp("us"),
+                    ),
+                }
+            )
+            stock_repo._append_rows(
+                "stocks.dividends",
+                arrow,
+            )
+            div_count = len(div_df)
+    _logger.info(
+        "[batch] dividends: %d new rows",
+        div_count,
+    )
+
+    # --- 3c: quarterly (bulk delete + append) ---------
+    all_qtr: list[pd.DataFrame] = []
+    qtr_tickers: set[str] = set()
+    for r in results:
         qtr_rows = r.get("quarterly_rows", [])
         if qtr_rows:
-            try:
-                qtr_df = pd.DataFrame(qtr_rows)
-                stock_repo.insert_quarterly_results(
-                    ticker,
-                    qtr_df,
-                )
-            except Exception:
-                pass
+            qdf = pd.DataFrame(qtr_rows)
+            all_qtr.append(qdf)
+            qtr_tickers.add(r["ticker"])
+
+    qtr_count = 0
+    if all_qtr:
+        combined_qtr = pd.concat(
+            all_qtr,
+            ignore_index=True,
+        )
+        # Bulk delete affected tickers, then append
+        from pyiceberg.expressions import In
+
+        affected = list(qtr_tickers)
+        try:
+            stock_repo._delete_rows(
+                "stocks.quarterly_results",
+                In("ticker", affected),
+            )
+        except Exception:
+            _logger.debug(
+                "[batch] quarterly bulk delete " "failed",
+                exc_info=True,
+            )
+
+        now = _now_utc()
+        n = len(combined_qtr)
+
+        def _qtr_col(name, fallback=None):
+            if name in combined_qtr.columns:
+                return combined_qtr[name]
+            return [fallback] * n
+
+        arrow = pa.table(
+            {
+                "ticker": pa.array(
+                    combined_qtr["ticker"].tolist(),
+                    pa.string(),
+                ),
+                "quarter_end": pa.array(
+                    [_to_dt(d) for d in combined_qtr["quarter_end"]],
+                    pa.date32(),
+                ),
+                "fiscal_year": pa.array(
+                    [_si(v) for v in combined_qtr["fiscal_year"]],
+                    pa.int32(),
+                ),
+                "fiscal_quarter": pa.array(
+                    combined_qtr["fiscal_quarter"].tolist(),
+                    pa.string(),
+                ),
+                "statement_type": pa.array(
+                    combined_qtr["statement_type"].tolist(),
+                    pa.string(),
+                ),
+                "revenue": pa.array(
+                    [_sf(v) for v in _qtr_col("revenue")],
+                    pa.float64(),
+                ),
+                "net_income": pa.array(
+                    [
+                        _sf(v)
+                        for v in _qtr_col(
+                            "net_income",
+                        )
+                    ],
+                    pa.float64(),
+                ),
+                "gross_profit": pa.array(
+                    [
+                        _sf(v)
+                        for v in _qtr_col(
+                            "gross_profit",
+                        )
+                    ],
+                    pa.float64(),
+                ),
+                "operating_income": pa.array(
+                    [
+                        _sf(v)
+                        for v in _qtr_col(
+                            "operating_income",
+                        )
+                    ],
+                    pa.float64(),
+                ),
+                "ebitda": pa.array(
+                    [_sf(v) for v in _qtr_col("ebitda")],
+                    pa.float64(),
+                ),
+                "eps_basic": pa.array(
+                    [
+                        _sf(v)
+                        for v in _qtr_col(
+                            "eps_basic",
+                        )
+                    ],
+                    pa.float64(),
+                ),
+                "eps_diluted": pa.array(
+                    [
+                        _sf(v)
+                        for v in _qtr_col(
+                            "eps_diluted",
+                        )
+                    ],
+                    pa.float64(),
+                ),
+                "total_assets": pa.array(
+                    [
+                        _sf(v)
+                        for v in _qtr_col(
+                            "total_assets",
+                        )
+                    ],
+                    pa.float64(),
+                ),
+                "total_liabilities": pa.array(
+                    [
+                        _sf(v)
+                        for v in _qtr_col(
+                            "total_liabilities",
+                        )
+                    ],
+                    pa.float64(),
+                ),
+                "total_equity": pa.array(
+                    [
+                        _sf(v)
+                        for v in _qtr_col(
+                            "total_equity",
+                        )
+                    ],
+                    pa.float64(),
+                ),
+                "total_debt": pa.array(
+                    [
+                        _sf(v)
+                        for v in _qtr_col(
+                            "total_debt",
+                        )
+                    ],
+                    pa.float64(),
+                ),
+                "cash_and_equivalents": pa.array(
+                    [
+                        _sf(v)
+                        for v in _qtr_col(
+                            "cash_and_equivalents",
+                        )
+                    ],
+                    pa.float64(),
+                ),
+                "operating_cashflow": pa.array(
+                    [
+                        _sf(v)
+                        for v in _qtr_col(
+                            "operating_cashflow",
+                        )
+                    ],
+                    pa.float64(),
+                ),
+                "capex": pa.array(
+                    [_sf(v) for v in _qtr_col("capex")],
+                    pa.float64(),
+                ),
+                "free_cashflow": pa.array(
+                    [
+                        _sf(v)
+                        for v in _qtr_col(
+                            "free_cashflow",
+                        )
+                    ],
+                    pa.float64(),
+                ),
+                "current_assets": pa.array(
+                    [
+                        _sf(v)
+                        for v in _qtr_col(
+                            "current_assets",
+                        )
+                    ],
+                    pa.float64(),
+                ),
+                "current_liabilities": pa.array(
+                    [
+                        _sf(v)
+                        for v in _qtr_col(
+                            "current_liabilities",
+                        )
+                    ],
+                    pa.float64(),
+                ),
+                "shares_outstanding": pa.array(
+                    [
+                        _sf(v)
+                        for v in _qtr_col(
+                            "shares_outstanding",
+                        )
+                    ],
+                    pa.float64(),
+                ),
+                "updated_at": pa.array(
+                    [now] * n,
+                    pa.timestamp("us"),
+                ),
+            }
+        )
+        stock_repo._append_rows(
+            "stocks.quarterly_results",
+            arrow,
+        )
+        qtr_count = n
+    _logger.info(
+        "[batch] quarterly: %d rows",
+        qtr_count,
+    )
+    _logger.info(
+        "[batch] Phase 3 complete in %.1fs",
+        time.monotonic() - t_phase3,
+    )
 
     # ── Phase 4: Registry updates ─────────────────────
     _logger.info(

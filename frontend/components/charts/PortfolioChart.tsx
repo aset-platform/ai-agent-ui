@@ -126,7 +126,7 @@ export function PortfolioChart({
     );
     investedSeries.setData(
       data.map((d) => ({
-        time: d.date as Time,
+        time: String(d.date).slice(0, 10) as Time,
         value: d.invested_value,
       })),
     );
@@ -155,7 +155,7 @@ export function PortfolioChart({
     );
     valueSeries.setData(
       data.map((d) => ({
-        time: d.date as Time,
+        time: String(d.date).slice(0, 10) as Time,
         value: d.value,
       })),
     );
@@ -177,7 +177,7 @@ export function PortfolioChart({
     });
     pnlSeries.setData(
       data.map((d) => ({
-        time: d.date as Time,
+        time: String(d.date).slice(0, 10) as Time,
         value: d.daily_pnl,
         color:
           d.daily_pnl >= 0
