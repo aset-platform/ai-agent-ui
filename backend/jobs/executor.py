@@ -342,29 +342,27 @@ def execute_compute_analytics(
     yf_map = _yf_ticker_map(registry, tickers)
 
     # ── Pre-query: skip tickers analysed today ──────────
-    # TODO: restore freshness check after validation
     today = datetime.now(timezone.utc).date()
     analysis_fresh: set[str] = set()
-    # --- TEMPORARILY DISABLED for e2e validation ---
-    # try:
-    #     adf = query_iceberg_df(
-    #         "stocks.analysis_summary",
-    #         "SELECT ticker, MAX(analysis_date) AS latest "
-    #         "FROM analysis_summary GROUP BY ticker",
-    #     )
-    #     if not adf.empty:
-    #         for _, row in adf.iterrows():
-    #             d = row["latest"]
-    #             if hasattr(d, "date"):
-    #                 d = d.date()
-    #             if d >= today:
-    #                 analysis_fresh.add(row["ticker"])
-    # except Exception as exc:
-    #     _logger.warning(
-    #         "[scheduler] Analysis freshness query "
-    #         "failed: %s",
-    #         exc,
-    #     )
+    try:
+        adf = query_iceberg_df(
+            "stocks.analysis_summary",
+            "SELECT ticker, MAX(analysis_date) AS latest "
+            "FROM analysis_summary GROUP BY ticker",
+        )
+        if not adf.empty:
+            for _, row in adf.iterrows():
+                d = row["latest"]
+                if hasattr(d, "date"):
+                    d = d.date()
+                if d >= today:
+                    analysis_fresh.add(row["ticker"])
+    except Exception as exc:
+        _logger.warning(
+            "[scheduler] Analysis freshness query "
+            "failed: %s",
+            exc,
+        )
 
     total = len(tickers)
     repo.update_scheduler_run(
