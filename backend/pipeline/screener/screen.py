@@ -156,13 +156,22 @@ async def run_screen(
         )
         ci_df = pd.DataFrame(ci_rows)
         if not ci_df.empty:
+            # Prefer rows with company_name filled
+            ci_df["_has_name"] = (
+                ci_df["company_name"]
+                .fillna("")
+                .ne("")
+            )
             ci_df = (
                 ci_df.sort_values(
-                    "fetched_at",
-                    ascending=False,
+                    ["_has_name", "fetched_at"],
+                    ascending=[False, False],
                 )
-                .groupby("ticker", as_index=False)
+                .groupby(
+                    "ticker", as_index=False,
+                )
                 .first()
+                .drop(columns=["_has_name"])
             )
     except Exception:
         _logger.warning(
@@ -170,6 +179,30 @@ async def run_screen(
             exc_info=True,
         )
         ci_df = pd.DataFrame()
+
+    # stock_master name fallback for tickers
+    # missing company_name in company_info
+    sm_names: dict[str, str] = {}
+    try:
+        from backend.db.engine import (
+            get_session_factory,
+        )
+        from backend.pipeline.universe import (
+            get_all_stocks,
+        )
+
+        factory = get_session_factory()
+        async with factory() as session:
+            all_stocks = await get_all_stocks(
+                session, active_only=False,
+            )
+        for s in all_stocks:
+            sm_names[s.yf_ticker] = s.name
+    except Exception:
+        _logger.debug(
+            "stock_master name fallback failed",
+            exc_info=True,
+        )
 
     # Group quarterly results by ticker
     if not all_qr_df.empty:
@@ -257,8 +290,9 @@ async def run_screen(
                     "industry": ci_row.get(
                         "industry",
                     ),
-                    "company_name": ci_row.get(
-                        "company_name",
+                    "company_name": (
+                        ci_row.get("company_name")
+                        or sm_names.get(ticker, "")
                     ),
                 }
             )
