@@ -70,6 +70,15 @@ def _get_stock_repo():
     return _require_repo()
 
 
+def _duckdb_read(table: str, sql: str):
+    """DuckDB Iceberg read — returns pd.DataFrame."""
+    from backend.db.duckdb_engine import (
+        query_iceberg_df,
+    )
+
+    return query_iceberg_df(table, sql)
+
+
 def _backfill_company_info(tickers, repo) -> None:
     """Background: fetch company info for tickers missing
     from the ``company_info`` Iceberg table."""
@@ -144,11 +153,30 @@ def create_dashboard_router() -> APIRouter:
         if not tickers:
             return WatchlistResponse()
 
-        # Batch fetch: 2 queries instead of 2N
-        ohlcv_df = stock_repo.get_ohlcv_batch(tickers)
-        info_df = stock_repo.get_company_info_batch(
-            tickers,
-        )
+        # Batch fetch via DuckDB.
+        import pandas as _pd
+
+        ph = ",".join(f"'{t}'" for t in tickers)
+        try:
+            ohlcv_df = _duckdb_read(
+                "stocks.ohlcv",
+                "SELECT ticker, date, open, high, "
+                "low, close, volume "
+                f"FROM ohlcv WHERE ticker IN ({ph}) "
+                "ORDER BY ticker, date",
+            )
+        except Exception:
+            ohlcv_df = _pd.DataFrame()
+        try:
+            info_df = _duckdb_read(
+                "stocks.company_info",
+                "SELECT ticker, company_name, "
+                "sector, current_price, currency "
+                "FROM company_info "
+                f"WHERE ticker IN ({ph})",
+            )
+        except Exception:
+            info_df = _pd.DataFrame()
 
         # Index company info by ticker for O(1) lookup
         info_map: dict = {}
@@ -489,20 +517,38 @@ def create_dashboard_router() -> APIRouter:
         stock_repo = _get_stock_repo()
         registry = stock_repo.get_all_registry()
 
-        # Batch fetch company info: 1 query instead
-        # of M (one per registered ticker)
+        # Batch fetch company info via DuckDB.
         reg_tickers = list(registry.keys())
-        info_df = (
-            stock_repo.get_company_info_batch(
-                reg_tickers,
-            )
-            if reg_tickers
-            else None
-        )
         info_map: dict = {}
-        if info_df is not None and not info_df.empty:
-            for _, row in info_df.iterrows():
-                info_map[row["ticker"]] = row.to_dict()
+        if reg_tickers:
+            try:
+                from backend.db.duckdb_engine import (
+                    query_iceberg_df,
+                )
+
+                ph = ",".join(
+                    f"'{t}'" for t in reg_tickers
+                )
+                info_df = query_iceberg_df(
+                    "stocks.company_info",
+                    "SELECT ticker, company_name, "
+                    "sector, industry, market_cap, "
+                    "current_price, currency, "
+                    "pe_ratio, week_52_high, "
+                    "week_52_low, avg_volume "
+                    "FROM company_info "
+                    f"WHERE ticker IN ({ph})",
+                )
+                if not info_df.empty:
+                    for _, row in info_df.iterrows():
+                        info_map[
+                            row["ticker"]
+                        ] = row.to_dict()
+            except Exception:
+                _logger.debug(
+                    "DuckDB company_info failed",
+                    exc_info=True,
+                )
 
         # Backfill missing company info (fire-and-forget).
         _missing = [t for t in reg_tickers if t not in info_map]
@@ -555,8 +601,19 @@ def create_dashboard_router() -> APIRouter:
 
         # Enrich with OHLCV: sparkline, change, price
         try:
-            ohlcv_df = stock_repo.get_ohlcv_batch(
-                reg_tickers,
+            import pandas as _pd2
+
+            _cutoff = (
+                _pd2.Timestamp.now()
+                - _pd2.DateOffset(days=45)
+            ).strftime("%Y-%m-%d")
+            ohlcv_df = _duckdb_read(
+                "stocks.ohlcv",
+                "SELECT ticker, date, close "
+                "FROM ohlcv "
+                f"WHERE ticker IN ({ph}) "
+                f"AND date >= '{_cutoff}' "
+                "ORDER BY ticker, date",
             )
             if ohlcv_df is not None and not ohlcv_df.empty:
                 _ohlcv_map: dict[str, dict] = {}
@@ -1684,11 +1741,48 @@ def create_dashboard_router() -> APIRouter:
             return RecommendationsResponse()
 
         tickers = holdings["ticker"].unique().tolist()
-        info_df = stock_repo.get_company_info_batch(
-            tickers,
-        )
-        ohlcv_df = stock_repo.get_ohlcv_batch(tickers)
-        analysis_df = stock_repo.get_dashboard_analysis(tickers)
+        import pandas as _pd3
+
+        ph = ",".join(f"'{t}'" for t in tickers)
+        try:
+            info_df = _duckdb_read(
+                "stocks.company_info",
+                "SELECT ticker, company_name, "
+                "sector, industry, market_cap, "
+                "current_price "
+                "FROM company_info "
+                f"WHERE ticker IN ({ph})",
+            )
+        except Exception:
+            info_df = _pd3.DataFrame()
+        try:
+            _rc = (
+                _pd3.Timestamp.now()
+                - _pd3.DateOffset(days=10)
+            ).strftime("%Y-%m-%d")
+            ohlcv_df = _duckdb_read(
+                "stocks.ohlcv",
+                "SELECT ticker, date, close "
+                "FROM ohlcv "
+                f"WHERE ticker IN ({ph}) "
+                f"AND date >= '{_rc}' "
+                "ORDER BY ticker, date",
+            )
+        except Exception:
+            ohlcv_df = _pd3.DataFrame()
+        try:
+            analysis_df = _duckdb_read(
+                "stocks.analysis_summary",
+                "SELECT ticker, "
+                "annualized_return_pct, "
+                "annualized_volatility_pct, "
+                "sharpe_ratio, max_drawdown_pct, "
+                "rsi_signal, macd_signal_text "
+                "FROM analysis_summary "
+                f"WHERE ticker IN ({ph})",
+            )
+        except Exception:
+            analysis_df = _pd3.DataFrame()
 
         info_map: dict = {}
         if not info_df.empty:
