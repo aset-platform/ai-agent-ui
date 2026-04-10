@@ -904,10 +904,30 @@ def create_insights_router() -> APIRouter:
             )
 
             ph = ",".join(f"'{t}'" for t in tickers)
+            cutoff = (
+                pd.Timestamp.now()
+                - pd.DateOffset(years=2)
+            ).strftime("%Y-%m-%d")
+            st_filter = (
+                f"AND statement_type = "
+                f"'{statement_type}'"
+                if statement_type != "all"
+                else ""
+            )
             df = query_iceberg_df(
                 "stocks.quarterly_results",
-                "SELECT * FROM quarterly_results "
-                f"WHERE ticker IN ({ph})",
+                "SELECT ticker, fiscal_quarter, "
+                "fiscal_year, quarter_end, "
+                "statement_type, revenue, "
+                "net_income, eps_basic AS eps, "
+                "total_assets, total_equity, "
+                "operating_cashflow, "
+                "free_cashflow "
+                "FROM quarterly_results "
+                f"WHERE ticker IN ({ph}) "
+                f"AND quarter_end >= '{cutoff}' "
+                f"{st_filter} "
+                "ORDER BY quarter_end DESC",
             )
         except Exception as exc:
             _logger.error("quarterly read: %s", exc)
@@ -916,9 +936,7 @@ def create_insights_router() -> APIRouter:
         if df.empty:
             return QuarterlyResponse()
 
-        # Filter by statement type if column exists.
-        if "statement_type" in df.columns and statement_type != "all":
-            df = df[df["statement_type"] == statement_type]
+        # statement_type filter pushed to DuckDB SQL.
 
         # Deduplicate per (ticker, quarter_end).
         if "quarter_end" in df.columns:
