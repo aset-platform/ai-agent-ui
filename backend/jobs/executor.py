@@ -777,26 +777,93 @@ def execute_run_sentiment(
 ) -> None:
     """Score sentiment for all tickers via LLM.
 
-    Pre-queries sentiment freshness in one DuckDB scan so
-    tickers already scored today are skipped entirely.
+    Smart scoring with market fallback + trickle:
 
-    Uses ``refresh_sentiment`` from gap_filler which calls
-    ``refresh_ticker_sentiment`` (fetch headlines → LLM
-    score → persist to Iceberg).
-
-    Schedule daily after ``data_refresh`` completes.
+    1. Fetch market-wide headlines once → score → cache.
+    2. Classify tickers into hot/cold/learning:
+       - Hot: had real headlines in last 10 days.
+       - Learning: <10 days of sentiment history.
+       - Cold: no real headlines for 10+ days.
+    3. Hot + learning: full headline fetch + LLM score.
+    4. Cold trickle (10-15%): headline fetch to detect
+       new coverage.
+    5. Remaining cold: market fallback score directly.
+    6. All tickers get a score every day.
     """
+    import random
+    import time
+
     from db.duckdb_engine import query_iceberg_df
     from jobs.gap_filler import refresh_sentiment
+    from tools._stock_shared import _require_repo
 
+    stock_repo = _require_repo()
     registry = repo.get_all_registry()
     tickers = _scope_filter(registry, scope)
     yf_map = _yf_ticker_map(registry, tickers)
 
-    # ── Pre-query: skip tickers scored today ────────────
     today = datetime.now(timezone.utc).date()
-    sentiment_fresh: set[str] = set()
+    total = len(tickers)
+    repo.update_scheduler_run(
+        run_id,
+        {"tickers_total": total},
+    )
+
+    # ── Step 1: Market-wide sentiment (1 LLM call) ────
+    _logger.info(
+        "[batch-sentiment] Fetching market-wide "
+        "headlines",
+    )
+    market_score = 0.0
     try:
+        from tools._sentiment_scorer import (
+            score_headlines,
+        )
+        from tools._sentiment_sources import (
+            fetch_market_headlines,
+        )
+
+        market_headlines = fetch_market_headlines(
+            max_age_days=3,
+        )
+        if market_headlines:
+            from jobs.gap_filler import (
+                _get_scoring_llm,
+            )
+
+            llm = _get_scoring_llm()
+            scored = score_headlines(
+                market_headlines,
+                llm=llm,
+            )
+            if scored is not None:
+                market_score = scored
+            _logger.info(
+                "[batch-sentiment] Market score: "
+                "%.3f (%d headlines)",
+                market_score,
+                len(market_headlines),
+            )
+        else:
+            _logger.info(
+                "[batch-sentiment] No market "
+                "headlines found, using 0.0",
+            )
+    except Exception as exc:
+        _logger.warning(
+            "[batch-sentiment] Market score "
+            "failed: %s",
+            exc,
+        )
+
+    # ── Step 2: Classify tickers ──────────────────────
+    # Pre-query: freshness + hot/cold classification.
+    sentiment_fresh: set[str] = set()
+    hot_tickers: set[str] = set()
+    ticker_history_days: dict[str, int] = {}
+
+    try:
+        # Tickers scored today (skip entirely).
         sdf = query_iceberg_df(
             "stocks.sentiment_scores",
             "SELECT ticker, MAX(score_date) AS latest "
@@ -809,44 +876,240 @@ def execute_run_sentiment(
                     d = d.date()
                 if d >= today:
                     sentiment_fresh.add(row["ticker"])
+
+        # Hot tickers: had real headlines in last 10d.
+        hot_df = query_iceberg_df(
+            "stocks.sentiment_scores",
+            "SELECT DISTINCT ticker "
+            "FROM sentiment_scores "
+            "WHERE score_date >= CURRENT_DATE - 10 "
+            "AND headline_count > 0 "
+            "AND source = 'llm'",
+        )
+        if not hot_df.empty:
+            hot_tickers = set(hot_df["ticker"].tolist())
+
+        # History length per ticker (for learning).
+        hist_df = query_iceberg_df(
+            "stocks.sentiment_scores",
+            "SELECT ticker, "
+            "COUNT(DISTINCT score_date) AS days "
+            "FROM sentiment_scores "
+            "GROUP BY ticker",
+        )
+        if not hist_df.empty:
+            for _, row in hist_df.iterrows():
+                ticker_history_days[
+                    row["ticker"]
+                ] = int(row["days"])
     except Exception as exc:
         _logger.warning(
-            "[scheduler] Sentiment freshness query "
-            "failed: %s",
+            "[batch-sentiment] Classification "
+            "query failed: %s",
             exc,
         )
 
-    total = len(tickers)
-    repo.update_scheduler_run(
-        run_id,
-        {"tickers_total": total},
+    # Build ticker lists.
+    all_yf = [yf_map.get(t, t) for t in tickers]
+    to_skip = [t for t in all_yf if t in sentiment_fresh]
+    remaining = [
+        t for t in all_yf if t not in sentiment_fresh
+    ]
+
+    learning = [
+        t for t in remaining
+        if ticker_history_days.get(t, 0) < 10
+    ]
+    hot = [
+        t for t in remaining
+        if t in hot_tickers and t not in learning
+    ]
+    cold = [
+        t for t in remaining
+        if t not in hot_tickers
+        and t not in learning
+    ]
+
+    # Trickle: 15% of cold tickers sampled randomly.
+    trickle_size = max(1, int(len(cold) * 0.15))
+    trickle = random.sample(
+        cold, min(trickle_size, len(cold)),
+    ) if cold else []
+    cold_skip = [t for t in cold if t not in trickle]
+
+    _logger.info(
+        "[batch-sentiment] Classification: "
+        "%d fresh (skip), %d hot, %d learning, "
+        "%d cold (%d trickle + %d fallback)",
+        len(to_skip),
+        len(hot),
+        len(learning),
+        len(cold),
+        len(trickle),
+        len(cold_skip),
     )
 
-    def _sentiment_one(ticker):
-        yf_ticker = yf_map.get(ticker, ticker)
+    # ── Step 3: Score hot + learning + trickle ────────
+    # 15 workers — headline fetch is I/O bound (3 HTTP
+    # calls per ticker). No per-ticker PG progress
+    # updates (single update at the end).
+    t_start = time.monotonic()
+    check_tickers = hot + learning + trickle
+    done = len(to_skip)  # Already scored today.
+    errors: list[str] = []
+    cancelled = False
 
-        # Skip if already scored today
-        if yf_ticker in sentiment_fresh:
-            _logger.info(
-                "[scheduler] Sentiment %s fresh. "
-                "Skipped.",
-                yf_ticker,
-            )
-            return
+    if check_tickers:
+        with ThreadPoolExecutor(
+            max_workers=15,
+        ) as pool:
+            future_map = {
+                pool.submit(
+                    refresh_sentiment, t,
+                ): t
+                for t in check_tickers
+            }
+            for future in as_completed(future_map):
+                if (
+                    cancel_event
+                    and cancel_event.is_set()
+                ):
+                    pool.shutdown(
+                        wait=False,
+                        cancel_futures=True,
+                    )
+                    cancelled = True
+                    break
+                t = future_map[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    _logger.warning(
+                        "[scheduler] %s failed: %s",
+                        t,
+                        exc,
+                    )
+                    errors.append(f"{t}: {exc}")
+                done += 1
 
         _logger.info(
-            "[scheduler] Sentiment %s",
-            yf_ticker,
+            "[batch-sentiment] Headline check "
+            "done: %d tickers in %.1fs",
+            len(check_tickers),
+            time.monotonic() - t_start,
         )
-        refresh_sentiment(yf_ticker)
 
-    done, errors, cancelled = _parallel_fetch(
-        tickers,
-        _sentiment_one,
-        repo,
+    # Single progress update after parallel phase.
+    repo.update_scheduler_run(
         run_id,
-        cancel_event,
-        max_workers=5,
+        {"tickers_done": done},
+    )
+
+    # ── Step 4: Market fallback for cold_skip ─────────
+    # (Merged into Step 5 gap-fill — cold_skip tickers
+    # will be caught there along with any other unscored
+    # tickers. No separate insert needed.)
+
+    # ── Step 5: Fill gaps — any ticker still without ──
+    # a score today gets the market fallback. This
+    # catches tickers where headline fetch returned
+    # nothing and refresh_sentiment didn't insert.
+    if not cancelled:
+        try:
+            scored_df = query_iceberg_df(
+                "stocks.sentiment_scores",
+                "SELECT DISTINCT ticker "
+                "FROM sentiment_scores "
+                "WHERE score_date = CURRENT_DATE",
+            )
+            scored_today = (
+                set(scored_df["ticker"].tolist())
+                if not scored_df.empty
+                else set()
+            )
+            unscored = [
+                t for t in all_yf
+                if t not in scored_today
+            ]
+            if unscored:
+                _logger.info(
+                    "[batch-sentiment] Filling %d "
+                    "unscored tickers with market "
+                    "fallback (%.3f)",
+                    len(unscored),
+                    market_score,
+                )
+                # Bulk insert all fallback rows in
+                # one Iceberg append (not per-ticker).
+                import pyarrow as pa
+                from stocks.repository import _now_utc
+
+                now = _now_utc()
+                fallback_tbl = pa.table(
+                    {
+                        "ticker": pa.array(
+                            [t.upper() for t in unscored],
+                            pa.string(),
+                        ),
+                        "score_date": pa.array(
+                            [today] * len(unscored),
+                            pa.date32(),
+                        ),
+                        "avg_score": pa.array(
+                            [market_score]
+                            * len(unscored),
+                            pa.float64(),
+                        ),
+                        "headline_count": pa.array(
+                            [0] * len(unscored),
+                            pa.int32(),
+                        ),
+                        "source": pa.array(
+                            ["market_fallback"]
+                            * len(unscored),
+                            pa.string(),
+                        ),
+                        "scored_at": pa.array(
+                            [now] * len(unscored),
+                            pa.timestamp("us"),
+                        ),
+                    }
+                )
+                stock_repo._append_rows(
+                    "stocks.sentiment_scores",
+                    fallback_tbl,
+                )
+                done += len(unscored)
+                _logger.info(
+                    "[batch-sentiment] Fallback "
+                    "inserted: %d rows",
+                    len(unscored),
+                )
+        except Exception as exc:
+            _logger.warning(
+                "[batch-sentiment] Gap fill "
+                "failed: %s",
+                exc,
+            )
+
+    # Final progress update.
+    repo.update_scheduler_run(
+        run_id,
+        {"tickers_done": done},
+    )
+
+    elapsed = time.monotonic() - t_start
+    _logger.info(
+        "[batch-sentiment] Done: %d/%d in %.1fs "
+        "(hot=%d, learning=%d, trickle=%d, "
+        "fallback=%d)",
+        done,
+        total,
+        elapsed,
+        len(hot),
+        len(learning),
+        len(trickle),
+        len(cold_skip),
     )
 
     _finalize_run(

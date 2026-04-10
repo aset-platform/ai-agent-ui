@@ -4158,6 +4158,26 @@ class StockRepository:
                 ),
             }
         )
+        # Upsert: delete existing row for this ticker +
+        # date, then append fresh score. Keeps exactly
+        # 1 row per ticker per day.
+        from pyiceberg.expressions import And, EqualTo
+
+        try:
+            self._delete_rows(
+                "stocks.sentiment_scores",
+                And(
+                    EqualTo("ticker", ticker.upper()),
+                    EqualTo("score_date", score_date),
+                ),
+            )
+        except Exception:
+            _logger.debug(
+                "Delete before upsert failed for "
+                "sentiment_scores/%s",
+                ticker,
+                exc_info=True,
+            )
         self._append_rows(
             "stocks.sentiment_scores",
             row,

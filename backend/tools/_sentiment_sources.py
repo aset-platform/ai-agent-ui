@@ -201,6 +201,71 @@ def _fetch_google_rss(
     return items
 
 
+def fetch_market_headlines(
+    max_age_days: int = 7,
+) -> list[HeadlineItem]:
+    """Fetch broad Indian market headlines.
+
+    Used as a fallback sentiment signal for tickers
+    with no ticker-specific news. Queries Google News
+    RSS for "Indian stock market" headlines.
+
+    Args:
+        max_age_days: Only keep headlines within this
+            many days.
+
+    Returns:
+        Deduplicated list of market-wide headlines.
+    """
+    import feedparser
+
+    queries = [
+        "Indian stock market today",
+        "Nifty 50 BSE NSE",
+    ]
+    all_items: list[HeadlineItem] = []
+    for q in queries:
+        try:
+            url = (
+                "https://news.google.com/rss/search"
+                f"?q={quote_plus(q)}"
+                "&hl=en-IN&gl=IN&ceid=IN:en"
+            )
+            feed = feedparser.parse(url)
+            for entry in feed.entries[:_MAX_PER_SOURCE]:
+                title = getattr(entry, "title", "")
+                if not title:
+                    continue
+                all_items.append(
+                    HeadlineItem(
+                        title=title,
+                        source="google_rss",
+                        weight=_WEIGHT_GOOGLE_RSS,
+                        published=getattr(
+                            entry, "published", "",
+                        ),
+                    )
+                )
+        except Exception:
+            _logger.debug(
+                "Market headlines fetch failed for "
+                "query=%s",
+                q,
+                exc_info=True,
+            )
+
+    if not all_items:
+        return []
+
+    from tools._date_utils import is_within_window
+
+    deduped = _deduplicate(all_items)
+    return [
+        h for h in deduped
+        if is_within_window(h.published, max_age_days)
+    ]
+
+
 # ------------------------------------------------------------------
 # Deduplication
 # ------------------------------------------------------------------
