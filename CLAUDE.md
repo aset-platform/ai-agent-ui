@@ -42,7 +42,7 @@ All pages fully migrated from Dash to Next.js.
 |---------|------|-------------|-------|
 | Backend | 8181 | `backend/main.py` | Python 3.12, FastAPI, LangChain 1.x, SQLAlchemy 2.0 async |
 | Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19, lightweight-charts |
-| PostgreSQL | 5432 | Docker | pgvector/pgvector:pg16 (OLTP: 10 tables + pgvector) |
+| PostgreSQL | 5432 | Docker | pgvector/pgvector:pg16 (OLTP: 13 tables + pgvector) |
 | Redis | 6379 | Docker | Redis 7 Alpine |
 | Docs | 8000 | Docker | MkDocs Material 9 (squidfunk) |
 | Alembic | — | `backend/db/migrations/` | Schema migrations for PostgreSQL |
@@ -140,7 +140,8 @@ append-only analytics.
 | `auth.user_tickers` | `backend/db/models/user_ticker.py` | Insert + delete |
 | `auth.payment_transactions` | `backend/db/models/payment.py` | Insert + update |
 | `stocks.registry` | `backend/db/pg_stocks.py` | Upsert |
-| `stocks.scheduled_jobs` | `backend/db/pg_stocks.py` | Upsert |
+| `stocks.scheduled_jobs` | `backend/db/pg_stocks.py` | Upsert (has `force` column) |
+| `stocks.scheduler_runs` | `backend/db/pg_stocks.py` | Insert + row-level UPDATE |
 | `public.user_memories` | `backend/db/models/memory.py` | pgvector semantic memory (768-dim) |
 | `stock_master` | `backend/db/models/stock_master.py` | Pipeline universe (symbol, yf_ticker, ISIN) |
 | `stock_tags` | `backend/db/models/stock_tag.py` | Temporal tagging (nifty50/100/500) |
@@ -149,20 +150,22 @@ append-only analytics.
 | `pipelines` | `backend/db/models/pipeline.py` | Pipeline chain definitions |
 | `pipeline_steps` | `backend/db/models/pipeline.py` | Ordered steps within pipelines |
 
-### Iceberg tables (14 — append / scoped-delete)
+### Iceberg tables (12 — append / scoped-delete)
 
 `audit_log`, `usage_history`, `company_info`, `dividends`, `ohlcv`,
 `analysis_summary`, `forecast_runs`, `forecasts`, `quarterly_results`,
-`llm_pricing`, `llm_usage`, `scheduler_runs`, `portfolio_transactions`,
+`llm_pricing`, `llm_usage`, `portfolio_transactions`,
 `piotroski_scores`, `sentiment_scores` (stocks ns)
 Note: `technical_indicators` exists but is empty/unused — indicators
 computed on-the-fly from OHLCV in `_analysis_shared.py`.
+Note: `scheduler_runs` and `scheduled_jobs` migrated to PG
+(ASETPLTFRM-301).
 
 ### Key components
 
 - `backend/db/engine.py` — async `session_factory` (asyncpg driver,
   `pool_pre_ping=True`)
-- `backend/db/models/` — 10 SQLAlchemy ORM models (FK cascade,
+- `backend/db/models/` — 12 SQLAlchemy ORM models (FK cascade,
   JSONB, composite PK, indexes, pgvector)
 - `backend/db/migrations/` — Alembic async migrations
 - `auth/repo/repository.py` — `UserRepository` facade
@@ -372,11 +375,13 @@ Run `list_memories` to browse all topics. Key categories:
   instead. Always set `notMerge={true}` + `key` prop on
   `ReactECharts` wrapped by `next/dynamic`.
 - **Prophet CV multiprocessing**: `cross_validation(parallel=
-  "processes")` fails when run from stdin or heredoc. Must run
+  "processes")` fails from stdin (`FileNotFoundError: /app/<stdin>`).
+  Batch executor uses `parallel=None` to avoid this. Must run
   from a `.py` file with `if __name__ == "__main__"` guard.
 - **Forecast backtest convention**: Backtest data stored in
   `forecasts` Iceberg table with `horizon_months=0`. Actual
-  price in `lower_bound` column. No schema changes needed.
+  price in `lower_bound` column. Batch executor must persist
+  this when CV runs (not just the live chat tool).
 - **yfinance sector names**: Uses "Technology" (not "IT"),
   "Financial Services" (not "Financials"), "Consumer Defensive"
   (not "FMCG"). Always verify with `get_company_info_batch()`.
@@ -408,19 +413,10 @@ Run `list_memories` to browse all topics. Key categories:
   connection (~2-5ms). Don't use for hot loops — batch via
   DuckDB or bulk PG writes instead. See memory
   `shared/debugging/pg-nullpool-sync-async-bridge`.
-- **Prophet CV `parallel="processes"` from stdin**: Spawns
-  subprocesses that fail with `FileNotFoundError: /app/<stdin>`.
-  Must run from a `.py` file. Batch executor uses
-  `parallel=None` to avoid this.
 - **Piotroski scoped delete**: `insert_piotroski_scores`
   deletes by `In("ticker", batch)` not `EqualTo("score_date")`.
   India and US pipelines run same day — date-scoped delete
   wipes the other market's scores.
-- **Forecast backtest convention**: Backtest data stored in
-  `forecasts` Iceberg table with `horizon_months=0`. Actual
-  price in `lower_bound` column. Batch executor must persist
-  this when CV runs (not just the live chat tool).
-
 ---
 
 ## Quick Reference
