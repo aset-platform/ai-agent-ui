@@ -491,7 +491,7 @@ export function DataHealthPanel() {
             total={total}
           />
           <ForecastCard
-            d={data.analytics}
+            d={data.forecasts}
             total={total}
           />
         </div>

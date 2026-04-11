@@ -617,13 +617,13 @@ export function useDataHealth(): UseDataHealthResult {
     fetcher,
     {
       revalidateOnFocus: false,
-      dedupingInterval: 60_000,
+      dedupingInterval: 5_000,
     },
   );
 
   const refresh = useCallback(
     () => {
-      mutate();
+      mutate(undefined, { revalidate: true });
     },
     [mutate],
   );
