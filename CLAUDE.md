@@ -240,19 +240,21 @@ These rules MUST be followed in every interaction.
 21. **Co-Authored-By in commits** — always use:
     `Co-Authored-By: Abhay Kumar Singh <asequitytrading@gmail.com>`
 22. **Update `PROGRESS.md`** after every session (dated entry).
-23. **Test-after-feature** — happy path + 1 error path minimum.
-24. **Jira story points** — update BOTH `customfield_10016`
+23. **Commit Serena memories** — always `git add .serena/`
+    before final push. Shared memories are checked into git.
+24. **Test-after-feature** — happy path + 1 error path minimum.
+25. **Jira story points** — update BOTH `customfield_10016`
     AND `customfield_10036`.
 
 ### Infra & Config
 
-25. **`NEXT_PUBLIC_BACKEND_URL` = `http://localhost:8181`** —
+26. **`NEXT_PUBLIC_BACKEND_URL` = `http://localhost:8181`** —
     never `127.0.0.1`. Hostname mismatch breaks cookies.
-26. **No `@traceable` on `FallbackLLM.invoke()`** — breaks
+27. **No `@traceable` on `FallbackLLM.invoke()`** — breaks
     LangChain tool call parsing.
-27. **Ollama for experiments only** — host-native, not
+28. **Ollama for experiments only** — host-native, not
     containerized. Cascade falls back to Groq/Anthropic.
-28. **LHCI can't audit authenticated routes** — use
+29. **LHCI can't audit authenticated routes** — use
     `npm run perf:full` (Playwright) instead.
 
 ---
