@@ -11,7 +11,12 @@ import {
   useEffect,
   useMemo,
   useCallback,
+  Suspense,
 } from "react";
+import {
+  useSearchParams,
+  useRouter,
+} from "next/navigation";
 import {
   useAdminUsers,
   useAdminAudit,
@@ -29,6 +34,7 @@ import { UserModal } from "@/components/admin/UserModal";
 import { ResetPasswordModal } from "@/components/admin/ResetPasswordModal";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SchedulerTab } from "@/components/admin/SchedulerTab";
+import { DataHealthPanel } from "@/components/admin/DataHealthPanel";
 import {
   InsightsTable,
   type Column,
@@ -1273,6 +1279,9 @@ function MaintenanceTab() {
         onCancel={() => setConfirm(null)}
       />
 
+      {/* Data Health */}
+      <DataHealthPanel />
+
       {/* Subscription Cleanup */}
       <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
         <div className="flex items-center gap-2 mb-2">
@@ -1799,9 +1808,22 @@ type AdminTab =
   | "transactions"
   | "scheduler";
 
-export default function AdminPage() {
-  const [tab, setTab] =
-    useState<AdminTab>("users");
+function AdminPageInner() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const [tab, setTab] = useState<AdminTab>(
+    (searchParams.get("tab") as AdminTab) ?? "users",
+  );
+
+  const handleTabChange = useCallback(
+    (t: AdminTab) => {
+      setTab(t);
+      router.replace(`/admin?tab=${t}`, {
+        scroll: false,
+      });
+    },
+    [router],
+  );
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
@@ -1832,7 +1854,7 @@ export default function AdminPage() {
           <button
             key={t.id}
             data-testid={`admin-tab-${t.id}`}
-            onClick={() => setTab(t.id)}
+            onClick={() => handleTabChange(t.id)}
             className={`
               whitespace-nowrap px-3 py-2 text-sm
               font-medium rounded-t-lg transition-colors
@@ -1864,5 +1886,13 @@ export default function AdminPage() {
         {tab === "scheduler" && <SchedulerTab />}
       </div>
     </div>
+  );
+}
+
+export default function AdminPage() {
+  return (
+    <Suspense fallback={null}>
+      <AdminPageInner />
+    </Suspense>
   );
 }

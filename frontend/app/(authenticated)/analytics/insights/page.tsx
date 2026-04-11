@@ -10,7 +10,12 @@ import {
   useState,
   useMemo,
   useCallback,
+  Suspense,
 } from "react";
+import {
+  useSearchParams,
+  useRouter,
+} from "next/navigation";
 import {
   useScreener,
   useTargets,
@@ -1449,9 +1454,25 @@ function PiotroskiTab() {
 // Main page
 // ---------------------------------------------------------------
 
-export default function InsightsPage() {
+function InsightsPageInner() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const [activeTab, setActiveTab] =
-    useState<TabId>("screener");
+    useState<TabId>(
+      (searchParams.get("tab") as TabId) ??
+        "screener",
+    );
+
+  const handleTabChange = useCallback(
+    (id: TabId) => {
+      setActiveTab(id);
+      router.replace(
+        `/analytics/insights?tab=${id}`,
+        { scroll: false },
+      );
+    },
+    [router],
+  );
 
   const renderTab = useCallback(() => {
     switch (activeTab) {
@@ -1482,7 +1503,7 @@ export default function InsightsPage() {
           <button
             key={tab.id}
             data-testid={`insights-tab-${tab.id}`}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => handleTabChange(tab.id)}
             className={`
               whitespace-nowrap px-3 py-2 text-sm
               font-medium rounded-t-lg transition-colors
@@ -1503,5 +1524,13 @@ export default function InsightsPage() {
         {renderTab()}
       </div>
     </div>
+  );
+}
+
+export default function InsightsPage() {
+  return (
+    <Suspense fallback={null}>
+      <InsightsPageInner />
+    </Suspense>
   );
 }

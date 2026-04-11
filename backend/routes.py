@@ -1658,6 +1658,412 @@ def create_app(
         dependencies=[Depends(superuser_only)],
     )
 
+    # ── Data health check ──────────────────────
+
+    async def _admin_data_health():
+        """GET /admin/data-health — data quality status."""
+        from datetime import datetime, timedelta, timezone
+
+        from db.duckdb_engine import query_iceberg_df
+        from tools._stock_shared import _require_repo
+
+        today = datetime.now(timezone.utc).date()
+        yesterday = today - timedelta(days=1)
+        stale_3d = today - timedelta(days=3)
+        stale_30d = today - timedelta(days=30)
+        stale_7d = today - timedelta(days=7)
+
+        # ── Registry baseline ────────────────────
+        try:
+            repo = _require_repo()
+            registry = repo.get_all_registry()
+            all_tickers = set(registry.keys())
+            total_registry = len(all_tickers)
+        except Exception:
+            all_tickers = set()
+            total_registry = 0
+
+        result: dict = {
+            "total_registry": total_registry,
+            "timestamp": time.time(),
+        }
+
+        # ── 1. OHLCV health ─────────────────────
+        ohlcv: dict = {
+            "nan_close_count": 0,
+            "nan_close_tickers": [],
+            "missing_latest_count": 0,
+            "stale_count": 0,
+            "stale_tickers": [],
+        }
+        try:
+            nan_df = query_iceberg_df(
+                "stocks.ohlcv",
+                "SELECT count(*) AS cnt "
+                "FROM ohlcv "
+                "WHERE close IS NULL "
+                "OR isnan(close)",
+            )
+            if not nan_df.empty:
+                ohlcv["nan_close_count"] = int(
+                    nan_df["cnt"].iloc[0]
+                )
+
+            nan_tk = query_iceberg_df(
+                "stocks.ohlcv",
+                "SELECT DISTINCT ticker "
+                "FROM ohlcv "
+                "WHERE close IS NULL "
+                "OR isnan(close)",
+            )
+            if not nan_tk.empty:
+                ohlcv["nan_close_tickers"] = sorted(
+                    nan_tk["ticker"].tolist()
+                )
+
+            latest_df = query_iceberg_df(
+                "stocks.ohlcv",
+                "SELECT ticker, MAX(date) AS latest "
+                "FROM ohlcv GROUP BY ticker",
+            )
+            if not latest_df.empty:
+                for _, row in latest_df.iterrows():
+                    d = row["latest"]
+                    if hasattr(d, "date"):
+                        d = d.date()
+                    if d < yesterday:
+                        ohlcv[
+                            "missing_latest_count"
+                        ] += 1
+                    if d < stale_3d:
+                        ohlcv["stale_count"] += 1
+                        ohlcv["stale_tickers"].append(
+                            row["ticker"]
+                        )
+                ohlcv["stale_tickers"] = sorted(
+                    ohlcv["stale_tickers"]
+                )
+        except Exception:
+            _logger.debug(
+                "OHLCV health check failed",
+                exc_info=True,
+            )
+        result["ohlcv"] = ohlcv
+
+        # ── 2. Forecast health ───────────────────
+        forecasts: dict = {
+            "total_tickers": 0,
+            "missing_tickers": [],
+            "extreme_predictions": 0,
+            "high_mape": 0,
+            "stale_count": 0,
+        }
+        try:
+            fc_df = query_iceberg_df(
+                "stocks.forecast_runs",
+                "SELECT ticker, "
+                "MAX(run_date) AS latest, "
+                "MAX(target_3m_pct_change) "
+                "  AS max_pct, "
+                "MIN(target_3m_pct_change) "
+                "  AS min_pct, "
+                "MAX(mape) AS max_mape "
+                "FROM forecast_runs "
+                "GROUP BY ticker",
+            )
+            if not fc_df.empty:
+                fc_tickers = set(
+                    fc_df["ticker"].tolist()
+                )
+                forecasts["total_tickers"] = len(
+                    fc_tickers
+                )
+                forecasts["missing_tickers"] = sorted(
+                    all_tickers - fc_tickers
+                )
+                for _, row in fc_df.iterrows():
+                    mx = row.get("max_pct")
+                    mn = row.get("min_pct")
+                    if (
+                        mx is not None and mx > 100
+                    ) or (
+                        mn is not None and mn < -50
+                    ):
+                        forecasts[
+                            "extreme_predictions"
+                        ] += 1
+                    mp = row.get("max_mape")
+                    if mp is not None and mp > 25:
+                        forecasts["high_mape"] += 1
+                    d = row["latest"]
+                    if hasattr(d, "date"):
+                        d = d.date()
+                    if d < stale_30d:
+                        forecasts["stale_count"] += 1
+        except Exception:
+            _logger.debug(
+                "Forecast health check failed",
+                exc_info=True,
+            )
+        result["forecasts"] = forecasts
+
+        # ── 3. Sentiment health ──────────────────
+        sentiment: dict = {
+            "total_tickers": 0,
+            "missing_tickers": [],
+            "stale_count": 0,
+        }
+        try:
+            s_df = query_iceberg_df(
+                "stocks.sentiment_scores",
+                "SELECT ticker, "
+                "MAX(score_date) AS latest "
+                "FROM sentiment_scores "
+                "GROUP BY ticker",
+            )
+            if not s_df.empty:
+                s_tickers = set(
+                    s_df["ticker"].tolist()
+                )
+                sentiment["total_tickers"] = len(
+                    s_tickers
+                )
+                sentiment["missing_tickers"] = sorted(
+                    all_tickers - s_tickers
+                )
+                for _, row in s_df.iterrows():
+                    d = row["latest"]
+                    if hasattr(d, "date"):
+                        d = d.date()
+                    if d < stale_7d:
+                        sentiment["stale_count"] += 1
+        except Exception:
+            _logger.debug(
+                "Sentiment health check failed",
+                exc_info=True,
+            )
+        result["sentiment"] = sentiment
+
+        # ── 4. Piotroski health ──────────────────
+        piotroski: dict = {
+            "total_tickers": 0,
+            "missing_tickers": [],
+            "stale_count": 0,
+        }
+        try:
+            p_df = query_iceberg_df(
+                "stocks.piotroski_scores",
+                "SELECT ticker, "
+                "MAX(score_date) AS latest "
+                "FROM piotroski_scores "
+                "GROUP BY ticker",
+            )
+            if not p_df.empty:
+                p_tickers = set(
+                    p_df["ticker"].tolist()
+                )
+                piotroski["total_tickers"] = len(
+                    p_tickers
+                )
+                piotroski["missing_tickers"] = sorted(
+                    all_tickers - p_tickers
+                )
+                for _, row in p_df.iterrows():
+                    d = row["latest"]
+                    if hasattr(d, "date"):
+                        d = d.date()
+                    if d < stale_30d:
+                        piotroski["stale_count"] += 1
+        except Exception:
+            _logger.debug(
+                "Piotroski health check failed",
+                exc_info=True,
+            )
+        result["piotroski"] = piotroski
+
+        # ── 5. Analytics health ──────────────────
+        analytics: dict = {
+            "total_tickers": 0,
+            "missing_tickers": [],
+        }
+        try:
+            a_df = query_iceberg_df(
+                "stocks.analysis_summary",
+                "SELECT DISTINCT ticker "
+                "FROM analysis_summary",
+            )
+            if not a_df.empty:
+                a_tickers = set(
+                    a_df["ticker"].tolist()
+                )
+                analytics["total_tickers"] = len(
+                    a_tickers
+                )
+                analytics["missing_tickers"] = sorted(
+                    all_tickers - a_tickers
+                )
+        except Exception:
+            _logger.debug(
+                "Analytics health check failed",
+                exc_info=True,
+            )
+        result["analytics"] = analytics
+
+        return result
+
+    async def _admin_fix_ohlcv(
+        request: Request,
+    ):
+        """POST /admin/data-health/fix-ohlcv."""
+        from datetime import datetime, timedelta, timezone
+
+        body = await request.json()
+        action = body.get("action")
+        if action not in (
+            "backfill_nan",
+            "backfill_missing",
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "action must be "
+                    "'backfill_nan' or "
+                    "'backfill_missing'"
+                ),
+            )
+
+        from tools._stock_shared import _require_repo
+
+        repo = _require_repo()
+
+        if action == "backfill_nan":
+            from pyiceberg.expressions import (
+                IsNaN,
+                IsNull,
+                Or,
+            )
+
+            expr = Or(
+                IsNull("close"),
+                IsNaN("close"),
+            )
+            repo.delete_rows("stocks.ohlcv", expr)
+            return {
+                "action": "backfill_nan",
+                "status": "deleted",
+                "detail": (
+                    "Removed OHLCV rows with "
+                    "NULL/NaN close values."
+                ),
+            }
+
+        # backfill_missing
+        from db.duckdb_engine import query_iceberg_df
+
+        today = datetime.now(timezone.utc).date()
+        yesterday = today - timedelta(days=1)
+        registry = repo.get_all_registry()
+
+        latest_df = query_iceberg_df(
+            "stocks.ohlcv",
+            "SELECT ticker, MAX(date) AS latest "
+            "FROM ohlcv GROUP BY ticker",
+        )
+        have_latest: set[str] = set()
+        if not latest_df.empty:
+            for _, row in latest_df.iterrows():
+                d = row["latest"]
+                if hasattr(d, "date"):
+                    d = d.date()
+                if d >= yesterday:
+                    have_latest.add(row["ticker"])
+
+        missing = sorted(
+            set(registry.keys()) - have_latest
+        )
+        if not missing:
+            return {
+                "action": "backfill_missing",
+                "status": "ok",
+                "detail": "No missing tickers found.",
+                "count": 0,
+            }
+
+        # Resolve yfinance tickers from registry
+        yf_map: dict[str, str] = {}
+        for tk in missing:
+            meta = registry.get(tk, {})
+            yf_tk = meta.get("yf_ticker", tk)
+            yf_map[tk] = yf_tk
+
+        import yfinance as yf
+
+        yf_tickers = list(yf_map.values())
+        # Batch download last 5 days to cover gaps
+        start = yesterday - timedelta(days=5)
+        try:
+            raw = yf.download(
+                yf_tickers,
+                start=str(start),
+                end=str(today + timedelta(days=1)),
+                group_by="ticker",
+                auto_adjust=True,
+                threads=True,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"yfinance download failed: {exc}",
+            )
+
+        inserted = 0
+        errors: list[str] = []
+        for canon_tk, yf_tk in yf_map.items():
+            try:
+                if len(yf_tickers) == 1:
+                    df = raw.copy()
+                else:
+                    df = raw[yf_tk].copy()
+                df = df.dropna(subset=["Close"])
+                if df.empty:
+                    continue
+                # Rename to match Iceberg schema
+                df = df.rename(
+                    columns={
+                        "Open": "open",
+                        "High": "high",
+                        "Low": "low",
+                        "Close": "close",
+                        "Volume": "volume",
+                    },
+                )
+                repo.insert_ohlcv(canon_tk, df)
+                inserted += 1
+            except Exception as exc:
+                errors.append(
+                    f"{canon_tk}: {exc}"
+                )
+        return {
+            "action": "backfill_missing",
+            "status": "done",
+            "tickers_backfilled": inserted,
+            "tickers_attempted": len(missing),
+            "errors": errors[:20],
+        }
+
+    admin_router.add_api_route(
+        "/admin/data-health",
+        _admin_data_health,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/data-health/fix-ohlcv",
+        _admin_fix_ohlcv,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+
     # ── Ollama local-LLM management ────────────
 
     async def _admin_ollama_status():

@@ -559,3 +559,112 @@ export function useAdminMaintenance() {
     getPaymentTransactions,
   };
 }
+
+// ---------------------------------------------------------------
+// Data Health hook
+// ---------------------------------------------------------------
+
+export interface DataHealthResult {
+  total_registry: number;
+  ohlcv: {
+    nan_close_count: number;
+    nan_close_tickers: string[];
+    missing_latest_count: number;
+    stale_count: number;
+    stale_tickers: string[];
+  };
+  forecasts: {
+    total_tickers: number;
+    missing_tickers: string[];
+    extreme_predictions: number;
+    high_mape: number;
+    stale_count: number;
+  };
+  sentiment: {
+    total_tickers: number;
+    missing_tickers: string[];
+    stale_count: number;
+  };
+  piotroski: {
+    total_tickers: number;
+    missing_tickers: string[];
+    stale_count: number;
+  };
+  analytics: {
+    total_tickers: number;
+    missing_tickers: string[];
+  };
+}
+
+export interface UseDataHealthResult {
+  data: DataHealthResult | null;
+  loading: boolean;
+  error: string | null;
+  refresh: () => void;
+  fixOhlcv: (
+    action: "backfill_nan" | "backfill_missing",
+  ) => Promise<{ status: string }>;
+}
+
+export function useDataHealth(): UseDataHealthResult {
+  const {
+    data,
+    error,
+    isLoading,
+    mutate,
+  } = useSWR<DataHealthResult>(
+    `${API_URL}/admin/data-health`,
+    fetcher,
+    {
+      revalidateOnFocus: false,
+      dedupingInterval: 60_000,
+    },
+  );
+
+  const refresh = useCallback(
+    () => {
+      mutate();
+    },
+    [mutate],
+  );
+
+  const fixOhlcv = useCallback(
+    async (
+      action: "backfill_nan" | "backfill_missing",
+    ): Promise<{ status: string }> => {
+      const r = await apiFetch(
+        `${API_URL}/admin/data-health/fix-ohlcv`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ action }),
+        },
+      );
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(
+          (b as { detail?: string }).detail ||
+            `HTTP ${r.status}`,
+        );
+      }
+      const result = await r.json();
+      mutate();
+      return result as { status: string };
+    },
+    [mutate],
+  );
+
+  return {
+    data: data ?? null,
+    loading: isLoading,
+    error: error
+      ? error instanceof Error
+        ? error.message
+        : "Failed to load data health"
+      : null,
+    refresh,
+    fixOhlcv,
+  };
+}
