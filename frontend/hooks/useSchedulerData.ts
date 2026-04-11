@@ -111,6 +111,7 @@ export function useSchedulerPipelines() {
     {
       revalidateOnFocus: false,
       dedupingInterval: 10_000,
+      refreshInterval: 15_000,
     },
   );
   return {
@@ -177,6 +178,7 @@ export function useSchedulerRunsFiltered(filters: {
   }>(url, fetcher, {
     revalidateOnFocus: false,
     dedupingInterval: 10_000,
+    refreshInterval: 15_000,
   });
   return {
     runs: data?.runs ?? [],
@@ -199,6 +201,7 @@ export function useSchedulerStats() {
       {
         revalidateOnFocus: false,
         dedupingInterval: 10_000,
+        refreshInterval: 15_000,
       },
     );
   return {
