@@ -8,7 +8,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { useSearchParams } from "next/navigation";
+import {
+  useSearchParams,
+  useRouter,
+} from "next/navigation";
 import Link from "next/link";
 import { CompareContent } from "../compare/page";
 import { apiFetch } from "@/lib/apiFetch";
@@ -1813,6 +1816,7 @@ const TABS: { id: TabId; label: string }[] = [
 
 function AnalysisPageInner() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const tickerParam = searchParams.get("ticker");
   const tabParam = searchParams.get("tab") as
     | TabId
@@ -2044,6 +2048,14 @@ function AnalysisPageInner() {
               onClick={() => {
                 setActiveTab(tab.id);
                 updatePrefs("chart", { tab: tab.id });
+                const params = new URLSearchParams(
+                  searchParams.toString(),
+                );
+                params.set("tab", tab.id);
+                router.replace(
+                  `/analytics/analysis?${params}`,
+                  { scroll: false },
+                );
               }}
               className={`whitespace-nowrap px-3 py-2 text-sm font-medium rounded-t-lg transition-colors ${
                 activeTab === tab.id
