@@ -2,6 +2,76 @@
 
 ---
 
+# Session: Apr 11–12, 2026 — Sprint 6: Forecast Optimization + Scheduler Features
+
+## Branch: `feature/sprint6` | 28 commits
+
+### Pipeline Bug Fixes
+- Fixed `get_scheduler_runs` DuckDB path returning `None` (pipeline stuck after step 1, 500 on jobs API)
+- Fixed `append_scheduler_run` KeyError on `pipeline_run_id` for standalone jobs (forecast runs invisible)
+- Fixed Piotroski `insert_piotroski_scores` overwriting India scores when US pipeline ran (scoped delete by ticker)
+- Fixed `execute_run_piotroski` missing `force` param (pipeline step 4 crash)
+- Persisted backtest overlay from batch executor (was only in live chat tool)
+- Added duration_secs to `_finalize_run` for forecast executor
+
+### Forecast Pipeline Optimization (748 India tickers)
+- Batch OHLCV: single DuckDB query before parallel loop (167s → 0.87s)
+- Batch freshness check: single DuckDB query → dict lookups (329s → 0.44s)
+- Regressor cache: scope-keyed TTL for VIX/index/macro (1.6s → 0.05s/ticker)
+- Bulk writes: 2 Iceberg commits instead of 2,244 (11.5 min → 2s)
+- CV reuse: 30-day TTL, skip CV on weekly reruns (~50% compute saving)
+- Disabled nested parallelism: `parallel=None`, `workers=cpu_count//2`
+- Monthly force (full CV): ~34 min. Weekly (CV reused): ~8 min. Skip path: 2.2s.
+
+### Database Migration (ASETPLTFRM-301)
+- `scheduler_runs` migrated from Iceberg to PostgreSQL (update 9s → 14ms, 640x faster)
+- NullPool for sync→async PG bridge (no connection leaks)
+- PG `max_connections` 20 → 50
+- Stale Iceberg tables dropped (scheduler_runs, scheduled_jobs)
+- Alembic migrations: `c4d9e2f1a8b3` (scheduler_runs), `d5e6f7a8b9c0` (force column)
+
+### Scheduler UI
+- Pipeline create/edit form (PipelineForm.tsx) with step editor
+- Force run: split buttons on jobs + pipelines, force toggle on schedule config
+- Force plumbing: routes → scheduler_service → pipeline_executor → executor
+- 15s auto-refresh on Run History, Stats, Pipeline DAG (SWR refreshInterval)
+
+### Screener & Insights
+- Sentiment column on Screener (Bullish/Neutral/Bearish + score, tooltip with headline count)
+- Market filter on Piotroski F-Score tab (India/US/All)
+- Tag/Index filter: 9 tags from stock_tags PG table (Nifty 50/100/500, Large/Mid/Small Cap)
+- KPI tooltip fix: portal-based rendering via createPortal (was clipped by overflow-hidden)
+
+### Data Health Dashboard (Admin > Maintenance)
+- `GET /admin/data-health`: scans OHLCV, Analytics, Sentiment, Piotroski, Forecasts
+- `POST /admin/data-health/fix-ohlcv`: backfill NaN or missing dates from yfinance
+- 5 status cards (green/yellow/red) with count pills, affected tickers, fix buttons, remediation suggestions
+
+### URL Tab Persistence
+- Admin page: `?tab=scheduler` preserved on refresh
+- Insights page: `?tab=piotroski` preserved on refresh
+- Analysis page: `?tab=forecast&ticker=RELIANCE.NS` — tab now writes to URL on click
+
+### Data Cleanup
+- 215 NaN OHLCV rows cleaned (204 Apr 9, 9 Mar 27, 1 Apr 1, 1 Jul 2023)
+- 204 tickers backfilled from yfinance for April 9
+- 7 tickers backfilled for March 27
+
+### Documentation
+- `docs/backend/scheduler.md` — comprehensive scheduler & pipeline docs
+- `docs/backend/maintenance.md` — data health dashboard docs
+- `PROJECT_INDEX.md` refreshed for Sprint 6
+- `README.md` comprehensive rewrite (480 → 280 lines)
+- `CLAUDE.md` restructured: performance-first rules, categorized gotchas
+
+### Jira
+- ASETPLTFRM-286: Done (filter non-Indian tickers — already working)
+- ASETPLTFRM-299: Done (US price bug — resolved by USA pipeline)
+- ASETPLTFRM-301: Done (scheduler_runs PG migration)
+- ASETPLTFRM-302: Created (forecast sanity gates for 97 broken predictions)
+
+---
+
 # Session: Apr 2–8, 2026 — Sprint 5: Stock Data Pipeline (Epic ASETPLTFRM-267)
 
 ## Branch: `feature/sprint5` | Biggest sprint to date

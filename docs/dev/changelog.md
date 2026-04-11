@@ -4,6 +4,74 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Apr 11–12, 2026 — Forecast Optimization + Scheduler Features + Data Health
+
+### Performance (Forecast Pipeline)
+- Batch OHLCV load: 167s → 0.87s (single DuckDB query for 748 tickers)
+- Batch freshness check: 329s → 0.44s (DuckDB → dict lookup)
+- Regressor cache: 1.6s → 0.05s/ticker (scope-keyed TTL)
+- Bulk Iceberg writes: 11.5 min → 2s (2 commits vs 2,244)
+- CV reuse: 30-day TTL skips cross-validation on weekly reruns
+- Nested parallelism disabled: `parallel=None`, `workers=cpu_count//2`
+- Weekly 748 tickers: ~33 min → ~8 min
+
+### Performance (Database)
+- `scheduler_runs` migrated Iceberg → PostgreSQL: update 9s → 14ms
+- NullPool for sync→async PG bridge (no connection leaks)
+- PG `max_connections` 20 → 50
+
+### Features
+- Pipeline create/edit form with ordered step editor
+- Force run option (UI → API → scheduler → pipeline → executor)
+- Sentiment column on Screener (after RSI Signal)
+- Market filter on Piotroski F-Score tab
+- Tag/Index filter on Screener (9 tags: Nifty 50/100/500, cap sizes)
+- Data Health dashboard (5 cards with fix buttons)
+- URL tab persistence on Admin, Insights, Analysis pages
+- 15s auto-refresh on Scheduler Run History
+
+### Bug Fixes
+- Pipeline stuck after step 1 (`get_scheduler_runs` DuckDB path missing return)
+- Standalone job runs invisible (`append_scheduler_run` missing `pipeline_run_id`)
+- Piotroski scores overwritten (scoped delete by ticker, not date)
+- `execute_run_piotroski` missing `force` parameter
+- Backtest overlay missing from batch forecast executor
+- KPI tooltips clipped (portal-based rendering)
+- Forecast duration not shown in Run History
+
+### Data Cleanup
+- 215 NaN OHLCV rows cleaned + 211 tickers backfilled from yfinance
+
+### Documentation
+- `docs/backend/scheduler.md` — scheduler & pipeline orchestration
+- `docs/backend/maintenance.md` — data health dashboard
+- `README.md` comprehensive rewrite
+- `CLAUDE.md` restructured with performance-first rules
+
+### Jira: ASETPLTFRM-286 (done), 299 (done), 301 (done), 302 (created)
+
+---
+
+## Apr 10, 2026 — Pipeline DAG + Piotroski F-Score + DuckDB Migration
+
+### Features
+- Pipeline + PipelineStep ORM models, PipelineExecutor, 6 API endpoints
+- India & USA daily pipelines (4 steps each)
+- Interactive DAG visualization with "Run from here"
+- Piotroski F-Score: 747 stocks scored, batch scheduler job
+- 5 new CLI commands: analytics, sentiment, forecast, indices, refresh
+
+### Performance (DuckDB Migration)
+- All insights + dashboard reads migrated from PyIceberg to DuckDB
+- DuckDB metadata cache with auto-invalidation
+- Screener: 3.2s → 0.11s, Registry: 5.5s → 0.17s, Home: 3.6s → 0.05s
+
+### Data Cleanup
+- Sentiment deduplication, company_info upsert, TI table truncated
+- Dividends API limited to 2 years
+
+---
+
 ## Mar 30, 2026 — Context-Aware Chat + Recency-Aware News + Bug Fixes
 
 ### Context-Aware Chat Phase 1 (19 SP, ASETPLTFRM-249–256)
