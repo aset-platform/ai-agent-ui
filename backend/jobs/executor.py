@@ -15,6 +15,7 @@ Example::
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from collections.abc import Callable
 from concurrent.futures import (
@@ -1539,7 +1540,7 @@ def execute_run_forecasts(
         repo,
         run_id,
         cancel_event,
-        max_workers=5,  # CmdStanPy is fast; 5 OK
+        max_workers=max(os.cpu_count() // 2, 2),
     )
 
     # Bulk write all forecast results (2 commits

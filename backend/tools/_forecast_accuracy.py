@@ -86,12 +86,18 @@ def _calculate_forecast_accuracy(
                 _cv_train[reg_name] = _cv_train[reg_name].ffill().bfill()
         _cv_model.fit(_cv_train)
 
+        # parallel=None avoids nested process spawning.
+        # With 5 outer ThreadPoolExecutor workers,
+        # parallel="processes" would spawn 50+ sub-
+        # processes on 10 cores, causing 2x contention.
+        # Sequential CV within each thread is faster
+        # overall (~17 min vs ~31 min for 748 tickers).
         df_cv = cross_validation(
             _cv_model,
             initial="730 days",
             period="90 days",
             horizon="90 days",
-            parallel="processes",
+            parallel=None,
         )
         metrics = performance_metrics(df_cv)
         mae = float(metrics["mae"].mean())
