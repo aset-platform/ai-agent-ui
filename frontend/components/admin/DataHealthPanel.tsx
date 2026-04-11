@@ -242,7 +242,7 @@ function ForecastCard({
         )}
       </div>
       {status !== "green" ? (
-        <Suggestion text="Run Forecast pipeline with force=true to recompute. Extreme predictions need model tuning (ASETPLTFRM-302)." />
+        <Suggestion text="Run Forecast pipeline with force=true to recompute. Extreme predictions need model tuning." />
       ) : (
         <Suggestion text="All forecasts are fresh and within normal range." />
       )}
@@ -478,8 +478,8 @@ export function DataHealthPanel() {
             onFix={handleFix}
             fixing={fixing}
           />
-          <ForecastCard
-            d={data.forecasts}
+          <AnalyticsCard
+            d={data.analytics}
             total={total}
           />
           <SentimentCard
@@ -490,7 +490,7 @@ export function DataHealthPanel() {
             d={data.piotroski}
             total={total}
           />
-          <AnalyticsCard
+          <ForecastCard
             d={data.analytics}
             total={total}
           />
