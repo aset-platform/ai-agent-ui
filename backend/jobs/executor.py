@@ -1479,6 +1479,27 @@ def execute_run_forecasts(
             )
         )
 
+        # Persist backtest overlay (horizon_months=0)
+        # when CV actually ran (not reused).
+        _bt = accuracy.get("backtest_df")
+        if _bt is not None and not _bt.empty:
+            _bt = _bt.copy()
+            _bt = _bt.rename(
+                columns={"y": "yhat_lower"},
+            )
+            _bt["yhat_upper"] = _bt["yhat"]
+            from datetime import date as _d
+
+            with _write_lock:
+                _pending_series.append(
+                    (
+                        yf_ticker,
+                        0,
+                        _d.today(),
+                        _bt,
+                    ),
+                )
+
         summary = _generate_forecast_summary(
             forecast_df,
             current_price,
