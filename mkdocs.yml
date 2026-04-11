@@ -68,6 +68,8 @@ nav:
       - Overview: stock_agent.md
       - Iceberg Storage: backend/stocks_iceberg.md
       - Data Pipeline: backend/stock-pipeline.md
+      - Scheduler & Pipelines: backend/scheduler.md
+      - Maintenance & Data Health: backend/maintenance.md
   - Dashboard:
       - Overview: dashboard/overview.md
   - Frontend:
