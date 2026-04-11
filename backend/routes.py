@@ -1320,7 +1320,16 @@ def create_app(
             raise HTTPException(
                 503, "Scheduler not available",
             )
-        run_id = svc.trigger_now(job_id)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        force = body.get("force", False)
+        run_id = svc.trigger_now(
+            job_id,
+            trigger_type="manual",
+            force=force,
+        )
         if not run_id:
             raise HTTPException(
                 404, "Job not found or no executor",
@@ -1489,7 +1498,14 @@ def create_app(
             raise HTTPException(
                 503, "Scheduler not available",
             )
-        tag = svc.trigger_pipeline_now(pipeline_id)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        force = body.get("force", False)
+        tag = svc.trigger_pipeline_now(
+            pipeline_id, force=force,
+        )
         if not tag:
             raise HTTPException(
                 404, "Pipeline not found",

@@ -11,8 +11,10 @@ import {
   useSchedulerStats,
   type SchedulerJob,
   type SchedulerRun,
+  type Pipeline,
 } from "@/hooks/useSchedulerData";
 import PipelineDAG from "./PipelineDAG";
+import PipelineForm from "./PipelineForm";
 
 // ---------------------------------------------------------------
 // Helpers
@@ -369,6 +371,89 @@ function StatCards() {
 }
 
 // ---------------------------------------------------------------
+// Split Run button (Run Now + Force Run dropdown)
+// ---------------------------------------------------------------
+
+function SplitRunButton({
+  onRun,
+  onForceRun,
+}: {
+  onRun: () => void;
+  onForceRun: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="relative shrink-0">
+      <div className="flex items-stretch">
+        <button
+          onClick={onRun}
+          className="rounded-l-lg border border-r-0
+            border-gray-200 px-2.5 py-1.5
+            text-[11px] font-semibold
+            text-indigo-600 transition-all
+            hover:bg-indigo-600 hover:text-white
+            dark:border-gray-700
+            dark:text-indigo-400
+            dark:hover:bg-indigo-500
+            dark:hover:text-white"
+        >
+          Run Now
+        </button>
+        <button
+          onClick={() => setOpen(!open)}
+          className="rounded-r-lg border
+            border-gray-200 px-1 py-1.5
+            text-indigo-600 transition-all
+            hover:bg-indigo-600 hover:text-white
+            dark:border-gray-700
+            dark:text-indigo-400
+            dark:hover:bg-indigo-500
+            dark:hover:text-white"
+        >
+          <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none"
+            stroke="currentColor" strokeWidth="2.5">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+      </div>
+      {open && (
+        <>
+          <div
+            className="fixed inset-0 z-[60]"
+            onClick={() => setOpen(false)}
+          />
+          <div
+            className="absolute right-0 top-full z-[70] mt-1
+              bg-white dark:bg-zinc-800
+              border border-zinc-200 dark:border-zinc-700
+              rounded-lg shadow-xl py-1 min-w-[130px]"
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onForceRun();
+              }}
+              className="flex items-center gap-2 w-full
+                text-left px-3 py-1.5 text-[11px]
+                font-semibold text-amber-600
+                dark:text-amber-400
+                hover:bg-amber-50
+                dark:hover:bg-amber-500/10
+                transition-colors"
+            >
+              <ZapIcon className="h-3 w-3" />
+              Force Run
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
 // Job list
 // ---------------------------------------------------------------
 
@@ -412,10 +497,14 @@ function JobList({
   );
 
   const handleTrigger = useCallback(
-    async (jobId: string) => {
+    async (jobId: string, force = false) => {
       await apiFetch(
         `${API_URL}/admin/scheduler/jobs/${jobId}/trigger`,
-        { method: "POST" },
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ force }),
+        },
       );
       mutate();
     },
@@ -555,23 +644,10 @@ function JobList({
                   Stop
                 </button>
               ) : (
-                <button
-                  onClick={() =>
-                    handleTrigger(j.job_id)
-                  }
-                  className="shrink-0 rounded-lg border
-                    border-gray-200 px-2.5 py-1.5
-                    text-[11px] font-semibold
-                    text-indigo-600 transition-all
-                    hover:bg-indigo-600
-                    hover:text-white
-                    dark:border-gray-700
-                    dark:text-indigo-400
-                    dark:hover:bg-indigo-500
-                    dark:hover:text-white"
-                >
-                  Run Now
-                </button>
+                <SplitRunButton
+                  onRun={() => handleTrigger(j.job_id, false)}
+                  onForceRun={() => handleTrigger(j.job_id, true)}
+                />
               )}
               <button
                 onClick={() => onEditClick(j)}
@@ -662,6 +738,7 @@ function NewScheduleForm({
   >("weekly");
   const [scope, setScope] = useState("all");
   const [jobType, setJobType] = useState("data_refresh");
+  const [force, setForce] = useState(false);
   const [saving, setSaving] = useState(false);
   const [activePreset, setActivePreset] = useState(0);
 
@@ -672,6 +749,7 @@ function NewScheduleForm({
       setTime(editingJob.cron_time);
       setScope(editingJob.scope);
       setJobType(editingJob.job_type || "data_refresh");
+      setForce(editingJob.force ?? false);
       if (
         editingJob.cron_dates &&
         editingJob.cron_dates.length > 0
@@ -696,6 +774,7 @@ function NewScheduleForm({
       setScheduleType("weekly");
       setScope("all");
       setJobType("data_refresh");
+      setForce(false);
       setActivePreset(0);
     }
   }, [editingJob]);
@@ -737,6 +816,7 @@ function NewScheduleForm({
             : [],
         cron_time: time,
         scope,
+        force,
       };
       if (editingJob) {
         await apiFetch(
@@ -768,7 +848,7 @@ function NewScheduleForm({
     }
   }, [
     name, days, cronDates, scheduleType,
-    time, scope, jobType, editingJob, onCreated,
+    time, scope, jobType, force, editingJob, onCreated,
   ]);
 
   return (
@@ -1130,6 +1210,26 @@ function NewScheduleForm({
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Force toggle */}
+        <div className="flex items-center justify-between">
+          <div>
+            <label
+              className="block text-[11px]
+                font-semibold uppercase tracking-wide
+                text-gray-400 dark:text-gray-500"
+            >
+              Force (skip cache)
+            </label>
+            <p className="text-[10px] text-gray-400 dark:text-gray-500">
+              Skip freshness checks and CV cache
+            </p>
+          </div>
+          <Toggle
+            checked={force}
+            onChange={setForce}
+          />
         </div>
 
         {/* Submit + Cancel */}
@@ -1738,6 +1838,10 @@ export function SchedulerTab() {
   const [showForm, setShowForm] = useState(true);
   const [editingJob, setEditingJob] =
     useState<SchedulerJob | null>(null);
+  const [showPipelineForm, setShowPipelineForm] =
+    useState(false);
+  const [editingPipeline, setEditingPipeline] =
+    useState<Pipeline | null>(null);
 
   const refreshAll = useCallback(() => {
     mutateJobs();
@@ -1761,7 +1865,31 @@ export function SchedulerTab() {
       <PipelineDAG
         pipelines={pipelines}
         mutatePipelines={mutatePipelines}
+        onEdit={(p) => {
+          setEditingPipeline(p);
+          setShowPipelineForm(true);
+        }}
+        onNewPipeline={() => {
+          setEditingPipeline(null);
+          setShowPipelineForm(true);
+        }}
       />
+
+      {/* Pipeline Form */}
+      {showPipelineForm && (
+        <PipelineForm
+          editingPipeline={editingPipeline}
+          onCreated={() => {
+            setShowPipelineForm(false);
+            setEditingPipeline(null);
+            mutatePipelines();
+          }}
+          onCancel={() => {
+            setShowPipelineForm(false);
+            setEditingPipeline(null);
+          }}
+        />
+      )}
 
       {/* Two-panel: Jobs + Form */}
       <div

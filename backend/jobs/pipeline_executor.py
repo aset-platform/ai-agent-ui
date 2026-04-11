@@ -28,6 +28,7 @@ class PipelineExecutor:
         pipeline: dict,
         trigger_type: str = "manual",
         cancel_event: threading.Event | None = None,
+        force: bool = False,
     ) -> str:
         """Run the full pipeline. Returns pipeline_run_id."""
         return self._execute_chain(
@@ -36,6 +37,7 @@ class PipelineExecutor:
             trigger_type=trigger_type,
             start_step=1,
             cancel_event=cancel_event,
+            force=force,
         )
 
     def resume_pipeline(
@@ -60,6 +62,7 @@ class PipelineExecutor:
         trigger_type: str,
         start_step: int,
         cancel_event: threading.Event | None = None,
+        force: bool = False,
     ) -> str:
         """Run steps sequentially from start_step."""
         steps = sorted(
@@ -112,6 +115,7 @@ class PipelineExecutor:
                 scope,
                 trigger_type,
                 cancel_event,
+                force=force,
             )
             if not ok:
                 failed = True
@@ -126,6 +130,7 @@ class PipelineExecutor:
         scope: str,
         trigger_type: str,
         cancel_event: threading.Event | None,
+        force: bool = False,
     ) -> bool:
         """Execute one step. Returns True on success."""
         job_type = step["job_type"]
@@ -168,6 +173,7 @@ class PipelineExecutor:
             executor_fn(
                 scope, run_id, self._repo,
                 cancel_event=cancel_event,
+                force=force,
             )
         except Exception as exc:
             elapsed = (

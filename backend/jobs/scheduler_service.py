@@ -475,6 +475,7 @@ class SchedulerService:
         self,
         pipeline_id: str,
         trigger_type: str = "manual",
+        force: bool = False,
     ) -> str | None:
         """Trigger a pipeline. Returns pipeline_run_id."""
         pipeline = self._pipelines.get(pipeline_id)
@@ -490,6 +491,7 @@ class SchedulerService:
                     pipeline,
                     trigger_type=trigger_type,
                     cancel_event=cancel_event,
+                    force=force,
                 )
             finally:
                 self._cancel_events.pop(tag, None)
@@ -769,8 +771,11 @@ class SchedulerService:
                 )
                 return
 
+        force = bool(job.get("force", False))
         run_id = self.trigger_now(
-            job_id, trigger_type="scheduled",
+            job_id,
+            trigger_type="scheduled",
+            force=force,
         )
         if run_id:
             _logger.info(
@@ -783,6 +788,7 @@ class SchedulerService:
         self,
         job_id: str,
         trigger_type: str = "manual",
+        force: bool = False,
     ) -> str | None:
         """Trigger a job. Returns run_id."""
         job = self._jobs.get(job_id)
@@ -828,6 +834,7 @@ class SchedulerService:
                 executor_fn(
                     scope, run_id, self._repo,
                     cancel_event=cancel_event,
+                    force=force,
                 )
             except Exception as exc:
                 _logger.warning(

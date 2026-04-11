@@ -23,6 +23,7 @@ export interface SchedulerJob {
   next_run_seconds: number | null;
   last_run_status: string | null;
   last_run_time: string | null;
+  force: boolean;
 }
 
 export interface SchedulerRun {

@@ -220,12 +220,17 @@ function PipelineRow({
   onTrigger,
   onResume,
   onToggle,
+  onEdit,
+  onDelete,
 }: {
   pipeline: Pipeline;
-  onTrigger: (id: string) => void;
+  onTrigger: (id: string, force?: boolean) => void;
   onResume: (id: string, step: number) => void;
   onToggle: (id: string, enabled: boolean) => void;
+  onEdit?: (pipeline: Pipeline) => void;
+  onDelete?: (id: string) => void;
 }) {
+  const [runMenuOpen, setRunMenuOpen] = useState(false);
   const scopeClass = SCOPE_BADGES[pipeline.scope] ?? SCOPE_BADGES.all;
 
   return (
@@ -277,21 +282,122 @@ function PipelineRow({
               `}
             />
           </button>
-          <button
-            type="button"
-            disabled={pipeline.is_running}
-            onClick={() => onTrigger(pipeline.pipeline_id)}
-            className="inline-flex items-center gap-1 rounded-md
-              bg-indigo-600 hover:bg-indigo-700
-              disabled:opacity-50 disabled:cursor-not-allowed
-              px-2.5 py-1 text-[11px] font-medium text-white
-              transition-colors"
-          >
-            <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor">
-              <polygon points="5,3 19,12 5,21" />
-            </svg>
-            Run All
-          </button>
+          {onEdit && (
+            <button
+              type="button"
+              onClick={() => onEdit(pipeline)}
+              className="flex h-[26px] w-[26px] items-center
+                justify-center rounded-md border
+                border-zinc-200 text-zinc-400
+                transition-all hover:border-indigo-400
+                hover:bg-indigo-50 hover:text-indigo-600
+                dark:border-zinc-700 dark:text-zinc-500
+                dark:hover:border-indigo-500
+                dark:hover:bg-indigo-500/10
+                dark:hover:text-indigo-400"
+              title="Edit pipeline"
+            >
+              <svg viewBox="0 0 24 24" className="h-3 w-3"
+                fill="none" stroke="currentColor" strokeWidth="2"
+                strokeLinecap="round" strokeLinejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+              </svg>
+            </button>
+          )}
+          {onDelete && (
+            <button
+              type="button"
+              onClick={() => onDelete(pipeline.pipeline_id)}
+              className="flex h-[26px] w-[26px] items-center
+                justify-center rounded-md border
+                border-zinc-200 text-zinc-400
+                transition-all hover:border-red-400
+                hover:bg-red-50 hover:text-red-600
+                dark:border-zinc-700 dark:text-zinc-500
+                dark:hover:border-red-500
+                dark:hover:bg-red-500/10
+                dark:hover:text-red-400"
+              title="Delete pipeline"
+            >
+              <svg viewBox="0 0 24 24" className="h-3 w-3"
+                fill="none" stroke="currentColor" strokeWidth="2"
+                strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              </svg>
+            </button>
+          )}
+          <div className="relative">
+            <div className="flex items-stretch">
+              <button
+                type="button"
+                disabled={pipeline.is_running}
+                onClick={() => onTrigger(pipeline.pipeline_id, false)}
+                className="inline-flex items-center gap-1 rounded-l-md
+                  bg-indigo-600 hover:bg-indigo-700
+                  disabled:opacity-50 disabled:cursor-not-allowed
+                  px-2.5 py-1 text-[11px] font-medium text-white
+                  transition-colors"
+              >
+                <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor">
+                  <polygon points="5,3 19,12 5,21" />
+                </svg>
+                Run All
+              </button>
+              <button
+                type="button"
+                disabled={pipeline.is_running}
+                onClick={() => setRunMenuOpen(!runMenuOpen)}
+                className="inline-flex items-center rounded-r-md
+                  border-l border-indigo-500
+                  bg-indigo-600 hover:bg-indigo-700
+                  disabled:opacity-50 disabled:cursor-not-allowed
+                  px-1 py-1 text-white transition-colors"
+              >
+                <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none"
+                  stroke="currentColor" strokeWidth="2.5">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+            </div>
+            {runMenuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-[60]"
+                  onClick={() => setRunMenuOpen(false)}
+                />
+                <div
+                  className="absolute right-0 top-full z-[70] mt-1
+                    bg-white dark:bg-zinc-800
+                    border border-zinc-200 dark:border-zinc-700
+                    rounded-lg shadow-xl py-1 min-w-[140px]"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRunMenuOpen(false);
+                      onTrigger(pipeline.pipeline_id, true);
+                    }}
+                    className="flex items-center gap-2 w-full
+                      text-left px-3 py-1.5 text-[11px]
+                      font-semibold text-amber-600
+                      dark:text-amber-400
+                      hover:bg-amber-50
+                      dark:hover:bg-amber-500/10
+                      transition-colors"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-3 w-3"
+                      fill="none" stroke="currentColor" strokeWidth="2"
+                      strokeLinecap="round" strokeLinejoin="round">
+                      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                    </svg>
+                    Force Run All
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -319,15 +425,35 @@ function PipelineRow({
 export default function PipelineDAG({
   pipelines,
   mutatePipelines,
+  onEdit,
+  onNewPipeline,
 }: {
   pipelines: Pipeline[];
   mutatePipelines: () => void;
+  onEdit?: (pipeline: Pipeline) => void;
+  onNewPipeline?: () => void;
 }) {
   const handleTrigger = useCallback(
-    async (id: string) => {
+    async (id: string, force = false) => {
       await apiFetch(
         `${API_URL}/admin/scheduler/pipelines/${id}/trigger`,
-        { method: "POST" },
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ force }),
+        },
+      );
+      mutatePipelines();
+    },
+    [mutatePipelines],
+  );
+
+  const handleDelete = useCallback(
+    async (id: string) => {
+      if (!confirm("Delete this pipeline?")) return;
+      await apiFetch(
+        `${API_URL}/admin/scheduler/pipelines/${id}`,
+        { method: "DELETE" },
       );
       mutatePipelines();
     },
@@ -364,22 +490,53 @@ export default function PipelineDAG({
     [mutatePipelines],
   );
 
-  if (!pipelines.length) return null;
-
   return (
     <div className="space-y-3">
-      <h2 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider">
-        Pipelines
-      </h2>
-      {pipelines.map((p) => (
-        <PipelineRow
-          key={p.pipeline_id}
-          pipeline={p}
-          onTrigger={handleTrigger}
-          onResume={handleResume}
-          onToggle={handleToggle}
-        />
-      ))}
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider">
+          Pipelines
+        </h2>
+        {onNewPipeline && (
+          <button
+            onClick={onNewPipeline}
+            className="flex items-center gap-1.5 rounded-[10px]
+              border border-indigo-600 px-3 py-[6px]
+              text-[11px] font-semibold text-indigo-600
+              transition-all hover:bg-indigo-600
+              hover:text-white
+              dark:border-indigo-500
+              dark:text-indigo-400
+              dark:hover:bg-indigo-500
+              dark:hover:text-white"
+          >
+            <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none"
+              stroke="currentColor" strokeWidth="2.5"
+              strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            New Pipeline
+          </button>
+        )}
+      </div>
+      {pipelines.length === 0 ? (
+        <div className="rounded-xl border border-zinc-200 dark:border-zinc-700
+          bg-white dark:bg-zinc-900 p-8 text-center text-sm
+          text-gray-400 dark:text-gray-500">
+          No pipelines yet. Create one to chain jobs together.
+        </div>
+      ) : (
+        pipelines.map((p) => (
+          <PipelineRow
+            key={p.pipeline_id}
+            pipeline={p}
+            onTrigger={handleTrigger}
+            onResume={handleResume}
+            onToggle={handleToggle}
+            onEdit={onEdit}
+            onDelete={handleDelete}
+          />
+        ))
+      )}
     </div>
   );
 }
