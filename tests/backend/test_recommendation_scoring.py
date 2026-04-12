@@ -298,3 +298,296 @@ class TestPrefilterCache:
 
         _PREFILTER_CACHE.clear()
         assert "stage1" not in _PREFILTER_CACHE
+
+
+# ── Stage 2: _classify_cap ────────────────────────
+
+
+class TestClassifyCap:
+    def test_largecap(self):
+        from backend.jobs.recommendation_engine import (
+            _classify_cap,
+        )
+
+        assert _classify_cap(300_000_000_000) == "largecap"
+
+    def test_largecap_boundary(self):
+        from backend.jobs.recommendation_engine import (
+            _classify_cap,
+        )
+
+        assert _classify_cap(200_000_000_000) == "largecap"
+
+    def test_midcap(self):
+        from backend.jobs.recommendation_engine import (
+            _classify_cap,
+        )
+
+        assert _classify_cap(100_000_000_000) == "midcap"
+
+    def test_midcap_boundary(self):
+        from backend.jobs.recommendation_engine import (
+            _classify_cap,
+        )
+
+        assert _classify_cap(50_000_000_000) == "midcap"
+
+    def test_smallcap(self):
+        from backend.jobs.recommendation_engine import (
+            _classify_cap,
+        )
+
+        assert _classify_cap(10_000_000_000) == "smallcap"
+
+    def test_none_is_smallcap(self):
+        from backend.jobs.recommendation_engine import (
+            _classify_cap,
+        )
+
+        assert _classify_cap(None) == "smallcap"
+
+    def test_zero_is_smallcap(self):
+        from backend.jobs.recommendation_engine import (
+            _classify_cap,
+        )
+
+        assert _classify_cap(0) == "smallcap"
+
+
+# ── Stage 2: _compute_sector_gaps ─────────────────
+
+
+class TestSectorGaps:
+    def test_overweight_tech(self):
+        """User 40 % tech vs universe 20 % -> +20."""
+        from backend.jobs.recommendation_engine import (
+            _compute_sector_gaps,
+        )
+
+        user = {"Technology": 40.0, "Finance": 5.0}
+        univ = {
+            "Technology": 20.0,
+            "Finance": 20.0,
+            "Healthcare": 15.0,
+        }
+        gaps = _compute_sector_gaps(user, univ)
+        assert gaps["Technology"] == 20.0
+        assert gaps["Finance"] == -15.0
+        assert gaps["Healthcare"] == -15.0
+
+    def test_missing_sector(self):
+        """Sector only in universe shows negative gap."""
+        from backend.jobs.recommendation_engine import (
+            _compute_sector_gaps,
+        )
+
+        user = {"Technology": 100.0}
+        univ = {"Technology": 50.0, "Energy": 50.0}
+        gaps = _compute_sector_gaps(user, univ)
+        assert gaps["Energy"] == -50.0
+        assert gaps["Technology"] == 50.0
+
+    def test_empty_user(self):
+        """Empty portfolio -> all negative gaps."""
+        from backend.jobs.recommendation_engine import (
+            _compute_sector_gaps,
+        )
+
+        gaps = _compute_sector_gaps(
+            {}, {"A": 30.0, "B": 70.0},
+        )
+        assert gaps["A"] == -30.0
+        assert gaps["B"] == -70.0
+
+    def test_both_empty(self):
+        """Both empty -> no gaps."""
+        from backend.jobs.recommendation_engine import (
+            _compute_sector_gaps,
+        )
+
+        assert _compute_sector_gaps({}, {}) == {}
+
+
+# ── Stage 2: _compute_gap_bonus ───────────────────
+
+
+class TestGapBonus:
+    def test_big_sector_gap_plus_nifty(self):
+        """Sector gap -20, nifty, cap gap 0 -> 15."""
+        from backend.jobs.recommendation_engine import (
+            _compute_gap_bonus,
+        )
+
+        bonus = _compute_gap_bonus(-20.0, True, 0.0)
+        # sector: min(10, 20*0.5)=10, index: 5
+        assert bonus == 15.0
+
+    def test_all_gaps(self):
+        """All gaps maxed -> capped at 20."""
+        from backend.jobs.recommendation_engine import (
+            _compute_gap_bonus,
+        )
+
+        bonus = _compute_gap_bonus(-50.0, True, -50.0)
+        assert bonus == 20.0
+
+    def test_no_gaps(self):
+        """No underweight -> 0 bonus."""
+        from backend.jobs.recommendation_engine import (
+            _compute_gap_bonus,
+        )
+
+        assert _compute_gap_bonus(5.0, False, 5.0) == 0.0
+
+    def test_only_index_gap(self):
+        """Index gap only -> 5 bonus."""
+        from backend.jobs.recommendation_engine import (
+            _compute_gap_bonus,
+        )
+
+        assert _compute_gap_bonus(0.0, True, 0.0) == 5.0
+
+    def test_sector_just_below_threshold(self):
+        """Sector gap -5 exactly is NOT < -5."""
+        from backend.jobs.recommendation_engine import (
+            _compute_gap_bonus,
+        )
+
+        assert _compute_gap_bonus(-5.0, False, 0.0) == 0.0
+
+    def test_cap_gap_only(self):
+        """Cap gap -10, no sector/index -> 3 points."""
+        from backend.jobs.recommendation_engine import (
+            _compute_gap_bonus,
+        )
+
+        bonus = _compute_gap_bonus(0.0, False, -10.0)
+        assert bonus == 3.0  # 10 * 0.3
+
+
+# ── Stage 2: _assign_tier ────────────────────────
+
+
+class TestTierAssignment:
+    def test_in_holdings(self):
+        from backend.jobs.recommendation_engine import (
+            _assign_tier,
+        )
+
+        assert _assign_tier(
+            "RELIANCE.NS",
+            {"RELIANCE.NS", "TCS.NS"},
+            {"INFY.NS"},
+        ) == "portfolio"
+
+    def test_in_watchlist(self):
+        from backend.jobs.recommendation_engine import (
+            _assign_tier,
+        )
+
+        assert _assign_tier(
+            "INFY.NS",
+            {"RELIANCE.NS"},
+            {"INFY.NS"},
+        ) == "watchlist"
+
+    def test_discovery(self):
+        from backend.jobs.recommendation_engine import (
+            _assign_tier,
+        )
+
+        assert _assign_tier(
+            "HDFCBANK.NS",
+            {"RELIANCE.NS"},
+            {"INFY.NS"},
+        ) == "discovery"
+
+    def test_holdings_takes_priority(self):
+        """If in both holdings and watchlist -> portfolio."""
+        from backend.jobs.recommendation_engine import (
+            _assign_tier,
+        )
+
+        assert _assign_tier(
+            "TCS.NS",
+            {"TCS.NS"},
+            {"TCS.NS"},
+        ) == "portfolio"
+
+
+# ── Stage 2: _categorize_holding ──────────────────
+
+
+class TestCategorizeHolding:
+    def test_exit_reduce(self):
+        """Low score + negative forecast -> exit."""
+        from backend.jobs.recommendation_engine import (
+            _categorize_holding,
+        )
+
+        assert _categorize_holding(
+            25.0, -5.0, 10.0, 0.0,
+        ) == "exit_reduce"
+
+    def test_risk_alert(self):
+        """Score < 40, sentiment < -0.3 -> risk_alert."""
+        from backend.jobs.recommendation_engine import (
+            _categorize_holding,
+        )
+
+        assert _categorize_holding(
+            35.0, 2.0, 10.0, -0.5,
+        ) == "risk_alert"
+
+    def test_rebalance(self):
+        """Weight > 20 -> rebalance."""
+        from backend.jobs.recommendation_engine import (
+            _categorize_holding,
+        )
+
+        assert _categorize_holding(
+            60.0, 5.0, 25.0, 0.2,
+        ) == "rebalance"
+
+    def test_hold_accumulate_strong(self):
+        """High score, low weight -> hold_accumulate."""
+        from backend.jobs.recommendation_engine import (
+            _categorize_holding,
+        )
+
+        assert _categorize_holding(
+            75.0, 10.0, 3.0, 0.5,
+        ) == "hold_accumulate"
+
+    def test_hold_accumulate_default(self):
+        """Mid-range everything -> hold_accumulate."""
+        from backend.jobs.recommendation_engine import (
+            _categorize_holding,
+        )
+
+        assert _categorize_holding(
+            55.0, 5.0, 10.0, 0.1,
+        ) == "hold_accumulate"
+
+    def test_exit_takes_priority_over_risk(self):
+        """Score < 30 AND forecast < 0 AND sent < -0.3.
+
+        exit_reduce checked first.
+        """
+        from backend.jobs.recommendation_engine import (
+            _categorize_holding,
+        )
+
+        assert _categorize_holding(
+            25.0, -3.0, 10.0, -0.5,
+        ) == "exit_reduce"
+
+    def test_risk_alert_boundary(self):
+        """Score exactly 40 -> NOT risk_alert."""
+        from backend.jobs.recommendation_engine import (
+            _categorize_holding,
+        )
+
+        assert _categorize_holding(
+            40.0, 2.0, 10.0, -0.5,
+        ) == "hold_accumulate"

@@ -314,3 +314,646 @@ def stage1_prefilter(
         df["composite_score"].iloc[-1],
     )
     return df
+
+
+# ─────────────────────────────────────────────────────
+# Stage 2 — Per-user portfolio gap analysis
+# ─────────────────────────────────────────────────────
+
+CAP_BENCHMARK = {
+    "largecap": 60,
+    "midcap": 25,
+    "smallcap": 15,
+}
+LARGE_CAP_FLOOR = 200_000_000_000  # 200 B INR
+MID_CAP_FLOOR = 50_000_000_000     # 50 B INR
+
+_CORRELATION_THRESHOLD = 0.85
+_TOP_CANDIDATES = 40
+
+
+def _classify_cap(market_cap: float | None) -> str:
+    """Classify market cap into largecap/midcap/smallcap.
+
+    Parameters
+    ----------
+    market_cap : float | None
+        Market capitalisation in INR.
+
+    Returns
+    -------
+    str
+        ``"largecap"``, ``"midcap"``, or ``"smallcap"``.
+    """
+    if market_cap is None or market_cap <= 0:
+        return "smallcap"
+    if market_cap >= LARGE_CAP_FLOOR:
+        return "largecap"
+    if market_cap >= MID_CAP_FLOOR:
+        return "midcap"
+    return "smallcap"
+
+
+def _compute_sector_gaps(
+    user_sectors: dict[str, float],
+    universe_sectors: dict[str, float],
+) -> dict[str, float]:
+    """Compute per-sector weight gap (user - universe).
+
+    Positive = overweight, negative = underweight.
+    Sectors present only in the universe appear as
+    negative gaps; sectors only in user appear as positive.
+
+    Parameters
+    ----------
+    user_sectors : dict[str, float]
+        Sector -> weight % in user portfolio.
+    universe_sectors : dict[str, float]
+        Sector -> weight % in the candidate universe.
+
+    Returns
+    -------
+    dict[str, float]
+        Sector -> gap percentage.
+    """
+    all_sectors = set(user_sectors) | set(universe_sectors)
+    gaps: dict[str, float] = {}
+    for sector in all_sectors:
+        user_w = user_sectors.get(sector, 0.0)
+        univ_w = universe_sectors.get(sector, 0.0)
+        gaps[sector] = round(user_w - univ_w, 2)
+    return gaps
+
+
+def _compute_gap_bonus(
+    sector_gap_pct: float,
+    index_gap: bool,
+    cap_gap_pct: float,
+) -> float:
+    """Compute 0-20 bonus points for filling gaps.
+
+    Parameters
+    ----------
+    sector_gap_pct : float
+        User's sector gap for this candidate's sector.
+        Negative means underweight (candidate fills gap).
+    index_gap : bool
+        True if candidate is in Nifty 50 but not in user
+        portfolio.
+    cap_gap_pct : float
+        User's cap-category gap. Negative means underweight.
+
+    Returns
+    -------
+    float
+        Bonus score, capped at 20.
+    """
+    bonus = 0.0
+    # Sector gap: underweight < -5 -> up to +10
+    if sector_gap_pct < -5:
+        bonus += min(10.0, abs(sector_gap_pct) * 0.5)
+    # Index gap: missing Nifty 50 stock -> +5
+    if index_gap:
+        bonus += 5.0
+    # Cap gap: underweight < -5 -> up to +5
+    if cap_gap_pct < -5:
+        bonus += min(5.0, abs(cap_gap_pct) * 0.3)
+    return min(20.0, round(bonus, 2))
+
+
+def _assign_tier(
+    ticker: str,
+    holdings_tickers: set[str],
+    watchlist_tickers: set[str],
+) -> str:
+    """Assign recommendation tier for a ticker.
+
+    Parameters
+    ----------
+    ticker : str
+        The ticker symbol.
+    holdings_tickers : set[str]
+        Tickers currently in user portfolio.
+    watchlist_tickers : set[str]
+        Tickers on user's watchlist.
+
+    Returns
+    -------
+    str
+        ``"portfolio"``, ``"watchlist"``, or
+        ``"discovery"``.
+    """
+    if ticker in holdings_tickers:
+        return "portfolio"
+    if ticker in watchlist_tickers:
+        return "watchlist"
+    return "discovery"
+
+
+def _categorize_holding(
+    composite_score: float,
+    forecast_3m_pct: float,
+    weight_pct: float,
+    sentiment: float,
+) -> str:
+    """Categorize an existing holding for action.
+
+    Parameters
+    ----------
+    composite_score : float
+        Stage 1 composite score (0-100).
+    forecast_3m_pct : float
+        3-month forecast percentage change.
+    weight_pct : float
+        Current weight in portfolio (0-100).
+    sentiment : float
+        Sentiment score (-1 to +1).
+
+    Returns
+    -------
+    str
+        One of ``"exit_reduce"``, ``"risk_alert"``,
+        ``"rebalance"``, or ``"hold_accumulate"``.
+    """
+    if composite_score < 30 and forecast_3m_pct < 0:
+        return "exit_reduce"
+    if composite_score < 40 and sentiment < -0.3:
+        return "risk_alert"
+    if weight_pct > 20:
+        return "rebalance"
+    return "hold_accumulate"
+
+
+# ── PG helpers (deferred imports, safe fallback) ─────
+
+
+def _get_nifty50_tickers() -> set[str]:
+    """Load Nifty 50 tickers from stock_tags PG table.
+
+    Returns empty set on any failure.
+    """
+    try:
+        from sqlalchemy import select as sa_select
+
+        from backend.db.engine import session_factory
+        from backend.db.models.stock_master import (
+            StockMaster,
+        )
+        from backend.db.models.stock_tag import StockTag
+
+        import asyncio
+
+        async def _fetch() -> set[str]:
+            async with session_factory() as s:
+                stmt = (
+                    sa_select(StockMaster.yf_ticker)
+                    .join(
+                        StockTag,
+                        StockTag.stock_id
+                        == StockMaster.id,
+                    )
+                    .where(StockTag.tag == "nifty50")
+                    .where(StockTag.removed_at.is_(None))
+                )
+                result = await s.execute(stmt)
+                return {r[0] for r in result.all()}
+
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+            ) as pool:
+                return pool.submit(
+                    asyncio.run, _fetch(),
+                ).result(timeout=10)
+        return asyncio.run(_fetch())
+    except Exception:
+        _logger.warning(
+            "Failed to load nifty50 tickers from PG",
+            exc_info=True,
+        )
+        return set()
+
+
+def _get_user_watchlist(user_id: str) -> set[str]:
+    """Load user's watchlist tickers from PG.
+
+    Returns empty set on any failure.
+    """
+    try:
+        from auth.repo.repository import UserRepository
+
+        import asyncio
+
+        async def _fetch() -> set[str]:
+            repo = UserRepository()
+            tickers = await repo.get_user_tickers(
+                user_id,
+            )
+            return set(tickers)
+
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+            ) as pool:
+                return pool.submit(
+                    asyncio.run, _fetch(),
+                ).result(timeout=10)
+        return asyncio.run(_fetch())
+    except Exception:
+        _logger.warning(
+            "Failed to load watchlist for user %s",
+            user_id,
+            exc_info=True,
+        )
+        return set()
+
+
+def _compute_correlation_alerts(
+    holdings_tickers: list[str],
+    repo=None,
+) -> list[dict]:
+    """Flag highly correlated holdings (>0.85).
+
+    Uses 1Y daily close returns from OHLCV.
+
+    Parameters
+    ----------
+    holdings_tickers : list[str]
+        Tickers in the user's portfolio.
+    repo :
+        Optional StockRepository override.
+
+    Returns
+    -------
+    list[dict]
+        Each dict has ``ticker_a``, ``ticker_b``,
+        ``correlation``.
+    """
+    if len(holdings_tickers) < 2:
+        return []
+
+    try:
+        from datetime import date, timedelta
+
+        if repo is None:
+            from stocks.repository import (
+                StockRepository,
+            )
+
+            repo = StockRepository()
+
+        start = date.today() - timedelta(days=365)
+        returns: dict[str, pd.Series] = {}
+        for tkr in holdings_tickers:
+            try:
+                ohlcv = repo.get_ohlcv(tkr, start=start)
+                if ohlcv is not None and len(ohlcv) > 20:
+                    close = ohlcv.set_index("date")[
+                        "close"
+                    ].sort_index()
+                    returns[tkr] = close.pct_change().dropna()
+            except Exception:
+                continue
+
+        if len(returns) < 2:
+            return []
+
+        ret_df = pd.DataFrame(returns).dropna()
+        if len(ret_df) < 20:
+            return []
+
+        corr = ret_df.corr()
+        alerts: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for i, t1 in enumerate(corr.columns):
+            for t2 in corr.columns[i + 1:]:
+                pair = (t1, t2)
+                if pair in seen:
+                    continue
+                seen.add(pair)
+                val = corr.loc[t1, t2]
+                if abs(val) > _CORRELATION_THRESHOLD:
+                    alerts.append({
+                        "ticker_a": t1,
+                        "ticker_b": t2,
+                        "correlation": round(val, 3),
+                    })
+        return alerts
+    except Exception:
+        _logger.warning(
+            "Correlation analysis failed",
+            exc_info=True,
+        )
+        return []
+
+
+# ── Stage 2 main function ───────────────────────────
+
+
+def stage2_gap_analysis(
+    user_id: str,
+    candidates_df: pd.DataFrame,
+    repo=None,
+) -> dict:
+    """Per-user portfolio gap analysis (Stage 2).
+
+    Enriches Stage 1 candidates with gap-fill bonuses,
+    tiers, and portfolio action tags.
+
+    Parameters
+    ----------
+    user_id : str
+        UUID of the user.
+    candidates_df : pd.DataFrame
+        Stage 1 output with ``ticker``,
+        ``composite_score``, ``sentiment``,
+        ``target_3m_pct_change``, and optionally
+        ``sector``, ``market_cap``.
+    repo :
+        Optional StockRepository override for testing.
+
+    Returns
+    -------
+    dict
+        Keys: ``portfolio_summary``,
+        ``portfolio_actions``, ``candidates``,
+        ``gap_analysis``.
+    """
+    if repo is None:
+        try:
+            from stocks.repository import (
+                StockRepository,
+            )
+
+            repo = StockRepository()
+        except Exception:
+            _logger.warning(
+                "StockRepository unavailable; "
+                "using empty holdings",
+            )
+            repo = None
+
+    # 1. Load holdings
+    holdings_df = pd.DataFrame()
+    if repo is not None:
+        try:
+            holdings_df = repo.get_portfolio_holdings(
+                user_id,
+            )
+        except Exception:
+            _logger.warning(
+                "get_portfolio_holdings failed "
+                "for user %s",
+                user_id,
+                exc_info=True,
+            )
+
+    holdings_tickers: set[str] = set()
+    if not holdings_df.empty:
+        holdings_tickers = set(
+            holdings_df["ticker"].tolist()
+        )
+
+    # 2. Build sector weights from holdings
+    user_sectors: dict[str, float] = {}
+    cap_dist: dict[str, float] = {
+        "largecap": 0.0,
+        "midcap": 0.0,
+        "smallcap": 0.0,
+    }
+    total_value = 0.0
+    if (
+        not holdings_df.empty
+        and "sector" in holdings_df.columns
+    ):
+        if "current_value" in holdings_df.columns:
+            val_col = "current_value"
+        elif "invested" in holdings_df.columns:
+            val_col = "invested"
+        else:
+            val_col = None
+
+        if val_col:
+            total_value = float(
+                holdings_df[val_col].sum()
+            )
+            if total_value > 0:
+                for _, row in holdings_df.iterrows():
+                    sector = row.get("sector") or "Other"
+                    val = float(row.get(val_col) or 0)
+                    w = val / total_value * 100.0
+                    user_sectors[sector] = (
+                        user_sectors.get(sector, 0.0) + w
+                    )
+                    # Cap distribution
+                    mcap = row.get("market_cap")
+                    cap_cat = _classify_cap(mcap)
+                    cap_dist[cap_cat] += w
+
+    # 3. Universe sector distribution
+    universe_sectors: dict[str, float] = {}
+    if (
+        not candidates_df.empty
+        and "sector" in candidates_df.columns
+    ):
+        sec_counts = (
+            candidates_df["sector"]
+            .fillna("Other")
+            .value_counts(normalize=True)
+            * 100.0
+        )
+        universe_sectors = sec_counts.to_dict()
+
+    # 4. Sector gaps
+    sector_gaps = _compute_sector_gaps(
+        user_sectors, universe_sectors,
+    )
+
+    # 5. Nifty 50 index gap
+    nifty50 = _get_nifty50_tickers()
+    missing_nifty = nifty50 - holdings_tickers
+
+    # 6. Cap distribution gaps vs benchmark
+    cap_gaps: dict[str, float] = {}
+    for cat, bench in CAP_BENCHMARK.items():
+        cap_gaps[cat] = round(
+            cap_dist.get(cat, 0.0) - bench, 2,
+        )
+
+    # 7. User watchlist for tier assignment
+    watchlist = _get_user_watchlist(user_id)
+
+    # 8. Correlation analysis
+    corr_alerts = _compute_correlation_alerts(
+        list(holdings_tickers), repo=repo,
+    )
+
+    # 9. Score existing holdings
+    portfolio_actions: list[dict] = []
+    if not holdings_df.empty:
+        score_map = {}
+        if not candidates_df.empty:
+            score_map = dict(
+                zip(
+                    candidates_df["ticker"],
+                    candidates_df["composite_score"],
+                )
+            )
+        for _, h in holdings_df.iterrows():
+            tkr = h["ticker"]
+            comp = score_map.get(tkr, 50.0)
+            fcast = 0.0
+            if (
+                not candidates_df.empty
+                and "target_3m_pct_change"
+                in candidates_df.columns
+            ):
+                match = candidates_df.loc[
+                    candidates_df["ticker"] == tkr,
+                    "target_3m_pct_change",
+                ]
+                if not match.empty:
+                    fcast = float(match.iloc[0])
+            sent = 0.0
+            if (
+                not candidates_df.empty
+                and "sentiment" in candidates_df.columns
+            ):
+                match = candidates_df.loc[
+                    candidates_df["ticker"] == tkr,
+                    "sentiment",
+                ]
+                if not match.empty:
+                    sent = float(match.iloc[0])
+            w_pct = 0.0
+            if total_value > 0:
+                val_col = (
+                    "current_value"
+                    if "current_value"
+                    in holdings_df.columns
+                    else "invested"
+                )
+                if val_col in holdings_df.columns:
+                    w_pct = (
+                        float(h.get(val_col) or 0)
+                        / total_value
+                        * 100.0
+                    )
+            category = _categorize_holding(
+                comp, fcast, w_pct, sent,
+            )
+            portfolio_actions.append({
+                "ticker": tkr,
+                "composite_score": round(comp, 2),
+                "forecast_3m_pct": round(fcast, 2),
+                "weight_pct": round(w_pct, 2),
+                "sentiment": round(sent, 2),
+                "category": category,
+            })
+
+    # 10. Tag candidates with gap bonus, tier, fills_gaps
+    enriched: list[dict] = []
+    for _, c in candidates_df.iterrows():
+        tkr = c["ticker"]
+        comp = float(c.get("composite_score") or 0)
+        sector = c.get("sector") or "Other"
+        mcap = c.get("market_cap")
+        cap_cat = _classify_cap(mcap)
+
+        # Sector gap for this candidate
+        s_gap = sector_gaps.get(sector, 0.0)
+        # Index gap
+        i_gap = tkr in missing_nifty
+        # Cap gap
+        c_gap = cap_gaps.get(cap_cat, 0.0)
+
+        bonus = _compute_gap_bonus(s_gap, i_gap, c_gap)
+        tier = _assign_tier(
+            tkr, holdings_tickers, watchlist,
+        )
+
+        fills: list[str] = []
+        if s_gap < -5:
+            fills.append(f"sector:{sector}")
+        if i_gap:
+            fills.append("nifty50")
+        if c_gap < -5:
+            fills.append(f"cap:{cap_cat}")
+
+        enriched.append({
+            "ticker": tkr,
+            "composite_score": comp,
+            "gap_bonus": bonus,
+            "gap_adjusted_score": round(
+                comp + bonus, 2,
+            ),
+            "tier": tier,
+            "fills_gaps": fills,
+            "sector": sector,
+            "cap_category": cap_cat,
+        })
+
+    # 11. Sort by gap-adjusted score, top 40
+    enriched.sort(
+        key=lambda x: x["gap_adjusted_score"],
+        reverse=True,
+    )
+    top_candidates = enriched[:_TOP_CANDIDATES]
+
+    # 12. Portfolio summary
+    concentration_risks: list[str] = []
+    if user_sectors:
+        for sec, w in user_sectors.items():
+            if w > 30:
+                concentration_risks.append(
+                    f"{sec}: {w:.1f}% (>30%)"
+                )
+    if cap_dist.get("largecap", 0) > 80:
+        concentration_risks.append(
+            "Large-cap heavy: "
+            f"{cap_dist['largecap']:.1f}%"
+        )
+
+    portfolio_summary = {
+        "total_holdings": len(holdings_tickers),
+        "total_value": round(total_value, 2),
+        "sector_weights": user_sectors,
+        "cap_distribution": {
+            k: round(v, 2) for k, v in cap_dist.items()
+        },
+        "concentration_risks": concentration_risks,
+        "correlation_alerts": corr_alerts,
+    }
+
+    gap_analysis = {
+        "sector_gaps": sector_gaps,
+        "cap_gaps": cap_gaps,
+        "missing_nifty50_count": len(missing_nifty),
+        "missing_nifty50_sample": sorted(
+            list(missing_nifty)
+        )[:10],
+    }
+
+    _logger.info(
+        "stage2_gap_analysis: user=%s, "
+        "holdings=%d, candidates=%d, "
+        "actions=%d, top=%d",
+        user_id,
+        len(holdings_tickers),
+        len(candidates_df),
+        len(portfolio_actions),
+        len(top_candidates),
+    )
+
+    return {
+        "portfolio_summary": portfolio_summary,
+        "portfolio_actions": portfolio_actions,
+        "candidates": top_candidates,
+        "gap_analysis": gap_analysis,
+    }
