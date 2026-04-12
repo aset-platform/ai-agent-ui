@@ -149,7 +149,13 @@ function RunRow({ run }: { run: HistoryRunItem }) {
   const date = new Date(run.run_date);
   const formatted = date.toLocaleDateString(
     "en-IN",
-    { year: "numeric", month: "short", day: "numeric" },
+    {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    },
   );
   const adoptionPct =
     run.total_recommendations > 0

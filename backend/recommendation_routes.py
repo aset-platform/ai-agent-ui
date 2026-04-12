@@ -378,7 +378,10 @@ def create_recommendation_router() -> APIRouter:
 
         run_items = []
         for r in rows:
-            rd = r.get("run_date", "")
+            # Use created_at (has time) over run_date
+            rd = r.get("created_at") or r.get(
+                "run_date", "",
+            )
             if hasattr(rd, "isoformat"):
                 rd = rd.isoformat()
             run_items.append(
