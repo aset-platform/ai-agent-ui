@@ -1808,14 +1808,33 @@ def execute_run_recommendations(
             # ── Freshness gate (30 days) ──────────
             if not force:
                 try:
+                    from sqlalchemy.ext.asyncio import (
+                        AsyncSession as _FAS,
+                        async_sessionmaker as _fasm,
+                        create_async_engine as _fcae,
+                    )
+                    from sqlalchemy.pool import (
+                        NullPool as _FNP,
+                    )
+                    from config import get_settings as _fgs
+
                     async def _check_fresh():
-                        async with session_factory() as s:
-                            return (
-                                await
+                        _fe = _fcae(
+                            _fgs().database_url,
+                            poolclass=_FNP,
+                        )
+                        _ff = _fasm(
+                            _fe, class_=_FAS,
+                        )
+                        async with _ff() as s:
+                            r = await (
                                 get_latest_recommendation_run(
-                                    s, uid, scope=scope,
+                                    s, uid,
+                                    scope=scope,
                                 )
                             )
+                        await _fe.dispose()
+                        return r
 
                     latest = asyncio.run(
                         _check_fresh(),
@@ -1824,21 +1843,17 @@ def execute_run_recommendations(
                         ca = latest.get("created_at")
                         if ca:
                             if isinstance(ca, str):
-                                from datetime import (
-                                    datetime as _dt,
+                                ca = (
+                                    datetime.fromisoformat(
+                                        ca,
+                                    )
                                 )
-                                ca = _dt.fromisoformat(
-                                    ca,
+                            if ca.tzinfo is None:
+                                ca = ca.replace(
+                                    tzinfo=timezone.utc,
                                 )
                             age = (
                                 datetime.now(
-                                    timezone.utc,
-                                )
-                                - ca.replace(
-                                    tzinfo=timezone.utc,
-                                )
-                                if not ca.tzinfo
-                                else datetime.now(
                                     timezone.utc,
                                 )
                                 - ca
@@ -1848,10 +1863,10 @@ def execute_run_recommendations(
                                 < _FRESHNESS_DAYS
                             ):
                                 _logger.info(
-                                    "[recommendations] "
-                                    "User %s: fresh run "
-                                    "(%dd ago, scope=%s)"
-                                    " — skip",
+                                    "[recommendations]"
+                                    " User %s: fresh "
+                                    "(%dd ago, "
+                                    "scope=%s) — skip",
                                     uid[:8],
                                     age.days,
                                     scope,
@@ -1865,8 +1880,14 @@ def execute_run_recommendations(
                                     },
                                 )
                                 continue
-                except Exception:
-                    pass  # freshness check best-effort
+                except Exception as _fex:
+                    _logger.debug(
+                        "[recommendations] "
+                        "Freshness check failed "
+                        "for %s: %s",
+                        uid[:8],
+                        _fex,
+                    )
 
             # Stage 2: per-user gap analysis.
             stage2 = stage2_gap_analysis(
