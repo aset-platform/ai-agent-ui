@@ -1698,12 +1698,15 @@ def execute_run_recommendations(
     run_id: str,
     repo,  # StockRepository
     cancel_event=None,
+    force: bool = False,
     **kwargs,
 ) -> None:
     """Generate LLM portfolio recommendations.
 
     Monthly job — runs the 3-stage smart funnel for
-    every user with portfolio transactions:
+    every user with portfolio transactions.  Skips
+    users whose latest run for this scope is <30 days
+    old (unless ``force=True``).
 
     1. Stage 1: DuckDB pre-filter (shared, cached 1h).
     2. Stage 2: Per-user gap analysis.
@@ -1716,11 +1719,12 @@ def execute_run_recommendations(
     """
     import asyncio
     import uuid
-    from datetime import date
+    from datetime import date, timedelta
 
     from backend.db.engine import get_session_factory
     from backend.db.pg_stocks import (
         expire_old_recommendations,
+        get_latest_recommendation_run,
         insert_recommendation_run,
         insert_recommendations,
     )
@@ -1730,6 +1734,8 @@ def execute_run_recommendations(
         stage3_llm_reasoning,
     )
     from db.duckdb_engine import query_iceberg_df
+
+    _FRESHNESS_DAYS = 30
 
     _run_start = datetime.now(timezone.utc)
     today = date.today()
@@ -1799,6 +1805,69 @@ def execute_run_recommendations(
             break
 
         try:
+            # ── Freshness gate (30 days) ──────────
+            if not force:
+                try:
+                    async def _check_fresh():
+                        async with session_factory() as s:
+                            return (
+                                await
+                                get_latest_recommendation_run(
+                                    s, uid, scope=scope,
+                                )
+                            )
+
+                    latest = asyncio.run(
+                        _check_fresh(),
+                    )
+                    if latest:
+                        ca = latest.get("created_at")
+                        if ca:
+                            if isinstance(ca, str):
+                                from datetime import (
+                                    datetime as _dt,
+                                )
+                                ca = _dt.fromisoformat(
+                                    ca,
+                                )
+                            age = (
+                                datetime.now(
+                                    timezone.utc,
+                                )
+                                - ca.replace(
+                                    tzinfo=timezone.utc,
+                                )
+                                if not ca.tzinfo
+                                else datetime.now(
+                                    timezone.utc,
+                                )
+                                - ca
+                            )
+                            if (
+                                age.days
+                                < _FRESHNESS_DAYS
+                            ):
+                                _logger.info(
+                                    "[recommendations] "
+                                    "User %s: fresh run "
+                                    "(%dd ago, scope=%s)"
+                                    " — skip",
+                                    uid[:8],
+                                    age.days,
+                                    scope,
+                                )
+                                done += 1
+                                repo.update_scheduler_run(
+                                    run_id,
+                                    {
+                                        "tickers_done":
+                                        done,
+                                    },
+                                )
+                                continue
+                except Exception:
+                    pass  # freshness check best-effort
+
             # Stage 2: per-user gap analysis.
             stage2 = stage2_gap_analysis(
                 uid, candidates_df, repo,
