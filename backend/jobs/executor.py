@@ -1736,7 +1736,7 @@ def execute_run_recommendations(
 
     # ── Stage 1: shared pre-filter (cached) ───────────
     _logger.info("[recommendations] Stage 1: pre-filter")
-    candidates_df = stage1_prefilter()
+    candidates_df = stage1_prefilter(scope=scope)
     if candidates_df.empty:
         _logger.warning(
             "[recommendations] No candidates after "
@@ -1802,6 +1802,7 @@ def execute_run_recommendations(
             # Stage 2: per-user gap analysis.
             stage2 = stage2_gap_analysis(
                 uid, candidates_df, repo,
+                scope=scope,
             )
             portfolio = stage2.get(
                 "portfolio_summary", {},

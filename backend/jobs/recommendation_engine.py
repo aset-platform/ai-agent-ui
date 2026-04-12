@@ -235,6 +235,7 @@ WHERE p.rn = 1
 
 def stage1_prefilter(
     duckdb_engine=None,
+    scope: str = "all",
 ) -> pd.DataFrame:
     """Run Stage 1 DuckDB pre-filter over the universe.
 
@@ -242,16 +243,20 @@ def stage1_prefilter(
     passes the hard gates, plus a ``composite_score``
     column (0-100).
 
-    Results are cached for 1 h.
+    Results are cached for 1 h (per scope).
 
     Parameters
     ----------
     duckdb_engine :
         Optional override for testing.  When *None*,
         uses :func:`backend.db.duckdb_engine`.
+    scope :
+        Market scope: ``"india"``, ``"us"``, or
+        ``"all"`` (default).
     """
     # ── Check cache ───────────────────────────────
-    cached = _PREFILTER_CACHE.get("stage1")
+    cache_key = f"stage1:{scope}"
+    cached = _PREFILTER_CACHE.get(cache_key)
     if cached:
         df, ts = cached
         if _time.time() - ts < _PREFILTER_TTL:
@@ -299,14 +304,30 @@ def stage1_prefilter(
         if duckdb_engine is None:
             conn.close()
 
+    # ── Filter by market scope ────────────────────
+    if scope != "all" and not df.empty:
+        from market_utils import is_indian_market
+
+        if scope == "india":
+            df = df[
+                df["ticker"].apply(is_indian_market)
+            ]
+        else:
+            df = df[
+                ~df["ticker"].apply(is_indian_market)
+            ]
+        df = df.reset_index(drop=True)
+
     _logger.info(
-        "stage1_prefilter: %d candidates from DuckDB",
+        "stage1_prefilter: %d candidates "
+        "(scope=%s)",
         len(df),
+        scope,
     )
 
     if df.empty:
         df["composite_score"] = pd.Series(dtype=float)
-        _PREFILTER_CACHE["stage1"] = (
+        _PREFILTER_CACHE[cache_key] = (
             df,
             _time.time(),
         )
@@ -321,7 +342,7 @@ def stage1_prefilter(
         "composite_score", ascending=False,
     ).reset_index(drop=True)
 
-    _PREFILTER_CACHE["stage1"] = (df, _time.time())
+    _PREFILTER_CACHE[cache_key] = (df, _time.time())
     _logger.info(
         "stage1_prefilter: top score %.1f, "
         "bottom score %.1f",
@@ -700,6 +721,7 @@ def stage2_gap_analysis(
     user_id: str,
     candidates_df: pd.DataFrame,
     repo=None,
+    scope: str = "all",
 ) -> dict:
     """Per-user portfolio gap analysis (Stage 2).
 
@@ -717,6 +739,9 @@ def stage2_gap_analysis(
         ``sector``, ``market_cap``.
     repo :
         Optional StockRepository override for testing.
+    scope :
+        Market scope: ``"india"``, ``"us"``, or
+        ``"all"`` (default).
 
     Returns
     -------
@@ -753,6 +778,16 @@ def stage2_gap_analysis(
                 user_id,
                 exc_info=True,
             )
+
+    # Filter holdings by market scope
+    if (
+        scope != "all"
+        and not holdings_df.empty
+        and "market" in holdings_df.columns
+    ):
+        holdings_df = holdings_df[
+            holdings_df["market"] == scope
+        ].reset_index(drop=True)
 
     holdings_tickers: set[str] = set()
     if not holdings_df.empty:
