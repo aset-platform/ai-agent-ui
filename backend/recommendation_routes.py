@@ -407,6 +407,9 @@ def create_recommendation_router() -> APIRouter:
                     ),
                     run_date=str(rd),
                     scope=r.get("scope", "all"),
+                    run_type=r.get(
+                        "run_type", "scheduled",
+                    ),
                     health_score=float(
                         r.get("health_score", 0),
                     ),

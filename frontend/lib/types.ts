@@ -646,6 +646,7 @@ export interface HistoryRunItem {
   run_id: string;
   run_date: string;
   scope: string;
+  run_type: string;
   health_score: number;
   health_label: string;
   total_recommendations: number;

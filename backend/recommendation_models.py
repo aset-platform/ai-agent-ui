@@ -47,6 +47,7 @@ class HistoryRunItem(BaseModel):
     run_id: str
     run_date: str
     scope: str = "all"
+    run_type: str = "scheduled"
     health_score: float
     health_label: str
     total_recommendations: int = 0

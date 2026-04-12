@@ -106,6 +106,46 @@ function ScopeBadge({ scope }: { scope: string }) {
 }
 
 // ---------------------------------------------------------------
+// Run type badge
+// ---------------------------------------------------------------
+
+function RunTypeBadge({
+  runType,
+}: {
+  runType: string;
+}) {
+  const styles: Record<string, string> = {
+    scheduled:
+      "bg-indigo-100 text-indigo-700 " +
+      "dark:bg-indigo-900/30 dark:text-indigo-400",
+    manual:
+      "bg-teal-100 text-teal-700 " +
+      "dark:bg-teal-900/30 dark:text-teal-400",
+    chat:
+      "bg-violet-100 text-violet-700 " +
+      "dark:bg-violet-900/30 dark:text-violet-400",
+  };
+  const labels: Record<string, string> = {
+    scheduled: "Scheduled",
+    manual: "Manual",
+    chat: "Chat",
+  };
+  return (
+    <span
+      className={
+        "px-1.5 py-0.5 rounded text-[10px] " +
+        "font-semibold " +
+        (styles[runType] ??
+          "bg-gray-100 text-gray-600 " +
+            "dark:bg-gray-800 dark:text-gray-400")
+      }
+    >
+      {labels[runType] ?? runType}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------
 // Filter pill
 // ---------------------------------------------------------------
 
@@ -186,6 +226,7 @@ function RunRow({ run }: { run: HistoryRunItem }) {
             {formatted}
           </span>
           <ScopeBadge scope={run.scope} />
+          <RunTypeBadge runType={run.run_type} />
           <span
             className={
               "px-2 py-0.5 rounded text-xs " +
