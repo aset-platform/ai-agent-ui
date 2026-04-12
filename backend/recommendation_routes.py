@@ -194,64 +194,6 @@ def create_recommendation_router() -> APIRouter:
         )
 
     # --------------------------------------------------
-    # GET /{run_id} — specific run detail
-    # --------------------------------------------------
-    @router.get(
-        "/{run_id}",
-        response_model=RecommendationResponse,
-    )
-    async def get_run_detail(
-        run_id: str,
-        user: UserContext = Depends(
-            get_current_user,
-        ),
-    ):
-        """Return a specific run with its recs."""
-        from backend.db.pg_stocks import (
-            get_recommendations_for_run,
-        )
-        from backend.db.models.recommendation import (
-            RecommendationRun as RunModel,
-        )
-        from sqlalchemy import select
-
-        factory = _get_session_factory()
-        async with factory() as session:
-            result = await session.execute(
-                select(RunModel).where(
-                    RunModel.run_id == run_id,
-                    RunModel.user_id
-                    == str(user.user_id),
-                )
-            )
-            row = result.scalar_one_or_none()
-
-        if not row:
-            return RecommendationResponse(
-                run_id="",
-                run_date="",
-                run_type="",
-                health_score=0,
-                health_label="no_data",
-                recommendations=[],
-            )
-
-        async with factory() as session:
-            recs = (
-                await get_recommendations_for_run(
-                    session, run_id,
-                )
-            )
-
-        return _build_run_response(
-            {
-                c.name: getattr(row, c.name)
-                for c in row.__table__.columns
-            },
-            recs,
-        )
-
-    # --------------------------------------------------
     # POST /refresh — trigger manual Smart Funnel run
     # --------------------------------------------------
     @router.post(
