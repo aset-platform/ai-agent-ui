@@ -224,10 +224,17 @@ function RunRow({
       className="border border-gray-200
         dark:border-gray-700 rounded-xl overflow-hidden"
     >
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setOpen((p) => !p)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ")
+            setOpen((p) => !p);
+        }}
         className="w-full flex items-center
           justify-between px-4 py-3 text-left
+          cursor-pointer select-none
           hover:bg-gray-50 dark:hover:bg-gray-800/50
           transition-colors"
       >
@@ -310,7 +317,7 @@ function RunRow({
             />
           </svg>
         </div>
-      </button>
+      </div>
 
       {open && (
         <div
