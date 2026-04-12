@@ -145,6 +145,39 @@ function TrendingUpIcon({ className = "h-4 w-4" }) {
   );
 }
 
+function StarIcon({ className = "h-4 w-4" }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+    </svg>
+  );
+}
+
+function CheckCircleIcon({ className = "h-4 w-4" }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+      <polyline points="22 4 12 14.01 9 11.01" />
+    </svg>
+  );
+}
+
 function ZapIcon({ className = "h-4 w-4" }) {
   return (
     <svg
@@ -800,6 +833,8 @@ function NewScheduleForm({
         run_sentiment: "Run Sentiment",
         run_piotroski: "Piotroski F-Score",
         run_forecasts: "Run Forecasts",
+        recommendations: "Recommendations",
+        recommendation_outcomes: "Outcome Tracker",
       };
       const typeLabel = typeLabelMap[jobType]
         || "Data Refresh";
@@ -1044,6 +1079,66 @@ function NewScheduleForm({
                 </p>
                 <p className="text-[10px] text-gray-400 dark:text-gray-500">
                   Fundamental scoring
+                </p>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setJobType("recommendations")}
+              className={`flex items-center gap-2.5
+                rounded-xl border p-3 text-left
+                transition-all ${
+                  jobType === "recommendations"
+                    ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-500/12"
+                    : "border-gray-200 dark:border-gray-700"
+                }`}
+            >
+              <div
+                className="flex h-9 w-9 items-center
+                  justify-center rounded-[10px]
+                  bg-emerald-100 text-emerald-700
+                  dark:bg-emerald-500/15
+                  dark:text-emerald-400"
+              >
+                <StarIcon />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-gray-900 dark:text-gray-100">
+                  Recommendations
+                </p>
+                <p className="text-[10px] text-gray-400 dark:text-gray-500">
+                  LLM portfolio picks
+                </p>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setJobType("recommendation_outcomes")
+              }
+              className={`flex items-center gap-2.5
+                rounded-xl border p-3 text-left
+                transition-all ${
+                  jobType === "recommendation_outcomes"
+                    ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-500/12"
+                    : "border-gray-200 dark:border-gray-700"
+                }`}
+            >
+              <div
+                className="flex h-9 w-9 items-center
+                  justify-center rounded-[10px]
+                  bg-sky-100 text-sky-700
+                  dark:bg-sky-500/15
+                  dark:text-sky-400"
+              >
+                <CheckCircleIcon />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-gray-900 dark:text-gray-100">
+                  Outcome Tracker
+                </p>
+                <p className="text-[10px] text-gray-400 dark:text-gray-500">
+                  30/60/90d checkpoints
                 </p>
               </div>
             </button>
@@ -1466,6 +1561,12 @@ function RunTimeline() {
             </option>
             <option value="run_forecasts">
               Forecasts
+            </option>
+            <option value="recommendations">
+              Recommendations
+            </option>
+            <option value="recommendation_outcomes">
+              Outcome Tracker
             </option>
           </select>
           <select

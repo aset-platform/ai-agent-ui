@@ -15,6 +15,8 @@ const JOB_TYPES = [
   { value: "run_sentiment", label: "Sentiment Scoring" },
   { value: "run_forecasts", label: "Forecasts" },
   { value: "run_piotroski", label: "Piotroski F-Score" },
+  { value: "recommendations", label: "Recommendations" },
+  { value: "recommendation_outcomes", label: "Outcome Tracker" },
 ] as const;
 
 const ALL_DAYS = [
