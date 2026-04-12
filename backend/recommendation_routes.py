@@ -157,9 +157,13 @@ def create_recommendation_router() -> APIRouter:
                 )
             )
         if not run:
-            raise HTTPException(
-                status_code=404,
-                detail="No recommendations yet.",
+            return RecommendationResponse(
+                run_id="",
+                run_date="",
+                run_type="",
+                health_score=0,
+                health_label="no_data",
+                recommendations=[],
             )
 
         async with factory() as session:
