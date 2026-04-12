@@ -760,6 +760,41 @@ def stage2_gap_analysis(
             holdings_df["ticker"].tolist()
         )
 
+    # 1b. Enrich holdings with sector, market_cap,
+    # current_price from Stage 1 candidates.
+    if (
+        not holdings_df.empty
+        and not candidates_df.empty
+        and "sector" not in holdings_df.columns
+    ):
+        enrich_cols = [
+            "ticker", "sector", "industry",
+            "market_cap", "company_name",
+            "current_price",
+        ]
+        avail = [
+            c for c in enrich_cols
+            if c in candidates_df.columns
+        ]
+        if "ticker" in avail:
+            enrich = candidates_df[avail].drop_duplicates(
+                subset=["ticker"],
+            )
+            holdings_df = holdings_df.merge(
+                enrich, on="ticker", how="left",
+            )
+            # Compute current_value if we got price
+            if (
+                "current_price" in holdings_df.columns
+                and "quantity" in holdings_df.columns
+            ):
+                holdings_df["current_value"] = (
+                    holdings_df["quantity"].astype(float)
+                    * holdings_df["current_price"]
+                    .fillna(0)
+                    .astype(float)
+                )
+
     # 2. Build sector weights from holdings
     user_sectors: dict[str, float] = {}
     cap_dist: dict[str, float] = {
