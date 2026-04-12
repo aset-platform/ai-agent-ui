@@ -1859,7 +1859,7 @@ def execute_run_recommendations(
             )
             from sqlalchemy.orm import Session
             from sqlalchemy.pool import NullPool
-            from db.models.recommendation import (
+            from backend.db.models.recommendation import (
                 Recommendation as RecModel,
                 RecommendationRun as RunModel,
             )
