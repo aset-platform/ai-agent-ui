@@ -167,7 +167,8 @@ WITH latest_piotroski AS (
 ),
 latest_analysis AS (
     SELECT *, ROW_NUMBER() OVER (
-        PARTITION BY ticker ORDER BY date DESC
+        PARTITION BY ticker
+        ORDER BY analysis_date DESC
     ) AS rn FROM analysis_summary
 ),
 latest_sentiment AS (
@@ -182,16 +183,22 @@ latest_forecast AS (
 ),
 latest_ohlcv AS (
     SELECT ticker,
-           "Close" AS current_price,
-           "Volume" AS volume,
+           close   AS current_price,
+           volume,
            ROW_NUMBER() OVER (
                PARTITION BY ticker ORDER BY date DESC
            ) AS rn
     FROM ohlcv
+    WHERE close IS NOT NULL
 )
 SELECT
     p.ticker,
-    p.piotroski_score   AS piotroski,
+    p.total_score        AS piotroski,
+    p.sector,
+    p.industry,
+    p.market_cap,
+    p.avg_volume,
+    p.company_name,
     a.sharpe_ratio,
     a.annualized_return_pct,
     a.sma_50_signal,
@@ -199,20 +206,27 @@ SELECT
     a.rsi_signal,
     a.macd_signal_text,
     f.target_3m_pct_change,
+    f.target_3m_price,
     f.mape,
     f.mae,
     f.rmse,
+    f.run_date           AS forecast_run_date,
     s.avg_score          AS sentiment,
+    s.headline_count,
     o.current_price,
-    o.volume             AS avg_volume
+    o.volume             AS ohlcv_volume
 FROM latest_piotroski p
-JOIN latest_analysis  a ON a.ticker = p.ticker AND a.rn = 1
-JOIN latest_sentiment s ON s.ticker = p.ticker AND s.rn = 1
-JOIN latest_forecast  f ON f.ticker = p.ticker AND f.rn = 1
-JOIN latest_ohlcv     o ON o.ticker = p.ticker AND o.rn = 1
+JOIN latest_analysis  a
+    ON a.ticker = p.ticker AND a.rn = 1
+JOIN latest_sentiment s
+    ON s.ticker = p.ticker AND s.rn = 1
+JOIN latest_forecast  f
+    ON f.ticker = p.ticker AND f.rn = 1
+JOIN latest_ohlcv     o
+    ON o.ticker = p.ticker AND o.rn = 1
 WHERE p.rn = 1
-  AND p.piotroski_score >= 4
-  AND o.volume >= 10000
+  AND p.total_score >= 4
+  AND COALESCE(p.avg_volume, 0) >= 10000
   AND f.run_date >= CURRENT_DATE - INTERVAL '30' DAY
   AND s.score_date >= CURRENT_DATE - INTERVAL '7' DAY
   AND COALESCE(f.mape, 0) < 80
