@@ -335,11 +335,9 @@ def create_recommendation_router() -> APIRouter:
 
         # Invalidate user cache keys
         cache = get_cache()
-        for mkt in ("all", "india", "us"):
-            cache.delete(
-                f"cache:portfolio:recs"
-                f":{uid}:{mkt}"
-            )
+        cache.invalidate(
+            f"cache:portfolio:recs:{uid}:*",
+        )
 
         # Fetch persisted rows for response
         async with factory() as session:
