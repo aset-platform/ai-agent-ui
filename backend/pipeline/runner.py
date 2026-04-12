@@ -310,6 +310,30 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip 7-day freshness check",
     )
 
+    # recommend ----------------------------------------------------
+    p_recommend = sub.add_parser(
+        "recommend",
+        help=(
+            "Generate LLM portfolio "
+            "recommendations"
+        ),
+    )
+    p_recommend.add_argument(
+        "--scope",
+        default="india",
+        choices=["all", "india", "us"],
+    )
+    p_recommend.add_argument(
+        "--force",
+        action="store_true",
+        help="Ignore 30-day freshness gate",
+    )
+    p_recommend.add_argument(
+        "--user",
+        default=None,
+        help="Single user_id (default: all users)",
+    )
+
     # indices ------------------------------------------------------
     sub.add_parser(
         "indices",
@@ -366,6 +390,7 @@ async def _dispatch(args: argparse.Namespace) -> None:
         "analytics": _cmd_analytics,
         "sentiment": _cmd_sentiment,
         "forecast": _cmd_forecast,
+        "recommend": _cmd_recommend,
         "indices": _cmd_indices,
         "refresh": _cmd_refresh,
     }
@@ -1063,6 +1088,234 @@ async def _cmd_forecast(
         scope, run_id, repo, force=force,
     )
     _logger.info("Forecast complete: run=%s", run_id)
+
+
+async def _cmd_recommend(
+    args: argparse.Namespace,
+) -> None:
+    """Generate LLM portfolio recommendations.
+
+    Uses the same Smart Funnel pipeline as the
+    scheduler and dashboard Refresh button.
+    """
+    import asyncio
+    import time as _time
+    import uuid as _uuid
+    from datetime import date, datetime, timedelta, timezone
+
+    from jobs.recommendation_engine import (
+        stage1_prefilter,
+        stage2_gap_analysis,
+        stage3_llm_reasoning,
+    )
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+    from sqlalchemy.pool import NullPool
+    from config import get_settings
+    from backend.db.models.recommendation import (
+        Recommendation as RecModel,
+        RecommendationRun as RunModel,
+    )
+
+    scope = getattr(args, "scope", "india")
+    force = getattr(args, "force", False)
+
+    _logger.info(
+        "Recommend: scope=%s force=%s",
+        scope,
+        force,
+    )
+
+    # Stage 1
+    t0 = _time.monotonic()
+    candidates = stage1_prefilter(scope=scope)
+    if candidates.empty:
+        _logger.warning("No candidates — aborting")
+        return
+    _logger.info(
+        "Stage 1: %d candidates (%.1fs)",
+        len(candidates),
+        _time.monotonic() - t0,
+    )
+
+    # Find users with portfolios
+    from db.duckdb_engine import query_iceberg_df
+
+    user_df = query_iceberg_df(
+        "stocks.portfolio_transactions",
+        "SELECT DISTINCT user_id "
+        "FROM portfolio_transactions",
+    )
+    if user_df.empty:
+        _logger.warning("No users with portfolios")
+        return
+
+    user_ids = user_df["user_id"].tolist()
+    if getattr(args, "user", None):
+        user_ids = [args.user]
+
+    _logger.info(
+        "Processing %d user(s)",
+        len(user_ids),
+    )
+
+    eng = create_async_engine(
+        get_settings().database_url,
+        poolclass=NullPool,
+    )
+    factory = async_sessionmaker(
+        eng, class_=AsyncSession,
+    )
+
+    _freshness = 30
+    generated = 0
+    skipped = 0
+
+    for uid in user_ids:
+        # Freshness gate
+        if not force:
+            async with factory() as s:
+                from backend.db.pg_stocks import (
+                    get_latest_recommendation_run,
+                )
+                latest = (
+                    await get_latest_recommendation_run(
+                        s, uid, scope=scope,
+                    )
+                )
+            if latest:
+                ca = latest.get("created_at")
+                if ca:
+                    if isinstance(ca, str):
+                        ca = datetime.fromisoformat(ca)
+                    if ca.tzinfo is None:
+                        ca = ca.replace(
+                            tzinfo=timezone.utc,
+                        )
+                    age = (
+                        datetime.now(timezone.utc) - ca
+                    )
+                    if age.days < _freshness:
+                        _logger.info(
+                            "User %s: fresh (%dd) "
+                            "— skip",
+                            uid[:8],
+                            age.days,
+                        )
+                        skipped += 1
+                        continue
+
+        # Stage 2 + 3
+        s2 = stage2_gap_analysis(
+            uid, candidates, scope=scope,
+        )
+        if not s2.get(
+            "portfolio_summary", {},
+        ).get("total_holdings"):
+            _logger.info(
+                "User %s: no %s holdings — skip",
+                uid[:8],
+                scope,
+            )
+            skipped += 1
+            continue
+
+        s3 = stage3_llm_reasoning(s2)
+        recs = s3.get("recommendations", [])
+
+        # Persist
+        run_id = str(_uuid.uuid4())
+        cand_map = {
+            c["ticker"]: c
+            for c in s2.get("candidates", [])
+        }
+        async with factory() as s:
+            s.add(RunModel(
+                run_id=run_id,
+                user_id=uid,
+                run_date=date.today(),
+                run_type="cli",
+                scope=scope,
+                portfolio_snapshot=s2.get(
+                    "portfolio_summary", {},
+                ),
+                health_score=s3.get(
+                    "health_score", 0,
+                ),
+                health_label=s3.get(
+                    "health_label", "unknown",
+                ),
+                health_assessment=s3.get(
+                    "portfolio_health_assessment",
+                ),
+                candidates_scanned=len(candidates),
+                candidates_passed=len(
+                    s2.get("candidates", []),
+                ),
+                llm_model=s3.get("llm_model"),
+                llm_tokens_used=s3.get(
+                    "llm_tokens_used",
+                ),
+            ))
+            for r in recs:
+                ticker = r.get("ticker")
+                c = cand_map.get(ticker, {})
+                s.add(RecModel(
+                    id=str(_uuid.uuid4()),
+                    run_id=run_id,
+                    tier=r.get("tier", "discovery"),
+                    category=r.get(
+                        "category", "general",
+                    ),
+                    ticker=ticker,
+                    action=r.get("action", "hold"),
+                    severity=r.get(
+                        "severity", "low",
+                    ),
+                    rationale=r.get(
+                        "rationale", "",
+                    ),
+                    expected_impact=r.get(
+                        "expected_impact",
+                    ),
+                    data_signals=r.get(
+                        "data_signals", {},
+                    ),
+                    price_at_rec=(
+                        r.get("price_at_rec")
+                        or c.get("current_price")
+                    ),
+                    target_price=(
+                        r.get("target_price")
+                        or c.get("target_price")
+                    ),
+                    expected_return_pct=(
+                        r.get("expected_return_pct")
+                        or c.get("forecast_3m_pct")
+                    ),
+                    status="active",
+                ))
+            await s.commit()
+
+        _logger.info(
+            "User %s: %d recs generated",
+            uid[:8],
+            len(recs),
+        )
+        generated += 1
+
+    await eng.dispose()
+    elapsed = _time.monotonic() - t0
+    _logger.info(
+        "Recommend done: %d generated, "
+        "%d skipped (%.1fs)",
+        generated,
+        skipped,
+        elapsed,
+    )
 
 
 async def _cmd_indices(
