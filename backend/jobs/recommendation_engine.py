@@ -1212,9 +1212,9 @@ def _compute_health_score(
     if total_holdings < 5:
         score -= 15.0
 
-    # Nifty 50 overlap bonus (not in summary, skip)
-    # Could be computed if we had the data; placeholder
-    # for future enrichment.
+    # Nifty 50 overlap bonus (+2 per stock, max +10)
+    overlap = summary.get("nifty50_overlap", 0)
+    score += min(overlap * 2, 10)
 
     score = max(0.0, min(100.0, score))
 
