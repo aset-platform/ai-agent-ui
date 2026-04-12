@@ -2,6 +2,54 @@
 
 ---
 
+# Session: Apr 12, 2026 — Sprint 6: LLM Portfolio Recommendations (ASETPLTFRM-298)
+
+## Branch: `feature/sprint6` | 14 commits
+
+### Smart Funnel Pipeline
+- Stage 1: DuckDB pre-filter scoring 748 tickers via 6-factor composite score (Piotroski, Sharpe, momentum, forecast with accuracy-adjustment, sentiment, technical signals)
+- Stage 2: Per-user portfolio gap analysis (sector, index tracking vs Nifty 50, market cap, correlation >0.85)
+- Stage 3: LLM reasoning pass (Groq cascade, structured JSON prompt, hallucination rejection, deterministic fallback)
+- Accuracy-adjusted forecasts: MAPE/MAE/RMSE composite factor discounts unreliable predictions
+
+### Database (3 new PG tables)
+- `stocks.recommendation_runs` — monthly run metadata with portfolio snapshot
+- `stocks.recommendations` — individual recs with tier/category/severity/data_signals JSONB
+- `stocks.recommendation_outcomes` — append-only 30/60/90d checkpoints with benchmark comparison
+- 11 PG CRUD functions for insert/query/expire/action-matching
+
+### Recommendation Agent (6th LangGraph sub-agent)
+- Agent config with mandatory tool use, currency rules, disclaimer
+- 3 new tools: generate_recommendations, get_recommendation_history, get_recommendation_performance
+- 3 shared tools from portfolio agent: get_portfolio_holdings, get_sector_allocation, get_risk_metrics
+- Router: 14 recommendation keywords added to intent map
+
+### Scheduler Jobs
+- `recommendations` job: monthly batch for all portfolio users (Stage 1 cached, per-user Stage 2+3)
+- `recommendation_outcomes` job: daily outcome tracker with price lookup + labeling
+
+### API Endpoints (5 new)
+- GET /recommendations — latest set with Redis caching
+- POST /recommendations/refresh — manual pipeline trigger
+- GET /recommendations/history — past runs with outcome stats
+- GET /recommendations/stats — aggregate hit rates + adoption
+- GET /recommendations/{run_id} — specific run detail
+
+### Frontend
+- Upgraded RecommendationsWidget: HealthScoreBadge, tier/severity filters, RecommendationCard with SignalPill components
+- New Recommendation History tab on Insights page (KPI cards + collapsible monthly timeline)
+- TypeScript types + SWR hooks for dashboard + insights
+
+### Testing
+- 84 unit tests: composite scoring, accuracy factor, gap analysis, outcome labeling, health score, LLM validation, deterministic fallback
+- 12 PG CRUD tests (async in-memory)
+
+### Docs
+- Design spec: `docs/superpowers/specs/2026-04-12-llm-portfolio-recommendations-design.md`
+- Implementation plan: `docs/superpowers/plans/2026-04-12-llm-portfolio-recommendations.md`
+
+---
+
 # Session: Apr 11–12, 2026 — Sprint 6: Forecast Optimization + Scheduler Features
 
 ## Branch: `feature/sprint6` | 28 commits
