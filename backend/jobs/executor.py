@@ -1829,6 +1829,7 @@ def execute_run_recommendations(
                 "user_id": uid,
                 "run_date": today,
                 "run_type": "scheduled",
+                "scope": scope,
                 "portfolio_snapshot": portfolio,
                 "health_score": stage3.get(
                     "health_score", 0,

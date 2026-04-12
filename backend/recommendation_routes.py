@@ -151,7 +151,9 @@ def create_recommendation_router() -> APIRouter:
         async with factory() as session:
             run = (
                 await get_latest_recommendation_run(
-                    session, str(user.user_id),
+                    session,
+                    str(user.user_id),
+                    scope=market,
                 )
             )
         if not run:

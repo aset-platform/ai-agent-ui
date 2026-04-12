@@ -512,18 +512,31 @@ async def insert_recommendations(
 async def get_latest_recommendation_run(
     session: AsyncSession,
     user_id: str,
+    scope: str = "all",
 ) -> dict | None:
-    """Return the most recent run for a user."""
+    """Return the most recent run for a user.
+
+    When *scope* is ``"india"`` or ``"us"``, only
+    returns runs matching that scope.  ``"all"``
+    returns the latest regardless of scope.
+    """
     from backend.db.models.recommendation import (
         RecommendationRun,
     )
 
-    result = await session.execute(
+    stmt = (
         select(RecommendationRun)
         .where(RecommendationRun.user_id == user_id)
-        .order_by(RecommendationRun.run_date.desc())
-        .limit(1)
     )
+    if scope != "all":
+        stmt = stmt.where(
+            RecommendationRun.scope == scope,
+        )
+    stmt = stmt.order_by(
+        RecommendationRun.run_date.desc(),
+    ).limit(1)
+
+    result = await session.execute(stmt)
     row = result.scalar_one_or_none()
     return _rec_run_to_dict(row) if row else None
 

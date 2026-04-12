@@ -46,6 +46,10 @@ class RecommendationRun(Base):
     run_type: Mapped[str] = mapped_column(
         String(20), nullable=False,
     )
+    scope: Mapped[str] = mapped_column(
+        String(20), nullable=False,
+        server_default="all",
+    )
     portfolio_snapshot: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False,
     )
