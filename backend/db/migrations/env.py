@@ -1,5 +1,6 @@
 """Alembic async migration environment."""
 import asyncio
+import os
 import sys
 from logging.config import fileConfig
 from pathlib import Path
@@ -19,6 +20,9 @@ from backend.db.models import (  # noqa: F401
     PaymentTransaction,
     Pipeline,
     PipelineStep,
+    Recommendation,
+    RecommendationOutcome,
+    RecommendationRun,
     ScheduledJob,
     SchedulerRun,
     StockMaster,
@@ -37,12 +41,13 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
+    url = _get_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_schemas=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -52,15 +57,22 @@ def do_run_migrations(connection):
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
+        include_schemas=True,
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
-async def run_async_migrations() -> None:
-    connectable = create_async_engine(
+def _get_url() -> str:
+    """DATABASE_URL env var overrides alembic.ini (for Docker)."""
+    return os.environ.get(
+        "DATABASE_URL",
         config.get_main_option("sqlalchemy.url"),
     )
+
+
+async def run_async_migrations() -> None:
+    connectable = create_async_engine(_get_url())
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
