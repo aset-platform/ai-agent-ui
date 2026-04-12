@@ -125,6 +125,7 @@ def _format_recs(run: dict, recs: list[dict]) -> str:
 @tool
 def generate_recommendations(
     force_refresh: bool = False,
+    scope: str = "india",
 ) -> str:
     """Generate portfolio recommendations.
 
@@ -134,14 +135,27 @@ def generate_recommendations(
 
     Args:
         force_refresh: Skip cache and regenerate.
+        scope: Market scope (india/us/all).
 
     Source: Iceberg + PostgreSQL.
     """
     user_id = _get_user_or_error()
 
-    from backend.db.engine import get_session_factory
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+    from sqlalchemy.pool import NullPool
+    from config import get_settings
 
-    factory = get_session_factory()
+    _eng = create_async_engine(
+        get_settings().database_url,
+        poolclass=NullPool,
+    )
+    _factory = async_sessionmaker(
+        _eng, class_=AsyncSession,
+    )
 
     async def _generate():
         from backend.db.pg_stocks import (
@@ -152,30 +166,36 @@ def generate_recommendations(
             insert_recommendations,
         )
 
-        # Check for fresh run (<24h)
-        async with factory() as session:
+        # Check for fresh run (<24h, same scope)
+        async with _factory() as session:
             latest = (
                 await get_latest_recommendation_run(
                     session, user_id,
+                    scope=scope,
                 )
             )
 
         if latest and not force_refresh:
-            run_date = latest.get("run_date")
-            if isinstance(run_date, str):
-                run_date = datetime.fromisoformat(
-                    run_date,
-                ).date()
-            age = date.today() - run_date
-            if age < timedelta(days=1):
-                async with factory() as session:
-                    recs = (
-                        await get_recommendations_for_run(
-                            session,
-                            latest["run_id"],
-                        )
+            ca = latest.get("created_at")
+            if ca:
+                if isinstance(ca, str):
+                    ca = datetime.fromisoformat(ca)
+                if ca.tzinfo is None:
+                    ca = ca.replace(
+                        tzinfo=timezone.utc,
                     )
-                return _format_recs(latest, recs)
+                age = datetime.now(timezone.utc) - ca
+                if age < timedelta(days=1):
+                    async with _factory() as session:
+                        recs = (
+                            await
+                            get_recommendations_for_run(
+                                session,
+                                latest["run_id"],
+                            )
+                        )
+                    await _eng.dispose()
+                    return _format_recs(latest, recs)
 
         # Run full pipeline
         from jobs.recommendation_engine import (
@@ -187,15 +207,18 @@ def generate_recommendations(
 
         t0 = _time.monotonic()
 
-        s1 = stage1_prefilter()
+        s1 = stage1_prefilter(scope=scope)
         if s1.empty:
+            await _eng.dispose()
             return (
                 "No candidates passed pre-filter. "
                 "Try again later when more data "
                 "is available."
             )
 
-        s2 = stage2_gap_analysis(user_id, s1)
+        s2 = stage2_gap_analysis(
+            user_id, s1, scope=scope,
+        )
         s3 = stage3_llm_reasoning(s2)
 
         duration = _time.monotonic() - t0
@@ -207,6 +230,7 @@ def generate_recommendations(
             "user_id": user_id,
             "run_date": date.today(),
             "run_type": "chat",
+            "scope": scope,
             "portfolio_snapshot": (
                 s2.get("portfolio_summary", {})
             ),
@@ -231,8 +255,14 @@ def generate_recommendations(
         }
 
         raw_recs = s3.get("recommendations", [])
+        cand_map = {
+            c["ticker"]: c
+            for c in s2.get("candidates", [])
+        }
         rec_rows = []
         for r in raw_recs:
+            ticker = r.get("ticker")
+            c = cand_map.get(ticker, {})
             rec_rows.append({
                 "id": str(uuid.uuid4()),
                 "run_id": run_id,
@@ -240,7 +270,7 @@ def generate_recommendations(
                 "category": r.get(
                     "category", "general",
                 ),
-                "ticker": r.get("ticker"),
+                "ticker": ticker,
                 "action": r.get("action", "hold"),
                 "severity": r.get(
                     "severity", "low",
@@ -254,20 +284,23 @@ def generate_recommendations(
                 "data_signals": r.get(
                     "data_signals", {},
                 ),
-                "price_at_rec": r.get(
-                    "price_at_rec",
+                "price_at_rec": (
+                    r.get("price_at_rec")
+                    or c.get("current_price")
                 ),
-                "target_price": r.get(
-                    "target_price",
+                "target_price": (
+                    r.get("target_price")
+                    or c.get("target_price")
                 ),
-                "expected_return_pct": r.get(
-                    "expected_return_pct",
+                "expected_return_pct": (
+                    r.get("expected_return_pct")
+                    or c.get("forecast_3m_pct")
                 ),
                 "index_tags": r.get("index_tags"),
                 "status": "active",
             })
 
-        async with factory() as session:
+        async with _factory() as session:
             await insert_recommendation_run(
                 session, run_data,
             )
@@ -280,13 +313,14 @@ def generate_recommendations(
             )
 
         # Return formatted
-        async with factory() as session:
+        async with _factory() as session:
             recs = (
                 await get_recommendations_for_run(
                     session, run_id,
                 )
             )
 
+        await _eng.dispose()
         run_dict = dict(run_data)
         return _format_recs(run_dict, recs)
 
