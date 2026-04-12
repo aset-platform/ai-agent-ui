@@ -1965,32 +1965,80 @@ def execute_run_recommendation_outcomes(
     persists to PG.  Expires stale (>90d) recs.
     """
     import asyncio
-    from datetime import date
+    import uuid as _uuid
+    from datetime import date, timedelta
 
-    from backend.db.engine import get_session_factory
-    from backend.db.pg_stocks import (
-        expire_stale_recommendations,
-        get_recommendations_due_for_outcome,
-        insert_recommendation_outcome,
+    from sqlalchemy import select as sa_select, update as sa_upd, func
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
     )
-    from backend.jobs.recommendation_engine import (
+    from sqlalchemy.pool import NullPool
+    from config import get_settings
+    from backend.db.models.recommendation import (
+        Recommendation as RecModel,
+        RecommendationOutcome as OutcomeModel,
+    )
+    from jobs.recommendation_engine import (
         compute_outcome_label,
     )
     from db.duckdb_engine import query_iceberg_df
-    from tools._stock_shared import _require_repo
 
     _run_start = datetime.now(timezone.utc)
     today = date.today()
-    session_factory = get_session_factory()
+
+    # Async NullPool — safe in thread pool workers.
+    _eng = create_async_engine(
+        get_settings().database_url,
+        poolclass=NullPool,
+    )
+    _factory = async_sessionmaker(
+        _eng, class_=AsyncSession,
+    )
 
     # ── Fetch due recommendations ─────────────────────
     async def _get_due():
-        async with session_factory() as s:
-            return (
-                await get_recommendations_due_for_outcome(
-                    s, today,
+        results = []
+        async with _factory() as s:
+            for days in (30, 60, 90):
+                target = today - timedelta(days=days)
+                w_start = target - timedelta(days=2)
+                w_end = target + timedelta(days=2)
+
+                existing = (
+                    sa_select(
+                        OutcomeModel.recommendation_id
+                    )
+                    .where(
+                        OutcomeModel.days_elapsed
+                        == days
+                    )
+                    .scalar_subquery()
                 )
-            )
+
+                q = await s.execute(
+                    sa_select(RecModel).where(
+                        RecModel.status.in_(
+                            ("active", "acted_on"),
+                        ),
+                        RecModel.ticker.isnot(None),
+                        func.date(
+                            RecModel.created_at
+                        ).between(w_start, w_end),
+                        RecModel.id.notin_(existing),
+                    )
+                )
+                for r in q.scalars().all():
+                    results.append({
+                        "id": r.id,
+                        "ticker": r.ticker,
+                        "action": r.action,
+                        "price_at_rec": r.price_at_rec,
+                        "days_due": days,
+                    })
+        await _eng.dispose()
+        return results
 
     try:
         due_recs = asyncio.run(_get_due())
@@ -2002,7 +2050,7 @@ def execute_run_recommendation_outcomes(
         )
         _finalize_run(
             repo, run_id, 0, 0,
-            [f"due query: {exc}"], False,
+            [str(exc)[:200]], False,
             started_at=_run_start,
         )
         return
@@ -2018,26 +2066,41 @@ def execute_run_recommendation_outcomes(
     )
 
     if not due_recs:
-        # Still expire stale recs even if none due.
+        # Expire stale recs even if none due.
         try:
-            async def _expire():
-                async with session_factory() as s:
-                    return (
-                        await
-                        expire_stale_recommendations(
-                            s, today,
+            async def _expire_empty():
+                eng2 = create_async_engine(
+                    get_settings().database_url,
+                    poolclass=NullPool,
+                )
+                fac2 = async_sessionmaker(
+                    eng2, class_=AsyncSession,
+                )
+                cutoff = today - timedelta(days=90)
+                async with fac2() as s:
+                    result = await s.execute(
+                        sa_upd(RecModel)
+                        .where(
+                            RecModel.status == "active",
+                            func.date(
+                                RecModel.created_at
+                            ) < cutoff,
                         )
+                        .values(status="expired")
                     )
+                    await s.commit()
+                    cnt = result.rowcount
+                await eng2.dispose()
+                return cnt
 
-            expired = asyncio.run(_expire())
+            expired = asyncio.run(_expire_empty())
             _logger.info(
-                "[rec-outcomes] Expired %d stale recs",
+                "[rec-outcomes] Expired %d stale",
                 expired,
             )
         except Exception as exc:
             _logger.warning(
-                "[rec-outcomes] Stale expire "
-                "failed: %s",
+                "[rec-outcomes] Expire failed: %s",
                 exc,
             )
         _finalize_run(
@@ -2047,9 +2110,9 @@ def execute_run_recommendation_outcomes(
         return
 
     # ── Batch fetch current prices ────────────────────
-    stock_repo = _require_repo()
     tickers = list({
-        r["ticker"] for r in due_recs if r.get("ticker")
+        r["ticker"] for r in due_recs
+        if r.get("ticker")
     })
     price_map: dict[str, float] = {}
     if tickers:
@@ -2073,15 +2136,16 @@ def execute_run_recommendation_outcomes(
                     )
         except Exception as exc:
             _logger.warning(
-                "[rec-outcomes] Batch price fetch "
+                "[rec-outcomes] Price fetch "
                 "failed: %s",
                 exc,
             )
 
-    # ── Compute outcomes ──────────────────────────────
+    # ── Compute + persist outcomes ────────────────────
     done = 0
     errors: list[str] = []
     cancelled = False
+    outcomes_to_insert: list[dict] = []
 
     for rec in due_recs:
         if cancel_event and cancel_event.is_set():
@@ -2094,97 +2158,98 @@ def execute_run_recommendation_outcomes(
         price_at_rec = rec.get("price_at_rec")
         days_due = rec.get("days_due", 30)
 
-        try:
-            current_price = price_map.get(ticker)
-            if current_price is None:
-                _logger.info(
-                    "[rec-outcomes] %s: no price "
-                    "for %s, skip",
-                    rec_id,
-                    ticker,
-                )
-                done += 1
-                continue
+        current_price = price_map.get(ticker)
+        if current_price is None or not price_at_rec:
+            done += 1
+            continue
 
-            if (
-                price_at_rec is None
-                or price_at_rec <= 0
-            ):
-                done += 1
-                continue
+        return_pct = (
+            (current_price - price_at_rec)
+            / price_at_rec
+        ) * 100.0
+        label = compute_outcome_label(
+            action, return_pct,
+        )
+        bench_return = 0.0
+        excess = return_pct - bench_return
 
-            return_pct = (
-                (current_price - price_at_rec)
-                / price_at_rec
-            ) * 100.0
-            label = compute_outcome_label(
-                action, return_pct,
-            )
-            # Benchmark return (use 0 for now;
-            # future: compute from index OHLCV).
-            bench_return = 0.0
-            excess = return_pct - bench_return
+        outcomes_to_insert.append({
+            "id": str(_uuid.uuid4()),
+            "recommendation_id": rec_id,
+            "check_date": today,
+            "days_elapsed": days_due,
+            "actual_price": current_price,
+            "return_pct": round(return_pct, 2),
+            "benchmark_return_pct": round(
+                bench_return, 2,
+            ),
+            "excess_return_pct": round(excess, 2),
+            "outcome_label": label,
+        })
 
-            async def _insert_outcome(
-                rid, cp, rp, br, ex, lbl, dd,
-            ):
-                async with session_factory() as s:
-                    await insert_recommendation_outcome(
-                        s, rid, today, dd,
-                        cp, rp, br, ex, lbl,
-                    )
-
-            asyncio.run(
-                _insert_outcome(
-                    rec_id, current_price,
-                    return_pct, bench_return,
-                    excess, label, days_due,
-                ),
-            )
-
-            _logger.info(
-                "[rec-outcomes] %s/%s: %.1f%% -> %s "
-                "(%dd)",
-                ticker,
-                rec_id[:8],
-                return_pct,
-                label,
-                days_due,
-            )
-        except Exception as exc:
-            _logger.warning(
-                "[rec-outcomes] %s failed: %s",
-                rec_id,
-                exc,
-            )
-            errors.append(f"{rec_id}: {exc}")
-
+        _logger.info(
+            "[rec-outcomes] %s/%s: %.1f%% -> %s "
+            "(%dd)",
+            ticker,
+            rec_id[:8],
+            return_pct,
+            label,
+            days_due,
+        )
         done += 1
         repo.update_scheduler_run(
             run_id,
             {"tickers_done": done},
         )
 
-    # ── Expire stale recommendations ──────────────────
-    try:
-        async def _expire_stale():
-            async with session_factory() as s:
-                return (
-                    await expire_stale_recommendations(
-                        s, today,
-                    )
+    # Bulk insert outcomes + expire stale
+    if outcomes_to_insert:
+        try:
+            async def _bulk_insert():
+                eng3 = create_async_engine(
+                    get_settings().database_url,
+                    poolclass=NullPool,
                 )
+                fac3 = async_sessionmaker(
+                    eng3, class_=AsyncSession,
+                )
+                async with fac3() as s:
+                    for o in outcomes_to_insert:
+                        s.add(OutcomeModel(**o))
+                    await s.commit()
 
-        expired = asyncio.run(_expire_stale())
-        _logger.info(
-            "[rec-outcomes] Expired %d stale recs",
-            expired,
-        )
-    except Exception as exc:
-        _logger.warning(
-            "[rec-outcomes] Stale expire failed: %s",
-            exc,
-        )
+                # Expire stale
+                cutoff = today - timedelta(days=90)
+                async with fac3() as s:
+                    result = await s.execute(
+                        sa_upd(RecModel)
+                        .where(
+                            RecModel.status == "active",
+                            func.date(
+                                RecModel.created_at
+                            ) < cutoff,
+                        )
+                        .values(status="expired")
+                    )
+                    await s.commit()
+                    expired = result.rowcount
+                await eng3.dispose()
+                return expired
+
+            expired = asyncio.run(_bulk_insert())
+            _logger.info(
+                "[rec-outcomes] Inserted %d outcomes, "
+                "expired %d stale",
+                len(outcomes_to_insert),
+                expired,
+            )
+        except Exception as exc:
+            _logger.warning(
+                "[rec-outcomes] Bulk insert "
+                "failed: %s",
+                exc,
+            )
+            errors.append(str(exc)[:200])
 
     _finalize_run(
         repo, run_id, done, total,
