@@ -36,19 +36,21 @@ function scoreColor(score: number) {
 }
 
 function labelDisplay(label: string): string {
+  if (!label) return "No Data";
   return label
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export function HealthScoreBadge({
-  score,
-  label,
+  score = 0,
+  label = "",
 }: HealthScoreBadgeProps) {
-  const colors = scoreColor(score);
+  const safeScore = Number.isFinite(score) ? score : 0;
+  const colors = scoreColor(safeScore);
   // SVG circle params: r=36, circumference ~226
   const circumference = 2 * Math.PI * 36;
-  const pct = Math.min(Math.max(score, 0), 100);
+  const pct = Math.min(Math.max(safeScore, 0), 100);
   const offset = circumference * (1 - pct / 100);
 
   return (
@@ -88,7 +90,7 @@ export function HealthScoreBadge({
             colors.text
           }
         >
-          {Math.round(score)}
+          {Math.round(safeScore)}
         </span>
       </div>
       <div className="flex flex-col">
