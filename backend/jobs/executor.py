@@ -1806,7 +1806,7 @@ def execute_run_recommendations(
             portfolio = stage2.get(
                 "portfolio_summary", {},
             )
-            if not portfolio.get("holdings"):
+            if not portfolio.get("total_holdings"):
                 _logger.info(
                     "[recommendations] User %s: "
                     "empty portfolio, skip",

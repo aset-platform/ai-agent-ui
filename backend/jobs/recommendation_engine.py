@@ -502,48 +502,54 @@ def _categorize_holding(
 # ── PG helpers (deferred imports, safe fallback) ─────
 
 
+def _sync_pg_url() -> str:
+    """Get sync PG URL (psycopg2) from settings."""
+    from config import get_settings
+
+    url = get_settings().database_url
+    # Convert async URL to sync
+    return url.replace(
+        "postgresql+asyncpg://",
+        "postgresql://",
+    )
+
+
 def _get_nifty50_tickers() -> set[str]:
     """Load Nifty 50 tickers from stock_tags PG table.
 
-    Returns empty set on any failure.
+    Uses sync psycopg2 connection (safe in thread
+    pool workers). Returns empty set on any failure.
     """
     try:
-        from sqlalchemy import select as sa_select
-
-        from backend.db.engine import session_factory
-        from backend.db.models.stock_master import (
-            StockMaster,
+        from sqlalchemy import (
+            create_engine,
+            select as sa_select,
+            text,
         )
-        from backend.db.models.stock_tag import StockTag
+        from sqlalchemy.orm import Session
+        from sqlalchemy.pool import NullPool
 
-        import asyncio
+        from db.models.stock_master import StockMaster
+        from db.models.stock_tag import StockTag
 
-        async def _fetch() -> set[str]:
-            async with session_factory() as s:
-                stmt = (
-                    sa_select(StockMaster.yf_ticker)
-                    .join(
-                        StockTag,
-                        StockTag.stock_id
-                        == StockMaster.id,
-                    )
-                    .where(StockTag.tag == "nifty50")
-                    .where(StockTag.removed_at.is_(None))
+        engine = create_engine(
+            _sync_pg_url(), poolclass=NullPool,
+        )
+        with Session(engine) as s:
+            stmt = (
+                sa_select(StockMaster.yf_ticker)
+                .join(
+                    StockTag,
+                    StockTag.stock_id
+                    == StockMaster.id,
                 )
-                result = await s.execute(stmt)
-                return {r[0] for r in result.all()}
-
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import concurrent.futures
-
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=1,
-            ) as pool:
-                return pool.submit(
-                    asyncio.run, _fetch(),
-                ).result(timeout=10)
-        return asyncio.run(_fetch())
+                .where(StockTag.tag == "nifty50")
+                .where(
+                    StockTag.removed_at.is_(None)
+                )
+            )
+            result = s.execute(stmt)
+            return {r[0] for r in result.all()}
     except Exception:
         _logger.warning(
             "Failed to load nifty50 tickers from PG",
@@ -555,31 +561,30 @@ def _get_nifty50_tickers() -> set[str]:
 def _get_user_watchlist(user_id: str) -> set[str]:
     """Load user's watchlist tickers from PG.
 
-    Returns empty set on any failure.
+    Uses sync psycopg2 connection (safe in thread
+    pool workers). Returns empty set on any failure.
     """
     try:
-        from auth.repo.repository import UserRepository
+        from sqlalchemy import (
+            create_engine,
+            select as sa_select,
+        )
+        from sqlalchemy.orm import Session
+        from sqlalchemy.pool import NullPool
 
-        import asyncio
+        from db.models.user_ticker import UserTicker
 
-        async def _fetch() -> set[str]:
-            repo = UserRepository()
-            tickers = await repo.get_user_tickers(
-                user_id,
+        engine = create_engine(
+            _sync_pg_url(), poolclass=NullPool,
+        )
+        with Session(engine) as s:
+            stmt = (
+                sa_select(UserTicker.ticker).where(
+                    UserTicker.user_id == user_id,
+                )
             )
-            return set(tickers)
-
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import concurrent.futures
-
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=1,
-            ) as pool:
-                return pool.submit(
-                    asyncio.run, _fetch(),
-                ).result(timeout=10)
-        return asyncio.run(_fetch())
+            result = s.execute(stmt)
+            return {r[0] for r in result.all()}
     except Exception:
         _logger.warning(
             "Failed to load watchlist for user %s",
