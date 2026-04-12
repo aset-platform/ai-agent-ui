@@ -181,7 +181,7 @@ def create_recommendation_router() -> APIRouter:
 
         resp = _build_run_response(run, recs)
         body = resp.model_dump_json()
-        cache.setex(ck, TTL_STABLE, body)
+        cache.set(ck, body, TTL_STABLE)
         return Response(
             content=body,
             media_type="application/json",
