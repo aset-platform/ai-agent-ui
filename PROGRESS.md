@@ -2,6 +2,32 @@
 
 ---
 
+# Session: Apr 13, 2026 (evening) — Sprint 6: Market Ticker (ASETPLTFRM-304)
+
+## Branch: `feature/sprint6` | 10 commits | 5 SP
+
+### Market Ticker — Nifty 50 + Sensex Header
+- Backend `GET /v1/market/indices`: dual-source NSE India + Yahoo Finance, JWT-protected
+- NSE India: cookie-based httpx session for `/api/allIndices`, auto-refresh on 403
+- Yahoo Finance: cookie + crumb auth for `^BSESN` (Sensex), shared `_fetch_yahoo_quote()` also used as Nifty `^NSEI` fallback
+- Redis cache: `market:indices` key, 30s TTL (market open) / 300s (closed)
+- PG persistence: `stocks.market_indices` single-row table (id=1 check constraint), survives restart
+- Market hours gating: Mon-Fri 09:00-15:30 IST, zero upstream calls off-hours
+- First-call-of-day seeding: fetches upstream once even off-hours if `fetched_at` is from previous day (IST)
+- Fallback chain: Redis → PG (off-hours) → upstream → stale PG → 503
+- Frontend `MarketTicker.tsx`: 30s `setInterval` poll via `apiFetch`, green/red change %, "Closed" label
+- Mounted in `AppHeader.tsx` center gap, `hidden md:flex` (hidden on mobile)
+- 11 backend tests: market hours boundaries, cache hit, off-hours PG serve, first-call-of-day seed, 503 fallback
+
+### Bugs Fixed During Implementation
+- `date.today()` returns UTC in Docker → fixed to `datetime.now(IST).date()` for seed check
+- `apiFetch("/market/indices")` hits Next.js not backend → fixed to `${API_URL}/market/indices`
+
+### Jira
+- ASETPLTFRM-304: Done (Market Ticker, 5 SP, Epic: Dashboard & Visualization)
+
+---
+
 # Session: Apr 13, 2026 — Sprint 6: Chat Agent Hardening + Portfolio History
 
 ## Branch: `feature/sprint6`

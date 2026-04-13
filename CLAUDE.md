@@ -42,7 +42,7 @@ All pages fully migrated from Dash to Next.js.
 |---------|------|-------------|-------|
 | Backend | 8181 | `backend/main.py` | Python 3.12, FastAPI, LangChain 1.x, SQLAlchemy 2.0 async |
 | Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19, lightweight-charts |
-| PostgreSQL | 5432 | Docker | pgvector/pgvector:pg16 (OLTP: 17 tables + pgvector) |
+| PostgreSQL | 5432 | Docker | pgvector/pgvector:pg16 (OLTP: 18 tables + pgvector) |
 | Redis | 6379 | Docker | Redis 7 Alpine |
 | Docs | 8000 | Docker | MkDocs Material 9 (squidfunk) |
 | Alembic | — | `backend/db/migrations/` | Schema migrations for PostgreSQL |
@@ -145,6 +145,7 @@ append-only analytics.
 | `stocks.recommendation_runs` | `backend/db/models/recommendation.py` | Smart Funnel run metadata |
 | `stocks.recommendations` | `backend/db/models/recommendation.py` | Individual recs with data_signals JSONB |
 | `stocks.recommendation_outcomes` | `backend/db/models/recommendation.py` | 30/60/90d outcome checkpoints |
+| `stocks.market_indices` | `backend/db/models/market_index.py` | Single-row ticker cache (Nifty+Sensex) |
 | `public.user_memories` | `backend/db/models/memory.py` | pgvector semantic memory (768-dim) |
 | `public.conversation_contexts` | `backend/db/models/conversation_context.py` | Chat context persistence (cross-session) |
 | `stock_master` | `backend/db/models/stock_master.py` | Pipeline universe (symbol, yf_ticker, ISIN) |
@@ -169,7 +170,7 @@ Note: `scheduler_runs` and `scheduled_jobs` migrated to PG
 
 - `backend/db/engine.py` — async `session_factory` (asyncpg driver,
   `pool_pre_ping=True`)
-- `backend/db/models/` — 16 SQLAlchemy ORM models (FK cascade,
+- `backend/db/models/` — 18 SQLAlchemy ORM models (FK cascade,
   JSONB, composite PK, indexes, pgvector)
 - `backend/db/migrations/` — Alembic async migrations
 - `auth/repo/repository.py` — `UserRepository` facade
@@ -351,6 +352,12 @@ Run `list_memories` to browse all topics. Key categories:
   class, not `useTheme()`. Set `notMerge={true}` + `key`.
 - **Perf script login**: Use `type()` not `fill()` — React
   `onChange` needs keystroke events.
+- **`apiFetch` requires full URL**: Always use
+  `${API_URL}/path` not relative `/path`. Relative paths
+  hit Next.js (port 3000), not the backend (port 8181).
+- **Market ticker**: `MarketTicker` in `AppHeader.tsx` center.
+  NSE India + Yahoo Finance dual-source, 30s poll, PG+Redis.
+  Off-hours: zero upstream calls (serves PG data).
 
 ### Testing & Config
 
