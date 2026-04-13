@@ -18,9 +18,36 @@ import json
 import logging
 import time as _time
 
+import asyncio
+import concurrent.futures
+
 import pandas as pd
 
 _logger = logging.getLogger(__name__)
+
+
+def _run_async_safe(coro):
+    """Run an async coroutine safely from any context.
+
+    Works in:
+    - Sync context (scheduler thread pool) — asyncio.run()
+    - Async context (uvicorn/chat) — thread offload
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        # Inside uvicorn's event loop — offload to
+        # a new thread with its own loop.
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+        ) as pool:
+            return pool.submit(
+                asyncio.run, coro,
+            ).result(timeout=30)
+    return asyncio.run(coro)
 
 # ── Composite score weights (sum = 1.0) ───────────
 
@@ -235,7 +262,7 @@ def check_recommendation_quota(
         return count, latest_id
 
     try:
-        count, latest_id = asyncio.run(_check())
+        count, latest_id = _run_async_safe(_check())
     except Exception:
         # Best-effort — allow on failure
         _logger.debug(
@@ -696,7 +723,7 @@ def _get_nifty50_tickers() -> set[str]:
             await eng.dispose()
             return tickers
 
-        return asyncio.run(_fetch())
+        return _run_async_safe(_fetch())
     except Exception:
         _logger.warning(
             "Failed to load nifty50 tickers from PG",
@@ -735,7 +762,7 @@ def _get_user_watchlist(user_id: str) -> set[str]:
             await eng.dispose()
             return tickers
 
-        return asyncio.run(_fetch())
+        return _run_async_safe(_fetch())
     except Exception:
         _logger.warning(
             "Failed to load watchlist for user %s",
