@@ -2154,6 +2154,12 @@ def create_app(
         create_recommendation_router(),
         prefix="/v1",
     )
+    from market_routes import create_market_router
+
+    app.include_router(
+        create_market_router(),
+        prefix="/v1",
+    )
 
     # Bulk data import/export endpoints.
     from bulk_data import create_bulk_router
