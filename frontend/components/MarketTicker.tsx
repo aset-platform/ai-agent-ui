@@ -60,20 +60,18 @@ function IndexTick({
       <span className="text-gray-800 dark:text-gray-200 font-semibold font-mono text-xs">
         {formatPrice(data.price)}
       </span>
-      {closed ? (
+      <span
+        className={`${colorClass} text-[11px] font-medium flex items-center gap-0.5`}
+      >
+        <span>{arrow}</span>
+        <span>
+          {positive ? "+" : "-"}
+          {Math.abs(data.change_pct).toFixed(2)}%
+        </span>
+      </span>
+      {closed && (
         <span className="text-gray-400 dark:text-gray-600 text-[10px]">
           Closed
-        </span>
-      ) : (
-        <span
-          className={`${colorClass} text-[11px] font-medium flex items-center gap-0.5`}
-        >
-          <span>{arrow}</span>
-          <span>{Math.abs(data.change).toFixed(2)}</span>
-          <span className="opacity-80">
-            ({positive ? "+" : ""}
-            {data.change_pct.toFixed(2)}%)
-          </span>
         </span>
       )}
     </div>
