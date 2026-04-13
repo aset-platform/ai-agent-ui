@@ -335,7 +335,33 @@ def guardrail(state: dict) -> dict:
             )
             # Fall through to financial relevance
         else:
-            # No keywords → LLM topic classifier
+            # No keywords matched. If the query
+            # mentions a ticker and we have a recent
+            # agent context, treat as follow-up
+            # (e.g. "fundamentals of X" after recs).
+            _has_ticker = bool(
+                _TICKER_PATTERN.search(user_input)
+            )
+            if _has_ticker and _ctx.last_agent:
+                _logger.info(
+                    "Ticker mention + context "
+                    "→ follow-up to %s",
+                    _ctx.last_agent,
+                )
+                return {
+                    "tickers": _merge_tickers(
+                        _ctx.tickers_mentioned,
+                        user_input,
+                    ),
+                    "next_agent": _ctx.last_agent,
+                    "intent": (
+                        _ctx.last_intent
+                        or "follow_up"
+                    ),
+                    "start_time_ns": start_ns,
+                }
+
+            # No ticker → LLM topic classifier
             # for ambiguous messages
             try:
                 from agents.nodes.topic_classifier import (

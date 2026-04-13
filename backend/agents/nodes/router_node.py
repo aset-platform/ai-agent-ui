@@ -103,6 +103,10 @@ _INTENT_MAP: dict[str, set[str]] = {
         "hit rate",
         "track record",
         "pick stocks",
+        "why recommended",
+        "why was it recommended",
+        "recommendation detail",
+        "piotroski",
     },
 }
 
