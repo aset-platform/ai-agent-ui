@@ -4,6 +4,36 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Apr 13, 2026 — Market Ticker: Nifty 50 + Sensex Header
+
+### Features
+- Real-time Nifty 50 + Sensex ticker in AppHeader center
+- Backend `GET /v1/market/indices` — JWT-protected, dual-source
+- NSE India `/api/allIndices` (primary for Nifty, cookie session)
+- Yahoo Finance v7 `^BSESN` (Sensex) + `^NSEI` (Nifty fallback)
+- Redis cache: 30s TTL (market open), 300s (closed)
+- PG persistence: `stocks.market_indices` single-row table
+- Market hours gating: Mon-Fri 09:00–15:30 IST, zero upstream off-hours
+- First-call-of-day seeding: one upstream fetch if no data for today
+- Frontend 30s polling via `apiFetch` + `setInterval`
+- Green/red change % + "Closed" label off-hours
+- Hidden on mobile (`hidden md:flex`)
+
+### Bug Fixes
+- `date.today()` returns UTC in Docker — fixed to `datetime.now(IST).date()`
+- `apiFetch` relative URL hits Next.js not backend — fixed to `${API_URL}/...`
+
+### Database
+- New table: `stocks.market_indices` (id, nifty_data JSONB, sensex_data JSONB, market_state, fetched_at)
+- Alembic migration: `a1b2c3d4e5f6_add_market_indices_table`
+
+### Tests
+- 11 backend tests: market hours boundaries, cache hit, off-hours PG, seed logic, 503 fallback
+
+### Jira: ASETPLTFRM-304 (done, 5 SP)
+
+---
+
 ## Apr 11–12, 2026 — Forecast Optimization + Scheduler Features + Data Health
 
 ### Performance (Forecast Pipeline)

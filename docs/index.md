@@ -20,6 +20,7 @@ A fullstack agentic chat application with stock analysis, Prophet forecasting, a
 - **LLM Observability dashboard** — real-time token tracking, per-model TPD/RPD bars, cascade event log
 - **Piotroski F-Score screening** — fundamental scoring (747 stocks), market filter (India/US), index tags (Nifty 50/100/500)
 - **Data Health dashboard** — 5 health cards with fix buttons, NaN cleanup, backfill from yfinance
+- **Live market ticker** — Nifty 50 + Sensex in header, dual-source (NSE India + Yahoo Finance), 30s refresh, PG-persisted for restart resilience
 
 ---
 
@@ -106,7 +107,7 @@ ai-agent-ui/
 │   ├── tools/                  # 32 LLM-callable tools
 │   ├── jobs/                   # Scheduler executors
 │   ├── pipeline/               # CLI pipeline (19 commands)
-│   ├── db/models/              # 16 ORM models
+│   ├── db/models/              # 18 ORM models
 │   └── llm_fallback.py         # N-tier cascade
 ├── auth/                       # JWT + RBAC + OAuth
 ├── stocks/repository.py        # Iceberg CRUD (DuckDB-first)
