@@ -23,6 +23,13 @@ _PORTFOLIO_SYSTEM_PROMPT = (
     "or value → call get_portfolio_holdings first.\n"
     "- If the user asks about performance → call "
     "get_portfolio_performance.\n"
+    "- If the user asks about historical portfolio "
+    "values, daily P&L over a period, or 'how did "
+    "my portfolio do last week/month' → call "
+    "get_portfolio_history with the period.\n"
+    "- If the user asks to compare two periods "
+    "(e.g. 'this week vs last month') → call "
+    "get_portfolio_comparison with both periods.\n"
     "- If the user asks for a summary → call "
     "get_portfolio_summary.\n"
     "- If the user asks about risk → call "
@@ -75,6 +82,8 @@ PORTFOLIO_CONFIG = SubAgentConfig(
     tool_names=[
         "get_portfolio_holdings",
         "get_portfolio_performance",
+        "get_portfolio_history",
+        "get_portfolio_comparison",
         "get_sector_allocation",
         "get_dividend_projection",
         "suggest_rebalancing",

@@ -76,6 +76,8 @@ def setup_tools(registry):
     try:
         from tools.portfolio_tools import (
             get_dividend_projection,
+            get_portfolio_comparison,
+            get_portfolio_history,
             get_portfolio_holdings,
             get_portfolio_performance,
             get_portfolio_summary,
@@ -86,6 +88,8 @@ def setup_tools(registry):
 
         registry.register(get_portfolio_holdings)
         registry.register(get_portfolio_performance)
+        registry.register(get_portfolio_history)
+        registry.register(get_portfolio_comparison)
         registry.register(get_sector_allocation)
         registry.register(get_dividend_projection)
         registry.register(suggest_rebalancing)

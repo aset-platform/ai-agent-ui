@@ -9,7 +9,7 @@ company info, dividends, and forecasts.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -830,5 +830,432 @@ def get_risk_metrics() -> str:
             lines.append(
                 f"- {t1} ↔ {t2}: {c:.2f}"
             )
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------
+# Shared: date parsing + daily portfolio computation
+# ---------------------------------------------------------------
+
+_PERIOD_DAYS: dict[str, int] = {
+    "1D": 1, "1W": 7, "1M": 30, "3M": 90,
+    "6M": 180, "1Y": 365, "ALL": 3650,
+}
+
+
+def _parse_period(
+    period: str,
+    start_date: str = "",
+    end_date: str = "",
+) -> tuple[date, date]:
+    """Parse period or date range into start/end.
+
+    Supports:
+    - Period strings: 1W, 1M, 3M, 6M, 1Y, ALL
+    - ISO range: "2026-01-01:2026-03-31"
+    - Explicit start_date / end_date overrides
+    """
+    today = date.today()
+    if start_date:
+        s = date.fromisoformat(start_date)
+        e = (
+            date.fromisoformat(end_date)
+            if end_date else today
+        )
+        return s, e
+    if ":" in period:
+        parts = period.split(":")
+        return (
+            date.fromisoformat(parts[0].strip()),
+            date.fromisoformat(parts[1].strip()),
+        )
+    days = _PERIOD_DAYS.get(
+        period.upper(), 30,
+    )
+    return today - timedelta(days=days), today
+
+
+def _compute_daily_portfolio(
+    user_id: str,
+    start: date,
+    end: date,
+) -> tuple[pd.DataFrame, dict]:
+    """Compute daily portfolio value series.
+
+    Returns (daily_df, summary_dict).
+
+    daily_df columns: date, value, invested,
+    daily_pnl, daily_return_pct, per-ticker values.
+
+    summary_dict keys: total_return_pct,
+    max_drawdown_pct, best_day, worst_day,
+    ann_volatility, invested, final_value,
+    currency_mix.
+    """
+    repo = _require_repo()
+    holdings = repo.get_portfolio_holdings(user_id)
+
+    if holdings.empty:
+        return pd.DataFrame(), {}
+
+    # Build per-ticker close × qty series
+    ticker_series: dict[str, pd.Series] = {}
+    invested_total = 0.0
+    ccy_set: set[str] = set()
+    for _, h in holdings.iterrows():
+        tkr = h["ticker"]
+        qty = float(h["quantity"])
+        avg_p = float(h.get("avg_price", 0))
+        ccy = h.get("currency", "USD")
+        ccy_set.add(ccy)
+        invested_total += qty * avg_p
+        ohlcv = repo.get_ohlcv(
+            tkr, start=start, end=end,
+        )
+        if ohlcv.empty:
+            continue
+        ohlcv["date"] = pd.to_datetime(
+            ohlcv["date"],
+        )
+        ohlcv = ohlcv.set_index("date").sort_index()
+        ticker_series[tkr] = (
+            ohlcv["close"].astype(float) * qty
+        )
+
+    if not ticker_series:
+        return pd.DataFrame(), {}
+
+    # Combine into portfolio daily value
+    pf = pd.DataFrame(ticker_series)
+    pf = pf.ffill().dropna(how="all")
+    daily_value = pf.sum(axis=1)
+
+    if len(daily_value) < 2:
+        return pd.DataFrame(), {}
+
+    # Build result DataFrame
+    df = pd.DataFrame({
+        "date": daily_value.index,
+        "value": daily_value.values,
+    })
+    df["invested"] = invested_total
+    df["daily_pnl"] = df["value"] - invested_total
+    df["daily_return_pct"] = (
+        (df["value"] / invested_total - 1) * 100
+    )
+
+    # Add per-ticker columns
+    for tkr in ticker_series:
+        if tkr in pf.columns:
+            df[tkr] = pf[tkr].values
+
+    # Summary metrics
+    returns = daily_value.pct_change().dropna()
+    total_ret = (
+        (daily_value.iloc[-1] / daily_value.iloc[0]
+         - 1) * 100
+    )
+    # Max drawdown
+    cummax = daily_value.cummax()
+    drawdown = (daily_value - cummax) / cummax * 100
+    max_dd = float(drawdown.min())
+    # Best / worst day
+    best_idx = returns.idxmax()
+    worst_idx = returns.idxmin()
+    ann_vol = float(returns.std() * np.sqrt(252) * 100)
+
+    summary = {
+        "total_return_pct": round(total_ret, 2),
+        "max_drawdown_pct": round(max_dd, 2),
+        "best_day": (
+            f"{best_idx.date()} "
+            f"({returns[best_idx] * 100:+.2f}%)"
+        ),
+        "worst_day": (
+            f"{worst_idx.date()} "
+            f"({returns[worst_idx] * 100:+.2f}%)"
+        ),
+        "ann_volatility": round(ann_vol, 2),
+        "invested": round(invested_total, 2),
+        "final_value": round(
+            float(daily_value.iloc[-1]), 2,
+        ),
+        "start_date": str(
+            daily_value.index[0].date(),
+        ),
+        "end_date": str(
+            daily_value.index[-1].date(),
+        ),
+        "trading_days": len(daily_value),
+        "currency_mix": sorted(ccy_set),
+    }
+    return df, summary
+
+
+# ---------------------------------------------------------------
+# Tool 8: get_portfolio_history
+# ---------------------------------------------------------------
+
+
+@tool
+def get_portfolio_history(
+    period: str = "1M",
+    start_date: str = "",
+    end_date: str = "",
+) -> str:
+    """Get daily portfolio value series over a period.
+
+    Returns daily portfolio values, P&L, and summary
+    metrics (total return, drawdown, volatility).
+
+    Use for questions like "how did my portfolio do
+    last month?" or "portfolio performance since
+    January".
+
+    Args:
+        period: Predefined period (1W, 1M, 3M, 6M,
+            1Y, ALL) or ISO range "YYYY-MM-DD:
+            YYYY-MM-DD".
+        start_date: ISO date override for start.
+            If set, overrides period.
+        end_date: ISO date override for end.
+            Defaults to today.
+
+    Source: Iceberg ohlcv + portfolio_transactions.
+    """
+    user_id = _get_user_or_error()
+    start, end = _parse_period(
+        period, start_date, end_date,
+    )
+
+    df, summary = _compute_daily_portfolio(
+        user_id, start, end,
+    )
+
+    if df.empty:
+        return (
+            "No portfolio data available for the "
+            "requested period. Check that you have "
+            "holdings and OHLCV data exists."
+        )
+
+    ccy_list = summary.get("currency_mix", [])
+    ccy_str = (
+        ", ".join(ccy_list) if ccy_list else "USD"
+    )
+    sym = _CCY_SYMBOLS.get(
+        ccy_list[0] if len(ccy_list) == 1
+        else "USD",
+        "$",
+    )
+
+    lines = [
+        "[Source: iceberg]",
+        f"**Portfolio History** "
+        f"({summary['start_date']} to "
+        f"{summary['end_date']})\n",
+        f"Currency: {ccy_str} | "
+        f"Trading Days: {summary['trading_days']}"
+        "\n",
+        "| Metric | Value |",
+        "|--------|-------|",
+        f"| Invested | {sym}"
+        f"{summary['invested']:,.2f} |",
+        f"| Current Value | {sym}"
+        f"{summary['final_value']:,.2f} |",
+        f"| Total Return | "
+        f"{summary['total_return_pct']:+.2f}% |",
+        f"| Max Drawdown | "
+        f"{summary['max_drawdown_pct']:.2f}% |",
+        f"| Ann. Volatility | "
+        f"{summary['ann_volatility']:.2f}% |",
+        f"| Best Day | "
+        f"{summary['best_day']} |",
+        f"| Worst Day | "
+        f"{summary['worst_day']} |",
+    ]
+
+    # Last 10 daily values
+    tail = df.tail(10)
+    lines.append(
+        "\n**Recent Daily Values**\n"
+    )
+    lines.append(
+        "| Date | Value | P&L | Return% |"
+    )
+    lines.append(
+        "|------|-------|-----|---------|"
+    )
+    for _, row in tail.iterrows():
+        d = str(row["date"])[:10]
+        v = row["value"]
+        pnl = row["daily_pnl"]
+        ret = row["daily_return_pct"]
+        lines.append(
+            f"| {d} | {sym}{v:,.2f} | "
+            f"{sym}{pnl:+,.2f} | "
+            f"{ret:+.2f}% |"
+        )
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------
+# Tool 9: get_portfolio_comparison
+# ---------------------------------------------------------------
+
+
+@tool
+def get_portfolio_comparison(
+    period1: str = "1M",
+    period2: str = "1W",
+) -> str:
+    """Compare portfolio performance across two periods.
+
+    Returns side-by-side metrics for both periods
+    including return, volatility, drawdown, and top
+    movers.
+
+    Use for questions like "compare this week vs
+    last month" or "how did March compare to
+    February?".
+
+    Args:
+        period1: First period (e.g. "1M", "3M", or
+            "2026-01-01:2026-01-31").
+        period2: Second period (e.g. "1W", or
+            "2026-02-01:2026-02-28").
+
+    Source: Iceberg ohlcv + portfolio_transactions.
+    """
+    user_id = _get_user_or_error()
+
+    s1, e1 = _parse_period(period1)
+    s2, e2 = _parse_period(period2)
+
+    df1, sum1 = _compute_daily_portfolio(
+        user_id, s1, e1,
+    )
+    df2, sum2 = _compute_daily_portfolio(
+        user_id, s2, e2,
+    )
+
+    if df1.empty and df2.empty:
+        return (
+            "No portfolio data available for "
+            "either period."
+        )
+
+    def _metrics(s: dict) -> dict:
+        if not s:
+            return {
+                "range": "N/A",
+                "return": "N/A",
+                "dd": "N/A",
+                "vol": "N/A",
+                "best": "N/A",
+                "worst": "N/A",
+                "value": "N/A",
+            }
+        return {
+            "range": (
+                f"{s['start_date']} to "
+                f"{s['end_date']}"
+            ),
+            "return": (
+                f"{s['total_return_pct']:+.2f}%"
+            ),
+            "dd": f"{s['max_drawdown_pct']:.2f}%",
+            "vol": f"{s['ann_volatility']:.2f}%",
+            "best": s["best_day"],
+            "worst": s["worst_day"],
+            "value": f"{s['final_value']:,.2f}",
+        }
+
+    m1 = _metrics(sum1)
+    m2 = _metrics(sum2)
+
+    lines = [
+        "[Source: iceberg]",
+        "**Portfolio Comparison**\n",
+        "| Metric | Period 1 | Period 2 |",
+        "|--------|----------|----------|",
+        f"| Range | {m1['range']} | "
+        f"{m2['range']} |",
+        f"| Return | {m1['return']} | "
+        f"{m2['return']} |",
+        f"| Max Drawdown | {m1['dd']} | "
+        f"{m2['dd']} |",
+        f"| Volatility | {m1['vol']} | "
+        f"{m2['vol']} |",
+        f"| Best Day | {m1['best']} | "
+        f"{m2['best']} |",
+        f"| Worst Day | {m1['worst']} | "
+        f"{m2['worst']} |",
+        f"| Final Value | {m1['value']} | "
+        f"{m2['value']} |",
+    ]
+
+    # Top movers: compare per-ticker returns
+    # between periods
+    if not df1.empty and not df2.empty:
+        tickers = set(
+            c for c in df1.columns
+            if c not in (
+                "date", "value", "invested",
+                "daily_pnl", "daily_return_pct",
+            )
+        ) & set(
+            c for c in df2.columns
+            if c not in (
+                "date", "value", "invested",
+                "daily_pnl", "daily_return_pct",
+            )
+        )
+        if tickers:
+            movers: list[tuple[str, float, float]] = []
+            for tkr in tickers:
+                s1_vals = df1[tkr].dropna()
+                s2_vals = df2[tkr].dropna()
+                if len(s1_vals) < 2 or len(s2_vals) < 2:
+                    continue
+                r1 = (
+                    (s1_vals.iloc[-1]
+                     / s1_vals.iloc[0] - 1)
+                    * 100
+                )
+                r2 = (
+                    (s2_vals.iloc[-1]
+                     / s2_vals.iloc[0] - 1)
+                    * 100
+                )
+                movers.append((tkr, r1, r2))
+            if movers:
+                movers.sort(
+                    key=lambda x: abs(x[1] - x[2]),
+                    reverse=True,
+                )
+                lines.append(
+                    "\n**Top Movers** "
+                    "(biggest change between periods)"
+                    "\n"
+                )
+                lines.append(
+                    "| Ticker | Period 1 | "
+                    "Period 2 | Delta |"
+                )
+                lines.append(
+                    "|--------|----------|"
+                    "----------|-------|"
+                )
+                for tkr, r1, r2 in movers[:5]:
+                    delta = r2 - r1
+                    lines.append(
+                        f"| {tkr} | "
+                        f"{r1:+.2f}% | "
+                        f"{r2:+.2f}% | "
+                        f"{delta:+.2f}% |"
+                    )
 
     return "\n".join(lines)
