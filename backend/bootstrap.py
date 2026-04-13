@@ -146,11 +146,13 @@ def setup_tools(registry):
     try:
         from tools.recommendation_tools import (
             generate_recommendations,
+            get_recommendation_detail,
             get_recommendation_history,
             get_recommendation_performance,
         )
 
         registry.register(generate_recommendations)
+        registry.register(get_recommendation_detail)
         registry.register(get_recommendation_history)
         registry.register(
             get_recommendation_performance,

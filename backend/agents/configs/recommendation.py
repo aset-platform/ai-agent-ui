@@ -28,12 +28,16 @@ _RECOMMENDATION_SYSTEM_PROMPT = (
     "- If you need portfolio context → call "
     "get_portfolio_holdings or get_sector_allocation "
     "or get_risk_metrics.\n"
-    "- If the user asks about fundamentals, company "
-    "info, PE ratio, beta, or details of a specific "
-    "stock → call get_stock_info with the ticker.\n"
-    "- If the user asks for technical analysis, RSI, "
-    "MACD, or price analysis → call "
-    "analyse_stock_price with the ticker.\n"
+    "- If the user asks about fundamentals, quality, "
+    "Piotroski, forecast, or 'why was this stock "
+    "recommended' → call get_recommendation_detail "
+    "with the ticker. This returns Piotroski F-Score "
+    "breakdown, technicals, forecast, and sentiment.\n"
+    "- If the user asks for live company info, PE "
+    "ratio, beta, or current price → call "
+    "get_stock_info with the ticker.\n"
+    "- If the user asks for technical analysis or "
+    "price chart → call analyse_stock_price.\n"
     "- NEVER fabricate tickers, prices, values, "
     "percentages, or any numbers.\n\n"
     "CRITICAL — SINGLE TOOL CALL RULE:\n"
@@ -80,5 +84,6 @@ RECOMMENDATION_CONFIG = SubAgentConfig(
         "get_risk_metrics",
         "get_stock_info",
         "analyse_stock_price",
+        "get_recommendation_detail",
     ],
 )

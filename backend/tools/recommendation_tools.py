@@ -545,3 +545,330 @@ def get_recommendation_performance(
         return "\n".join(lines)
 
     return _run_async(_performance())
+
+
+# -----------------------------------------------------------
+# Tool 4: get_recommendation_detail
+# -----------------------------------------------------------
+
+
+@tool
+def get_recommendation_detail(
+    ticker: str,
+) -> str:
+    """Get comprehensive fundamentals, technicals,
+    forecast, and quality data for a specific stock.
+
+    Pulls from all Iceberg analytics tables to show
+    why a stock was recommended and its current state.
+
+    Args:
+        ticker: Stock symbol (e.g. AHLUCONT.NS).
+
+    Source: DuckDB (Iceberg tables).
+    """
+    from db.duckdb_engine import (
+        get_connection,
+        _create_view,
+    )
+
+    ticker = ticker.strip().upper()
+    conn = get_connection()
+    sections: list[str] = []
+
+    try:
+        # ── Company Info ──────────────────────────
+        _create_view(conn, "stocks.company_info")
+        ci = conn.execute(
+            "SELECT * FROM company_info "
+            f"WHERE ticker = '{ticker}' "
+            "ORDER BY fetched_at DESC LIMIT 1",
+        ).fetchone()
+        ci_cols = [
+            d[0]
+            for d in conn.description
+        ] if conn.description else []
+        ci_d = (
+            dict(zip(ci_cols, ci)) if ci else {}
+        )
+
+        if ci_d:
+            name = ci_d.get(
+                "company_name", ticker,
+            )
+            sections.append(
+                f"## {name} ({ticker})\n"
+            )
+            sections.append("### Company Profile")
+            sections.append(
+                f"| Metric | Value |"
+            )
+            sections.append("| --- | --- |")
+            _ci_fields = [
+                ("Sector", "sector"),
+                ("Industry", "industry"),
+                ("Market Cap", "market_cap"),
+                ("Current Price", "current_price"),
+                ("P/E Ratio", "pe_ratio"),
+                ("Price/Book", "price_to_book"),
+                ("Book Value", "book_value"),
+                ("Beta", "beta"),
+                ("Dividend Yield", "dividend_yield"),
+                ("Earnings Growth", "earnings_growth"),
+                ("Revenue Growth", "revenue_growth"),
+                ("Profit Margins", "profit_margins"),
+                ("Analyst Target", "analyst_target"),
+                ("Analyst Rating", "recommendation"),
+            ]
+            for label, key in _ci_fields:
+                val = ci_d.get(key)
+                if val is not None:
+                    if key == "market_cap":
+                        val = f"{val / 1e9:.2f}B"
+                    elif key in (
+                        "dividend_yield",
+                        "earnings_growth",
+                        "revenue_growth",
+                        "profit_margins",
+                    ):
+                        val = f"{val * 100:.1f}%"
+                    elif key == "recommendation":
+                        labels = {
+                            1: "Strong Buy",
+                            2: "Buy",
+                            3: "Hold",
+                            4: "Sell",
+                            5: "Strong Sell",
+                        }
+                        val = labels.get(
+                            round(val),
+                            f"{val:.1f}",
+                        )
+                    elif isinstance(val, float):
+                        val = f"{val:.2f}"
+                    sections.append(
+                        f"| {label} | {val} |"
+                    )
+        else:
+            sections.append(
+                f"## {ticker}\n"
+                "No company info available."
+            )
+
+        # ── Piotroski F-Score ─────────────────────
+        _create_view(conn, "stocks.piotroski_scores")
+        pi = conn.execute(
+            "SELECT * FROM piotroski_scores "
+            f"WHERE ticker = '{ticker}' "
+            "ORDER BY score_date DESC LIMIT 1",
+        ).fetchone()
+        pi_cols = [
+            d[0]
+            for d in conn.description
+        ] if conn.description else []
+        pi_d = (
+            dict(zip(pi_cols, pi)) if pi else {}
+        )
+
+        if pi_d:
+            score = pi_d.get("total_score", 0)
+            quality = (
+                "Strong"
+                if score >= 7
+                else "Moderate"
+                if score >= 4
+                else "Weak"
+            )
+            sections.append(
+                f"\n### Piotroski F-Score: "
+                f"**{score}/9** ({quality})"
+            )
+            _pi_criteria = [
+                ("ROA positive", "roa_positive"),
+                (
+                    "Operating CF positive",
+                    "operating_cf_positive",
+                ),
+                ("ROA increasing", "roa_increasing"),
+                (
+                    "CF > Net Income",
+                    "cf_gt_net_income",
+                ),
+                (
+                    "Leverage decreasing",
+                    "leverage_decreasing",
+                ),
+                (
+                    "Current ratio up",
+                    "current_ratio_increasing",
+                ),
+                ("No dilution", "no_dilution"),
+                (
+                    "Gross margin up",
+                    "gross_margin_increasing",
+                ),
+                (
+                    "Asset turnover up",
+                    "asset_turnover_increasing",
+                ),
+            ]
+            for label, key in _pi_criteria:
+                val = pi_d.get(key)
+                icon = (
+                    "pass"
+                    if val
+                    else "fail"
+                )
+                sections.append(
+                    f"- {label}: **{icon}**"
+                )
+
+        # ── Technical Analysis ────────────────────
+        _create_view(conn, "stocks.analysis_summary")
+        an = conn.execute(
+            "SELECT * FROM analysis_summary "
+            f"WHERE ticker = '{ticker}' "
+            "ORDER BY analysis_date DESC "
+            "LIMIT 1",
+        ).fetchone()
+        an_cols = [
+            d[0]
+            for d in conn.description
+        ] if conn.description else []
+        an_d = (
+            dict(zip(an_cols, an)) if an else {}
+        )
+
+        if an_d:
+            sections.append(
+                "\n### Technical Indicators"
+            )
+            sections.append(
+                "| Indicator | Value |"
+            )
+            sections.append("| --- | --- |")
+            _an_fields = [
+                ("Sharpe Ratio", "sharpe_ratio"),
+                (
+                    "Annualized Return",
+                    "annualized_return_pct",
+                ),
+                (
+                    "Volatility",
+                    "annualized_volatility_pct",
+                ),
+                (
+                    "Max Drawdown",
+                    "max_drawdown_pct",
+                ),
+                ("SMA 50", "sma_50_signal"),
+                ("SMA 200", "sma_200_signal"),
+                ("RSI", "rsi_signal"),
+                ("MACD", "macd_signal_text"),
+            ]
+            for label, key in _an_fields:
+                val = an_d.get(key)
+                if val is not None:
+                    if isinstance(val, float):
+                        val = f"{val:.2f}"
+                        if "pct" in key:
+                            val += "%"
+                    sections.append(
+                        f"| {label} | {val} |"
+                    )
+
+        # ── Forecast ──────────────────────────────
+        _create_view(conn, "stocks.forecast_runs")
+        fc = conn.execute(
+            "SELECT * FROM forecast_runs "
+            f"WHERE ticker = '{ticker}' "
+            "AND horizon_months > 0 "
+            "ORDER BY run_date DESC LIMIT 1",
+        ).fetchone()
+        fc_cols = [
+            d[0]
+            for d in conn.description
+        ] if conn.description else []
+        fc_d = (
+            dict(zip(fc_cols, fc)) if fc else {}
+        )
+
+        if fc_d:
+            sections.append("\n### Price Forecast")
+            sections.append(
+                "| Horizon | Target | Change | "
+                "Confidence |"
+            )
+            sections.append(
+                "| --- | --- | --- | --- |"
+            )
+            for h in (3, 6, 9):
+                tgt = fc_d.get(
+                    f"target_{h}m_price",
+                )
+                pct = fc_d.get(
+                    f"target_{h}m_pct_change",
+                )
+                lo = fc_d.get(f"target_{h}m_lower")
+                hi = fc_d.get(f"target_{h}m_upper")
+                if tgt is not None:
+                    band = ""
+                    if lo and hi:
+                        band = (
+                            f"{lo:.0f} – {hi:.0f}"
+                        )
+                    sections.append(
+                        f"| {h}M | "
+                        f"{tgt:.2f} | "
+                        f"{pct:+.1f}% | "
+                        f"{band} |"
+                    )
+            mape = fc_d.get("mape")
+            if mape is not None:
+                sections.append(
+                    f"\nForecast accuracy "
+                    f"(MAPE): **{mape:.1f}%**"
+                )
+
+        # ── Sentiment ─────────────────────────────
+        _create_view(conn, "stocks.sentiment_scores")
+        se = conn.execute(
+            "SELECT * FROM sentiment_scores "
+            f"WHERE ticker = '{ticker}' "
+            "ORDER BY score_date DESC LIMIT 1",
+        ).fetchone()
+        se_cols = [
+            d[0]
+            for d in conn.description
+        ] if conn.description else []
+        se_d = (
+            dict(zip(se_cols, se)) if se else {}
+        )
+
+        if se_d:
+            score = se_d.get("avg_score", 0)
+            count = se_d.get("headline_count", 0)
+            label = (
+                "Bullish"
+                if score > 0.3
+                else "Bearish"
+                if score < -0.3
+                else "Neutral"
+            )
+            sections.append(
+                f"\n### Sentiment: "
+                f"**{label}** ({score:+.2f}, "
+                f"{count} headlines)"
+            )
+
+    finally:
+        conn.close()
+
+    if not sections:
+        return (
+            f"No data found for {ticker}. "
+            "It may not be in the analysis "
+            "universe."
+        )
+
+    return "\n".join(sections)
