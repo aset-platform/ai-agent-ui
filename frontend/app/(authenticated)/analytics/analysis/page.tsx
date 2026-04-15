@@ -688,6 +688,23 @@ function ForecastTab({
                 </span>
               )}
             </h3>
+            {summary?.confidence_components?.badge && (
+              <span
+                className={`
+                  inline-flex items-center px-2 py-0.5
+                  rounded-full text-xs font-medium
+                  ${summary.confidence_components.badge === "High"
+                    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
+                    : summary.confidence_components.badge === "Medium"
+                    ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
+                    : "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
+                  }
+                `}
+                title={`Confidence: ${((summary.confidence_score ?? 0) * 100).toFixed(0)}%${summary.confidence_components.reason ? ` — ${summary.confidence_components.reason}` : ""}`}
+              >
+                {summary.confidence_components.badge}
+              </span>
+            )}
             {summary && (
               <span className="text-xs text-gray-400 dark:text-gray-500">
                 as of {summary.run_date}

@@ -337,6 +337,19 @@ def create_dashboard_router() -> APIRouter:
                         )
                     )
 
+            # Parse confidence components
+            _cc = row.get("confidence_components")
+            _cc_parsed = None
+            if _cc is not None:
+                if isinstance(_cc, dict):
+                    _cc_parsed = _cc
+                elif isinstance(_cc, str):
+                    try:
+                        import json
+                        _cc_parsed = json.loads(_cc)
+                    except Exception:
+                        pass
+
             forecasts.append(
                 TickerForecast(
                     ticker=str(row["ticker"]),
@@ -347,6 +360,10 @@ def create_dashboard_router() -> APIRouter:
                     mae=_safe(row.get("mae")),
                     rmse=_safe(row.get("rmse")),
                     mape=_safe(row.get("mape")),
+                    confidence_score=_safe(
+                        row.get("confidence_score"),
+                    ),
+                    confidence_components=_cc_parsed,
                 )
             )
 

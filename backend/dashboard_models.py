@@ -46,6 +46,8 @@ class TickerForecast(BaseModel):
     mae: float | None = None
     rmse: float | None = None
     mape: float | None = None
+    confidence_score: float | None = None
+    confidence_components: dict | None = None
 
 
 class ForecastsResponse(BaseModel):

@@ -50,6 +50,8 @@ export interface TickerForecast {
   mae: number | null;
   rmse: number | null;
   mape: number | null;
+  confidence_score: number | null;
+  confidence_components: ForecastConfidence | null;
 }
 
 export interface ForecastsResponse {
