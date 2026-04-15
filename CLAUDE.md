@@ -297,6 +297,17 @@ Run `list_memories` to browse all topics. Key categories:
   "Financial Services" not "Financials".
 - **jugaad-data timeout**: No built-in timeout. NseSource
   wraps in `asyncio.wait_for(timeout=60.0)`.
+- **Forecast regime classification**: Tickers classified by annualized
+  volatility into stable (<30%), moderate (30-60%), volatile (>60%).
+  Each regime gets different Prophet config (growth, cps, log-transform).
+- **Log-transform**: Applied for moderate/volatile regimes. Guarantees
+  non-negative predictions. `np.log(y)` before fit, `np.exp(yhat)` after.
+- **Technical bias**: RSI/MACD/volume signals dampen forecast by up to
+  ±15%, tapering over 30 days. Does NOT change model — post-processing.
+- **Confidence score**: 5-component weighted score (direction, MASE,
+  coverage, interval, data completeness). <0.25 = rejected (hidden).
+- **Sector indices for enrichment**: 10 sector index tickers (5 India,
+  5 US) ingested via bulk-download for sector relative strength.
 
 ### Database & PG
 

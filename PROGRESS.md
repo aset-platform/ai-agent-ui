@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-04-15 — Sprint 7: Forecast Enrichment & Sanity Gates
+
+### Forecast Pipeline Overhaul
+- **Volatility regime classification** — 3 regimes (stable/moderate/volatile)
+  with per-regime Prophet config: growth mode, changepoint_prior_scale,
+  log-transform, logistic bounds
+- **Tier 1 regressors** — 6 new signals from existing Iceberg data:
+  volatility regime, trend strength, S/R position, Piotroski F-Score,
+  revenue growth, EPS growth
+- **Tier 2 features** — 7 computed signals: sector relative strength,
+  volume anomaly, OBV trend, day-of-week, month-of-year, F&O expiry
+  proximity, earnings proximity
+- **Post-Prophet technical bias** — RSI/MACD/volume dampener (±15% cap,
+  30-day taper)
+- **Composite confidence score** — weighted from directional accuracy,
+  MASE, coverage, interval width, data completeness → High/Medium/Low/
+  Rejected badge
+- **Sector index ingestion** — 10 sector ETFs/indices added to pipeline
+  for relative strength computation
+- **Frontend confidence badge** — color-coded pill with expandable
+  explanation card showing metric breakdown
+- **API enrichment** — confidence_score + confidence_components returned
+  in forecast endpoint
+- **Schema evolution** — 2 new columns in forecast_runs Iceberg table
+
+### Files Created
+- `backend/tools/_forecast_regime.py` — regime classification + bias
+- `backend/tools/_forecast_features.py` — Tier 1/2 feature computation
+- `tests/backend/test_forecast_regime.py` — 21 tests
+- `tests/backend/test_forecast_features.py` — 38 tests
+- `tests/backend/test_forecast_confidence.py` — 15 tests
+- `tests/backend/test_forecast_enrichment_e2e.py` — 5 E2E tests
+
+### Commits: 14
+
+---
+
 # Session: Apr 14, 2026 — Sprint 6: Data Health Fix + ETF Ingestion + ticker_type
 
 ## Data Health Fix Panel (Maintenance page)

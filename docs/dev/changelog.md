@@ -4,6 +4,19 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## 2026-04-15 — Forecast Enrichment & Sanity Gates (Sprint 7)
+
+- Volatility-regime adaptive Prophet: stable/moderate/volatile configs
+- 13 new forecast regressors (Tier 1 fundamentals + Tier 2 microstructure)
+- Post-Prophet technical bias adjustment (RSI/MACD/volume, 30d taper)
+- Composite confidence score with High/Medium/Low/Rejected badges
+- Confidence badge UI on forecast chart with expandable explanation
+- Sector index OHLCV ingestion (5 India + 5 US sector indices)
+- forecast_runs schema evolution: confidence_score, confidence_components
+- 79 new tests across 4 test files
+
+---
+
 ## Apr 14, 2026 — Data Health Fix Panel + ETF Ingestion + ticker_type
 
 ### Features
