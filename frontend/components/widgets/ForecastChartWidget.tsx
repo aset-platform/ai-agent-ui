@@ -694,7 +694,7 @@ export function ForecastChartWidget({
               )}
               {/* Confidence Badge */}
               {confidence && confidence.badge !== "Rejected" && (
-                <div className="relative inline-block ml-3">
+                <span className="relative inline-block ml-3">
                   <button
                     type="button"
                     className={`
@@ -712,34 +712,34 @@ export function ForecastChartWidget({
                     {confidence.badge} Confidence
                   </button>
                   {showConfidence && (
-                    <div className="absolute z-10 mt-1 w-64 p-3 bg-white dark:bg-gray-800
-                      border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg text-xs">
-                      <div className="space-y-1.5">
-                        <div className="flex justify-between">
+                    <span className="absolute z-10 mt-1 w-64 p-3 bg-white dark:bg-gray-800
+                      border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg text-xs block">
+                      <span className="space-y-1.5 block">
+                        <span className="flex justify-between">
                           <span className="text-gray-500">Directional accuracy</span>
                           <span>{(confidence.direction * 100).toFixed(0)}%</span>
-                        </div>
-                        <div className="flex justify-between">
+                        </span>
+                        <span className="flex justify-between">
                           <span className="text-gray-500">Forecast error (MASE)</span>
                           <span>{confidence.mase.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between">
+                        </span>
+                        <span className="flex justify-between">
                           <span className="text-gray-500">Interval coverage</span>
                           <span>{(confidence.coverage * 100).toFixed(0)}%</span>
-                        </div>
-                        <div className="flex justify-between">
+                        </span>
+                        <span className="flex justify-between">
                           <span className="text-gray-500">Data signals</span>
                           <span>{(confidence.data_completeness * 14).toFixed(0)} of 14</span>
-                        </div>
+                        </span>
                         {confidence.reason && (
-                          <p className="text-gray-400 pt-1 border-t border-gray-200 dark:border-gray-700">
+                          <span className="text-gray-400 pt-1 border-t border-gray-200 dark:border-gray-700 block">
                             {confidence.reason}
-                          </p>
+                          </span>
                         )}
-                      </div>
-                    </div>
+                      </span>
+                    </span>
                   )}
-                </div>
+                </span>
               )}
             </p>
           </div>
