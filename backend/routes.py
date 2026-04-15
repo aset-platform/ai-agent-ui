@@ -1833,17 +1833,20 @@ def create_app(
                 "stale_count": 0,
             }
             try:
+                # Use latest run per ticker (by computed_at)
+                # to avoid old extreme values inflating counts.
                 df = query_iceberg_df(
                     "stocks.forecast_runs",
-                    "SELECT ticker, "
-                    "MAX(run_date) AS latest, "
-                    "MAX(target_3m_pct_change)"
-                    "  AS max_pct, "
-                    "MIN(target_3m_pct_change)"
-                    "  AS min_pct, "
-                    "MAX(mape) AS max_mape "
-                    "FROM forecast_runs "
-                    "GROUP BY ticker",
+                    "SELECT * FROM ("
+                    "  SELECT ticker, run_date,"
+                    "    target_3m_pct_change,"
+                    "    mape, computed_at,"
+                    "    ROW_NUMBER() OVER ("
+                    "      PARTITION BY ticker"
+                    "      ORDER BY computed_at DESC"
+                    "    ) AS rn"
+                    "  FROM forecast_runs"
+                    ") WHERE rn = 1",
                 )
                 if not df.empty:
                     tks = set(
@@ -1854,25 +1857,22 @@ def create_app(
                         analyzable_tickers - tks
                     )
                     for _, r in df.iterrows():
-                        mx = r.get("max_pct")
-                        mn = r.get("min_pct")
-                        if (
-                            mx is not None
-                            and mx > 100
-                        ) or (
-                            mn is not None
-                            and mn < -50
+                        pct = r.get(
+                            "target_3m_pct_change",
+                        )
+                        if pct is not None and (
+                            pct > 50 or pct < -50
                         ):
                             f[
                                 "extreme_predictions"
                             ] += 1
-                        mp = r.get("max_mape")
+                        mp = r.get("mape")
                         if (
                             mp is not None
                             and mp > 25
                         ):
                             f["high_mape"] += 1
-                        d = r["latest"]
+                        d = r["run_date"]
                         if hasattr(d, "date"):
                             d = d.date()
                         if d < stale_30d:
