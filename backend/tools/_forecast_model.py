@@ -304,8 +304,11 @@ def _generate_forecast(
     # Reverse log-transform: exp(yhat) → price space.
     # Cap log-space values relative to last training price
     # to prevent overflow on extreme Prophet extrapolations.
+    # prophet_df["y"] is RAW price (not log-transformed),
+    # so we must log() it first to get log-space reference.
     if transform == "log":
-        last_log_y = float(prophet_df["y"].iloc[-1])
+        last_raw_y = float(prophet_df["y"].iloc[-1])
+        last_log_y = np.log(max(last_raw_y, 0.01))
         # Allow max ±150% deviation in log-space from last
         # known price. exp(1.5) ≈ 4.5x, exp(-1.5) ≈ 0.22x.
         log_cap = last_log_y + 1.5
