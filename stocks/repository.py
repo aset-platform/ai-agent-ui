@@ -2564,6 +2564,12 @@ class StockRepository:
                         rd.get("mape"),
                     ),
                     "computed_at": _now_utc(),
+                    "confidence_score": _safe_float(
+                        rd.get("confidence_score"),
+                    ),
+                    "confidence_components": rd.get(
+                        "confidence_components"
+                    ),
                 }
             )
         tbl = self._load_table(_FORECAST_RUNS)
@@ -3082,6 +3088,84 @@ class StockRepository:
             "total_score",
             ascending=False,
         ).reset_index(drop=True)
+
+    def get_piotroski_scores_batch(
+        self,
+        tickers: list[str],
+    ) -> dict[str, dict]:
+        """Get latest Piotroski scores for multiple tickers.
+
+        Reads all scores in a single Iceberg scan, filters
+        to *tickers*, and returns the most recent score per
+        ticker as a dict of dicts.
+
+        Args:
+            tickers: List of ticker symbols to look up.
+
+        Returns:
+            Dict mapping ticker → score dict (includes
+            ``total_score``, ``score_date``, and all
+            individual F-score components).
+        """
+        df = self.get_piotroski_scores()
+        if df.empty:
+            return {}
+        upper = [t.upper() for t in tickers]
+        df = df[df["ticker"].isin(upper)]
+        if df.empty:
+            return {}
+        # Keep only the latest score_date per ticker.
+        if "score_date" in df.columns:
+            df = df.sort_values(
+                "score_date", ascending=False
+            )
+            df = df.drop_duplicates(
+                subset=["ticker"], keep="first"
+            )
+        result: dict[str, dict] = {}
+        for row in df.to_dict(orient="records"):
+            ticker = row.get("ticker", "")
+            if ticker:
+                result[ticker] = row
+        return result
+
+    def get_quarterly_results_batch(
+        self,
+        tickers: list[str],
+    ) -> dict[str, list[dict]]:
+        """Get latest 2 quarters per ticker for growth calc.
+
+        Fetches quarterly results for each ticker
+        individually (uses existing single-ticker scan)
+        and returns the two most recent rows per ticker.
+
+        Args:
+            tickers: List of ticker symbols to look up.
+
+        Returns:
+            Dict mapping ticker → [latest_q, prev_q].
+            Tickers with no data are omitted.
+        """
+        result: dict[str, list[dict]] = {}
+        for ticker in tickers:
+            try:
+                df = self.get_quarterly_results(
+                    ticker.upper()
+                )
+                if df.empty:
+                    continue
+                rows = (
+                    df.head(2)
+                    .to_dict(orient="records")
+                )
+                if rows:
+                    result[ticker.upper()] = rows
+            except Exception:
+                _logger.debug(
+                    "quarterly_results unavailable: %s",
+                    ticker,
+                )
+        return result
 
     # ── Bulk delete ──────────────────────────────────────
 

@@ -729,6 +729,18 @@ def _forecast_runs_schema() -> Schema:
             field_type=TimestampType(),
             required=False,
         ),
+        NestedField(
+            field_id=26,
+            name="confidence_score",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=27,
+            name="confidence_components",
+            field_type=StringType(),
+            required=False,
+        ),
     )
 
 
