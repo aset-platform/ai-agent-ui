@@ -104,20 +104,23 @@ def ensemble_forecast(
             work["ds"],
         ).dt.date
         tech = tech.reset_index()
+        # Normalize column names to lowercase so they
+        # match the lowercase _FEATURES list.
+        tech.columns = [c.lower() for c in tech.columns]
         tech["_date"] = pd.to_datetime(
-            tech["Date"],
+            tech["date"],
         ).dt.date
 
         tech_cols = [
             c
             for c in [
-                "SMA_50",
-                "SMA_200",
-                "RSI_14",
-                "MACD",
-                "BB_Upper",
-                "BB_Lower",
-                "ATR_14",
+                "sma_50",
+                "sma_200",
+                "rsi_14",
+                "macd",
+                "bb_upper",
+                "bb_lower",
+                "atr_14",
             ]
             if c in tech.columns
         ]
