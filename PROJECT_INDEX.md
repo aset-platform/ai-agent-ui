@@ -1,7 +1,7 @@
 # Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-04-14 (Sprint 6 — Data Health Fix + ETF Ingestion + ticker_type)
+> Last refreshed: 2026-04-15 (Sprint 7 — Forecast Enrichment + FinBERT Sentiment + XGBoost Features)
 
 ---
 
@@ -17,7 +17,7 @@ ai-agent-ui/
 │   │   ├── graph.py       # LangGraph state graph
 │   │   ├── sub_agents.py  # Sub-agent tool-calling loop factory
 │   │   └── conversation_context.py  # PG-persisted multi-turn context
-│   ├── tools/             # 32 LLM-callable tool modules
+│   ├── tools/             # 35 LLM-callable tool modules
 │   ├── jobs/              # 7 scheduler executors + pipeline chaining
 │   ├── pipeline/          # CLI data pipeline (19 commands, 21 files)
 │   │   ├── runner.py      # CLI entry point
@@ -26,7 +26,7 @@ ai-agent-ui/
 │   │   └── screener/      # Piotroski F-Score
 │   ├── db/                # ORM models, migrations, DuckDB
 │   │   ├── models/        # 18 SQLAlchemy models
-│   │   ├── migrations/    # 11 Alembic async migrations
+│   │   ├── migrations/    # 11 Alembic async migrations (+ forecast_runs schema v2)
 │   │   ├── engine.py      # Async session factory
 │   │   ├── duckdb_engine.py # Iceberg read engine + metadata cache
 │   │   └── pg_stocks.py   # PG CRUD (registry, scheduler, pipeline, recs)
@@ -50,10 +50,10 @@ ai-agent-ui/
 │   ├── hooks/             # 19 SWR data hooks
 │   ├── providers/         # Chat, Layout context providers
 │   └── lib/               # Types, config, apiFetch
-├── e2e/                   # 65 Playwright specs (~219 tests)
-├── tests/                 # 88 pytest files (~755 tests)
-├── scripts/               # 37 data/migration/seed scripts
-├── docs/                  # 48 MkDocs Material pages (14 dirs)
+├── e2e/                   # 54 Playwright specs
+├── tests/                 # 96 pytest files (~755+ tests)
+├── scripts/               # 28 data/migration/seed scripts + poc_forecast_comparison.py
+├── docs/                  # 56 MkDocs Material pages (15 dirs)
 └── docker-compose.yml     # 5 services (backend, frontend, PG, Redis, docs)
 ```
 
@@ -80,9 +80,10 @@ recommendation_outcomes, market_indices, user_memories (pgvector
 ingestion_cursor, ingestion_skipped, pipelines, pipeline_steps.
 
 **Iceberg (14 tables)**: ohlcv (1.4M rows), company_info, dividends,
-quarterly_results, analysis_summary, forecast_runs, forecasts,
-piotroski_scores, sentiment_scores, llm_pricing, llm_usage,
-portfolio_transactions, audit_log, usage_history.
+quarterly_results, analysis_summary, forecast_runs (27 cols, incl.
+confidence_score + confidence_components), forecasts, piotroski_scores,
+sentiment_scores, llm_pricing, llm_usage, portfolio_transactions,
+audit_log, usage_history.
 
 **Rule**: Mutable state → PG. Append-only analytics → Iceberg.
 DuckDB for ALL Iceberg reads (metadata cache, auto-invalidated).
@@ -110,14 +111,18 @@ LLM Cascade: Groq pools (llama-3.3-70b, kimi-k2, qwen3-32b) →
 
 | Module | Files | Purpose |
 |--------|-------|---------|
-| `backend/agents/` | 30+ | LangGraph graph, 7 configs, 10 nodes, context |
-| `backend/tools/` | 32 | Stock tools: forecast, analysis, sentiment, portfolio, recs |
-| `backend/jobs/` | 7 | Executor registry, pipeline chaining, batch refresh, recs |
+| `backend/agents/` | 30+ | LangGraph graph, 8 configs, 11 nodes, context |
+| `backend/tools/` | 35 | Stock tools: forecast, analysis, sentiment, portfolio, recs |
+| `backend/tools/_forecast_regime.py` | 1 | Volatility regime classification (low/medium/high/extreme) |
+| `backend/tools/_forecast_features.py` | 1 | Tier 1/2 feature computation (macro, technical, sentiment) |
+| `backend/tools/_sentiment_finbert.py` | 1 | FinBERT batch sentiment scorer (torch CPU, transformers) |
+| `backend/jobs/` | 8 | Executor registry, pipeline chaining, batch refresh, recs |
 | `backend/pipeline/` | 21 | CLI: download, seed, bulk-download, analytics, forecast, screen |
 | `backend/db/models/` | 18 | SQLAlchemy ORM (PG tables) |
 | `stocks/repository.py` | 1 (5.2K lines) | Iceberg CRUD + DuckDB reads + PG bridge |
 | `frontend/hooks/` | 19 | SWR data fetching for all pages |
 | `frontend/components/` | 30+ | Admin, charts, insights, widgets, modals |
+| `scripts/poc_forecast_comparison.py` | 1 | POC test harness: baseline vs enriched forecast comparison |
 
 ---
 
@@ -149,6 +154,8 @@ pipeline pickup (scheduler refreshes them daily).
 | SQLAlchemy | 2.0 async | ORM (asyncpg) |
 | PyIceberg | 0.11 | Table management |
 | DuckDB | 1.2 | Iceberg read engine |
+| torch (CPU) | latest | FinBERT inference (Docker: CPU wheel) |
+| transformers | latest | FinBERT model (ProsusAI/finbert) |
 | SWR | 2.3 | Frontend data hooks |
 | lightweight-charts | 5.1 | TradingView |
 
@@ -156,7 +163,7 @@ pipeline pickup (scheduler refreshes them daily).
 
 ## File Counts
 
-Python: 363 | TypeScript/TSX: 196 | Tests: 88+10+65 | Docs: 187 | Scripts: 37
+Python: 374 | TypeScript/TSX: 98 | Tests: 96+54 | Docs: 56 pages | Scripts: 28+1 POC
 
 ---
 
