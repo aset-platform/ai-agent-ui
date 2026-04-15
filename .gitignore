@@ -84,3 +84,5 @@ backend/data/
 
 # Lighthouse CI local artifacts
 .lighthouseci/
+.playwright-mcp/
+.superpowers/
