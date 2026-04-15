@@ -1379,6 +1379,56 @@ def execute_run_forecasts(
             exc_info=True,
         )
 
+    # ── Pre-load Tier 1 data ──
+    _logger.info(
+        "Pre-loading analysis_summary for %d tickers",
+        len(tickers),
+    )
+    _analysis_cache: dict[str, dict] = {}
+    try:
+        analysis_df = (
+            stock_repo.get_analysis_summary_batch(
+                tickers,
+            )
+        )
+        if (
+            analysis_df is not None
+            and not analysis_df.empty
+        ):
+            for _, row in analysis_df.iterrows():
+                _analysis_cache[row["ticker"]] = (
+                    row.to_dict()
+                )
+    except Exception:
+        _logger.warning(
+            "Failed to pre-load analysis_summary",
+            exc_info=True,
+        )
+
+    _piotroski_cache = (
+        stock_repo.get_piotroski_scores_batch(tickers)
+    )
+    _quarterly_cache = (
+        stock_repo.get_quarterly_results_batch(tickers)
+    )
+
+    # ── Pre-load sector index OHLCV ──
+    from tools._forecast_features import (
+        get_sector_index_mapping,
+    )
+
+    _market = "india" if scope == "india" else "us"
+    sector_map = get_sector_index_mapping(_market)
+    _sector_ohlcv_cache: dict[str, pd.DataFrame] = {}
+    _sector_tickers = list(set(sector_map.values()))
+    for _st in _sector_tickers:
+        try:
+            _sdf = stock_repo.get_ohlcv(_st)
+            if _sdf is not None and not _sdf.empty:
+                _sector_ohlcv_cache[_st] = _sdf
+        except Exception:
+            pass
+
     def _forecast_one(ticker):
         yf_ticker = yf_map.get(ticker, ticker)
         _logger.info(
@@ -1443,16 +1493,72 @@ def execute_run_forecasts(
             prophet_df,
         )
 
+        # ── Regime classification ──
+        from tools._forecast_regime import (
+            classify_regime,
+        )
+
+        analysis_row = _analysis_cache.get(yf_ticker)
+        _vol = (analysis_row or {}).get(
+            "annualized_volatility",
+        )
+        regime = classify_regime(_vol)
+
+        # ── Tier 1 features ──
+        from tools._forecast_features import (
+            compute_tier1_features,
+            compute_tier2_features,
+        )
+
+        piotroski_row = _piotroski_cache.get(
+            yf_ticker,
+        )
+        quarterly_rows = _quarterly_cache.get(
+            yf_ticker,
+        )
+
+        tier1 = compute_tier1_features(
+            analysis_row,
+            piotroski_row,
+            quarterly_rows,
+            current_price,
+        )
+
+        # ── Tier 2 features ──
+        company_sector = (analysis_row or {}).get(
+            "sector", "",
+        )
+        sector_idx = sector_map.get(company_sector)
+        sector_df = _sector_ohlcv_cache.get(
+            sector_idx,
+        )
+
+        tier2 = compute_tier2_features(
+            df, sector_df, earnings_dates=None,
+        )
+
+        # ── Enrich regressors ──
+        from tools._forecast_shared import (
+            _enrich_regressors,
+        )
+
+        if regressors is not None:
+            regressors = _enrich_regressors(
+                regressors, yf_ticker, tier1, tier2,
+            )
+
         model, train_df = _train_prophet_model(
             prophet_df,
             ticker=yf_ticker,
             regressors=regressors,
+            regime=regime,
         )
         forecast_df = _generate_forecast(
             model,
             prophet_df,
             horizon_months,
             regressors=regressors,
+            regime=regime,
         )
 
         # XGBoost ensemble correction
@@ -1541,6 +1647,45 @@ def execute_run_forecasts(
                     ),
                 )
 
+        # ── Technical bias adjustment ──
+        from tools._forecast_regime import (
+            apply_technical_bias,
+        )
+
+        forecast_df, bias_meta = apply_technical_bias(
+            forecast_df, analysis_row,
+        )
+
+        # ── Confidence score ──
+        import json as _json
+
+        from tools._forecast_accuracy import (
+            compute_confidence_score,
+            confidence_badge,
+        )
+
+        _total_regressors = 14
+        _available = (
+            sum(
+                1
+                for v in {**tier1, **tier2}.values()
+                if v != 0.0
+            )
+            + 3  # market+macro always available
+        )
+        _data_comp = min(
+            _available / _total_regressors, 1.0,
+        )
+
+        conf_score, conf_components = (
+            compute_confidence_score(
+                accuracy, _data_comp,
+            )
+        )
+        badge, badge_reason = confidence_badge(
+            conf_score, conf_components,
+        )
+
         summary = _generate_forecast_summary(
             forecast_df,
             current_price,
@@ -1577,6 +1722,18 @@ def execute_run_forecasts(
             run_dict["mae"] = accuracy.get("MAE")
             run_dict["rmse"] = accuracy.get("RMSE")
             run_dict["mape"] = accuracy.get("MAPE_pct")
+
+        # ── Confidence metadata ──
+        run_dict["confidence_score"] = conf_score
+        run_dict["confidence_components"] = _json.dumps(
+            {
+                **conf_components,
+                "regime": regime,
+                "bias": bias_meta,
+                "badge": badge,
+                "reason": badge_reason,
+            },
+        )
 
         # Accumulate for bulk write after parallel loop.
         with _write_lock:
