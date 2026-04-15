@@ -6,14 +6,37 @@ Session-by-session record of what was built, changed, and fixed.
 
 ## 2026-04-15 — Forecast Enrichment & Sanity Gates (Sprint 7)
 
-- Volatility-regime adaptive Prophet: stable/moderate/volatile configs
-- 13 new forecast regressors (Tier 1 fundamentals + Tier 2 microstructure)
-- Post-Prophet technical bias adjustment (RSI/MACD/volume, 30d taper)
-- Composite confidence score with High/Medium/Low/Rejected badges
-- Confidence badge UI on forecast chart with expandable explanation
-- Sector index OHLCV ingestion (5 India + 5 US sector indices)
-- forecast_runs schema evolution: confidence_score, confidence_components
-- 79 new tests across 4 test files
+### Features
+- Volatility-regime adaptive Prophet: stable/moderate/volatile configs with per-regime growth mode, changepoint_prior_scale, log-transform, logistic bounds
+- 11 enriched regressors (Tier 1: volatility regime, trend strength, S/R position, Piotroski, revenue/EPS growth; Tier 2: sector RS, volume anomaly, OBV trend, calendar, F&O/earnings proximity)
+- Post-Prophet technical bias adjustment (RSI/MACD/volume dampener, ±15% cap, 30d taper)
+- Composite confidence score with High/Medium/Low/Rejected badges on Analysis + Portfolio UIs
+- Confidence badge UI with expandable explanation card showing metric breakdown
+- Sector index OHLCV ingestion for relative strength computation
+- forecast_runs schema evolution: `confidence_score`, `confidence_components` columns
+- FinBERT batch sentiment (ProsusAI/finbert, CPU-only, zero API cost) — replaces LLM for batch scoring
+
+### Sanity Gates (ASETPLTFRM-302)
+- Exp cap: forecasts beyond 4.5x current price capped/rejected
+- Extreme series skip: tickers with >200% OHLCV range skipped
+- Frontend "Low confidence" warning for NaN MAPE or rejected forecast
+- Data Health latest-run fix: uses latest `run_date` not MAX confidence
+
+### Performance
+- Batch DuckDB reads: 748 individual Iceberg scans → single bulk `WHERE ticker IN (...)`
+- Single bulk merge: 20 per-column writes → one merge
+- 9 zero-signal regressors pruned automatically
+- India forced run: ~46 min (was ~90 min)
+
+### Bug Fixes
+- XGBoost casing bug: technical indicator columns silently dropped (case mismatch fixed)
+- 5 column name mismatches in forecast feature extraction
+- Exp overflow on logistic growth for large-cap tickers
+- Data Health stale query (invalidate_metadata before scan)
+- Forecast dedup on write, React hydration error on badge, retention API blocking event loop
+
+### Tests
+- 79 new tests across 4 files: test_forecast_regime (21), test_forecast_features (38), test_forecast_confidence (15), test_forecast_enrichment_e2e (5)
 
 ---
 

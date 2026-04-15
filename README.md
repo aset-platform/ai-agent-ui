@@ -9,12 +9,12 @@ A fullstack agentic chat application with stock analysis, Prophet forecasting, a
 - **6 AI sub-agents** — Portfolio, Stock Analyst, Forecaster, Research, Sentiment, Recommendation (LangGraph supervisor routing)
 - **Memory-augmented chat** — pgvector semantic memory (768-dim), per-user facts + PG-persisted conversation context (cross-session resume)
 - **Round-robin LLM pools** — 6 Groq models (~2.3M TPD), Ollama local fallback, Anthropic paid tier
-- **Prophet forecasting** — 3/6/9-month targets, 80% confidence bands, XGBoost ensemble correction, backtest overlay
+- **Prophet forecasting** — volatility-regime adaptive (stable/moderate/volatile), 11 enriched regressors, log-transform + logistic growth, post-Prophet RSI/MACD/volume bias adjustment, composite confidence score with High/Medium/Low badges on Analysis + Portfolio UIs
 - **Portfolio dashboard** — TradingView charts, sector allocation, P&L trend, news sentiment, recommendations widget
 - **Smart Funnel recommendations** — 3-stage pipeline (DuckDB pre-filter → gap analysis → LLM reasoning), market-scoped, unified quota
 - **54 NSE ETFs** — broad market, sectoral, factor, gold/silver, international, debt ETFs with OHLCV, analytics, sentiment, and Prophet forecasts
 - **Piotroski F-Score** — fundamental scoring (755 stocks), market filter (India/US)
-- **Sentiment scoring** — LLM headline analysis, hot/learning/cold tiers, market fallback
+- **Sentiment scoring** — FinBERT batch sentiment (ProsusAI/finbert, CPU-only, zero API cost) + LLM fallback, hot/learning/cold tiers, market fallback
 - **Pipeline orchestration** — 4-step pipelines (Data Refresh → Analytics → Sentiment → Piotroski), force run, DAG viz
 - **Scheduler** — cron jobs with freshness gates, CV reuse (30-day TTL), catchup on restart
 - **Data Health dashboard** — 5 health cards with async fix buttons, live progress bars, parallelized DuckDB queries (~1.4s)

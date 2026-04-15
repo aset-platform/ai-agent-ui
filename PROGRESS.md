@@ -27,15 +27,43 @@
   in forecast endpoint
 - **Schema evolution** — 2 new columns in forecast_runs Iceberg table
 
+### Sanity Gates (ASETPLTFRM-302)
+- **Exp cap** — max 4.5x current price; forecasts beyond that capped/rejected
+- **Extreme series skip** — tickers with >200% OHLCV range flagged and skipped
+- **Frontend "Low confidence" warning** — shown when NaN MAPE or rejected forecast
+- **Data Health latest-run fix** — uses latest `run_date` not MAX confidence score
+
+### Performance
+- **Batch DuckDB reads** — replaced 748 individual Iceberg scans with single bulk `WHERE ticker IN (...)`
+- **Single bulk merge** — replaced 20 per-column Iceberg writes with one merge operation
+- **9 zero-signal regressors pruned** — data-driven pruning removes noise features automatically
+- **Low-data ticker skip** — tickers with <30d OHLCV skipped; 30d cadence for sparse data
+- **India forced run** — ~46 min end-to-end (down from ~90 min)
+
+### FinBERT POC (ASETPLTFRM-203)
+- **ProsusAI/finbert** replaces LLM for batch sentiment scoring (CPU-only, zero API cost)
+- **XGBoost casing bug fixed** — technical indicator column names were silently dropped due to case mismatch
+- Docker rebuilt with torch CPU + transformers; `_sentiment_finbert.py` module created
+
+### Bug Fixes
+- 5 column name mismatches in forecast feature extraction
+- Exp overflow on logistic growth (large-cap tickers)
+- Data Health stale query (now calls `invalidate_metadata()` before scan)
+- Forecast dedup (duplicate run_date rows now deduplicated on write)
+- React hydration error on forecast confidence badge (SSR mismatch)
+- Retention API blocking event loop (converted to async)
+
 ### Files Created
 - `backend/tools/_forecast_regime.py` — regime classification + bias
 - `backend/tools/_forecast_features.py` — Tier 1/2 feature computation
+- `backend/tools/_sentiment_finbert.py` — FinBERT batch inference
+- `poc_forecast_comparison.py` — baseline vs enriched forecast comparison
 - `tests/backend/test_forecast_regime.py` — 21 tests
 - `tests/backend/test_forecast_features.py` — 38 tests
 - `tests/backend/test_forecast_confidence.py` — 15 tests
 - `tests/backend/test_forecast_enrichment_e2e.py` — 5 E2E tests
 
-### Commits: 14
+### Commits: 38
 
 ---
 
