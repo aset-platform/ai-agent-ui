@@ -251,7 +251,7 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             )
 
         vol = (analysis_row or {}).get(
-            "annualized_volatility"
+            "annualized_volatility_pct"
         )
         regime = classify_regime(vol)
 

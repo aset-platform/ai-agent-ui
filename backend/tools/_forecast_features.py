@@ -194,7 +194,7 @@ def compute_tier1_features(
     # --- Analysis summary features ---
     if analysis_row:
         try:
-            vol = analysis_row.get("annualized_volatility")
+            vol = analysis_row.get("annualized_volatility_pct")
             if vol is not None and not math.isnan(float(vol)):
                 out["volatility_regime"] = float(vol) / 100.0
 
@@ -210,8 +210,8 @@ def compute_tier1_features(
                     float(bull) - float(bear)
                 ) / 100.0
 
-            sup = analysis_row.get("support_level")
-            res = analysis_row.get("resistance_level")
+            sup = analysis_row.get("support_levels")
+            res = analysis_row.get("resistance_levels")
             if (
                 sup is not None
                 and res is not None

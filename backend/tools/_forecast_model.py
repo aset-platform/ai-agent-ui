@@ -302,10 +302,14 @@ def _generate_forecast(
     result = result.reset_index(drop=True)
 
     # Reverse log-transform: exp(yhat) → price space.
+    # Cap log-space values at 20 (~exp(20) ≈ 485M) to prevent
+    # float overflow on extreme Prophet extrapolations.
     if transform == "log":
         for col in ("yhat", "yhat_lower", "yhat_upper"):
             if col in result.columns:
-                result[col] = np.exp(result[col])
+                result[col] = np.exp(
+                    result[col].clip(upper=20.0)
+                )
 
     # Clamp negative predictions — stock prices cannot go below zero.
     # For log-transform regimes this is mathematically impossible

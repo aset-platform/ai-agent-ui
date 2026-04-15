@@ -1500,7 +1500,7 @@ def execute_run_forecasts(
 
         analysis_row = _analysis_cache.get(yf_ticker)
         _vol = (analysis_row or {}).get(
-            "annualized_volatility",
+            "annualized_volatility_pct",
         )
         regime = classify_regime(_vol)
 
