@@ -1180,7 +1180,8 @@ def create_insights_router() -> APIRouter:
         if df.empty:
             return PiotroskiResponse()
 
-        # Patch empty company_name from company_info
+        # Patch empty company_name from company_info,
+        # then stock_master PG as final fallback
         empty_mask = (
             df["company_name"].isna()
             | (df["company_name"] == "")
@@ -1203,11 +1204,68 @@ def create_insights_router() -> APIRouter:
                 for idx in df[empty_mask].index:
                     tk = df.at[idx, "ticker"]
                     if tk in ci.index:
-                        df.at[idx, "company_name"] = (
-                            ci.at[tk, "company_name"]
-                        )
+                        name = ci.at[tk, "company_name"]
+                        if name and str(name) not in (
+                            "", "None",
+                        ):
+                            df.at[
+                                idx, "company_name"
+                            ] = name
             except Exception:
                 pass
+
+        # Re-check: stock_master PG fallback for
+        # tickers still missing names
+        empty_mask = (
+            df["company_name"].isna()
+            | (df["company_name"] == "")
+            | (df["company_name"] == "None")
+        )
+        if empty_mask.any():
+            try:
+                from sqlalchemy import select
+
+                from backend.db.engine import (
+                    get_session_factory,
+                )
+                from backend.db.models.stock_master import (
+                    StockMaster,
+                )
+
+                missing = df.loc[
+                    empty_mask, "ticker"
+                ].tolist()
+                async with (
+                    get_session_factory()() as s
+                ):
+                    rows = (
+                        await s.execute(
+                            select(
+                                StockMaster.yf_ticker,
+                                StockMaster.name,
+                            ).where(
+                                StockMaster.yf_ticker.in_(
+                                    missing,
+                                ),
+                            ),
+                        )
+                    ).all()
+                sm_map = {
+                    r.yf_ticker: r.name
+                    for r in rows
+                }
+                for idx in df[empty_mask].index:
+                    tk = df.at[idx, "ticker"]
+                    if tk in sm_map and sm_map[tk]:
+                        df.at[
+                            idx, "company_name"
+                        ] = sm_map[tk]
+            except Exception:
+                _logger.debug(
+                    "stock_master name fallback "
+                    "failed for piotroski",
+                    exc_info=True,
+                )
 
         latest_date = (
             df["score_date"].max()

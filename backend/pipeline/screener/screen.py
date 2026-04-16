@@ -197,10 +197,12 @@ async def run_screen(
                 session, active_only=False,
             )
         for s in all_stocks:
-            sm_names[s.yf_ticker] = s.name
+            if s.name:
+                sm_names[s.yf_ticker] = s.name
     except Exception:
-        _logger.debug(
-            "stock_master name fallback failed",
+        _logger.warning(
+            "stock_master name fallback failed "
+            "— names may be blank",
             exc_info=True,
         )
 
@@ -303,6 +305,21 @@ async def run_screen(
                 exc_info=True,
             )
             failed += 1
+
+    # Log tickers with blank names before persist
+    blank_names = [
+        s["ticker"]
+        for s in scores
+        if not s.get("company_name")
+    ]
+    if blank_names:
+        _logger.warning(
+            "Piotroski: %d tickers have blank "
+            "company_name — will be patched at "
+            "read time: %s",
+            len(blank_names),
+            blank_names[:20],
+        )
 
     # Persist
     written = 0

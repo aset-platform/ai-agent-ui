@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   useSchedulerJobs,
   useSchedulerPipelines,
@@ -500,6 +501,8 @@ function JobList({
   runs: SchedulerRun[];
 }) {
   const { jobs, mutate } = useSchedulerJobs();
+  const [deleteJobId, setDeleteJobId] =
+    useState<string | null>(null);
 
   const handleToggle = useCallback(
     async (jobId: string, enabled: boolean) => {
@@ -518,15 +521,17 @@ function JobList({
     [mutate],
   );
 
-  const handleDelete = useCallback(
-    async (jobId: string) => {
+  const confirmDelete = useCallback(
+    async () => {
+      if (!deleteJobId) return;
       await apiFetch(
-        `${API_URL}/admin/scheduler/jobs/${jobId}`,
+        `${API_URL}/admin/scheduler/jobs/${deleteJobId}`,
         { method: "DELETE" },
       );
+      setDeleteJobId(null);
       mutate();
     },
-    [mutate],
+    [deleteJobId, mutate],
   );
 
   const handleTrigger = useCallback(
@@ -700,7 +705,7 @@ function JobList({
                 <PencilIcon />
               </button>
               <button
-                onClick={() => handleDelete(j.job_id)}
+                onClick={() => setDeleteJobId(j.job_id)}
                 className="shrink-0 flex h-[30px]
                   w-[30px] items-center justify-center
                   rounded-lg border border-gray-200
@@ -719,6 +724,22 @@ function JobList({
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={deleteJobId !== null}
+        title="Delete Scheduled Job"
+        message={
+          `Are you sure you want to delete "${
+            jobs.find(
+              (j) => j.job_id === deleteJobId,
+            )?.name ?? deleteJobId
+          }"? This action cannot be undone.`
+        }
+        confirmLabel="Delete"
+        variant="danger"
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteJobId(null)}
+      />
     </div>
   );
 }

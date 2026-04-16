@@ -31,6 +31,10 @@ import {
   type Column,
 } from "@/components/insights/InsightsTable";
 import { InsightsFilters } from "@/components/insights/InsightsFilters";
+import {
+  downloadCsv,
+  type CsvColumn,
+} from "@/lib/downloadCsv";
 import { PlotlyChart } from "@/components/charts/PlotlyChart";
 import { CorrelationHeatmap } from "@/components/charts/CorrelationHeatmap";
 import { PiotroskiBadge } from "@/components/insights/PiotroskiBadge";
@@ -700,6 +704,120 @@ const piotroskiCols: Column<PiotroskiRow>[] = [
 ];
 
 // ---------------------------------------------------------------
+// CSV column definitions (for downloadCsv)
+// ---------------------------------------------------------------
+
+const screenerCsvCols: CsvColumn<ScreenerRow>[] = [
+  { key: "ticker", header: "Ticker" },
+  { key: "price", header: "Price" },
+  { key: "rsi_14", header: "RSI" },
+  { key: "rsi_signal", header: "RSI Signal" },
+  {
+    key: "sentiment_score",
+    header: "Sentiment",
+    format: (v) => (v != null ? String(v) : ""),
+  },
+  { key: "macd_signal", header: "MACD Signal" },
+  { key: "sma_200_signal", header: "vs SMA 200" },
+  {
+    key: "annualized_return_pct",
+    header: "Ann Return %",
+  },
+  {
+    key: "annualized_volatility_pct",
+    header: "Vol %",
+  },
+  { key: "sharpe_ratio", header: "Sharpe" },
+  { key: "sector", header: "Sector" },
+];
+
+const riskCsvCols: CsvColumn<RiskRow>[] = [
+  { key: "ticker", header: "Ticker" },
+  {
+    key: "annualized_return_pct",
+    header: "Ann Return %",
+  },
+  {
+    key: "annualized_volatility_pct",
+    header: "Vol %",
+  },
+  { key: "sharpe_ratio", header: "Sharpe" },
+  { key: "max_drawdown_pct", header: "Max DD %" },
+  { key: "max_drawdown_days", header: "DD Days" },
+  { key: "bull_phase_pct", header: "Bull %" },
+  { key: "bear_phase_pct", header: "Bear %" },
+  { key: "sector", header: "Sector" },
+];
+
+const sectorCsvCols: CsvColumn<SectorRow>[] = [
+  { key: "sector", header: "Sector" },
+  { key: "stock_count", header: "Stocks" },
+  { key: "avg_return_pct", header: "Avg Return %" },
+  { key: "avg_sharpe", header: "Avg Sharpe" },
+  {
+    key: "avg_volatility_pct",
+    header: "Avg Vol %",
+  },
+];
+
+const targetCsvCols: CsvColumn<TargetRow>[] = [
+  { key: "ticker", header: "Ticker" },
+  { key: "run_date", header: "Run Date" },
+  { key: "current_price", header: "Price" },
+  { key: "target_3m_price", header: "3m Target" },
+  { key: "target_3m_pct", header: "3m Change %" },
+  { key: "target_6m_price", header: "6m Target" },
+  { key: "target_6m_pct", header: "6m Change %" },
+  { key: "target_9m_price", header: "9m Target" },
+  { key: "target_9m_pct", header: "9m Change %" },
+  { key: "sentiment", header: "Sentiment" },
+];
+
+const dividendCsvCols: CsvColumn<DividendRow>[] = [
+  { key: "ticker", header: "Ticker" },
+  { key: "ex_date", header: "Ex-Date" },
+  { key: "amount", header: "Amount" },
+  { key: "currency", header: "Currency" },
+];
+
+const quarterlyCsvKeys: (keyof QuarterlyRow)[] = [
+  "ticker",
+  "quarter_label",
+  "revenue",
+  "net_income",
+  "eps",
+  "total_assets",
+  "total_equity",
+  "operating_cashflow",
+  "free_cashflow",
+];
+
+const piotroskiCsvCols: CsvColumn<PiotroskiRow>[] = [
+  { key: "ticker", header: "Ticker" },
+  { key: "company_name", header: "Company" },
+  { key: "total_score", header: "Score" },
+  { key: "label", header: "Rating" },
+  { key: "sector", header: "Sector" },
+  {
+    key: "market_cap",
+    header: "MCap (Cr)",
+    format: (v) =>
+      v != null
+        ? (Number(v) / 1e7).toFixed(0)
+        : "",
+  },
+  {
+    key: "revenue",
+    header: "Revenue (Cr)",
+    format: (v) =>
+      v != null
+        ? (Number(v) / 1e7).toFixed(0)
+        : "",
+  },
+  { key: "avg_volume", header: "Avg Volume" },
+];
+
+// ---------------------------------------------------------------
 // Tab content components
 // ---------------------------------------------------------------
 
@@ -752,6 +870,9 @@ function ScreenerTab() {
           col: "ticker",
           dir: "asc",
         }}
+        onDownload={(r) =>
+          downloadCsv(r, screenerCsvCols, "screener")
+        }
       />
     </div>
   );
@@ -796,6 +917,11 @@ function TargetsTab() {
           col: "run_date",
           dir: "desc",
         }}
+        onDownload={(r) =>
+          downloadCsv(
+            r, targetCsvCols, "price-targets",
+          )
+        }
       />
     </div>
   );
@@ -840,6 +966,11 @@ function DividendsTab() {
           col: "ex_date",
           dir: "desc",
         }}
+        onDownload={(r) =>
+          downloadCsv(
+            r, dividendCsvCols, "dividends",
+          )
+        }
       />
     </div>
   );
@@ -880,6 +1011,9 @@ function RiskTab() {
           col: "sharpe_ratio",
           dir: "desc",
         }}
+        onDownload={(r) =>
+          downloadCsv(r, riskCsvCols, "risk-metrics")
+        }
       />
     </div>
   );
@@ -950,6 +1084,9 @@ function SectorsTab() {
           col: "avg_return_pct",
           dir: "desc",
         }}
+        onDownload={(r) =>
+          downloadCsv(r, sectorCsvCols, "sectors")
+        }
       />
     </div>
   );
@@ -1348,6 +1485,17 @@ function QuarterlyTab() {
           col: "quarter_end",
           dir: "desc",
         }}
+        onDownload={(r) => {
+          const csv = allCols.map((c) => ({
+            key: c.key,
+            header: c.label,
+          })) as CsvColumn<QuarterlyRow>[];
+          downloadCsv(
+            r,
+            csv,
+            `quarterly-${stmtType}`,
+          );
+        }}
       />
     </div>
   );
@@ -1448,6 +1596,13 @@ function PiotroskiTab() {
           col: "total_score",
           dir: "desc",
         }}
+        onDownload={(r) =>
+          downloadCsv(
+            r,
+            piotroskiCsvCols,
+            "piotroski-fscore",
+          )
+        }
       />
     </div>
   );
