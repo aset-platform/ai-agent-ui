@@ -79,7 +79,7 @@ ollama-profile embedding                    # load nomic-embed-text (memory vect
 ollama-profile status                       # check loaded model
 ```
 
-**Key dirs**: `backend/` (agents, tools, config), `backend/pipeline/` (stock data pipeline, 19 CLI commands), `backend/jobs/` (scheduler executors, pipeline chaining, gap filler), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `backend/tools/` (forecast: `_forecast_regime.py`, `_forecast_features.py`, `_forecast_model.py`, `_forecast_ensemble.py`; sentiment: `_sentiment_finbert.py`, `_sentiment_scorer.py`), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 14 OLAP tables), `frontend/` (SPA), `dashboard/` (legacy Dash callbacks — all pages migrated to Next.js), `hooks/` (pre-commit, pre-push).
+**Key dirs**: `backend/` (agents, tools, config), `backend/pipeline/` (stock data pipeline, 19 CLI commands), `backend/jobs/` (scheduler executors, pipeline chaining, gap filler), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `backend/tools/` (forecast: `_forecast_regime.py`, `_forecast_features.py`, `_forecast_model.py`, `_forecast_ensemble.py`; sentiment: `_sentiment_finbert.py`, `_sentiment_scorer.py`), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 14 OLAP tables), `frontend/` (SPA), `e2e/` (Playwright — 257 tests, 51 specs), `hooks/` (pre-commit, pre-push).
 
 **Docker files**: `Dockerfile.backend`, `Dockerfile.frontend`,
 `Dockerfile.docs`, `docker-compose.yml`,
@@ -432,7 +432,7 @@ Run `list_memories` to browse all topics. Key categories:
   for inline elements inside `<p>` tags. `<div>` inside
   `<p>` causes React hydration errors.
 
-### Testing & Config
+### Testing & Config (unit/integration)
 
 - **Test mock dates**: Never hardcode — use
   `str(int(time.time()) - 86400)` for "yesterday".
@@ -441,50 +441,59 @@ Run `list_memories` to browse all topics. Key categories:
   test fixtures, not `limiter.reset()`.
 - **`get_settings().debug`**: Use `getattr()` with fallback.
 - **StockRepository**: Always use `_require_repo()`.
-- **E2E passwords**: `admin@demo.com` / `Admin123!`.
-  Run `seed_demo_data.py` if login fails.
-- **E2E chat panel**: Chat is collapsible side panel on
-  `/dashboard`, NOT a full page. `ChatPage.goto()` must
-  click "Toggle chat panel" button to open. All chat
-  locators scoped to `data-testid="chat-panel"` (desktop)
-  to avoid strict mode violations from mobile duplicate.
-- **E2E auth state**: `frontend-chromium` uses superuser
-  auth (`superuser.json`). Portfolio CRUD tests use
-  `analytics-chromium` (general user auth).
 - **Superuser insights**: `_get_user_tickers()` shows all
   registry for superusers, watchlist-only for general.
-- **E2E 1 worker locally**: `playwright.config.ts` uses
-  `workers: 1` locally (2 on CI). Video off locally.
-  `maxFailures: 10`. Never increase workers — 3 workers
-  consumed >1000% CPU and starved Docker services.
-- **E2E never use networkidle**: Dashboard has continuous
-  polling (market ticker 30s, WebSocket). Use explicit
-  element waits: `page.getByTestId("sidebar").toBeVisible()`.
-- **E2E below-fold widgets**: WatchlistWidget, Forecast,
-  P&L Trend are far down the dashboard. Use
-  `element.waitFor({ state: "attached" })` then
-  `scrollIntoViewIfNeeded()` before asserting visibility.
-- **E2E after page.reload()**: Chat panel closes. Wait
-  for sidebar not chat input. Never assume panel state
-  persists across navigation.
-- **E2E CSS uppercase vs DOM text**: `getByText("CURRENT
-  PLAN")` fails when DOM has "Current Plan" with CSS
-  `uppercase`. Use `getByTestId` or exact case match.
-- **E2E strict mode**: `/cancel|close/i` matches both
-  Cancel button and Close X icon (aria-label). Use
-  exact match: `/^cancel$/i`.
-- **E2E visual baselines**: Regenerate after UI changes
-  with `npx playwright test --update-snapshots`.
-  Baselines in `*.spec.ts-snapshots/` dirs, committed
-  to git.
-- **E2E testid constants**: All in `e2e/utils/selectors.ts`
+
+### E2E Testing (Playwright)
+
+**Config** (`e2e/playwright.config.ts`):
+
+| Setting | Local | CI |
+|---------|-------|----|
+| Workers | 1 | 2 |
+| Video | off | retain-on-failure |
+| maxFailures | 10 | 0 |
+| Retries | 1 | 2 |
+
+**Projects** (run one at a time locally):
+
+| Project | Auth | Tests |
+|---------|------|-------|
+| `frontend-chromium` | superuser | chat, billing, profile, dark-mode, navigation |
+| `analytics-chromium` | general user | dashboard, insights, marketplace, portfolio-crud |
+| `admin-chromium` | superuser | admin CRUD, observability, scheduler |
+
+**Key conventions**:
+- **Credentials**: `admin@demo.com` / `Admin123!`.
+  Run `seed_demo_data.py` if login fails.
+- **Chat panel**: Collapsible side panel on `/dashboard`.
+  `ChatPage.goto()` clicks "Toggle chat panel" to open.
+  All locators scoped to `data-testid="chat-panel"`.
+- **Testid constants**: All in `e2e/utils/selectors.ts`
   (FE object). Page objects use `this.tid(FE.xxx)`.
   Never hardcode testid strings in tests.
-- **E2E insights statement type**: Quarterly tab options
-  are `income`, `balance`, `cashflow` (not `balance_sheet`).
-- **E2E run projects sequentially**: Run one at a time:
-  `--project=frontend-chromium`, then analytics, then admin.
-  Never run all 3 in parallel locally.
+- **Visual baselines**: Regenerate after UI changes with
+  `npx playwright test --update-snapshots`. Baselines
+  in `*.spec.ts-snapshots/` dirs, committed to git.
+
+**Gotchas**:
+- **Never use `networkidle`** — dashboard has continuous
+  polling (30s) + WebSocket. Use explicit element waits:
+  `page.getByTestId("sidebar").toBeVisible()`.
+- **Below-fold widgets**: WatchlistWidget, Forecast, P&L
+  need `waitFor({ state: "attached" })` then
+  `scrollIntoViewIfNeeded()` before visibility asserts.
+- **After `page.reload()`**: Chat panel closes. Wait for
+  sidebar not chat input.
+- **CSS uppercase vs DOM text**: `getByText("CURRENT
+  PLAN")` fails when DOM has "Current Plan" with CSS
+  `uppercase`. Use `getByTestId` or exact case.
+- **Strict mode**: `/cancel|close/i` matches both Cancel
+  button + Close X icon. Use `/^cancel$/i`.
+- **Statement type options**: Quarterly tab uses `income`,
+  `balance`, `cashflow` (not `balance_sheet`).
+- **Never increase workers** — 3 workers consumed >1000%
+  CPU and starved Docker services.
 
 ---
 

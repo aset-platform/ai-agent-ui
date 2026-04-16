@@ -10,6 +10,8 @@ import {
   useState,
   useMemo,
   useCallback,
+  useEffect,
+  useRef,
   Suspense,
 } from "react";
 import {
@@ -65,7 +67,8 @@ type TabId =
   | "correlation"
   | "quarterly"
   | "piotroski"
-  | "recommendations";
+  | "recommendations"
+  | "screenql";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "screener", label: "Screener" },
@@ -77,6 +80,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "quarterly", label: "Quarterly" },
   { id: "piotroski", label: "Piotroski F-Score" },
   { id: "recommendations", label: "Recommendation History" },
+  { id: "screenql", label: "ScreenQL" },
 ];
 
 // ---------------------------------------------------------------
@@ -1609,6 +1613,557 @@ function PiotroskiTab() {
 }
 
 // ---------------------------------------------------------------
+// ScreenQL — universal stock screener
+// ---------------------------------------------------------------
+
+const SCREENQL_PRESETS = [
+  {
+    label: "Value Picks",
+    query:
+      "pe_ratio < 15\n" +
+      "price_to_book < 3\n" +
+      "dividend_yield > 2",
+  },
+  {
+    label: "Growth Stars",
+    query:
+      "earnings_growth > 20\n" +
+      "revenue_growth > 20\n" +
+      "sharpe_ratio > 0.5",
+  },
+  {
+    label: "Quality + Momentum",
+    query:
+      "piotroski_score >= 7\n" +
+      "annualized_return_pct > 15\n" +
+      "rsi_14 < 70",
+  },
+  {
+    label: "Undervalued Large Caps",
+    query:
+      "market_cap > 50000\n" +
+      "pe_ratio < 20\n" +
+      "sentiment_score > 0.2",
+  },
+  {
+    label: "High Conviction Forecasts",
+    query:
+      "forecast_confidence > 0.6\n" +
+      "target_6m_pct > 10",
+  },
+  {
+    label: "Dividend Champions",
+    query:
+      "dividend_yield > 3\n" +
+      "piotroski_score >= 5\n" +
+      "profit_margins > 10",
+  },
+];
+
+interface ScreenField {
+  name: string;
+  label: string;
+  type: string;
+  category: string;
+}
+
+function ScreenQLTab() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const [query, setQuery] = useState(
+    searchParams.get("q") ?? "",
+  );
+  const [results, setResults] = useState<{
+    rows: Record<string, unknown>[];
+    total: number;
+    page: number;
+    page_size: number;
+    columns_used: string[];
+    excluded_null_count: number;
+  } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string>("");
+  const [fields, setFields] = useState<
+    ScreenField[]
+  >([]);
+  const [suggestions, setSuggestions] = useState<
+    ScreenField[]
+  >([]);
+  const [showSuggestions, setShowSuggestions] =
+    useState(false);
+  const textareaRef =
+    useRef<HTMLTextAreaElement>(null);
+
+  // Fetch field catalog once
+  useEffect(() => {
+    const url = `${
+      process.env.NEXT_PUBLIC_BACKEND_URL ??
+      "http://localhost:8181"
+    }/v1/insights/screen/fields`;
+    fetch(url)
+      .then((r) => r.json())
+      .then((d) => setFields(d.fields ?? []))
+      .catch(() => {});
+  }, []);
+
+  // Auto-run if URL has ?q= param
+  useEffect(() => {
+    const q = searchParams.get("q");
+    if (q && !results && !loading) {
+      setQuery(q);
+      runScreen(q);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const runScreen = useCallback(
+    async (q?: string) => {
+      const text = q ?? query;
+      if (!text.trim()) return;
+      setLoading(true);
+      setError("");
+      try {
+        const { apiFetch } = await import(
+          "@/lib/apiFetch"
+        );
+        const API_URL = `${
+          process.env
+            .NEXT_PUBLIC_BACKEND_URL ??
+          "http://localhost:8181"
+        }/v1`;
+        const res = await apiFetch(
+          `${API_URL}/insights/screen`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              query: text,
+              page: 1,
+              page_size: 25,
+              sort_by: null,
+              sort_dir: "desc",
+            }),
+          },
+        );
+        if (!res.ok) {
+          const err = await res.json();
+          setError(
+            err.detail ?? "Query failed",
+          );
+          setResults(null);
+        } else {
+          const data = await res.json();
+          setResults(data);
+          // Update URL
+          router.replace(
+            `/analytics/insights?tab=screenql&q=${encodeURIComponent(text)}`,
+            { scroll: false },
+          );
+        }
+      } catch (e) {
+        setError(
+          e instanceof Error
+            ? e.message
+            : "Query failed",
+        );
+        setResults(null);
+      }
+      setLoading(false);
+    },
+    [query, router],
+  );
+
+  // Autocomplete logic
+  const handleQueryChange = useCallback(
+    (val: string) => {
+      setQuery(val);
+      // Get current word at cursor
+      if (!textareaRef.current) {
+        setSuggestions([]);
+        return;
+      }
+      const pos =
+        textareaRef.current.selectionStart;
+      const before = val.slice(0, pos);
+      const match = before.match(
+        /([a-zA-Z_]\w*)$/,
+      );
+      if (
+        match &&
+        match[1].length >= 2 &&
+        fields.length > 0
+      ) {
+        const partial = match[1].toLowerCase();
+        const matches = fields.filter((f) =>
+          f.name
+            .toLowerCase()
+            .includes(partial),
+        );
+        setSuggestions(matches.slice(0, 8));
+        setShowSuggestions(matches.length > 0);
+      } else {
+        setSuggestions([]);
+        setShowSuggestions(false);
+      }
+    },
+    [fields],
+  );
+
+  const acceptSuggestion = useCallback(
+    (fieldName: string) => {
+      if (!textareaRef.current) return;
+      const pos =
+        textareaRef.current.selectionStart;
+      const before = query.slice(0, pos);
+      const after = query.slice(pos);
+      const match = before.match(
+        /([a-zA-Z_]\w*)$/,
+      );
+      if (match) {
+        const start =
+          before.length - match[1].length;
+        const newVal =
+          before.slice(0, start) +
+          fieldName +
+          " " +
+          after;
+        setQuery(newVal);
+      }
+      setShowSuggestions(false);
+      textareaRef.current.focus();
+    },
+    [query],
+  );
+
+  // Build dynamic columns for results
+  const dynamicCols = useMemo(() => {
+    if (!results) return [];
+
+    const SYM: Record<string, string> = {
+      INR: "\u20B9",
+      USD: "$",
+      GBP: "\u00A3",
+      EUR: "\u20AC",
+    };
+    const sym = (
+      r: Record<string, unknown>,
+    ) => {
+      const c = String(r.currency ?? "");
+      return SYM[c] ?? c;
+    };
+
+    const baseCols: Column<
+      Record<string, unknown>
+    >[] = [
+      { key: "ticker", label: "Ticker" },
+      {
+        key: "company_name",
+        label: "Company",
+      },
+      { key: "sector", label: "Sector" },
+      {
+        key: "market_cap",
+        label: "MCap (Cr)",
+        numeric: true,
+        render: (r) =>
+          r.market_cap != null
+            ? `${sym(r)}${Number(
+                Number(r.market_cap) / 1e7,
+              ).toLocaleString("en-IN", {
+                maximumFractionDigits: 0,
+              })}`
+            : "\u2014",
+      },
+      {
+        key: "current_price",
+        label: "Price",
+        numeric: true,
+        render: (r) =>
+          r.current_price != null
+            ? `${sym(r)}${Number(
+                r.current_price,
+              ).toFixed(2)}`
+            : "\u2014",
+      },
+    ];
+
+    // Hidden helper cols (not displayed)
+    const hiddenKeys = new Set([
+      "currency", "market",
+    ]);
+
+    const baseKeys = new Set(
+      baseCols.map((c) => c.key),
+    );
+    const extra: Column<
+      Record<string, unknown>
+    >[] = [];
+    for (const col of results.columns_used) {
+      if (
+        baseKeys.has(col) ||
+        hiddenKeys.has(col)
+      ) {
+        continue;
+      }
+      extra.push({
+        key: col,
+        label: col
+          .replace(/_/g, " ")
+          .replace(
+            /\b\w/g,
+            (c) => c.toUpperCase(),
+          ),
+        numeric: ![
+          "sector", "industry",
+          "market", "currency",
+          "rsi_signal", "macd_signal",
+          "sma_200_signal",
+          "piotroski_label",
+        ].includes(col),
+        render: (r) => {
+          const v = r[col];
+          if (v == null) return "\u2014";
+          if (typeof v === "number") {
+            return v.toFixed(2);
+          }
+          return String(v);
+        },
+      });
+    }
+
+    return [...baseCols, ...extra];
+  }, [results]);
+
+  // CSV columns
+  const csvCols = useMemo(() => {
+    if (!dynamicCols.length) return [];
+    return dynamicCols.map((c) => ({
+      key: c.key,
+      header: c.label,
+    })) as CsvColumn<
+      Record<string, unknown>
+    >[];
+  }, [dynamicCols]);
+
+  return (
+    <div className="space-y-4">
+      {/* Preset chips */}
+      <div
+        className="flex flex-wrap gap-2"
+        data-testid="screenql-presets"
+      >
+        {SCREENQL_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            onClick={() => {
+              setQuery(p.query);
+              setShowSuggestions(false);
+            }}
+            className="px-3 py-1 text-xs
+              font-medium rounded-full border
+              border-gray-300 dark:border-gray-600
+              text-gray-600 dark:text-gray-300
+              hover:bg-indigo-50
+              dark:hover:bg-indigo-900/20
+              hover:border-indigo-400
+              dark:hover:border-indigo-500
+              hover:text-indigo-600
+              dark:hover:text-indigo-400
+              transition-colors"
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Query input + run */}
+      <div className="relative">
+        <textarea
+          ref={textareaRef}
+          data-testid="screenql-input"
+          value={query}
+          onChange={(e) =>
+            handleQueryChange(e.target.value)
+          }
+          onKeyDown={(e) => {
+            if (
+              e.key === "Enter" &&
+              (e.metaKey || e.ctrlKey)
+            ) {
+              e.preventDefault();
+              runScreen();
+            }
+            if (e.key === "Escape") {
+              setShowSuggestions(false);
+            }
+          }}
+          onBlur={() =>
+            setTimeout(
+              () => setShowSuggestions(false),
+              150,
+            )
+          }
+          placeholder={
+            "Type conditions... e.g. " +
+            "pe_ratio < 15 AND market_cap > 50000"
+          }
+          rows={4}
+          className="w-full rounded-lg border
+            border-gray-300 dark:border-gray-600
+            bg-white dark:bg-gray-800
+            px-3 py-2 text-sm font-mono
+            text-gray-700 dark:text-gray-200
+            placeholder:text-gray-400
+            focus:outline-none focus:ring-2
+            focus:ring-indigo-500/40
+            resize-y"
+        />
+
+        {/* Autocomplete dropdown */}
+        {showSuggestions &&
+          suggestions.length > 0 && (
+          <div
+            className="absolute z-20 mt-1
+            w-72 rounded-lg border
+            border-gray-200 dark:border-gray-700
+            bg-white dark:bg-gray-800
+            shadow-lg overflow-hidden"
+          >
+            {suggestions.map((s) => (
+              <button
+                key={s.name}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  acceptSuggestion(s.name);
+                }}
+                className="w-full px-3 py-1.5
+                  text-left text-xs
+                  hover:bg-indigo-50
+                  dark:hover:bg-indigo-900/20
+                  flex justify-between
+                  items-center"
+              >
+                <span className="font-mono
+                  text-gray-700
+                  dark:text-gray-200">
+                  {s.name}
+                </span>
+                <span className="text-gray-400
+                  dark:text-gray-500">
+                  {s.type} &middot; {s.category}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Run button + info */}
+      <div className="flex items-center gap-3">
+        <button
+          data-testid="screenql-run"
+          onClick={() => runScreen()}
+          disabled={loading || !query.trim()}
+          className="px-4 py-1.5 text-sm
+            font-medium text-white
+            bg-indigo-600 rounded-lg
+            hover:bg-indigo-700
+            disabled:opacity-50
+            disabled:cursor-not-allowed
+            transition-colors"
+        >
+          {loading
+            ? "Running\u2026"
+            : "Run Screen"}
+        </button>
+        <span className="text-xs text-gray-400">
+          {typeof navigator !== "undefined" &&
+          /Mac/i.test(navigator.platform)
+            ? "⌘+Enter"
+            : "Ctrl+Enter"}{" "}
+          to run
+        </span>
+        {results && (
+          <span
+            className="text-xs font-medium
+            text-indigo-600 dark:text-indigo-400"
+          >
+            {results.total} results
+            {results.excluded_null_count > 0 &&
+              ` (${results.excluded_null_count} excluded)`}
+          </span>
+        )}
+      </div>
+
+      {/* Error banner */}
+      {error && (
+        <div
+          data-testid="screenql-error"
+          className="rounded-lg border
+          border-red-200 dark:border-red-800
+          bg-red-50 dark:bg-red-900/20
+          px-4 py-2 text-sm text-red-700
+          dark:text-red-400 flex
+          items-start gap-2"
+        >
+          <span className="shrink-0 mt-0.5">
+            &#9888;
+          </span>
+          <span>{error}</span>
+          <button
+            onClick={() => setError("")}
+            className="ml-auto shrink-0
+              text-red-400 hover:text-red-600"
+          >
+            &times;
+          </button>
+        </div>
+      )}
+
+      {/* Results table */}
+      {results && dynamicCols.length > 0 && (
+        <InsightsTable<
+          Record<string, unknown>
+        >
+          columns={dynamicCols}
+          rows={
+            results.rows as Record<
+              string,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              any
+            >[]
+          }
+          defaultSort={{
+            col: "market_cap",
+            dir: "desc",
+          }}
+          onDownload={(r) =>
+            downloadCsv(
+              r, csvCols, "screenql-results",
+            )
+          }
+        />
+      )}
+
+      {results &&
+        results.rows.length === 0 &&
+        !loading && (
+        <div
+          className="py-12 text-center
+            text-gray-400 dark:text-gray-500"
+        >
+          No matching stocks found.
+          Try adjusting your conditions.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------
 
@@ -1652,6 +2207,8 @@ function InsightsPageInner() {
         return <PiotroskiTab />;
       case "recommendations":
         return <RecommendationHistoryTab />;
+      case "screenql":
+        return <ScreenQLTab />;
     }
   }, [activeTab]);
 
