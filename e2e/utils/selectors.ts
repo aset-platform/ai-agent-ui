@@ -165,7 +165,7 @@ export const FE = {
   adminCascadeTable: "admin-cascade-table",
   adminSummaryRequests: "admin-summary-requests",
   adminSummaryCascades: "admin-summary-cascades",
-  adminSummaryCompressions: "admin-summary-compressions",
+  adminSummaryCompressions: "admin-summary-tokens",
 
   // ── AddStockModal ────────────────────────────────
   addStockTicker: "add-stock-ticker",

@@ -38,8 +38,10 @@ test.describe("Token refresh", () => {
   }) => {
     // Just verify that with valid storageState, the page loads
     await page.goto("/dashboard");
+    // Sidebar is always visible on dashboard (chat panel
+    // is collapsed by default)
     await expect(
-      page.getByTestId("chat-message-input"),
+      page.getByTestId("sidebar"),
     ).toBeVisible({ timeout: 15_000 });
   });
 });
