@@ -59,6 +59,7 @@ export default defineConfig({
         /dashboard.*\.spec\.ts/,
         /insights.*\.spec\.ts/,
         /marketplace.*\.spec\.ts/,
+        /portfolio.*\.spec\.ts/,
         /admin.*\.spec\.ts/,
         /theme-consistency.*\.spec\.ts/,
       ],
@@ -79,6 +80,7 @@ export default defineConfig({
         /dashboard.*\.spec\.ts/,
         /insights.*\.spec\.ts/,
         /marketplace.*\.spec\.ts/,
+        /portfolio.*\.spec\.ts/,
         /theme-consistency.*\.spec\.ts/,
       ],
       use: {

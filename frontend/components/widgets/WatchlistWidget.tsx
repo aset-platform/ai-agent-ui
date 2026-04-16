@@ -411,6 +411,7 @@ export function WatchlistWidget({
                           onEditStock(h.ticker);
                         }}
                         title="Edit holding"
+                        data-testid={`watchlist-edit-${h.ticker}`}
                         className="p-1 rounded text-gray-400 hover:text-indigo-600 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
                       >
                         <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -425,6 +426,7 @@ export function WatchlistWidget({
                           onDeleteStock(h.ticker);
                         }}
                         title="Remove from portfolio"
+                        data-testid={`watchlist-delete-${h.ticker}`}
                         className="p-1 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
                       >
                         <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

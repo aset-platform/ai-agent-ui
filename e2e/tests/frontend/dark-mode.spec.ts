@@ -1,39 +1,29 @@
 /**
  * E2E tests for dark mode theme toggling and persistence.
  *
- * Uses pre-authenticated storageState (general user).
+ * Uses pre-authenticated storageState (superuser).
+ * Theme toggle lives in the desktop sidebar footer.
  */
 
 import { test, expect } from "@playwright/test";
 
-import { ChatPage } from "../../pages/frontend/chat.page";
+import { FE } from "../../utils/selectors";
 
 test.describe("Dark mode", () => {
-  let chatPage: ChatPage;
-
   test.beforeEach(async ({ page }) => {
-    chatPage = new ChatPage(page);
-    await chatPage.goto();
-    await expect(chatPage.messageInput).toBeVisible({
-      timeout: 15_000,
-    });
+    await page.goto("/dashboard");
+    await expect(
+      page.getByTestId(FE.sidebar),
+    ).toBeVisible({ timeout: 15_000 });
   });
 
   test("theme toggle switches between light and dark", async ({
     page,
   }) => {
-    // Open nav drawer
-    const navBtn = page.getByRole("button", {
-      name: /open navigation/i,
-    });
-    await navBtn.click();
-    // Use the visible Dark Mode / Light Mode button
-    const themeBtn = page.getByRole("button", {
-      name: /dark mode|light mode/i,
-    });
-    await expect(themeBtn.first()).toBeVisible({
-      timeout: 5_000,
-    });
+    const themeBtn = page.getByTestId(
+      FE.sidebarThemeToggle,
+    );
+    await expect(themeBtn).toBeVisible({ timeout: 5_000 });
 
     // Get initial theme
     const initialTheme = await page.evaluate(
@@ -41,7 +31,7 @@ test.describe("Dark mode", () => {
     );
 
     // Toggle theme
-    await themeBtn.first().click();
+    await themeBtn.click();
     const newTheme = await page.evaluate(
       () => localStorage.getItem("theme"),
     );
@@ -51,14 +41,13 @@ test.describe("Dark mode", () => {
   test("dark mode persists across page reload", async ({
     page,
   }) => {
-    // Set dark mode
     await page.evaluate(
       () => localStorage.setItem("theme", "dark"),
     );
     await page.reload();
-    await expect(chatPage.messageInput).toBeVisible({
-      timeout: 15_000,
-    });
+    await expect(
+      page.getByTestId(FE.sidebar),
+    ).toBeVisible({ timeout: 15_000 });
 
     const theme = await page.evaluate(
       () => localStorage.getItem("theme"),
@@ -73,36 +62,33 @@ test.describe("Dark mode", () => {
       () => localStorage.setItem("theme", "dark"),
     );
     await page.reload();
-    await expect(chatPage.messageInput).toBeVisible({
-      timeout: 15_000,
-    });
+    await expect(
+      page.getByTestId(FE.sidebar),
+    ).toBeVisible({ timeout: 15_000 });
 
     const hasDarkClass = await page.evaluate(
-      () => document.documentElement.classList.contains("dark"),
+      () =>
+        document.documentElement.classList.contains("dark"),
     );
     expect(hasDarkClass).toBe(true);
   });
 
-  test("switching view preserves dark mode", async ({ page }) => {
-    // Set dark mode
+  test("switching view preserves dark mode", async ({
+    page,
+  }) => {
     await page.evaluate(
       () => localStorage.setItem("theme", "dark"),
     );
     await page.reload();
-    await expect(chatPage.messageInput).toBeVisible({
-      timeout: 15_000,
-    });
+    await expect(
+      page.getByTestId(FE.sidebar),
+    ).toBeVisible({ timeout: 15_000 });
 
-    // Switch to dashboard view via nav drawer
-    const navBtn = page.getByRole("button", {
-      name: /open navigation/i,
-    });
-    await navBtn.click();
-    const dashBtn = page.getByRole("button", {
-      name: /dashboard/i,
-    });
-    await dashBtn.first().click();
-    await page.waitForLoadState("networkidle");
+    // Navigate to docs via sidebar
+    await page
+      .getByTestId(FE.sidebarItem("docs"))
+      .click();
+    await page.waitForURL("**/docs**");
 
     // Theme should still be dark
     const theme = await page.evaluate(

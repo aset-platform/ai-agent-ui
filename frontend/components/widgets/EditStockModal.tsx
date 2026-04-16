@@ -68,7 +68,7 @@ export function EditStockModal({
         className="absolute inset-0 bg-black/50"
         onClick={onClose}
       />
-      <div className="relative w-full max-w-sm rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-xl p-6 mx-4">
+      <div data-testid="edit-stock-modal" className="relative w-full max-w-sm rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-xl p-6 mx-4">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-1">
           Edit {ticker}
         </h2>

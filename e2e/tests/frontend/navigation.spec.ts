@@ -1,122 +1,100 @@
 /**
- * E2E tests for the navigation menu and view switching.
+ * E2E tests for sidebar navigation and view switching.
+ *
+ * Desktop sidebar is always visible (md+). Navigation uses
+ * Next.js <Link> routing — no iframes for dashboard/analytics.
+ * Docs page still embeds MkDocs via iframe.
  */
 
 import { test, expect } from "@playwright/test";
+
+import { FE } from "../../utils/selectors";
 
 test.describe("Navigation", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/dashboard");
     await expect(
-      page.getByRole("button", { name: "Toggle chat panel" }),
+      page.getByTestId(FE.sidebar),
     ).toBeVisible({ timeout: 15_000 });
   });
 
-  test("nav button opens navigation drawer", async ({
+  test("sidebar is visible with nav items", async ({
     page,
   }) => {
-    const navBtn = page.getByRole("button", {
-      name: /open navigation/i,
-    });
-    await navBtn.click();
-    // At minimum, "Dashboard" option should be visible
-    const dashBtn = page.getByRole("button", {
-      name: /dashboard/i,
-    });
-    await expect(dashBtn.first()).toBeVisible({
-      timeout: 5_000,
-    });
+    // Portfolio (dashboard) and Docs should be visible
+    await expect(
+      page.getByTestId(FE.sidebarItem("dashboard")),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId(FE.sidebarItem("docs")),
+    ).toBeVisible();
   });
 
-  test("navigate to dashboard → iframe loads", async ({
+  test("navigate to docs → iframe loads", async ({
     page,
   }) => {
-    const navBtn = page.getByRole("button", {
-      name: /open navigation/i,
-    });
-    await navBtn.click();
-    const dashBtn = page.getByRole("button", {
-      name: /dashboard/i,
-    });
-    await dashBtn.first().click();
-    // The dashboard is loaded in an iframe
+    await page
+      .getByTestId(FE.sidebarItem("docs"))
+      .click();
+    await page.waitForURL("**/docs**");
     const iframe = page.locator("iframe");
-    await expect(iframe).toBeVisible({ timeout: 15_000 });
-    const src = await iframe.getAttribute("src");
-    expect(src).toContain("8050");
-  });
-
-  test("navigate to docs → iframe loads", async ({ page }) => {
-    const navBtn = page.getByRole("button", {
-      name: /open navigation/i,
+    await expect(iframe).toBeVisible({
+      timeout: 15_000,
     });
-    await navBtn.click();
-    const docsBtn = page.getByRole("button", {
-      name: /docs/i,
-    });
-    await docsBtn.first().click();
-    const iframe = page.locator("iframe");
-    await expect(iframe).toBeVisible({ timeout: 15_000 });
     const src = await iframe.getAttribute("src");
     expect(src).toContain("8000");
   });
 
-  test("chat nav item returns to chat view", async ({
+  test("navigate to analytics → page loads", async ({
     page,
   }) => {
-    // Navigate away first
-    const navBtn = page.getByRole("button", {
-      name: /open navigation/i,
-    });
-    await navBtn.click();
-    const dashBtn = page.getByRole("button", {
-      name: /dashboard/i,
-    });
-    await dashBtn.first().click();
-    await page.waitForLoadState("networkidle");
+    // Sidebar defaults to collapsed — analytics group is
+    // a direct link. Click it to navigate.
+    await page
+      .getByTestId(FE.sidebarGroup("analytics"))
+      .click();
+    await page.waitForURL("**/analytics**");
+  });
 
-    // Navigate back to chat
-    const navBtn2 = page.getByRole("button", {
-      name: /open navigation/i,
-    });
-    await navBtn2.click();
-    const chatBtn = page.getByRole("button", {
-      name: /^chat$/i,
-    });
-    await chatBtn.first().click();
+  test("navigate back to portfolio from docs", async ({
+    page,
+  }) => {
+    // Go to docs first
+    await page
+      .getByTestId(FE.sidebarItem("docs"))
+      .click();
+    await page.waitForURL("**/docs**");
 
-    // Chat input should reappear
+    // Navigate back to portfolio
+    await page
+      .getByTestId(FE.sidebarItem("dashboard"))
+      .click();
+    await page.waitForURL("**/dashboard**");
+
+    // Chat toggle should be available on dashboard
     await expect(
-      page.getByRole("button", { name: "Toggle chat panel" }),
+      page.getByTestId("chat-toggle"),
     ).toBeVisible({ timeout: 15_000 });
   });
 
   test("navigation preserves auth state", async ({
     page,
   }) => {
-    // Navigate to dashboard
-    const navBtn = page.getByRole("button", {
-      name: /open navigation/i,
-    });
-    await navBtn.click();
-    const dashBtn = page.getByRole("button", {
-      name: /dashboard/i,
-    });
-    await dashBtn.first().click();
-    await page.waitForLoadState("networkidle");
+    // Navigate to docs
+    await page
+      .getByTestId(FE.sidebarItem("docs"))
+      .click();
+    await page.waitForURL("**/docs**");
 
-    // Navigate back to chat
-    const navBtn2 = page.getByRole("button", {
-      name: /open navigation/i,
-    });
-    await navBtn2.click();
-    const chatBtn = page.getByRole("button", {
-      name: /^chat$/i,
-    });
-    await chatBtn.first().click();
+    // Navigate back to dashboard
+    await page
+      .getByTestId(FE.sidebarItem("dashboard"))
+      .click();
+    await page.waitForURL("**/dashboard**");
 
-    // Profile avatar should still be visible (still authed)
-    const avatar = page.getByTestId("profile-avatar");
-    await expect(avatar).toBeVisible({ timeout: 15_000 });
+    // Profile avatar should still be visible
+    await expect(
+      page.getByTestId(FE.profileAvatar),
+    ).toBeVisible({ timeout: 15_000 });
   });
 });

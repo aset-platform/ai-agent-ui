@@ -60,18 +60,13 @@ test.describe("Chat interface", () => {
     await expect(lastAssistant).not.toBeEmpty();
   });
 
-  test("clear messages → all bubbles removed", async ({
-    page,
-  }) => {
-    await mockChatStream(page);
-    // Send a message first
-    await chatPage.sendMessage("Test message for clearing");
-    await expect(chatPage.userMessages).toHaveCount(1, {
-      timeout: 5_000,
-    });
-    // Clear
-    await chatPage.clearAllMessages();
-  });
+  // Clear button only exists on the legacy full-page chat
+  // view (view === "chat"). The current UI uses a chat side
+  // panel on /dashboard — no clear button is rendered.
+  test.skip(
+    "clear messages → all bubbles removed",
+    async () => {},
+  );
 
   test("multi-turn conversation → messages stack", async ({
     page,

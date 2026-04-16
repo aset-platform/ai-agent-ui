@@ -8,6 +8,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 import { ChatPage } from "../../pages/frontend/chat.page";
+import { FE } from "../../utils/selectors";
 
 async function openBillingTab(
   chatPage: ChatPage,
@@ -25,7 +26,7 @@ async function openBillingTab(
   }
   await billing.click();
   await expect(
-    page.getByText("CURRENT PLAN"),
+    page.getByTestId(FE.billingCurrentPlan),
   ).toBeVisible({ timeout: 10_000 });
 }
 
@@ -44,15 +45,13 @@ test.describe("Billing tab", () => {
     page,
   }) => {
     await openBillingTab(chatPage, page);
-    await expect(
-      page.getByText("CURRENT PLAN"),
-    ).toBeVisible();
+    const planEl = page.getByTestId(
+      FE.billingCurrentPlan,
+    );
+    await expect(planEl).toBeVisible();
     // Should show one of: Free, Pro, Premium
-    const planText = await page
-      .locator("text=CURRENT PLAN")
-      .locator("..")
-      .textContent();
-    expect(planText).toMatch(/Free|Pro|Premium/);
+    const planText = await planEl.textContent();
+    expect(planText).toMatch(/free|pro|premium/i);
   });
 
   test("pricing cards show all 3 tiers", async ({
@@ -77,7 +76,10 @@ test.describe("Billing tab", () => {
     page,
   }) => {
     await openBillingTab(chatPage, page);
-    const meter = page.getByText(/\d+\s*\/\s*\d+\s*used/);
+    // Format: "X / Y used" (limited) or "X used (unlimited)"
+    const meter = page.getByText(
+      /\d+\s*(\/\s*\d+\s*)?used/,
+    );
     await expect(meter).toBeVisible({
       timeout: 5_000,
     });
@@ -89,12 +91,12 @@ test.describe("Billing tab", () => {
     await openBillingTab(chatPage, page);
 
     // Default should be INR (Razorpay)
-    const inrBtn = page.getByRole("button", {
-      name: /UPI.*INR/i,
-    });
-    const usdBtn = page.getByRole("button", {
-      name: /International.*USD/i,
-    });
+    const inrBtn = page.getByTestId(
+      FE.billingGatewayRazorpay,
+    );
+    const usdBtn = page.getByTestId(
+      FE.billingGatewayStripe,
+    );
     await expect(inrBtn).toBeVisible();
     await expect(usdBtn).toBeVisible();
 
@@ -118,8 +120,9 @@ test.describe("Billing tab", () => {
     page,
   }) => {
     await openBillingTab(chatPage, page);
+    // "Current plan" badge on the active pricing card
     await expect(
-      page.getByText("Current plan"),
+      page.getByText("Current plan", { exact: true }),
     ).toBeVisible();
   });
 });

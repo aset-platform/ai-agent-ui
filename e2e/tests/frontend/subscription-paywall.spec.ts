@@ -23,10 +23,10 @@ test.describe("Paywall enforcement", () => {
   test("usage badge visible in header", async ({
     page,
   }) => {
-    // The usage badge shows X/Y format
+    // The usage badge shows X/Y format in the header
     const badge = page.locator(
-      "span:has-text(/\\d+\\/\\d+/)",
-    );
+      "span",
+    ).filter({ hasText: /\d+\s*\/\s*\d+/ });
     // May not be visible if premium/unlimited
     const count = await badge.count();
     // Just verify no crash — badge is optional

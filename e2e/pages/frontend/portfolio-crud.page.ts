@@ -21,7 +21,9 @@ export class PortfolioCrudPage extends BasePage {
 
   /** Click the "Add Stock" button on the dashboard. */
   async openAddStockModal(): Promise<void> {
-    await this.tid(FE.dashboardAddStockBtn).click();
+    const btn = this.tid(FE.dashboardAddStockBtn);
+    await btn.scrollIntoViewIfNeeded();
+    await btn.click();
   }
 
   /**
@@ -36,24 +38,19 @@ export class PortfolioCrudPage extends BasePage {
     price: number,
     date: string,
   ): Promise<void> {
-    // data-testid="add-stock-ticker-input"
-    await this.tid("add-stock-ticker-input").fill(ticker);
-    // data-testid="add-stock-quantity-input"
-    await this.tid("add-stock-quantity-input").fill(
+    await this.tid(FE.addStockTicker).fill(ticker);
+    await this.tid(FE.addStockQuantity).fill(
       String(qty),
     );
-    // data-testid="add-stock-price-input"
-    await this.tid("add-stock-price-input").fill(
+    await this.tid(FE.addStockPrice).fill(
       String(price),
     );
-    // data-testid="add-stock-date-input"
-    await this.tid("add-stock-date-input").fill(date);
+    await this.tid(FE.addStockDate).fill(date);
   }
 
   /** Click the submit button in the add-stock modal. */
   async submitAddStock(): Promise<void> {
-    // data-testid="add-stock-submit-btn"
-    await this.tid("add-stock-submit-btn").click();
+    await this.tid(FE.addStockSubmit).click();
   }
 
   // ── Edit Stock ────────────────────────────────────
@@ -65,7 +62,10 @@ export class PortfolioCrudPage extends BasePage {
    * identified by the ticker symbol.
    */
   async openEditModal(ticker: string): Promise<void> {
-    // data-testid="watchlist-edit-{ticker}"
+    const row = this.tid(
+      FE.dashboardWatchlistRow(ticker),
+    );
+    await row.scrollIntoViewIfNeeded();
     await this.tid(`watchlist-edit-${ticker}`).click();
   }
 
@@ -74,19 +74,18 @@ export class PortfolioCrudPage extends BasePage {
     qty: number,
     price: number,
   ): Promise<void> {
-    const qtyInput = this.tid("edit-stock-quantity-input");
+    const qtyInput = this.tid(FE.editStockQuantity);
     await qtyInput.clear();
     await qtyInput.fill(String(qty));
 
-    const priceInput = this.tid("edit-stock-price-input");
+    const priceInput = this.tid(FE.editStockPrice);
     await priceInput.clear();
     await priceInput.fill(String(price));
   }
 
   /** Click the save/submit button in the edit modal. */
   async submitEdit(): Promise<void> {
-    // data-testid="edit-stock-submit-btn"
-    await this.tid("edit-stock-submit-btn").click();
+    await this.tid(FE.editStockSave).click();
   }
 
   // ── Delete Stock ──────────────────────────────────
@@ -97,7 +96,10 @@ export class PortfolioCrudPage extends BasePage {
    * This should open a ConfirmDialog.
    */
   async clickDeleteBtn(ticker: string): Promise<void> {
-    // data-testid="watchlist-delete-{ticker}"
+    const row = this.tid(
+      FE.dashboardWatchlistRow(ticker),
+    );
+    await row.scrollIntoViewIfNeeded();
     await this.tid(`watchlist-delete-${ticker}`).click();
   }
 

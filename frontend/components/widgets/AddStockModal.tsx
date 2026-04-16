@@ -111,7 +111,7 @@ export function AddStockModal({
       />
 
       {/* Modal */}
-      <div className="relative w-full max-w-md rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-xl p-6 mx-4">
+      <div data-testid="add-stock-modal" className="relative w-full max-w-md rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-xl p-6 mx-4">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
           Add Stock to Portfolio
         </h2>
