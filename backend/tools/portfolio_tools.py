@@ -844,6 +844,29 @@ _PERIOD_DAYS: dict[str, int] = {
 }
 
 
+_UNIT_DAYS = {"D": 1, "W": 7, "M": 30, "Y": 365}
+
+
+def _period_to_days(period: str) -> int | None:
+    """Convert a period string like '2W' to days.
+
+    Supports any ``<N><unit>`` where unit is D/W/M/Y,
+    plus the predefined keys in ``_PERIOD_DAYS``.
+    Returns ``None`` for ISO ranges or unrecognised
+    strings.
+    """
+    p = period.strip().upper()
+    if p in _PERIOD_DAYS:
+        return _PERIOD_DAYS[p]
+    if len(p) >= 2 and p[-1] in _UNIT_DAYS:
+        try:
+            n = int(p[:-1])
+            return n * _UNIT_DAYS[p[-1]]
+        except ValueError:
+            return None
+    return None
+
+
 def _parse_period(
     period: str,
     start_date: str = "",
@@ -1131,8 +1154,31 @@ def get_portfolio_comparison(
     """
     user_id = _get_user_or_error()
 
-    s1, e1 = _parse_period(period1)
-    s2, e2 = _parse_period(period2)
+    # When both periods are shorthand strings (not ISO
+    # date ranges), compute non-overlapping windows:
+    # period2 = recent window ending today,
+    # period1 = preceding window ending where period2
+    # starts.  This makes "2W vs 1W" mean "last week
+    # vs this week" instead of overlapping ranges.
+    d1 = _period_to_days(period1)
+    d2 = _period_to_days(period2)
+    if (
+        ":" not in period1
+        and ":" not in period2
+        and d1 is not None
+        and d2 is not None
+    ):
+        today = date.today()
+        s2 = today - timedelta(days=d2)
+        e2 = today
+        # period1 window ends where period2 starts.
+        e1 = s2 - timedelta(days=1)
+        s1 = e1 - timedelta(days=d1) + timedelta(
+            days=1,
+        )
+    else:
+        s1, e1 = _parse_period(period1)
+        s2, e2 = _parse_period(period2)
 
     df1, sum1 = _compute_daily_portfolio(
         user_id, s1, e1,
