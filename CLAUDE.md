@@ -102,11 +102,16 @@ ollama-profile status                       # check loaded model
 | N-1 | Ollama (local) | gpt-oss:20b | Fallback (`ollama_first=False` everywhere) |
 | N | Anthropic (paid) | claude-sonnet-4-6 | Final fallback |
 
-- `OllamaManager` (`backend/ollama_manager.py`): TTL-cached health probe,
-  load/unload profiles. If Ollama unavailable, cascade skips it.
+- `FallbackLLM` (`backend/llm_fallback.py`): per-request model
+  pinning via `_pinned_model`. First invoke selects model via
+  round-robin, subsequent iterations reuse it. `pin_reset()`
+  called before each ReAct loop in `sub_agents.py`.
 - `RoundRobinPool` (`backend/token_budget.py`): per-pool atomic
   counter, `get_token_budget()` singleton seeded from Iceberg.
+  Counter advances once per REQUEST, not per iteration.
   `ROUND_ROBIN_ENABLED=false` reverts to legacy sequential.
+- `OllamaManager` (`backend/ollama_manager.py`): TTL-cached health
+  probe, load/unload profiles. If unavailable, cascade skips.
 - Admin API: `GET/POST /v1/admin/ollama/{status,load,unload}`
 - `ollama-profile` CLI: `coding`, `reasoning`, `embedding`, `unload`
 - Observability: `provider="ollama"` in `ObservabilityCollector`
@@ -250,8 +255,8 @@ These rules MUST be followed in every interaction.
 23. **Commit Serena memories** — always `git add .serena/`
     before final push. Shared memories are checked into git.
 24. **Test-after-feature** — happy path + 1 error path minimum.
-25. **Jira story points** — update BOTH `customfield_10016`
-    AND `customfield_10036`.
+25. **Jira story points** — update `customfield_10016`
+    (estimate). `customfield_10036` not settable via API.
 
 ### Infra & Config
 
@@ -325,6 +330,18 @@ Run `list_memories` to browse all topics. Key categories:
   use `computed_at` (exact UTC timestamp) for dedup, not
   `run_date`. Affects `get_dashboard_forecast_runs()` and
   `get_latest_forecast_run()`.
+- **NeuralProphet incompatible**: pandas 3.0 breaks
+  `Series.view()` and `groupby().apply()` in NP 0.8.0–
+  1.0.0rc10. Project stale since June 2024. Do NOT attempt
+  integration until pandas 3.0 support ships.
+- **Portfolio period overlap**: `_parse_period()` computes
+  both periods from today. For comparison ("2W vs 1W"),
+  `get_portfolio_comparison` uses `_period_to_days()` to
+  build non-overlapping windows: period2=recent ending today,
+  period1=preceding ending where period2 starts.
+- **Portfolio bfill**: `_compute_daily_portfolio()` uses
+  `ffill().bfill()` on ticker DataFrame. Without `bfill()`,
+  first rows with partial tickers inflate returns to 4000%+.
 
 ### Database & PG
 
@@ -379,6 +396,14 @@ Run `list_memories` to browse all topics. Key categories:
   `FallbackLLM.bind_tools()`.
 - **Groq TPD limits**: 5 models ~2.0M combined TPD.
   `TokenBudget` seeds from Iceberg on restart.
+- **Model pinning**: `_pinned_model` in `FallbackLLM` locks
+  model after first invoke per request. If pinned model hits
+  budget, compresses first, then unpins and cascades. Call
+  `pin_reset()` before each new ReAct loop.
+- **Double-synthesis**: Sub-agent synthesis + graph-level
+  synthesis caused hallucinations. Portfolio uses
+  `skip_synthesis=True` — tools return formatted tables.
+  Graph synthesis passthroughs responses >100 chars.
 
 ### Frontend
 
@@ -421,6 +446,14 @@ Run `list_memories` to browse all topics. Key categories:
 - **StockRepository**: Always use `_require_repo()`.
 - **E2E passwords**: `admin@demo.com` / `Admin123!`.
   Run `seed_demo_data.py` if login fails.
+- **E2E chat panel**: Chat is collapsible side panel on
+  `/dashboard`, NOT a full page. `ChatPage.goto()` must
+  click "Toggle chat panel" button to open. All chat
+  locators scoped to `data-testid="chat-panel"` (desktop)
+  to avoid strict mode violations from mobile duplicate.
+- **E2E auth state**: `frontend-chromium` uses superuser
+  auth (`superuser.json`). Tests need `admin@demo.com`
+  credentials for full dashboard access.
 - **Superuser insights**: `_get_user_tickers()` shows all
   registry for superusers, watchlist-only for general.
 ---
@@ -435,7 +468,7 @@ flake8 backend/ auth/ stocks/ scripts/
 cd frontend && npx eslint . --fix
 
 # Test
-python -m pytest tests/ -v        # all (~834 tests)
+python -m pytest tests/ -v        # all (~839 tests)
 cd frontend && npx vitest run     # frontend (18 tests)
 cd e2e && npm test                # E2E (~219 tests, needs live services)
 
