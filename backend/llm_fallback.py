@@ -267,6 +267,12 @@ class FallbackLLM:
                 ],
             )
 
+        # Per-request model pinning — prevents
+        # round-robin rotation within a single ReAct
+        # iteration loop.  Call pin_reset() before
+        # each new request context.
+        self._pinned_model: str | None = None
+
         # Anthropic fallback (None = disabled for test).
         self._anthropic_model = anthropic_model
         if anthropic_model:
@@ -310,6 +316,16 @@ class FallbackLLM:
                 tools, **kwargs
             )
         return self
+
+    def pin_reset(self) -> None:
+        """Reset model pin for a new request context.
+
+        Call this before each sub-agent iteration loop
+        so the first ``invoke()`` selects a fresh model
+        via round-robin, then subsequent iterations
+        reuse it.
+        """
+        self._pinned_model = None
 
     def _try_model(
         self,
@@ -620,6 +636,41 @@ class FallbackLLM:
                         self._agent_id,
                     )
 
+        # Step 2b: Try pinned model first (per-request
+        # affinity).  Avoids round-robin rotation within
+        # a single ReAct iteration loop.
+        _pin_tier = 1 if self._ollama_tier else 0
+        if self._pinned_model is not None:
+            info = self._model_lookup.get(
+                self._pinned_model,
+            )
+            if info is not None:
+                _, _, bound_llm = info
+                result = self._try_model(
+                    self._pinned_model,
+                    bound_llm,
+                    compressed,
+                    est,
+                    messages,
+                    iteration,
+                    _pin_tier,
+                    _trace_cbs,
+                    _user,
+                    **kwargs,
+                )
+                if result is not None:
+                    return result
+            # Pinned model failed (budget or error) —
+            # clear pin and fall through to normal
+            # cascade below.
+            _logger.info(
+                "Pinned model %s failed, "
+                "unpinning (agent=%s)",
+                self._pinned_model,
+                self._agent_id,
+            )
+            self._pinned_model = None
+
         # Step 3: Try Groq tiers — pool-aware or flat.
         _tier_offset = 1 if self._ollama_tier else 0
         _tier_idx = _tier_offset
@@ -648,6 +699,7 @@ class FallbackLLM:
                         **kwargs,
                     )
                     if result is not None:
+                        self._pinned_model = model_name
                         return result
                     _tier_idx += 1
         else:
@@ -668,6 +720,7 @@ class FallbackLLM:
                     **kwargs,
                 )
                 if result is not None:
+                    self._pinned_model = model_name
                     return result
 
         # Step 3b: Try Ollama AFTER Groq if not ollama_first.
