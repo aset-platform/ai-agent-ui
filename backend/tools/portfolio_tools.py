@@ -951,7 +951,7 @@ def _compute_daily_portfolio(
 
     # Combine into portfolio daily value
     pf = pd.DataFrame(ticker_series)
-    pf = pf.ffill().dropna(how="all")
+    pf = pf.ffill().bfill().dropna(how="all")
     daily_value = pf.sum(axis=1)
 
     if len(daily_value) < 2:
