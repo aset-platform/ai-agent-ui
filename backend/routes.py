@@ -1688,6 +1688,19 @@ def create_app(
         """GET /admin/data-health — data quality status."""
         from datetime import datetime, timedelta, timezone
 
+        # Cache 60s to avoid re-running DuckDB
+        # queries on every page load / poll.
+        from cache import get_cache
+
+        _cache = get_cache()
+        _ck = "cache:admin:data-health"
+        if _cache:
+            _hit = _cache.get(_ck)
+            if _hit:
+                import json
+
+                return json.loads(_hit)
+
         from db.duckdb_engine import query_iceberg_df
         from tools._stock_shared import _require_repo
 
@@ -2002,6 +2015,14 @@ def create_app(
         result["piotroski"] = f_pio.result()
         result["analytics"] = f_ana.result()
 
+        # Cache for 60s
+        if _cache:
+            import json
+
+            _cache.set(
+                _ck, json.dumps(result), 60,
+            )
+
         return result
 
     async def _admin_fix_ohlcv(
@@ -2030,6 +2051,8 @@ def create_app(
         repo = _require_repo()
 
         if action == "backfill_nan":
+            import asyncio
+
             from pyiceberg.expressions import (
                 IsNaN,
                 IsNull,
@@ -2040,7 +2063,14 @@ def create_app(
                 IsNull("close"),
                 IsNaN("close"),
             )
-            repo.delete_rows("stocks.ohlcv", expr)
+            # Iceberg delete is sync I/O (~9s on
+            # 1.4M rows). Must offload to thread
+            # to avoid blocking uvicorn event loop.
+            await asyncio.to_thread(
+                repo.delete_rows,
+                "stocks.ohlcv",
+                expr,
+            )
             return {
                 "action": "backfill_nan",
                 "status": "deleted",
@@ -2050,99 +2080,125 @@ def create_app(
                 ),
             }
 
-        # backfill_missing
-        from db.duckdb_engine import query_iceberg_df
+        # backfill_missing — all sync I/O, offload
+        import asyncio
 
-        today = datetime.now(timezone.utc).date()
-        yesterday = today - timedelta(days=1)
-        registry = repo.get_all_registry()
+        def _run_backfill_missing():
+            from db.duckdb_engine import (
+                query_iceberg_df,
+            )
 
-        latest_df = query_iceberg_df(
-            "stocks.ohlcv",
-            "SELECT ticker, MAX(date) AS latest "
-            "FROM ohlcv GROUP BY ticker",
-        )
-        have_latest: set[str] = set()
-        if not latest_df.empty:
-            for _, row in latest_df.iterrows():
-                d = row["latest"]
-                if hasattr(d, "date"):
-                    d = d.date()
-                if d >= yesterday:
-                    have_latest.add(row["ticker"])
+            today_ = datetime.now(
+                timezone.utc,
+            ).date()
+            yesterday_ = today_ - timedelta(
+                days=1,
+            )
+            registry = repo.get_all_registry()
 
-        missing = sorted(
-            set(registry.keys()) - have_latest
-        )
-        if not missing:
-            return {
-                "action": "backfill_missing",
-                "status": "ok",
-                "detail": "No missing tickers found.",
-                "count": 0,
-            }
+            latest_df = query_iceberg_df(
+                "stocks.ohlcv",
+                "SELECT ticker, "
+                "MAX(date) AS latest "
+                "FROM ohlcv GROUP BY ticker",
+            )
+            have_latest: set[str] = set()
+            if not latest_df.empty:
+                for _, row in (
+                    latest_df.iterrows()
+                ):
+                    d = row["latest"]
+                    if hasattr(d, "date"):
+                        d = d.date()
+                    if d >= yesterday_:
+                        have_latest.add(
+                            row["ticker"],
+                        )
 
-        # Resolve yfinance tickers from registry
-        yf_map: dict[str, str] = {}
-        for tk in missing:
-            meta = registry.get(tk, {})
-            yf_tk = meta.get("yf_ticker", tk)
-            yf_map[tk] = yf_tk
+            missing = sorted(
+                set(registry.keys())
+                - have_latest
+            )
+            if not missing:
+                return {
+                    "action": "backfill_missing",
+                    "status": "ok",
+                    "detail": (
+                        "No missing tickers."
+                    ),
+                    "count": 0,
+                }
 
-        import yfinance as yf
+            yf_map: dict[str, str] = {}
+            for tk in missing:
+                meta = registry.get(tk, {})
+                yf_tk = meta.get(
+                    "yf_ticker", tk,
+                )
+                yf_map[tk] = yf_tk
 
-        yf_tickers = list(yf_map.values())
-        # Batch download last 5 days to cover gaps
-        start = yesterday - timedelta(days=5)
-        try:
+            import yfinance as yf
+
+            yf_tickers = list(yf_map.values())
+            start = yesterday_ - timedelta(
+                days=5,
+            )
             raw = yf.download(
                 yf_tickers,
                 start=str(start),
-                end=str(today + timedelta(days=1)),
+                end=str(
+                    today_ + timedelta(days=1),
+                ),
                 group_by="ticker",
                 auto_adjust=True,
                 threads=True,
             )
-        except Exception as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"yfinance download failed: {exc}",
-            )
 
-        inserted = 0
-        errors: list[str] = []
-        for canon_tk, yf_tk in yf_map.items():
-            try:
-                if len(yf_tickers) == 1:
-                    df = raw.copy()
-                else:
-                    df = raw[yf_tk].copy()
-                df = df.dropna(subset=["Close"])
-                if df.empty:
-                    continue
-                # Rename to match Iceberg schema
-                df = df.rename(
-                    columns={
-                        "Open": "open",
-                        "High": "high",
-                        "Low": "low",
-                        "Close": "close",
-                        "Volume": "volume",
-                    },
-                )
-                repo.insert_ohlcv(canon_tk, df)
-                inserted += 1
-            except Exception as exc:
-                errors.append(
-                    f"{canon_tk}: {exc}"
-                )
-        return {
-            "action": "backfill_missing",
-            "status": "done",
-            "tickers_backfilled": inserted,
-            "tickers_attempted": len(missing),
-            "errors": errors[:20],
-        }
+            inserted = 0
+            errors: list[str] = []
+            for canon_tk, yf_tk in (
+                yf_map.items()
+            ):
+                try:
+                    if len(yf_tickers) == 1:
+                        df = raw.copy()
+                    else:
+                        df = raw[yf_tk].copy()
+                    df = df.dropna(
+                        subset=["Close"],
+                    )
+                    if df.empty:
+                        continue
+                    df = df.rename(
+                        columns={
+                            "Open": "open",
+                            "High": "high",
+                            "Low": "low",
+                            "Close": "close",
+                            "Volume": "volume",
+                        },
+                    )
+                    repo.insert_ohlcv(
+                        canon_tk, df,
+                    )
+                    inserted += 1
+                except Exception as exc:
+                    errors.append(
+                        f"{canon_tk}: {exc}"
+                    )
+            return {
+                "action": "backfill_missing",
+                "status": "done",
+                "tickers_backfilled": inserted,
+                "tickers_attempted": len(
+                    missing,
+                ),
+                "errors": errors[:20],
+            }
+
+        return await asyncio.to_thread(
+            _run_backfill_missing,
+        )
 
     admin_router.add_api_route(
         "/admin/data-health",
@@ -2410,6 +2466,222 @@ def create_app(
     admin_router.add_api_route(
         "/admin/data-health/fix/{run_id}/status",
         _admin_fix_status,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    # ── Backup Health (readonly) ────────────────
+
+    async def _admin_backups_list():
+        """GET /admin/backups — list backups."""
+        from cache import get_cache
+
+        _c = get_cache()
+        _bk = "cache:admin:backups-list"
+        if _c:
+            _h = _c.get(_bk)
+            if _h:
+                import json
+
+                return json.loads(_h)
+
+        from backend.maintenance.backup import (
+            list_backups,
+        )
+
+        backups = list_backups()
+        now = __import__("time").time()
+        for b in backups:
+            from datetime import datetime
+
+            dt = datetime.fromisoformat(
+                b["date"],
+            )
+            age_h = (
+                now
+                - dt.timestamp()
+            ) / 3600
+            b["age_hours"] = round(age_h, 1)
+            # Check catalog
+            from pathlib import Path
+
+            bp = Path(b["path"])
+            b["has_catalog"] = (
+                bp / "catalog.db"
+            ).exists()
+        result = {"backups": backups}
+        if _c:
+            import json
+
+            _c.set(_bk, json.dumps(result), 120)
+        return result
+
+    async def _admin_backups_health():
+        """GET /admin/backups/health."""
+        from cache import get_cache
+
+        _c2 = get_cache()
+        _bk2 = "cache:admin:backups-health"
+        if _c2:
+            _h2 = _c2.get(_bk2)
+            if _h2:
+                import json
+
+                return json.loads(_h2)
+
+        from backend.maintenance.backup import (
+            list_backups,
+        )
+
+        backups = list_backups()
+        if not backups:
+            return {
+                "status": "missing",
+                "latest_date": None,
+                "age_hours": None,
+                "backup_count": 0,
+                "has_catalog": False,
+            }
+
+        latest = backups[0]
+        from datetime import datetime
+        from pathlib import Path
+
+        dt = datetime.fromisoformat(
+            latest["date"],
+        )
+        age_h = (
+            __import__("time").time()
+            - dt.timestamp()
+        ) / 3600
+        has_cat = (
+            Path(latest["path"])
+            / "catalog.db"
+        ).exists()
+
+        if age_h < 24:
+            status = "healthy"
+        elif age_h < 72:
+            status = "stale"
+        else:
+            status = "critical"
+
+        result = {
+            "status": status,
+            "latest_date": latest["date"],
+            "age_hours": round(age_h, 1),
+            "backup_count": len(backups),
+            "has_catalog": has_cat,
+            "size_mb": latest["size_mb"],
+        }
+        if _c2:
+            import json
+
+            _c2.set(
+                _bk2, json.dumps(result), 120,
+            )
+        return result
+
+    async def _admin_backup_contents(
+        request: Request,
+    ):
+        """GET /admin/backups/{date}/contents."""
+        dt = request.path_params["date"]
+        from pathlib import Path
+
+        from backend.maintenance.backup import (
+            BACKUP_ROOT,
+        )
+
+        bp = Path(BACKUP_ROOT) / f"backup-{dt}"
+        if not bp.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"No backup for {dt}",
+            )
+
+        warehouse = bp / "warehouse"
+        if not warehouse.exists():
+            warehouse = bp  # legacy format
+
+        tables: list[dict] = []
+        stocks_dir = warehouse / "stocks"
+        if stocks_dir.exists():
+            import subprocess as _sp
+
+            for tbl_dir in sorted(
+                stocks_dir.iterdir(),
+            ):
+                if not tbl_dir.is_dir():
+                    continue
+                data_dir = tbl_dir / "data"
+                parts = 0
+                files = 0
+                size_mb = 0.0
+                if data_dir.exists():
+                    parts = sum(
+                        1
+                        for d in data_dir.iterdir()
+                        if d.is_dir()
+                    )
+                    # Use du for fast size
+                    try:
+                        r = _sp.run(
+                            [
+                                "du", "-sk",
+                                str(data_dir),
+                            ],
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                        )
+                        if r.returncode == 0:
+                            kb = int(
+                                r.stdout.split()[
+                                    0
+                                ],
+                            )
+                            size_mb = kb / 1024.0
+                    except Exception:
+                        pass
+                    # Approx file count from
+                    # partitions (1 file/part
+                    # after compaction)
+                    files = parts or 1
+                tables.append({
+                    "name": (
+                        f"stocks.{tbl_dir.name}"
+                    ),
+                    "partitions": parts,
+                    "files": files,
+                    "size_mb": round(
+                        size_mb, 1,
+                    ),
+                })
+
+        return {
+            "date": dt,
+            "tables": tables,
+            "catalog_present": (
+                bp / "catalog.db"
+            ).exists(),
+        }
+
+    admin_router.add_api_route(
+        "/admin/backups",
+        _admin_backups_list,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/backups/health",
+        _admin_backups_health,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/backups/{date}/contents",
+        _admin_backup_contents,
         methods=["GET"],
         dependencies=[Depends(superuser_only)],
     )

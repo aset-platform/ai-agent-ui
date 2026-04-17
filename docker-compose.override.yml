@@ -14,6 +14,7 @@ services:
       - ./fixtures:/app/fixtures
       - ./.pyiceberg.yaml:/app/.pyiceberg.yaml:ro
       - ${AI_AGENT_UI_HOME:-~/.ai-agent-ui}:${AI_AGENT_UI_HOME:-/Users/abhay/.ai-agent-ui}
+      - /Users/abhay/Documents/projects/ai-agent-ui-backups:/Users/abhay/Documents/projects/ai-agent-ui-backups
     command: >
       uvicorn main:app
         --host 0.0.0.0 --port 8181
