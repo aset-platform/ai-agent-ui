@@ -1,7 +1,7 @@
 # Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-04-16 (Sprint 7 — E2E Overhaul + CSV Download + Model Pinning)
+> Last refreshed: 2026-04-17 (Sprint 7 — ScreenQL + Iceberg Maintenance + Bulk OHLCV)
 
 ---
 
@@ -24,11 +24,18 @@ ai-agent-ui/
 │   │   ├── sources/       # yfinance, NSE, racing
 │   │   ├── jobs/          # ohlcv, fundamentals, fill_gaps, seed
 │   │   └── screener/      # Piotroski F-Score
+│   ├── insights/          # ScreenQL query engine
+│   │   ├── screen_parser.py # Tokenizer, parser, SQL generator, 36-field catalog
+│   │   └── __init__.py
+│   ├── maintenance/       # Iceberg ops + backup
+│   │   ├── iceberg_maintenance.py # Compact, expire, purge, drop_dead_tables
+│   │   ├── backup.py      # rsync + catalog.db + 2-rotation
+│   │   └── __init__.py
 │   ├── db/                # ORM models, migrations, DuckDB
 │   │   ├── models/        # 18 SQLAlchemy models
 │   │   ├── migrations/    # 11 Alembic async migrations (+ forecast_runs schema v2)
 │   │   ├── engine.py      # Async session factory
-│   │   ├── duckdb_engine.py # Iceberg read engine + metadata cache
+│   │   ├── duckdb_engine.py # Iceberg read engine + metadata cache + query_iceberg_multi
 │   │   └── pg_stocks.py   # PG CRUD (registry, scheduler, pipeline, recs)
 │   ├── config.py          # Settings (Pydantic)
 │   ├── routes.py          # Chat API + admin endpoints
@@ -86,14 +93,20 @@ recommendation_outcomes, market_indices, user_memories (pgvector
 768-dim), conversation_contexts, stock_master, stock_tags,
 ingestion_cursor, ingestion_skipped, pipelines, pipeline_steps.
 
-**Iceberg (14 tables)**: ohlcv (1.4M rows), company_info, dividends,
-quarterly_results, analysis_summary, forecast_runs (27 cols, incl.
-confidence_score + confidence_components), forecasts, piotroski_scores,
-sentiment_scores, llm_pricing, llm_usage, portfolio_transactions,
-audit_log, usage_history.
+**Iceberg (12 active tables)**: ohlcv (1.5M rows), company_info,
+dividends, quarterly_results, analysis_summary, forecast_runs
+(27 cols), forecasts, piotroski_scores, sentiment_scores,
+llm_pricing, llm_usage, portfolio_transactions.
+**Dropped**: scheduler_runs (25GB→PG), scheduled_jobs (→PG),
+technical_indicators (unused, computed on-the-fly).
+
+**Maintenance**: `backend/maintenance/` — backup (rsync + catalog.db,
+2-rotation), compaction (overwrite → 1 file/partition), 11yr retention.
+Backup dir: `/Users/abhay/Documents/projects/ai-agent-ui-backups/`.
 
 **Rule**: Mutable state → PG. Append-only analytics → Iceberg.
 DuckDB for ALL Iceberg reads (metadata cache, auto-invalidated).
+NEVER delete metadata/parquet files directly (CLAUDE.md Rule #20).
 
 ---
 
@@ -123,7 +136,9 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 | `backend/tools/_forecast_regime.py` | 1 | Volatility regime classification (low/medium/high/extreme) |
 | `backend/tools/_forecast_features.py` | 1 | Tier 1/2 feature computation (macro, technical, sentiment) |
 | `backend/tools/_sentiment_finbert.py` | 1 | FinBERT batch sentiment scorer (torch CPU, transformers) |
-| `backend/jobs/` | 8 | Executor registry, pipeline chaining, batch refresh, recs |
+| `backend/insights/screen_parser.py` | 1 | ScreenQL: tokenizer, parser, SQL gen, 36-field catalog |
+| `backend/maintenance/` | 3 | Backup (rsync), compaction, retention, dead table cleanup |
+| `backend/jobs/` | 8 | Executor registry, pipeline chaining, batch refresh (bulk OHLCV), recs |
 | `backend/pipeline/` | 21 | CLI: download, seed, bulk-download, analytics, forecast, screen |
 | `backend/db/models/` | 18 | SQLAlchemy ORM (PG tables) |
 | `stocks/repository.py` | 1 (5.2K lines) | Iceberg CRUD + DuckDB reads + PG bridge |
@@ -144,8 +159,9 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 Freshness gates: daily (OHLCV, analytics, sentiment), weekly
 (forecasts), monthly (CV accuracy auto-refresh via 30-day TTL).
 
-Pipeline: sequential steps with skip-on-failure. India (4 steps,
-~10 min) and USA (4 steps, ~2 min) daily pipelines.
+Pipeline: sequential steps with skip-on-failure + post-pipeline
+snapshot expiry. India (5 steps, ~5 min) and USA (5 steps, ~1 min).
+Bulk OHLCV: yf.download() batches of 100 (99.8% success, 58s).
 
 Chat-discovered tickers auto-inserted into stock_master for
 pipeline pickup (scheduler refreshes them daily).
