@@ -28,6 +28,9 @@ from insights_models import (
     CorrelationResponse,
     DividendRow,
     DividendsResponse,
+    ScreenFieldsResponse,
+    ScreenQLRequest,
+    ScreenQLResponse,
     PiotroskiResponse,
     PiotroskiRow,
     QuarterlyResponse,
@@ -1367,6 +1370,224 @@ def create_insights_router() -> APIRouter:
             result.model_dump_json(),
             TTL_STABLE,
         )
+        return result
+
+    # -----------------------------------------------------------
+    # ScreenQL — universal screener
+    # -----------------------------------------------------------
+
+    @router.get(
+        "/screen/fields",
+        response_model=ScreenFieldsResponse,
+    )
+    async def get_screen_fields():
+        """Return field catalog for autocomplete."""
+        from backend.insights.screen_parser import (
+            get_field_catalog_json,
+        )
+
+        return ScreenFieldsResponse(
+            fields=get_field_catalog_json(),
+        )
+
+    @router.post(
+        "/screen",
+        response_model=ScreenQLResponse,
+    )
+    async def run_screen(
+        req: ScreenQLRequest,
+        user: UserContext = Depends(
+            get_current_user,
+        ),
+    ):
+        """Execute a ScreenQL query."""
+        from hashlib import sha256
+
+        from backend.insights.screen_parser import (
+            ScreenQLError,
+            generate_sql,
+            parse_query,
+        )
+
+        # Cache check
+        cache = get_cache()
+        ck = (
+            "cache:insights:screenql:"
+            + sha256(
+                f"{req.query}:{req.page}:"
+                f"{req.page_size}:"
+                f"{req.sort_by}:"
+                f"{req.sort_dir}:"
+                f"{user.user_id}".encode()
+            ).hexdigest()[:16]
+        )
+        if cache:
+            hit = cache.get(ck)
+            if hit:
+                return ScreenQLResponse.model_validate_json(
+                    hit,
+                )
+
+        # Parse query
+        try:
+            ast = parse_query(req.query)
+        except ScreenQLError as e:
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=422,
+                detail=str(e),
+            )
+
+        # User scope
+        tickers = await _get_user_tickers(user)
+
+        # Generate SQL
+        gen = generate_sql(
+            ast,
+            page=req.page,
+            page_size=req.page_size,
+            sort_by=req.sort_by,
+            sort_dir=req.sort_dir,
+            ticker_filter=(
+                tickers if tickers else None
+            ),
+        )
+
+        # Execute via DuckDB
+        try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_multi,
+            )
+
+            # Map table aliases to Iceberg names
+            alias_to_iceberg = {
+                "ci": "stocks.company_info",
+                "as_": "stocks.analysis_summary",
+                "ps": "stocks.piotroski_scores",
+                "fr": "stocks.forecast_runs",
+                "ss": "stocks.sentiment_scores",
+                "qr": "stocks.quarterly_results",
+            }
+            tables = [
+                alias_to_iceberg[a]
+                for a in gen.tables_used
+                if a in alias_to_iceberg
+            ]
+            rows = query_iceberg_multi(
+                tables,
+                gen.sql,
+                params=gen.params,
+            )
+            count_rows = query_iceberg_multi(
+                tables,
+                gen.count_sql,
+                params=gen.params[
+                    : -2  # exclude LIMIT/OFFSET
+                ],
+            )
+            total = (
+                count_rows[0]["cnt"]
+                if count_rows
+                else 0
+            )
+        except Exception:
+            _logger.exception(
+                "ScreenQL query failed",
+            )
+            rows = []
+            total = 0
+
+        # Sanitize rows
+        clean: list[dict] = []
+        for r in rows:
+            d: dict = {}
+            for k, v in r.items():
+                if k == "rn":
+                    continue
+                if v is None:
+                    d[k] = None
+                elif isinstance(v, float):
+                    d[k] = (
+                        None
+                        if pd.isna(v)
+                        else round(v, 4)
+                    )
+                else:
+                    d[k] = v
+            clean.append(d)
+
+        # Patch blank company_name from stock_master
+        missing = [
+            d["ticker"]
+            for d in clean
+            if not d.get("company_name")
+            and d.get("ticker")
+        ]
+        if missing:
+            try:
+                from sqlalchemy import select
+
+                from backend.db.engine import (
+                    get_session_factory,
+                )
+                from backend.db.models.stock_master import (
+                    StockMaster,
+                )
+
+                async with (
+                    get_session_factory()() as s
+                ):
+                    sm_rows = (
+                        await s.execute(
+                            select(
+                                StockMaster.yf_ticker,
+                                StockMaster.name,
+                            ).where(
+                                StockMaster.yf_ticker.in_(
+                                    missing,
+                                ),
+                            ),
+                        )
+                    ).all()
+                sm_map = {
+                    r.yf_ticker: r.name
+                    for r in sm_rows
+                }
+                for d in clean:
+                    tk = d.get("ticker")
+                    if (
+                        not d.get("company_name")
+                        and tk in sm_map
+                    ):
+                        d["company_name"] = (
+                            sm_map[tk]
+                        )
+            except Exception:
+                _logger.debug(
+                    "stock_master fallback "
+                    "failed for screenql",
+                    exc_info=True,
+                )
+
+        result = ScreenQLResponse(
+            rows=clean,
+            total=int(total),
+            page=req.page,
+            page_size=req.page_size,
+            columns_used=gen.columns_used,
+            excluded_null_count=max(
+                0, int(total) - len(clean),
+            ),
+        )
+
+        if cache:
+            cache.set(
+                ck,
+                result.model_dump_json(),
+                TTL_STABLE,
+            )
+
         return result
 
     return router
