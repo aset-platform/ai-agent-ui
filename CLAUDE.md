@@ -241,29 +241,33 @@ These rules MUST be followed in every interaction.
     `EqualTo("score_date")`. Prevents cross-market overwrites.
 19. **Ticker format** — ALL Indian stocks `.NS` suffix
     everywhere. Import `detect_market` from `market_utils.py`.
+20. **NEVER delete Iceberg metadata/parquet files directly**
+    — use `overwrite()` or `delete_rows()` API only. Direct
+    deletion breaks the SQLite catalog. Backup before any
+    maintenance operation.
 
 ### Process & Git
 
-20. **Branch off `dev`** — NEVER push to `dev`, `qa`,
+21. **Branch off `dev`** — NEVER push to `dev`, `qa`,
     `release`, `main`.
-21. **Co-Authored-By in commits** — always use:
+22. **Co-Authored-By in commits** — always use:
     `Co-Authored-By: Abhay Kumar Singh <asequitytrading@gmail.com>`
-22. **Update `PROGRESS.md`** after every session (dated entry).
-23. **Commit Serena memories** — always `git add .serena/`
+23. **Update `PROGRESS.md`** after every session (dated entry).
+24. **Commit Serena memories** — always `git add .serena/`
     before final push. Shared memories are checked into git.
-24. **Test-after-feature** — happy path + 1 error path minimum.
-25. **Jira story points** — update `customfield_10016`
+25. **Test-after-feature** — happy path + 1 error path minimum.
+26. **Jira story points** — update `customfield_10016`
     (estimate). `customfield_10036` not settable via API.
 
 ### Infra & Config
 
-26. **`NEXT_PUBLIC_BACKEND_URL` = `http://localhost:8181`** —
+27. **`NEXT_PUBLIC_BACKEND_URL` = `http://localhost:8181`** —
     never `127.0.0.1`. Hostname mismatch breaks cookies.
-27. **No `@traceable` on `FallbackLLM.invoke()`** — breaks
+28. **No `@traceable` on `FallbackLLM.invoke()`** — breaks
     LangChain tool call parsing.
-28. **Ollama for experiments only** — host-native, not
+29. **Ollama for experiments only** — host-native, not
     containerized. Cascade falls back to Groq/Anthropic.
-29. **LHCI can't audit authenticated routes** — use
+30. **LHCI can't audit authenticated routes** — use
     `npm run perf:full` (Playwright) instead.
 
 ---
@@ -372,6 +376,50 @@ Run `list_memories` to browse all topics. Key categories:
   is synchronous Iceberg I/O. Must wrap in
   `asyncio.to_thread()` when called from async route
   handlers, otherwise blocks uvicorn event loop.
+- **Data health fix-ohlcv blocking**: Both `backfill_nan`
+  and `backfill_missing` actions are sync Iceberg I/O.
+  Wrapped in `asyncio.to_thread()` in `routes.py`.
+
+### Iceberg Maintenance (CRITICAL)
+
+- **NEVER delete Iceberg metadata files** — the SQLite
+  catalog (`~/.ai-agent-ui/data/iceberg/catalog.db`)
+  stores absolute paths to `.metadata.json` files.
+  Deleting them breaks `load_table()` with
+  `FileNotFoundError`. If this happens, fix with:
+  ```sql
+  sqlite3 ~/.ai-agent-ui/data/iceberg/catalog.db
+  UPDATE iceberg_tables
+  SET metadata_location='file:///path/to/latest.metadata.json'
+  WHERE table_name='ohlcv';
+  ```
+- **NEVER delete parquet data files directly** — use
+  Iceberg `overwrite()` or `delete_rows()` API only.
+  Direct file deletion causes `IOException` on reads.
+  Orphan cleanup must only remove empty directories.
+- **Compaction**: Use `overwrite()` (read all via DuckDB
+  → write back as single batch). Produces 1 file per
+  partition instead of 27. OHLCV went from 8,670 files
+  to 817, reads from ~9s to 0.24s.
+- **Backup before maintenance**: Always `run_backup()`
+  before compaction or retention purge. Backup includes
+  BOTH the warehouse dir AND `catalog.db`. Location:
+  `/Users/abhay/Documents/projects/ai-agent-ui-backups/`
+  (2 latest rotated).
+- **OHLCV freshness gate**: Uses `latest >= today` (not
+  `yesterday`). A ticker is "fresh" only if it has
+  today's candle. Evening runs re-fetch closing data.
+- **OHLCV upsert**: Append-only dedup skips rows where
+  `(ticker, date)` exists. For today's data, a scoped
+  delete + re-append ensures intraday flat candles are
+  replaced by closing data.
+- **Post-pipeline expiry**: `pipeline_executor.py` calls
+  `expire_snapshots()` after successful pipeline runs.
+  Currently logs snapshot count (safe no-op) since
+  PyIceberg's snapshot removal API is fragile.
+- **Maintenance module**: `backend/maintenance/` —
+  `backup.py` (rsync + rotate), `iceberg_maintenance.py`
+  (compact, expire, retain, orchestrate).
 - **torch CPU-only in Docker**: Install via
   `pip install torch --index-url .../whl/cpu`. Do NOT add
   torch to requirements.txt (needs special index URL).

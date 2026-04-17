@@ -1585,6 +1585,18 @@ def create_dashboard_router() -> APIRouter:
             for _, row in info_df.iterrows():
                 info_map[row["ticker"]] = row.to_dict()
 
+        # Load ticker_type from registry for
+        # ETF/index/commodity fallback labels
+        try:
+            from tools._stock_shared import (
+                _require_repo,
+            )
+
+            _repo = _require_repo()
+            _reg = _repo.get_all_registry()
+        except Exception:
+            _reg = {}
+
         # Build sector → holdings map
         sector_data: dict[str, dict] = {}
         total_value = 0.0
@@ -1593,7 +1605,35 @@ def create_dashboard_router() -> APIRouter:
             ticker = h["ticker"]
             qty = float(h.get("quantity", 0))
             info = info_map.get(ticker, {})
-            sector = info.get("sector") or "Unknown"
+            raw_sector = info.get("sector")
+            # NaN check: pandas NaN is float
+            if (
+                not isinstance(raw_sector, str)
+                or not raw_sector.strip()
+            ):
+                # Detect ETFs by ticker pattern
+                # or registry ticker_type
+                tt = (
+                    _reg.get(ticker, {})
+                    .get("ticker_type", "")
+                )
+                sym = ticker.upper()
+                if (
+                    tt == "etf"
+                    or "BEES" in sym
+                    or "ETF" in sym
+                ):
+                    sector = "ETF"
+                elif tt == "index" or (
+                    sym.startswith("^")
+                ):
+                    sector = "Index"
+                elif tt == "commodity":
+                    sector = "Commodity"
+                else:
+                    sector = "Other"
+            else:
+                sector = raw_sector
 
             # Current price from OHLCV
             cur = 0.0

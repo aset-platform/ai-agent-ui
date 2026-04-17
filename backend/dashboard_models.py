@@ -29,10 +29,10 @@ class WatchlistResponse(BaseModel):
 class ForecastTarget(BaseModel):
     horizon_months: int
     target_date: str
-    target_price: float
-    pct_change: float
-    lower_bound: float
-    upper_bound: float
+    target_price: float | None = None
+    pct_change: float | None = None
+    lower_bound: float | None = None
+    upper_bound: float | None = None
 
 
 class TickerForecast(BaseModel):
