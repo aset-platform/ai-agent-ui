@@ -343,6 +343,25 @@ Run `list_memories` to browse all topics. Key categories:
 - **Portfolio bfill**: `_compute_daily_portfolio()` uses
   `ffill().bfill()` on ticker DataFrame. Without `bfill()`,
   first rows with partial tickers inflate returns to 4000%+.
+- **Portfolio ETF sector NaN**: `company_info.sector` is
+  `NaN` (float) for ETFs — not `None`, not empty string.
+  Check `isinstance(sector, str)` before using. Fallback:
+  detect ETFs by ticker pattern (BEES/ETF in name) or
+  `stock_registry.ticker_type`. Shows "ETF" label in
+  sector allocation pie chart.
+- **ForecastTarget nullable**: `target_price`, `pct_change`,
+  `lower_bound`, `upper_bound` must be `float | None` —
+  tickers without forecast data return `None`. Non-optional
+  `float` causes 500 for new users with sparse portfolios.
+- **Bulk OHLCV download**: `_bulk_fetch_ohlcv()` in
+  `batch_refresh.py` uses `yf.download()` batches of 100.
+  99.8% success vs 56% with per-ticker `.history()`.
+  Per-ticker trimming by start date after batch download.
+  Known: `^`-prefixed index tickers fail in bulk mode.
+- **company_info snapshot bloat**: Per-ticker appends
+  without retention created 4,055 files for 830 rows
+  (5.3 GB). Compaction via `overwrite()` reduced to 1 file.
+  Monitor after pipeline runs.
 
 ### Database & PG
 
@@ -371,6 +390,9 @@ Run `list_memories` to browse all topics. Key categories:
   `HOSTNAME=0.0.0.0` to bind all interfaces.
 - **Docker seed script**: Set `PYICEBERG_CATALOG__LOCAL__URI`
   before pyiceberg import. Mount `fixtures/` volume.
+- **Backup dir in Docker**: Mounted at same host path in
+  `docker-compose.override.yml`. `rsync` not available in
+  Docker — run backup from host or install rsync in image.
 - **Redis cache**: After code changes: `redis-cli FLUSHALL`.
 - **Retention API blocking**: `RetentionManager.run_cleanup()`
   is synchronous Iceberg I/O. Must wrap in
@@ -452,6 +474,27 @@ Run `list_memories` to browse all topics. Key categories:
 
 ### Frontend
 
+- **ScreenQL multi-line AND**: Newlines are implicit AND.
+  If a line starts with `AND`/`OR`, don't add another AND.
+  Parser handles this via `_bulk_fetch_ohlcv()` smart join.
+- **ScreenQL RSI field**: `rsi_14` is NOT a standalone
+  column in `analysis_summary`. Extracted via
+  `TRY_CAST(regexp_extract(rsi_signal, 'RSI:\\s*([\\d.]+)',
+  1) AS DOUBLE)` in the CTE. Map is in `screen_parser.py`.
+- **ScreenQL dynamic columns**: Base 5 always shown
+  (ticker, company, sector, mcap, price). Query fields
+  auto-added. `currency` and `market` are hidden helpers
+  (not displayed as columns).
+- **CSV download**: `downloadCsv()` in `frontend/lib/`.
+  `InsightsTable.onDownload` receives sorted (not paginated)
+  rows. CSV columns exclude `action` columns.
+- **KpiTooltip clipping**: Tooltip `left` clamped to
+  `viewport - tipWidth - 8px` to prevent right-edge
+  overflow. Fix in `KpiTooltip.tsx`.
+- **Admin API caching**: `data-health` cached 60s,
+  backup endpoints cached 120s in Redis. First load after
+  cache expires is slow (~1-12s for backup due to 113K
+  orphan files in warehouse).
 - **ChatInput `readOnly` not `disabled`**: Keeps focus.
 - **Sidebar collapsed by default**: Hover flyout for submenus.
 - **ECharts dark/light**: Use `MutationObserver` on `<html>`
