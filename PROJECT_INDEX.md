@@ -1,7 +1,7 @@
 # Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-04-18 (Sprint 7 Session 5 — Pro role, Recommendation quota, Sentiment hardening, NaN safety)
+> Last refreshed: 2026-04-19 (Sprint 7 Session 6 — BYOM Phase A+B, Insights three-tier scoping, hallucination guards)
 
 ---
 
@@ -38,13 +38,15 @@ ai-agent-ui/
 │   │   ├── duckdb_engine.py # Iceberg read engine + metadata cache + query_iceberg_multi
 │   │   └── pg_stocks.py   # PG CRUD (registry, scheduler, pipeline, recs)
 │   ├── config.py          # Settings (Pydantic)
-│   ├── routes.py          # Chat API + admin endpoints
-│   ├── ws.py              # WebSocket chat handler
+│   ├── routes.py          # Chat API + admin endpoints + BYO resolve
+│   ├── ws.py              # WebSocket chat handler + BYO context scope
 │   ├── market_routes.py   # Market ticker (Nifty/Sensex, NSE+Yahoo)
 │   ├── dashboard_routes.py # Dashboard/chart API
-│   ├── insights_routes.py # Screener/analytics API
-│   ├── observability.py   # LLM usage collector + Iceberg flush
-│   ├── llm_fallback.py    # N-tier LLM cascade (Groq → Ollama → Anthropic)
+│   ├── insights_routes.py # Screener/analytics API + _scoped_tickers
+│   ├── observability.py   # LLM usage collector + Iceberg flush + key_source
+│   ├── llm_fallback.py    # N-tier cascade w/ BYO override hook
+│   ├── llm_byo.py         # BYOContext + ContextVar + resolve_byo_for_chat
+│   ├── crypto/byo_secrets.py  # Fernet-backed BYO key encryption
 │   ├── token_budget.py    # Per-model TPM/RPM/TPD/RPD sliding windows
 │   └── bootstrap.py       # Tool + agent registration
 ├── auth/                  # JWT + RBAC + OAuth PKCE
@@ -130,6 +132,49 @@ My Audit Log, My LLM Usage); superuser sees full 7-tab strip.
 
 ---
 
+## BYOM — Bring Your Own Model
+
+Chat-agent LLM routing: non-superusers get 10 lifetime free
+chat turns, then must configure a Groq and/or Anthropic key or
+chat blocks with 429. Non-chat flows (recommendations,
+sentiment, forecast) always use platform keys. Ollama stays
+shared/native.
+
+Key infra:
+- `user_llm_keys` table (Alembic `f8e7d6c5b4a3`), Fernet-encrypted
+  via `backend/crypto/byo_secrets.py` (`BYO_SECRET_KEY` env).
+- `backend/llm_byo.py` — `BYOContext` + module-level `ContextVar`
+  + `apply_byo_context()` + `resolve_byo_for_chat()` + Redis
+  monthly counter `byo:month_counter:{uid}:{yyyy-mm}` (IST).
+- `FallbackLLM._try_model` (Groq) + Anthropic fallback both
+  consult `get_active_byo_context()` and swap in user-keyed
+  client when BYO active. Stamps `key_source="user"` on
+  `llm_usage` rows.
+- `chat_request_count` bump guarded by `byo_active` so the
+  free counter pins at 10 once BYO kicks in.
+- `/v1/users/me/llm-keys` + `/v1/users/me/byo-settings` endpoints
+  (self-scoped). `MyLLMUsageTab.tsx` renders the page.
+
+Full workflow: `docs/backend/byom.md`.
+
+---
+
+## Insights tab scoping (three-tier)
+
+Single helper `backend/insights_routes.py::_scoped_tickers(user, scope)`
+drives ticker visibility for all 9 Insights tabs:
+
+| Scope | Tabs | Pro / Superuser | General |
+|---|---|---|---|
+| `discovery` | Screener, ScreenQL, Sectors, Piotroski | full platform (stock + ETF) | watchlist ∪ holdings |
+| `watchlist` | Risk, Targets, Dividends | watchlist ∪ holdings | watchlist ∪ holdings |
+| `portfolio` | Correlation, Quarterly | holdings only | holdings only |
+
+Full-universe scope filters `ticker_type IN ('stock', 'etf')`
+— index/commodity tickers stay out of Screener/ScreenQL.
+
+---
+
 ## Recommendation Engine
 
 **Quota**: 1 run per `(user, scope, IST calendar month)`. All
@@ -186,6 +231,11 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 | `backend/market_utils.py` | 1 | `detect_market`, `safe_str`, `safe_sector` (NaN-truthy safe) |
 | `auth/dependencies.py` | 1 | `superuser_only`, `require_role()`, `pro_or_superuser` guards |
 | `auth/repo/user_writes.py` | 1 | Tier→role auto-sync pinch point + post-commit audit |
+| `backend/llm_byo.py` | 1 | BYOContext + ContextVar + resolve_byo_for_chat + Redis monthly counter |
+| `backend/crypto/byo_secrets.py` | 1 | Fernet encrypt/decrypt/mask for user-supplied provider keys |
+| `auth/repo/byo_repo.py` | 1 | BYO key CRUD + provider/prefix validators + chat counter bump |
+| `auth/endpoints/byo_routes.py` | 1 | Self-scoped `/v1/users/me/llm-keys` + `/byo-settings` endpoints |
+| `backend/db/models/user_llm_key.py` | 1 | `user_llm_keys` ORM (encrypted_key BYTEA, unique per provider) |
 | `backend/insights/screen_parser.py` | 1 | ScreenQL: tokenizer, parser, SQL gen, 36-field catalog |
 | `backend/maintenance/` | 3 | Backup (rsync), compaction, retention, dead table cleanup |
 | `backend/jobs/` | 8 | Executor registry, pipeline chaining, batch refresh (bulk OHLCV), recs |
@@ -198,6 +248,8 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 | `frontend/components/common/DownloadCsvButton.tsx` | 1 | Shared CSV button (icon + loading state) — used by all exports |
 | `frontend/providers/PortfolioActionsProvider.tsx` | 1 | Layout-level Add/Edit/Delete modals via `usePortfolioActions()` |
 | `frontend/components/admin/MyAccountTab.tsx` | 1 | Pro scoped admin tab (profile + password, no role/tier) |
+| `frontend/components/admin/MyLLMUsageTab.tsx` | 1 | BYO allowance + provider cards + usage/model split + sparkline |
+| `frontend/components/admin/ConfigureProviderKeyModal.tsx` | 1 | Paste Groq/Anthropic key, show/hide, prefix validation |
 | `frontend/components/admin/SentimentDetailsModal.tsx` | 1 | Source tiles + paginated filterable ticker table |
 | `frontend/components/recommendations/RecActionButton.tsx` | 1 | +Buy / Edit / Acted ✓ pills on rec cards |
 | `e2e/utils/selectors.ts` | 1 | Centralised data-testid constants (217 lines) |
@@ -243,10 +295,10 @@ pipeline pickup (scheduler refreshes them daily).
 
 ## File Counts
 
-Python: 239 modules (+97 test files) | TypeScript/TSX: 115 |
-Backend tests: 97 files (~839) | E2E: 51 specs (~257) |
-Frontend: 18 vitest | Docs: 59 pages | Scripts: 30 |
-Alembic migrations: 11
+Python: 246 modules (+102 test files) | TypeScript/TSX: 117 |
+Backend tests: 102 files (~902) | E2E: 51 specs (~257) |
+Frontend: 18 vitest | Docs: 60 pages | Scripts: 30 |
+Alembic migrations: 12
 
 ---
 
