@@ -20,14 +20,14 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from langsmith.middleware import TracingMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from models import ChatRequest, ChatResponse
 from slowapi.errors import RateLimitExceeded
 from tools._ticker_linker import set_current_user
 
 from auth.api import create_auth_router, get_ticker_router
-from auth.dependencies import get_current_user
+from auth.dependencies import get_current_user, pro_or_superuser
 from auth.models import UserContext
 from auth.rate_limit import limiter, rate_limit_exceeded_handler
 
@@ -738,28 +738,53 @@ def create_app(
     # ---------------------------------------------------------------
 
     async def _admin_metrics(
-        current_user=None,
+        scope: str = "all",
+        user: UserContext = Depends(pro_or_superuser),
     ):
-        """GET /admin/metrics — LLM observability data.
+        """GET /admin/metrics?scope=self|all — LLM observability.
 
-        Combines real-time cascade stats from the
-        in-memory collector with persistent request
-        totals from the Iceberg ``llm_usage`` table
-        so the count matches the dashboard widget.
+        * ``scope='all'`` (default for superuser): global
+          request totals + all cascade stats.
+        * ``scope='self'`` (default for pro): requests +
+          cost totals filtered to the caller.  Token-
+          budget block omitted (global-only metric).
+
+        Pro callers may only pass ``scope='self'`` — 403
+        on ``scope='all'``.
         """
-        result: dict = {"timestamp": time.time()}
-        if token_budget is not None:
-            result["models"] = token_budget.get_status()
+        if scope not in ("self", "all"):
+            raise HTTPException(
+                status_code=400,
+                detail="scope must be 'self' or 'all'",
+            )
+        if scope == "all" and user.role != "superuser":
+            raise HTTPException(
+                status_code=403,
+                detail="scope='all' requires superuser",
+            )
+
+        result: dict = {
+            "timestamp": time.time(),
+            "scope": scope,
+        }
+        if scope == "all":
+            if token_budget is not None:
+                result["models"] = (
+                    token_budget.get_status()
+                )
+            else:
+                result["models"] = {}
         else:
+            # Token-budget is global — omit on self view.
             result["models"] = {}
 
         cascade_stats: dict = {}
-        if obs_collector is not None:
+        if scope == "all" and obs_collector is not None:
             cascade_stats = obs_collector.get_stats()
 
         # Override ephemeral request count with
-        # persistent Iceberg total (last 30 days)
-        # so it matches the dashboard LLM widget.
+        # persistent Iceberg total (last 30 days).  For
+        # self-scope, filter by user_id.
         try:
             from tools._stock_shared import (
                 _require_repo,
@@ -767,12 +792,19 @@ def create_app(
 
             repo = _require_repo()
             usage = repo.get_dashboard_llm_usage(
-                user_id=None,
+                user_id=(
+                    str(user.user_id)
+                    if scope == "self" else None
+                ),
                 days=30,
             )
             cascade_stats["requests_total"] = int(
                 usage.get("total_requests", 0)
             )
+            if scope == "self":
+                # Surface per-user totals directly for
+                # the My LLM Usage tab.
+                cascade_stats["usage"] = usage
         except Exception:
             _logger.debug(
                 "Iceberg LLM usage fallback",
@@ -1037,7 +1069,10 @@ def create_app(
         "/admin/metrics",
         _admin_metrics,
         methods=["GET"],
-        dependencies=[Depends(superuser_only)],
+        # Guard moved into the handler — declares its
+        # own Depends(pro_or_superuser) with scope
+        # enforcement. A route-level superuser_only
+        # here would short-circuit pro callers.
     )
     admin_router.add_api_route(
         "/admin/tier-health",
@@ -1110,11 +1145,37 @@ def create_app(
         count = await reset_monthly_usage()
         return {"reset_count": count}
 
-    async def _admin_usage_stats():
-        """GET /admin/usage-stats — all users + counts."""
+    async def _admin_usage_stats(
+        scope: str = "all",
+        user: UserContext = Depends(pro_or_superuser),
+    ):
+        """GET /admin/usage-stats?scope=self|all — usage counts.
+
+        * superuser default ``scope='all'`` returns every
+          user's monthly-usage row.
+        * pro default (or when superuser passes
+          ``scope='self'``) returns only the caller's row.
+        """
+        if scope not in ("self", "all"):
+            raise HTTPException(
+                status_code=400,
+                detail="scope must be 'self' or 'all'",
+            )
+        if scope == "all" and user.role != "superuser":
+            raise HTTPException(
+                status_code=403,
+                detail="scope='all' requires superuser",
+            )
         from usage_tracker import get_usage_stats
 
-        return {"users": await get_usage_stats()}
+        all_rows = await get_usage_stats()
+        if scope == "self":
+            uid = str(user.user_id)
+            all_rows = [
+                r for r in all_rows
+                if str(r.get("user_id", "")) == uid
+            ]
+        return {"users": all_rows, "scope": scope}
 
     async def _admin_reset_selected(
         request: Request,
@@ -1139,7 +1200,8 @@ def create_app(
         "/admin/usage-stats",
         _admin_usage_stats,
         methods=["GET"],
-        dependencies=[Depends(superuser_only)],
+        # Guard is declared inside the handler (pro +
+        # superuser allowed, with scope enforcement).
     )
     admin_router.add_api_route(
         "/admin/reset-usage/selected",
@@ -1724,8 +1786,19 @@ def create_app(
             registry = repo.get_all_registry()
             all_tickers = set(registry.keys())
             total_registry = len(all_tickers)
-            # Analyzable: stocks + ETFs (for
-            # analytics, sentiment, forecasts)
+            # Illiquid tickers (flagged by detector) —
+            # carve out from analyzable so Data Health
+            # doesn't treat them as "missing".
+            illiquid_tickers = {
+                t
+                for t in all_tickers
+                if not registry[t].get(
+                    "is_tradeable", True,
+                )
+            }
+            # Analyzable: stocks + ETFs, excluding
+            # illiquid (for analytics, sentiment,
+            # forecasts).
             analyzable_tickers = {
                 t
                 for t in all_tickers
@@ -1733,8 +1806,10 @@ def create_app(
                     "ticker_type", "stock",
                 )
                 in ("stock", "etf")
+                and t not in illiquid_tickers
             }
-            # Financials: stocks only (for Piotroski)
+            # Financials: stocks only, excluding
+            # illiquid (for Piotroski).
             financial_tickers = {
                 t
                 for t in all_tickers
@@ -1742,11 +1817,13 @@ def create_app(
                     "ticker_type", "stock",
                 )
                 == "stock"
+                and t not in illiquid_tickers
             }
         except Exception:
             all_tickers = set()
             analyzable_tickers = set()
             financial_tickers = set()
+            illiquid_tickers = set()
             total_registry = 0
 
         result: dict = {
@@ -1756,6 +1833,10 @@ def create_app(
             ),
             "total_financial": len(
                 financial_tickers,
+            ),
+            "illiquid_count": len(illiquid_tickers),
+            "illiquid_tickers": sorted(
+                illiquid_tickers,
             ),
             "timestamp": time.time(),
         }
@@ -1810,7 +1891,9 @@ def create_app(
                             )
                         )
 
-                # Freshness per ticker
+                # Freshness per ticker — skip
+                # illiquid tickers so they don't
+                # inflate the "missing" count.
                 latest = query_iceberg_df(
                     "stocks.ohlcv",
                     "SELECT ticker, "
@@ -1822,6 +1905,9 @@ def create_app(
                     for _, row in (
                         latest.iterrows()
                     ):
+                        tk = row["ticker"]
+                        if tk in illiquid_tickers:
+                            continue
                         d = row["latest"]
                         if hasattr(d, "date"):
                             d = d.date()
@@ -1833,7 +1919,7 @@ def create_app(
                             o["stale_count"] += 1
                             o[
                                 "stale_tickers"
-                            ].append(row["ticker"])
+                            ].append(tk)
                     o["stale_tickers"] = sorted(
                         o["stale_tickers"]
                     )
@@ -2213,6 +2299,167 @@ def create_app(
         dependencies=[Depends(superuser_only)],
     )
 
+    # ── Sentiment scoring breakdown (today) ─────
+    # Feeds the "View details" modal on the Sentiment
+    # data-health card. Categorises today's rows by
+    # provenance so an admin can see FinBERT vs LLM vs
+    # market-fallback mix at a glance.
+
+    async def _admin_sentiment_details(
+        scope: str = "all",
+    ):
+        """GET /admin/data-health/sentiment-details.
+
+        Query params:
+            scope: ``all`` | ``india`` | ``us``
+                (default ``all``).
+
+        Returns:
+            {
+              "by_source": [
+                {"source": "finbert", "count": N,
+                 "avg_score": x.xxx},
+                ...
+              ],
+              "scored": [            # non-fallback rows
+                {"ticker": "...",
+                 "score": ...,
+                 "headline_count": n,
+                 "source": "finbert"|"llm"|"none"},
+                ...
+              ],
+              "total": N,
+              "scope": "all"|"india"|"us",
+              "as_of": "YYYY-MM-DD"
+            }
+        """
+        from datetime import date
+        from cache import get_cache
+
+        ck = (
+            f"cache:admin:sentiment-details:{scope}"
+        )
+        cache = get_cache()
+        hit = cache.get(ck) if cache else None
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        from tools._stock_shared import _require_repo
+        from db.duckdb_engine import (
+            invalidate_metadata,
+            query_iceberg_df,
+        )
+
+        repo = _require_repo()
+        registry = repo.get_all_registry()
+        # Build ticker-to-market map from registry so
+        # we can filter by scope without a PG round trip.
+        market_by_ticker: dict[str, str] = {}
+        for tkr, row in registry.items():
+            mkt = row.get("market")
+            if isinstance(mkt, str) and mkt:
+                market_by_ticker[tkr.upper()] = mkt
+
+        invalidate_metadata("stocks.sentiment_scores")
+        df = query_iceberg_df(
+            "stocks.sentiment_scores",
+            "SELECT ticker, avg_score, "
+            "headline_count, source "
+            "FROM sentiment_scores "
+            "WHERE score_date = CURRENT_DATE",
+        )
+
+        if df.empty:
+            payload = {
+                "by_source": [],
+                "scored": [],
+                "total": 0,
+                "scope": scope,
+                "as_of": date.today().isoformat(),
+            }
+        else:
+            if scope in ("india", "us"):
+                df["_market"] = (
+                    df["ticker"]
+                    .astype(str)
+                    .str.upper()
+                    .map(market_by_ticker)
+                )
+                df = df[df["_market"] == scope]
+
+            # Summary per source
+            grp = (
+                df.groupby("source")
+                .agg(
+                    count=("ticker", "count"),
+                    avg_score=(
+                        "avg_score", "mean",
+                    ),
+                )
+                .reset_index()
+                .sort_values(
+                    "count", ascending=False,
+                )
+            )
+            by_source = [
+                {
+                    "source": str(r["source"]),
+                    "count": int(r["count"]),
+                    "avg_score": round(
+                        float(r["avg_score"]), 3,
+                    ),
+                }
+                for _, r in grp.iterrows()
+            ]
+
+            # Per-ticker list for non-fallback rows
+            scored_df = df[
+                df["source"] != "market_fallback"
+            ].sort_values(
+                "avg_score", ascending=False,
+            )
+            scored = [
+                {
+                    "ticker": str(r["ticker"]),
+                    "score": round(
+                        float(r["avg_score"]), 3,
+                    ),
+                    "headline_count": int(
+                        r["headline_count"] or 0,
+                    ),
+                    "source": str(r["source"]),
+                }
+                for _, r in scored_df.iterrows()
+            ]
+
+            payload = {
+                "by_source": by_source,
+                "scored": scored,
+                "total": int(len(df)),
+                "scope": scope,
+                "as_of": date.today().isoformat(),
+            }
+
+        import json as _json
+
+        body = _json.dumps(payload, default=str)
+        if cache:
+            cache.set(ck, body, 60)
+        return Response(
+            content=body,
+            media_type="application/json",
+        )
+
+    admin_router.add_api_route(
+        "/admin/data-health/sentiment-details",
+        _admin_sentiment_details,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+
     # ── Data Health Fix (unified) ─────────────
 
     _VALID_TARGETS = {
@@ -2467,6 +2714,332 @@ def create_app(
         "/admin/data-health/fix/{run_id}/status",
         _admin_fix_status,
         methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    # ── Admin Recommendations (cross-user) ──────
+
+    async def _admin_recommendations_list(
+        limit: int = 500,
+        offset: int = 0,
+    ):
+        """GET /admin/recommendations — list recs
+        across all users with joined email/full_name.
+        """
+        from backend.db.engine import (
+            get_session_factory,
+        )
+        from backend.db.pg_stocks import (
+            get_all_recommendations,
+        )
+
+        sf = get_session_factory()
+        async with sf() as s:
+            rows = await get_all_recommendations(
+                s,
+                limit=min(limit, 1000),
+                offset=max(offset, 0),
+            )
+        return {
+            "recommendations": rows,
+            "count": len(rows),
+            "limit": limit,
+            "offset": offset,
+        }
+
+    async def _admin_recommendation_delete(
+        rec_id: str,
+        user: UserContext = Depends(get_current_user),
+    ):
+        """DELETE /admin/recommendations/{rec_id}.
+
+        Hard-delete; cascades to recommendation_outcomes
+        via the FK ondelete=CASCADE.
+        """
+        from backend.db.engine import (
+            get_session_factory,
+        )
+        from backend.db.pg_stocks import (
+            delete_recommendation,
+        )
+
+        sf = get_session_factory()
+        async with sf() as s:
+            deleted = await delete_recommendation(
+                s, rec_id,
+            )
+        if deleted == 0:
+            raise HTTPException(
+                404,
+                f"Recommendation {rec_id} not found",
+            )
+        _logger.info(
+            "Admin %s deleted recommendation %s",
+            user.email,
+            rec_id,
+        )
+        return {
+            "status": "deleted",
+            "rec_id": rec_id,
+        }
+
+    async def _admin_recommendation_run_delete(
+        run_id: str,
+        user: UserContext = Depends(get_current_user),
+    ):
+        """DELETE /admin/recommendation-runs/{run_id}.
+
+        Hard-delete the run and everything it contains
+        (cascades to recommendations and outcomes).
+        """
+        from backend.db.engine import (
+            get_session_factory,
+        )
+        from backend.db.pg_stocks import (
+            delete_recommendation_run,
+        )
+
+        sf = get_session_factory()
+        async with sf() as s:
+            deleted = await delete_recommendation_run(
+                s, run_id,
+            )
+        if deleted == 0:
+            raise HTTPException(
+                404,
+                f"Recommendation run {run_id} not found",
+            )
+        _logger.info(
+            "Admin %s deleted recommendation run %s",
+            user.email,
+            run_id,
+        )
+        return {
+            "status": "deleted",
+            "run_id": run_id,
+        }
+
+    admin_router.add_api_route(
+        "/admin/recommendations",
+        _admin_recommendations_list,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/recommendations/{rec_id}",
+        _admin_recommendation_delete,
+        methods=["DELETE"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/recommendation-runs/{run_id}",
+        _admin_recommendation_run_delete,
+        methods=["DELETE"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    # ── Superuser: force-refresh a test run ─────
+    # Bypasses the monthly quota, writes a row with
+    # run_type='admin_test' that stays hidden from
+    # user-facing consumers until an admin "promotes"
+    # it.
+
+    async def _admin_recommendation_force_refresh(
+        payload: dict,
+        user: UserContext = Depends(get_current_user),
+    ):
+        """POST /admin/recommendations/force-refresh.
+
+        Body: ``{"user_id": "<uuid or email>",
+        "scope": "india"|"us"}``. Accepts either the
+        user's UUID or their email address — an email
+        is resolved to ``auth.users.id`` before the
+        pipeline runs.  Creates a test run
+        (``run_type='admin_test'``).
+        """
+        import asyncio as _asyncio
+
+        raw = str(payload.get("user_id") or "").strip()
+        scope = str(payload.get("scope") or "")
+        if not raw or scope not in ("india", "us"):
+            raise HTTPException(
+                400,
+                "user_id and scope (india|us) required",
+            )
+
+        # Resolve email → UUID if needed
+        target_uid = raw
+        if "@" in raw:
+            from sqlalchemy import select
+            from backend.db.engine import (
+                get_session_factory,
+            )
+            from backend.db.models.user import User
+
+            sf = get_session_factory()
+            async with sf() as s:
+                row = (
+                    await s.execute(
+                        select(User).where(
+                            User.email == raw.lower(),
+                        )
+                    )
+                ).scalar_one_or_none()
+            if row is None:
+                raise HTTPException(
+                    404,
+                    f"No user found with email '{raw}'.",
+                )
+            target_uid = str(row.user_id)
+
+        from jobs.recommendation_engine import (
+            get_or_create_monthly_run,
+        )
+
+        def _call() -> dict:
+            return get_or_create_monthly_run(
+                target_uid, scope,
+                run_type="admin_test",
+                bypass_quota=True,
+            )
+
+        result = await _asyncio.to_thread(_call)
+        if not result.get("run_id"):
+            note = result.get(
+                "status_note", "no_recommendations",
+            )
+            raise HTTPException(
+                422,
+                f"Could not generate test run ({note}).",
+            )
+        _logger.info(
+            "Admin %s force-refreshed test run %s "
+            "for user=%s (input=%s) scope=%s",
+            user.email, result["run_id"],
+            target_uid[:8], raw, scope,
+        )
+        return {
+            "status": "generated",
+            "run_id": result["run_id"],
+            "user_id": target_uid,
+            "scope": scope,
+            "run_type": "admin_test",
+            "count": len(
+                result.get("recommendations", []),
+            ),
+        }
+
+    # ── Superuser: promote a test run ───────────
+    # Atomically: delete any existing non-test run
+    # for the same (user, scope, IST month), then
+    # relabel the selected admin_test run as 'admin'
+    # so it surfaces to the end user.
+
+    async def _admin_recommendation_promote(
+        run_id: str,
+        user: UserContext = Depends(get_current_user),
+    ):
+        """POST /admin/recommendation-runs/{run_id}/promote."""
+        from sqlalchemy import select
+        from backend.db.engine import (
+            get_session_factory,
+        )
+        from backend.db.models.recommendation import (
+            RecommendationRun,
+        )
+        from backend.db.pg_stocks import (
+            delete_recommendation_run,
+        )
+        from jobs.recommendation_engine import (
+            current_month_start_ist,
+        )
+
+        sf = get_session_factory()
+        month_start = current_month_start_ist()
+
+        async with sf() as s:
+            row = (
+                await s.execute(
+                    select(RecommendationRun).where(
+                        RecommendationRun.run_id
+                        == run_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                raise HTTPException(
+                    404, "Run not found",
+                )
+            if row.run_type != "admin_test":
+                raise HTTPException(
+                    400,
+                    "Only admin_test runs may be "
+                    "promoted.",
+                )
+            target_user = str(row.user_id)
+            target_scope = row.scope
+
+            # Find existing non-test run this month
+            existing_q = await s.execute(
+                select(RecommendationRun).where(
+                    RecommendationRun.user_id
+                    == target_user,
+                    RecommendationRun.scope
+                    == target_scope,
+                    RecommendationRun.run_type
+                    != "admin_test",
+                    RecommendationRun.created_at
+                    >= month_start,
+                    RecommendationRun.run_id != run_id,
+                )
+            )
+            existing = existing_q.scalars().all()
+
+        replaced_ids: list[str] = []
+        for ex in existing:
+            async with sf() as s:
+                await delete_recommendation_run(
+                    s, str(ex.run_id),
+                )
+            replaced_ids.append(str(ex.run_id))
+
+        async with sf() as s:
+            target = (
+                await s.execute(
+                    select(RecommendationRun).where(
+                        RecommendationRun.run_id
+                        == run_id,
+                    )
+                )
+            ).scalar_one()
+            target.run_type = "admin"
+            await s.commit()
+
+        _logger.info(
+            "Admin %s promoted run %s "
+            "(user=%s scope=%s) replacing %s",
+            user.email, run_id,
+            target_user[:8], target_scope,
+            replaced_ids or "nothing",
+        )
+        return {
+            "status": "promoted",
+            "run_id": run_id,
+            "user_id": target_user,
+            "scope": target_scope,
+            "replaced": replaced_ids,
+        }
+
+    admin_router.add_api_route(
+        "/admin/recommendations/force-refresh",
+        _admin_recommendation_force_refresh,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/recommendation-runs/{run_id}/promote",
+        _admin_recommendation_promote,
+        methods=["POST"],
         dependencies=[Depends(superuser_only)],
     )
 
