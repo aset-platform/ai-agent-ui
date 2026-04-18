@@ -404,6 +404,20 @@ Run `list_memories` to browse all topics. Key categories:
 - **Data health fix-ohlcv blocking**: Both `backfill_nan`
   and `backfill_missing` actions are sync Iceberg I/O.
   Wrapped in `asyncio.to_thread()` in `routes.py`.
+- **`env_file` reload**: `docker compose restart backend`
+  does NOT re-read `.env` — it only reruns the existing
+  container with the same env. New variables (e.g.
+  `BYO_SECRET_KEY` after Fernet setup) require
+  `docker compose up -d --force-recreate backend`.
+- **Alembic `.pyc` cache**: renaming a migration file on
+  disk isn't enough — Python bytecode caches in the
+  container at
+  `/app/backend/db/migrations/versions/__pycache__/`
+  still reference the old module + revision ID.
+  alembic will report "Cycle detected" / "revision
+  present more than once" until cleared. Delete the
+  stale `.pyc` inside the container and also edit the
+  `revision: str = "..."` line inside the Python file.
 
 ### Iceberg Maintenance (CRITICAL)
 
@@ -550,9 +564,10 @@ Run `list_memories` to browse all topics. Key categories:
   `PASSWORD_RESET`, `OAUTH_LOGIN`, `USER_CREATED`,
   `USER_UPDATED`, `USER_DELETED`,
   `ADMIN_PASSWORD_RESET`, `ROLE_PROMOTED`,
-  `ROLE_DEMOTED`. `PATCH /auth/me` writes
-  `USER_UPDATED` (actor == target) so pros see
-  self-edits in My Audit Log.
+  `ROLE_DEMOTED`, `BYO_KEY_ADDED`,
+  `BYO_KEY_UPDATED`, `BYO_KEY_DELETED`. `PATCH /auth/me`
+  writes `USER_UPDATED` (actor == target) so pros
+  see self-edits in My Audit Log.
 
 ### Sentiment Batch
 
@@ -597,6 +612,31 @@ Run `list_memories` to browse all topics. Key categories:
   score_date)`), so force genuinely overrides
   today's row.
 
+### Insights ticker scoping (three-tier)
+
+- `backend/insights_routes.py::_scoped_tickers(user, scope)`
+  is the single helper. Scope enum:
+  `"discovery" | "watchlist" | "portfolio"`.
+- **Tab → scope mapping** (don't mix up):
+  - `discovery` — Screener, ScreenQL, Sectors, Piotroski
+    → pro/superuser see full universe (stock + ETF only);
+    general sees watchlist ∪ holdings.
+  - `watchlist` — Risk, Targets, Dividends → everyone
+    sees watchlist ∪ holdings.
+  - `portfolio` — Correlation, Quarterly → everyone sees
+    holdings only (`get_portfolio_holdings` where
+    `quantity > 0`).
+- **Full-universe filter**: `ticker_type IN ('stock', 'etf')`.
+  Index tickers (`^NSEI`, `^GSPC`) and commodity
+  (`GC=F`) are excluded from Screener/ScreenQL.
+- **Legacy shim**: `_get_user_tickers(user)` resolves
+  to `watchlist` tier. Don't remove until every caller
+  migrates.
+- **Per-user cache key** on Piotroski: when adding
+  per-user scoping, always include `user_id` in the
+  Redis cache key. Was platform-wide before; cache
+  served wrong data across users until fixed.
+
 ### NaN-truthy trap (sector + any optional str field)
 
 - `float('nan')` is truthy in Python. `row.get("sector")
@@ -609,6 +649,16 @@ Run `list_memories` to browse all topics. Key categories:
   - `safe_str(val) -> str | None` — None/NaN/ws → None
   - `safe_sector(val, fallback="Other") -> str`
     — always a non-empty label
+- `safe_str` ALSO rejects stringified-NaN sentinels
+  `{"nan", "none", "null", "n/a", "na", "nat"}`
+  (case-insensitive, post-strip). pandas / json.dumps /
+  repr() round-trips can produce these literal tokens
+  from a float NaN upstream. Legit substrings
+  (`"Naniwa"`, `"Financial Services"`) still pass.
+- Sectors tab's "unnamed" bucket was caused by 3 ETFs
+  with literal `""` sector (not float NaN) that
+  `dropna` missed. Fix: route the `sector` column
+  through `safe_str` before the groupby.
 - Applied at both write-paths (before Iceberg insert
   in repository.py, batch_refresh.py, pipeline
   fundamentals, universe, screener, stock_data_tool)
@@ -617,6 +667,112 @@ Run `list_memories` to browse all topics. Key categories:
   report_builder.py, insights_routes.py).
   Existing rows may still have NaN stored — read
   paths handle it gracefully.
+
+### BYOM (Bring Your Own Model)
+
+- **Product rule**: every non-superuser gets 10 free
+  chat turns. After 10, they must configure a Groq
+  and/or Anthropic key — otherwise chat returns 429
+  with "Configure a Groq or Anthropic key on the
+  My LLM Usage page". Non-chat flows (recommendations,
+  sentiment, forecast) + superusers stay on platform
+  keys regardless.
+- **ContextVar pattern**: `backend/llm_byo.py` exposes
+  `BYOContext` + `apply_byo_context()`. MUST be set
+  **inside** the worker thread — `run_in_executor`
+  does not auto-propagate ContextVars. Every chat
+  entry point (`/chat`, `/chat/stream`, LangGraph
+  variants, WS `_run_graph`/`_run_legacy`) wraps the
+  worker in `apply_byo_context(byo_ctx)`.
+- **Post-chat side-effect trap**: `update_summary()`
+  must run INSIDE the `apply_byo_context()` block or
+  it leaks to platform keys. Use
+  `_update_summary_in_byo_scope()` helper (WS) or
+  nest inside the `with` block (HTTP).
+- **`chat_request_count` bump rule**: guard with
+  `byo_active=bool` so the free-allowance counter
+  freezes once BYO kicks in. Scope-self response
+  clamps `free_allowance_used = min(count, 10)` for
+  any historical drift past the cap.
+- **Raw `ChatGroq` / `ChatAnthropic` audit**: any
+  node that instantiates these directly (bypassing
+  `FallbackLLM`) must ALSO check
+  `get_active_byo_context()` and swap to a user-keyed
+  client. Known past offender:
+  `backend/agents/nodes/llm_classifier.py` — fixed.
+  Audit this pattern when adding new nodes.
+- **Fernet setup**: `BYO_SECRET_KEY` env var (32-byte
+  URL-safe base64). Generate via
+  `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
+  **Container must be recreated** (not just restarted)
+  to pick up new `.env` vars: `docker compose up -d
+  --force-recreate backend`. `restart` alone doesn't
+  re-read `env_file`.
+- **Redis counter**: `byo:month_counter:{user_id}:{yyyy-mm}`
+  (IST month, 40-day TTL). `CacheService.set()` uses
+  `ttl=` keyword, NOT `ex=` (Redis-like). Wrong kwarg
+  raises `TypeError` that gets swallowed by
+  `except Exception` → silent no-op. `cache.get()`
+  returns `str` (decode_responses=True), not `bytes`.
+- **`FallbackLLM.bind_tools()`** stores
+  `_bound_tools` + `_bound_tools_kwargs` so BYO clients
+  rebind to the same tool set on each `_try_model()`
+  invocation. Don't remove these fields.
+- **Per-user LangChain client cache** keyed on
+  `(provider, model, sha256(key)[:12])` — avoids
+  rebuilding on every invocation within a turn.
+- **WS 429 delivery**: `_handle_chat` must send errors
+  directly via `ws.send_json({"type":"error"})` +
+  `{"type":"final"}` — returning an `event_queue`
+  after enqueueing the error spins the drain loop
+  forever (drain hadn't started yet when handler
+  returns). Same bug lurks on the monthly-quota path.
+- **Iceberg `key_source` column**: nullable on
+  `stocks.llm_usage`. Legacy null rows treated as
+  `platform` at read time. Schema evolved via
+  `tbl.update_schema().add_column()` — no backfill.
+- **Alembic migration file vs revision ID**: when
+  renaming a migration file on disk, also edit the
+  `revision: str = "..."` line inside. And clean
+  stale `.pyc` in Docker container
+  (`/app/backend/db/migrations/versions/__pycache__/`)
+  — alembic loads from bytecode if present and will
+  report cycle/duplicate-revision errors until cache
+  is cleared.
+
+### ContextVar propagation (async → thread)
+
+- `asyncio.loop.run_in_executor(executor, fn)` does
+  NOT copy the calling task's ContextVars into the
+  worker thread by default. Any ContextVar set in an
+  async route handler will be empty inside the thread.
+- **Fix**: set the ContextVar INSIDE the worker via a
+  scoped context manager
+  (`apply_byo_context`, `apply_X_context`, etc.) or
+  use `contextvars.copy_context().run(fn)` when
+  wrapping a simple callable.
+- Auto-clears on block exit so the next request
+  starts clean — verify in unit tests with a
+  `test_apply_and_auto_clear` case.
+
+### Tool-result truncation hallucination
+
+- `MessageCompressor` in `backend/message_compressor.py`
+  truncates `ToolMessage.content` via a literal
+  `[truncated N chars]` marker. When the marker
+  appears mid-table in a tool output, the LLM can
+  hallucinate the missing rows in synthesis — observed
+  `"[Truncated in display, but confirmed in memory
+  context]"` which exists NOWHERE in our code.
+- **Defaults**: `max_tool_result_chars=4000`,
+  progressive pass 2 `2500`, pass 3 `1500`. Don't
+  regress below 3000 without testing the portfolio /
+  screener flows.
+- **Prompt guardrails**: `_SYNTHESIS_PROMPT` +
+  portfolio sub-agent prompt both include a
+  NO HALLUCINATION ON TRUNCATION clause. Don't
+  remove. If a new table-returning tool surfaces,
+  mirror the clause in its sub-agent prompt too.
 
 ### Frontend
 
@@ -698,12 +854,35 @@ Run `list_memories` to browse all topics. Key categories:
   Pros currently only see `my_account`, `my_audit`,
   `my_llm`. Route-level gate redirects `general` users
   to `/dashboard` on mount.
+- **My LLM Usage tab** (`MyLLMUsageTab.tsx`) is a
+  standalone component — does NOT delegate to the
+  superuser `ObservabilityTab`. Consumes the new
+  scope-self shape (`quota`, `providers`, `daily_trend`,
+  per-user per-model rollup with `requests_platform` +
+  `requests_user` split). If you extend the scope-self
+  response shape on the backend, mirror in
+  `frontend/lib/types.ts::UserModelUsage` + related
+  types.
 - **Scope-aware admin hooks**: `useAdminAudit(scope)`,
   `useObservability(scope)`, `getUsageStats(scope)`
   all take `"self" | "all"`. Pass the right one based
   on the consuming tab. `obsFetcher` skips the
   superuser-only `tier-health` GET on `scope="self"`
   — saves a guaranteed 403.
+- **Idempotent DELETE UX**: delete handlers that go
+  through a confirm modal should treat `HTTP 404` as
+  success (already-removed) alongside `204`. Stale UI
+  state (double-click, concurrent tab) shouldn't throw
+  a runtime error. See
+  `useAdminData::deleteKey`.
+- **Timestamp parsing for relative display**: any
+  `fmtRelative()` helper must receive ISO 8601 with a
+  timezone marker (`Z` or `+HH:MM`). Iceberg-sourced
+  timestamps come back tz-naive — the backend must
+  stamp `Z` before returning (via the shared
+  `_iso_utc()` helper in `backend/routes.py`).
+  Without the marker, `new Date()` parses as local
+  time and shows fresh rows as "5h ago" in IST.
 
 ### Testing & Config (unit/integration)
 
