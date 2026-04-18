@@ -36,7 +36,12 @@ import queue
 import threading
 import time
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from starlette.websockets import WebSocketState
 from tools._ticker_linker import set_current_user
 
@@ -264,7 +269,7 @@ async def _handle_chat(
         from usage_tracker import is_quota_exceeded
 
         if await is_quota_exceeded(user_id):
-            event_queue.put(
+            await ws.send_json(
                 {
                     "type": "error",
                     "message": (
@@ -273,11 +278,56 @@ async def _handle_chat(
                     ),
                 }
             )
-            event_queue.put(None)
-            return event_queue
+            await ws.send_json(
+                {"type": "final", "response": ""}
+            )
+            return
     except Exception:
         _logger.debug(
             "Quota check failed for WS user",
+            exc_info=True,
+        )
+
+    # Resolve BYO context — may raise HTTPException(429)
+    # when the user is over the free allowance and has no
+    # key configured, or has exceeded their own limit.
+    _byo_ctx = None
+    try:
+        from auth.endpoints.helpers import _get_repo
+        from backend.llm_byo import resolve_byo_for_chat
+
+        repo = _get_repo()
+        _u = await repo.get_by_id(user_id)
+        if _u is not None:
+            _byo_ctx = await resolve_byo_for_chat(
+                user_id=user_id,
+                role=user_ctx.get("role", "general"),
+                chat_request_count=int(
+                    _u.get(
+                        "chat_request_count", 0,
+                    ) or 0
+                ),
+                byo_monthly_limit=int(
+                    _u.get(
+                        "byo_monthly_limit", 100,
+                    ) or 100
+                ),
+            )
+    except HTTPException as hx:
+        # Send error + terminator directly so the client
+        # stops the "Thinking…" spinner and renders the
+        # message.  Using the drain loop here would stall
+        # because the worker thread never starts.
+        await ws.send_json(
+            {"type": "error", "message": hx.detail}
+        )
+        await ws.send_json(
+            {"type": "final", "response": ""}
+        )
+        return
+    except Exception:
+        _logger.debug(
+            "BYO resolve failed for WS user",
             exc_info=True,
         )
 
@@ -294,6 +344,10 @@ async def _handle_chat(
                     event_queue,
                     session_id=session_id,
                     main_loop=_main_loop,
+                    user_role=user_ctx.get(
+                        "role", "general",
+                    ),
+                    byo_ctx=_byo_ctx,
                 )
             else:
                 _run_legacy(
@@ -303,6 +357,10 @@ async def _handle_chat(
                     event_queue,
                     user_id,
                     main_loop=_main_loop,
+                    user_role=user_ctx.get(
+                        "role", "general",
+                    ),
+                    byo_ctx=_byo_ctx,
                 )
         except Exception as exc:
             _logger.warning(
@@ -367,6 +425,73 @@ async def _handle_chat(
     worker.join(timeout=2)
 
 
+def _update_summary_in_byo_scope(
+    session_id: str,
+    user_id: str,
+    message: str,
+    result: dict,
+) -> None:
+    """Persist the conversation summary inside the active
+    BYO context so any LLM call during summary generation
+    uses the user's keys (not the platform's).
+    """
+    if not session_id:
+        return
+    try:
+        from agents.conversation_context import (
+            ConversationContext,
+            context_store,
+            update_summary,
+        )
+
+        ctx = context_store.get(session_id)
+        if ctx is None:
+            ctx = context_store.get_latest_for_user(
+                user_id,
+            )
+            if ctx is not None:
+                ctx.session_id = session_id
+            else:
+                ctx = ConversationContext(
+                    session_id=session_id,
+                )
+        if not ctx.user_id:
+            ctx.user_id = user_id
+        ctx.last_agent = result.get(
+            "current_agent", "",
+        )
+        ctx.last_intent = result.get("intent", "")
+        ctx.last_response = (
+            result.get("final_response", "")[:500]
+        )
+        tickers = result.get("tickers", [])
+        ctx.current_topic = (
+            f"{', '.join(tickers)} "
+            f"{ctx.last_intent}"
+            if tickers else ctx.last_intent
+        )
+        for t in tickers:
+            if t not in ctx.tickers_mentioned:
+                ctx.tickers_mentioned.append(t)
+        try:
+            update_summary(
+                ctx, message,
+                result.get("final_response", ""),
+            )
+        except Exception:
+            ctx.turn_count += 1
+        context_store.upsert(session_id, ctx)
+        _logger.debug(
+            "Context updated for session %s"
+            " (turn %d, agent=%s)",
+            session_id, ctx.turn_count, ctx.last_agent,
+        )
+    except Exception:
+        _logger.debug(
+            "WS context update failed", exc_info=True,
+        )
+
+
 def _run_graph(
     graph,
     message,
@@ -375,6 +500,8 @@ def _run_graph(
     event_queue,
     session_id: str = "",
     main_loop=None,
+    user_role: str = "general",
+    byo_ctx=None,
 ):
     """Run LangGraph supervisor in worker thread."""
     from langchain_core.messages import (
@@ -449,69 +576,20 @@ def _run_graph(
     set_event_sink(event_queue.put)
 
     try:
-        result = graph.invoke(input_state)
+        from backend.llm_byo import apply_byo_context
+
+        with apply_byo_context(byo_ctx):
+            result = graph.invoke(input_state)
+            _update_summary_in_byo_scope(
+                session_id=session_id,
+                user_id=user_id,
+                message=message,
+                result=result,
+            )
     finally:
         set_event_sink(None)
 
-    # Update conversation context for follow-ups.
-    if session_id:
-        try:
-            from agents.conversation_context import (
-                ConversationContext,
-                context_store,
-                update_summary,
-            )
-
-            ctx = context_store.get(session_id)
-            if ctx is None:
-                # Try resume from user's last session
-                ctx = context_store.get_latest_for_user(
-                    user_id,
-                )
-                if ctx is not None:
-                    ctx.session_id = session_id
-                else:
-                    ctx = ConversationContext(
-                        session_id=session_id,
-                    )
-            if not ctx.user_id:
-                ctx.user_id = user_id
-            ctx.last_agent = result.get(
-                "current_agent", "",
-            )
-            ctx.last_intent = result.get("intent", "")
-            ctx.last_response = (
-                result.get("final_response", "")[:500]
-            )
-            tickers = result.get("tickers", [])
-            ctx.current_topic = (
-                f"{', '.join(tickers)} "
-                f"{ctx.last_intent}"
-                if tickers else ctx.last_intent
-            )
-            for t in tickers:
-                if t not in ctx.tickers_mentioned:
-                    ctx.tickers_mentioned.append(t)
-            try:
-                update_summary(
-                    ctx, message,
-                    result.get("final_response", ""),
-                )
-            except Exception:
-                ctx.turn_count += 1
-            context_store.upsert(session_id, ctx)
-            _logger.debug(
-                "Context updated for session %s"
-                " (turn %d, agent=%s)",
-                session_id,
-                ctx.turn_count,
-                ctx.last_agent,
-            )
-        except Exception:
-            _logger.debug(
-                "WS context update failed",
-                exc_info=True,
-            )
+    # Summary update already happened inside apply_byo_context.
 
     # ── Post-response async tasks (fire-and-forget) ──
     _final_resp = result.get("final_response", "")
@@ -605,6 +683,27 @@ def _run_graph(
                 user_id,
                 exc_info=True,
             )
+        # BYO free-allowance counter — non-superuser only
+        # AND skipped when this turn routed through BYO
+        # (byo_ctx is not None) so the banner stops at 10.
+        if user_role != "superuser" and byo_ctx is None:
+            try:
+                from auth.endpoints.helpers import (
+                    _get_repo,
+                )
+
+                asyncio.run_coroutine_threadsafe(
+                    _get_repo().increment_chat_counter(
+                        user_id,
+                    ),
+                    main_loop,
+                )
+            except Exception:
+                _logger.debug(
+                    "Chat counter failed for %s",
+                    user_id,
+                    exc_info=True,
+                )
 
 
 def _run_legacy(
@@ -614,6 +713,8 @@ def _run_legacy(
     event_queue,
     user_id=None,
     main_loop=None,
+    user_role: str = "general",
+    byo_ctx=None,
 ):
     """Run legacy agent in worker thread."""
     from agents.router import route as _route
@@ -622,8 +723,11 @@ def _run_legacy(
     agent = agent_registry.get(agent_id)
     if agent is None:
         return
-    for event in agent.stream(message, history):
-        event_queue.put(event)
+    from backend.llm_byo import apply_byo_context
+
+    with apply_byo_context(byo_ctx):
+        for event in agent.stream(message, history):
+            event_queue.put(event)
 
     if user_id and main_loop:
         try:
@@ -641,6 +745,26 @@ def _run_legacy(
                 user_id,
                 exc_info=True,
             )
+        if user_role != "superuser" and byo_ctx is None:
+            try:
+                import asyncio as _asyncio
+
+                from auth.endpoints.helpers import (
+                    _get_repo,
+                )
+
+                _asyncio.run_coroutine_threadsafe(
+                    _get_repo().increment_chat_counter(
+                        user_id,
+                    ),
+                    main_loop,
+                )
+            except Exception:
+                _logger.debug(
+                    "Chat counter failed for %s",
+                    user_id,
+                    exc_info=True,
+                )
 
 
 async def _close(ws, code: int, reason: str) -> None:

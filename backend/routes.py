@@ -34,6 +34,31 @@ from auth.rate_limit import limiter, rate_limit_exceeded_handler
 _logger = logging.getLogger(__name__)
 
 
+def _iso_utc(ts) -> str | None:
+    """Serialize a datetime / pandas Timestamp as ISO 8601 UTC
+    with a trailing ``Z`` so the frontend's ``new Date()``
+    parses it as UTC instead of local time. Returns ``None``
+    when *ts* is falsy or can't be coerced.
+    """
+    if ts is None:
+        return None
+    try:
+        from datetime import datetime, timezone
+        if hasattr(ts, "tzinfo"):
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            return (
+                ts.astimezone(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+        if isinstance(ts, str):
+            return ts if "Z" in ts or "+" in ts else f"{ts}Z"
+        return str(ts)
+    except Exception:
+        return str(ts) if ts else None
+
+
 def create_app(
     agent_registry,
     executor,
@@ -225,8 +250,88 @@ def create_app(
                 detail="Usage tracking unavailable",
             )
 
-    async def _track_usage(user_id: str) -> None:
-        """Increment monthly usage count."""
+    async def _bump_chat_counter(
+        user_id: str,
+        role: str,
+        byo_active: bool = False,
+    ) -> None:
+        """Increment the "free allowance used" counter.
+
+        Skipped for superusers (exempt from the allowance)
+        and for BYO-routed turns (once the user is paying
+        their own bill, the free-allowance banner should
+        stay pinned at 10 — not drift past).
+        """
+        if role == "superuser" or byo_active:
+            return
+        try:
+            from auth.endpoints.helpers import (
+                _get_repo,
+            )
+
+            await _get_repo().increment_chat_counter(user_id)
+        except Exception:
+            _logger.debug(
+                "Chat counter skipped for %s",
+                user_id,
+            )
+
+    async def _resolve_byo_for_request(
+        user: UserContext,
+    ):
+        """Resolve BYO context for the current chat turn.
+
+        Returns a BYOContext when the user must route through
+        their own keys.  May raise HTTPException(429) when the
+        user is over the free allowance and has no key, or has
+        exceeded their own monthly limit.
+        """
+        if user.role == "superuser":
+            return None
+        try:
+            from auth.endpoints.helpers import (
+                _get_repo,
+            )
+            from backend.llm_byo import (
+                resolve_byo_for_chat,
+            )
+
+            repo = _get_repo()
+            user_row = await repo.get_by_id(
+                str(user.user_id),
+            )
+            if user_row is None:
+                return None
+            return await resolve_byo_for_chat(
+                user_id=str(user.user_id),
+                role=user.role,
+                chat_request_count=int(
+                    user_row.get(
+                        "chat_request_count", 0,
+                    ) or 0
+                ),
+                byo_monthly_limit=int(
+                    user_row.get(
+                        "byo_monthly_limit", 100,
+                    ) or 100
+                ),
+            )
+        except HTTPException:
+            raise
+        except Exception:
+            _logger.warning(
+                "BYO resolve failed for %s",
+                user.user_id,
+                exc_info=True,
+            )
+            return None
+
+    async def _track_usage(
+        user_id: str,
+        role: str = "general",
+        byo_active: bool = False,
+    ) -> None:
+        """Increment monthly usage + BYO allowance counters."""
         try:
             from usage_tracker import increment_usage
 
@@ -236,10 +341,15 @@ def create_app(
                 "Usage tracking skipped for %s",
                 user_id,
             )
+        await _bump_chat_counter(
+            user_id, role, byo_active=byo_active,
+        )
 
     def _track_usage_sync(
         user_id: str,
         loop=None,
+        role: str = "general",
+        byo_active: bool = False,
     ) -> None:
         """Sync wrapper for thread contexts.
 
@@ -263,6 +373,24 @@ def create_app(
                 "Usage tracking skipped for %s",
                 user_id,
             )
+        # BYO counter — non-superuser, non-BYO turns only.
+        if role == "superuser" or byo_active:
+            return
+        try:
+            if loop is not None and loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    _bump_chat_counter(user_id, role),
+                    loop,
+                )
+            else:
+                asyncio.run(
+                    _bump_chat_counter(user_id, role),
+                )
+        except Exception:
+            _logger.debug(
+                "Chat counter sync skipped for %s",
+                user_id,
+            )
 
     # ---------------------------------------------------------------
     # Core route handlers — shared by root and /v1 mounts
@@ -277,13 +405,19 @@ def create_app(
         """Sync agent dispatch (POST /chat)."""
         req.user_id = current_user.user_id
         await _enforce_quota(req.user_id)
+        _byo_ctx = await _resolve_byo_for_request(
+            current_user,
+        )
 
         # ── LangGraph path ────────────────────────
         if graph is not None and settings.use_langgraph:
-            return await _chat_langgraph(req)
+            return await _chat_langgraph(
+                req, current_user.role, _byo_ctx,
+            )
 
         # ── Legacy path ───────────────────────────
         from agents.router import route as _route
+        from backend.llm_byo import apply_byo_context
 
         resolved = _route(req.message)
         agent = agent_registry.get(resolved)
@@ -296,9 +430,10 @@ def create_app(
 
             def _run_with_user():
                 set_current_user(req.user_id)
-                return agent.run(
-                    req.message, req.history,
-                )
+                with apply_byo_context(_byo_ctx):
+                    return agent.run(
+                        req.message, req.history,
+                    )
 
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
@@ -328,20 +463,31 @@ def create_app(
                 status_code=500,
                 detail="Agent execution failed",
             )
-        await _track_usage(req.user_id)
+        await _track_usage(
+            req.user_id,
+            current_user.role,
+            byo_active=_byo_ctx is not None,
+        )
         return ChatResponse(
             response=result,
             agent_id=req.agent_id,
         )
 
-    async def _chat_langgraph(req: ChatRequest):
+    async def _chat_langgraph(
+        req: ChatRequest,
+        role: str = "general",
+        byo_ctx=None,
+    ):
         """Sync chat via LangGraph supervisor graph."""
+        from backend.llm_byo import apply_byo_context
+
         input_state = _build_graph_input(req)
         try:
 
             def _invoke_with_user():
                 set_current_user(req.user_id)
-                return graph.invoke(input_state)
+                with apply_byo_context(byo_ctx):
+                    return graph.invoke(input_state)
 
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
@@ -366,7 +512,10 @@ def create_app(
                 status_code=500,
                 detail="Agent execution failed",
             )
-        await _track_usage(req.user_id)
+        await _track_usage(
+            req.user_id, role,
+            byo_active=byo_ctx is not None,
+        )
         return ChatResponse(
             response=result.get("final_response", ""),
             agent_id=result.get("current_agent", "graph"),
@@ -381,12 +530,18 @@ def create_app(
         """NDJSON streaming (POST /chat/stream)."""
         req.user_id = current_user.user_id
         await _enforce_quota(req.user_id)
+        _byo_ctx = await _resolve_byo_for_request(
+            current_user,
+        )
         _loop = asyncio.get_running_loop()
 
         # ── LangGraph path ────────────────────────
         if graph is not None and settings.use_langgraph:
             return _stream_langgraph(
-                req, loop=_loop,
+                req,
+                loop=_loop,
+                role=current_user.role,
+                byo_ctx=_byo_ctx,
             )
 
         # ── Legacy path ───────────────────────────
@@ -402,6 +557,8 @@ def create_app(
 
         timeout = settings.agent_timeout_seconds
 
+        from backend.llm_byo import apply_byo_context
+
         def generate():
             """Run agent.stream() in a thread."""
             event_queue: queue.Queue = queue.Queue()
@@ -409,13 +566,17 @@ def create_app(
             def run() -> None:
                 set_current_user(req.user_id)
                 try:
-                    for event in agent.stream(
-                        req.message,
-                        req.history,
-                    ):
-                        event_queue.put(event)
+                    with apply_byo_context(_byo_ctx):
+                        for event in agent.stream(
+                            req.message,
+                            req.history,
+                        ):
+                            event_queue.put(event)
                     _track_usage_sync(
-                        req.user_id, loop=_loop,
+                        req.user_id,
+                        loop=_loop,
+                        role=current_user.role,
+                        byo_active=_byo_ctx is not None,
                     )
                 except Exception as exc:
                     _logger.warning(
@@ -620,11 +781,16 @@ def create_app(
             )
 
     def _stream_langgraph(
-        req: ChatRequest, loop=None,
+        req: ChatRequest,
+        loop=None,
+        role: str = "general",
+        byo_ctx=None,
     ):
         """NDJSON streaming via LangGraph graph."""
         timeout = settings.agent_timeout_seconds
         input_state = _build_graph_input(req)
+
+        from backend.llm_byo import apply_byo_context
 
         def generate():
             event_queue: queue.Queue = queue.Queue()
@@ -641,31 +807,35 @@ def create_app(
 
                     set_event_sink(_sink)
                     try:
-                        result = graph.invoke(
-                            input_state,
-                        )
+                        with apply_byo_context(byo_ctx):
+                            result = graph.invoke(
+                                input_state,
+                            )
+                            # Keep the summary-update LLM
+                            # call under the same BYO scope
+                            # so it uses the user's key
+                            # when active.
+                            _update_conversation_context(
+                                session_id=(
+                                    req.session_id or ""
+                                ),
+                                user_input=req.message,
+                                response=result.get(
+                                    "final_response", "",
+                                ),
+                                agent=result.get(
+                                    "current_agent", "",
+                                ),
+                                intent=result.get(
+                                    "intent", "",
+                                ),
+                                tickers=result.get(
+                                    "tickers", [],
+                                ),
+                                user_id=req.user_id or "",
+                            )
                     finally:
                         set_event_sink(None)
-                    # Update conversation context.
-                    _update_conversation_context(
-                        session_id=(
-                            req.session_id or ""
-                        ),
-                        user_input=req.message,
-                        response=result.get(
-                            "final_response", "",
-                        ),
-                        agent=result.get(
-                            "current_agent", "",
-                        ),
-                        intent=result.get(
-                            "intent", "",
-                        ),
-                        tickers=result.get(
-                            "tickers", [],
-                        ),
-                        user_id=req.user_id or "",
-                    )
                     # Emit final
                     event_queue.put(
                         json.dumps(
@@ -678,7 +848,10 @@ def create_app(
                         + "\n"
                     )
                     _track_usage_sync(
-                        req.user_id, loop=loop,
+                        req.user_id,
+                        loop=loop,
+                        role=role,
+                        byo_active=byo_ctx is not None,
                     )
                 except Exception as exc:
                     event_queue.put(
@@ -774,9 +947,6 @@ def create_app(
                 )
             else:
                 result["models"] = {}
-        else:
-            # Token-budget is global — omit on self view.
-            result["models"] = {}
 
         cascade_stats: dict = {}
         if scope == "all" and obs_collector is not None:
@@ -805,11 +975,114 @@ def create_app(
                 # Surface per-user totals directly for
                 # the My LLM Usage tab.
                 cascade_stats["usage"] = usage
+                # Mirror per-model into top-level ``models``
+                # so the frontend has a stable key regardless
+                # of superuser vs self shape.
+                result["models"] = dict(
+                    usage.get("per_model", {}),
+                )
+                result["daily_trend"] = usage.get(
+                    "daily_trend", [],
+                )
         except Exception:
             _logger.debug(
                 "Iceberg LLM usage fallback",
                 exc_info=True,
             )
+
+        # Self-scope additions: quota + provider status
+        # for the "My LLM Usage" tab.
+        if scope == "self":
+            try:
+                from auth.endpoints.helpers import (
+                    _get_repo,
+                )
+
+                auth_repo = _get_repo()
+                user_row = await auth_repo.get_by_id(
+                    str(user.user_id),
+                )
+                keys = await auth_repo.list_llm_keys(
+                    str(user.user_id),
+                )
+                keys_by_provider = {
+                    k["provider"]: k for k in keys
+                }
+                # ``request_count_30d`` on the key row is a
+                # future-use field; the authoritative BYO
+                # chat-turn count for the current IST month
+                # lives in Redis.
+                from backend.llm_byo import (
+                    read_byo_month_used,
+                )
+                byo_month_used = read_byo_month_used(
+                    str(user.user_id),
+                )
+                _raw_used = int(
+                    (user_row or {}).get(
+                        "chat_request_count", 0,
+                    ) or 0
+                )
+                # Clamp to the 10-turn ceiling for display —
+                # any historical drift past 10 (from before
+                # the BYO-active guard) otherwise shows up
+                # as "15 of 10 used" in the banner.
+                result["quota"] = {
+                    "free_allowance_total": 10,
+                    "free_allowance_used": min(
+                        _raw_used, 10,
+                    ),
+                    "byo_monthly_limit": int(
+                        (user_row or {}).get(
+                            "byo_monthly_limit", 100,
+                        ) or 100
+                    ),
+                    "byo_month_used": byo_month_used,
+                }
+                providers: list[dict] = []
+                for p in ("groq", "anthropic"):
+                    row = keys_by_provider.get(p)
+                    providers.append(
+                        {
+                            "provider": p,
+                            "configured": row is not None,
+                            "label": (
+                                row.get("label")
+                                if row else None
+                            ),
+                            "masked_key": (
+                                row.get("masked_key")
+                                if row else None
+                            ),
+                            "last_used_at": (
+                                _iso_utc(
+                                    row["last_used_at"],
+                                )
+                                if row and row.get(
+                                    "last_used_at",
+                                ) else None
+                            ),
+                            "request_count_30d": (
+                                int(
+                                    row["request_count_30d"],
+                                )
+                                if row else 0
+                            ),
+                        }
+                    )
+                providers.append(
+                    {
+                        "provider": "ollama",
+                        "native": True,
+                        "configured": True,
+                    },
+                )
+                result["providers"] = providers
+            except Exception:
+                _logger.debug(
+                    "self-quota enrichment failed",
+                    exc_info=True,
+                )
 
         result["cascade_stats"] = cascade_stats
         return result
