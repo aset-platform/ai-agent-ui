@@ -2,6 +2,88 @@
 
 ---
 
+## 2026-04-18 — Sprint 7 Session 5: Monthly Recommendations + Acted-On + Sentiment Hardening + Pro Role
+
+### ASETPLTFRM-318 (8 SP, Done): Recommendation monthly-per-scope quota + admin test workflow
+- New rule: **1 run per `(user, scope, IST calendar month)`**. Replaces the old "5 per rolling 30 days" cap.
+- Single consolidator `get_or_create_monthly_run(user_id, scope, *, run_type, repo, bypass_quota)` in `backend/jobs/recommendation_engine.py`. Widget, chat, and scheduler all delegate through it — cache hit returns existing run, cache miss runs stages 1→3 and persists.
+- `scope="all"` silently expands to `india` + `us` at every entry point.
+- New superuser endpoints:
+  - `POST /v1/admin/recommendations/force-refresh` — takes email OR UUID; bypasses quota; creates `run_type='admin_test'`.
+  - `POST /v1/admin/recommendation-runs/{id}/promote` — transactional delete of existing non-test run + relabel target to `run_type='admin'`.
+- `admin_test` rows hidden from user-facing tabs via default `exclude_test=True` on `get_latest_recommendation_run` + `get_recommendation_history`.
+- Fixed `expire_old_recommendations` — was cross-scope (incoming US run wiped India recs). Now scoped by `(user_id, scope)`.
+- IST month helpers: `current_month_start_ist()` + `next_month_start_ist()` via `ZoneInfo("Asia/Kolkata")`.
+- `scripts/truncate_recommendations.py` — one-shot cleanup (wiped 41 runs / 284 recs pre-deploy).
+- Frontend: `RunTypeBadge` variants ADMIN (fuchsia) + TEST (amber), Force-refresh panel + Replace button in Admin Recommendations tab, widget Generate button disables + shows `Next available {reset_at}` when cached.
+
+### ASETPLTFRM-319 (5 SP, Done): Recommendation acted-on auto-detection + in-place portfolio modals
+- Backend hook in `auth/endpoints/ticker_routes.py` on `POST/PUT/DELETE /users/me/portfolio`. Daemon thread calls `update_recommendation_status(user, ticker, actions, "acted_on")` via NullPool async engine.
+  - POST (new holding) → `buy/accumulate` recs.
+  - PUT (qty decrease) → `sell/reduce/trim` recs.
+  - DELETE → `sell/reduce/trim` recs.
+- Stats corrections:
+  - `get_recommendation_history` — `acted_on_count` computed via SUM of `CAST(acted_on_date IS NOT NULL AS Integer)` grouped per run.
+  - `get_recommendation_stats` — new `total_acted_on`; scope filter; `admin_test` excluded.
+  - `/history` + `/stats` endpoints return real values (were hardcoded 0).
+- `/stats?scope=india|us|all` — scope-aware adoption rate.
+- KPI formatter fix: null Hit Rate now renders `0.0%` (was em-dash).
+- Frontend: shared `RecActionButton.tsx` — green `+ Buy` / amber pencil `Edit` / green disabled `Acted ✓` pills, wired into `RecommendationCard` (slideover) + `RecRow` (Analysis → Recommendations).
+- `PortfolioActionsProvider` at authenticated-layout level — mounts Add/Edit/Delete modals once; `usePortfolioActions()` hook replaces the old `/dashboard?add=TICKER` route-redirect pattern.
+- Modal z-index raised to `z-[70]` so action modals layer above `RecommendationSlideOver` (`z-[60]`).
+- One-off data backfill: 9 recs across 3 users flipped to `acted_on` for existing holdings.
+
+### ASETPLTFRM-320 (5 SP, Done): Sentiment batch hardening + FinBERT provenance + Data Health details modal
+- Four bugs fixed in `backend/jobs/executor.py::execute_run_sentiment`:
+  1. **1599/802 double-count**: DuckDB metadata cache stale-read caused Step-5 gap-fill to see 0 new rows and overwrite 797 genuine LLM scores with market-fallback. Fix: `invalidate_metadata("stocks.sentiment_scores")` before the re-query.
+  2. **Deadlocked pool**: 15 concurrent `yf.Ticker().news` sockets hung indefinitely. Fix: `_run_with_timeout(fn, *args, timeout=10)` wrapper in `_sentiment_sources.py` applied to all three fetchers + market-headlines feedparser.
+  3. **Force flag ignored**: per-ticker `refresh_ticker_sentiment` had its own idempotency early-return. Fix: added `force` param; propagated executor → gap_filler → per-ticker.
+  4. **Unused LLM build in FinBERT mode**: 802× `FallbackLLM` constructors per run (log noise, CPU waste). Fix: `refresh_sentiment` reads `settings.sentiment_scorer`, skips LLM when `finbert`.
+- Learning-set cap: 767 → top 50 by `market_cap`; tail drops into Step-5 market-fallback. Runtime 802 → ~85 tickers (~30s).
+- Accurate source labels: new `score_headlines_with_source()` returns `(score, source)`; `sentiment_scores.source` now carries `finbert | llm | market_fallback | none`. Log format: `Sentiment scored TCS.NS: 0.340 (4 headlines, 3 sources, src=finbert, force=upsert)`.
+- New endpoint `GET /v1/admin/data-health/sentiment-details?scope=all|india|us` (superuser, 60s Redis cache).
+- New `SentimentDetailsModal.tsx` on Admin → Maintenance → Data Health → Sentiment card: source tiles (FinBERT indigo, LLM violet, fallback amber, none grey), filterable + paginated (10/25/50/100) ticker table, CSV download, scope tabs.
+
+### ASETPLTFRM-321 (3 SP, Done): NaN-truthy sector audit + shared helpers
+- Root cause: `row.get("sector") or "Other"` kept `float('nan')` for ETFs (NaN is truthy in Python). Recommendation prompt leaked literal "NaN (41.8%)".
+- New shared helpers in `backend/market_utils.py`:
+  - `safe_str(val) -> str | None` — handles None / NaN / whitespace.
+  - `safe_sector(val, fallback="Other") -> str` — non-empty label safe for dict keys + prompts.
+- Applied across 10 files:
+  - **Write paths** (sanitize before Iceberg insert): `stocks/repository.py` (company_info + piotroski_scores), `backend/jobs/batch_refresh.py`, `backend/pipeline/jobs/fundamentals.py`, `backend/pipeline/universe.py`, `backend/pipeline/screener/screen.py`, `backend/tools/stock_data_tool.py`.
+  - **Read paths** (handle pre-existing NaN): `backend/jobs/recommendation_engine.py` (3 sites), `backend/dashboard_routes.py`, `backend/agents/report_builder.py`, `backend/insights_routes.py`.
+
+### ASETPLTFRM-322 (3 SP, Done): UX polish — Asset Perf + Scheduler + CSV consistency
+- `AssetPerformanceWidget`: fixed body height (9 rows ~292px) with overflow-y scroll; dropped top-7/bottom-7 truncation.
+- Scheduler labels: `progressUnit(jobType)` returns `users/user` for `recommendations`, `tickers/ticker` otherwise. "Last Run" stat card shows `N processed`.
+- Scheduler Force Run: greyed "Off" pill with tooltip ONLY on `recommendations` jobs; other job types keep the amber menu.
+- New `DownloadCsvButton` shared component (`components/common/`) matches Screener's icon+label pattern. Used by Admin Recommendations, Analysis Recommendations, Sentiment Details modal, and refactored `InsightsTable`.
+- Modal z-index normalised: Add/Edit/ConfirmDialog → `z-[70]`.
+
+### Pro user role (unticketed, shipped same session)
+- Third role between `general` and `superuser`: paying users (`subscription_tier ∈ {pro, premium}`) get `role=pro`.
+- `auth/dependencies.py`: new `require_role(*allowed)` factory + `pro_or_superuser` alias.
+- `auth/repo/user_writes.py::update()`: tier→role auto-sync (superuser sticky — never auto-demoted). Fires `ROLE_PROMOTED` / `ROLE_DEMOTED` audit events post-commit via PyIceberg catalog.
+- `UserCreateRequest.role` + `UserUpdateRequest.role` Literals extended to `general | pro | superuser`.
+- `/admin/audit-log`, `/admin/metrics`, `/admin/usage-stats` switched to `pro_or_superuser` with `?scope=self|all` query param. Pro forced to `scope=self`; `scope=all` → 403 unless superuser.
+- Pro admin view: 3-tab scoped strip (My Account, My Audit Log, My LLM Usage). Superuser still sees all 7 tabs.
+- `AuditLogTab` + `ObservabilityTab` accept optional `{scope, title}` props; hide superuser-only sections (tier health, daily budget, cascade log, model budget) on self-scope.
+- New `MyAccountTab.tsx` — reuses canonical `EditProfileModal` + `ChangePasswordModal`.
+- `UserModal.tsx` role dropdown: General / Pro / Superuser.
+- `Sidebar.canSeeItem` extended so pros see Admin + Insights nav items.
+- `/admin` route gate: general users redirected to `/dashboard`.
+- `PATCH /auth/me` now writes `USER_UPDATED` audit event (pros see self-edits in My Audit Log).
+- **Known gap**: no cron for `subscription_end_at` expiry; webhooks cover the common path. Token retains old role up to 60min until next `/auth/refresh`.
+
+### Totals
+- **24 SP closed** in Jira (5 tickets). Pro role shipped but awaits ticketing.
+- **~40 files modified** across `auth/`, `backend/`, `stocks/`, `frontend/app/(authenticated)/admin/`, `frontend/components/admin/`, `frontend/components/recommendations/`, `frontend/components/widgets/`, `frontend/hooks/`, `frontend/providers/`.
+- **2 new shared helpers** (`safe_str`/`safe_sector`, `DownloadCsvButton`).
+- **2 new standalone artifacts** (`scripts/truncate_recommendations.py`, `SentimentDetailsModal`).
+- **Memories updated**: Serena `session/2026-04-18-sprint7-session5`; auto-memory `project_recommendation_monthly_quota.md` + `project_pro_user_role.md`.
+
+---
+
 ## 2026-04-16/17 — Sprint 7 Session 4: ScreenQL, CSV, Iceberg Maintenance, Bulk OHLCV
 
 ### ASETPLTFRM-312 (3 SP, Done): Piotroski Fix + Delete Modals

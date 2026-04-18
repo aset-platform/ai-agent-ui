@@ -62,12 +62,35 @@ sentiment per ticker.
 
 **Fix**: Run Sentiment pipeline (`pipeline.runner sentiment`).
 
+**View details**: click "View details →" on the Sentiment data-health
+card to open the Sentiment Details modal. It lists today's scoring
+breakdown by source (`finbert` / `llm` / `market_fallback` / `none`)
+with counts + average score per category, plus a filterable +
+paginated table of scored tickers (excluding fallback rows) with
+CSV download and scope tabs (all / india / us). Endpoint:
+`GET /v1/admin/data-health/sentiment-details?scope=all|india|us`
+(superuser, 60s Redis cache).
+
 **Scoring strategy:**
 
 - Hot tickers (>10 headlines): re-scored every run
-- Learning tickers (5-10 headlines): scored via trickle
+- Learning tickers (5-10 headlines): **capped at top-50 by market
+  cap** per run — the tail drops into market-fallback. Cap keeps the
+  batch runtime bounded (~30s for ~85 tickers vs hours for 800+).
 - Cold tickers (<5 headlines): use market-level fallback score
-- Fresh tickers (scored <24h ago): skipped
+- Fresh tickers (scored <24h ago): skipped (unless `force=true`,
+  which upserts and overrides today's row)
+
+**Safety net (added Sprint 7):**
+
+- Per-source 10s HTTP timeout (`_run_with_timeout`) on all three
+  headline fetchers — protects against `yf.Ticker().news` deadlocks.
+- `invalidate_metadata("stocks.sentiment_scores")` before the Step-5
+  gap-fill re-query — prevents the DuckDB metadata cache from
+  masking pool-inserted rows and double-counting fallback inserts.
+- Accurate `source` provenance: rows tagged `finbert` vs `llm` vs
+  `market_fallback` vs `none` based on the scorer that actually
+  produced the value.
 
 ### Piotroski F-Score
 

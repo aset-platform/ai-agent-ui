@@ -1,7 +1,7 @@
 # Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-04-17 (Sprint 7 — ScreenQL + Iceberg Maintenance + Bulk OHLCV)
+> Last refreshed: 2026-04-18 (Sprint 7 Session 5 — Pro role, Recommendation quota, Sentiment hardening, NaN safety)
 
 ---
 
@@ -55,7 +55,7 @@ ai-agent-ui/
 │   ├── app/               # 12 pages (App Router)
 │   ├── components/        # 30+ components (admin, charts, insights, widgets)
 │   ├── hooks/             # 19 SWR data hooks
-│   ├── providers/         # Chat, Layout context providers
+│   ├── providers/         # Chat, Layout, PortfolioActions contexts
 │   └── lib/               # Types, config, apiFetch, downloadCsv
 ├── e2e/                   # 51 Playwright specs (~257 tests)
 │   ├── tests/frontend/    # 30 spec files (auth, chat, analytics, admin, billing)
@@ -110,6 +110,50 @@ NEVER delete metadata/parquet files directly (CLAUDE.md Rule #20).
 
 ---
 
+## Auth & RBAC
+
+Three roles: `general | pro | superuser`. Tier→role auto-sync
+hooked in `auth/repo/user_writes.py::update()` (pinch point):
+`free → general`, `pro|premium → pro`. **Superuser is sticky** —
+never auto-demoted. Fires `ROLE_PROMOTED`/`ROLE_DEMOTED` audit
+events post-commit.
+
+Guards: `superuser_only` (~45 admin endpoints), `pro_or_superuser`
+alias via `require_role(*allowed)` factory for 3 self-scoped
+endpoints (`/admin/audit-log`, `/admin/metrics`,
+`/admin/usage-stats`). Pattern: `?scope=self|all`; pro forced
+to self.
+
+JWT role is cached — role change only propagates after
+`/auth/refresh`. Pro admin page shows 3 tabs (My Account,
+My Audit Log, My LLM Usage); superuser sees full 7-tab strip.
+
+---
+
+## Recommendation Engine
+
+**Quota**: 1 run per `(user, scope, IST calendar month)`. All
+three entry points (widget, chat, scheduler) delegate to
+`get_or_create_monthly_run` in `backend/jobs/recommendation_engine.py`.
+`scope="all"` auto-expands into india + us sequential calls.
+
+**run_type vocabulary**: `manual | chat | scheduled | admin |
+admin_test`. `admin_test` hidden from user-facing reads via
+`exclude_test=True` default. Superuser admin tab passes
+`exclude_test=False`.
+
+**Admin flow**: `POST /admin/recommendations/force-refresh`
+bypasses quota → writes `admin_test`. `POST /admin/recommendation-runs/{id}/promote`
+deletes existing non-test run for same `(user, scope, IST month)`
++ relabels target to `admin`.
+
+**Acted-on**: `POST/PUT/DELETE /users/me/portfolio` fires daemon
+thread → `update_recommendation_status(uid, ticker, actions,
+"acted_on")`. BUY/ACCUMULATE on POST; SELL/REDUCE/TRIM on qty
+decrease or delete. Only matches `status='active'`.
+
+---
+
 ## Chat Agent Architecture
 
 6 sub-agents: stock_analyst, portfolio, forecaster, research,
@@ -136,6 +180,12 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 | `backend/tools/_forecast_regime.py` | 1 | Volatility regime classification (low/medium/high/extreme) |
 | `backend/tools/_forecast_features.py` | 1 | Tier 1/2 feature computation (macro, technical, sentiment) |
 | `backend/tools/_sentiment_finbert.py` | 1 | FinBERT batch sentiment scorer (torch CPU, transformers) |
+| `backend/tools/_sentiment_sources.py` | 1 | Headline fetchers with 10s per-source `_run_with_timeout` guard |
+| `backend/tools/_sentiment_scorer.py` | 1 | `score_headlines_with_source()` returns `(score, finbert|llm|none)` |
+| `backend/jobs/recommendation_engine.py` | 1 | Monthly-per-scope IST quota, consolidator entry point |
+| `backend/market_utils.py` | 1 | `detect_market`, `safe_str`, `safe_sector` (NaN-truthy safe) |
+| `auth/dependencies.py` | 1 | `superuser_only`, `require_role()`, `pro_or_superuser` guards |
+| `auth/repo/user_writes.py` | 1 | Tier→role auto-sync pinch point + post-commit audit |
 | `backend/insights/screen_parser.py` | 1 | ScreenQL: tokenizer, parser, SQL gen, 36-field catalog |
 | `backend/maintenance/` | 3 | Backup (rsync), compaction, retention, dead table cleanup |
 | `backend/jobs/` | 8 | Executor registry, pipeline chaining, batch refresh (bulk OHLCV), recs |
@@ -145,6 +195,11 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 | `frontend/hooks/` | 19 | SWR data fetching for all pages |
 | `frontend/components/` | 30+ | Admin, charts, insights, widgets, modals |
 | `frontend/lib/downloadCsv.ts` | 1 | CSV export utility (escape, blob, browser download) |
+| `frontend/components/common/DownloadCsvButton.tsx` | 1 | Shared CSV button (icon + loading state) — used by all exports |
+| `frontend/providers/PortfolioActionsProvider.tsx` | 1 | Layout-level Add/Edit/Delete modals via `usePortfolioActions()` |
+| `frontend/components/admin/MyAccountTab.tsx` | 1 | Pro scoped admin tab (profile + password, no role/tier) |
+| `frontend/components/admin/SentimentDetailsModal.tsx` | 1 | Source tiles + paginated filterable ticker table |
+| `frontend/components/recommendations/RecActionButton.tsx` | 1 | +Buy / Edit / Acted ✓ pills on rec cards |
 | `e2e/utils/selectors.ts` | 1 | Centralised data-testid constants (217 lines) |
 | `e2e/playwright.config.ts` | 1 | 6 projects, 1 worker local / 2 CI, video off local |
 
@@ -188,7 +243,10 @@ pipeline pickup (scheduler refreshes them daily).
 
 ## File Counts
 
-Python: 374 | TypeScript/TSX: 98 | Backend tests: 97 files (~839) | E2E: 51 specs (~257) | Frontend: 18 vitest | Docs: 56 pages | Scripts: 28
+Python: 239 modules (+97 test files) | TypeScript/TSX: 115 |
+Backend tests: 97 files (~839) | E2E: 51 specs (~257) |
+Frontend: 18 vitest | Docs: 59 pages | Scripts: 30 |
+Alembic migrations: 11
 
 ---
 

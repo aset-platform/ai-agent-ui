@@ -19,6 +19,23 @@ TIER_ORDER = {"free": 0, "pro": 1, "premium": 2}
 USAGE_QUOTAS = {"free": 3, "pro": 30, "premium": 0}  # 0 = unlimited
 ```
 
+### Side effect: role auto-sync
+
+Any time `subscription_tier` is written via
+`auth/repo/user_writes.py::update()`, the user's `role` is kept in
+sync:
+
+- `free` → `role="general"`
+- `pro`, `premium` → `role="pro"`
+
+**Superuser is sticky** — subscription changes never demote a superuser.
+Role transitions fire `ROLE_PROMOTED` / `ROLE_DEMOTED` audit events.
+Checkout success handlers, webhook handlers (`_handle_charged`,
+`_handle_cancelled`), and `POST /subscription/cancel` all flow through
+the same helper, so the role is always consistent with the persisted
+tier. See `docs/backend/auth.md` for the role model and the
+`/admin/*` scope-gate pattern pro users unlock.
+
 ---
 
 ## Data Model

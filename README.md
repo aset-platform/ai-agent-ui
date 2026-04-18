@@ -11,10 +11,11 @@ A fullstack agentic chat application with stock analysis, Prophet forecasting, a
 - **Round-robin LLM pools** — 5 Groq models (~2.0M TPD), Ollama local fallback, Anthropic paid tier
 - **Prophet forecasting** — volatility-regime adaptive (stable/moderate/volatile), 11 enriched regressors, log-transform + logistic growth, post-Prophet RSI/MACD/volume bias adjustment, composite confidence score with High/Medium/Low badges on Analysis + Portfolio UIs
 - **Portfolio dashboard** — TradingView charts, sector allocation, P&L trend, news sentiment, recommendations widget
-- **Smart Funnel recommendations** — 3-stage pipeline (DuckDB pre-filter → gap analysis → LLM reasoning), market-scoped, unified quota
+- **Smart Funnel recommendations** — 3-stage pipeline (DuckDB pre-filter → gap analysis → LLM reasoning), market-scoped, **1 run per (user, scope, IST calendar month)**, shared consolidator across widget/chat/scheduler, `scope="all"` auto-expands to India + US, admin force-refresh + promote workflow for testing
+- **Recommendation acted-on tracking** — portfolio Add/Edit/Delete auto-flips matching recs to `acted_on`, green "+ Buy" / "Edit" pills on every rec row, in-place Add/Edit modals via `PortfolioActionsProvider` (no route hops), scope-aware adoption-rate KPIs
 - **54 NSE ETFs** — broad market, sectoral, factor, gold/silver, international, debt ETFs with OHLCV, analytics, sentiment, and Prophet forecasts
 - **Piotroski F-Score** — fundamental scoring (755 stocks), market filter (India/US)
-- **Sentiment scoring** — FinBERT batch sentiment (ProsusAI/finbert, CPU-only, zero API cost) + LLM fallback, hot/learning/cold tiers, market fallback
+- **Sentiment scoring** — FinBERT batch sentiment (ProsusAI/finbert, CPU-only, zero API cost) + LLM fallback, hot/learning/cold tiers, market fallback, accurate `source` provenance (`finbert | llm | market_fallback | none`), per-source 10s HTTP timeout, learning-set cap (top-50 by market cap), superuser Data Health details modal
 - **Pipeline orchestration** — 4-step pipelines (Data Refresh → Analytics → Sentiment → Piotroski), force run, DAG viz
 - **Scheduler** — cron jobs with freshness gates, CV reuse (30-day TTL), catchup on restart
 - **Data Health dashboard** — 5 health cards with async fix buttons, live progress bars, parallelized DuckDB queries (~1.4s)
@@ -25,6 +26,7 @@ A fullstack agentic chat application with stock analysis, Prophet forecasting, a
 - **Backup Health panel** — readonly admin dashboard with health badge, folder browser, Redis-cached
 - **Bulk OHLCV download** — yf.download() batches of 100 (99.8% success, 58s for 804 tickers)
 - **Live market ticker** — Nifty 50 + Sensex in header, dual-source (NSE India + Yahoo Finance), 30s refresh
+- **RBAC with Pro tier** — three roles (`general` / `pro` / `superuser`). Pro users auto-activate on paid subscription (superuser sticky), see Insights + a 3-tab scoped Admin view (My Account, My Audit Log, My LLM Usage); superuser sees all 7 tabs. Self-scoped admin endpoints via `?scope=self|all` gate.
 - **Dual payment gateways** — Razorpay (INR) + Stripe (USD)
 - **Docker Compose** — 5 services, single command start
 - **19 CLI pipeline commands** — seed, download, analytics, sentiment, forecast, screen, refresh

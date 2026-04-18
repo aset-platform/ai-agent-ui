@@ -5,6 +5,48 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.0] — 2026-04-18: Monthly Recommendations + Acted-On + Sentiment Hardening + Pro Role (Sprint 7)
+
+### Added
+
+- **Recommendation monthly-per-scope quota** (ASETPLTFRM-318): one run per `(user, scope, IST calendar month)`. All three entry points (widget, chat, scheduler) share a single `get_or_create_monthly_run()` consolidator. `scope="all"` silently expands to `india` + `us`. Superuser-only `POST /v1/admin/recommendations/force-refresh` creates `admin_test` rows that stay hidden from user-facing views; `POST /v1/admin/recommendation-runs/{id}/promote` atomically swaps a TEST run into the active slot. New `RunTypeBadge` variants (ADMIN fuchsia, TEST amber). Widget Generate button disables with reset-date tooltip when cached.
+- **Recommendation acted-on auto-detection** (ASETPLTFRM-319): `POST/PUT/DELETE /users/me/portfolio` now fire `update_recommendation_status(user, ticker, actions, "acted_on")` so matching recs flip to Acted ✓ without manual input. New `RecActionButton` pills (+ Buy / Edit / Acted ✓) on every recommendation row across Portfolio Widget, slideover, and Analysis → Recommendations. New `PortfolioActionsProvider` at the authenticated-layout level mounts Add/Edit/Delete modals once; `usePortfolioActions()` hook replaces the old route-redirect UX.
+- **Recommendation stats scope filter** (ASETPLTFRM-319): `/stats?scope=india|us|all` returns scope-aware adoption rate + hit rates; `get_recommendation_history` now emits real `acted_on_count` per run (was hardcoded 0).
+- **Sentiment Data Health details modal** (ASETPLTFRM-320): `GET /v1/admin/data-health/sentiment-details?scope=all|india|us` (superuser, 60s Redis cache) + `SentimentDetailsModal.tsx` with source-category tiles (finbert / llm / market_fallback / none), filterable and paginated ticker table, CSV download, scope tabs.
+- **Accurate sentiment provenance** (ASETPLTFRM-320): new `score_headlines_with_source()` returns `(score, source)`; `sentiment_scores.source` column carries one of `finbert`, `llm`, `market_fallback`, `none`. Log line format `src=finbert, force=upsert`.
+- **Sentiment force-upsert** (ASETPLTFRM-320): `refresh_ticker_sentiment(..., force=True)` bypasses the per-ticker idempotency check and overrides today's row via the existing upsert path. Scheduler-level `force=true` now actually reaches per-ticker.
+- **Pro user role** (unticketed, shipped same session): third role between `general` and `superuser`. Tier-driven auto-sync (`subscription_tier ∈ {pro, premium}` → `role=pro`, **superuser sticky**) fires `ROLE_PROMOTED` / `ROLE_DEMOTED` audit events. Pro users see Insights + a 3-tab scoped Admin view (My Account, My Audit Log, My LLM Usage) — superuser still sees all 7 tabs. `/admin/audit-log`, `/admin/metrics`, `/admin/usage-stats` switched to `pro_or_superuser` guard with `?scope=self|all`. New `MyAccountTab.tsx`; `UserModal` role dropdown now offers General / Pro / Superuser.
+- **Shared helpers**: `safe_str()` + `safe_sector()` in `backend/market_utils.py` (NaN-truthy guard); `DownloadCsvButton` shared component in `frontend/components/common/`.
+- **One-shot cleanup script**: `scripts/truncate_recommendations.py` for the monthly-quota rollout.
+
+### Changed
+
+- **Sentiment batch pipeline** (ASETPLTFRM-320): learning set capped at top-50 by market cap (767 → 50 per run) — tail drops into market-fallback. Runtime 802 → ~85 tickers, ~30s. FinBERT-mode skips the unused `FallbackLLM` constructor (no more 802× "Groq 5 tiers" log lines per run).
+- **Widget + Admin CSV buttons** (ASETPLTFRM-322): unified around the shared `DownloadCsvButton` matching the Screener pattern — icon + "CSV" label placed next to pagination.
+- **Asset Performance widget** (ASETPLTFRM-322): fixed height (9 bars ~292px) with overflow-y scroll; dropped the top-7/bottom-7 truncation so all holdings render.
+- **Scheduler UI** (ASETPLTFRM-322): counter label flips to `users` for `job_type="recommendations"` (was always `tickers`); "Last Run" stat card shows `N processed` (generic); Force Run menu item greyed-out with "Off" pill only on recommendation jobs.
+- **Modal z-index** (ASETPLTFRM-319, -322): `AddStockModal`, `EditStockModal`, `ConfirmDialog` raised to `z-[70]` so they render above `RecommendationSlideOver` (`z-[60]`).
+
+### Fixed
+
+- **Sentiment 1599/802 double-count** (ASETPLTFRM-320): DuckDB metadata cache stale-read caused Step-5 gap-fill to see 0 new rows and overwrite genuine LLM/FinBERT scores with market-fallback. Fix: `invalidate_metadata("stocks.sentiment_scores")` before the re-query.
+- **Sentiment deadlocked pool** (ASETPLTFRM-320): unthrottled `yf.Ticker().news` hung 15 concurrent Yahoo sockets indefinitely. Fix: `_run_with_timeout(fn, timeout=10)` wrapper in `_sentiment_sources.py` applied to all three fetchers + market-headlines feedparser.
+- **Sentiment force flag ignored** (ASETPLTFRM-320): `refresh_ticker_sentiment` early-returned on already-scored-today regardless of scheduler force. Fix: new `force` param propagated from executor through `gap_filler.refresh_sentiment`.
+- **expire_old_recommendations cross-scope wipe** (ASETPLTFRM-318): an incoming US run was deleting India recs because the helper expired every prior run for the user. Now scoped by `(user_id, scope)`.
+- **Recommendation stats counter hardcoded 0** (ASETPLTFRM-319): `acted_on_count` now computed via `SUM(CAST(acted_on_date IS NOT NULL AS Integer))`; `total_acted_on` from a dedicated count query, not `total_outcomes`.
+- **NaN-truthy sector leak** (ASETPLTFRM-321): `row.get("sector") or "Other"` kept ETF NaN values in recommendation prompts ("NaN (41.8%)"). Fixed across 10 files: 6 write paths sanitize before Iceberg insert, 4 read paths use `safe_sector(..., fallback="ETF/Other")`.
+- **Admin force-refresh UUID-only** (ASETPLTFRM-318): endpoint now accepts email or UUID, resolves email → `auth.users.user_id` before the pipeline.
+- **Widget cached state persistence** (ASETPLTFRM-318): response now carries `cached`, `reset_at`, `scope`; Generate button disables + shows `Next available <date>` when the month's run already exists.
+
+### Security / RBAC
+
+- New dependency `require_role(*allowed)` factory in `auth/dependencies.py`; `pro_or_superuser` alias on self-scoped admin endpoints.
+- Pro callers passing `scope="all"` get 403; `scope="self"` always allowed for `pro` and `superuser`.
+- `UserUpdateRequest.role` + `UserCreateRequest.role` Pydantic Literals extended to `general | pro | superuser` — invalid values rejected with 422.
+- Audit event vocabulary extended: `ROLE_PROMOTED`, `ROLE_DEMOTED` (system-driven on subscription change). `PATCH /auth/me` now writes `USER_UPDATED` so pros see self-edits in My Audit Log.
+
+---
+
 ## [0.9.0] — 2026-04-17: ScreenQL + Iceberg Maintenance + Bulk OHLCV (Sprint 7)
 
 ### Added

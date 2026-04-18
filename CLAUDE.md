@@ -79,7 +79,7 @@ ollama-profile embedding                    # load nomic-embed-text (memory vect
 ollama-profile status                       # check loaded model
 ```
 
-**Key dirs**: `backend/` (agents, tools, config), `backend/pipeline/` (stock data pipeline, 19 CLI commands), `backend/jobs/` (scheduler executors, pipeline chaining, bulk OHLCV), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `backend/insights/` (ScreenQL parser, 36-field catalog), `backend/maintenance/` (backup, compaction, retention), `backend/tools/` (forecast, sentiment, analysis), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 12 active OLAP tables), `frontend/` (SPA), `e2e/` (Playwright), `hooks/` (pre-commit, pre-push).
+**Key dirs**: `backend/` (agents, tools, config), `backend/pipeline/` (stock data pipeline, 19 CLI commands), `backend/jobs/` (scheduler executors, pipeline chaining, bulk OHLCV), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `backend/insights/` (ScreenQL parser, 36-field catalog), `backend/maintenance/` (backup, compaction, retention), `backend/tools/` (forecast, sentiment, analysis), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 12 active OLAP tables), `frontend/` (SPA), `frontend/providers/` (layout-level React contexts: Chat, Layout, PortfolioActions), `e2e/` (Playwright), `hooks/` (pre-commit, pre-push).
 
 **Docker files**: `Dockerfile.backend`, `Dockerfile.frontend`,
 `Dockerfile.docs`, `docker-compose.yml`,
@@ -146,8 +146,8 @@ append-only analytics.
 | `stocks.registry` | `backend/db/pg_stocks.py` | Upsert (has `ticker_type`: stock/etf/index/commodity) |
 | `stocks.scheduled_jobs` | `backend/db/pg_stocks.py` | Upsert (has `force` column) |
 | `stocks.scheduler_runs` | `backend/db/pg_stocks.py` | Insert + row-level UPDATE |
-| `stocks.recommendation_runs` | `backend/db/models/recommendation.py` | Smart Funnel run metadata |
-| `stocks.recommendations` | `backend/db/models/recommendation.py` | Individual recs with data_signals JSONB |
+| `stocks.recommendation_runs` | `backend/db/models/recommendation.py` | Smart Funnel run metadata. `run_type ∈ {manual,chat,scheduled,admin,admin_test}`. `admin_test` is hidden from user-facing reads |
+| `stocks.recommendations` | `backend/db/models/recommendation.py` | Individual recs with data_signals JSONB. `acted_on_date` auto-set by portfolio hook |
 | `stocks.recommendation_outcomes` | `backend/db/models/recommendation.py` | 30/60/90d outcome checkpoints |
 | `stocks.market_indices` | `backend/db/models/market_index.py` | Single-row ticker cache (Nifty+Sensex) |
 | `public.user_memories` | `backend/db/models/memory.py` | pgvector semantic memory (768-dim) |
@@ -256,7 +256,11 @@ These rules MUST be followed in every interaction.
     before final push. Shared memories are checked into git.
 25. **Test-after-feature** — happy path + 1 error path minimum.
 26. **Jira story points** — update `customfield_10016`
-    (estimate). `customfield_10036` not settable via API.
+    (estimate; always works). `customfield_10036` is the
+    board-display field — settable via API on **Story**
+    issues, but NOT on **Task** issues ("field not on
+    screen" error). Set both on Stories so the Sprint
+    board shows the number.
 
 ### Infra & Config
 
@@ -471,6 +475,149 @@ Run `list_memories` to browse all topics. Key categories:
   `skip_synthesis=True` — tools return formatted tables.
   Graph synthesis passthroughs responses >100 chars.
 
+### Recommendations
+
+- **Monthly-per-scope quota**: 1 run per `(user, scope,
+  IST calendar month)`. All three entry points (widget,
+  chat, scheduler) delegate to `get_or_create_monthly_run`
+  in `backend/jobs/recommendation_engine.py`. `scope="all"`
+  auto-expands into two sequential calls (india + us).
+  IST boundary via `ZoneInfo("Asia/Kolkata")`.
+- **`run_type` vocabulary**: `manual | chat | scheduled |
+  admin | admin_test`. User-facing reads filter out
+  `admin_test` by default via `exclude_test=True` on
+  `get_latest_recommendation_run` +
+  `get_recommendation_history`. Admin tab queries pass
+  `exclude_test=False` to see everything.
+- **Admin force-refresh + promote**: superuser-only.
+  `POST /v1/admin/recommendations/force-refresh
+  {user_id|email, scope}` bypasses quota, writes
+  `admin_test`. `POST /admin/recommendation-runs/{id}/
+  promote` atomically deletes any existing non-test
+  run for the same `(user, scope, IST month)` +
+  relabels target to `run_type='admin'`.
+- **`expire_old_recommendations` IS scope-aware**: was
+  a cross-scope wipe bug — an incoming US run killed
+  all India recs. Now filters by `(user_id, scope)`
+  via the consolidator-read scope. Don't re-regress
+  this if refactoring.
+- **Acted-on auto-detect**: `POST/PUT/DELETE
+  /v1/users/me/portfolio` fires a daemon thread that
+  calls `update_recommendation_status(uid, ticker,
+  actions, "acted_on")` via NullPool async bridge.
+  BUY/ACCUMULATE on POST; SELL/REDUCE/TRIM on qty
+  decrease (PUT) or delete. Errors logged, never
+  raised.
+- **Acted-on only matches `status='active'`**: if a
+  rec is `expired` the hook silently does nothing. The
+  cross-scope wipe bug above meant recs were stuck
+  expired and the hook seemed broken. Fixed, but worth
+  re-checking if you see "added ticker but rec didn't
+  flip".
+- **Stats derivation**: `/recommendations/stats` +
+  `/history` are scope-aware (`?scope=india|us|all`).
+  `acted_on_count` is `SUM(CAST(acted_on_date IS NOT
+  NULL AS Integer))` per run; `total_acted_on` is
+  derived from `acted_on_date`, NOT `recommendation_
+  outcomes` (outcomes are 30/60/90d price checks).
+
+### Auth & RBAC
+
+- **Three roles**: `general | pro | superuser`. Column
+  is `auth.users.role` VARCHAR(50). Pydantic Literals
+  in `UserCreateRequest` + `UserUpdateRequest` enforce
+  the set.
+- **Tier → role auto-sync**: hooked into
+  `auth/repo/user_writes.py::update()`. When
+  `subscription_tier` is in the updates dict AND the
+  current role is NOT `superuser`, role flips:
+  `free → general`, `pro|premium → pro`. **Superuser
+  is sticky** — never auto-demoted. Fires
+  `ROLE_PROMOTED` / `ROLE_DEMOTED` audit event
+  post-commit via PyIceberg catalog.
+- **Dependency guards**: `superuser_only` for ~45
+  admin endpoints; `require_role(*allowed)` factory
+  with `pro_or_superuser` alias for three self-scoped
+  endpoints (`/admin/audit-log`, `/admin/metrics`,
+  `/admin/usage-stats`). Pattern: pro forced to
+  `scope=self`; `scope=all` → 403 unless superuser.
+- **JWT role is cached**: `get_current_user` reads
+  role from the JWT claim (no DB re-read). A role
+  change only propagates after `/auth/refresh`
+  (up to 60 min). `BillingTab.tsx` already calls
+  `refreshAccessToken()` after subscription writes.
+- **Audit event vocabulary**: `LOGIN`,
+  `PASSWORD_RESET`, `OAUTH_LOGIN`, `USER_CREATED`,
+  `USER_UPDATED`, `USER_DELETED`,
+  `ADMIN_PASSWORD_RESET`, `ROLE_PROMOTED`,
+  `ROLE_DEMOTED`. `PATCH /auth/me` writes
+  `USER_UPDATED` (actor == target) so pros see
+  self-edits in My Audit Log.
+
+### Sentiment Batch
+
+- **DuckDB cache before Step-5**: the sentiment
+  executor must call `invalidate_metadata("stocks.
+  sentiment_scores")` before the Step-5 gap-fill
+  re-query. Without it, DuckDB serves a stale
+  snapshot, thinks N tickers are unscored, and
+  overwrites real FinBERT/LLM rows with
+  market-fallback. Caused 1599/802 double-count +
+  silent data loss.
+- **Per-source 10s timeout**: `_fetch_yfinance`,
+  `_fetch_yahoo_rss`, `_fetch_google_rss`, and
+  `fetch_market_headlines` are wrapped with
+  `_run_with_timeout(fn, *args, timeout=10)` in
+  `backend/tools/_sentiment_sources.py`. Unthrottled
+  `yf.Ticker().news` deadlocked the 15-worker pool
+  indefinitely before this.
+- **Learning-set cap**: `execute_run_sentiment`
+  caps `learning` at top-50 by `market_cap`; the
+  tail drops into Step-5 market-fallback. Keeps
+  runtime ~30s for ~85 tickers instead of hours.
+  Tune `_LEARNING_CAP` if you need more coverage.
+- **FinBERT mode skips LLM build**: when
+  `settings.sentiment_scorer == "finbert"`,
+  `refresh_sentiment` passes `llm=None` so no
+  `FallbackLLM` constructor (and no noisy "Groq
+  5 tiers" log line) fires per ticker. Only builds
+  the LLM when config is `"llm"` or FinBERT fails.
+- **`source` column vocabulary**: rows in
+  `stocks.sentiment_scores` carry `finbert | llm |
+  market_fallback | none`. `source='none'` means
+  zero headlines were fetched (LLM unavailable and
+  fallback wasn't applied). `score_headlines_with_
+  source()` returns `(score, source)`;
+  `score_headlines()` is the back-compat wrapper.
+- **Force = upsert**: scheduler `force=true` now
+  propagates to `refresh_ticker_sentiment(...,
+  force=True)` which skips the per-ticker idempotency
+  check. `insert_sentiment_score` is already an
+  upsert (scoped delete + append by `(ticker,
+  score_date)`), so force genuinely overrides
+  today's row.
+
+### NaN-truthy trap (sector + any optional str field)
+
+- `float('nan')` is truthy in Python. `row.get("sector")
+  or "Other"` silently KEEPS the NaN — it does NOT
+  fall through to "Other". yfinance returns NaN for
+  ETF sector/industry/company_name. This leaked
+  literal "NaN (41.8%)" into LLM recommendation prompts.
+- **Use the shared helpers** in
+  `backend/market_utils.py`:
+  - `safe_str(val) -> str | None` — None/NaN/ws → None
+  - `safe_sector(val, fallback="Other") -> str`
+    — always a non-empty label
+- Applied at both write-paths (before Iceberg insert
+  in repository.py, batch_refresh.py, pipeline
+  fundamentals, universe, screener, stock_data_tool)
+  and read-paths (recommendation_engine.py stage2,
+  dashboard_routes.py portfolio summary,
+  report_builder.py, insights_routes.py).
+  Existing rows may still have NaN stored — read
+  paths handle it gracefully.
+
 ### Frontend
 
 - **ScreenQL multi-line AND**: Newlines are implicit AND.
@@ -521,6 +668,42 @@ Run `list_memories` to browse all topics. Key categories:
 - **Confidence badge in `<p>`**: Use `<span>` not `<div>`
   for inline elements inside `<p>` tags. `<div>` inside
   `<p>` causes React hydration errors.
+- **PortfolioActionsProvider pattern**: Add/Edit/Delete
+  portfolio modals are mounted ONCE at
+  `frontend/app/(authenticated)/layout.tsx` via
+  `PortfolioActionsProvider`. Any page uses
+  `usePortfolioActions()` → `{openAdd, openEdit,
+  openDelete}` to trigger them in place. Do NOT
+  route-redirect to `/dashboard?add=TICKER` — the
+  slideover stays open behind the route-hop and stacks.
+- **Modal z-index convention**: Add/Edit/Confirm
+  modals use `z-[70]` so they render above
+  `RecommendationSlideOver` (`z-[60]`). Any new action
+  modal that can be triggered from inside a slideover
+  must also sit at `z-[70]`.
+- **Shared `DownloadCsvButton`**: single source of
+  truth is
+  `frontend/components/common/DownloadCsvButton.tsx`
+  (icon + "CSV" text, matches Screener pattern). All
+  CSV exports — InsightsTable, Admin Recommendations,
+  Analysis Recommendations, SentimentDetailsModal —
+  use it. Place next to pagination controls, not in
+  headers. Supports `loading` prop for async-collecting
+  downloads (spinner replaces icon).
+- **Pro role admin UI**: if you're adding a new admin
+  tab, decide whether pro users should see it.
+  `frontend/app/(authenticated)/admin/page.tsx` has a
+  single `ALL_TABS` array with `roles: Role[]` per
+  entry; the page filters and renders accordingly.
+  Pros currently only see `my_account`, `my_audit`,
+  `my_llm`. Route-level gate redirects `general` users
+  to `/dashboard` on mount.
+- **Scope-aware admin hooks**: `useAdminAudit(scope)`,
+  `useObservability(scope)`, `getUsageStats(scope)`
+  all take `"self" | "all"`. Pass the right one based
+  on the consuming tab. `obsFetcher` skips the
+  superuser-only `tier-health` GET on `scope="self"`
+  — saves a guaranteed 403.
 
 ### Testing & Config (unit/integration)
 
@@ -616,6 +799,10 @@ PYTHONPATH=backend python scripts/migrate_iceberg_to_pg.py  # one-time data migr
 PYTHONPATH=backend python scripts/seed_demo_data.py
 # Docker seed (when running via Docker Compose)
 docker compose exec backend python scripts/seed_demo_data.py
+
+# One-shot maintenance scripts (destructive — confirm first)
+docker compose exec backend python3 scripts/truncate_recommendations.py --yes   # wipe all recommendation_runs + cascade
+docker compose exec backend python3 scripts/detect_illiquid.py                   # flag low-liquidity tickers
 
 # Stock Data Pipeline
 PYTHONPATH=.:backend python -m backend.pipeline.runner download    # fetch Nifty 500 CSV
