@@ -13,6 +13,19 @@ log = logging.getLogger(__name__)
 
 _IMMUTABLE_FIELDS = {"user_id", "created_at"}
 
+# Tier → role mapping used by auto-sync.  Superuser is
+# sticky and never auto-demoted by subscription changes.
+_PAID_TIERS = frozenset({"pro", "premium"})
+
+
+def _role_for_tier(tier: str | None) -> str:
+    """Return the role a non-superuser user should have
+    for the given *tier*.  ``None`` / ``"free"`` → general.
+    """
+    if tier and tier in _PAID_TIERS:
+        return "pro"
+    return "general"
+
 
 async def create(
     session: AsyncSession,
@@ -70,13 +83,37 @@ async def update(
     user_id: str,
     updates: dict[str, Any],
 ) -> dict[str, Any]:
-    """Update user fields. Raises ValueError if not found."""
+    """Update user fields. Raises ValueError if not found.
+
+    Side-effect: when ``subscription_tier`` is in *updates* and the
+    user's current role is NOT ``"superuser"``, the role is
+    auto-synced from the new tier.  Superusers are sticky — tier
+    changes never demote them.  An audit event
+    (``ROLE_PROMOTED`` / ``ROLE_DEMOTED``) is written after commit
+    when a role flip actually happens.
+    """
     result = await session.execute(
         select(User).where(User.user_id == user_id)
     )
     user = result.scalar_one_or_none()
     if not user:
         raise ValueError(f"User {user_id} not found")
+
+    # ── Auto-sync role from subscription_tier ────────────────
+    # Runs before the setattr loop so the computed role lands
+    # via the same code path as any explicit role update.
+    role_transition: tuple[str, str, str] | None = None
+    if (
+        "subscription_tier" in updates
+        and user.role != "superuser"
+    ):
+        new_tier = updates["subscription_tier"]
+        new_role = _role_for_tier(new_tier)
+        if user.role != new_role and "role" not in updates:
+            updates = {**updates, "role": new_role}
+            role_transition = (
+                user.role, new_role, new_tier or "free",
+            )
 
     for key, value in updates.items():
         if key in _IMMUTABLE_FIELDS:
@@ -89,6 +126,42 @@ async def update(
     await session.refresh(user)
 
     log.info("Updated user %s", user_id)
+
+    # ── Post-commit audit for role changes ──────────────────
+    if role_transition is not None:
+        old_role, new_role, new_tier = role_transition
+        try:
+            from pyiceberg.catalog import load_catalog
+
+            from auth.repo.audit import append_audit_event
+
+            evt = (
+                "ROLE_PROMOTED"
+                if old_role == "general" and new_role == "pro"
+                else "ROLE_DEMOTED"
+            )
+            cat = load_catalog("local")
+            # Actor == target: this path represents an
+            # automated system-driven transition triggered by
+            # the user's own subscription change.
+            append_audit_event(
+                cat,
+                evt,
+                str(user.user_id),
+                str(user.user_id),
+                {
+                    "old_role": old_role,
+                    "new_role": new_role,
+                    "reason": "subscription_tier_change",
+                    "new_tier": new_tier,
+                },
+            )
+        except Exception:
+            log.warning(
+                "Failed to write role-change audit",
+                exc_info=True,
+            )
+
     return {
         c.name: getattr(user, c.name)
         for c in user.__table__.columns

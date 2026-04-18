@@ -65,13 +65,13 @@ export interface CreateUserData {
   email: string;
   password: string;
   full_name: string;
-  role: "superuser" | "general";
+  role: "superuser" | "pro" | "general";
 }
 
 export interface UpdateUserData {
   full_name?: string;
   email?: string;
-  role?: "superuser" | "general";
+  role?: "superuser" | "pro" | "general";
   is_active?: boolean;
   page_permissions?: Record<string, boolean>;
 }
@@ -265,11 +265,13 @@ export interface UseAdminAuditResult {
   refresh: () => void;
 }
 
-export function useAdminAudit(): UseAdminAuditResult {
+export function useAdminAudit(
+  scope: "self" | "all" = "all",
+): UseAdminAuditResult {
   const { data, error, isLoading, mutate } = useSWR<{
     events: AuditEvent[];
   }>(
-    `${API_URL}/admin/audit-log`,
+    `${API_URL}/admin/audit-log?scope=${scope}`,
     fetcher,
     {
       revalidateOnFocus: false,
@@ -315,37 +317,44 @@ interface ObsData {
   health: TierHealthResponse;
 }
 
-async function obsFetcher(): Promise<ObsData> {
-  const [m, h] = await Promise.all([
-    apiFetch(`${API_URL}/admin/metrics`).then(
-      (r) => {
-        if (!r.ok)
-          throw new Error(
-            `metrics: HTTP ${r.status}`,
-          );
-        return r.json();
-      },
-    ),
-    apiFetch(`${API_URL}/admin/tier-health`).then(
-      (r) => {
-        if (!r.ok)
-          throw new Error(
-            `health: HTTP ${r.status}`,
-          );
-        return r.json();
-      },
-    ),
-  ]);
+async function obsFetcher(
+  url: string,
+): Promise<ObsData> {
+  // Cache key encodes the scope; parse it out so we can
+  // skip superuser-only tier-health on self-scoped calls.
+  const scope = url.includes("scope=self") ? "self" : "all";
+  const metricsUrl = `${API_URL}/admin/metrics?scope=${scope}`;
+  const fetches: Promise<unknown>[] = [
+    apiFetch(metricsUrl).then((r) => {
+      if (!r.ok)
+        throw new Error(`metrics: HTTP ${r.status}`);
+      return r.json();
+    }),
+  ];
+  if (scope === "all") {
+    fetches.push(
+      apiFetch(`${API_URL}/admin/tier-health`).then(
+        (r) => {
+          if (!r.ok)
+            throw new Error(`health: HTTP ${r.status}`);
+          return r.json();
+        },
+      ),
+    );
+  }
+  const results = await Promise.all(fetches);
   return {
-    metrics: m as MetricsResponse,
-    health: h as TierHealthResponse,
+    metrics: results[0] as MetricsResponse,
+    health: (results[1] ?? null) as TierHealthResponse,
   };
 }
 
-export function useObservability(): UseObservabilityResult {
+export function useObservability(
+  scope: "self" | "all" = "all",
+): UseObservabilityResult {
   const { data, error, isLoading, mutate } =
     useSWR<ObsData>(
-      `${API_URL}/admin/observability`,
+      `${API_URL}/admin/observability?scope=${scope}`,
       obsFetcher,
       {
         revalidateOnFocus: false,
@@ -461,9 +470,11 @@ export function useAdminMaintenance() {
   );
 
   const getUsageStats = useCallback(
-    async (): Promise<{ users: UsageUser[] }> => {
+    async (
+      scope: "self" | "all" = "all",
+    ): Promise<{ users: UsageUser[] }> => {
       const res = await apiFetch(
-        `${API_URL}/admin/usage-stats`,
+        `${API_URL}/admin/usage-stats?scope=${scope}`,
       );
       return res.json();
     },
@@ -573,6 +584,8 @@ export interface DataHealthResult {
   total_registry: number;
   total_analyzable: number;
   total_financial: number;
+  illiquid_count?: number;
+  illiquid_tickers?: string[];
   ohlcv: {
     nan_close_count: number;
     nan_close_tickers: string[];
@@ -786,5 +799,175 @@ export function useDataHealth(): UseDataHealthResult {
     triggerFix,
     fixProgress,
     fixTarget,
+  };
+}
+
+// ---------------------------------------------------------------
+// Admin Recommendations hook
+// ---------------------------------------------------------------
+
+export interface AdminRecommendationRow {
+  id: string;
+  run_id: string;
+  user_id: string | null;
+  email: string | null;
+  full_name: string | null;
+  ticker: string | null;
+  tier: string;
+  category: string;
+  action: string;
+  severity: string;
+  rationale: string;
+  expected_impact: string | null;
+  data_signals: Record<string, number | string>;
+  price_at_rec: number | null;
+  target_price: number | null;
+  expected_return_pct: number | null;
+  index_tags: string[] | null;
+  status: string;
+  acted_on_date: string | null;
+  created_at: string;
+  scope: string;
+  run_type: string;
+  run_date: string | null;
+}
+
+interface AdminRecommendationsResponse {
+  recommendations: AdminRecommendationRow[];
+  count: number;
+  limit: number;
+  offset: number;
+}
+
+export interface UseAdminRecommendationsResult {
+  recommendations: AdminRecommendationRow[];
+  loading: boolean;
+  error: string | null;
+  refresh: () => void;
+  deleteRecommendation: (id: string) => Promise<boolean>;
+  deleteRecommendationRun: (
+    runId: string,
+  ) => Promise<boolean>;
+  forceRefresh: (
+    userId: string,
+    scope: "india" | "us",
+  ) => Promise<boolean>;
+  promoteRun: (runId: string) => Promise<boolean>;
+}
+
+export function useAdminRecommendations():
+  UseAdminRecommendationsResult {
+  const { data, error, isLoading, mutate } =
+    useSWR<AdminRecommendationsResponse>(
+      `${API_URL}/admin/recommendations`,
+      fetcher,
+      { revalidateOnFocus: false },
+    );
+
+  const refresh = useCallback(() => {
+    mutate(undefined, { revalidate: true });
+  }, [mutate]);
+
+  const deleteRecommendation = useCallback(
+    async (id: string): Promise<boolean> => {
+      const r = await apiFetch(
+        `${API_URL}/admin/recommendations/${id}`,
+        { method: "DELETE" },
+      );
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(
+          (b as { detail?: string }).detail ||
+            `HTTP ${r.status}`,
+        );
+      }
+      mutate();
+      return true;
+    },
+    [mutate],
+  );
+
+  const deleteRecommendationRun = useCallback(
+    async (runId: string): Promise<boolean> => {
+      const r = await apiFetch(
+        `${API_URL}/admin/recommendation-runs/${runId}`,
+        { method: "DELETE" },
+      );
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(
+          (b as { detail?: string }).detail ||
+            `HTTP ${r.status}`,
+        );
+      }
+      mutate();
+      return true;
+    },
+    [mutate],
+  );
+
+  const forceRefresh = useCallback(
+    async (
+      userId: string,
+      scope: "india" | "us",
+    ): Promise<boolean> => {
+      const r = await apiFetch(
+        `${API_URL}/admin/recommendations/force-refresh`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            user_id: userId,
+            scope,
+          }),
+        },
+      );
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(
+          (b as { detail?: string }).detail ||
+            `HTTP ${r.status}`,
+        );
+      }
+      mutate();
+      return true;
+    },
+    [mutate],
+  );
+
+  const promoteRun = useCallback(
+    async (runId: string): Promise<boolean> => {
+      const r = await apiFetch(
+        `${API_URL}/admin/recommendation-runs/${runId}/promote`,
+        { method: "POST" },
+      );
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(
+          (b as { detail?: string }).detail ||
+            `HTTP ${r.status}`,
+        );
+      }
+      mutate();
+      return true;
+    },
+    [mutate],
+  );
+
+  return {
+    recommendations: data?.recommendations ?? [],
+    loading: isLoading,
+    error: error
+      ? error instanceof Error
+        ? error.message
+        : "Failed to load recommendations"
+      : null,
+    refresh,
+    deleteRecommendation,
+    deleteRecommendationRun,
+    forceRefresh,
+    promoteRun,
   };
 }

@@ -98,6 +98,17 @@ def register(router: APIRouter) -> None:
         updated = await repo.update(
             current_user.user_id, updates,
         )
+        # Audit the self-edit so pros see it in
+        # "My Audit Log".  Actor == target on this path.
+        await repo.append_audit_event(
+            "USER_UPDATED",
+            actor_user_id=current_user.user_id,
+            target_user_id=current_user.user_id,
+            metadata={
+                "fields_changed": list(updates.keys()),
+                "self_edit": True,
+            },
+        )
         logger.info("Profile updated for user_id=%s", current_user.user_id)
         return _helpers._user_to_response(updated)
 

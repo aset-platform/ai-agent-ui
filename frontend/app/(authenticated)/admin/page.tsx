@@ -34,8 +34,12 @@ import { UserModal } from "@/components/admin/UserModal";
 import { ResetPasswordModal } from "@/components/admin/ResetPasswordModal";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SchedulerTab } from "@/components/admin/SchedulerTab";
+import { RecommendationsTab } from "@/components/admin/RecommendationsTab";
 import { DataHealthPanel } from "@/components/admin/DataHealthPanel";
 import { BackupHealthPanel } from "@/components/admin/BackupHealthPanel";
+import { MyAccountTab } from "@/components/admin/MyAccountTab";
+import { apiFetch } from "@/lib/apiFetch";
+import { API_URL } from "@/lib/config";
 import {
   InsightsTable,
   type Column,
@@ -563,8 +567,14 @@ function UsersTab() {
 // Audit Log Tab
 // ---------------------------------------------------------------
 
-function AuditLogTab() {
-  const audit = useAdminAudit();
+function AuditLogTab({
+  scope = "all",
+  title = "Audit Log",
+}: {
+  scope?: "self" | "all";
+  title?: string;
+} = {}) {
+  const audit = useAdminAudit(scope);
   const [search, setSearch] = useState("");
 
   const filtered = useMemo(() => {
@@ -593,7 +603,7 @@ function AuditLogTab() {
     <div className="space-y-4">
       <div className="flex items-center gap-3">
         <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
-          Audit Log ({audit.events.length} events)
+          {title} ({audit.events.length} events)
         </h2>
         <input
           type="text"
@@ -924,8 +934,12 @@ const cascadeCols: Column<CascadeEvent>[] = [
   },
 ];
 
-function ObservabilityTab() {
-  const obs = useObservability();
+function ObservabilityTab({
+  scope = "all",
+}: {
+  scope?: "self" | "all";
+} = {}) {
+  const obs = useObservability(scope);
 
   if (obs.loading) return <WidgetSkeleton />;
   if (obs.error)
@@ -973,8 +987,8 @@ function ObservabilityTab() {
 
   return (
     <div className="space-y-6">
-      {/* Daily Token Budget */}
-      <DailyTokenBudgetCard />
+      {/* Daily Token Budget — global metric, hide on self-scope */}
+      {scope === "all" && <DailyTokenBudgetCard />}
 
       {/* Summary cards — 5 columns */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -1047,8 +1061,8 @@ function ObservabilityTab() {
         </div>
       </div>
 
-      {/* Tier Health */}
-      {tiers.length > 0 && (
+      {/* Tier Health — superuser only (pro sees no tier data) */}
+      {scope === "all" && tiers.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
@@ -1144,8 +1158,8 @@ function ObservabilityTab() {
         </div>
       )}
 
-      {/* Model Budget & Usage */}
-      {Object.keys(models).length > 0 && (
+      {/* Model Budget & Usage — superuser only */}
+      {scope === "all" && Object.keys(models).length > 0 && (
         <div className="space-y-3">
           <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
             Per-Model Budget & Usage
@@ -1287,8 +1301,8 @@ function ObservabilityTab() {
         </div>
       )}
 
-      {/* Recent Cascade Events */}
-      {cascadeLog.length > 0 && (
+      {/* Recent Cascade Events — superuser only */}
+      {scope === "all" && cascadeLog.length > 0 && (
         <div className="space-y-3">
           <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
             Recent Cascade Events
@@ -1970,14 +1984,103 @@ type AdminTab =
   | "observability"
   | "maintenance"
   | "transactions"
-  | "scheduler";
+  | "scheduler"
+  | "recommendations"
+  | "my_account"
+  | "my_audit"
+  | "my_llm";
+
+type Role = "general" | "pro" | "superuser";
+
+interface TabDef {
+  id: AdminTab;
+  label: string;
+  roles: Role[];
+}
+
+const ALL_TABS: TabDef[] = [
+  { id: "users",           label: "Users",             roles: ["superuser"] },
+  { id: "audit",           label: "Audit Log",         roles: ["superuser"] },
+  { id: "observability",   label: "LLM Observability", roles: ["superuser"] },
+  { id: "transactions",    label: "Transactions",      roles: ["superuser"] },
+  { id: "scheduler",       label: "Scheduler",         roles: ["superuser"] },
+  { id: "recommendations", label: "Recommendations",   roles: ["superuser"] },
+  { id: "maintenance",     label: "Maintenance",       roles: ["superuser"] },
+  { id: "my_account",      label: "My Account",        roles: ["pro"] },
+  { id: "my_audit",        label: "My Audit Log",      roles: ["pro"] },
+  { id: "my_llm",          label: "My LLM Usage",      roles: ["pro"] },
+];
 
 function AdminPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const [tab, setTab] = useState<AdminTab>(
-    (searchParams.get("tab") as AdminTab) ?? "users",
+  const [role, setRole] = useState<Role | null>(null);
+  const [roleError, setRoleError] = useState<
+    string | null
+  >(null);
+
+  // Fetch role on mount. General users redirect out.
+  useEffect(() => {
+    let alive = true;
+    apiFetch(`${API_URL}/auth/me`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<{ role: Role }>;
+      })
+      .then((p) => {
+        if (!alive) return;
+        if (p.role === "general") {
+          router.replace("/dashboard");
+          return;
+        }
+        setRole(p.role);
+      })
+      .catch((e: unknown) => {
+        if (!alive) return;
+        setRoleError(
+          e instanceof Error
+            ? e.message
+            : "Failed to load profile",
+        );
+      });
+    return () => {
+      alive = false;
+    };
+  }, [router]);
+
+  const visibleTabs = useMemo(
+    () =>
+      role
+        ? ALL_TABS.filter((t) =>
+            t.roles.includes(role),
+          )
+        : [],
+    [role],
   );
+
+  const requestedTab = (
+    searchParams.get("tab") as AdminTab | null
+  ) ?? null;
+
+  const initialTab: AdminTab = useMemo(() => {
+    if (!visibleTabs.length) return "users";
+    // Honour the URL if the requested tab is visible,
+    // otherwise fall back to the first visible tab.
+    if (
+      requestedTab
+      && visibleTabs.some((t) => t.id === requestedTab)
+    ) {
+      return requestedTab;
+    }
+    return visibleTabs[0].id;
+  }, [visibleTabs, requestedTab]);
+
+  const [tab, setTab] = useState<AdminTab>(initialTab);
+
+  // Sync state when role / URL resolves.
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
 
   const handleTabChange = useCallback(
     (t: AdminTab) => {
@@ -1989,32 +2092,26 @@ function AdminPageInner() {
     [router],
   );
 
+  if (roleError) {
+    return (
+      <div className="p-6 text-sm text-red-600 dark:text-red-400">
+        {roleError}
+      </div>
+    );
+  }
+  if (!role) {
+    return (
+      <div className="p-6 text-sm text-gray-500 dark:text-gray-400">
+        Loading…
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 p-4 sm:p-6">
-      {/* Tab bar */}
+      {/* Tab bar — role-filtered */}
       <div className="flex gap-1 border-b border-gray-200 dark:border-gray-700 pb-px">
-        {(
-          [
-            { id: "users", label: "Users" },
-            { id: "audit", label: "Audit Log" },
-            {
-              id: "observability",
-              label: "LLM Observability",
-            },
-            {
-              id: "maintenance",
-              label: "Maintenance",
-            },
-            {
-              id: "transactions",
-              label: "Transactions",
-            },
-            {
-              id: "scheduler",
-              label: "Scheduler",
-            },
-          ] as const
-        ).map((t) => (
+        {visibleTabs.map((t) => (
           <button
             key={t.id}
             data-testid={`admin-tab-${t.id}`}
@@ -2048,6 +2145,19 @@ function AdminPageInner() {
           <TransactionsTab />
         )}
         {tab === "scheduler" && <SchedulerTab />}
+        {tab === "recommendations" && (
+          <RecommendationsTab />
+        )}
+        {tab === "my_account" && <MyAccountTab />}
+        {tab === "my_audit" && (
+          <AuditLogTab
+            scope="self"
+            title="My Audit Log"
+          />
+        )}
+        {tab === "my_llm" && (
+          <ObservabilityTab scope="self" />
+        )}
       </div>
     </div>
   );
