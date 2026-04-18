@@ -39,6 +39,9 @@ class RecommendationResponse(BaseModel):
     health_assessment: str | None = None
     recommendations: list[RecommendationItem] = []
     generated_at: str | None = None
+    cached: bool = False
+    reset_at: str | None = None
+    scope: str | None = None
 
 
 class HistoryRunItem(BaseModel):

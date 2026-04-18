@@ -143,9 +143,13 @@ export function useRecommendationHistory(
   );
 }
 
-export function useRecommendationStats(): InsightsData<RecommendationStatsResponse> {
+export function useRecommendationStats(
+  scope?: "all" | "india" | "us",
+): InsightsData<RecommendationStatsResponse> {
+  const qs =
+    scope && scope !== "all" ? `?scope=${scope}` : "";
   return useInsightsFetch<RecommendationStatsResponse>(
-    `/dashboard/portfolio/recommendations/stats`,
+    `/dashboard/portfolio/recommendations/stats${qs}`,
   );
 }
 

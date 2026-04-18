@@ -134,226 +134,88 @@ def _format_recs(run: dict, recs: list[dict]) -> str:
 
 @tool
 def generate_recommendations(
-    force_refresh: str = "false",
     scope: str = "india",
 ) -> str:
-    """Generate portfolio recommendations.
+    """Get this month's portfolio recommendations.
 
-    Runs the Smart Funnel pipeline (pre-filter,
-    gap analysis, LLM reasoning) to produce
-    data-driven buy/sell/hold recommendations.
+    Rule: one run per user per scope per IST calendar
+    month. When a run already exists for this month,
+    the existing set is returned unchanged. ``scope=all``
+    expands to ``india`` + ``us``.
 
     Args:
-        force_refresh: "true" to skip cache, "false"
-            to use cached if available.
-        scope: Market scope (india/us/all).
+        scope: Market scope (``india``, ``us``, or
+            ``all``).
 
     Source: Iceberg + PostgreSQL.
     """
     user_id = _get_user_or_error()
-    _force = str(force_refresh).lower() in (
-        "true", "1", "yes",
+
+    from jobs.recommendation_engine import (
+        get_or_create_monthly_run,
     )
 
-    from sqlalchemy.ext.asyncio import (
-        AsyncSession,
-        async_sessionmaker,
-        create_async_engine,
+    scopes = (
+        ["india", "us"] if scope == "all"
+        else [scope]
     )
-    from sqlalchemy.pool import NullPool
-    from config import get_settings
-
-    _eng = create_async_engine(
-        get_settings().database_url,
-        poolclass=NullPool,
-    )
-    _factory = async_sessionmaker(
-        _eng, class_=AsyncSession,
-    )
-
-    async def _generate():
-        from backend.db.pg_stocks import (
-            expire_old_recommendations,
-            get_latest_recommendation_run,
-            get_recommendations_for_run,
-            insert_recommendation_run,
-            insert_recommendations,
-        )
-
-        # ── Step 1: Reuse existing run if available ──
-        # Non-force calls always return the latest
-        # existing run. Only superusers with force
-        # can trigger a new pipeline run.
-        if not _force:
-            async with _factory() as session:
-                latest = (
-                    await get_latest_recommendation_run(
-                        session, user_id,
-                        scope=scope,
-                    )
-                )
-            if latest and latest.get("run_id"):
-                async with _factory() as session:
-                    recs = (
-                        await
-                        get_recommendations_for_run(
-                            session,
-                            latest["run_id"],
-                        )
-                    )
-                if recs:
-                    await _eng.dispose()
-                    return _format_recs(
-                        latest, recs,
-                    )
-
-        # ── Step 2: Quota gate for new generation ────
-        if not _force:
-            from jobs.recommendation_engine import (
-                check_recommendation_quota,
-            )
-
-            quota = check_recommendation_quota(
-                user_id, scope=scope,
-            )
-            if not quota.get("allowed"):
-                await _eng.dispose()
-                return (
-                    "[Source: recommendation_engine]\n"
-                    f"**Quota reached**: "
-                    f"{quota.get('reason', '')}\n"
-                    "Only superusers can force-"
-                    "generate beyond the quota."
-                )
-
-        # Run full pipeline
-        from jobs.recommendation_engine import (
-            stage1_prefilter,
-            stage2_gap_analysis,
-            stage3_llm_reasoning,
-        )
-        import time as _time
-
-        t0 = _time.monotonic()
-
-        s1 = stage1_prefilter(scope=scope)
-        if s1.empty:
-            await _eng.dispose()
+    for s in scopes:
+        if s not in ("india", "us"):
             return (
-                "No candidates passed pre-filter. "
-                "Try again later when more data "
-                "is available."
+                "[Source: recommendation_engine]\n"
+                f"Invalid scope '{s}'. Use "
+                "'india', 'us', or 'all'."
             )
 
-        s2 = stage2_gap_analysis(
-            user_id, s1, scope=scope,
+    def _one(scope_val: str) -> dict:
+        return get_or_create_monthly_run(
+            user_id, scope_val,
+            run_type="chat",
         )
-        s3 = stage3_llm_reasoning(s2)
 
-        duration = _time.monotonic() - t0
-
-        # Persist to PG
-        run_id = str(uuid.uuid4())
-        run_data = {
-            "run_id": run_id,
-            "user_id": user_id,
-            "run_date": date.today(),
-            "run_type": "chat",
-            "scope": scope,
-            "portfolio_snapshot": (
-                s2.get("portfolio_summary", {})
-            ),
-            "health_score": s3.get(
-                "health_score", 0,
-            ),
-            "health_label": s3.get(
-                "health_label", "unknown",
-            ),
-            "health_assessment": s3.get(
-                "portfolio_health_assessment",
-            ),
-            "candidates_scanned": len(s1),
-            "candidates_passed": len(
-                s2.get("candidates", []),
-            ),
-            "llm_model": s3.get("llm_model"),
-            "llm_tokens_used": s3.get(
-                "llm_tokens_used",
-            ),
-            "duration_secs": round(duration, 2),
-        }
-
-        raw_recs = s3.get("recommendations", [])
-        cand_map = {
-            c["ticker"]: c
-            for c in s2.get("candidates", [])
-        }
-        rec_rows = []
-        for r in raw_recs:
-            ticker = r.get("ticker")
-            c = cand_map.get(ticker, {})
-            rec_rows.append({
-                "id": str(uuid.uuid4()),
-                "run_id": run_id,
-                "tier": r.get("tier", "explore"),
-                "category": r.get(
-                    "category", "general",
-                ),
-                "ticker": ticker,
-                "action": r.get("action", "hold"),
-                "severity": r.get(
-                    "severity", "low",
-                ),
-                "rationale": r.get(
-                    "rationale", "",
-                ),
-                "expected_impact": r.get(
-                    "expected_impact",
-                ),
-                "data_signals": r.get(
-                    "data_signals", {},
-                ),
-                "price_at_rec": (
-                    r.get("price_at_rec")
-                    or c.get("current_price")
-                ),
-                "target_price": (
-                    r.get("target_price")
-                    or c.get("target_price")
-                ),
-                "expected_return_pct": (
-                    r.get("expected_return_pct")
-                    or c.get("forecast_3m_pct")
-                ),
-                "index_tags": r.get("index_tags"),
-                "status": "active",
+    results: list[dict] = []
+    for s in scopes:
+        try:
+            results.append(_one(s))
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception(
+                "chat tool rec gen failed "
+                "user=%s scope=%s",
+                user_id[:8], s,
+            )
+            results.append({
+                "run_id": None,
+                "scope": s,
+                "status_note": f"error: {exc}",
             })
 
-        async with _factory() as session:
-            await insert_recommendation_run(
-                session, run_data,
+    parts: list[str] = []
+    for r in results:
+        scope_val = r.get("scope", "?")
+        if not r.get("run_id"):
+            note = r.get(
+                "status_note", "no_recommendations",
             )
-            if rec_rows:
-                await insert_recommendations(
-                    session, run_id, rec_rows,
-                )
-            await expire_old_recommendations(
-                session, user_id, run_id,
+            parts.append(
+                f"**[{scope_val.upper()}]** "
+                f"No recommendations ({note})."
             )
-
-        # Return formatted
-        async with _factory() as session:
-            recs = (
-                await get_recommendations_for_run(
-                    session, run_id,
-                )
+            continue
+        recs = r.get("recommendations", [])
+        header = _format_recs(r, recs)
+        footer = ""
+        if r.get("was_cached"):
+            reset = r.get("reset_at") or ""
+            footer = (
+                "\n_Showing this month's run — next "
+                f"set available after {reset[:10]}._"
             )
+        parts.append(
+            f"## {scope_val.upper()} scope\n"
+            + header + footer
+        )
 
-        await _eng.dispose()
-        run_dict = dict(run_data)
-        return _format_recs(run_dict, recs)
-
-    return _run_async(_generate())
+    return "\n\n---\n\n".join(parts)
 
 
 # -----------------------------------------------------------
