@@ -28,6 +28,22 @@ function fmtDuration(secs: number | null): string {
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
+/**
+ * Progress-counter label for a job.  The scheduler
+ * re-uses `tickers_total`/`tickers_done` for every
+ * job type, but recommendation jobs iterate *users*
+ * (one pass per user per scope), not tickers.
+ */
+function progressUnit(
+  jobType: string,
+  total: number,
+): string {
+  const plural = total === 1 ? "" : "s";
+  if (jobType === "recommendations")
+    return `user${plural}`;
+  return `ticker${plural}`;
+}
+
 function fmtCountdown(
   totalSecs: number | null,
 ): string {
@@ -353,7 +369,7 @@ function StatCards() {
           + stats.last_run_status.slice(1)
         : "\u2014",
       sub: stats?.last_run_tickers
-        ? `${stats.last_run_tickers} tickers`
+        ? `${stats.last_run_tickers} processed`
         : "\u2014",
       success: stats?.last_run_status === "success",
     },
@@ -411,9 +427,13 @@ function StatCards() {
 function SplitRunButton({
   onRun,
   onForceRun,
+  forceDisabled = false,
+  forceDisabledHint,
 }: {
   onRun: () => void;
   onForceRun: () => void;
+  forceDisabled?: boolean;
+  forceDisabledHint?: string;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -463,23 +483,46 @@ function SplitRunButton({
               border border-zinc-200 dark:border-zinc-700
               rounded-lg shadow-xl py-1 min-w-[130px]"
           >
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                onForceRun();
-              }}
-              className="flex items-center gap-2 w-full
-                text-left px-3 py-1.5 text-[11px]
-                font-semibold text-amber-600
-                dark:text-amber-400
-                hover:bg-amber-50
-                dark:hover:bg-amber-500/10
-                transition-colors"
-            >
-              <ZapIcon className="h-3 w-3" />
-              Force Run
-            </button>
+            {forceDisabled ? (
+              <button
+                type="button"
+                disabled
+                title={
+                  forceDisabledHint ??
+                  "Force Run is disabled for this job."
+                }
+                className="flex items-center gap-2 w-full
+                  text-left px-3 py-1.5 text-[11px]
+                  font-semibold text-gray-400
+                  dark:text-gray-500
+                  cursor-not-allowed
+                  opacity-60"
+              >
+                <ZapIcon className="h-3 w-3" />
+                Force Run
+                <span className="ml-auto rounded bg-gray-200 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                  Off
+                </span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  onForceRun();
+                }}
+                className="flex items-center gap-2 w-full
+                  text-left px-3 py-1.5 text-[11px]
+                  font-semibold text-amber-600
+                  dark:text-amber-400
+                  hover:bg-amber-50
+                  dark:hover:bg-amber-500/10
+                  transition-colors"
+              >
+                <ZapIcon className="h-3 w-3" />
+                Force Run
+              </button>
+            )}
           </div>
         </>
       )}
@@ -685,6 +728,10 @@ function JobList({
                 <SplitRunButton
                   onRun={() => handleTrigger(j.job_id, false)}
                   onForceRun={() => handleTrigger(j.job_id, true)}
+                  forceDisabled={
+                    j.job_type === "recommendations"
+                  }
+                  forceDisabledHint="Force Run is disabled for Recommendations — use Admin → Recommendations → Force-refresh for per-user test runs."
                 />
               )}
               <button
@@ -1824,7 +1871,11 @@ function PipelineRunGroup({
                     {fmtDuration(r.duration_secs)}
                   </span>
                   <span className="font-mono text-[10px] text-gray-400">
-                    {r.tickers_done}/{r.tickers_total}
+                    {r.tickers_done}/{r.tickers_total}{" "}
+                    {progressUnit(
+                      r.job_type,
+                      r.tickers_total,
+                    )}
                   </span>
                   {r.status === "running" && (
                     <button
@@ -1915,7 +1966,11 @@ function SoloRunRow({
             {fmtDuration(r.duration_secs)}
           </span>
           <span className="font-mono text-[11px] text-gray-500 dark:text-gray-400">
-            {r.tickers_done}/{r.tickers_total} tickers
+            {r.tickers_done}/{r.tickers_total}{" "}
+            {progressUnit(
+              r.job_type,
+              r.tickers_total,
+            )}
           </span>
           {r.status === "running" && (
             <button

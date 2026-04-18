@@ -658,11 +658,15 @@ export interface RecommendationResponse {
   health_assessment?: string | null;
   recommendations: RecommendationItem[];
   generated_at?: string | null;
+  cached?: boolean;
+  reset_at?: string | null;
+  scope?: string | null;
 }
 
 export interface HistoryRunItem {
   run_id: string;
   run_date: string;
+  created_at?: string;
   scope: string;
   run_type: string;
   health_score: number;

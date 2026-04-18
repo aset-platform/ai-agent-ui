@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { usePreferences } from "@/hooks/usePreferences";
+import { usePortfolioActions } from "@/providers/PortfolioActionsProvider";
 import type { UserProfile } from "@/hooks/useEditProfile";
 import type {
   WatchlistResponse,
@@ -15,9 +16,6 @@ import type {
   AnalysisResponse,
 } from "@/lib/types";
 import { usePortfolio } from "@/hooks/usePortfolio";
-import { AddStockModal } from "@/components/widgets/AddStockModal";
-import { EditStockModal } from "@/components/widgets/EditStockModal";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useRegistry } from "@/hooks/useDashboardData";
 import {
   useDashboardHome,
@@ -75,15 +73,8 @@ export default function DashboardPage() {
       ),
     [registryData.value],
   );
-  const [showAddStock, setShowAddStock] =
-    useState(false);
-  const [editingTicker, setEditingTicker] =
-    useState<string | null>(null);
-  const [deleteConfirm, setDeleteConfirm] =
-    useState<{
-      ticker: string;
-      txnId: string;
-    } | null>(null);
+  const { openAdd, openEdit, openDelete } =
+    usePortfolioActions();
 
   // Single request for all widget data
   const {
@@ -298,21 +289,9 @@ export default function DashboardPage() {
           }}
           portfolio={filteredPortfolio}
           portfolioLoading={portfolioData.loading}
-          onAddStock={() => setShowAddStock(true)}
-          onEditStock={(ticker) =>
-            setEditingTicker(ticker)
-          }
-          onDeleteStock={(ticker) => {
-            const holding = portfolioData.holdings.find(
-              (h) => h.ticker === ticker,
-            );
-            if (holding?.transaction_id) {
-              setDeleteConfirm({
-                ticker,
-                txnId: holding.transaction_id,
-              });
-            }
-          }}
+          onAddStock={() => openAdd()}
+          onEditStock={(ticker) => openEdit(ticker)}
+          onDeleteStock={(ticker) => openDelete(ticker)}
         />
         <AnalysisSignalsWidget
           data={selectedAnalysis}
@@ -326,57 +305,6 @@ export default function DashboardPage() {
         selectedTicker={selectedTicker}
       />
 
-      <AddStockModal
-        isOpen={showAddStock}
-        tickers={registryTickers}
-        onClose={() => setShowAddStock(false)}
-        onAdd={async (data) => {
-          await portfolioData.addHolding(data);
-        }}
-      />
-
-      <ConfirmDialog
-        open={deleteConfirm !== null}
-        title="Remove Stock"
-        message={
-          deleteConfirm
-            ? `Remove ${deleteConfirm.ticker} from your portfolio? This cannot be undone.`
-            : ""
-        }
-        confirmLabel="Remove"
-        variant="danger"
-        onConfirm={() => {
-          if (deleteConfirm) {
-            portfolioData.deleteHolding(
-              deleteConfirm.txnId,
-            );
-          }
-          setDeleteConfirm(null);
-        }}
-        onCancel={() => setDeleteConfirm(null)}
-      />
-
-      {editingTicker && (() => {
-        const h = portfolioData.holdings.find(
-          (x) => x.ticker === editingTicker,
-        );
-        return h ? (
-          <EditStockModal
-            isOpen
-            ticker={h.ticker}
-            currentQty={h.quantity}
-            currentPrice={h.avg_price}
-            onClose={() => setEditingTicker(null)}
-            onSave={async (data) => {
-              await portfolioData.editHolding(
-                h.transaction_id,
-                data,
-              );
-              setEditingTicker(null);
-            }}
-          />
-        ) : null;
-      })()}
     </div>
   );
 }

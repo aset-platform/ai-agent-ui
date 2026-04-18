@@ -14,6 +14,8 @@ import {
 } from "next/navigation";
 import Link from "next/link";
 import { CompareContent } from "../compare/page";
+import { RecommendationHistoryTab } from
+  "@/components/insights/RecommendationHistoryTab";
 import { apiFetch } from "@/lib/apiFetch";
 import { useTheme } from "@/hooks/useTheme";
 import { API_URL } from "@/lib/config";
@@ -68,6 +70,7 @@ type TabId =
   | "analysis"
   | "forecast"
   | "compare"
+  | "recommendations"
   | "portfolio"
   | "portfolio-forecast";
 
@@ -1861,6 +1864,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "analysis", label: "Stock Analysis" },
   { id: "forecast", label: "Stock Forecast" },
   { id: "compare", label: "Compare Stocks" },
+  { id: "recommendations", label: "Recommendations" },
 ];
 
 // ---------------------------------------------------------------
@@ -2203,7 +2207,7 @@ function AnalysisPageInner() {
 
         {/* Searchable ticker + refresh — RIGHT */}
         <div
-          className={`relative ${activeTab === "compare" || activeTab.startsWith("portfolio") ? "invisible" : ""}`}
+          className={`relative ${activeTab === "compare" || activeTab === "recommendations" || activeTab.startsWith("portfolio") ? "invisible" : ""}`}
         >
           <div className="flex items-center gap-1.5">
             <button
@@ -2333,6 +2337,9 @@ function AnalysisPageInner() {
         />
       )}
       {activeTab === "compare" && <CompareTab />}
+      {activeTab === "recommendations" && (
+        <RecommendationHistoryTab />
+      )}
       {activeTab === "portfolio" && (
         <PortfolioTab
           marketFilter={
