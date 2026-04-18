@@ -1,12 +1,18 @@
 """Insights API endpoints.
 
-Provides data for the native Next.js Insights page (7 tabs):
-Screener, Price Targets, Dividends, Risk Metrics, Sectors,
-Correlation, and Quarterly.  All queries are scoped to the
-authenticated user's linked tickers.
+Provides data for the native Next.js Insights page (9 tabs):
+Screener, Risk Metrics, Sectors, Price Targets, Dividends,
+Correlation, Quarterly, Piotroski F-Score, and ScreenQL.
 
-Responses are cached in Redis with 300 s TTL.  Cache keys
-use the ``cache:insights:`` prefix and are invalidated by
+Ticker visibility is scoped per tab via ``_scoped_tickers``:
+- Discovery (Screener, ScreenQL): full platform universe for
+  pro + superuser; watchlist ∪ holdings for general.
+- Watchlist (Risk, Sectors, Targets, Dividends, Piotroski):
+  user's watchlist ∪ current holdings for all roles.
+- Portfolio (Correlation, Quarterly): current holdings only.
+
+Responses are cached in Redis with 300 s TTL. Cache keys use
+the ``cache:insights:`` prefix and are invalidated by
 :mod:`stocks.repository` on Iceberg writes.
 """
 
@@ -14,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -113,29 +120,85 @@ def _safe_str(val) -> str | None:
         return None
 
 
-async def _get_user_tickers(user: UserContext) -> list[str]:
-    """Fetch tickers visible to user.
+_DISCOVERY_ROLES = frozenset({"pro", "superuser"})
+_ANALYZABLE_TICKER_TYPES = frozenset({"stock", "etf"})
+TickerScope = Literal["discovery", "watchlist", "portfolio"]
 
-    Superusers see all registry tickers (full universe).
-    Other roles see only their linked watchlist tickers.
+
+def _portfolio_tickers(stock_repo, user_id) -> list[str]:
+    """Current-holdings tickers for a user.
+
+    Derived from Iceberg portfolio_transactions (quantity > 0).
+    """
+    holdings_df = stock_repo.get_portfolio_holdings(user_id)
+    if holdings_df is None or holdings_df.empty:
+        return []
+    return list(holdings_df["ticker"].astype(str).unique())
+
+
+def _full_universe(stock_repo) -> list[str]:
+    """Platform-wide tradeable stock + ETF universe."""
+    registry = stock_repo.get_all_registry()
+    return [
+        t
+        for t, meta in registry.items()
+        if meta.get("ticker_type", "stock")
+        in _ANALYZABLE_TICKER_TYPES
+    ]
+
+
+def _dedup(*lists: list[str]) -> list[str]:
+    """Union of ticker lists, preserving first-seen order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for lst in lists:
+        for t in lst:
+            key = t.upper()
+            if key not in seen:
+                seen.add(key)
+                out.append(t)
+    return out
+
+
+async def _scoped_tickers(
+    user: UserContext,
+    scope: TickerScope,
+) -> list[str]:
+    """Return tickers visible to the user for a given tab scope.
+
+    - ``discovery``: Screener / ScreenQL. Pro + superuser see the
+      full platform universe (stocks + ETFs) unioned with their
+      watchlist + holdings. General sees watchlist ∪ holdings.
+    - ``watchlist``: Risk, Sectors, Targets, Dividends, Piotroski.
+      All roles see their watchlist ∪ holdings.
+    - ``portfolio``: Correlation, Quarterly. All roles see only
+      current holdings (``quantity > 0``).
     """
     repo = _helpers._get_repo()
-    user_list = await repo.get_user_tickers(user.user_id)
-
-    if user.role != "superuser":
-        return user_list
-
-    # Superuser: merge with full registry
     stock_repo = _get_stock_repo()
-    registry = stock_repo.get_all_registry()
+    watchlist = await repo.get_user_tickers(user.user_id)
+    portfolio = _portfolio_tickers(stock_repo, user.user_id)
 
-    seen = set(t.upper() for t in user_list)
-    merged = list(user_list)
-    for t in registry:
-        if t.upper() not in seen:
-            merged.append(t)
-            seen.add(t.upper())
-    return merged
+    if scope == "portfolio":
+        return portfolio
+    if scope == "watchlist":
+        return _dedup(watchlist, portfolio)
+    # discovery
+    if user.role in _DISCOVERY_ROLES:
+        return _dedup(
+            _full_universe(stock_repo),
+            watchlist,
+            portfolio,
+        )
+    return _dedup(watchlist, portfolio)
+
+
+async def _get_user_tickers(user: UserContext) -> list[str]:
+    """Deprecated alias — new code should use ``_scoped_tickers``.
+
+    Kept as a back-compat shim resolving to the ``watchlist`` scope.
+    """
+    return await _scoped_tickers(user, "watchlist")
 
 
 def _get_company_info_df(
@@ -224,7 +287,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = await _get_user_tickers(user)
+        tickers = await _scoped_tickers(user, "discovery")
         if not tickers:
             return ScreenerResponse()
 
@@ -441,7 +504,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = await _get_user_tickers(user)
+        tickers = await _scoped_tickers(user, "watchlist")
         if not tickers:
             return TargetsResponse()
 
@@ -559,7 +622,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = await _get_user_tickers(user)
+        tickers = await _scoped_tickers(user, "watchlist")
         if not tickers:
             return DividendsResponse()
 
@@ -651,7 +714,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = await _get_user_tickers(user)
+        tickers = await _scoped_tickers(user, "watchlist")
         if not tickers:
             return RiskResponse()
 
@@ -754,7 +817,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = await _get_user_tickers(user)
+        tickers = await _scoped_tickers(user, "watchlist")
         if not tickers:
             return SectorsResponse()
 
@@ -867,18 +930,16 @@ def create_insights_router() -> APIRouter:
             "all",
             description="'all', 'india', or 'us'",
         ),
-        source: str = Query(
-            "portfolio",
-            description=("'portfolio' or 'watchlist'"),
-        ),
         user: UserContext = Depends(get_current_user),
     ):
-        """Pairwise daily-returns correlation matrix."""
+        """Pairwise daily-returns correlation matrix.
+
+        Portfolio-scoped: only the caller's current holdings.
+        """
         cache = get_cache()
         ck = (
             f"cache:insights:correlation:"
             f"{user.user_id}:{period}:{market}"
-            f":{source}"
         )
         hit = cache.get(ck)
         if hit is not None:
@@ -888,20 +949,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-
-        # Source: portfolio or watchlist
-        if source == "portfolio":
-            holdings_df = stock_repo.get_portfolio_holdings(
-                user.user_id,
-            )
-            if holdings_df.empty:
-                tickers = []
-            else:
-                tickers = list(
-                    holdings_df["ticker"].astype(str).unique(),
-                )
-        else:
-            tickers = await _get_user_tickers(user)
+        tickers = await _scoped_tickers(user, "portfolio")
 
         if not tickers:
             return CorrelationResponse(period=period)
@@ -1031,7 +1079,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = await _get_user_tickers(user)
+        tickers = await _scoped_tickers(user, "portfolio")
         if not tickers:
             return QuarterlyResponse()
 
@@ -1158,7 +1206,7 @@ def create_insights_router() -> APIRouter:
         cache = get_cache()
         ck = (
             f"cache:insights:piotroski:"
-            f"{min_score}:{sector}:{market}"
+            f"{user.user_id}:{min_score}:{sector}:{market}"
         )
         hit = cache.get(ck)
         if hit is not None:
@@ -1180,6 +1228,18 @@ def create_insights_router() -> APIRouter:
             repo = _get_stock_repo()
             df = repo.get_piotroski_scores()
 
+        if df.empty:
+            return PiotroskiResponse()
+
+        # Scope to user's watchlist ∪ portfolio.
+        scoped = set(
+            t.upper() for t in await _scoped_tickers(
+                user, "watchlist",
+            )
+        )
+        if not scoped:
+            return PiotroskiResponse()
+        df = df[df["ticker"].str.upper().isin(scoped)]
         if df.empty:
             return PiotroskiResponse()
 
@@ -1439,8 +1499,8 @@ def create_insights_router() -> APIRouter:
                 detail=str(e),
             )
 
-        # User scope
-        tickers = await _get_user_tickers(user)
+        # User scope — ScreenQL is discovery-tier
+        tickers = await _scoped_tickers(user, "discovery")
 
         # Generate SQL
         gen = generate_sql(

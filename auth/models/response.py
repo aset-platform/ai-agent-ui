@@ -38,7 +38,7 @@ class UserContext(BaseModel):
     Attributes:
         user_id: UUID string of the authenticated user.
         email: Email address extracted from the JWT payload.
-        role: Either ``"superuser"`` or ``"general"``.
+        role: One of ``"general"``, ``"pro"``, ``"superuser"``.
         subscription_tier: ``"free"``, ``"pro"``, or
             ``"premium"``.
         subscription_status: ``"active"``, ``"past_due"``,

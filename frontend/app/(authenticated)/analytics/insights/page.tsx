@@ -1095,9 +1095,7 @@ function SectorsTab() {
 
 function CorrelationTab() {
   const [period, setPeriod] = useState("1y");
-  const data = useCorrelation(
-    period, "all", "portfolio",
-  );
+  const data = useCorrelation(period, "all");
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
