@@ -5,6 +5,58 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.11.0] — 2026-04-19: Bring-Your-Own-Model + Insights Three-Tier Scoping + Hallucination Guards (Sprint 7)
+
+### Added
+
+- **BYOM — Bring Your Own Model** (ASETPLTFRM-324, Phase A + B): chat-agent LLM costs shift from *platform-pays-all* to *platform-pays-first-10-then-BYO*. Every non-superuser gets **10 lifetime free chat turns**; after that they must configure their own Groq and/or Anthropic key or chat is blocked with `HTTP 429`. Non-chat flows (recommendations, sentiment, forecast) and superusers keep using platform keys. Ollama stays shared/native — free for all when available.
+  - New Alembic `f8e7d6c5b4a3`: `users.chat_request_count`, `users.byo_monthly_limit`, new `user_llm_keys` table (Fernet-encrypted).
+  - `backend/crypto/byo_secrets.py` — Fernet wrapper; master key in `BYO_SECRET_KEY` env.
+  - `auth/endpoints/byo_routes.py` — 4 self-scoped CRUD endpoints under `/v1/users/me/llm-keys` + `/v1/users/me/byo-settings`.
+  - `backend/llm_byo.py` — `BYOContext` + `ContextVar` + `resolve_byo_for_chat()` + Redis monthly counter `byo:month_counter:{user_id}:{yyyy-mm}` (IST, 40-day TTL) + per-user LangChain client cache.
+  - `FallbackLLM._try_model` and Anthropic fallback both consult `get_active_byo_context()` and swap in user-keyed clients when BYO active. `llm_classifier` (Tier-2 intent) also BYO-aware. Stamps `key_source="user"` on Iceberg `llm_usage`.
+  - `MyLLMUsageTab.tsx` redesign: free-allowance card with inline `BYOLimitEditor`, 3 provider cards (Groq + Anthropic configurable, Ollama native), 4 KPIs with free/user split subtitle, usage-by-model table with **Free · Your keys** badge column, 30-day sparkline. New `ConfigureProviderKeyModal` + `ConfirmDialog`-gated delete.
+  - Iceberg schema evolution: nullable `key_source` column on `stocks.llm_usage`. No backfill; legacy null rows treated as `platform` at read time.
+  - Scope-self `/admin/metrics` response enriched with `quota`, `providers`, `daily_trend`, per-user per-model rollup (tokens, cost, `last_used_at` in UTC-Z, platform/user request split).
+  - Docs: `docs/backend/byom.md` with end-to-end workflow diagram, architecture, endpoints, local setup.
+- **Insights three-tier ticker scoping**: `_scoped_tickers(user, scope)` helper drives 9 tabs across three tiers — `discovery` (Screener + ScreenQL + Sectors + Piotroski), `watchlist` (Risk + Targets + Dividends), `portfolio` (Correlation + Quarterly). Pro / superuser see the full stock+ETF universe on discovery tabs; general users see watchlist ∪ holdings. Portfolio-tier tabs always scope to current holdings only.
+
+### Changed
+
+- **`MessageCompressor` defaults**: `max_tool_result_chars` 800 → 4000 so typical portfolio/screener tables no longer clip mid-row. Progressive passes 500 → 2500 (pass 2) and 300 → 1500 (pass 3).
+- **`chat_request_count` bump rule**: skipped when turn routes through BYO so the free-allowance counter stays pinned at 10 once the user is paying their own bill. Scope-self response clamps `free_allowance_used = min(count, 10)` for historical drift.
+- **`get_dashboard_llm_usage` per-model rollup** now returns `input_tokens`, `output_tokens`, `last_used_at` (UTC-Z), `requests_platform`, `requests_user`. Filters `event_type == "request"` so cascade/compression bookkeeping rows (model=`n/a`) don't surface on the Usage by Model table.
+- **Synthesis + portfolio sub-agent prompts** gained a `NO HALLUCINATION ON TRUNCATION` clause: when a tool message ends with `[truncated N chars]`, list only visible rows and explicitly tell the user some rows were trimmed — never fabricate.
+
+### Fixed
+
+- **Tool-truncation hallucination** (found via "You have 8 stocks … [Truncated in display, but confirmed in memory context]"): that phrase was pure LLM invention, not a system marker. 800-char cap was chopping the 8-row portfolio table mid-row; LLM fabricated the rest. Three-layer defense shipped (raise cap + prompt guardrail in synthesis + portfolio agent).
+- **NaN sentinel string leak in `safe_str` / `safe_sector`**: literal `"NaN"`, `"None"`, `"null"`, `"N/A"`, `"NaT"` tokens slipped past the existing NaN/whitespace guards and ended up in LLM recommendation prompts (*"large weight of NaN (41.8%)"*) and Sectors-tab groupby keys. Added `_MISSING_SENTINELS` frozenset with case-insensitive post-strip check. Legit substrings like `"Naniwa"` or `"Financial Services"` still pass.
+- **Naïve-UTC timestamps in frontend**: Iceberg `timestamp` is `datetime64[us]` (no tz); `str(ts)` emitted a bare ISO string that the browser's `new Date()` parsed as local (IST = UTC+5:30), showing fresh rows as "5h ago". New `_iso_utc()` helper in `backend/routes.py` + UTC-Z coercion in `get_dashboard_llm_usage` per-model aggregator.
+- **WebSocket 429 delivery**: `_handle_chat` used to return an `event_queue` after enqueueing an error — but the drain loop hadn't started yet, so the client spun "Thinking…" forever. Now sends errors directly via `ws.send_json` with a terminating `final` frame. Same pattern fixed on the pre-existing quota-exceeded path.
+- **`llm_classifier.py` Tier-2 raw ChatGroq bypass** — was creating a `ChatGroq` directly regardless of BYO state. Now consults `get_active_byo_context()` and builds user-keyed client when BYO active. Closed the last leak point for free-tier consumption on chat turns.
+- **Post-chat `update_summary` leak**: the conversation-context summariser ran *outside* the `apply_byo_context()` block and landed on platform keys. Moved inside the scope via new `_update_summary_in_byo_scope` helper (HTTP + WS paths).
+- **Delete-key 404 runtime error**: clicking Delete on a stale UI card threw because the key was already gone server-side. Handler now treats 404 as the same end state as 204 (removed).
+- **Empty-string sector on Sectors tab**: 3 ETFs (`EQUAL50.NS`, `MOM50.NS`, `VALUE.NS`) had literal `""` sectors that `dropna` missed; they collapsed into an unnamed bucket. Fixed by routing `sector` through `safe_str` before groupby.
+- **`CacheService.set()` kwarg mismatch**: BYO Redis counter was silently failing — calling `cache.set(..., ex=...)` raised `TypeError: unexpected keyword 'ex'` (takes `ttl=`). Swallowed by the `except Exception`. Fixed both the real code and the test fakes.
+
+### Migration notes
+
+Generate a Fernet master key and add to `.env`:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Apply the Alembic migration and recreate the backend container so `env_file` is re-read:
+
+```bash
+docker compose exec -e PYTHONPATH=/app:/app/backend backend alembic upgrade head
+docker compose up -d --force-recreate backend
+```
+
+---
+
 ## [0.10.0] — 2026-04-18: Monthly Recommendations + Acted-On + Sentiment Hardening + Pro Role (Sprint 7)
 
 ### Added

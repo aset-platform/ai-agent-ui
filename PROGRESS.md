@@ -2,6 +2,89 @@
 
 ---
 
+## 2026-04-18 / 19 — Sprint 7 Session 6: BYOM + Insights Three-Tier Scoping + Hallucination Guards
+
+### ASETPLTFRM-324 (13 SP, In Progress): Bring-Your-Own-Model (BYOM) — Phase A + B
+
+**Product shift:** chat-agent LLM costs move from *platform-pays-all* to
+*platform-pays-first-10-then-BYO*. Every non-superuser gets 10 lifetime
+free chat turns; after that they must configure their own Groq and/or
+Anthropic key or chat is blocked (429). Non-chat flows (recommendations,
+sentiment, forecast) and superusers continue to use platform keys.
+Ollama remains a shared native fallback — free for all when available.
+
+**Phase A — storage + UI + observability:**
+- Alembic migration `f8e7d6c5b4a3`:
+  - `users.chat_request_count INT NOT NULL DEFAULT 0` (free-allowance counter, clamped to 10 for display).
+  - `users.byo_monthly_limit INT NOT NULL DEFAULT 100` (user-settable cap on own keys).
+  - New `user_llm_keys` table — `(user_id, provider)` unique, `encrypted_key BYTEA`, `label`, `last_used_at`, `request_count_30d`, FK cascade on user delete.
+- Fernet encryption in `backend/crypto/byo_secrets.py`. Master key `BYO_SECRET_KEY` env (32-byte URL-safe base64). Provider-aware `mask_key()` handles both Groq (`gsk_****abcd`) and Anthropic (`sk-ant-****wxyz`).
+- `auth/repo/byo_repo.py` + `auth/endpoints/byo_routes.py`: 4 self-scoped endpoints — `GET/PUT/DELETE /v1/users/me/llm-keys[/{provider}]` + `PATCH /v1/users/me/byo-settings`. All fire `BYO_KEY_ADDED / UPDATED / DELETED` audit events. Plaintext keys never returned.
+- Iceberg schema evolution on `stocks.llm_usage` — added nullable `key_source` column via `tbl.update_schema().add_column()`. Legacy null rows treated as `platform` at read time; no backfill.
+- Scope-self `/admin/metrics` response enriched with `quota`, `providers`, `daily_trend`, per-user per-model rollup (tokens, cost, last_used_at, `requests_platform`/`requests_user` split).
+- `get_dashboard_llm_usage` per-model rollup — filters `event_type == "request"` (drops `n/a`-model cascade/compression bookkeeping), ISO 8601 UTC with `Z` suffix on timestamps.
+- Frontend full rewrite of `MyLLMUsageTab.tsx`: free-allowance card with `BYOLimitEditor`, 3 provider cards (Groq/Anthropic configurable, Ollama native), 4 KPIs with free/user split, usage-by-model table with badge column, 30-day sparkline. New `ConfigureProviderKeyModal` (paste/show-hide/label/prefix validation). Delete goes through shared `ConfirmDialog`; 404 treated as already-gone.
+
+**Phase B — cascade routing + enforcement:**
+- New `backend/llm_byo.py`:
+  - `BYOContext` dataclass + module-level `ContextVar` + `apply_byo_context()` scoped context manager.
+  - `resolve_byo_for_chat()` — decides per-turn: None for superuser / under-10, `HTTPException(429)` for over-10 with no keys or over monthly limit, `BYOContext` otherwise.
+  - Redis counter `byo:month_counter:{user_id}:{yyyy-mm}` (IST, 40-day TTL).
+  - Fire-and-forget bump of `user_llm_keys.last_used_at`.
+  - Per-user LangChain client cache keyed on `(provider, model, sha256(key)[:12])`.
+- `FallbackLLM._try_model` (Groq) + Anthropic fallback: check active BYO context, build user-keyed client with identical tool binding, invoke, stamp `key_source="user"`. Graceful platform fallback on build error.
+- `bind_tools()` stores `_bound_tools` + kwargs so user-keyed clients rebind to the same tool set.
+- `llm_classifier.py` — Tier-2 intent classifier used raw `ChatGroq` bypassing FallbackLLM; now consults ContextVar and swaps to user-keyed client when BYO is active. Closed the last leak point on chat turns.
+- All 4 chat entry points resolve BYO at entry and wrap the worker in `apply_byo_context(byo_ctx)` **inside** the thread (ContextVars don't propagate through `run_in_executor`).
+- Post-chat `update_summary` moved inside BYO scope via new `_update_summary_in_byo_scope` helper (was leaking to platform).
+- `chat_request_count` bump is now guarded by `byo_active` so the free-allowance counter stays pinned at 10 once BYO kicks in. Scope-self response clamps `free_allowance_used = min(count, 10)` for historical drift.
+- WebSocket 429 delivery fix — `_handle_chat` used to return `event_queue` after enqueueing the error, but the drain loop hadn't started; client spun forever. Errors now go out via direct `ws.send_json({"type":"error"})` + `{"type":"final"}` terminator so the spinner clears.
+
+### Insights three-tier ticker scoping
+
+Replaced the binary `_get_user_tickers(user)` in `backend/insights_routes.py` with a scope-aware `_scoped_tickers(user, scope)`. Nine tabs mapped to three tiers:
+
+| Tier | Tabs | Pro / Superuser | General |
+|---|---|---|---|
+| `discovery` | Screener, ScreenQL, **Sectors**, **Piotroski** | full platform (stock + ETF, excluding index/commodity) | watchlist ∪ holdings |
+| `watchlist` | Risk, Targets, Dividends | watchlist ∪ holdings | watchlist ∪ holdings |
+| `portfolio` | Correlation, Quarterly | holdings only | holdings only |
+
+- Full-universe scope filters `ticker_type IN ('stock', 'etf')` so `^NSEI` / `GC=F` stay out of Screener.
+- Correlation's `source=portfolio|watchlist` param dropped — only `portfolio` was ever used.
+- Piotroski was platform-wide; now scoped. Cache key gained `user_id`.
+- Sectors "unnamed" bucket — 3 ETFs (`EQUAL50.NS`, `MOM50.NS`, `VALUE.NS`) had literal empty-string sectors that survived `dropna`. Fixed by routing `sector` through `market_utils.safe_str`.
+- 9 tests in `tests/backend/test_insights_scoping.py`.
+
+### Hallucination + data-integrity fixes
+
+- **Tool-result truncation hallucination**: `MessageCompressor.max_tool_result_chars` default 800 → 4000; progressive passes 500 → 2500 and 300 → 1500. The 800-char cap was clipping the 8-row portfolio-holdings table mid-row and the LLM invented *"[Truncated in display, but confirmed in memory context]"* (pure fabrication — that phrase is not in our code). Synthesis + portfolio prompts gained a `NO HALLUCINATION ON TRUNCATION` clause: when `[truncated N chars]` marker appears, list only visible rows and explicitly tell the user some rows were trimmed.
+- **NaN sentinel string leak**: `safe_str` / `safe_sector` already rejected numeric NaN, `None`, empty strings — but preserved literal `"NaN"`, `"None"`, `"null"`, `"N/A"`, `"NaT"` tokens that pandas / JSON round-trips produce. These leaked into LLM recommendation prompts ("large weight of NaN (41.8%)") and Sectors-tab groupby keys. Added `_MISSING_SENTINELS` frozenset + case-insensitive post-strip check. Legit substrings (`"Naniwa"`, `"Financial Services"`) still pass. 25 regression tests in `tests/backend/test_market_utils_safe.py`.
+- **Naïve UTC timestamp → frontend drift**: Iceberg `timestamp` column is `datetime64[us]` tz-naive. `str()` produced `"2026-04-19 00:15:33"` with no tz marker; frontend's `new Date()` parsed as local (IST = UTC+5:30), showing fresh rows as "5h ago". Fixed by coercing to UTC + emitting ISO 8601 with `Z` suffix in the per-model aggregator + new shared `_iso_utc()` helper in `routes.py` for provider-card `last_used_at`.
+- **Confirm-delete on BYO provider cards**: delete goes through shared `ConfirmDialog`; handler tolerates HTTP 404 (already-deleted) as success.
+
+### Operational learnings captured in Serena shared memory
+
+Six shared memories promoted on branch `docs/promote-memory-byom-and-patterns`:
+- `shared/architecture/byom-cascade-override` — full BYOM design.
+- `shared/architecture/pro-user-role-scoped-admin` — three-role model + scope=self|all pattern.
+- `shared/debugging/contextvar-run-in-executor` — `run_in_executor` doesn't auto-copy ContextVars.
+- `shared/debugging/llm-truncation-hallucination` — three-layer defense.
+- `shared/debugging/nan-string-sentinels` — stringified-NaN leak.
+- `shared/debugging/iceberg-tz-naive-timestamps` — extended with read-side UTC-Z fix.
+
+### Totals
+- 1 Jira ticket (ASETPLTFRM-324, 13 SP, In Progress) + 6 shared memories + 63 new tests (54 BYO/NaN + 9 Insights scoping).
+- 9 commits on `feature/sprint7`: Insights `3196fe4`, `62fc2e2`, `ec5a74e`; BYOM `608f8bd`, `4e34a1c`, `e1e49a0`, `ba528dd`, `38fd146`, `3022a3a`.
+
+### Follow-ups for next session
+1. Manual E2E verification of BYOM on pro user account.
+2. ASETPLTFRM-323 (Pro role) also pending user verification.
+3. Optional: OpenAI provider support, per-provider monthly limits, retroactive `key_source` backfill on legacy `llm_usage` rows.
+4. Merge `docs/promote-memory-byom-and-patterns` once reviewed.
+
+---
+
 ## 2026-04-18 — Sprint 7 Session 5: Monthly Recommendations + Acted-On + Sentiment Hardening + Pro Role
 
 ### ASETPLTFRM-318 (8 SP, Done): Recommendation monthly-per-scope quota + admin test workflow
