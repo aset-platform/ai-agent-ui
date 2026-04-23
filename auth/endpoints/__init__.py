@@ -14,6 +14,7 @@ from fastapi import APIRouter
 from auth.endpoints import (
     admin_routes,
     auth_routes,
+    byo_routes,
     oauth_routes,
     profile_routes,
     session_routes,
@@ -52,6 +53,7 @@ def create_auth_router() -> APIRouter:
     admin_routes.register(router)
     session_routes.register(router)
     subscription_routes.register(router)
+    byo_routes.register(router)
     logger.debug(
         "Auth router created with all"
         " sub-routes registered.",

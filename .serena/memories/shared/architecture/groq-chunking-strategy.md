@@ -10,7 +10,7 @@ paid fallback. Configured via `GROQ_MODEL_TIERS` env var (comma-separated).
 | Tier | Model | TPM | Notes |
 |------|-------|-----|-------|
 | 1 | `llama-3.3-70b-versatile` | 12K | Reliable tool-calling |
-| 2 | `moonshotai/kimi-k2-instruct` | 10K | Parallel tools |
+| 2 | `qwen/qwen3-32b` | 10K | Tool-calling + synthesis |
 | 3 | `openai/gpt-oss-120b` | 8K | Quality |
 | 4 | `meta-llama/llama-4-scout-17b-16e-instruct` | 30K | Fast, small |
 | 5 | `claude-sonnet-4-6` | unlimited | Paid Anthropic fallback |
@@ -38,9 +38,9 @@ Three profiles, selected per-agent at startup:
 
 | Profile | Tiers | Anthropic | Use case |
 |---------|-------|-----------|----------|
-| tool | llama → kimi → scout | Yes (fallback) | Tool-calling iterations |
-| synthesis | gpt-oss-120b → kimi | Yes (fallback) | Final response (no tool calls) |
-| test | llama → kimi → scout | No (RuntimeError) | E2E + pytest |
+| tool | llama → qwen3 → scout | Yes (fallback) | Tool-calling iterations |
+| synthesis | gpt-oss-120b → qwen3 | Yes (fallback) | Final response (no tool calls) |
+| test | llama → qwen3 → scout | No (RuntimeError) | E2E + pytest |
 
 Detection: `AI_AGENT_UI_ENV=test` env var activates test profile.
 `BaseAgent` has `llm_with_tools` (tool cascade) + `llm_synthesis`
@@ -82,6 +82,6 @@ News sub-agent (`search_market_news`) capped at `max_iterations=2`.
 ## Groq Free Tier Limits (March 2026)
 See `token_budget._DEFAULT_LIMITS` for all models. Key ones:
 - llama-3.3-70b-versatile: 30 RPM, 12K TPM, 1K RPD
-- kimi-k2-instruct: 30 RPM, 10K TPM
+- qwen3-32b: 30 RPM, 10K TPM
 - gpt-oss-120b: 30 RPM, 8K TPM, 1K RPD, 200K TPD
 - scout-17b: 30 RPM, 30K TPM, 1K RPD, 500K TPD

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models.stock_master import StockMaster
 from backend.db.models.stock_tag import StockTag
+from market_utils import safe_str
 
 _logger = logging.getLogger(__name__)
 
@@ -92,8 +93,8 @@ async def upsert_stock(
             "yf_ticker", f"{symbol}.NS",
         ),
         nse_symbol=data.get("nse_symbol", symbol),
-        sector=data.get("sector"),
-        industry=data.get("industry"),
+        sector=safe_str(data.get("sector")),
+        industry=safe_str(data.get("industry")),
         market_cap=data.get("market_cap"),
         currency=data.get("currency", "INR"),
         is_active=True,

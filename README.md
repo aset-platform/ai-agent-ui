@@ -8,18 +8,27 @@ A fullstack agentic chat application with stock analysis, Prophet forecasting, a
 
 - **6 AI sub-agents** — Portfolio, Stock Analyst, Forecaster, Research, Sentiment, Recommendation (LangGraph supervisor routing)
 - **Memory-augmented chat** — pgvector semantic memory (768-dim), per-user facts + PG-persisted conversation context (cross-session resume)
-- **Round-robin LLM pools** — 6 Groq models (~2.3M TPD), Ollama local fallback, Anthropic paid tier
-- **Prophet forecasting** — 3/6/9-month targets, 80% confidence bands, XGBoost ensemble correction, backtest overlay
+- **Round-robin LLM pools** — 5 Groq models (~2.0M TPD), Ollama local fallback, Anthropic paid tier
+- **Prophet forecasting** — volatility-regime adaptive (stable/moderate/volatile), 11 enriched regressors, log-transform + logistic growth, post-Prophet RSI/MACD/volume bias adjustment, composite confidence score with High/Medium/Low badges on Analysis + Portfolio UIs
 - **Portfolio dashboard** — TradingView charts, sector allocation, P&L trend, news sentiment, recommendations widget
-- **Smart Funnel recommendations** — 3-stage pipeline (DuckDB pre-filter → gap analysis → LLM reasoning), market-scoped, unified quota
+- **Smart Funnel recommendations** — 3-stage pipeline (DuckDB pre-filter → gap analysis → LLM reasoning), market-scoped, **1 run per (user, scope, IST calendar month)**, shared consolidator across widget/chat/scheduler, `scope="all"` auto-expands to India + US, admin force-refresh + promote workflow for testing
+- **Recommendation acted-on tracking** — portfolio Add/Edit/Delete auto-flips matching recs to `acted_on`, green "+ Buy" / "Edit" pills on every rec row, in-place Add/Edit modals via `PortfolioActionsProvider` (no route hops), scope-aware adoption-rate KPIs
 - **54 NSE ETFs** — broad market, sectoral, factor, gold/silver, international, debt ETFs with OHLCV, analytics, sentiment, and Prophet forecasts
 - **Piotroski F-Score** — fundamental scoring (755 stocks), market filter (India/US)
-- **Sentiment scoring** — LLM headline analysis, hot/learning/cold tiers, market fallback
+- **Sentiment scoring** — FinBERT batch sentiment (ProsusAI/finbert, CPU-only, zero API cost) + LLM fallback, hot/learning/cold tiers, market fallback, accurate `source` provenance (`finbert | llm | market_fallback | none`), per-source 10s HTTP timeout, learning-set cap (top-50 by market cap), superuser Data Health details modal
 - **Pipeline orchestration** — 4-step pipelines (Data Refresh → Analytics → Sentiment → Piotroski), force run, DAG viz
 - **Scheduler** — cron jobs with freshness gates, CV reuse (30-day TTL), catchup on restart
 - **Data Health dashboard** — 5 health cards with async fix buttons, live progress bars, parallelized DuckDB queries (~1.4s)
-- **Insights screener** — 809 tickers with sentiment, RSI, MACD, Sharpe, tag/index filters (Nifty 50/100/500, cap sizes)
+- **ScreenQL universal screener** — text-based stock query language (36 fields, 6 Iceberg tables), recursive descent parser, DuckDB SQL, 6 presets, autocomplete, dynamic columns, currency symbols
+- **Insights screener** — 809 tickers with sentiment, RSI, MACD, Sharpe, tag/index filters (Nifty 50/100/500, cap sizes), CSV export on all data tabs
+- **CSV download** — centralized utility on 10 tabs (Insights + Admin), respects current filters
+- **Iceberg maintenance** — backup (rsync + catalog.db), compaction, 11yr retention, post-pipeline snapshot expiry
+- **Backup Health panel** — readonly admin dashboard with health badge, folder browser, Redis-cached
+- **Bulk OHLCV download** — yf.download() batches of 100 (99.8% success, 58s for 804 tickers)
 - **Live market ticker** — Nifty 50 + Sensex in header, dual-source (NSE India + Yahoo Finance), 30s refresh
+- **RBAC with Pro tier** — three roles (`general` / `pro` / `superuser`). Pro users auto-activate on paid subscription (superuser sticky), see Insights + a 3-tab scoped Admin view (My Account, My Audit Log, My LLM Usage); superuser sees all 7 tabs. Self-scoped admin endpoints via `?scope=self|all` gate.
+- **Bring Your Own Model (BYOM)** — chat agent shifts from *platform-pays-all* to *platform-pays-first-10-then-BYO*. Every non-superuser gets **10 lifetime free chat turns**; past that they must configure their own Groq and/or Anthropic key or chat is blocked (`HTTP 429`). Fernet-encrypted keys, Redis-backed IST monthly counter, user-settable monthly cap. `FallbackLLM._try_model` routes each Groq/Anthropic hop through the user's key via a per-request `ContextVar`; cascade falls back to shared Ollama when available. Non-chat flows (recommendations, sentiment, forecast) and superusers continue on platform keys. My LLM Usage tab surfaces free/BYO split per model with `key_source` stamped on `stocks.llm_usage`. Full workflow: [docs/backend/byom.md](docs/backend/byom.md).
+- **Insights three-tier ticker scoping** — 9 Insights tabs mapped to `discovery` / `watchlist` / `portfolio` scopes via a single `_scoped_tickers(user, scope)` helper. Pro + superuser get the full stock+ETF universe on Screener, ScreenQL, Sectors, and Piotroski; Risk/Targets/Dividends stay on watchlist ∪ holdings for everyone; Correlation + Quarterly are portfolio-only (current holdings).
 - **Dual payment gateways** — Razorpay (INR) + Stripe (USD)
 - **Docker Compose** — 5 services, single command start
 - **19 CLI pipeline commands** — seed, download, analytics, sentiment, forecast, screen, refresh
@@ -86,7 +95,7 @@ graph TD
     end
 
     subgraph LLM["LLM Cascade"]
-        GROQ["Groq (6 models)<br/><i>round-robin pools</i>"]
+        GROQ["Groq (5 models)<br/><i>round-robin pools</i>"]
         OLL["Ollama<br/><i>local fallback</i>"]
         ANT["Anthropic<br/><i>paid fallback</i>"]
     end
@@ -275,6 +284,7 @@ graph LR
 | `stock_tags` | Temporal tags (nifty50, largecap, etf, etc.) |
 | `ingestion_cursor` | Keyset pagination cursor |
 | `ingestion_skipped` | Failed ticker log + retry |
+| `sentiment_dormant` | Per-ticker headline-fetch dormancy (capped expo cooldown) |
 | `pipelines` | Pipeline chain definitions |
 | `pipeline_steps` | Ordered steps within pipelines |
 
@@ -304,12 +314,25 @@ DuckDB serves as the primary read engine with in-memory metadata cache.
 | Recommendations | recommendation_runs | `< 30 days` | Monthly |
 | Rec Outcomes | outcome checkpoints | daily price check | Daily |
 
-### Pipeline (India Daily — 4 steps, ~10 min)
+### Pipeline (India + USA Daily — 6 steps each, ~12 min)
+
+Cron: `08:00 IST` (India) / `08:15 IST` (USA), Tue–Sat. Container runs
+in `TZ=Asia/Kolkata` so cron strings match wall-clock IST.
 
 ```
-Data Refresh → Compute Analytics → Sentiment → Piotroski
-  (5 min)         (45s)            (3.5 min)     (2s)
+Data Refresh → Compute Analytics → Sentiment → Piotroski → Rec Outcomes → Iceberg Maintenance
+  (5 min)         (45s)            (3.5 min)     (2s)        (15s)         (~2 min, backup+compact)
 ```
+
+Step 6 (`iceberg_maintenance`) is **fail-closed**: runs `run_backup()`
+first, and if backup fails the compaction is skipped — preserving the
+"backup before maintenance" safety rule. Compacts hot tables
+(`ohlcv`, `sentiment_scores`, `company_info`, `analysis_summary`)
+so file count stays bounded.
+
+`scheduler_catchup_enabled=False` by default — startup catchup of
+"missed" jobs is opt-in only (was silently pulling mid-day partial
+data). Set `SCHEDULER_CATCHUP_ENABLED=true` to enable.
 
 ### Performance
 
@@ -366,7 +389,7 @@ PYTHONPATH=.:backend python -m backend.pipeline.runner <command>
 ## LLM Cascade
 
 ```
-Tool Pool:    llama-3.3-70b → kimi-k2 → qwen3-32b  (round-robin)
+Tool Pool:    llama-3.3-70b → qwen3-32b              (round-robin)
 Quality Pool: gpt-oss-120b → gpt-oss-20b             (round-robin)
 Fast Pool:    scout-17b                               (single)
 Local:        Ollama gpt-oss:20b                      (fallback)
@@ -380,9 +403,9 @@ Progressive compression: system prompt → tool results → context window.
 ## Testing
 
 ```bash
-python -m pytest tests/ -v              # 755 backend tests
+python -m pytest tests/ -v              # 839 backend tests
 cd frontend && npx vitest run           # 18 frontend tests
-cd e2e && npm test                      # 219 E2E tests (needs live services)
+cd e2e && npm test                      # 257 E2E tests (needs live services)
 ```
 
 ---

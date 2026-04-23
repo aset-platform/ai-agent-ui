@@ -34,6 +34,69 @@ router = APIRouter(
 )
 
 
+_BUY_ACTIONS = ["buy", "accumulate"]
+_SELL_ACTIONS = ["sell", "reduce", "trim"]
+
+
+def _mark_recs_acted_on(
+    user_id: str,
+    ticker: str,
+    actions: list[str],
+) -> None:
+    """Flip matching active recs to ``acted_on``.
+
+    Fire-and-forget sync→async bridge: opens a NullPool
+    engine, calls ``update_recommendation_status``,
+    disposes the engine.  Errors are logged but never
+    raised — we must not fail a portfolio transaction
+    just because the outcome bookkeeping choked.
+    """
+    import asyncio
+
+    async def _run() -> None:
+        from sqlalchemy.ext.asyncio import (
+            AsyncSession,
+            async_sessionmaker,
+            create_async_engine,
+        )
+        from sqlalchemy.pool import NullPool
+        from config import get_settings
+        from backend.db.pg_stocks import (
+            update_recommendation_status,
+        )
+
+        eng = create_async_engine(
+            get_settings().database_url,
+            poolclass=NullPool,
+        )
+        factory = async_sessionmaker(
+            eng, class_=AsyncSession,
+        )
+        try:
+            async with factory() as s:
+                n = await update_recommendation_status(
+                    s, str(user_id), ticker,
+                    actions, "acted_on",
+                )
+            if n:
+                _logger.info(
+                    "acted_on: %d rec(s) for "
+                    "user=%s ticker=%s actions=%s",
+                    n, str(user_id)[:8],
+                    ticker, actions,
+                )
+        finally:
+            await eng.dispose()
+
+    try:
+        asyncio.run(_run())
+    except Exception:  # noqa: BLE001
+        _logger.debug(
+            "mark_recs_acted_on failed",
+            exc_info=True,
+        )
+
+
 def _fetch_company_info_bg(ticker: str) -> None:
     """Background: fetch yfinance info and store in Iceberg."""
     try:
@@ -437,6 +500,123 @@ def get_portfolio(
     }
 
 
+@router.get("/portfolio/{ticker}/transactions")
+def get_portfolio_transactions(
+    ticker: str,
+    user: UserContext = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Per-ticker transaction list + computed summary.
+
+    Powers the "view transactions" modal on the
+    Portfolio tab. Sorted by ``trade_date`` ascending.
+    Summary mirrors the holding aggregate (avg_price
+    weighted by quantity) and adds live current price
+    and gain/loss against total invested.
+    """
+    ticker = ticker.upper().strip()
+    stock_repo = _get_stock_repo()
+    txn_df = stock_repo.get_portfolio_transactions(
+        user.user_id,
+    )
+    if txn_df.empty:
+        raise HTTPException(
+            status_code=404,
+            detail="No transactions for ticker",
+        )
+
+    rows = txn_df[txn_df["ticker"] == ticker].copy()
+    if rows.empty:
+        raise HTTPException(
+            status_code=404,
+            detail="No transactions for ticker",
+        )
+
+    rows = rows.sort_values("trade_date")
+    transactions: List[Dict[str, Any]] = []
+    for _, r in rows.iterrows():
+        td = r.get("trade_date")
+        transactions.append(
+            {
+                "transaction_id": str(
+                    r["transaction_id"],
+                ),
+                "trade_date": (
+                    td.isoformat()
+                    if hasattr(td, "isoformat")
+                    else str(td)
+                ),
+                "side": str(r.get("side") or "BUY"),
+                "quantity": float(r["quantity"]),
+                "price": float(r["price"]),
+                "fees": float(r.get("fees") or 0),
+                "notes": (
+                    str(r["notes"])
+                    if r.get("notes") is not None
+                    and str(r["notes"]) != "nan"
+                    else None
+                ),
+            },
+        )
+
+    # Aggregate respecting BUY/SELL sign.
+    total_qty = 0.0
+    invested = 0.0
+    for t in transactions:
+        sign = -1 if t["side"].upper() == "SELL" else 1
+        total_qty += sign * t["quantity"]
+        invested += sign * t["quantity"] * t["price"]
+    avg_price = (
+        invested / total_qty if total_qty else 0.0
+    )
+
+    current_price: float | None = None
+    try:
+        ohlcv = stock_repo.get_ohlcv(ticker)
+        if not ohlcv.empty:
+            valid = ohlcv.dropna(subset=["close"])
+            if not valid.empty:
+                current_price = float(
+                    valid.iloc[-1]["close"],
+                )
+    except Exception:
+        pass
+
+    current_value = (
+        round(total_qty * current_price, 2)
+        if current_price is not None
+        else None
+    )
+    gain = (
+        round(current_value - invested, 2)
+        if current_value is not None
+        else None
+    )
+    gain_pct = (
+        round((gain / invested * 100), 2)
+        if gain is not None and invested
+        else None
+    )
+
+    currency = str(rows.iloc[0].get("currency") or "USD")
+    market = str(rows.iloc[0].get("market") or "us")
+
+    return {
+        "ticker": ticker,
+        "currency": currency,
+        "market": market,
+        "transactions": transactions,
+        "summary": {
+            "total_quantity": round(total_qty, 4),
+            "avg_price": round(avg_price, 2),
+            "invested": round(invested, 2),
+            "current_price": current_price,
+            "current_value": current_value,
+            "gain": gain,
+            "gain_pct": gain_pct,
+        },
+    }
+
+
 @router.post("/portfolio")
 async def add_portfolio_holding(
     body: AddPortfolioRequest,
@@ -505,6 +685,15 @@ async def add_portfolio_holding(
         body.quantity,
         body.price,
     )
+
+    # Auto-mark matching BUY/ACCUMULATE recs as
+    # acted_on. Fire-and-forget; logged on failure.
+    threading.Thread(
+        target=_mark_recs_acted_on,
+        args=(user.user_id, ticker, _BUY_ACTIONS),
+        daemon=True,
+    ).start()
+
     return {
         "detail": "added",
         "transaction_id": txn["transaction_id"],
@@ -533,6 +722,33 @@ def edit_portfolio_holding(
         )
 
     stock_repo = _get_stock_repo()
+
+    # Capture pre-update quantity so we can detect a
+    # reduction and auto-mark matching SELL/REDUCE recs.
+    pre_qty: float | None = None
+    pre_ticker: str | None = None
+    try:
+        txn_df = stock_repo.get_portfolio_transactions(
+            user.user_id,
+        )
+        if not txn_df.empty:
+            row = txn_df[
+                txn_df["transaction_id"].astype(str)
+                == str(transaction_id)
+            ]
+            if not row.empty:
+                pre_qty = float(
+                    row.iloc[0].get("quantity") or 0,
+                )
+                pre_ticker = str(
+                    row.iloc[0].get("ticker") or "",
+                )
+    except Exception:
+        _logger.debug(
+            "pre-edit qty lookup failed",
+            exc_info=True,
+        )
+
     ok = stock_repo.update_portfolio_transaction(
         transaction_id,
         user.user_id,
@@ -558,6 +774,25 @@ def edit_portfolio_holding(
     except ImportError:
         pass
 
+    # If the edit reduced the quantity, treat as a
+    # SELL/REDUCE action and mark matching recs.
+    new_qty = body.quantity
+    if (
+        pre_ticker
+        and pre_qty is not None
+        and new_qty is not None
+        and new_qty < pre_qty
+    ):
+        threading.Thread(
+            target=_mark_recs_acted_on,
+            args=(
+                user.user_id,
+                pre_ticker,
+                _SELL_ACTIONS,
+            ),
+            daemon=True,
+        ).start()
+
     return {"detail": "updated"}
 
 
@@ -568,6 +803,29 @@ def delete_portfolio_holding(
 ) -> Dict[str, str]:
     """Delete a portfolio transaction."""
     stock_repo = _get_stock_repo()
+
+    # Capture the ticker before we nuke the row so we
+    # can auto-mark matching SELL/REDUCE recs after.
+    pre_ticker: str | None = None
+    try:
+        txn_df = stock_repo.get_portfolio_transactions(
+            user.user_id,
+        )
+        if not txn_df.empty:
+            row = txn_df[
+                txn_df["transaction_id"].astype(str)
+                == str(transaction_id)
+            ]
+            if not row.empty:
+                pre_ticker = str(
+                    row.iloc[0].get("ticker") or "",
+                )
+    except Exception:
+        _logger.debug(
+            "pre-delete ticker lookup failed",
+            exc_info=True,
+        )
+
     ok = stock_repo.delete_portfolio_transaction(
         transaction_id,
         user.user_id,
@@ -591,5 +849,16 @@ def delete_portfolio_holding(
         )
     except ImportError:
         pass
+
+    if pre_ticker:
+        threading.Thread(
+            target=_mark_recs_acted_on,
+            args=(
+                user.user_id,
+                pre_ticker,
+                _SELL_ACTIONS,
+            ),
+            daemon=True,
+        ).start()
 
     return {"detail": "deleted"}

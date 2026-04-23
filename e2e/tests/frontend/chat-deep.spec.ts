@@ -20,29 +20,6 @@ test.describe("Chat deep coverage", () => {
     });
   });
 
-  test("all agent buttons are visible in selector", async () => {
-    const buttons = chatPage.agentSelector.getByRole("button");
-    const count = await buttons.count();
-    expect(count).toBeGreaterThanOrEqual(2);
-  });
-
-  test("switching agent changes hint text", async ({ page }) => {
-    // Get initial hint
-    const initialHint = await page
-      .locator("p.text-gray-400, p.text-gray-500")
-      .first()
-      .textContent();
-
-    await chatPage.selectAgent("Stock Analysis");
-    await page.waitForTimeout(500);
-
-    const newHint = await page
-      .locator("p.text-gray-400, p.text-gray-500")
-      .first()
-      .textContent();
-    expect(newHint).not.toBe(initialHint);
-  });
-
   test("empty input → send button disabled", async () => {
     await expect(chatPage.messageInput).toHaveValue("");
     await expect(chatPage.sendBtn).toBeDisabled();

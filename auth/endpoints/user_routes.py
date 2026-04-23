@@ -169,13 +169,19 @@ def register(router: APIRouter) -> None:
             HTTPException: 409 if the new email is already in use.
         """
         repo = _helpers._get_repo()
-        if await repo.get_by_id(user_id) is None:
+        target = await repo.get_by_id(user_id)
+        if target is None:
             raise HTTPException(
                 status_code=404, detail="User '{}' not found".format(user_id)
             )
         updates: Dict[str, Any] = {
             k: v for k, v in body.model_dump().items() if v is not None
         }
+        # Capture old role so we can enrich the audit event
+        # when a role change is part of this update.
+        old_role = (
+            target.get("role") if isinstance(target, dict) else None
+        )
         if "email" in updates:
             existing = await repo.get_by_email(
                 str(updates["email"]),
@@ -210,11 +216,18 @@ def register(router: APIRouter) -> None:
                 updates["page_permissions"]
             )
         updated = await repo.update(user_id, updates)
+        audit_meta: Dict[str, Any] = {
+            "fields_changed": list(updates.keys()),
+        }
+        new_role = updates.get("role")
+        if new_role is not None and new_role != old_role:
+            audit_meta["old_role"] = old_role
+            audit_meta["new_role"] = new_role
         await repo.append_audit_event(
             "USER_UPDATED",
             actor_user_id=caller.user_id,
             target_user_id=user_id,
-            metadata={"fields_changed": list(updates.keys())},
+            metadata=audit_meta,
         )
         _logger.info(
             "User updated: user_id=%s by superuser=%s", user_id, caller.user_id

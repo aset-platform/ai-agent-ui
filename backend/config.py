@@ -105,7 +105,6 @@ class Settings(BaseSettings):
     # exhaustion or API error.  Comma-separated in env var.
     groq_model_tiers: str = (
         "llama-3.3-70b-versatile,"
-        "moonshotai/kimi-k2-instruct,"
         "qwen/qwen3-32b,"
         "openai/gpt-oss-120b,"
         "openai/gpt-oss-20b,"
@@ -117,13 +116,13 @@ class Settings(BaseSettings):
     synthesis_model_tiers: str = (
         "openai/gpt-oss-120b,"
         "openai/gpt-oss-20b,"
-        "moonshotai/kimi-k2-instruct"
+        "qwen/qwen3-32b"
     )
 
     # Test tiers — free models only, zero paid exposure.
     test_model_tiers: str = (
         "llama-3.3-70b-versatile,"
-        "moonshotai/kimi-k2-instruct,"
+        "qwen/qwen3-32b,"
         "meta-llama/llama-4-scout-17b-16e-instruct"
     )
 
@@ -135,7 +134,6 @@ class Settings(BaseSettings):
 
     tool_pool_primary: str = (
         "llama-3.3-70b-versatile,"
-        "moonshotai/kimi-k2-instruct,"
         "qwen/qwen3-32b"
     )
     tool_pool_secondary: str = (
@@ -149,7 +147,7 @@ class Settings(BaseSettings):
     synthesis_pool_primary: str = (
         "openai/gpt-oss-120b,"
         "openai/gpt-oss-20b,"
-        "moonshotai/kimi-k2-instruct"
+        "qwen/qwen3-32b"
     )
     synthesis_pool_secondary: str = (
         "meta-llama/"
@@ -217,7 +215,11 @@ class Settings(BaseSettings):
     # Job scheduler
     scheduler_enabled: bool = True
     scheduler_max_workers: int = 3
-    scheduler_catchup_enabled: bool = True
+    # Catchup fires "missed" jobs on startup, which can
+    # silently pull mid-day partial data after a restart.
+    # Off by default — explicit manual or scheduled runs
+    # only. Set SCHEDULER_CATCHUP_ENABLED=true to opt in.
+    scheduler_catchup_enabled: bool = False
 
     # Smart cache warming: pre-warm Redis for the top
     # N most active users at startup.
@@ -237,6 +239,11 @@ class Settings(BaseSettings):
     langfuse_host: str = "https://cloud.langfuse.com"
     trace_sample_rate: float = 1.0  # 1.0 = 100% (dev)
     hide_trace_io: bool = False  # True in prod only
+
+    # ── Sentiment scoring backend ─────────────────
+    # "finbert"  — local FinBERT model (zero API cost)
+    # "llm"      — FallbackLLM cascade (default)
+    sentiment_scorer: str = "finbert"
 
     # ── Forecast: Phase 3 ──────────────────────────
     ensemble_enabled: bool = False  # XGBoost ensemble

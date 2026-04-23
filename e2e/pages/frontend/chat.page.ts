@@ -1,5 +1,8 @@
 /**
- * Page object for the Next.js chat interface (``/``).
+ * Page object for the chat side-panel on ``/dashboard``.
+ *
+ * Chat is a collapsible panel (not a full page). All chat
+ * locators are scoped to ``data-testid="chat-panel"``.
  */
 
 import { type Locator, expect } from "@playwright/test";
@@ -8,37 +11,50 @@ import { FE } from "../../utils/selectors";
 import { BasePage } from "../base.page";
 
 export class ChatPage extends BasePage {
+  /** Desktop chat panel — scopes all chat locators. */
+  get panel(): Locator {
+    return this.page.getByTestId("chat-panel");
+  }
+
   get messageInput() {
-    return this.tid(FE.chatInput);
+    return this.panel.getByTestId(FE.chatInput);
   }
   get sendBtn() {
-    return this.tid(FE.chatSend);
-  }
-  get agentSelector() {
-    return this.tid(FE.agentSelector);
+    return this.panel.getByTestId(FE.chatSend);
   }
   get clearBtn() {
-    return this.tid(FE.clearMessages);
+    return this.panel.getByTestId(FE.clearMessages);
   }
+  /** Profile avatar lives in AppHeader, not chat panel. */
   get profileAvatar() {
-    return this.tid(FE.profileAvatar);
+    return this.page.getByTestId(FE.profileAvatar);
   }
   get statusBadge() {
-    return this.tid(FE.statusBadge);
+    return this.panel.getByTestId(FE.statusBadge);
   }
 
   /** All assistant message bubbles. */
   get assistantMessages(): Locator {
-    return this.tid(FE.assistantMessage);
+    return this.panel.getByTestId(FE.assistantMessage);
   }
 
   /** All user message bubbles. */
   get userMessages(): Locator {
-    return this.tid(FE.userMessage);
+    return this.panel.getByTestId(FE.userMessage);
   }
 
   async goto(): Promise<void> {
-    await super.goto("/");
+    await super.goto("/dashboard");
+    // Chat panel is collapsed by default — open it.
+    const toggle = this.page.getByRole("button", {
+      name: "Toggle chat panel",
+    });
+    await expect(toggle).toBeVisible({ timeout: 10_000 });
+    await toggle.click();
+    await this.messageInput.waitFor({
+      state: "visible",
+      timeout: 10_000,
+    });
   }
 
   /** Type a message and send it. */
@@ -63,34 +79,6 @@ export class ChatPage extends BasePage {
       countBefore + 1,
       { timeout },
     );
-  }
-
-  /** Switch to a different agent by visible label. */
-  async selectAgent(agentName: string): Promise<void> {
-    const btn = this.agentSelector.getByRole("button", {
-      name: agentName,
-    });
-    // Ensure the button is stable before clicking — React 19
-    // controlled inputs with storageState can delay hydration.
-    await expect(btn).toBeVisible();
-    await btn.click();
-    // Retry the click if React hasn't re-rendered yet.
-    await expect(btn).toHaveClass(/bg-white/, {
-      timeout: 5_000,
-    }).catch(async () => {
-      await btn.click({ force: true });
-      await expect(btn).toHaveClass(/bg-white/, {
-        timeout: 5_000,
-      });
-    });
-  }
-
-  /** Get the currently active agent button label. */
-  async activeAgentLabel(): Promise<string> {
-    const active = this.agentSelector.locator(
-      "button.bg-white",
-    );
-    return active.innerText();
   }
 
   /** Clear all messages and assert the list is empty. */

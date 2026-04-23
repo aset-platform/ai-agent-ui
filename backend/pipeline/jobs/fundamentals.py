@@ -229,12 +229,18 @@ async def _process_ticker(
                 )
                 sm = result.scalar_one_or_none()
                 if sm:
+                    from market_utils import safe_str
+
                     changed = False
-                    new_sector = info.get("sector")
+                    new_sector = safe_str(
+                        info.get("sector"),
+                    )
                     if new_sector and sm.sector != new_sector:
                         sm.sector = new_sector
                         changed = True
-                    new_industry = info.get("industry")
+                    new_industry = safe_str(
+                        info.get("industry"),
+                    )
                     if new_industry and sm.industry != new_industry:
                         sm.industry = new_industry
                         changed = True

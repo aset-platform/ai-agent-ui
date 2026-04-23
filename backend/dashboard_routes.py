@@ -36,6 +36,7 @@ from dashboard_models import (
     PortfolioForecastResponse,
     PortfolioMetrics,
     PortfolioPerformanceResponse,
+    StalePriceTicker,
     RegistryResponse,
     RegistryTicker,
     SignalInfo,
@@ -337,6 +338,19 @@ def create_dashboard_router() -> APIRouter:
                         )
                     )
 
+            # Parse confidence components
+            _cc = row.get("confidence_components")
+            _cc_parsed = None
+            if _cc is not None:
+                if isinstance(_cc, dict):
+                    _cc_parsed = _cc
+                elif isinstance(_cc, str):
+                    try:
+                        import json
+                        _cc_parsed = json.loads(_cc)
+                    except Exception:
+                        pass
+
             forecasts.append(
                 TickerForecast(
                     ticker=str(row["ticker"]),
@@ -347,6 +361,10 @@ def create_dashboard_router() -> APIRouter:
                     mae=_safe(row.get("mae")),
                     rmse=_safe(row.get("rmse")),
                     mape=_safe(row.get("mape")),
+                    confidence_score=_safe(
+                        row.get("confidence_score"),
+                    ),
+                    confidence_components=_cc_parsed,
                 )
             )
 
@@ -1025,6 +1043,26 @@ def create_dashboard_router() -> APIRouter:
         if df.empty:
             return OHLCVResponse(ticker=t_upper)
 
+        # Defensive de-duplicate: under failed pipeline
+        # retries the OHLCV table can briefly carry
+        # multiple rows for the same (ticker, date),
+        # which causes lightweight-charts to assert on
+        # duplicate timestamps. Keep the LAST row per
+        # date (latest fetched_at when present, else
+        # latest insertion) — same precedence the
+        # frontend would otherwise need to apply.
+        if "fetched_at" in df.columns:
+            df = (
+                df.sort_values(["date", "fetched_at"])
+                .drop_duplicates(
+                    subset=["date"], keep="last",
+                )
+            )
+        else:
+            df = df.drop_duplicates(
+                subset=["date"], keep="last",
+            )
+
         points: list[OHLCVPoint] = []
         for _, row in df.iterrows():
             points.append(
@@ -1568,6 +1606,18 @@ def create_dashboard_router() -> APIRouter:
             for _, row in info_df.iterrows():
                 info_map[row["ticker"]] = row.to_dict()
 
+        # Load ticker_type from registry for
+        # ETF/index/commodity fallback labels
+        try:
+            from tools._stock_shared import (
+                _require_repo,
+            )
+
+            _repo = _require_repo()
+            _reg = _repo.get_all_registry()
+        except Exception:
+            _reg = {}
+
         # Build sector → holdings map
         sector_data: dict[str, dict] = {}
         total_value = 0.0
@@ -1576,7 +1626,35 @@ def create_dashboard_router() -> APIRouter:
             ticker = h["ticker"]
             qty = float(h.get("quantity", 0))
             info = info_map.get(ticker, {})
-            sector = info.get("sector") or "Unknown"
+            raw_sector = info.get("sector")
+            # NaN check: pandas NaN is float
+            if (
+                not isinstance(raw_sector, str)
+                or not raw_sector.strip()
+            ):
+                # Detect ETFs by ticker pattern
+                # or registry ticker_type
+                tt = (
+                    _reg.get(ticker, {})
+                    .get("ticker_type", "")
+                )
+                sym = ticker.upper()
+                if (
+                    tt == "etf"
+                    or "BEES" in sym
+                    or "ETF" in sym
+                ):
+                    sector = "ETF"
+                elif tt == "index" or (
+                    sym.startswith("^")
+                ):
+                    sector = "Index"
+                elif tt == "commodity":
+                    sector = "Commodity"
+                else:
+                    sector = "Other"
+            else:
+                sector = raw_sector
 
             # Current price from OHLCV
             cur = 0.0
@@ -1677,7 +1755,34 @@ def create_dashboard_router() -> APIRouter:
         tickers = holdings["ticker"].unique().tolist()
 
         import yfinance as yf
-        from datetime import datetime, timezone
+        from datetime import datetime, timedelta, timezone
+
+        # Drop articles older than this window —
+        # mid/small-caps with thin Yahoo News coverage
+        # otherwise surface 60+ day-old articles that
+        # add no decisioning value.
+        _NEWS_MAX_AGE_DAYS = 21
+        _now = datetime.now(timezone.utc)
+        _cutoff = _now - timedelta(
+            days=_NEWS_MAX_AGE_DAYS,
+        )
+
+        def _too_old(pub_str: str) -> bool:
+            if not pub_str:
+                # Unknown publish date — surface it
+                # rather than silently drop.
+                return False
+            try:
+                # Handle ISO with or without 'Z'
+                p = pub_str.replace("Z", "+00:00")
+                dt = datetime.fromisoformat(p)
+                if dt.tzinfo is None:
+                    dt = dt.replace(
+                        tzinfo=timezone.utc,
+                    )
+                return dt < _cutoff
+            except Exception:
+                return False
 
         all_headlines: list[NewsHeadline] = []
         for ticker in tickers[:10]:
@@ -1700,6 +1805,9 @@ def create_dashboard_router() -> APIRouter:
                             pub,
                             tz=timezone.utc,
                         ).isoformat()
+                    pub_str = str(pub)
+                    if _too_old(pub_str):
+                        continue
                     all_headlines.append(
                         NewsHeadline(
                             title=title,
@@ -1711,7 +1819,7 @@ def create_dashboard_router() -> APIRouter:
                                     "",
                                 )
                             ),
-                            published_at=str(pub),
+                            published_at=pub_str,
                             ticker=ticker,
                         )
                     )
@@ -1728,9 +1836,16 @@ def create_dashboard_router() -> APIRouter:
         )
         all_headlines = all_headlines[:10]
 
-        # Aggregate portfolio sentiment from Iceberg
+        # Aggregate portfolio sentiment from Iceberg.
+        # Track which tickers are valued via the
+        # market-fallback proxy (no per-ticker
+        # headlines were scored) so the UI can warn
+        # the user that the aggregate is not driven
+        # by genuine per-stock analysis.
+        _UNANALYZED_SOURCES = {"market_fallback", "none"}
         total_weight = 0.0
         weighted_score = 0.0
+        unanalyzed: list[str] = []
         for _, h in holdings.iterrows():
             ticker = h["ticker"]
             qty = float(h.get("quantity", 0))
@@ -1739,11 +1854,19 @@ def create_dashboard_router() -> APIRouter:
                     ticker,
                 )
                 if not series.empty:
+                    last_row = series.iloc[-1]
                     score = float(
-                        series["avg_score"].iloc[-1],
+                        last_row["avg_score"],
                     )
                     weighted_score += score * qty
                     total_weight += qty
+                    src = (
+                        str(last_row.get("source", ""))
+                        if "source" in series.columns
+                        else ""
+                    )
+                    if src in _UNANALYZED_SOURCES:
+                        unanalyzed.append(str(ticker))
             except Exception:
                 pass
 
@@ -1759,6 +1882,7 @@ def create_dashboard_router() -> APIRouter:
                 2,
             ),
             portfolio_sentiment_label=port_label,
+            unanalyzed_tickers=sorted(unanalyzed),
         )
         cache.set(
             cache_key,
@@ -1878,7 +2002,10 @@ def create_dashboard_router() -> APIRouter:
             qty = float(h.get("quantity", 0))
             avg = float(h.get("avg_price", 0))
             info = info_map.get(ticker, {})
-            sector = info.get("sector") or "Unknown"
+            from market_utils import safe_sector
+            sector = safe_sector(
+                info.get("sector"), fallback="Unknown",
+            )
 
             cur = 0.0
             t_df = (
@@ -2177,15 +2304,48 @@ def _build_portfolio_performance(
             currency=currency,
         )
 
-    # Build per-ticker close maps and lot lists
+    # Build per-ticker close maps and lot lists.
+    # Forward-fill NaN closes so a one-off Yahoo data
+    # gap (OHLV present, Close=NaN) doesn't drop the
+    # entire portfolio date downstream — we use the
+    # last known good close as today's estimate.
+    # Track last_valid_close_date per ticker so we can
+    # surface a "stale price" signal to the UI for
+    # holdings whose latest *real* close is older than
+    # the portfolio's series last date.
+    import math
+
     close_maps: dict[str, dict[str, float]] = {}
+    last_valid_close_date: dict[str, str] = {}
     for t in tickers:
         t_df = ohlcv_df[ohlcv_df["ticker"] == t]
         if t_df.empty:
             continue
-        close_maps[t] = {
-            str(row["date"]): float(row["close"]) for _, row in t_df.iterrows()
-        }
+        # Sorted by date asc thanks to ORDER BY upstream;
+        # ffill carries the last valid close forward.
+        t_df = t_df.sort_values("date")
+        # Capture the last date with a real (non-NaN)
+        # close BEFORE ffilling — this is what the UI
+        # will display.
+        valid_mask = t_df["close"].notna() & (
+            t_df["close"] == t_df["close"]
+        )
+        if valid_mask.any():
+            last_valid_close_date[t] = str(
+                t_df.loc[valid_mask, "date"].iloc[-1],
+            )
+        ffilled = t_df["close"].ffill()
+        close_maps[t] = {}
+        for _, row in t_df.assign(close=ffilled).iterrows():
+            c = row["close"]
+            # Skip pre-ffill NaN rows (no prior close to
+            # carry forward — ticker truly had no data
+            # up to this date).
+            if c is None or (
+                isinstance(c, float) and math.isnan(c)
+            ):
+                continue
+            close_maps[t][str(row["date"])] = float(c)
 
     # Lots: (ticker, qty, trade_date, buy_price)
     # If price is 0/NULL, use OHLCV close on
@@ -2213,7 +2373,38 @@ def _build_portfolio_performance(
         all_dates.update(cm.keys())
     sorted_dates = sorted(all_dates)
 
-    # Compute daily portfolio value + invested
+    # Extend each ticker's close_map forward to the
+    # series end with its last known good close. Until
+    # this gap-fill, a held ticker that LACKED a row on
+    # a date (Yahoo upstream gap, recently-cleaned NaN
+    # row, etc.) contributed zero to that date's
+    # portfolio total — producing a visible dip on the
+    # P&L chart even though the position was simply
+    # priced at yesterday's close. The frontend stale-
+    # ticker chip already flags these holdings; this
+    # fill-forward keeps the aggregate visually stable
+    # so the dip doesn't surprise users.
+    if sorted_dates:
+        series_end = sorted_dates[-1]
+        for t, cm in close_maps.items():
+            if not cm:
+                continue
+            ticker_max = max(cm.keys())
+            if ticker_max >= series_end:
+                continue
+            carry = cm[ticker_max]
+            # Fill every series date strictly after the
+            # ticker's own last entry, up to series_end.
+            for d in sorted_dates:
+                if d > ticker_max and d not in cm:
+                    cm[d] = carry
+
+    # Compute daily portfolio value + invested.
+    # Treat NaN identically to missing — NaN propagates
+    # through arithmetic and `NaN > 0` is False, which
+    # would silently drop the entire date. ffill above
+    # eliminates most of these but keep the guard as a
+    # belt-and-suspenders for any residual NaN.
     values: list[tuple[str, float, float]] = []
     for d in sorted_dates:
         val = 0.0
@@ -2222,9 +2413,13 @@ def _build_portfolio_performance(
             if d < td:
                 continue
             price = close_maps[t].get(d)
-            if price is not None:
-                val += qty * price
-                inv += qty * bp
+            if price is None or (
+                isinstance(price, float)
+                and math.isnan(price)
+            ):
+                continue
+            val += qty * price
+            inv += qty * bp
         if val > 0:
             values.append(
                 (
@@ -2362,10 +2557,49 @@ def _build_portfolio_performance(
         worst_day_date=points[worst_i].date,
     )
 
+    # Stale-ticker signal: any held ticker whose latest
+    # *real* close (pre-ffill) is older than the
+    # series' last date is being valued at a carried-
+    # forward close. Surface to the UI so users can see
+    # which holdings are estimated rather than settled.
+    stale_tickers: list[StalePriceTicker] = []
+    if values:
+        last_series_date = values[-1][0]
+        held_tickers = {t for t, *_ in lots}
+        from datetime import date as _date
+
+        try:
+            last_dt = _date.fromisoformat(
+                last_series_date,
+            )
+        except Exception:
+            last_dt = None
+        for t in sorted(held_tickers):
+            lvc = last_valid_close_date.get(t)
+            if not lvc or lvc >= last_series_date:
+                continue
+            days = 0
+            if last_dt is not None:
+                try:
+                    days = (
+                        last_dt
+                        - _date.fromisoformat(lvc)
+                    ).days
+                except Exception:
+                    days = 0
+            stale_tickers.append(
+                StalePriceTicker(
+                    ticker=t,
+                    last_valid_close_date=lvc,
+                    days_stale=days,
+                )
+            )
+
     return PortfolioPerformanceResponse(
         data=points,
         metrics=metrics,
         currency=currency,
+        stale_tickers=stale_tickers,
     )
 
 

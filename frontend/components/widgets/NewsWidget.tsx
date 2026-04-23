@@ -3,6 +3,7 @@
  * W4: News & Sentiment widget (ASETPLTFRM-290).
  */
 
+import { useState } from "react";
 import { WidgetSkeleton } from "./WidgetSkeleton";
 import { WidgetError } from "./WidgetError";
 import type { DashboardData } from "@/hooks/useDashboardData";
@@ -10,6 +11,69 @@ import type { PortfolioNewsResponse } from "@/lib/types";
 
 interface Props {
   data: DashboardData<PortfolioNewsResponse>;
+}
+
+function UnanalyzedChip({
+  tickers,
+}: {
+  tickers: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  if (tickers.length === 0) return null;
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        data-testid="news-unanalyzed-chip"
+        className="inline-flex items-center gap-1 rounded-md bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 px-2 py-0.5 text-xs font-medium border border-amber-200 dark:border-amber-800/50"
+      >
+        <svg
+          className="w-3 h-3"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="12" cy="12" r="10" />
+          <line x1="12" y1="8" x2="12" y2="12" />
+          <line x1="12" y1="16" x2="12.01" y2="16" />
+        </svg>
+        {tickers.length} holding
+        {tickers.length === 1 ? "" : "s"} unanalyzed
+      </button>
+      {open && (
+        <div
+          role="tooltip"
+          data-testid="news-unanalyzed-tooltip"
+          className="absolute right-0 top-full mt-1 z-20 min-w-[260px] rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-lg p-3 text-xs"
+        >
+          <p className="text-gray-700 dark:text-gray-200 font-medium mb-2">
+            Sentiment for these holdings is the
+            market-wide proxy (no per-stock headlines):
+          </p>
+          <ul className="grid grid-cols-2 gap-x-3 gap-y-1">
+            {tickers.map((t) => (
+              <li
+                key={t}
+                className="font-mono text-gray-600 dark:text-gray-300"
+              >
+                {t}
+              </li>
+            ))}
+          </ul>
+          <p className="text-gray-400 dark:text-gray-500 mt-2 text-[11px]">
+            The aggregate above may not reflect
+            stock-specific signals for these positions.
+          </p>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function sentimentColor(label: string): string {
@@ -46,9 +110,14 @@ export function NewsWidget({ data }: Props) {
           <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">
             News & Sentiment
           </h3>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
             {resp && (
               <>
+                <UnanalyzedChip
+                  tickers={
+                    resp.unanalyzed_tickers ?? []
+                  }
+                />
                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${sentimentColor(resp.portfolio_sentiment_label)}`}>
                   Portfolio: {resp.portfolio_sentiment_label} ({resp.portfolio_sentiment > 0 ? "+" : ""}{resp.portfolio_sentiment.toFixed(2)})
                 </span>

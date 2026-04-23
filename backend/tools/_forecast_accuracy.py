@@ -4,6 +4,8 @@ Functions
 ---------
 - :func:`_calculate_forecast_accuracy` — MAE, RMSE, MAPE backtest.
 - :func:`_generate_forecast_summary` — 3/6/9m price targets.
+- :func:`compute_confidence_score` — weighted composite score (0-1).
+- :func:`confidence_badge` — human-readable badge + reason string.
 """
 
 import logging
@@ -236,3 +238,151 @@ def _generate_forecast_summary(
         "targets": targets,
         "sentiment": sentiment,
     }
+
+
+def compute_confidence_score(
+    metrics: dict,
+    data_completeness: float,
+) -> tuple[float, dict]:
+    """Compute a weighted composite confidence score (0-1).
+
+    Combines five components with fixed weights:
+
+    +-----------------------+--------+
+    | Component             | Weight |
+    +=======================+========+
+    | direction             |  0.25  |
+    | mase (via MAPE)       |  0.25  |
+    | coverage              |  0.20  |
+    | interval_width        |  0.15  |
+    | data_completeness     |  0.15  |
+    +-----------------------+--------+
+
+    Args:
+        metrics: Dict with optional keys
+            ``directional_accuracy_pct``, ``MAPE_pct``,
+            ``coverage``, ``interval_width_ratio``.
+            Missing keys fall back to moderate defaults.
+        data_completeness: Fraction of expected data
+            points present, in [0, 1].
+
+    Returns:
+        Tuple of (score rounded to 4 d.p., components
+        dict with each component rounded to 3 d.p.).
+    """
+    import math
+
+    def _safe_get(d, key, default):
+        """Get value from dict, treating None/NaN as default."""
+        v = d.get(key)
+        if v is None:
+            return default
+        try:
+            if math.isnan(float(v)):
+                return default
+        except (TypeError, ValueError):
+            return default
+        return float(v)
+
+    # If no accuracy metrics at all (no CV run), penalise
+    # heavily — these forecasts are unvalidated.
+    has_accuracy = (
+        _safe_get(metrics, "MAPE_pct", None) is not None
+        or _safe_get(metrics, "directional_accuracy_pct",
+                     None) is not None
+    )
+
+    # --- direction component (weight 0.25) ---
+    dir_acc = _safe_get(metrics, "directional_accuracy_pct",
+                        50.0 if has_accuracy else 30.0)
+    direction = max(0.0, min(1.0, (dir_acc - 30.0) / 50.0))
+
+    # --- mase component (weight 0.25) ---
+    mape = _safe_get(metrics, "MAPE_pct",
+                     20.0 if has_accuracy else 50.0)
+    mase_approx = min(mape / 20.0, 2.0)
+    mase = max(0.0, min(1.0, 1.0 - mase_approx / 2.0))
+
+    # --- coverage component (weight 0.20) ---
+    cov = _safe_get(metrics, "coverage", 0.80)
+    coverage = max(
+        0.0, min(1.0, 1.0 - abs(cov - 0.80) * 5.0)
+    )
+
+    # --- interval width component (weight 0.15) ---
+    iwr = _safe_get(metrics, "interval_width_ratio", 0.50)
+    interval = max(0.0, min(1.0, 1.0 - min(iwr, 1.0)))
+
+    # --- data completeness component (weight 0.15) ---
+    dc = max(0.0, min(1.0, data_completeness))
+
+    score = (
+        0.25 * direction
+        + 0.25 * mase
+        + 0.20 * coverage
+        + 0.15 * interval
+        + 0.15 * dc
+    )
+    score = round(score, 4)
+
+    components = {
+        "direction": round(direction, 3),
+        "mase": round(mase, 3),
+        "coverage": round(coverage, 3),
+        "interval": round(interval, 3),
+        "data_completeness": round(dc, 3),
+    }
+    _logger.debug(
+        "Confidence score=%.4f components=%s",
+        score,
+        components,
+    )
+    return score, components
+
+
+def confidence_badge(
+    score: float,
+    components: dict,
+) -> tuple[str, str]:
+    """Map a confidence score to a human-readable badge.
+
+    Args:
+        score: Composite score from
+            :func:`compute_confidence_score`.
+        components: Component dict from the same call.
+
+    Returns:
+        Tuple of (badge_label, reason_string).
+        ``reason_string`` is empty for High/Medium.
+        For Low/Rejected it lists the weakest signals,
+        e.g. ``"Low confidence: low directional
+        accuracy, high forecast error"``.
+    """
+    # Collect weak-signal descriptions.
+    issues: list[str] = []
+    if components.get("direction", 1.0) < 0.40:
+        issues.append("low directional accuracy")
+    if components.get("mase", 1.0) < 0.40:
+        issues.append("high forecast error")
+    if components.get("coverage", 1.0) < 0.40:
+        issues.append(
+            "poor prediction interval coverage"
+        )
+    if components.get("data_completeness", 1.0) < 0.40:
+        issues.append("limited data signals")
+
+    if score >= 0.65:
+        return "High", ""
+    if score >= 0.40:
+        return "Medium", ""
+
+    reason = (
+        ", ".join(issues) if issues else "overall low model fit"
+    )
+
+    if score >= 0.25:
+        label = "Low"
+    else:
+        label = "Rejected"
+
+    return label, f"{label} confidence: {reason}"

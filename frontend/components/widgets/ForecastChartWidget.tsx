@@ -6,6 +6,7 @@ import type {
   ForecastsResponse,
   TickerForecast,
   ForecastTarget,
+  ForecastConfidence,
 } from "@/lib/types";
 import { WidgetSkeleton } from "./WidgetSkeleton";
 import { WidgetError } from "./WidgetError";
@@ -447,7 +448,30 @@ function ForecastDetail({
       {/* SVG forecast chart */}
       <ForecastSVGChart forecast={forecast} sym={sym} />
 
-      {/* Horizon cards */}
+      {/* Horizon cards — hide if any target is extreme */}
+      {forecast.targets.some(
+        (t) => Math.abs(t.pct_change) > 200,
+      ) ? (
+        <div
+          className="
+            p-4 rounded-lg border mb-4
+            bg-amber-50 dark:bg-amber-900/20
+            border-amber-200 dark:border-amber-800
+            text-amber-700 dark:text-amber-400
+            text-sm
+          "
+        >
+          <p className="font-medium mb-1">
+            Low confidence forecast
+          </p>
+          <p className="text-xs">
+            This ticker&apos;s forecast shows extreme
+            predictions (&gt;200% deviation) which are
+            unreliable. The model struggles with highly
+            volatile price histories.
+          </p>
+        </div>
+      ) : (
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
         {forecast.targets.map((target) => (
           <HorizonCard
@@ -457,6 +481,7 @@ function ForecastDetail({
           />
         ))}
       </div>
+      )}
 
       {/* Accuracy metrics */}
       {(forecast.mae != null || forecast.rmse != null || forecast.mape != null) && (
@@ -509,6 +534,7 @@ export function ForecastChartWidget({
   selectedTicker,
 }: ForecastChartWidgetProps) {
   const [selectedIdx, setSelectedIdx] = useState(0);
+  const [showConfidence, setShowConfidence] = useState(false);
   const sym = marketFilter === "india" ? "₹" : "$";
   const forecasts = data.value?.forecasts ?? [];
 
@@ -553,6 +579,24 @@ export function ForecastChartWidget({
   }
 
   const selected = forecasts[selectedIdx] ?? forecasts[0];
+
+  const confidence: ForecastConfidence | null = (() => {
+    const cc = (selected as unknown as Record<string, unknown>)?.confidence_components;
+    if (!cc) return null;
+    const parsed = typeof cc === "string" ? JSON.parse(cc) : cc;
+    const cs = (selected as unknown as Record<string, unknown>)?.confidence_score;
+    return {
+      score: typeof cs === "number" ? cs : 0,
+      badge: parsed.badge ?? "Medium",
+      reason: parsed.reason ?? "",
+      direction: parsed.direction ?? 0,
+      mase: parsed.mase ?? 0,
+      coverage: parsed.coverage ?? 0,
+      interval: parsed.interval ?? 0,
+      data_completeness: parsed.data_completeness ?? 0,
+      regime: parsed.regime ?? "moderate",
+    };
+  })();
 
   return (
     <div
@@ -648,11 +692,70 @@ export function ForecastChartWidget({
                   Sentiment: {selected.sentiment}
                 </span>
               )}
+              {/* Confidence Badge */}
+              {confidence && confidence.badge !== "Rejected" && (
+                <span className="relative inline-block ml-3">
+                  <button
+                    type="button"
+                    className={`
+                      inline-flex items-center px-2 py-0.5 rounded-full
+                      text-xs font-medium
+                      ${confidence.badge === "High"
+                        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
+                        : confidence.badge === "Medium"
+                        ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
+                        : "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
+                      }
+                    `}
+                    onClick={() => setShowConfidence(!showConfidence)}
+                  >
+                    {confidence.badge} Confidence
+                  </button>
+                  {showConfidence && (
+                    <span className="absolute z-10 mt-1 w-64 p-3 bg-white dark:bg-gray-800
+                      border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg text-xs block">
+                      <span className="space-y-1.5 block">
+                        <span className="flex justify-between">
+                          <span className="text-gray-500">Directional accuracy</span>
+                          <span>{(confidence.direction * 100).toFixed(0)}%</span>
+                        </span>
+                        <span className="flex justify-between">
+                          <span className="text-gray-500">Forecast error (MASE)</span>
+                          <span>{confidence.mase.toFixed(2)}</span>
+                        </span>
+                        <span className="flex justify-between">
+                          <span className="text-gray-500">Interval coverage</span>
+                          <span>{(confidence.coverage * 100).toFixed(0)}%</span>
+                        </span>
+                        <span className="flex justify-between">
+                          <span className="text-gray-500">Data signals</span>
+                          <span>{(confidence.data_completeness * 14).toFixed(0)} of 14</span>
+                        </span>
+                        {confidence.reason && (
+                          <span className="text-gray-400 pt-1 border-t border-gray-200 dark:border-gray-700 block">
+                            {confidence.reason}
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                  )}
+                </span>
+              )}
             </p>
           </div>
         )}
 
         <ForecastDetail forecast={selected} sym={sym} />
+
+        {confidence && confidence.badge === "Rejected" && (
+          <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200
+            dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-400">
+            Forecast unavailable — insufficient model confidence.
+            {confidence.reason && (
+              <span className="block mt-1 text-xs">{confidence.reason}</span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 
 interface AddStockModalProps {
   isOpen: boolean;
@@ -13,6 +13,7 @@ interface AddStockModalProps {
     trade_date: string;
     notes?: string;
   }) => Promise<void>;
+  initialTicker?: string;
 }
 
 export function AddStockModal({
@@ -20,11 +21,20 @@ export function AddStockModal({
   tickers,
   onClose,
   onAdd,
+  initialTicker,
 }: AddStockModalProps) {
   const [ticker, setTicker] = useState("");
   const [search, setSearch] = useState("");
   const [showDropdown, setShowDropdown] =
     useState(false);
+
+  // Pre-fill when opened from a recommendation
+  useEffect(() => {
+    if (isOpen && initialTicker) {
+      setTicker(initialTicker);
+      setSearch(initialTicker);
+    }
+  }, [isOpen, initialTicker]);
   const [quantity, setQuantity] = useState("");
   const [price, setPrice] = useState("");
   const [tradeDate, setTradeDate] = useState(
@@ -100,7 +110,7 @@ export function AddStockModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/50"
@@ -111,7 +121,7 @@ export function AddStockModal({
       />
 
       {/* Modal */}
-      <div className="relative w-full max-w-md rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-xl p-6 mx-4">
+      <div data-testid="add-stock-modal" className="relative w-full max-w-md rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-xl p-6 mx-4">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
           Add Stock to Portfolio
         </h2>

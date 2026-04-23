@@ -12,15 +12,15 @@ All settings are read from environment variables (or `backend/.env`). The env va
 | `GROQ_API_KEY` | str | *(empty — required)* |
 | `ANTHROPIC_API_KEY` | str | *(empty — required)* |
 | `SERPAPI_API_KEY` | str | *(empty — required)* |
-| `GROQ_MODEL_TIERS` | str | `llama-3.3-70b-versatile,moonshotai/kimi-…` |
+| `GROQ_MODEL_TIERS` | str | `llama-3.3-70b-versatile,qwen/qwen3-32b,…` |
 
 ## LLM Cascade
 
 | Variable | Type | Default |
 |----------|------|---------|
 | `AI_AGENT_UI_ENV` | str | `dev` |
-| `SYNTHESIS_MODEL_TIERS` | str | `openai/gpt-oss-120b,moonshotai/kimi-k2-instruct` |
-| `TEST_MODEL_TIERS` | str | `llama-3.3-70b-versatile,moonshotai/kimi-…` |
+| `SYNTHESIS_MODEL_TIERS` | str | `openai/gpt-oss-120b,openai/gpt-oss-20b,qwen/qwen3-32b` |
+| `TEST_MODEL_TIERS` | str | `llama-3.3-70b-versatile,qwen/qwen3-32b,…` |
 
 ## JWT & Auth
 

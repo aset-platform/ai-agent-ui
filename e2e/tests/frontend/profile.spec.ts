@@ -11,9 +11,9 @@ test.describe("Profile management", () => {
 
   test.beforeEach(async ({ page }) => {
     profilePage = new ProfileModalPage(page);
-    await page.goto("/");
+    await page.goto("/dashboard");
     await expect(
-      page.getByTestId("chat-message-input"),
+      page.getByRole("button", { name: "Toggle chat panel" }),
     ).toBeVisible({ timeout: 15_000 });
   });
 

@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+import time
 from datetime import datetime
 
 import httpx
@@ -30,6 +32,10 @@ _CACHE_KEY = "market:indices"
 _TTL_MARKET_OPEN = 30
 _TTL_MARKET_CLOSED = 300
 _UPSTREAM_TIMEOUT = 10.0
+# Yahoo's ^BSESN feed periodically freezes mid-session
+# (stops emitting new ticks). When the last trade time is
+# older than this during market hours, fall back to Google.
+_YAHOO_STALE_SECONDS = 300
 
 _nse_client: httpx.AsyncClient | None = None
 _yahoo_client: httpx.AsyncClient | None = None
@@ -216,6 +222,9 @@ async def _fetch_yahoo_quote(
             "open": q.get("regularMarketOpen", 0),
             "high": q.get("regularMarketDayHigh", 0),
             "low": q.get("regularMarketDayLow", 0),
+            "_last_trade_ts": q.get(
+                "regularMarketTime", 0,
+            ),
         }, market_state
     except Exception:
         _logger.warning(
@@ -226,9 +235,76 @@ async def _fetch_yahoo_quote(
         return None, market_state
 
 
+def _is_yahoo_quote_stale(quote: dict) -> bool:
+    """True if Yahoo's quote is too old during market hours."""
+    if not _is_market_open():
+        return False
+    ts = quote.get("_last_trade_ts") or 0
+    if ts <= 0:
+        return False
+    return (time.time() - ts) > _YAHOO_STALE_SECONDS
+
+
+async def _fetch_google_finance_price(
+    ticker: str,
+) -> float | None:
+    """Scrape last price from Google Finance.
+
+    Used as a fallback when the primary Yahoo feed freezes
+    (a recurring ^BSESN issue during market hours).
+    """
+    url = f"https://www.google.com/finance/quote/{ticker}"
+    try:
+        client = await _get_yahoo_client()
+        resp = await client.get(url)
+        resp.raise_for_status()
+        m = re.search(
+            r'data-last-price="([\d.]+)"', resp.text,
+        )
+        if m is None:
+            _logger.warning(
+                "Google Finance price not found for %s",
+                ticker,
+            )
+            return None
+        return float(m.group(1))
+    except Exception:
+        _logger.warning(
+            "Google Finance fetch failed for %s",
+            ticker, exc_info=True,
+        )
+        return None
+
+
 async def _fetch_sensex() -> tuple[dict | None, str]:
-    """Fetch Sensex from Yahoo (^BSESN)."""
-    return await _fetch_yahoo_quote("^BSESN")
+    """Fetch Sensex — Yahoo primary, Google fallback.
+
+    Yahoo's ^BSESN feed freezes mid-session; when stale we
+    overlay Google Finance's live price on Yahoo's other
+    fields (prev_close stays valid intraday).
+    """
+    quote, market_state = await _fetch_yahoo_quote("^BSESN")
+    if quote is None or _is_yahoo_quote_stale(quote):
+        live = await _fetch_google_finance_price(
+            "SENSEX:INDEXBOM",
+        )
+        if live is not None:
+            base = quote or {}
+            prev = base.get("prev_close") or live
+            change = live - prev
+            change_pct = (
+                (change / prev * 100) if prev else 0.0
+            )
+            return {
+                "price": live,
+                "change": change,
+                "change_pct": change_pct,
+                "prev_close": prev,
+                "open": base.get("open", 0),
+                "high": base.get("high", 0),
+                "low": base.get("low", 0),
+            }, market_state or "REGULAR"
+    return quote, market_state
 
 
 async def _fetch_nifty_yahoo() -> dict | None:

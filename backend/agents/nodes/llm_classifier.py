@@ -12,6 +12,11 @@ import logging
 from langchain_core.messages import HumanMessage
 from langchain_groq import ChatGroq
 
+from backend.llm_byo import (
+    get_active_byo_context,
+    get_user_groq_client,
+)
+
 _logger = logging.getLogger(__name__)
 
 _VALID_INTENTS = frozenset({
@@ -51,12 +56,24 @@ def llm_classifier(state: dict) -> dict:
     query = state.get("user_input", "")
 
     try:
-        llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            temperature=0,
-            max_retries=0,
-            max_tokens=20,
-        )
+        model_name = "llama-3.3-70b-versatile"
+        # BYO: if the caller's request is past the free
+        # allowance and carries a Groq key, route this
+        # classifier hop through their key as well —
+        # otherwise the user would still be burning free
+        # tokens on every turn's intent classification.
+        _byo = get_active_byo_context()
+        if _byo is not None and _byo.groq_key:
+            llm = get_user_groq_client(
+                _byo.groq_key, model_name, temperature=0,
+            )
+        else:
+            llm = ChatGroq(
+                model=model_name,
+                temperature=0,
+                max_retries=0,
+                max_tokens=20,
+            )
         prompt = _CLASSIFY_PROMPT.format(query=query)
         resp = llm.invoke(
             [HumanMessage(content=prompt)],

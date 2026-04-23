@@ -102,6 +102,9 @@ def _build_run_response(
             _build_rec_item(r) for r in recs
         ],
         generated_at=str(created) if created else None,
+        cached=bool(run.get("was_cached", False)),
+        reset_at=run.get("reset_at"),
+        scope=run.get("scope"),
     )
 
 
@@ -209,192 +212,74 @@ def create_recommendation_router() -> APIRouter:
             get_current_user,
         ),
     ):
-        """Trigger a fresh Smart Funnel pipeline run.
+        """Trigger (or reuse) a Smart Funnel run.
 
-        Subject to monthly quota (5 runs / 30 days).
-        Superusers bypass the quota.
+        Rule: one run per user per scope per IST
+        calendar month.  If a run already exists for
+        the current month, the existing run is
+        returned unchanged.  ``market=all`` expands
+        to two runs (``india`` + ``us``); the first
+        non-empty result is returned as the primary
+        response.
         """
+        import asyncio
+
         from jobs.recommendation_engine import (
-            check_recommendation_quota,
-            stage1_prefilter,
-            stage2_gap_analysis,
-            stage3_llm_reasoning,
+            get_or_create_monthly_run,
         )
-        from backend.db.pg_stocks import (
-            expire_old_recommendations,
-            get_recommendations_for_run,
-            insert_recommendation_run,
-            insert_recommendations,
-        )
-        import time as _time
-        import uuid as _uuid
-        from datetime import date
 
         uid = str(user.user_id)
-        is_super = getattr(
-            user, "role", "",
-        ) == "superuser"
 
-        # Quota gate (superusers bypass)
-        if not is_super:
-            quota = check_recommendation_quota(
-                uid, scope=market,
-            )
-            if not quota.get("allowed"):
-                # Return latest cached run
-                latest_id = quota.get(
-                    "latest_run_id",
-                )
-                if latest_id:
-                    factory = _get_session_factory()
-                    async with factory() as session:
-                        from backend.db.pg_stocks import (
-                            get_latest_recommendation_run,
-                        )
-                        latest = (
-                            await
-                            get_latest_recommendation_run(
-                                session, uid,
-                                scope=market,
-                            )
-                        )
-                    async with factory() as session:
-                        recs = (
-                            await
-                            get_recommendations_for_run(
-                                session, latest_id,
-                            )
-                        )
-                    return _build_run_response(
-                        latest or {}, recs,
-                    )
-                raise HTTPException(
-                    status_code=429,
-                    detail=quota.get("reason", ""),
-                )
-
-        t0 = _time.monotonic()
-
-        s1 = stage1_prefilter(scope=market)
-        if s1.empty:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "No candidates passed "
-                    "pre-filter."
-                ),
-            )
-
-        s2 = stage2_gap_analysis(
-            uid, s1, scope=market,
+        scopes = (
+            ["india", "us"] if market == "all"
+            else [market]
         )
-        s3 = stage3_llm_reasoning(s2)
-
-        duration = _time.monotonic() - t0
-        run_id = str(_uuid.uuid4())
-        run_data = {
-            "run_id": run_id,
-            "user_id": uid,
-            "run_date": date.today(),
-            "run_type": "manual",
-            "scope": market,
-            "portfolio_snapshot": (
-                s2.get("portfolio_summary", {})
-            ),
-            "health_score": s3.get(
-                "health_score", 0,
-            ),
-            "health_label": s3.get(
-                "health_label", "unknown",
-            ),
-            "health_assessment": s3.get(
-                "portfolio_health_assessment",
-            ),
-            "candidates_scanned": len(s1),
-            "candidates_passed": len(
-                s2.get("candidates", []),
-            ),
-            "llm_model": s3.get("llm_model"),
-            "llm_tokens_used": s3.get(
-                "llm_tokens_used",
-            ),
-            "duration_secs": round(duration, 2),
-        }
-
-        raw_recs = s3.get("recommendations", [])
-        cand_map = {
-            c["ticker"]: c
-            for c in s2.get("candidates", [])
-        }
-        rec_rows = []
-        for r in raw_recs:
-            ticker = r.get("ticker")
-            c = cand_map.get(ticker, {})
-            rec_rows.append({
-                "id": str(_uuid.uuid4()),
-                "run_id": run_id,
-                "tier": r.get("tier", "explore"),
-                "category": r.get(
-                    "category", "general",
-                ),
-                "ticker": ticker,
-                "action": r.get("action", "hold"),
-                "severity": r.get(
-                    "severity", "low",
-                ),
-                "rationale": r.get(
-                    "rationale", "",
-                ),
-                "expected_impact": r.get(
-                    "expected_impact",
-                ),
-                "data_signals": r.get(
-                    "data_signals", {},
-                ),
-                "price_at_rec": (
-                    r.get("price_at_rec")
-                    or c.get("current_price")
-                ),
-                "target_price": (
-                    r.get("target_price")
-                    or c.get("target_price")
-                ),
-                "expected_return_pct": (
-                    r.get("expected_return_pct")
-                    or c.get("forecast_3m_pct")
-                ),
-                "index_tags": r.get("index_tags"),
-                "status": "active",
-            })
-
-        factory = _get_session_factory()
-        async with factory() as session:
-            await insert_recommendation_run(
-                session, run_data,
-            )
-            if rec_rows:
-                await insert_recommendations(
-                    session, run_id, rec_rows,
+        for s in scopes:
+            if s not in ("india", "us"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Invalid scope '{s}'. "
+                        "Use 'india', 'us', or 'all'."
+                    ),
                 )
-            await expire_old_recommendations(
-                session, uid, run_id,
+
+        def _call(scope_val: str) -> dict:
+            return get_or_create_monthly_run(
+                uid, scope_val,
+                run_type="manual",
             )
 
-        # Invalidate user cache keys
+        results: list[dict] = []
+        for s in scopes:
+            results.append(
+                await asyncio.to_thread(_call, s),
+            )
+
         cache = get_cache()
         cache.invalidate(
             f"cache:portfolio:recs:{uid}:*",
         )
 
-        # Fetch persisted rows for response
-        async with factory() as session:
-            recs = (
-                await get_recommendations_for_run(
-                    session, run_id,
-                )
+        # Pick the primary result: first with a run_id
+        primary = next(
+            (r for r in results if r.get("run_id")),
+            results[0] if results else {},
+        )
+        if not primary.get("run_id"):
+            note = primary.get(
+                "status_note", "no_recommendations",
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Could not generate "
+                    f"recommendations ({note})."
+                ),
             )
 
-        resp = _build_run_response(run_data, recs)
+        recs = primary.get("recommendations", [])
+        resp = _build_run_response(primary, recs)
         return Response(
             content=resp.model_dump_json(),
             media_type="application/json",
@@ -464,24 +349,36 @@ def create_recommendation_router() -> APIRouter:
                     total_recommendations=r.get(
                         "rec_count", 0,
                     ),
-                    acted_on_count=0,
+                    acted_on_count=int(
+                        r.get("acted_on_count", 0)
+                    ),
                 )
             )
 
+        total_recs_agg = stats.get("total_recs", 0) or 0
+        total_acted_agg = (
+            stats.get("total_acted_on", 0) or 0
+        )
+        adoption_pct = (
+            round(
+                total_acted_agg / total_recs_agg * 100,
+                1,
+            )
+            if total_recs_agg
+            else 0.0
+        )
         agg = AggregateStats(
             total_runs=stats.get(
                 "total_runs", 0,
             ),
-            total_recommendations=stats.get(
-                "total_recs", 0,
-            ),
+            total_recommendations=total_recs_agg,
             overall_avg_return_pct=stats.get(
                 "avg_return_pct",
             ),
             overall_avg_excess_pct=stats.get(
                 "avg_excess_return_pct",
             ),
-            adoption_rate_pct=0.0,
+            adoption_rate_pct=adoption_pct,
         )
 
         resp = RecommendationHistoryResponse(
@@ -503,11 +400,22 @@ def create_recommendation_router() -> APIRouter:
         ),
     )
     async def get_stats(
+        scope: str = Query(
+            "all",
+            description="all|india|us",
+        ),
         user: UserContext = Depends(
             get_current_user,
         ),
     ):
-        """Return aggregate recommendation stats."""
+        """Return aggregate recommendation stats.
+
+        When *scope* is ``india`` or ``us``, the stats
+        are filtered to that scope so the page's
+        scope-filtered view shows a matching adoption
+        rate.  Default ``all`` keeps the historical
+        cross-scope total.
+        """
         from backend.db.pg_stocks import (
             get_recommendation_stats,
         )
@@ -518,20 +426,24 @@ def create_recommendation_router() -> APIRouter:
         async with factory() as session:
             stats = await get_recommendation_stats(
                 session, uid,
+                scope=(
+                    scope if scope in ("india", "us")
+                    else None
+                ),
             )
 
         total_recs = stats.get("total_recs", 0)
-        total_outcomes = stats.get(
-            "total_outcomes", 0,
+        total_acted_on = stats.get(
+            "total_acted_on", 0,
         )
         hit_rate = stats.get("hit_rate_pct")
 
         resp = RecommendationStatsResponse(
             total_recommendations=total_recs,
-            total_acted_on=total_outcomes,
+            total_acted_on=total_acted_on,
             adoption_rate_pct=(
                 round(
-                    total_outcomes
+                    total_acted_on
                     / total_recs
                     * 100,
                     1,

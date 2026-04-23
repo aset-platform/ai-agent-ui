@@ -120,6 +120,32 @@ class PipelineExecutor:
             if not ok:
                 failed = True
 
+        # Post-pipeline: expire old snapshots
+        # (lightweight, keeps tables manageable)
+        if not failed:
+            try:
+                from backend.maintenance.iceberg_maintenance import (
+                    expire_snapshots,
+                )
+
+                for tbl in [
+                    "stocks.ohlcv",
+                    "stocks.analysis_summary",
+                    "stocks.piotroski_scores",
+                    "stocks.sentiment_scores",
+                ]:
+                    expire_snapshots(tbl, keep=5)
+                _logger.info(
+                    "Post-pipeline snapshot "
+                    "expiry complete",
+                )
+            except Exception:
+                _logger.debug(
+                    "Post-pipeline snapshot "
+                    "expiry failed",
+                    exc_info=True,
+                )
+
         return pipeline_run_id
 
     def _run_step(

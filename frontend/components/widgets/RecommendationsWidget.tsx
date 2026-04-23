@@ -73,7 +73,7 @@ export function RecommendationsWidget({
     } finally {
       setRefreshing(false);
     }
-  }, [data]);
+  }, [data, market]);
 
   /* ── Loading / error ──────────────────────────── */
   if (data.loading)
@@ -85,6 +85,21 @@ export function RecommendationsWidget({
   const recs = resp?.recommendations ?? [];
   const preview = recs.slice(0, 3);
   const totalCount = recs.length;
+  const cached = resp?.cached === true;
+  const resetAt = resp?.reset_at ?? null;
+  const resetLabel = resetAt
+    ? new Date(resetAt).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      })
+    : null;
+  const runDate = resp?.run_date
+    ? new Date(resp.run_date).toLocaleDateString(
+        undefined,
+        { month: "short", year: "numeric" },
+      )
+    : null;
 
   return (
     <>
@@ -98,7 +113,12 @@ export function RecommendationsWidget({
             <button
               type="button"
               onClick={handleRefresh}
-              disabled={refreshing}
+              disabled={refreshing || cached}
+              title={
+                cached && resetLabel
+                  ? `Already generated for this month. Next set available ${resetLabel}.`
+                  : "Generate this month's recommendations"
+              }
               className={
                 "inline-flex items-center gap-1.5 " +
                 "rounded-lg px-3 py-1.5 text-xs " +
@@ -124,9 +144,23 @@ export function RecommendationsWidget({
                   clipRule="evenodd"
                 />
               </svg>
-              {refreshing ? "Generating..." : "Refresh"}
+              {refreshing
+                ? "Generating..."
+                : cached
+                  ? "Generated"
+                  : "Generate"}
             </button>
           </div>
+          {(cached || resetLabel) && (
+            <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+              {cached && runDate
+                ? `Generated for ${runDate}. `
+                : ""}
+              {resetLabel
+                ? `Next set available ${resetLabel}.`
+                : ""}
+            </p>
+          )}
         </div>
 
         {/* ── Health score row ────────────────────── */}

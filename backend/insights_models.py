@@ -68,6 +68,8 @@ class TargetRow(BaseModel):
     sentiment: str | None = None
     market: str = "us"
     sector: str | None = None
+    confidence_score: float | None = None
+    confidence_components: dict | None = None
 
 
 class TargetsResponse(BaseModel):
@@ -261,3 +263,52 @@ class PiotroskiResponse(BaseModel):
         default_factory=list,
     )
     score_date: str | None = None
+
+
+# ---------------------------------------------------------------
+# ScreenQL (universal screener)
+# ---------------------------------------------------------------
+
+
+class ScreenQLRequest(BaseModel):
+    """ScreenQL query request."""
+
+    query: str = Field(
+        ..., min_length=1, max_length=2000,
+    )
+    page: int = Field(1, ge=1)
+    page_size: int = Field(25, ge=1, le=100)
+    sort_by: str | None = None
+    sort_dir: str = Field("desc")
+
+
+class ScreenQLResponse(BaseModel):
+    """ScreenQL query response."""
+
+    rows: list[dict] = Field(
+        default_factory=list,
+    )
+    total: int = 0
+    page: int = 1
+    page_size: int = 25
+    columns_used: list[str] = Field(
+        default_factory=list,
+    )
+    excluded_null_count: int = 0
+
+
+class ScreenFieldDef(BaseModel):
+    """Field definition for autocomplete."""
+
+    name: str
+    label: str
+    type: str
+    category: str
+
+
+class ScreenFieldsResponse(BaseModel):
+    """Field catalog response."""
+
+    fields: list[ScreenFieldDef] = Field(
+        default_factory=list,
+    )

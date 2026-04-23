@@ -90,12 +90,6 @@ _DEFAULT_LIMITS: dict[str, ModelLimits] = {
         rpd=1_000,
         tpd=500_000,
     ),
-    "moonshotai/kimi-k2-instruct": ModelLimits(
-        rpm=60,
-        tpm=10_000,
-        rpd=1_000,
-        tpd=300_000,
-    ),
     "openai/gpt-oss-20b": ModelLimits(
         rpm=30,
         tpm=8_000,

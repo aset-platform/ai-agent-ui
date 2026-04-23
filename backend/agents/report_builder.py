@@ -112,13 +112,15 @@ def _section_header(
     info: dict[str, Any],
 ) -> str:
     """Section 1: Stock header."""
-    name = info.get("company_name", ticker)
-    sector = info.get("sector", "—")
-    industry = info.get("industry", "—")
+    from market_utils import safe_str
+
+    name = safe_str(info.get("company_name")) or ticker
+    sector = safe_str(info.get("sector")) or "\u2014"
+    industry = safe_str(info.get("industry")) or "\u2014"
     mcap = info.get("market_cap")
     pe = info.get("pe_ratio")
-    currency = info.get("currency", "USD")
-    price = info.get("current_price", "—")
+    currency = safe_str(info.get("currency")) or "USD"
+    price = info.get("current_price", "\u2014")
 
     mcap_str = "—"
     if mcap:

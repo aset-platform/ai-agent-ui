@@ -312,6 +312,7 @@ class ObservabilityCollector:
         prompt_tokens: int | None = None,
         completion_tokens: int | None = None,
         latency_ms: int | None = None,
+        key_source: str = "platform",
     ) -> None:
         """Record a successful LLM request.
 
@@ -391,6 +392,7 @@ class ObservabilityCollector:
                     "estimated_cost_usd": cost,
                     "latency_ms": latency_ms,
                     "success": True,
+                    "key_source": key_source,
                 }
             )
 

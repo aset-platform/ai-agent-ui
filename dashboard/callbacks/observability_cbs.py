@@ -76,7 +76,7 @@ def _short_model(name: str) -> str:
     Returns:
         Short label.
     """
-    # "moonshotai/kimi-k2-instruct" → "kimi-k2"
+    # "qwen/qwen3-32b" → "qwen3-32b"
     short = name.rsplit("/", 1)[-1]
     # Remove common suffixes.
     for suffix in [

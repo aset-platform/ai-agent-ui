@@ -184,27 +184,56 @@ def _compute_composite_score(row: dict) -> float:
 
 
 # ── Quota gate ────────────────────────────────────
-# Max 5 runs per user per rolling 30-day window.
-# Only superusers can bypass with force=True.
+# One non-test run per user per (scope, IST calendar
+# month).  Admin force-refresh (run_type='admin_test')
+# bypasses this gate and does not consume the slot.
 
-_MAX_RUNS_PER_MONTH = 5
+_MAX_RUNS_PER_SCOPE_PER_MONTH = 1
+_ADMIN_TEST_RUN_TYPE = "admin_test"
+_IST_TZ_NAME = "Asia/Kolkata"
+
+
+def current_month_start_ist():
+    """First instant of the current month in IST.
+
+    Returned as a timezone-aware datetime (IST).  Compare
+    against ``recommendation_runs.created_at`` which is
+    stored as ``timestamptz``; Postgres handles the TZ
+    conversion.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo(_IST_TZ_NAME))
+    return now.replace(
+        day=1, hour=0, minute=0,
+        second=0, microsecond=0,
+    )
+
+
+def next_month_start_ist():
+    """First instant of the *next* month in IST."""
+    start = current_month_start_ist()
+    year = start.year + (1 if start.month == 12 else 0)
+    month = 1 if start.month == 12 else start.month + 1
+    return start.replace(year=year, month=month)
 
 
 def check_recommendation_quota(
     user_id: str,
-    scope: str = "all",
+    scope: str,
 ) -> dict:
-    """Check if user can generate new recommendations.
+    """Check if *user_id* can generate a new run for *scope*.
 
-    Returns:
-        ``{"allowed": True}`` or
-        ``{"allowed": False, "reason": "...",
-           "runs_used": N, "max": 5,
-           "latest_run_id": "..."}``
+    The gate is: at most one non-test run per user per
+    scope per IST calendar month.  Admin test runs
+    (``run_type='admin_test'``) are excluded from the
+    count — they never consume a user's slot.
+
+    Returns a dict with ``allowed``, ``latest_run_id``,
+    ``reset_at`` (ISO string, first of next IST month),
+    and ``reason`` when not allowed.
     """
-    import asyncio
-    from datetime import date, datetime, timedelta, timezone
-
     from sqlalchemy import func, select
     from sqlalchemy.ext.asyncio import (
         AsyncSession,
@@ -217,6 +246,9 @@ def check_recommendation_quota(
         RecommendationRun,
     )
 
+    month_start = current_month_start_ist()
+    reset_at = next_month_start_ist().isoformat()
+
     async def _check():
         eng = create_async_engine(
             get_settings().database_url,
@@ -225,28 +257,30 @@ def check_recommendation_quota(
         factory = async_sessionmaker(
             eng, class_=AsyncSession,
         )
-        cutoff = datetime.now(timezone.utc) - timedelta(
-            days=30,
-        )
         async with factory() as s:
-            # Count runs in last 30 days for this
-            # user (all scopes combined)
             count_q = await s.execute(
                 select(
                     func.count(RecommendationRun.run_id)
                 ).where(
                     RecommendationRun.user_id == user_id,
-                    RecommendationRun.created_at >= cutoff,
+                    RecommendationRun.scope == scope,
+                    RecommendationRun.created_at
+                    >= month_start,
+                    RecommendationRun.run_type
+                    != _ADMIN_TEST_RUN_TYPE,
                 )
             )
             count = count_q.scalar() or 0
 
-            # Get latest run for this scope
             latest_q = await s.execute(
                 select(RecommendationRun)
                 .where(
                     RecommendationRun.user_id == user_id,
                     RecommendationRun.scope == scope,
+                    RecommendationRun.created_at
+                    >= month_start,
+                    RecommendationRun.run_type
+                    != _ADMIN_TEST_RUN_TYPE,
                 )
                 .order_by(
                     RecommendationRun.created_at.desc()
@@ -255,7 +289,7 @@ def check_recommendation_quota(
             )
             latest = latest_q.scalar_one_or_none()
             latest_id = (
-                latest.run_id if latest else None
+                str(latest.run_id) if latest else None
             )
 
         await eng.dispose()
@@ -264,33 +298,299 @@ def check_recommendation_quota(
     try:
         count, latest_id = _run_async_safe(_check())
     except Exception:
-        # Best-effort — allow on failure
         _logger.debug(
             "Quota check failed for %s",
             user_id[:8],
             exc_info=True,
         )
-        return {"allowed": True}
+        return {
+            "allowed": True,
+            "reset_at": reset_at,
+        }
 
-    if count >= _MAX_RUNS_PER_MONTH:
+    if count >= _MAX_RUNS_PER_SCOPE_PER_MONTH:
         return {
             "allowed": False,
             "reason": (
-                f"Monthly quota reached: "
-                f"{count}/{_MAX_RUNS_PER_MONTH} "
-                f"runs used in the last 30 days."
+                f"Already generated for scope={scope} "
+                f"this IST month. "
+                f"Next reset at {reset_at}."
             ),
             "runs_used": count,
-            "max": _MAX_RUNS_PER_MONTH,
+            "max": _MAX_RUNS_PER_SCOPE_PER_MONTH,
             "latest_run_id": latest_id,
+            "reset_at": reset_at,
         }
 
     return {
         "allowed": True,
         "runs_used": count,
-        "max": _MAX_RUNS_PER_MONTH,
+        "max": _MAX_RUNS_PER_SCOPE_PER_MONTH,
         "latest_run_id": latest_id,
+        "reset_at": reset_at,
     }
+
+
+# ── Consolidator: single get-or-create path ───────
+
+
+def get_or_create_monthly_run(
+    user_id: str,
+    scope: str,
+    *,
+    run_type: str,
+    repo=None,
+    bypass_quota: bool = False,
+) -> dict:
+    """Return the canonical run for *(user, scope, IST month)*.
+
+    If a non-test run already exists for this user + scope
+    in the current IST calendar month, that run is returned
+    with ``was_cached=True``.  Otherwise the Smart Funnel
+    pipeline runs (stages 1 → 3) and a new run is inserted
+    with the given *run_type*.
+
+    When *bypass_quota* is True (admin force-refresh),
+    the cache check is skipped and a fresh run is always
+    generated.  Callers should pass ``run_type='admin_test'``
+    in that case so the row stays hidden from user views
+    and does not occupy the monthly slot.
+
+    Returned dict contains all ``recommendation_runs``
+    columns plus ``recommendations`` (list) and
+    ``was_cached`` (bool) and ``reset_at`` (ISO IST).
+    """
+    import time as _time
+    import uuid as _uuid
+    from datetime import date
+
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+    from sqlalchemy.pool import NullPool
+    from config import get_settings
+
+    if scope not in ("india", "us"):
+        raise ValueError(
+            f"Invalid scope for monthly run: {scope!r} "
+            f"(expected 'india' or 'us')"
+        )
+
+    reset_at = next_month_start_ist().isoformat()
+
+    eng = create_async_engine(
+        get_settings().database_url,
+        poolclass=NullPool,
+    )
+    factory = async_sessionmaker(
+        eng, class_=AsyncSession,
+    )
+
+    async def _fetch_cached():
+        from backend.db.pg_stocks import (
+            get_latest_recommendation_run,
+            get_recommendations_for_run,
+        )
+
+        async with factory() as s:
+            latest = await get_latest_recommendation_run(
+                s, user_id, scope=scope,
+                exclude_test=True,
+            )
+        if not latest:
+            return None
+        created = latest.get("created_at")
+        if isinstance(created, str):
+            from datetime import datetime
+            try:
+                created = datetime.fromisoformat(created)
+            except ValueError:
+                return None
+        if created is None:
+            return None
+        month_start = current_month_start_ist()
+        # Normalise to compare: created is tz-aware UTC,
+        # month_start is tz-aware IST — direct compare OK.
+        if created < month_start:
+            return None
+        async with factory() as s:
+            recs = await get_recommendations_for_run(
+                s, latest["run_id"],
+            )
+        latest["recommendations"] = recs
+        latest["was_cached"] = True
+        latest["reset_at"] = reset_at
+        return latest
+
+    async def _persist(run_data: dict, rec_rows: list):
+        from backend.db.pg_stocks import (
+            expire_old_recommendations,
+            get_recommendations_for_run,
+            insert_recommendation_run,
+            insert_recommendations,
+        )
+
+        async with factory() as s:
+            await insert_recommendation_run(s, run_data)
+            if rec_rows:
+                await insert_recommendations(
+                    s, run_data["run_id"], rec_rows,
+                )
+            # Only non-test runs expire prior active recs
+            if run_type != _ADMIN_TEST_RUN_TYPE:
+                await expire_old_recommendations(
+                    s, user_id, run_data["run_id"],
+                )
+        async with factory() as s:
+            return await get_recommendations_for_run(
+                s, run_data["run_id"],
+            )
+
+    async def _dispose():
+        await eng.dispose()
+
+    # ── Fast path: cache hit ──────────────────────
+    if not bypass_quota:
+        try:
+            cached = _run_async_safe(_fetch_cached())
+        except Exception:
+            _logger.exception(
+                "cache lookup failed for %s/%s",
+                user_id[:8], scope,
+            )
+            cached = None
+        if cached:
+            _run_async_safe(_dispose())
+            _logger.info(
+                "rec cache_hit user=%s scope=%s run=%s "
+                "run_type=%s",
+                user_id[:8], scope,
+                cached.get("run_id"), run_type,
+            )
+            return cached
+
+    # ── Slow path: generate + persist ─────────────
+    t0 = _time.monotonic()
+    s1 = stage1_prefilter(scope=scope)
+    if s1.empty:
+        _run_async_safe(_dispose())
+        return {
+            "run_id": None,
+            "user_id": user_id,
+            "scope": scope,
+            "run_type": run_type,
+            "recommendations": [],
+            "was_cached": False,
+            "reset_at": reset_at,
+            "status_note": "no_candidates",
+        }
+
+    if repo is not None:
+        s2 = stage2_gap_analysis(
+            user_id, s1, repo, scope=scope,
+        )
+    else:
+        s2 = stage2_gap_analysis(
+            user_id, s1, scope=scope,
+        )
+
+    portfolio = s2.get("portfolio_summary", {})
+    if not portfolio.get("total_holdings"):
+        _run_async_safe(_dispose())
+        return {
+            "run_id": None,
+            "user_id": user_id,
+            "scope": scope,
+            "run_type": run_type,
+            "recommendations": [],
+            "was_cached": False,
+            "reset_at": reset_at,
+            "status_note": "empty_portfolio",
+        }
+
+    s3 = stage3_llm_reasoning(s2)
+    duration = _time.monotonic() - t0
+
+    run_id = str(_uuid.uuid4())
+    run_data = {
+        "run_id": run_id,
+        "user_id": user_id,
+        "run_date": date.today(),
+        "run_type": run_type,
+        "scope": scope,
+        "portfolio_snapshot": portfolio,
+        "health_score": s3.get("health_score", 0),
+        "health_label": s3.get(
+            "health_label", "unknown",
+        ),
+        "health_assessment": s3.get(
+            "portfolio_health_assessment",
+        ),
+        "candidates_scanned": len(s1),
+        "candidates_passed": len(
+            s2.get("candidates", []),
+        ),
+        "llm_model": s3.get("llm_model"),
+        "llm_tokens_used": s3.get(
+            "llm_tokens_used", 0,
+        ),
+        "duration_secs": round(duration, 2),
+    }
+
+    raw_recs = s3.get("recommendations", [])
+    cand_map = {
+        c["ticker"]: c
+        for c in s2.get("candidates", [])
+    }
+    rec_rows = []
+    for r in raw_recs:
+        ticker = r.get("ticker")
+        c = cand_map.get(ticker, {})
+        rec_rows.append({
+            "id": str(_uuid.uuid4()),
+            "run_id": run_id,
+            "tier": r.get("tier", "explore"),
+            "category": r.get("category", "general"),
+            "ticker": ticker,
+            "action": r.get("action", "hold"),
+            "severity": r.get("severity", "low"),
+            "rationale": r.get("rationale", ""),
+            "expected_impact": r.get("expected_impact"),
+            "data_signals": r.get("data_signals", {}),
+            "price_at_rec": (
+                r.get("price_at_rec")
+                or c.get("current_price")
+            ),
+            "target_price": (
+                r.get("target_price")
+                or c.get("target_price")
+            ),
+            "expected_return_pct": (
+                r.get("expected_return_pct")
+                or c.get("forecast_3m_pct")
+            ),
+            "index_tags": r.get("index_tags"),
+            "status": "active",
+        })
+
+    try:
+        persisted_recs = _run_async_safe(
+            _persist(run_data, rec_rows),
+        )
+    finally:
+        _run_async_safe(_dispose())
+
+    run_data["recommendations"] = persisted_recs
+    run_data["was_cached"] = False
+    run_data["reset_at"] = reset_at
+    _logger.info(
+        "rec generated user=%s scope=%s run=%s "
+        "run_type=%s duration=%.2fs",
+        user_id[:8], scope, run_id, run_type, duration,
+    )
+    return run_data
 
 
 # ── Stage 1 query ─────────────────────────────────
@@ -999,9 +1299,14 @@ def stage2_gap_analysis(
                         mask = (
                             holdings_df["ticker"] == t
                         )
+                        from market_utils import (
+                            safe_str,
+                        )
                         holdings_df.loc[
                             mask, "sector"
-                        ] = ci_row.get("sector")
+                        ] = safe_str(
+                            ci_row.get("sector"),
+                        )
                         holdings_df.loc[
                             mask, "market_cap"
                         ] = ci_row.get("market_cap")
@@ -1060,8 +1365,13 @@ def stage2_gap_analysis(
                 holdings_df[val_col].sum()
             )
             if total_value > 0:
+                from market_utils import safe_sector
+
                 for _, row in holdings_df.iterrows():
-                    sector = row.get("sector") or "Other"
+                    sector = safe_sector(
+                        row.get("sector"),
+                        fallback="ETF/Other",
+                    )
                     val = float(row.get(val_col) or 0)
                     w = val / total_value * 100.0
                     user_sectors[sector] = (
@@ -1174,11 +1484,15 @@ def stage2_gap_analysis(
             })
 
     # 10. Tag candidates with gap bonus, tier, fills_gaps
+    from market_utils import safe_sector
+
     enriched: list[dict] = []
     for _, c in candidates_df.iterrows():
         tkr = c["ticker"]
         comp = float(c.get("composite_score") or 0)
-        sector = c.get("sector") or "Other"
+        sector = safe_sector(
+            c.get("sector"), fallback="ETF/Other",
+        )
         mcap = c.get("market_cap")
         cap_cat = _classify_cap(mcap)
 

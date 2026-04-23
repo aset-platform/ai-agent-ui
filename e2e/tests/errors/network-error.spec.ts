@@ -25,7 +25,7 @@ test.describe("Network error handling", () => {
       }),
     );
 
-    await page.goto("/");
+    await page.goto("/dashboard");
     await expect(
       page.getByTestId("chat-message-input"),
     ).toBeVisible({ timeout: 15_000 });
@@ -46,7 +46,7 @@ test.describe("Network error handling", () => {
   test("network offline → graceful handling", async ({
     page,
   }) => {
-    await page.goto("/");
+    await page.goto("/dashboard");
     await expect(
       page.getByTestId("chat-message-input"),
     ).toBeVisible({ timeout: 15_000 });

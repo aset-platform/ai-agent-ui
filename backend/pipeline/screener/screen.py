@@ -21,6 +21,7 @@ from datetime import date
 import pandas as pd
 
 from backend.db.duckdb_engine import query_iceberg_table
+from market_utils import safe_str
 from backend.pipeline.screener.piotroski import (
     compute_piotroski,
 )
@@ -197,10 +198,12 @@ async def run_screen(
                 session, active_only=False,
             )
         for s in all_stocks:
-            sm_names[s.yf_ticker] = s.name
+            if s.name:
+                sm_names[s.yf_ticker] = s.name
     except Exception:
-        _logger.debug(
-            "stock_master name fallback failed",
+        _logger.warning(
+            "stock_master name fallback failed "
+            "— names may be blank",
             exc_info=True,
         )
 
@@ -286,12 +289,16 @@ async def run_screen(
                     "avg_volume": ci_row.get(
                         "avg_volume",
                     ),
-                    "sector": ci_row.get("sector"),
-                    "industry": ci_row.get(
-                        "industry",
+                    "sector": safe_str(
+                        ci_row.get("sector"),
+                    ),
+                    "industry": safe_str(
+                        ci_row.get("industry"),
                     ),
                     "company_name": (
-                        ci_row.get("company_name")
+                        safe_str(
+                            ci_row.get("company_name"),
+                        )
                         or sm_names.get(ticker, "")
                     ),
                 }
@@ -303,6 +310,21 @@ async def run_screen(
                 exc_info=True,
             )
             failed += 1
+
+    # Log tickers with blank names before persist
+    blank_names = [
+        s["ticker"]
+        for s in scores
+        if not s.get("company_name")
+    ]
+    if blank_names:
+        _logger.warning(
+            "Piotroski: %d tickers have blank "
+            "company_name — will be patched at "
+            "read time: %s",
+            len(blank_names),
+            blank_names[:20],
+        )
 
     # Persist
     written = 0

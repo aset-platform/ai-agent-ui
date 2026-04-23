@@ -59,6 +59,7 @@ nav:
       - Auth & Users: backend/auth.md
       - OAuth / SSO: backend/oauth.md
       - Billing & Subscriptions: backend/billing.md
+      - BYOM (Bring Your Own Model): backend/byom.md
       - Agents: backend/agents.md
       - Tools: backend/tools.md
       - Configuration: backend/config.md

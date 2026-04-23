@@ -84,3 +84,8 @@ backend/data/
 
 # Lighthouse CI local artifacts
 .lighthouseci/
+.playwright-mcp/
+.superpowers/
+
+# Playwright default artifact dir (screenshots, videos, traces)
+test-results/

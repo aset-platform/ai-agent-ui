@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.repo import (
+    byo_repo,
     oauth,
     payment_repo,
     ticker_repo,
@@ -215,6 +216,54 @@ class UserRepository:
                 "Audit read failed", exc_info=True,
             )
             return []
+
+    # ── BYO provider keys ──
+
+    async def list_llm_keys(
+        self, user_id: str,
+    ) -> list[dict[str, Any]]:
+        async with self._session_scope() as s:
+            return await byo_repo.list_keys(s, user_id)
+
+    async def upsert_llm_key(
+        self, user_id: str, provider: str,
+        key: str, label: str | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        async with self._session_scope() as s:
+            row, created = await byo_repo.upsert_key(
+                s, user_id, provider, key, label,
+            )
+            await s.commit()
+        return row, created
+
+    async def delete_llm_key(
+        self, user_id: str, provider: str,
+    ) -> bool:
+        async with self._session_scope() as s:
+            removed = await byo_repo.delete_key(
+                s, user_id, provider,
+            )
+            await s.commit()
+        return removed
+
+    async def set_byo_monthly_limit(
+        self, user_id: str, monthly_limit: int,
+    ) -> int:
+        async with self._session_scope() as s:
+            value = await byo_repo.set_byo_monthly_limit(
+                s, user_id, monthly_limit,
+            )
+            await s.commit()
+        return value
+
+    async def increment_chat_counter(
+        self, user_id: str,
+    ) -> None:
+        async with self._session_scope() as s:
+            await byo_repo.increment_chat_counter(
+                s, user_id,
+            )
+            await s.commit()
 
 
 # Deprecated alias — kept for backward compatibility with

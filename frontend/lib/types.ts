@@ -50,6 +50,8 @@ export interface TickerForecast {
   mae: number | null;
   rmse: number | null;
   mape: number | null;
+  confidence_score: number | null;
+  confidence_components: ForecastConfidence | null;
 }
 
 export interface ForecastsResponse {
@@ -264,10 +266,17 @@ export interface PortfolioMetrics {
   worst_day_date: string;
 }
 
+export interface StalePriceTicker {
+  ticker: string;
+  last_valid_close_date: string;
+  days_stale: number;
+}
+
 export interface PortfolioPerformanceResponse {
   data: PortfolioDailyPoint[];
   metrics: PortfolioMetrics | null;
   currency: string;
+  stale_tickers: StalePriceTicker[];
 }
 
 export interface PortfolioForecastPoint {
@@ -471,8 +480,60 @@ export interface CascadeStats {
 
 export interface MetricsResponse {
   timestamp: number;
+  scope?: "self" | "all";
+  // scope="all" → cascade rate bars ({tpm, rpm, tpd, rpd}).
+  // scope="self" → per-user usage rollup (see UserModelUsage).
+  // Callers branch on ``scope`` before reading fields.
   models: Record<string, ModelBudget>;
   cascade_stats: CascadeStats;
+  // Present only when scope === "self".
+  quota?: BYOQuota;
+  providers?: BYOProviderStatus[];
+  daily_trend?: DailyTrendPoint[];
+}
+
+export interface UserModelUsage {
+  requests: number;
+  requests_platform: number;
+  requests_user: number;
+  cost: number;
+  provider: string;
+  input_tokens: number;
+  output_tokens: number;
+  last_used_at: string | null;
+}
+
+export interface BYOQuota {
+  free_allowance_total: number;
+  free_allowance_used: number;
+  byo_monthly_limit: number;
+  byo_month_used: number;
+}
+
+export interface BYOProviderStatus {
+  provider: "groq" | "anthropic" | "ollama";
+  configured: boolean;
+  label?: string | null;
+  masked_key?: string | null;
+  last_used_at?: string | null;
+  request_count_30d?: number;
+  native?: boolean;
+}
+
+export interface DailyTrendPoint {
+  date: string;
+  requests: number;
+  cost: number;
+}
+
+export interface UserLLMKey {
+  provider: "groq" | "anthropic";
+  label: string | null;
+  masked_key: string;
+  last_used_at: string | null;
+  request_count_30d: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface TierHealth {
@@ -528,6 +589,7 @@ export interface PortfolioNewsResponse {
   portfolio_sentiment_label: string;
   market_sentiment: number;
   market_sentiment_label: string;
+  unanalyzed_tickers: string[];
 }
 
 export interface Recommendation {
@@ -543,6 +605,22 @@ export interface Recommendation {
 export interface RecommendationsResponse {
   recommendations: Recommendation[];
   portfolio_health: string;
+}
+
+// ---------------------------------------------------------------
+// Forecast Confidence
+// ---------------------------------------------------------------
+
+export interface ForecastConfidence {
+  score: number;
+  badge: "High" | "Medium" | "Low" | "Rejected";
+  reason: string;
+  direction: number;
+  mase: number;
+  coverage: number;
+  interval: number;
+  data_completeness: number;
+  regime: string;
 }
 
 // ---------------------------------------------------------------
@@ -640,11 +718,15 @@ export interface RecommendationResponse {
   health_assessment?: string | null;
   recommendations: RecommendationItem[];
   generated_at?: string | null;
+  cached?: boolean;
+  reset_at?: string | null;
+  scope?: string | null;
 }
 
 export interface HistoryRunItem {
   run_id: string;
   run_date: string;
+  created_at?: string;
   scope: string;
   run_type: string;
   health_score: number;
@@ -677,4 +759,32 @@ export interface RecommendationStatsResponse {
   avg_return_30d?: number | null;
   avg_return_60d?: number | null;
   avg_return_90d?: number | null;
+}
+
+export interface PortfolioTransaction {
+  transaction_id: string;
+  trade_date: string;
+  side: string;
+  quantity: number;
+  price: number;
+  fees: number;
+  notes?: string | null;
+}
+
+export interface PortfolioTransactionSummary {
+  total_quantity: number;
+  avg_price: number;
+  invested: number;
+  current_price: number | null;
+  current_value: number | null;
+  gain: number | null;
+  gain_pct: number | null;
+}
+
+export interface PortfolioTransactionsResponse {
+  ticker: string;
+  currency: string;
+  market: string;
+  transactions: PortfolioTransaction[];
+  summary: PortfolioTransactionSummary;
 }

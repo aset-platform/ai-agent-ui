@@ -237,8 +237,8 @@ models to avoid TPD exhaustion on any single model.
 
 | Profile | Pool 1 (primary) | Pool 2 (quality) | Pool 3 (fast) |
 |---------|-----------------|-------------------|---------------|
-| tool | llama-3.3-70b, kimi-k2, qwen3-32b | gpt-oss-120b, gpt-oss-20b | scout-17b |
-| synthesis | gpt-oss-120b, gpt-oss-20b, kimi-k2 | scout-17b | — |
+| tool | llama-3.3-70b, qwen3-32b | gpt-oss-120b, gpt-oss-20b | scout-17b |
+| synthesis | gpt-oss-120b, gpt-oss-20b, qwen3-32b | scout-17b | — |
 
 Per-pool atomic counter (thread-safe). `get_token_budget()`
 singleton seeded from Iceberg `llm_usage` on startup so
@@ -248,7 +248,7 @@ TPD/RPD persist across restarts.
 
 After the ReAct tool loop completes, the sub-agent re-invokes
 with a **synthesis-tier** FallbackLLM for higher quality final
-text. Synthesis tiers: `gpt-oss-120b → gpt-oss-20b → kimi-k2`.
+text. Synthesis tiers: `gpt-oss-120b → gpt-oss-20b → qwen3-32b`.
 Falls back to the tool-tier response if synthesis fails.
 
 ---

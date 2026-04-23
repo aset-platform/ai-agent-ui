@@ -29,7 +29,7 @@ function shortName(model: string): string {
     "claude-sonnet-4-20250514": "Claude Sonnet",
     "claude-haiku-4-5-20251001": "Claude Haiku",
     "openai/gpt-oss-120b": "GPT OSS 120B",
-    "moonshotai/kimi-k2-instruct": "Kimi K2",
+    "qwen/qwen3-32b": "Qwen3 32B",
     "test-model": "Test",
   };
   return map[model] ?? model.split("/").pop()

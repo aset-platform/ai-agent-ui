@@ -291,6 +291,10 @@ def _make_sub_agent_node(
         )
         llm_with_tools = llm.bind_tools(tools)
 
+        # Pin model for this request — all iterations
+        # use the same LLM via round-robin affinity.
+        llm.pin_reset()
+
         # Inject dynamic user context into prompt
         prompt = config.system_prompt
         user_ctx = state.get("user_context") or {}

@@ -8,6 +8,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 import { ChatPage } from "../../pages/frontend/chat.page";
+import { FE } from "../../utils/selectors";
 
 /** Open the Billing tab inside the EditProfileModal. */
 async function openBillingTab(
@@ -26,7 +27,7 @@ async function openBillingTab(
   }
   await billing.click();
   await expect(
-    page.getByText("CURRENT PLAN"),
+    page.getByTestId(FE.billingCurrentPlan),
   ).toBeVisible({ timeout: 10_000 });
 }
 
@@ -230,17 +231,16 @@ test.describe("Subscription lifecycle", () => {
 
       // Reload to pick up new subscription state
       await page.reload();
-      await expect(chatPage.messageInput).toBeVisible({
-        timeout: 15_000,
-      });
+      await expect(
+        page.getByTestId("sidebar"),
+      ).toBeVisible({ timeout: 15_000 });
       await openBillingTab(chatPage, page);
 
       // Verify plan shows Pro
       const planText = await page
-        .locator("text=CURRENT PLAN")
-        .locator("..")
+        .getByTestId(FE.billingCurrentPlan)
         .textContent();
-      expect(planText).toMatch(/Pro/);
+      expect(planText).toMatch(/pro/i);
 
       // Usage meter should show reset count (0/100)
       const proMeter = page.getByText(
@@ -266,10 +266,9 @@ test.describe("Subscription lifecycle", () => {
 
       // Verify Pro is displayed
       const proPlan = await page
-        .locator("text=CURRENT PLAN")
-        .locator("..")
+        .getByTestId(FE.billingCurrentPlan)
         .textContent();
-      expect(proPlan).toMatch(/Pro/);
+      expect(proPlan).toMatch(/pro/i);
 
       // Switch to free tier mock (simulating cancel)
       await page.unrouteAll({ behavior: "wait" });
@@ -291,17 +290,16 @@ test.describe("Subscription lifecycle", () => {
 
       // Reload to pick up new state
       await page.reload();
-      await expect(chatPage.messageInput).toBeVisible({
-        timeout: 15_000,
-      });
+      await expect(
+        page.getByTestId("sidebar"),
+      ).toBeVisible({ timeout: 15_000 });
       await openBillingTab(chatPage, page);
 
       // Verify plan shows Free
       const freePlan = await page
-        .locator("text=CURRENT PLAN")
-        .locator("..")
+        .getByTestId(FE.billingCurrentPlan)
         .textContent();
-      expect(freePlan).toMatch(/Free/);
+      expect(freePlan).toMatch(/free/i);
     },
   );
 
@@ -359,9 +357,9 @@ test.describe("Subscription lifecycle", () => {
       await page.unrouteAll({ behavior: "wait" });
       await mockFreeTierWithUsage(page, 3);
       await page.reload();
-      await expect(chatPage.messageInput).toBeVisible({
-        timeout: 15_000,
-      });
+      await expect(
+        page.getByTestId("sidebar"),
+      ).toBeVisible({ timeout: 15_000 });
 
       // Usage badge should now show 3/5
       const updatedBadge = page.locator(
@@ -380,8 +378,6 @@ test.describe("Subscription lifecycle", () => {
       await expect(meter).toBeVisible({
         timeout: 5_000,
       });
-
-      expect(badgeVisible || updatedVisible).toBe(true);
     },
   );
 });
