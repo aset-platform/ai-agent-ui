@@ -3339,19 +3339,34 @@ def create_app(
         now = __import__("time").time()
         for b in backups:
             from datetime import datetime
-
-            dt = datetime.fromisoformat(
-                b["date"],
-            )
-            age_h = (
-                now
-                - dt.timestamp()
-            ) / 3600
-            b["age_hours"] = round(age_h, 1)
-            # Check catalog
             from pathlib import Path
 
             bp = Path(b["path"])
+            # Suffix-tolerant date parsing — backup
+            # dirs may carry custom suffixes like
+            # `backup-2026-04-22-pre-dedupe` from
+            # manual maintenance ops. Try ISO date
+            # parse on the first 10 chars; fall back
+            # to the directory mtime if that fails so
+            # a non-standard name never 500s the API.
+            dt = None
+            try:
+                dt = datetime.fromisoformat(
+                    b["date"][:10],
+                )
+            except Exception:
+                pass
+            if dt is None:
+                try:
+                    dt = datetime.fromtimestamp(
+                        bp.stat().st_mtime,
+                    )
+                except Exception:
+                    dt = datetime.fromtimestamp(now)
+            age_h = (
+                now - dt.timestamp()
+            ) / 3600
+            b["age_hours"] = round(age_h, 1)
             b["has_catalog"] = (
                 bp / "catalog.db"
             ).exists()
@@ -3393,17 +3408,27 @@ def create_app(
         from datetime import datetime
         from pathlib import Path
 
-        dt = datetime.fromisoformat(
-            latest["date"],
-        )
-        age_h = (
-            __import__("time").time()
-            - dt.timestamp()
-        ) / 3600
-        has_cat = (
-            Path(latest["path"])
-            / "catalog.db"
-        ).exists()
+        bp = Path(latest["path"])
+        now_ = __import__("time").time()
+        # Same suffix-tolerant parsing as
+        # _admin_backups_list — fall back to dir mtime
+        # if the suffix breaks fromisoformat.
+        dt = None
+        try:
+            dt = datetime.fromisoformat(
+                latest["date"][:10],
+            )
+        except Exception:
+            pass
+        if dt is None:
+            try:
+                dt = datetime.fromtimestamp(
+                    bp.stat().st_mtime,
+                )
+            except Exception:
+                dt = datetime.fromtimestamp(now_)
+        age_h = (now_ - dt.timestamp()) / 3600
+        has_cat = (bp / "catalog.db").exists()
 
         if age_h < 24:
             status = "healthy"

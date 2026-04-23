@@ -1514,7 +1514,12 @@ class StockRepository:
             df.index
         ).date  # numpy array of date objects
 
-        # Dedup: fetch existing dates for this ticker
+        # Dedup: fetch existing dates for this ticker.
+        # Filter to rows with a valid (non-NaN) close so
+        # a previously-written NaN row does NOT block a
+        # fresh re-fetch from replacing it. The NaN row
+        # itself is scoped-deleted just before the
+        # append below.
         existing_dates: set = set()
         tbl = self._load_table(_OHLCV)
         # DuckDB fast path
@@ -1526,7 +1531,9 @@ class StockRepository:
             edf = query_iceberg_df(
                 _OHLCV,
                 "SELECT date FROM ohlcv"
-                " WHERE ticker = ?",
+                " WHERE ticker = ?"
+                " AND close IS NOT NULL"
+                " AND NOT isnan(close)",
                 [ticker],
             )
             if not edf.empty:
@@ -1536,16 +1543,23 @@ class StockRepository:
                 }
         except Exception:
             pass
-        # PyIceberg fallback
+        # PyIceberg fallback. Also exclude NaN-close
+        # rows from the dedup set for consistency with
+        # the DuckDB path above.
         if not existing_dates:
             try:
                 from pyiceberg.expressions import (
+                    And,
                     EqualTo,
+                    NotNaN,
+                    NotNull,
                 )
 
                 existing_arrow = tbl.scan(
-                    row_filter=EqualTo(
-                        "ticker", ticker,
+                    row_filter=And(
+                        EqualTo("ticker", ticker),
+                        NotNull("close"),
+                        NotNaN("close"),
                     ),
                     selected_fields=("date",),
                 ).to_arrow()
@@ -1566,7 +1580,8 @@ class StockRepository:
                 full_df = tbl.scan().to_pandas()
                 if not full_df.empty:
                     mask = (
-                        full_df["ticker"] == ticker
+                        (full_df["ticker"] == ticker)
+                        & full_df["close"].notna()
                     )
                     existing_dates = {
                         _to_date(d)
@@ -1623,6 +1638,45 @@ class StockRepository:
                 ),
             }
         )
+        # Scoped pre-delete: any existing NaN-close rows
+        # for the (ticker, date) pairs we're about to
+        # insert. Without this, an earlier write that
+        # left NaN closes (Yahoo upstream gap) would not
+        # be replaced — the insert above only added
+        # genuinely-new dates, so the NaN row would
+        # silently survive alongside the new valid one
+        # only if dedup misclassified.  This delete
+        # makes the upsert atomic for the NaN-→-valid
+        # transition.  No-op when there are no NaN rows
+        # to clean up (common case).
+        try:
+            from pyiceberg.expressions import (
+                And as _And,
+                EqualTo as _EqualTo,
+                In as _In,
+                IsNaN as _IsNaN,
+                IsNull as _IsNull,
+                Or as _Or,
+            )
+
+            self._delete_rows(
+                _OHLCV,
+                _And(
+                    _EqualTo("ticker", ticker),
+                    _In("date", new_dates),
+                    _Or(
+                        _IsNull("close"),
+                        _IsNaN("close"),
+                    ),
+                ),
+            )
+        except Exception:
+            _logger.debug(
+                "NaN pre-delete failed for %s "
+                "(non-fatal)", ticker,
+                exc_info=True,
+            )
+
         self._append_rows(_OHLCV, arrow_tbl)
         _logger.debug(
             "Inserted %d new OHLCV rows for %s", len(new_dates), ticker

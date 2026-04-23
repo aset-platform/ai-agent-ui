@@ -263,6 +263,11 @@ Sector/industry/market_cap should now be populated from yfinance.
 Run this daily post-market (~4:30 PM IST) to fetch today's data
 for all bulk-loaded stocks.
 
+> **In production this runs automatically as the first step of
+> the scheduled `India Daily Pipeline` / `USA Daily Pipeline`
+> (cron 08:00 / 08:15 IST, Tue–Sat).** See "Scheduled daily
+> chain" below.
+
 ```bash
 PYTHONPATH=. python -m backend.pipeline.runner daily
 ```
@@ -279,6 +284,36 @@ Daily complete: processed=10 skipped=0 failed=0
 
 If run on a weekend/holiday, most tickers will be `skipped`
 (date_range_end already >= yesterday).
+
+### Scheduled daily chain (6 steps, ~12 min total)
+
+In production both `India Daily Pipeline` (cron `08:00 IST`) and
+`USA Daily Pipeline` (cron `08:15 IST`) run Tue–Sat. Each is a
+6-step chain:
+
+| # | Job type | Duration | What it does |
+|---|---|---|---|
+| 1 | `data_refresh` | ~5 min | Bulk yfinance OHLCV + company_info + dividends + quarterly |
+| 2 | `compute_analytics` | ~45 s | Technical indicators + analysis_summary |
+| 3 | `run_sentiment` | ~3.5 min | FinBERT scoring with dormancy-aware classification (top-50 by `market_cap`) |
+| 4 | `run_piotroski` | ~2 s | F-Score from quarterly_results |
+| 5 | `recommendation_outcomes` | ~15 s | 30/60/90d outcome checkpoints |
+| 6 | `iceberg_maintenance` | ~2 min | Backup-then-compact for hot tables (fail-closed) |
+
+**Container TZ matters**: backend runs `TZ=Asia/Kolkata` so cron
+strings match wall-clock IST. The `schedule` library uses local
+time — pre-Apr-23 the container was UTC and jobs fired 5.5h late.
+
+**Catchup defaults to OFF**: `scheduler_catchup_enabled=False` —
+startup catchup of "missed" jobs was silently pulling mid-day
+partial data. Opt-in via `SCHEDULER_CATCHUP_ENABLED=true`.
+
+**OHLCV upsert is NaN-replaceable** (Apr 23+): the dedup query
+filters non-NaN closes AND scoped pre-deletes NaN rows for the
+to-be-inserted `(ticker, date)` set before append. So a stuck
+NaN-close row from a Yahoo upstream gap doesn't block future
+re-fetches as "duplicate." Pattern in both `insert_ohlcv` (this
+module) and `batch_data_refresh`.
 
 ---
 

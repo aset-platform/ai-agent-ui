@@ -1042,6 +1042,26 @@ def create_dashboard_router() -> APIRouter:
         if df.empty:
             return OHLCVResponse(ticker=t_upper)
 
+        # Defensive de-duplicate: under failed pipeline
+        # retries the OHLCV table can briefly carry
+        # multiple rows for the same (ticker, date),
+        # which causes lightweight-charts to assert on
+        # duplicate timestamps. Keep the LAST row per
+        # date (latest fetched_at when present, else
+        # latest insertion) — same precedence the
+        # frontend would otherwise need to apply.
+        if "fetched_at" in df.columns:
+            df = (
+                df.sort_values(["date", "fetched_at"])
+                .drop_duplicates(
+                    subset=["date"], keep="last",
+                )
+            )
+        else:
+            df = df.drop_duplicates(
+                subset=["date"], keep="last",
+            )
+
         points: list[OHLCVPoint] = []
         for _, row in df.iterrows():
             points.append(

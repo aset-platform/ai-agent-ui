@@ -805,9 +805,18 @@ def batch_data_refresh(
                 query_iceberg_df,
             )
 
+            # Existing-keys query filters NaN-close
+            # rows so a stuck NaN row from a previous
+            # Yahoo gap doesn't block a fresh re-fetch
+            # from being inserted. Those NaN rows are
+            # then explicitly cleaned up below for the
+            # exact (ticker, date) pairs we're about to
+            # write.
             existing = query_iceberg_df(
                 "stocks.ohlcv",
-                "SELECT ticker, date FROM ohlcv",
+                "SELECT ticker, date FROM ohlcv "
+                "WHERE close IS NOT NULL "
+                "AND NOT isnan(close)",
             )
             combined["_date"] = pd.to_datetime(
                 combined["date"],
@@ -884,6 +893,70 @@ def batch_data_refresh(
                     )
             else:
                 new_only = combined
+
+            # Pre-delete any historical NaN-close rows
+            # for the (ticker, date) pairs we're about
+            # to insert. The existing-keys filter above
+            # excludes NaN rows from the dedup set, so
+            # `new_only` will include rows that overlap
+            # with NaN rows on disk — without this
+            # delete we'd end up with two rows per
+            # (ticker, date), causing the duplicate-
+            # timestamp chart assertion. No-op when
+            # there are no NaN rows to clean up.
+            if not new_only.empty:
+                try:
+                    nan_pairs_df = new_only[
+                        ["ticker", "_date"]
+                    ].drop_duplicates()
+                    nan_tickers = (
+                        nan_pairs_df["ticker"]
+                        .unique()
+                        .tolist()
+                    )
+                    nan_dates = sorted(
+                        set(
+                            d.isoformat()
+                            for d in nan_pairs_df[
+                                "_date"
+                            ]
+                        ),
+                    )
+                    if nan_tickers and nan_dates:
+                        from pyiceberg.expressions import (
+                            And as _And,
+                            In as _In,
+                            IsNaN as _IsNaN,
+                            IsNull as _IsNull,
+                            Or as _Or,
+                        )
+
+                        from tools._stock_shared import (
+                            _require_repo as _req_repo,
+                        )
+
+                        _req_repo().delete_rows(
+                            "stocks.ohlcv",
+                            _And(
+                                _In(
+                                    "ticker",
+                                    nan_tickers,
+                                ),
+                                _In(
+                                    "date", nan_dates,
+                                ),
+                                _Or(
+                                    _IsNull("close"),
+                                    _IsNaN("close"),
+                                ),
+                            ),
+                        )
+                except Exception:
+                    _logger.debug(
+                        "[batch] NaN pre-delete "
+                        "failed (non-fatal)",
+                        exc_info=True,
+                    )
 
             new_only = new_only.drop(
                 columns=["_date"],
