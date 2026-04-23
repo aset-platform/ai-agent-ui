@@ -65,7 +65,7 @@ class MessageCompressor:
     def __init__(
         self,
         max_history_turns: int = 3,
-        max_tool_result_chars: int = 800,
+        max_tool_result_chars: int = 4000,
         condensed_prompt_ratio: float = 0.4,
     ) -> None:
         self._max_history = max_history_turns
@@ -363,9 +363,11 @@ class MessageCompressor:
         if est <= target_tokens:
             return messages
 
-        # Pass 2
+        # Pass 2 — drop history, keep tool results wide
+        # enough for a typical portfolio / screener table
+        # (~20 rows of markdown).
         result = self._truncate_history(messages, 1)
-        result = self._truncate_tool_results(result, 500)
+        result = self._truncate_tool_results(result, 2500)
         est = TokenBudget.estimate_tokens(result)
         if est <= target_tokens:
             _logger.debug(
@@ -375,9 +377,11 @@ class MessageCompressor:
             )
             return result
 
-        # Pass 3
+        # Pass 3 — last resort: strip all history + tighter
+        # tool cap.  Still generous enough to keep 10-12
+        # portfolio rows intact.
         result = self._truncate_history(result, 0)
-        result = self._truncate_tool_results(result, 300)
+        result = self._truncate_tool_results(result, 1500)
         _logger.debug(
             "Progressive pass 3: %d tokens (target %d)",
             TokenBudget.estimate_tokens(result),

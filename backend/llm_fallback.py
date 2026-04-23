@@ -8,7 +8,7 @@ paid fallback.
 Tier order (default)::
 
     1. llama-3.3-70b-versatile   (12K TPM, parallel tools)
-    2. kimi-k2-instruct          (10K TPM, parallel tools)
+    2. qwen3-32b                 (6K TPM, 500K TPD)
     3. gpt-oss-120b              (8K TPM, quality)
     4. llama-4-scout-17b         (30K TPM, fast)
     5. claude-sonnet-4-6         (paid, unlimited)
@@ -27,7 +27,7 @@ Typical usage::
     llm = FallbackLLM(
         groq_models=[
             "llama-3.3-70b-versatile",
-            "moonshotai/kimi-k2-instruct",
+            "qwen/qwen3-32b",
             "openai/gpt-oss-120b",
             "meta-llama/llama-4-scout-17b-16e-instruct",
         ],
@@ -267,6 +267,19 @@ class FallbackLLM:
                 ],
             )
 
+        # Per-request model pinning — prevents
+        # round-robin rotation within a single ReAct
+        # iteration loop.  Call pin_reset() before
+        # each new request context.
+        self._pinned_model: str | None = None
+
+        # Bound tools cache for BYO path — populated on
+        # first ``bind_tools`` call, consumed when user
+        # keys route through a fresh LangChain client.
+        self._bound_tools: list[Any] | None = None
+        self._bound_tools_kwargs: dict = {}
+        self._temperature = temperature
+
         # Anthropic fallback (None = disabled for test).
         self._anthropic_model = anthropic_model
         if anthropic_model:
@@ -290,6 +303,11 @@ class FallbackLLM:
         Returns:
             This :class:`FallbackLLM` instance.
         """
+        # Remember the bound tools so BYO can rebuild
+        # per-user-keyed clients with the same tool set.
+        self._bound_tools = tools
+        self._bound_tools_kwargs = kwargs
+
         if self._ollama_tier is not None:
             _on, _or, _ob = self._ollama_tier
             _ob = _or.bind_tools(tools, **kwargs)
@@ -310,6 +328,16 @@ class FallbackLLM:
                 tools, **kwargs
             )
         return self
+
+    def pin_reset(self) -> None:
+        """Reset model pin for a new request context.
+
+        Call this before each sub-agent iteration loop
+        so the first ``invoke()`` selects a fresh model
+        via round-robin, then subsequent iterations
+        reuse it.
+        """
+        self._pinned_model = None
 
     def _try_model(
         self,
@@ -386,13 +414,47 @@ class FallbackLLM:
                 )
                 return None
 
+        # BYO override: swap in a user-keyed ChatGroq when a
+        # BYOContext is active for this request.  Falls back
+        # to the platform client on any build error.
+        from backend.llm_byo import (
+            get_active_byo_context as _get_byo,
+            get_user_groq_client as _uclient,
+        )
+
+        _byo = _get_byo()
+        _invoke_llm = bound_llm
+        _key_source = "platform"
+        if _byo is not None and _byo.groq_key:
+            try:
+                _user_raw = _uclient(
+                    _byo.groq_key,
+                    model_name,
+                    self._temperature,
+                )
+                if self._bound_tools is not None:
+                    _invoke_llm = _user_raw.bind_tools(
+                        self._bound_tools,
+                        **self._bound_tools_kwargs,
+                    )
+                else:
+                    _invoke_llm = _user_raw
+                _key_source = "user"
+            except Exception:  # noqa: BLE001
+                _logger.warning(
+                    "BYO Groq client build failed; "
+                    "falling back to platform key "
+                    "(user=%s)",
+                    _byo.user_id,
+                )
+
         _t0 = time.monotonic()
         try:
             _kw = dict(kwargs)
             if trace_cbs:
                 _kw.setdefault("config", {})
                 _kw["config"]["callbacks"] = trace_cbs
-            result = bound_llm.invoke(
+            result = _invoke_llm.invoke(
                 cur_compressed, **_kw,
             )
             _ms = int(
@@ -415,6 +477,7 @@ class FallbackLLM:
                     prompt_tokens=_pt,
                     completion_tokens=_ct,
                     latency_ms=_ms,
+                    key_source=_key_source,
                 )
             _logger.info(
                 "Route → %s | iter=%d "
@@ -620,6 +683,41 @@ class FallbackLLM:
                         self._agent_id,
                     )
 
+        # Step 2b: Try pinned model first (per-request
+        # affinity).  Avoids round-robin rotation within
+        # a single ReAct iteration loop.
+        _pin_tier = 1 if self._ollama_tier else 0
+        if self._pinned_model is not None:
+            info = self._model_lookup.get(
+                self._pinned_model,
+            )
+            if info is not None:
+                _, _, bound_llm = info
+                result = self._try_model(
+                    self._pinned_model,
+                    bound_llm,
+                    compressed,
+                    est,
+                    messages,
+                    iteration,
+                    _pin_tier,
+                    _trace_cbs,
+                    _user,
+                    **kwargs,
+                )
+                if result is not None:
+                    return result
+            # Pinned model failed (budget or error) —
+            # clear pin and fall through to normal
+            # cascade below.
+            _logger.info(
+                "Pinned model %s failed, "
+                "unpinning (agent=%s)",
+                self._pinned_model,
+                self._agent_id,
+            )
+            self._pinned_model = None
+
         # Step 3: Try Groq tiers — pool-aware or flat.
         _tier_offset = 1 if self._ollama_tier else 0
         _tier_idx = _tier_offset
@@ -648,6 +746,7 @@ class FallbackLLM:
                         **kwargs,
                     )
                     if result is not None:
+                        self._pinned_model = model_name
                         return result
                     _tier_idx += 1
         else:
@@ -668,6 +767,7 @@ class FallbackLLM:
                     **kwargs,
                 )
                 if result is not None:
+                    self._pinned_model = model_name
                     return result
 
         # Step 3b: Try Ollama AFTER Groq if not ollama_first.
@@ -783,13 +883,45 @@ class FallbackLLM:
                 f"No paid fallback available."
             )
 
+        # BYO override for Anthropic leg.
+        from backend.llm_byo import (
+            get_active_byo_context as _get_byo2,
+            get_user_anthropic_client as _uanth,
+        )
+
+        _byo2 = _get_byo2()
+        _anth_llm = self._anthropic_bound
+        _anth_key_source = "platform"
+        if _byo2 is not None and _byo2.anthropic_key:
+            try:
+                _user_raw = _uanth(
+                    _byo2.anthropic_key,
+                    self._anthropic_model,
+                    self._temperature,
+                )
+                if self._bound_tools is not None:
+                    _anth_llm = _user_raw.bind_tools(
+                        self._bound_tools,
+                        **self._bound_tools_kwargs,
+                    )
+                else:
+                    _anth_llm = _user_raw
+                _anth_key_source = "user"
+            except Exception:  # noqa: BLE001
+                _logger.warning(
+                    "BYO Anthropic client build failed; "
+                    "falling back to platform key "
+                    "(user=%s)",
+                    _byo2.user_id,
+                )
+
         _t0 = time.monotonic()
         _akw = dict(kwargs)
         if _trace_cbs:
             _akw.setdefault("config", {})
             _akw["config"]["callbacks"] = _trace_cbs
         _sanitize_tool_ids(compressed)
-        result = self._anthropic_bound.invoke(
+        result = _anth_llm.invoke(
             compressed,
             **_akw,
         )
@@ -812,6 +944,7 @@ class FallbackLLM:
                 prompt_tokens=_pt,
                 completion_tokens=_ct,
                 latency_ms=_ms,
+                key_source=_anth_key_source,
             )
         _logger.warning(
             "All Groq tiers exhausted → Anthropic "

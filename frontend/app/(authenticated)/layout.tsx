@@ -15,6 +15,7 @@ import {
   useLayoutContext,
 } from "@/providers/LayoutProvider";
 import { LayoutProvider } from "@/providers/LayoutProvider";
+import { PortfolioActionsProvider } from "@/providers/PortfolioActionsProvider";
 import { useEditProfile, type UserProfile } from "@/hooks/useEditProfile";
 import { useChangePassword } from "@/hooks/useChangePassword";
 import { useSessionManagement } from "@/hooks/useSessionManagement";
@@ -187,9 +188,11 @@ export default function AuthenticatedLayout({
   return (
     <LayoutProvider>
       <ChatProvider>
-        <AuthenticatedShell>
-          {children}
-        </AuthenticatedShell>
+        <PortfolioActionsProvider>
+          <AuthenticatedShell>
+            {children}
+          </AuthenticatedShell>
+        </PortfolioActionsProvider>
       </ChatProvider>
     </LayoutProvider>
   );

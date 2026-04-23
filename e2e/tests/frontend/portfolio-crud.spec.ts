@@ -31,7 +31,24 @@ test.describe("Portfolio CRUD", () => {
     void seededPortfolio; // ensure fixture runs
     portfolio = new PortfolioCrudPage(page);
     await portfolio.gotoDashboard();
-    await waitForPageReady(page);
+    // Wait for sidebar (dashboard rendered)
+    await expect(
+      page.getByTestId("sidebar"),
+    ).toBeVisible({ timeout: 15_000 });
+    // Wait for WatchlistWidget to appear in DOM, then
+    // scroll to it. It's far below the fold on the
+    // dashboard page.
+    const addBtn = page.getByTestId(
+      "dashboard-add-stock-btn",
+    );
+    await addBtn.waitFor({
+      state: "attached",
+      timeout: 30_000,
+    });
+    await addBtn.scrollIntoViewIfNeeded();
+    await expect(addBtn).toBeVisible({
+      timeout: 5_000,
+    });
   });
 
   // ── Add Stock ───────────────────────────────────────
@@ -68,7 +85,7 @@ test.describe("Portfolio CRUD", () => {
 
     // Wait for modal to close and watchlist to update
     await page.waitForTimeout(2_000);
-    await waitForPageReady(page);
+    await page.waitForTimeout(2_000);
 
     // Verify the ticker appears in the watchlist
     const row = portfolio.isTickerVisible(TEST_TICKER);
@@ -127,8 +144,7 @@ test.describe("Portfolio CRUD", () => {
     // Quantity input should have a non-empty value
     const qtyInput = portfolio
       .editStockModal()
-      .getByTestId("edit-stock-quantity-input");
-    // data-testid="edit-stock-quantity-input"
+      .getByTestId("edit-stock-quantity");
     const qtyValue = await qtyInput.inputValue();
     expect(qtyValue).not.toBe("");
     expect(Number(qtyValue)).toBeGreaterThan(0);
@@ -146,7 +162,7 @@ test.describe("Portfolio CRUD", () => {
 
     // Wait for modal to close and watchlist to update
     await page.waitForTimeout(2_000);
-    await waitForPageReady(page);
+    await page.waitForTimeout(2_000);
 
     // The row should still be visible
     const row = portfolio.isTickerVisible(ticker);
@@ -191,7 +207,7 @@ test.describe("Portfolio CRUD", () => {
 
     // Reload to ensure the holding is visible
     await page.reload();
-    await waitForPageReady(page);
+    await page.waitForTimeout(2_000);
 
     const rowBefore = portfolio.isTickerVisible(
       disposableTicker,
@@ -204,7 +220,7 @@ test.describe("Portfolio CRUD", () => {
 
     // Wait for removal
     await page.waitForTimeout(2_000);
-    await waitForPageReady(page);
+    await page.waitForTimeout(2_000);
 
     const rowAfter = portfolio.isTickerVisible(
       disposableTicker,

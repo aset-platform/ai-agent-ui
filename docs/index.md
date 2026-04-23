@@ -9,7 +9,7 @@ A fullstack agentic chat application with stock analysis, Prophet forecasting, a
 - **6 specialized AI agents** — Portfolio, Stock Analyst, Forecaster, Research, Sentiment, and Recommendation agents, each with purpose-built tool sets, routed by a LangGraph supervisor with 2-tier intent classification
 - **Context-aware multi-turn conversations** — PG-persisted conversation context with cross-session resume, rolling summary window, intent-aware follow-up detection
 - **Smart Funnel recommendations** — 3-stage pipeline (DuckDB pre-filter → gap analysis → LLM reasoning), market-scoped (India/US), unified quota system
-- **Prophet forecasting with ensemble correction** — 3/6/9-month price targets with 80% confidence bands, XGBoost ensemble, accuracy-adjusted scoring
+- **Prophet forecasting with enrichment** — volatility-regime adaptive (stable/moderate/volatile), 11 enriched regressors (fundamentals + microstructure), post-Prophet RSI/MACD/volume bias adjustment, composite confidence score with High/Medium/Low badges; sanity gates (exp cap 4.5x, extreme series skip)
 - **Historical portfolio tools** — daily value series, period comparison, time-travel queries with flexible date range support
 - **817-ticker pipeline** — automated daily refresh for 755 stocks + 54 ETFs + 8 indices/commodities, with analytics, sentiment, Piotroski F-Score across India and US markets
 - **Memory-augmented chat** — pgvector semantic memory retrieval (768-dim); facts + summaries persist and auto-inject into sub-agent prompts

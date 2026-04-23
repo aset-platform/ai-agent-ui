@@ -287,13 +287,13 @@ Returns health status for each configured Groq LLM tier.
       "p95_latency_ms": 580.0
     },
     {
-      "model": "moonshotai/kimi-k2-instruct",
-      "health": "degraded",
+      "model": "qwen/qwen3-32b",
+      "health": "healthy",
       "requests": 10,
-      "successes": 7,
-      "cascades": 3,
-      "avg_latency_ms": 450.2,
-      "p95_latency_ms": 890.0
+      "successes": 9,
+      "cascades": 1,
+      "avg_latency_ms": 380.4,
+      "p95_latency_ms": 720.0
     }
   ],
   "summary": {

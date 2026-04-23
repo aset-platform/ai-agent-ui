@@ -103,10 +103,19 @@ export function KpiTooltip({
 
   const updatePos = useCallback(() => {
     if (!iconRef.current) return;
-    const rect = iconRef.current.getBoundingClientRect();
+    const rect =
+      iconRef.current.getBoundingClientRect();
+    const tipW = 224; // w-56 = 14rem = 224px
+    const vw = window.innerWidth;
+    // Clamp left so tooltip stays in viewport
+    let left = rect.left;
+    if (left + tipW > vw - 8) {
+      left = vw - tipW - 8;
+    }
+    if (left < 8) left = 8;
     setPos({
       top: rect.bottom + 4,
-      left: rect.left,
+      left,
     });
   }, []);
 

@@ -30,6 +30,17 @@ _PORTFOLIO_SYSTEM_PROMPT = (
     "- If the user asks to compare two periods "
     "(e.g. 'this week vs last month') → call "
     "get_portfolio_comparison with both periods.\n"
+    "  Period mapping:\n"
+    "  - 'last week vs this week' → period1=\"2W\", "
+    "period2=\"1W\"\n"
+    "  - 'this month vs last month' → period1=\"2M\", "
+    "period2=\"1M\"\n"
+    "  - 'this week vs last 3 months' → "
+    "period1=\"3M\", period2=\"1W\"\n"
+    "  - Explicit dates → period1=\"2026-04-01:"
+    "2026-04-07\", period2=\"2026-04-08:2026-04-14\"\n"
+    "  - Single period → period1=\"1W\" (omit "
+    "period2)\n"
     "- If the user asks for a summary → call "
     "get_portfolio_summary.\n"
     "- If the user asks about risk → call "
@@ -43,7 +54,13 @@ _PORTFOLIO_SYSTEM_PROMPT = (
     "\\u2192\",\"prompt\":\"analyse TICKER\"}]-->\n"
     "- NEVER fabricate tickers, prices, values, "
     "percentages, or any numbers. If a tool returns "
-    "no data, say so — do not make up data.\n\n"
+    "no data, say so — do not make up data.\n"
+    "- If a tool output ends with a literal "
+    "`[truncated N chars]` marker, list only the "
+    "rows you can see and explicitly tell the user "
+    "some rows were trimmed. Never invent tickers "
+    "or phrase it as 'confirmed in memory' / "
+    "'truncated in display'.\n\n"
     "CURRENCY RULES (CRITICAL):\n"
     "- ALWAYS use the correct currency symbol from "
     "the tool output: ₹ for INR, $ for USD.\n"
@@ -79,6 +96,7 @@ PORTFOLIO_CONFIG = SubAgentConfig(
         "and rebalancing suggestions."
     ),
     system_prompt=_PORTFOLIO_SYSTEM_PROMPT,
+    skip_synthesis=True,
     tool_names=[
         "get_portfolio_holdings",
         "get_portfolio_performance",

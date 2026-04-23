@@ -78,7 +78,7 @@ class TestTierHealthCards:
     def down_tier(self):
         """Return a down tier dict."""
         return {
-            "model": "moonshotai/kimi-k2-instruct",
+            "model": "qwen/qwen3-32b",
             "status": "down",
             "failures_5m": 6,
             "successes_5m": 0,
@@ -141,8 +141,8 @@ class TestTierHealthCards:
     def test_short_model_names(self):
         """Model names are shortened correctly."""
         assert _short_model(
-            "moonshotai/kimi-k2-instruct",
-        ) == "kimi-k2"
+            "qwen/qwen3-32b",
+        ) == "qwen3-32b"
         assert _short_model(
             "llama-3.3-70b-versatile",
         ) == "llama-3.3-70b"

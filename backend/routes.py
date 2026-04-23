@@ -20,18 +20,43 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from langsmith.middleware import TracingMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from models import ChatRequest, ChatResponse
 from slowapi.errors import RateLimitExceeded
 from tools._ticker_linker import set_current_user
 
 from auth.api import create_auth_router, get_ticker_router
-from auth.dependencies import get_current_user
+from auth.dependencies import get_current_user, pro_or_superuser
 from auth.models import UserContext
 from auth.rate_limit import limiter, rate_limit_exceeded_handler
 
 _logger = logging.getLogger(__name__)
+
+
+def _iso_utc(ts) -> str | None:
+    """Serialize a datetime / pandas Timestamp as ISO 8601 UTC
+    with a trailing ``Z`` so the frontend's ``new Date()``
+    parses it as UTC instead of local time. Returns ``None``
+    when *ts* is falsy or can't be coerced.
+    """
+    if ts is None:
+        return None
+    try:
+        from datetime import datetime, timezone
+        if hasattr(ts, "tzinfo"):
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            return (
+                ts.astimezone(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+        if isinstance(ts, str):
+            return ts if "Z" in ts or "+" in ts else f"{ts}Z"
+        return str(ts)
+    except Exception:
+        return str(ts) if ts else None
 
 
 def create_app(
@@ -225,8 +250,88 @@ def create_app(
                 detail="Usage tracking unavailable",
             )
 
-    async def _track_usage(user_id: str) -> None:
-        """Increment monthly usage count."""
+    async def _bump_chat_counter(
+        user_id: str,
+        role: str,
+        byo_active: bool = False,
+    ) -> None:
+        """Increment the "free allowance used" counter.
+
+        Skipped for superusers (exempt from the allowance)
+        and for BYO-routed turns (once the user is paying
+        their own bill, the free-allowance banner should
+        stay pinned at 10 — not drift past).
+        """
+        if role == "superuser" or byo_active:
+            return
+        try:
+            from auth.endpoints.helpers import (
+                _get_repo,
+            )
+
+            await _get_repo().increment_chat_counter(user_id)
+        except Exception:
+            _logger.debug(
+                "Chat counter skipped for %s",
+                user_id,
+            )
+
+    async def _resolve_byo_for_request(
+        user: UserContext,
+    ):
+        """Resolve BYO context for the current chat turn.
+
+        Returns a BYOContext when the user must route through
+        their own keys.  May raise HTTPException(429) when the
+        user is over the free allowance and has no key, or has
+        exceeded their own monthly limit.
+        """
+        if user.role == "superuser":
+            return None
+        try:
+            from auth.endpoints.helpers import (
+                _get_repo,
+            )
+            from backend.llm_byo import (
+                resolve_byo_for_chat,
+            )
+
+            repo = _get_repo()
+            user_row = await repo.get_by_id(
+                str(user.user_id),
+            )
+            if user_row is None:
+                return None
+            return await resolve_byo_for_chat(
+                user_id=str(user.user_id),
+                role=user.role,
+                chat_request_count=int(
+                    user_row.get(
+                        "chat_request_count", 0,
+                    ) or 0
+                ),
+                byo_monthly_limit=int(
+                    user_row.get(
+                        "byo_monthly_limit", 100,
+                    ) or 100
+                ),
+            )
+        except HTTPException:
+            raise
+        except Exception:
+            _logger.warning(
+                "BYO resolve failed for %s",
+                user.user_id,
+                exc_info=True,
+            )
+            return None
+
+    async def _track_usage(
+        user_id: str,
+        role: str = "general",
+        byo_active: bool = False,
+    ) -> None:
+        """Increment monthly usage + BYO allowance counters."""
         try:
             from usage_tracker import increment_usage
 
@@ -236,10 +341,15 @@ def create_app(
                 "Usage tracking skipped for %s",
                 user_id,
             )
+        await _bump_chat_counter(
+            user_id, role, byo_active=byo_active,
+        )
 
     def _track_usage_sync(
         user_id: str,
         loop=None,
+        role: str = "general",
+        byo_active: bool = False,
     ) -> None:
         """Sync wrapper for thread contexts.
 
@@ -263,6 +373,24 @@ def create_app(
                 "Usage tracking skipped for %s",
                 user_id,
             )
+        # BYO counter — non-superuser, non-BYO turns only.
+        if role == "superuser" or byo_active:
+            return
+        try:
+            if loop is not None and loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    _bump_chat_counter(user_id, role),
+                    loop,
+                )
+            else:
+                asyncio.run(
+                    _bump_chat_counter(user_id, role),
+                )
+        except Exception:
+            _logger.debug(
+                "Chat counter sync skipped for %s",
+                user_id,
+            )
 
     # ---------------------------------------------------------------
     # Core route handlers — shared by root and /v1 mounts
@@ -277,13 +405,19 @@ def create_app(
         """Sync agent dispatch (POST /chat)."""
         req.user_id = current_user.user_id
         await _enforce_quota(req.user_id)
+        _byo_ctx = await _resolve_byo_for_request(
+            current_user,
+        )
 
         # ── LangGraph path ────────────────────────
         if graph is not None and settings.use_langgraph:
-            return await _chat_langgraph(req)
+            return await _chat_langgraph(
+                req, current_user.role, _byo_ctx,
+            )
 
         # ── Legacy path ───────────────────────────
         from agents.router import route as _route
+        from backend.llm_byo import apply_byo_context
 
         resolved = _route(req.message)
         agent = agent_registry.get(resolved)
@@ -296,9 +430,10 @@ def create_app(
 
             def _run_with_user():
                 set_current_user(req.user_id)
-                return agent.run(
-                    req.message, req.history,
-                )
+                with apply_byo_context(_byo_ctx):
+                    return agent.run(
+                        req.message, req.history,
+                    )
 
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
@@ -328,20 +463,31 @@ def create_app(
                 status_code=500,
                 detail="Agent execution failed",
             )
-        await _track_usage(req.user_id)
+        await _track_usage(
+            req.user_id,
+            current_user.role,
+            byo_active=_byo_ctx is not None,
+        )
         return ChatResponse(
             response=result,
             agent_id=req.agent_id,
         )
 
-    async def _chat_langgraph(req: ChatRequest):
+    async def _chat_langgraph(
+        req: ChatRequest,
+        role: str = "general",
+        byo_ctx=None,
+    ):
         """Sync chat via LangGraph supervisor graph."""
+        from backend.llm_byo import apply_byo_context
+
         input_state = _build_graph_input(req)
         try:
 
             def _invoke_with_user():
                 set_current_user(req.user_id)
-                return graph.invoke(input_state)
+                with apply_byo_context(byo_ctx):
+                    return graph.invoke(input_state)
 
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
@@ -366,7 +512,10 @@ def create_app(
                 status_code=500,
                 detail="Agent execution failed",
             )
-        await _track_usage(req.user_id)
+        await _track_usage(
+            req.user_id, role,
+            byo_active=byo_ctx is not None,
+        )
         return ChatResponse(
             response=result.get("final_response", ""),
             agent_id=result.get("current_agent", "graph"),
@@ -381,12 +530,18 @@ def create_app(
         """NDJSON streaming (POST /chat/stream)."""
         req.user_id = current_user.user_id
         await _enforce_quota(req.user_id)
+        _byo_ctx = await _resolve_byo_for_request(
+            current_user,
+        )
         _loop = asyncio.get_running_loop()
 
         # ── LangGraph path ────────────────────────
         if graph is not None and settings.use_langgraph:
             return _stream_langgraph(
-                req, loop=_loop,
+                req,
+                loop=_loop,
+                role=current_user.role,
+                byo_ctx=_byo_ctx,
             )
 
         # ── Legacy path ───────────────────────────
@@ -402,6 +557,8 @@ def create_app(
 
         timeout = settings.agent_timeout_seconds
 
+        from backend.llm_byo import apply_byo_context
+
         def generate():
             """Run agent.stream() in a thread."""
             event_queue: queue.Queue = queue.Queue()
@@ -409,13 +566,17 @@ def create_app(
             def run() -> None:
                 set_current_user(req.user_id)
                 try:
-                    for event in agent.stream(
-                        req.message,
-                        req.history,
-                    ):
-                        event_queue.put(event)
+                    with apply_byo_context(_byo_ctx):
+                        for event in agent.stream(
+                            req.message,
+                            req.history,
+                        ):
+                            event_queue.put(event)
                     _track_usage_sync(
-                        req.user_id, loop=_loop,
+                        req.user_id,
+                        loop=_loop,
+                        role=current_user.role,
+                        byo_active=_byo_ctx is not None,
                     )
                 except Exception as exc:
                     _logger.warning(
@@ -620,11 +781,16 @@ def create_app(
             )
 
     def _stream_langgraph(
-        req: ChatRequest, loop=None,
+        req: ChatRequest,
+        loop=None,
+        role: str = "general",
+        byo_ctx=None,
     ):
         """NDJSON streaming via LangGraph graph."""
         timeout = settings.agent_timeout_seconds
         input_state = _build_graph_input(req)
+
+        from backend.llm_byo import apply_byo_context
 
         def generate():
             event_queue: queue.Queue = queue.Queue()
@@ -641,31 +807,35 @@ def create_app(
 
                     set_event_sink(_sink)
                     try:
-                        result = graph.invoke(
-                            input_state,
-                        )
+                        with apply_byo_context(byo_ctx):
+                            result = graph.invoke(
+                                input_state,
+                            )
+                            # Keep the summary-update LLM
+                            # call under the same BYO scope
+                            # so it uses the user's key
+                            # when active.
+                            _update_conversation_context(
+                                session_id=(
+                                    req.session_id or ""
+                                ),
+                                user_input=req.message,
+                                response=result.get(
+                                    "final_response", "",
+                                ),
+                                agent=result.get(
+                                    "current_agent", "",
+                                ),
+                                intent=result.get(
+                                    "intent", "",
+                                ),
+                                tickers=result.get(
+                                    "tickers", [],
+                                ),
+                                user_id=req.user_id or "",
+                            )
                     finally:
                         set_event_sink(None)
-                    # Update conversation context.
-                    _update_conversation_context(
-                        session_id=(
-                            req.session_id or ""
-                        ),
-                        user_input=req.message,
-                        response=result.get(
-                            "final_response", "",
-                        ),
-                        agent=result.get(
-                            "current_agent", "",
-                        ),
-                        intent=result.get(
-                            "intent", "",
-                        ),
-                        tickers=result.get(
-                            "tickers", [],
-                        ),
-                        user_id=req.user_id or "",
-                    )
                     # Emit final
                     event_queue.put(
                         json.dumps(
@@ -678,7 +848,10 @@ def create_app(
                         + "\n"
                     )
                     _track_usage_sync(
-                        req.user_id, loop=loop,
+                        req.user_id,
+                        loop=loop,
+                        role=role,
+                        byo_active=byo_ctx is not None,
                     )
                 except Exception as exc:
                     event_queue.put(
@@ -738,28 +911,50 @@ def create_app(
     # ---------------------------------------------------------------
 
     async def _admin_metrics(
-        current_user=None,
+        scope: str = "all",
+        user: UserContext = Depends(pro_or_superuser),
     ):
-        """GET /admin/metrics — LLM observability data.
+        """GET /admin/metrics?scope=self|all — LLM observability.
 
-        Combines real-time cascade stats from the
-        in-memory collector with persistent request
-        totals from the Iceberg ``llm_usage`` table
-        so the count matches the dashboard widget.
+        * ``scope='all'`` (default for superuser): global
+          request totals + all cascade stats.
+        * ``scope='self'`` (default for pro): requests +
+          cost totals filtered to the caller.  Token-
+          budget block omitted (global-only metric).
+
+        Pro callers may only pass ``scope='self'`` — 403
+        on ``scope='all'``.
         """
-        result: dict = {"timestamp": time.time()}
-        if token_budget is not None:
-            result["models"] = token_budget.get_status()
-        else:
-            result["models"] = {}
+        if scope not in ("self", "all"):
+            raise HTTPException(
+                status_code=400,
+                detail="scope must be 'self' or 'all'",
+            )
+        if scope == "all" and user.role != "superuser":
+            raise HTTPException(
+                status_code=403,
+                detail="scope='all' requires superuser",
+            )
+
+        result: dict = {
+            "timestamp": time.time(),
+            "scope": scope,
+        }
+        if scope == "all":
+            if token_budget is not None:
+                result["models"] = (
+                    token_budget.get_status()
+                )
+            else:
+                result["models"] = {}
 
         cascade_stats: dict = {}
-        if obs_collector is not None:
+        if scope == "all" and obs_collector is not None:
             cascade_stats = obs_collector.get_stats()
 
         # Override ephemeral request count with
-        # persistent Iceberg total (last 30 days)
-        # so it matches the dashboard LLM widget.
+        # persistent Iceberg total (last 30 days).  For
+        # self-scope, filter by user_id.
         try:
             from tools._stock_shared import (
                 _require_repo,
@@ -767,17 +962,127 @@ def create_app(
 
             repo = _require_repo()
             usage = repo.get_dashboard_llm_usage(
-                user_id=None,
+                user_id=(
+                    str(user.user_id)
+                    if scope == "self" else None
+                ),
                 days=30,
             )
             cascade_stats["requests_total"] = int(
                 usage.get("total_requests", 0)
             )
+            if scope == "self":
+                # Surface per-user totals directly for
+                # the My LLM Usage tab.
+                cascade_stats["usage"] = usage
+                # Mirror per-model into top-level ``models``
+                # so the frontend has a stable key regardless
+                # of superuser vs self shape.
+                result["models"] = dict(
+                    usage.get("per_model", {}),
+                )
+                result["daily_trend"] = usage.get(
+                    "daily_trend", [],
+                )
         except Exception:
             _logger.debug(
                 "Iceberg LLM usage fallback",
                 exc_info=True,
             )
+
+        # Self-scope additions: quota + provider status
+        # for the "My LLM Usage" tab.
+        if scope == "self":
+            try:
+                from auth.endpoints.helpers import (
+                    _get_repo,
+                )
+
+                auth_repo = _get_repo()
+                user_row = await auth_repo.get_by_id(
+                    str(user.user_id),
+                )
+                keys = await auth_repo.list_llm_keys(
+                    str(user.user_id),
+                )
+                keys_by_provider = {
+                    k["provider"]: k for k in keys
+                }
+                # ``request_count_30d`` on the key row is a
+                # future-use field; the authoritative BYO
+                # chat-turn count for the current IST month
+                # lives in Redis.
+                from backend.llm_byo import (
+                    read_byo_month_used,
+                )
+                byo_month_used = read_byo_month_used(
+                    str(user.user_id),
+                )
+                _raw_used = int(
+                    (user_row or {}).get(
+                        "chat_request_count", 0,
+                    ) or 0
+                )
+                # Clamp to the 10-turn ceiling for display —
+                # any historical drift past 10 (from before
+                # the BYO-active guard) otherwise shows up
+                # as "15 of 10 used" in the banner.
+                result["quota"] = {
+                    "free_allowance_total": 10,
+                    "free_allowance_used": min(
+                        _raw_used, 10,
+                    ),
+                    "byo_monthly_limit": int(
+                        (user_row or {}).get(
+                            "byo_monthly_limit", 100,
+                        ) or 100
+                    ),
+                    "byo_month_used": byo_month_used,
+                }
+                providers: list[dict] = []
+                for p in ("groq", "anthropic"):
+                    row = keys_by_provider.get(p)
+                    providers.append(
+                        {
+                            "provider": p,
+                            "configured": row is not None,
+                            "label": (
+                                row.get("label")
+                                if row else None
+                            ),
+                            "masked_key": (
+                                row.get("masked_key")
+                                if row else None
+                            ),
+                            "last_used_at": (
+                                _iso_utc(
+                                    row["last_used_at"],
+                                )
+                                if row and row.get(
+                                    "last_used_at",
+                                ) else None
+                            ),
+                            "request_count_30d": (
+                                int(
+                                    row["request_count_30d"],
+                                )
+                                if row else 0
+                            ),
+                        }
+                    )
+                providers.append(
+                    {
+                        "provider": "ollama",
+                        "native": True,
+                        "configured": True,
+                    },
+                )
+                result["providers"] = providers
+            except Exception:
+                _logger.debug(
+                    "self-quota enrichment failed",
+                    exc_info=True,
+                )
 
         result["cascade_stats"] = cascade_stats
         return result
@@ -941,10 +1246,14 @@ def create_app(
         Args:
             dry_run: If True (default), report only.
         """
+        import asyncio
+
         from stocks.retention import RetentionManager
 
         mgr = RetentionManager()
-        results = mgr.run_cleanup(dry_run=dry_run)
+        results = await asyncio.to_thread(
+            mgr.run_cleanup, dry_run=dry_run,
+        )
         return {
             "results": [
                 {
@@ -1033,7 +1342,10 @@ def create_app(
         "/admin/metrics",
         _admin_metrics,
         methods=["GET"],
-        dependencies=[Depends(superuser_only)],
+        # Guard moved into the handler — declares its
+        # own Depends(pro_or_superuser) with scope
+        # enforcement. A route-level superuser_only
+        # here would short-circuit pro callers.
     )
     admin_router.add_api_route(
         "/admin/tier-health",
@@ -1056,10 +1368,13 @@ def create_app(
         table_ids = body.get("table_ids", [])
         if not table_ids:
             return {"results": []}
+        import asyncio
+
         from stocks.retention import RetentionManager
 
         mgr = RetentionManager()
-        results = mgr.run_cleanup_tables(
+        results = await asyncio.to_thread(
+            mgr.run_cleanup_tables,
             table_ids,
             dry_run=False,
         )
@@ -1103,11 +1418,37 @@ def create_app(
         count = await reset_monthly_usage()
         return {"reset_count": count}
 
-    async def _admin_usage_stats():
-        """GET /admin/usage-stats — all users + counts."""
+    async def _admin_usage_stats(
+        scope: str = "all",
+        user: UserContext = Depends(pro_or_superuser),
+    ):
+        """GET /admin/usage-stats?scope=self|all — usage counts.
+
+        * superuser default ``scope='all'`` returns every
+          user's monthly-usage row.
+        * pro default (or when superuser passes
+          ``scope='self'``) returns only the caller's row.
+        """
+        if scope not in ("self", "all"):
+            raise HTTPException(
+                status_code=400,
+                detail="scope must be 'self' or 'all'",
+            )
+        if scope == "all" and user.role != "superuser":
+            raise HTTPException(
+                status_code=403,
+                detail="scope='all' requires superuser",
+            )
         from usage_tracker import get_usage_stats
 
-        return {"users": await get_usage_stats()}
+        all_rows = await get_usage_stats()
+        if scope == "self":
+            uid = str(user.user_id)
+            all_rows = [
+                r for r in all_rows
+                if str(r.get("user_id", "")) == uid
+            ]
+        return {"users": all_rows, "scope": scope}
 
     async def _admin_reset_selected(
         request: Request,
@@ -1132,7 +1473,8 @@ def create_app(
         "/admin/usage-stats",
         _admin_usage_stats,
         methods=["GET"],
-        dependencies=[Depends(superuser_only)],
+        # Guard is declared inside the handler (pro +
+        # superuser allowed, with scope enforcement).
     )
     admin_router.add_api_route(
         "/admin/reset-usage/selected",
@@ -1681,6 +2023,19 @@ def create_app(
         """GET /admin/data-health — data quality status."""
         from datetime import datetime, timedelta, timezone
 
+        # Cache 60s to avoid re-running DuckDB
+        # queries on every page load / poll.
+        from cache import get_cache
+
+        _cache = get_cache()
+        _ck = "cache:admin:data-health"
+        if _cache:
+            _hit = _cache.get(_ck)
+            if _hit:
+                import json
+
+                return json.loads(_hit)
+
         from db.duckdb_engine import query_iceberg_df
         from tools._stock_shared import _require_repo
 
@@ -1704,8 +2059,19 @@ def create_app(
             registry = repo.get_all_registry()
             all_tickers = set(registry.keys())
             total_registry = len(all_tickers)
-            # Analyzable: stocks + ETFs (for
-            # analytics, sentiment, forecasts)
+            # Illiquid tickers (flagged by detector) —
+            # carve out from analyzable so Data Health
+            # doesn't treat them as "missing".
+            illiquid_tickers = {
+                t
+                for t in all_tickers
+                if not registry[t].get(
+                    "is_tradeable", True,
+                )
+            }
+            # Analyzable: stocks + ETFs, excluding
+            # illiquid (for analytics, sentiment,
+            # forecasts).
             analyzable_tickers = {
                 t
                 for t in all_tickers
@@ -1713,8 +2079,10 @@ def create_app(
                     "ticker_type", "stock",
                 )
                 in ("stock", "etf")
+                and t not in illiquid_tickers
             }
-            # Financials: stocks only (for Piotroski)
+            # Financials: stocks only, excluding
+            # illiquid (for Piotroski).
             financial_tickers = {
                 t
                 for t in all_tickers
@@ -1722,11 +2090,13 @@ def create_app(
                     "ticker_type", "stock",
                 )
                 == "stock"
+                and t not in illiquid_tickers
             }
         except Exception:
             all_tickers = set()
             analyzable_tickers = set()
             financial_tickers = set()
+            illiquid_tickers = set()
             total_registry = 0
 
         result: dict = {
@@ -1736,6 +2106,10 @@ def create_app(
             ),
             "total_financial": len(
                 financial_tickers,
+            ),
+            "illiquid_count": len(illiquid_tickers),
+            "illiquid_tickers": sorted(
+                illiquid_tickers,
             ),
             "timestamp": time.time(),
         }
@@ -1790,7 +2164,9 @@ def create_app(
                             )
                         )
 
-                # Freshness per ticker
+                # Freshness per ticker — skip
+                # illiquid tickers so they don't
+                # inflate the "missing" count.
                 latest = query_iceberg_df(
                     "stocks.ohlcv",
                     "SELECT ticker, "
@@ -1802,6 +2178,9 @@ def create_app(
                     for _, row in (
                         latest.iterrows()
                     ):
+                        tk = row["ticker"]
+                        if tk in illiquid_tickers:
+                            continue
                         d = row["latest"]
                         if hasattr(d, "date"):
                             d = d.date()
@@ -1813,7 +2192,7 @@ def create_app(
                             o["stale_count"] += 1
                             o[
                                 "stale_tickers"
-                            ].append(row["ticker"])
+                            ].append(tk)
                     o["stale_tickers"] = sorted(
                         o["stale_tickers"]
                     )
@@ -1833,17 +2212,20 @@ def create_app(
                 "stale_count": 0,
             }
             try:
+                # Use latest run per ticker (by computed_at)
+                # to avoid old extreme values inflating counts.
                 df = query_iceberg_df(
                     "stocks.forecast_runs",
-                    "SELECT ticker, "
-                    "MAX(run_date) AS latest, "
-                    "MAX(target_3m_pct_change)"
-                    "  AS max_pct, "
-                    "MIN(target_3m_pct_change)"
-                    "  AS min_pct, "
-                    "MAX(mape) AS max_mape "
-                    "FROM forecast_runs "
-                    "GROUP BY ticker",
+                    "SELECT * FROM ("
+                    "  SELECT ticker, run_date,"
+                    "    target_3m_pct_change,"
+                    "    mape, computed_at,"
+                    "    ROW_NUMBER() OVER ("
+                    "      PARTITION BY ticker"
+                    "      ORDER BY computed_at DESC"
+                    "    ) AS rn"
+                    "  FROM forecast_runs"
+                    ") WHERE rn = 1",
                 )
                 if not df.empty:
                     tks = set(
@@ -1854,25 +2236,22 @@ def create_app(
                         analyzable_tickers - tks
                     )
                     for _, r in df.iterrows():
-                        mx = r.get("max_pct")
-                        mn = r.get("min_pct")
-                        if (
-                            mx is not None
-                            and mx > 100
-                        ) or (
-                            mn is not None
-                            and mn < -50
+                        pct = r.get(
+                            "target_3m_pct_change",
+                        )
+                        if pct is not None and (
+                            pct > 50 or pct < -50
                         ):
                             f[
                                 "extreme_predictions"
                             ] += 1
-                        mp = r.get("max_mape")
+                        mp = r.get("mape")
                         if (
                             mp is not None
                             and mp > 25
                         ):
                             f["high_mape"] += 1
-                        d = r["latest"]
+                        d = r["run_date"]
                         if hasattr(d, "date"):
                             d = d.date()
                         if d < stale_30d:
@@ -1995,6 +2374,14 @@ def create_app(
         result["piotroski"] = f_pio.result()
         result["analytics"] = f_ana.result()
 
+        # Cache for 60s
+        if _cache:
+            import json
+
+            _cache.set(
+                _ck, json.dumps(result), 60,
+            )
+
         return result
 
     async def _admin_fix_ohlcv(
@@ -2023,6 +2410,8 @@ def create_app(
         repo = _require_repo()
 
         if action == "backfill_nan":
+            import asyncio
+
             from pyiceberg.expressions import (
                 IsNaN,
                 IsNull,
@@ -2033,7 +2422,14 @@ def create_app(
                 IsNull("close"),
                 IsNaN("close"),
             )
-            repo.delete_rows("stocks.ohlcv", expr)
+            # Iceberg delete is sync I/O (~9s on
+            # 1.4M rows). Must offload to thread
+            # to avoid blocking uvicorn event loop.
+            await asyncio.to_thread(
+                repo.delete_rows,
+                "stocks.ohlcv",
+                expr,
+            )
             return {
                 "action": "backfill_nan",
                 "status": "deleted",
@@ -2043,99 +2439,125 @@ def create_app(
                 ),
             }
 
-        # backfill_missing
-        from db.duckdb_engine import query_iceberg_df
+        # backfill_missing — all sync I/O, offload
+        import asyncio
 
-        today = datetime.now(timezone.utc).date()
-        yesterday = today - timedelta(days=1)
-        registry = repo.get_all_registry()
+        def _run_backfill_missing():
+            from db.duckdb_engine import (
+                query_iceberg_df,
+            )
 
-        latest_df = query_iceberg_df(
-            "stocks.ohlcv",
-            "SELECT ticker, MAX(date) AS latest "
-            "FROM ohlcv GROUP BY ticker",
-        )
-        have_latest: set[str] = set()
-        if not latest_df.empty:
-            for _, row in latest_df.iterrows():
-                d = row["latest"]
-                if hasattr(d, "date"):
-                    d = d.date()
-                if d >= yesterday:
-                    have_latest.add(row["ticker"])
+            today_ = datetime.now(
+                timezone.utc,
+            ).date()
+            yesterday_ = today_ - timedelta(
+                days=1,
+            )
+            registry = repo.get_all_registry()
 
-        missing = sorted(
-            set(registry.keys()) - have_latest
-        )
-        if not missing:
-            return {
-                "action": "backfill_missing",
-                "status": "ok",
-                "detail": "No missing tickers found.",
-                "count": 0,
-            }
+            latest_df = query_iceberg_df(
+                "stocks.ohlcv",
+                "SELECT ticker, "
+                "MAX(date) AS latest "
+                "FROM ohlcv GROUP BY ticker",
+            )
+            have_latest: set[str] = set()
+            if not latest_df.empty:
+                for _, row in (
+                    latest_df.iterrows()
+                ):
+                    d = row["latest"]
+                    if hasattr(d, "date"):
+                        d = d.date()
+                    if d >= yesterday_:
+                        have_latest.add(
+                            row["ticker"],
+                        )
 
-        # Resolve yfinance tickers from registry
-        yf_map: dict[str, str] = {}
-        for tk in missing:
-            meta = registry.get(tk, {})
-            yf_tk = meta.get("yf_ticker", tk)
-            yf_map[tk] = yf_tk
+            missing = sorted(
+                set(registry.keys())
+                - have_latest
+            )
+            if not missing:
+                return {
+                    "action": "backfill_missing",
+                    "status": "ok",
+                    "detail": (
+                        "No missing tickers."
+                    ),
+                    "count": 0,
+                }
 
-        import yfinance as yf
+            yf_map: dict[str, str] = {}
+            for tk in missing:
+                meta = registry.get(tk, {})
+                yf_tk = meta.get(
+                    "yf_ticker", tk,
+                )
+                yf_map[tk] = yf_tk
 
-        yf_tickers = list(yf_map.values())
-        # Batch download last 5 days to cover gaps
-        start = yesterday - timedelta(days=5)
-        try:
+            import yfinance as yf
+
+            yf_tickers = list(yf_map.values())
+            start = yesterday_ - timedelta(
+                days=5,
+            )
             raw = yf.download(
                 yf_tickers,
                 start=str(start),
-                end=str(today + timedelta(days=1)),
+                end=str(
+                    today_ + timedelta(days=1),
+                ),
                 group_by="ticker",
                 auto_adjust=True,
                 threads=True,
             )
-        except Exception as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"yfinance download failed: {exc}",
-            )
 
-        inserted = 0
-        errors: list[str] = []
-        for canon_tk, yf_tk in yf_map.items():
-            try:
-                if len(yf_tickers) == 1:
-                    df = raw.copy()
-                else:
-                    df = raw[yf_tk].copy()
-                df = df.dropna(subset=["Close"])
-                if df.empty:
-                    continue
-                # Rename to match Iceberg schema
-                df = df.rename(
-                    columns={
-                        "Open": "open",
-                        "High": "high",
-                        "Low": "low",
-                        "Close": "close",
-                        "Volume": "volume",
-                    },
-                )
-                repo.insert_ohlcv(canon_tk, df)
-                inserted += 1
-            except Exception as exc:
-                errors.append(
-                    f"{canon_tk}: {exc}"
-                )
-        return {
-            "action": "backfill_missing",
-            "status": "done",
-            "tickers_backfilled": inserted,
-            "tickers_attempted": len(missing),
-            "errors": errors[:20],
-        }
+            inserted = 0
+            errors: list[str] = []
+            for canon_tk, yf_tk in (
+                yf_map.items()
+            ):
+                try:
+                    if len(yf_tickers) == 1:
+                        df = raw.copy()
+                    else:
+                        df = raw[yf_tk].copy()
+                    df = df.dropna(
+                        subset=["Close"],
+                    )
+                    if df.empty:
+                        continue
+                    df = df.rename(
+                        columns={
+                            "Open": "open",
+                            "High": "high",
+                            "Low": "low",
+                            "Close": "close",
+                            "Volume": "volume",
+                        },
+                    )
+                    repo.insert_ohlcv(
+                        canon_tk, df,
+                    )
+                    inserted += 1
+                except Exception as exc:
+                    errors.append(
+                        f"{canon_tk}: {exc}"
+                    )
+            return {
+                "action": "backfill_missing",
+                "status": "done",
+                "tickers_backfilled": inserted,
+                "tickers_attempted": len(
+                    missing,
+                ),
+                "errors": errors[:20],
+            }
+
+        return await asyncio.to_thread(
+            _run_backfill_missing,
+        )
 
     admin_router.add_api_route(
         "/admin/data-health",
@@ -2147,6 +2569,167 @@ def create_app(
         "/admin/data-health/fix-ohlcv",
         _admin_fix_ohlcv,
         methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    # ── Sentiment scoring breakdown (today) ─────
+    # Feeds the "View details" modal on the Sentiment
+    # data-health card. Categorises today's rows by
+    # provenance so an admin can see FinBERT vs LLM vs
+    # market-fallback mix at a glance.
+
+    async def _admin_sentiment_details(
+        scope: str = "all",
+    ):
+        """GET /admin/data-health/sentiment-details.
+
+        Query params:
+            scope: ``all`` | ``india`` | ``us``
+                (default ``all``).
+
+        Returns:
+            {
+              "by_source": [
+                {"source": "finbert", "count": N,
+                 "avg_score": x.xxx},
+                ...
+              ],
+              "scored": [            # non-fallback rows
+                {"ticker": "...",
+                 "score": ...,
+                 "headline_count": n,
+                 "source": "finbert"|"llm"|"none"},
+                ...
+              ],
+              "total": N,
+              "scope": "all"|"india"|"us",
+              "as_of": "YYYY-MM-DD"
+            }
+        """
+        from datetime import date
+        from cache import get_cache
+
+        ck = (
+            f"cache:admin:sentiment-details:{scope}"
+        )
+        cache = get_cache()
+        hit = cache.get(ck) if cache else None
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        from tools._stock_shared import _require_repo
+        from db.duckdb_engine import (
+            invalidate_metadata,
+            query_iceberg_df,
+        )
+
+        repo = _require_repo()
+        registry = repo.get_all_registry()
+        # Build ticker-to-market map from registry so
+        # we can filter by scope without a PG round trip.
+        market_by_ticker: dict[str, str] = {}
+        for tkr, row in registry.items():
+            mkt = row.get("market")
+            if isinstance(mkt, str) and mkt:
+                market_by_ticker[tkr.upper()] = mkt
+
+        invalidate_metadata("stocks.sentiment_scores")
+        df = query_iceberg_df(
+            "stocks.sentiment_scores",
+            "SELECT ticker, avg_score, "
+            "headline_count, source "
+            "FROM sentiment_scores "
+            "WHERE score_date = CURRENT_DATE",
+        )
+
+        if df.empty:
+            payload = {
+                "by_source": [],
+                "scored": [],
+                "total": 0,
+                "scope": scope,
+                "as_of": date.today().isoformat(),
+            }
+        else:
+            if scope in ("india", "us"):
+                df["_market"] = (
+                    df["ticker"]
+                    .astype(str)
+                    .str.upper()
+                    .map(market_by_ticker)
+                )
+                df = df[df["_market"] == scope]
+
+            # Summary per source
+            grp = (
+                df.groupby("source")
+                .agg(
+                    count=("ticker", "count"),
+                    avg_score=(
+                        "avg_score", "mean",
+                    ),
+                )
+                .reset_index()
+                .sort_values(
+                    "count", ascending=False,
+                )
+            )
+            by_source = [
+                {
+                    "source": str(r["source"]),
+                    "count": int(r["count"]),
+                    "avg_score": round(
+                        float(r["avg_score"]), 3,
+                    ),
+                }
+                for _, r in grp.iterrows()
+            ]
+
+            # Per-ticker list for non-fallback rows
+            scored_df = df[
+                df["source"] != "market_fallback"
+            ].sort_values(
+                "avg_score", ascending=False,
+            )
+            scored = [
+                {
+                    "ticker": str(r["ticker"]),
+                    "score": round(
+                        float(r["avg_score"]), 3,
+                    ),
+                    "headline_count": int(
+                        r["headline_count"] or 0,
+                    ),
+                    "source": str(r["source"]),
+                }
+                for _, r in scored_df.iterrows()
+            ]
+
+            payload = {
+                "by_source": by_source,
+                "scored": scored,
+                "total": int(len(df)),
+                "scope": scope,
+                "as_of": date.today().isoformat(),
+            }
+
+        import json as _json
+
+        body = _json.dumps(payload, default=str)
+        if cache:
+            cache.set(ck, body, 60)
+        return Response(
+            content=body,
+            media_type="application/json",
+        )
+
+    admin_router.add_api_route(
+        "/admin/data-health/sentiment-details",
+        _admin_sentiment_details,
+        methods=["GET"],
         dependencies=[Depends(superuser_only)],
     )
 
@@ -2403,6 +2986,573 @@ def create_app(
     admin_router.add_api_route(
         "/admin/data-health/fix/{run_id}/status",
         _admin_fix_status,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    # ── Admin Recommendations (cross-user) ──────
+
+    async def _admin_recommendations_list(
+        limit: int = 500,
+        offset: int = 0,
+    ):
+        """GET /admin/recommendations — list recs
+        across all users with joined email/full_name.
+        """
+        from backend.db.engine import (
+            get_session_factory,
+        )
+        from backend.db.pg_stocks import (
+            get_all_recommendations,
+        )
+
+        sf = get_session_factory()
+        async with sf() as s:
+            rows = await get_all_recommendations(
+                s,
+                limit=min(limit, 1000),
+                offset=max(offset, 0),
+            )
+        return {
+            "recommendations": rows,
+            "count": len(rows),
+            "limit": limit,
+            "offset": offset,
+        }
+
+    async def _admin_recommendation_delete(
+        rec_id: str,
+        user: UserContext = Depends(get_current_user),
+    ):
+        """DELETE /admin/recommendations/{rec_id}.
+
+        Hard-delete; cascades to recommendation_outcomes
+        via the FK ondelete=CASCADE.
+        """
+        from backend.db.engine import (
+            get_session_factory,
+        )
+        from backend.db.pg_stocks import (
+            delete_recommendation,
+        )
+
+        sf = get_session_factory()
+        async with sf() as s:
+            deleted = await delete_recommendation(
+                s, rec_id,
+            )
+        if deleted == 0:
+            raise HTTPException(
+                404,
+                f"Recommendation {rec_id} not found",
+            )
+        _logger.info(
+            "Admin %s deleted recommendation %s",
+            user.email,
+            rec_id,
+        )
+        return {
+            "status": "deleted",
+            "rec_id": rec_id,
+        }
+
+    async def _admin_recommendation_run_delete(
+        run_id: str,
+        user: UserContext = Depends(get_current_user),
+    ):
+        """DELETE /admin/recommendation-runs/{run_id}.
+
+        Hard-delete the run and everything it contains
+        (cascades to recommendations and outcomes).
+        """
+        from backend.db.engine import (
+            get_session_factory,
+        )
+        from backend.db.pg_stocks import (
+            delete_recommendation_run,
+        )
+
+        sf = get_session_factory()
+        async with sf() as s:
+            deleted = await delete_recommendation_run(
+                s, run_id,
+            )
+        if deleted == 0:
+            raise HTTPException(
+                404,
+                f"Recommendation run {run_id} not found",
+            )
+        _logger.info(
+            "Admin %s deleted recommendation run %s",
+            user.email,
+            run_id,
+        )
+        return {
+            "status": "deleted",
+            "run_id": run_id,
+        }
+
+    admin_router.add_api_route(
+        "/admin/recommendations",
+        _admin_recommendations_list,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/recommendations/{rec_id}",
+        _admin_recommendation_delete,
+        methods=["DELETE"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/recommendation-runs/{run_id}",
+        _admin_recommendation_run_delete,
+        methods=["DELETE"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    # ── Superuser: force-refresh a test run ─────
+    # Bypasses the monthly quota, writes a row with
+    # run_type='admin_test' that stays hidden from
+    # user-facing consumers until an admin "promotes"
+    # it.
+
+    async def _admin_recommendation_force_refresh(
+        payload: dict,
+        user: UserContext = Depends(get_current_user),
+    ):
+        """POST /admin/recommendations/force-refresh.
+
+        Body: ``{"user_id": "<uuid or email>",
+        "scope": "india"|"us"}``. Accepts either the
+        user's UUID or their email address — an email
+        is resolved to ``auth.users.id`` before the
+        pipeline runs.  Creates a test run
+        (``run_type='admin_test'``).
+        """
+        import asyncio as _asyncio
+
+        raw = str(payload.get("user_id") or "").strip()
+        scope = str(payload.get("scope") or "")
+        if not raw or scope not in ("india", "us"):
+            raise HTTPException(
+                400,
+                "user_id and scope (india|us) required",
+            )
+
+        # Resolve email → UUID if needed
+        target_uid = raw
+        if "@" in raw:
+            from sqlalchemy import select
+            from backend.db.engine import (
+                get_session_factory,
+            )
+            from backend.db.models.user import User
+
+            sf = get_session_factory()
+            async with sf() as s:
+                row = (
+                    await s.execute(
+                        select(User).where(
+                            User.email == raw.lower(),
+                        )
+                    )
+                ).scalar_one_or_none()
+            if row is None:
+                raise HTTPException(
+                    404,
+                    f"No user found with email '{raw}'.",
+                )
+            target_uid = str(row.user_id)
+
+        from jobs.recommendation_engine import (
+            get_or_create_monthly_run,
+        )
+
+        def _call() -> dict:
+            return get_or_create_monthly_run(
+                target_uid, scope,
+                run_type="admin_test",
+                bypass_quota=True,
+            )
+
+        result = await _asyncio.to_thread(_call)
+        if not result.get("run_id"):
+            note = result.get(
+                "status_note", "no_recommendations",
+            )
+            raise HTTPException(
+                422,
+                f"Could not generate test run ({note}).",
+            )
+        _logger.info(
+            "Admin %s force-refreshed test run %s "
+            "for user=%s (input=%s) scope=%s",
+            user.email, result["run_id"],
+            target_uid[:8], raw, scope,
+        )
+        return {
+            "status": "generated",
+            "run_id": result["run_id"],
+            "user_id": target_uid,
+            "scope": scope,
+            "run_type": "admin_test",
+            "count": len(
+                result.get("recommendations", []),
+            ),
+        }
+
+    # ── Superuser: promote a test run ───────────
+    # Atomically: delete any existing non-test run
+    # for the same (user, scope, IST month), then
+    # relabel the selected admin_test run as 'admin'
+    # so it surfaces to the end user.
+
+    async def _admin_recommendation_promote(
+        run_id: str,
+        user: UserContext = Depends(get_current_user),
+    ):
+        """POST /admin/recommendation-runs/{run_id}/promote."""
+        from sqlalchemy import select
+        from backend.db.engine import (
+            get_session_factory,
+        )
+        from backend.db.models.recommendation import (
+            RecommendationRun,
+        )
+        from backend.db.pg_stocks import (
+            delete_recommendation_run,
+        )
+        from jobs.recommendation_engine import (
+            current_month_start_ist,
+        )
+
+        sf = get_session_factory()
+        month_start = current_month_start_ist()
+
+        async with sf() as s:
+            row = (
+                await s.execute(
+                    select(RecommendationRun).where(
+                        RecommendationRun.run_id
+                        == run_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                raise HTTPException(
+                    404, "Run not found",
+                )
+            if row.run_type != "admin_test":
+                raise HTTPException(
+                    400,
+                    "Only admin_test runs may be "
+                    "promoted.",
+                )
+            target_user = str(row.user_id)
+            target_scope = row.scope
+
+            # Find existing non-test run this month
+            existing_q = await s.execute(
+                select(RecommendationRun).where(
+                    RecommendationRun.user_id
+                    == target_user,
+                    RecommendationRun.scope
+                    == target_scope,
+                    RecommendationRun.run_type
+                    != "admin_test",
+                    RecommendationRun.created_at
+                    >= month_start,
+                    RecommendationRun.run_id != run_id,
+                )
+            )
+            existing = existing_q.scalars().all()
+
+        replaced_ids: list[str] = []
+        for ex in existing:
+            async with sf() as s:
+                await delete_recommendation_run(
+                    s, str(ex.run_id),
+                )
+            replaced_ids.append(str(ex.run_id))
+
+        async with sf() as s:
+            target = (
+                await s.execute(
+                    select(RecommendationRun).where(
+                        RecommendationRun.run_id
+                        == run_id,
+                    )
+                )
+            ).scalar_one()
+            target.run_type = "admin"
+            await s.commit()
+
+        _logger.info(
+            "Admin %s promoted run %s "
+            "(user=%s scope=%s) replacing %s",
+            user.email, run_id,
+            target_user[:8], target_scope,
+            replaced_ids or "nothing",
+        )
+        return {
+            "status": "promoted",
+            "run_id": run_id,
+            "user_id": target_user,
+            "scope": target_scope,
+            "replaced": replaced_ids,
+        }
+
+    admin_router.add_api_route(
+        "/admin/recommendations/force-refresh",
+        _admin_recommendation_force_refresh,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/recommendation-runs/{run_id}/promote",
+        _admin_recommendation_promote,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    # ── Backup Health (readonly) ────────────────
+
+    async def _admin_backups_list():
+        """GET /admin/backups — list backups."""
+        from cache import get_cache
+
+        _c = get_cache()
+        _bk = "cache:admin:backups-list"
+        if _c:
+            _h = _c.get(_bk)
+            if _h:
+                import json
+
+                return json.loads(_h)
+
+        from backend.maintenance.backup import (
+            list_backups,
+        )
+
+        backups = list_backups()
+        now = __import__("time").time()
+        for b in backups:
+            from datetime import datetime
+            from pathlib import Path
+
+            bp = Path(b["path"])
+            # Suffix-tolerant date parsing — backup
+            # dirs may carry custom suffixes like
+            # `backup-2026-04-22-pre-dedupe` from
+            # manual maintenance ops. Try ISO date
+            # parse on the first 10 chars; fall back
+            # to the directory mtime if that fails so
+            # a non-standard name never 500s the API.
+            dt = None
+            try:
+                dt = datetime.fromisoformat(
+                    b["date"][:10],
+                )
+            except Exception:
+                pass
+            if dt is None:
+                try:
+                    dt = datetime.fromtimestamp(
+                        bp.stat().st_mtime,
+                    )
+                except Exception:
+                    dt = datetime.fromtimestamp(now)
+            age_h = (
+                now - dt.timestamp()
+            ) / 3600
+            b["age_hours"] = round(age_h, 1)
+            b["has_catalog"] = (
+                bp / "catalog.db"
+            ).exists()
+        result = {"backups": backups}
+        if _c:
+            import json
+
+            _c.set(_bk, json.dumps(result), 120)
+        return result
+
+    async def _admin_backups_health():
+        """GET /admin/backups/health."""
+        from cache import get_cache
+
+        _c2 = get_cache()
+        _bk2 = "cache:admin:backups-health"
+        if _c2:
+            _h2 = _c2.get(_bk2)
+            if _h2:
+                import json
+
+                return json.loads(_h2)
+
+        from backend.maintenance.backup import (
+            list_backups,
+        )
+
+        backups = list_backups()
+        if not backups:
+            return {
+                "status": "missing",
+                "latest_date": None,
+                "age_hours": None,
+                "backup_count": 0,
+                "has_catalog": False,
+            }
+
+        latest = backups[0]
+        from datetime import datetime
+        from pathlib import Path
+
+        bp = Path(latest["path"])
+        now_ = __import__("time").time()
+        # Same suffix-tolerant parsing as
+        # _admin_backups_list — fall back to dir mtime
+        # if the suffix breaks fromisoformat.
+        dt = None
+        try:
+            dt = datetime.fromisoformat(
+                latest["date"][:10],
+            )
+        except Exception:
+            pass
+        if dt is None:
+            try:
+                dt = datetime.fromtimestamp(
+                    bp.stat().st_mtime,
+                )
+            except Exception:
+                dt = datetime.fromtimestamp(now_)
+        age_h = (now_ - dt.timestamp()) / 3600
+        has_cat = (bp / "catalog.db").exists()
+
+        if age_h < 24:
+            status = "healthy"
+        elif age_h < 72:
+            status = "stale"
+        else:
+            status = "critical"
+
+        result = {
+            "status": status,
+            "latest_date": latest["date"],
+            "age_hours": round(age_h, 1),
+            "backup_count": len(backups),
+            "has_catalog": has_cat,
+            "size_mb": latest["size_mb"],
+        }
+        if _c2:
+            import json
+
+            _c2.set(
+                _bk2, json.dumps(result), 120,
+            )
+        return result
+
+    async def _admin_backup_contents(
+        request: Request,
+    ):
+        """GET /admin/backups/{date}/contents."""
+        dt = request.path_params["date"]
+        from pathlib import Path
+
+        from backend.maintenance.backup import (
+            BACKUP_ROOT,
+        )
+
+        bp = Path(BACKUP_ROOT) / f"backup-{dt}"
+        if not bp.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"No backup for {dt}",
+            )
+
+        warehouse = bp / "warehouse"
+        if not warehouse.exists():
+            warehouse = bp  # legacy format
+
+        tables: list[dict] = []
+        stocks_dir = warehouse / "stocks"
+        if stocks_dir.exists():
+            import subprocess as _sp
+
+            for tbl_dir in sorted(
+                stocks_dir.iterdir(),
+            ):
+                if not tbl_dir.is_dir():
+                    continue
+                data_dir = tbl_dir / "data"
+                parts = 0
+                files = 0
+                size_mb = 0.0
+                if data_dir.exists():
+                    parts = sum(
+                        1
+                        for d in data_dir.iterdir()
+                        if d.is_dir()
+                    )
+                    # Use du for fast size
+                    try:
+                        r = _sp.run(
+                            [
+                                "du", "-sk",
+                                str(data_dir),
+                            ],
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                        )
+                        if r.returncode == 0:
+                            kb = int(
+                                r.stdout.split()[
+                                    0
+                                ],
+                            )
+                            size_mb = kb / 1024.0
+                    except Exception:
+                        pass
+                    # Approx file count from
+                    # partitions (1 file/part
+                    # after compaction)
+                    files = parts or 1
+                tables.append({
+                    "name": (
+                        f"stocks.{tbl_dir.name}"
+                    ),
+                    "partitions": parts,
+                    "files": files,
+                    "size_mb": round(
+                        size_mb, 1,
+                    ),
+                })
+
+        return {
+            "date": dt,
+            "tables": tables,
+            "catalog_present": (
+                bp / "catalog.db"
+            ).exists(),
+        }
+
+    admin_router.add_api_route(
+        "/admin/backups",
+        _admin_backups_list,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/backups/health",
+        _admin_backups_health,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/backups/{date}/contents",
+        _admin_backup_contents,
         methods=["GET"],
         dependencies=[Depends(superuser_only)],
     )

@@ -12,6 +12,7 @@ import {
   type FixTarget,
   type FixProgress,
 } from "@/hooks/useAdminData";
+import { SentimentDetailsModal } from "./SentimentDetailsModal";
 
 type Status = "green" | "yellow" | "red";
 
@@ -141,6 +142,8 @@ function ProgressBar({
 function OhlcvCard({
   d,
   total,
+  illiquidCount,
+  illiquidTickers,
   onFixNaN,
   fixingNaN,
   onFix,
@@ -149,6 +152,8 @@ function OhlcvCard({
 }: {
   d: DataHealthResult["ohlcv"];
   total: number;
+  illiquidCount: number;
+  illiquidTickers: string[];
   onFixNaN: (a: string) => void;
   fixingNaN: string | null;
   onFix: (t: FixTarget) => void;
@@ -158,6 +163,7 @@ function OhlcvCard({
   const hasNaN = d.nan_close_count > 0;
   const hasMissing = d.missing_latest_count > 0;
   const hasStale = d.stale_count > 0;
+  const hasIlliquid = illiquidCount > 0;
   const status: Status = hasNaN || hasMissing
     ? "red"
     : hasStale
@@ -199,6 +205,18 @@ function OhlcvCard({
               color="amber"
             />
             data older than 3 days
+          </p>
+        )}
+        {hasIlliquid && (
+          <p
+            className="flex items-center gap-1.5"
+            title={illiquidTickers.join(", ")}
+          >
+            <Pill
+              label={`${illiquidCount} illiquid`}
+              color="gray"
+            />
+            excluded (low-liquidity)
           </p>
         )}
       </div>
@@ -323,12 +341,14 @@ function SentimentCard({
   onFix,
   fixing,
   fixProgress,
+  onShowDetails,
 }: {
   d: DataHealthResult["sentiment"];
   total: number;
   onFix: (t: FixTarget) => void;
   fixing: FixTarget | null;
   fixProgress: FixProgress | null;
+  onShowDetails: () => void;
 }) {
   const missing = total - d.total_tickers;
   const status: Status =
@@ -343,6 +363,13 @@ function SentimentCard({
         <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
           Sentiment
         </h4>
+        <button
+          type="button"
+          onClick={onShowDetails}
+          className="ml-auto text-[11px] font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300"
+        >
+          View details →
+        </button>
       </div>
       <div className="space-y-1 text-xs text-gray-600 dark:text-gray-400 flex-1">
         <p className="font-medium text-gray-900 dark:text-gray-100">
@@ -530,6 +557,10 @@ export function DataHealthPanel() {
   } = useDataHealth();
   const [fixingNaN, setFixingNaN] =
     useState<string | null>(null);
+  const [
+    showSentimentDetails,
+    setShowSentimentDetails,
+  ] = useState(false);
 
   const handleFixNaN = useCallback(
     async (action: string) => {
@@ -612,7 +643,9 @@ export function DataHealthPanel() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
           <OhlcvCard
             d={data.ohlcv}
-            total={total}
+            total={total - (data.illiquid_count ?? 0)}
+            illiquidCount={data.illiquid_count ?? 0}
+            illiquidTickers={data.illiquid_tickers ?? []}
             onFixNaN={handleFixNaN}
             fixingNaN={fixingNaN}
             onFix={handleFix}
@@ -632,6 +665,9 @@ export function DataHealthPanel() {
             onFix={handleFix}
             fixing={fixTarget}
             fixProgress={fixProgress}
+            onShowDetails={() =>
+              setShowSentimentDetails(true)
+            }
           />
           <PiotroskiCard
             d={data.piotroski}
@@ -649,6 +685,11 @@ export function DataHealthPanel() {
           />
         </div>
       ) : null}
+
+      <SentimentDetailsModal
+        open={showSentimentDetails}
+        onClose={() => setShowSentimentDetails(false)}
+      />
     </div>
   );
 }

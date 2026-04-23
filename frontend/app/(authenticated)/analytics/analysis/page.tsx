@@ -14,6 +14,8 @@ import {
 } from "next/navigation";
 import Link from "next/link";
 import { CompareContent } from "../compare/page";
+import { RecommendationHistoryTab } from
+  "@/components/insights/RecommendationHistoryTab";
 import { apiFetch } from "@/lib/apiFetch";
 import { useTheme } from "@/hooks/useTheme";
 import { API_URL } from "@/lib/config";
@@ -68,6 +70,7 @@ type TabId =
   | "analysis"
   | "forecast"
   | "compare"
+  | "recommendations"
   | "portfolio"
   | "portfolio-forecast";
 
@@ -688,6 +691,23 @@ function ForecastTab({
                 </span>
               )}
             </h3>
+            {summary?.confidence_components?.badge && (
+              <span
+                className={`
+                  inline-flex items-center px-2 py-0.5
+                  rounded-full text-xs font-medium
+                  ${summary.confidence_components.badge === "High"
+                    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
+                    : summary.confidence_components.badge === "Medium"
+                    ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
+                    : "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
+                  }
+                `}
+                title={`Confidence: ${((summary.confidence_score ?? 0) * 100).toFixed(0)}%${summary.confidence_components.reason ? ` — ${summary.confidence_components.reason}` : ""}`}
+              >
+                {summary.confidence_components.badge}
+              </span>
+            )}
             {summary && (
               <span className="text-xs text-gray-400 dark:text-gray-500">
                 as of {summary.run_date}
@@ -772,7 +792,34 @@ function ForecastTab({
       </div>
 
       {/* Forecast target cards */}
-      {targets.length > 0 && (
+      {targets.length > 0 && (() => {
+        const isExtreme = targets.some(
+          (t) => Math.abs(t.pct_change) > 200,
+        );
+        if (isExtreme) {
+          return (
+            <div
+              className="
+                p-4 rounded-lg border
+                bg-amber-50 dark:bg-amber-900/20
+                border-amber-200 dark:border-amber-800
+                text-amber-700 dark:text-amber-400
+                text-sm
+              "
+            >
+              <p className="font-medium mb-1">
+                Low confidence forecast
+              </p>
+              <p className="text-xs">
+                This ticker&apos;s forecast shows extreme
+                predictions (&gt;200% deviation) which are
+                unreliable. The model struggles with
+                highly volatile price histories.
+              </p>
+            </div>
+          );
+        }
+        return (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {targets.map((target, idx) => {
             const isPositive = target.pct_change >= 0;
@@ -844,7 +891,8 @@ function ForecastTab({
             );
           })}
         </div>
-      )}
+        );
+      })()}
 
       {/* Accuracy metrics */}
       {summary &&
@@ -1816,6 +1864,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "analysis", label: "Stock Analysis" },
   { id: "forecast", label: "Stock Forecast" },
   { id: "compare", label: "Compare Stocks" },
+  { id: "recommendations", label: "Recommendations" },
 ];
 
 // ---------------------------------------------------------------
@@ -2158,7 +2207,7 @@ function AnalysisPageInner() {
 
         {/* Searchable ticker + refresh — RIGHT */}
         <div
-          className={`relative ${activeTab === "compare" || activeTab.startsWith("portfolio") ? "invisible" : ""}`}
+          className={`relative ${activeTab === "compare" || activeTab === "recommendations" || activeTab.startsWith("portfolio") ? "invisible" : ""}`}
         >
           <div className="flex items-center gap-1.5">
             <button
@@ -2288,6 +2337,9 @@ function AnalysisPageInner() {
         />
       )}
       {activeTab === "compare" && <CompareTab />}
+      {activeTab === "recommendations" && (
+        <RecommendationHistoryTab />
+      )}
       {activeTab === "portfolio" && (
         <PortfolioTab
           marketFilter={

@@ -34,13 +34,23 @@ import { UserModal } from "@/components/admin/UserModal";
 import { ResetPasswordModal } from "@/components/admin/ResetPasswordModal";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SchedulerTab } from "@/components/admin/SchedulerTab";
+import { RecommendationsTab } from "@/components/admin/RecommendationsTab";
 import { DataHealthPanel } from "@/components/admin/DataHealthPanel";
+import { BackupHealthPanel } from "@/components/admin/BackupHealthPanel";
+import { MyAccountTab } from "@/components/admin/MyAccountTab";
+import { MyLLMUsageTab } from "@/components/admin/MyLLMUsageTab";
+import { apiFetch } from "@/lib/apiFetch";
+import { API_URL } from "@/lib/config";
 import {
   InsightsTable,
   type Column,
 } from "@/components/insights/InsightsTable";
 import { WidgetSkeleton } from "@/components/widgets/WidgetSkeleton";
 import { WidgetError } from "@/components/widgets/WidgetError";
+import {
+  downloadCsv,
+  type CsvColumn,
+} from "@/lib/downloadCsv";
 import type {
   UserResponse,
   AuditEvent,
@@ -172,6 +182,81 @@ const auditCols: Column<AuditEvent>[] = [
     ),
   },
 ];
+
+// ---------------------------------------------------------------
+// CSV column definitions
+// ---------------------------------------------------------------
+
+const userCsvCols: CsvColumn<UserResponse>[] = [
+  { key: "full_name", header: "Name" },
+  { key: "email", header: "Email" },
+  { key: "role", header: "Role" },
+  {
+    key: "is_active",
+    header: "Status",
+    format: (v) => (v ? "Active" : "Inactive"),
+  },
+  {
+    key: "created_at",
+    header: "Created",
+    format: (v) =>
+      v ? String(v).slice(0, 10) : "",
+  },
+  {
+    key: "last_login_at",
+    header: "Last Login",
+    format: (v) =>
+      v ? String(v).slice(0, 10) : "",
+  },
+];
+
+const auditCsvCols: CsvColumn<AuditEvent>[] = [
+  {
+    key: "event_timestamp",
+    header: "Timestamp",
+    format: (v) =>
+      v
+        ? String(v).slice(0, 19).replace("T", " ")
+        : "",
+  },
+  { key: "event_type", header: "Event" },
+  { key: "actor_user_id", header: "Actor" },
+  { key: "target_user_id", header: "Target" },
+  {
+    key: "metadata",
+    header: "Details",
+    format: (v) => parseMetadata(v as string),
+  },
+];
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const txnCsvCols: CsvColumn<Record<string, any>>[] =
+  [
+    {
+      key: "created_at",
+      header: "Date",
+      format: (v) =>
+        v ? String(v).slice(0, 19) : "",
+    },
+    {
+      key: "user_id",
+      header: "User ID",
+      format: (v) => String(v ?? ""),
+    },
+    { key: "user_name", header: "Name" },
+    { key: "user_email", header: "Email" },
+    { key: "gateway", header: "Gateway" },
+    { key: "event_type", header: "Event" },
+    {
+      key: "amount",
+      header: "Amount",
+      format: (v, r) =>
+        v ? `${r.currency} ${v}` : "",
+    },
+    { key: "tier_before", header: "Tier Before" },
+    { key: "tier_after", header: "Tier After" },
+    { key: "status", header: "Status" },
+  ];
 
 // ---------------------------------------------------------------
 // Users Tab
@@ -431,6 +516,9 @@ function UsersTab() {
           col: "full_name",
           dir: "asc",
         }}
+        onDownload={(r) =>
+          downloadCsv(r, userCsvCols, "users")
+        }
       />
       </div>
 
@@ -480,8 +568,14 @@ function UsersTab() {
 // Audit Log Tab
 // ---------------------------------------------------------------
 
-function AuditLogTab() {
-  const audit = useAdminAudit();
+function AuditLogTab({
+  scope = "all",
+  title = "Audit Log",
+}: {
+  scope?: "self" | "all";
+  title?: string;
+} = {}) {
+  const audit = useAdminAudit(scope);
   const [search, setSearch] = useState("");
 
   const filtered = useMemo(() => {
@@ -510,7 +604,7 @@ function AuditLogTab() {
     <div className="space-y-4">
       <div className="flex items-center gap-3">
         <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
-          Audit Log ({audit.events.length} events)
+          {title} ({audit.events.length} events)
         </h2>
         <input
           type="text"
@@ -532,6 +626,11 @@ function AuditLogTab() {
           col: "event_timestamp",
           dir: "desc",
         }}
+        onDownload={(r) =>
+          downloadCsv(
+            r, auditCsvCols, "audit-log",
+          )
+        }
       />
       </div>
     </div>
@@ -836,8 +935,12 @@ const cascadeCols: Column<CascadeEvent>[] = [
   },
 ];
 
-function ObservabilityTab() {
-  const obs = useObservability();
+function ObservabilityTab({
+  scope = "all",
+}: {
+  scope?: "self" | "all";
+} = {}) {
+  const obs = useObservability(scope);
 
   if (obs.loading) return <WidgetSkeleton />;
   if (obs.error)
@@ -885,8 +988,8 @@ function ObservabilityTab() {
 
   return (
     <div className="space-y-6">
-      {/* Daily Token Budget */}
-      <DailyTokenBudgetCard />
+      {/* Daily Token Budget — global metric, hide on self-scope */}
+      {scope === "all" && <DailyTokenBudgetCard />}
 
       {/* Summary cards — 5 columns */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -959,8 +1062,8 @@ function ObservabilityTab() {
         </div>
       </div>
 
-      {/* Tier Health */}
-      {tiers.length > 0 && (
+      {/* Tier Health — superuser only (pro sees no tier data) */}
+      {scope === "all" && tiers.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
@@ -1056,8 +1159,8 @@ function ObservabilityTab() {
         </div>
       )}
 
-      {/* Model Budget & Usage */}
-      {Object.keys(models).length > 0 && (
+      {/* Model Budget & Usage — superuser only */}
+      {scope === "all" && Object.keys(models).length > 0 && (
         <div className="space-y-3">
           <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
             Per-Model Budget & Usage
@@ -1199,8 +1302,8 @@ function ObservabilityTab() {
         </div>
       )}
 
-      {/* Recent Cascade Events */}
-      {cascadeLog.length > 0 && (
+      {/* Recent Cascade Events — superuser only */}
+      {scope === "all" && cascadeLog.length > 0 && (
         <div className="space-y-3">
           <h2 className="text-sm font-medium text-gray-600 dark:text-gray-300">
             Recent Cascade Events
@@ -1281,6 +1384,11 @@ function MaintenanceTab() {
 
       {/* Data Health */}
       <DataHealthPanel />
+
+      {/* Backup Health */}
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+        <BackupHealthPanel />
+      </div>
 
       {/* Subscription Cleanup */}
       <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
@@ -1669,128 +1777,199 @@ function MaintenanceTab() {
 
 function TransactionsTab() {
   const m = useAdminMaintenance();
-  const [txns, setTxns] = useState<Record<string, unknown>[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [txns, setTxns] = useState<
+    Record<string, any>[]
+  >([]);
   const [loading, setLoading] = useState(false);
-  const [gwFilter, setGwFilter] = useState<string>("");
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [gwFilter, setGwFilter] =
+    useState<string>("");
 
   const fetchTxns = async () => {
     setLoading(true);
     try {
-      const r = await m.getPaymentTransactions(undefined, gwFilter || undefined);
+      const r =
+        await m.getPaymentTransactions(
+          undefined,
+          gwFilter || undefined,
+        );
       setTxns(r.transactions || []);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     setLoading(false);
   };
 
-  useEffect(() => { fetchTxns(); }, [gwFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchTxns(); }, [gwFilter]);
 
   const statusColor = (s: string) =>
-    s === "success" ? "text-emerald-600 dark:text-emerald-400"
-    : s === "failed" ? "text-red-600 dark:text-red-400"
-    : "text-amber-600 dark:text-amber-400";
+    s === "success"
+      ? "text-emerald-600 dark:text-emerald-400"
+      : s === "failed"
+        ? "text-red-600 dark:text-red-400"
+        : "text-amber-600 dark:text-amber-400";
+
+  const gwBadge = (gw: string) => {
+    const cls =
+      gw === "stripe"
+        ? "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400"
+        : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400";
+    return (
+      <span
+        className={`px-1.5 py-0.5 rounded text-xs font-medium ${cls}`}
+      >
+        {gw}
+      </span>
+    );
+  };
+
+  const sourceBadge = (evt: string) => {
+    const isUser =
+      evt.startsWith("user_") ||
+      evt === "upgrade";
+    const cls = isUser
+      ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400"
+      : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400";
+    return (
+      <span
+        className={`px-1.5 py-0.5 rounded text-xs font-medium ${cls}`}
+      >
+        {isUser ? "User" : "Webhook"}
+      </span>
+    );
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const txnCols: Column<Record<string, any>>[] = [
+    {
+      key: "created_at",
+      label: "Date",
+      render: (r) =>
+        String(r.created_at ?? "").slice(0, 19),
+    },
+    {
+      key: "user_id",
+      label: "User",
+      render: (r) => (
+        <code className="text-xs font-mono">
+          {String(r.user_id ?? "").slice(0, 8)}
+        </code>
+      ),
+    },
+    {
+      key: "user_name",
+      label: "Name",
+      render: (r) => (
+        <div>
+          <div className="font-medium text-gray-900 dark:text-gray-100">
+            {String(r.user_name ?? "")}
+          </div>
+          <div className="text-gray-400 text-[10px]">
+            {String(r.user_email ?? "")}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "gateway",
+      label: "Gateway",
+      render: (r) =>
+        gwBadge(String(r.gateway ?? "")),
+    },
+    {
+      key: "event_type",
+      label: "Event",
+    },
+    {
+      key: "source",
+      label: "Source",
+      sortable: false,
+      render: (r) =>
+        sourceBadge(
+          String(r.event_type ?? ""),
+        ),
+    },
+    {
+      key: "amount",
+      label: "Amount",
+      numeric: true,
+      render: (r) =>
+        r.amount
+          ? `${r.currency} ${r.amount}`
+          : "\u2014",
+    },
+    {
+      key: "tier_before",
+      label: "Tier Change",
+      render: (r) =>
+        r.tier_before && r.tier_after
+          ? `${r.tier_before} \u2192 ${r.tier_after}`
+          : "\u2014",
+    },
+    {
+      key: "status",
+      label: "Status",
+      render: (r) => (
+        <span
+          className={`font-medium ${statusColor(String(r.status ?? ""))}`}
+        >
+          {String(r.status ?? "")}
+        </span>
+      ),
+    },
+  ];
 
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
         <select
           value={gwFilter}
-          onChange={(e) => setGwFilter(e.target.value)}
-          className="text-xs border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-lg px-2 py-1.5 text-gray-700 dark:text-gray-300"
+          onChange={(e) =>
+            setGwFilter(e.target.value)
+          }
+          className="text-xs border border-gray-300
+            dark:border-gray-600 bg-white
+            dark:bg-gray-800 rounded-lg px-2
+            py-1.5 text-gray-700
+            dark:text-gray-300"
         >
           <option value="">All Gateways</option>
-          <option value="razorpay">Razorpay</option>
+          <option value="razorpay">
+            Razorpay
+          </option>
           <option value="stripe">Stripe</option>
         </select>
         <button
           onClick={fetchTxns}
           disabled={loading}
-          className="text-xs px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+          className="text-xs px-3 py-1.5
+            rounded-lg border border-gray-300
+            dark:border-gray-600 text-gray-700
+            dark:text-gray-300 hover:bg-gray-50
+            dark:hover:bg-gray-700
+            disabled:opacity-50"
         >
           {loading ? "Loading\u2026" : "Refresh"}
         </button>
-        <span className="text-xs text-gray-400">{txns.length} transactions</span>
       </div>
 
-      {txns.length === 0 && !loading && (
-        <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-8">No transactions recorded yet.</p>
-      )}
+      {loading && <WidgetSkeleton />}
 
-      {txns.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-gray-500 dark:text-gray-400">
-                <th className="pb-2 pr-3">Date</th>
-                <th className="pb-2 pr-3">User</th>
-                <th className="pb-2 pr-3">Name</th>
-                <th className="pb-2 pr-3">Gateway</th>
-                <th className="pb-2 pr-3">Event</th>
-                <th className="pb-2 pr-3">Source</th>
-                <th className="pb-2 pr-3">Amount</th>
-                <th className="pb-2 pr-3">Tier Change</th>
-                <th className="pb-2 pr-3">Status</th>
-                <th className="pb-2">Details</th>
-              </tr>
-            </thead>
-            <tbody>
-              {txns.map((t) => {
-                const tid = String(t.transaction_id ?? "");
-                const isExpanded = expanded === tid;
-                return (
-                  <tr key={tid} className="border-b border-gray-100 dark:border-gray-800 align-top">
-                    <td className="py-1.5 pr-3 whitespace-nowrap">{String(t.created_at ?? "").slice(0, 19)}</td>
-                    <td className="py-1.5 pr-3 font-mono">{String(t.user_id ?? "").slice(0, 8)}</td>
-                    <td className="py-1.5 pr-3">
-                      <div className="font-medium text-gray-900 dark:text-gray-100">{String(t.user_name ?? "")}</div>
-                      <div className="text-gray-400 text-[10px]">{String(t.user_email ?? "")}</div>
-                    </td>
-                    <td className="py-1.5 pr-3">
-                      <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                        t.gateway === "stripe" ? "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400"
-                        : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-                      }`}>
-                        {String(t.gateway ?? "")}
-                      </span>
-                    </td>
-                    <td className="py-1.5 pr-3">{String(t.event_type ?? "")}</td>
-                    <td className="py-1.5 pr-3">
-                      {(() => {
-                        const evt = String(t.event_type ?? "");
-                        const isUser = evt.startsWith("user_") || evt === "upgrade";
-                        return (
-                          <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                            isUser
-                              ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400"
-                              : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400"
-                          }`}>
-                            {isUser ? "User" : "Webhook"}
-                          </span>
-                        );
-                      })()}
-                    </td>
-                    <td className="py-1.5 pr-3">{t.amount ? `${t.currency} ${t.amount}` : "\u2014"}</td>
-                    <td className="py-1.5 pr-3">{t.tier_before && t.tier_after ? `${t.tier_before} \u2192 ${t.tier_after}` : "\u2014"}</td>
-                    <td className={`py-1.5 pr-3 font-medium ${statusColor(String(t.status ?? ""))}`}>{String(t.status ?? "")}</td>
-                    <td className="py-1.5">
-                      <button
-                        onClick={() => setExpanded(isExpanded ? null : tid)}
-                        className="text-indigo-600 dark:text-indigo-400 hover:underline"
-                      >
-                        {isExpanded ? "Hide" : "View"}
-                      </button>
-                      {isExpanded && !!t.raw_payload && (
-                        <pre className="mt-1 text-[10px] bg-gray-50 dark:bg-gray-900 rounded p-2 max-h-40 overflow-auto whitespace-pre-wrap break-all">
-                          {(() => { try { return JSON.stringify(JSON.parse(String(t.raw_payload)), null, 2); } catch { return String(t.raw_payload); } })()}
-                        </pre>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+      {!loading && (
+        <InsightsTable<Record<string, any>>
+          columns={txnCols}
+          rows={txns}
+          defaultSort={{
+            col: "created_at",
+            dir: "desc",
+          }}
+          onDownload={(r) =>
+            downloadCsv(
+              r, txnCsvCols, "transactions",
+            )
+          }
+        />
       )}
     </div>
   );
@@ -1806,14 +1985,103 @@ type AdminTab =
   | "observability"
   | "maintenance"
   | "transactions"
-  | "scheduler";
+  | "scheduler"
+  | "recommendations"
+  | "my_account"
+  | "my_audit"
+  | "my_llm";
+
+type Role = "general" | "pro" | "superuser";
+
+interface TabDef {
+  id: AdminTab;
+  label: string;
+  roles: Role[];
+}
+
+const ALL_TABS: TabDef[] = [
+  { id: "users",           label: "Users",             roles: ["superuser"] },
+  { id: "audit",           label: "Audit Log",         roles: ["superuser"] },
+  { id: "observability",   label: "LLM Observability", roles: ["superuser"] },
+  { id: "transactions",    label: "Transactions",      roles: ["superuser"] },
+  { id: "scheduler",       label: "Scheduler",         roles: ["superuser"] },
+  { id: "recommendations", label: "Recommendations",   roles: ["superuser"] },
+  { id: "maintenance",     label: "Maintenance",       roles: ["superuser"] },
+  { id: "my_account",      label: "My Account",        roles: ["pro"] },
+  { id: "my_audit",        label: "My Audit Log",      roles: ["pro"] },
+  { id: "my_llm",          label: "My LLM Usage",      roles: ["pro"] },
+];
 
 function AdminPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const [tab, setTab] = useState<AdminTab>(
-    (searchParams.get("tab") as AdminTab) ?? "users",
+  const [role, setRole] = useState<Role | null>(null);
+  const [roleError, setRoleError] = useState<
+    string | null
+  >(null);
+
+  // Fetch role on mount. General users redirect out.
+  useEffect(() => {
+    let alive = true;
+    apiFetch(`${API_URL}/auth/me`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<{ role: Role }>;
+      })
+      .then((p) => {
+        if (!alive) return;
+        if (p.role === "general") {
+          router.replace("/dashboard");
+          return;
+        }
+        setRole(p.role);
+      })
+      .catch((e: unknown) => {
+        if (!alive) return;
+        setRoleError(
+          e instanceof Error
+            ? e.message
+            : "Failed to load profile",
+        );
+      });
+    return () => {
+      alive = false;
+    };
+  }, [router]);
+
+  const visibleTabs = useMemo(
+    () =>
+      role
+        ? ALL_TABS.filter((t) =>
+            t.roles.includes(role),
+          )
+        : [],
+    [role],
   );
+
+  const requestedTab = (
+    searchParams.get("tab") as AdminTab | null
+  ) ?? null;
+
+  const initialTab: AdminTab = useMemo(() => {
+    if (!visibleTabs.length) return "users";
+    // Honour the URL if the requested tab is visible,
+    // otherwise fall back to the first visible tab.
+    if (
+      requestedTab
+      && visibleTabs.some((t) => t.id === requestedTab)
+    ) {
+      return requestedTab;
+    }
+    return visibleTabs[0].id;
+  }, [visibleTabs, requestedTab]);
+
+  const [tab, setTab] = useState<AdminTab>(initialTab);
+
+  // Sync state when role / URL resolves.
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
 
   const handleTabChange = useCallback(
     (t: AdminTab) => {
@@ -1825,32 +2093,26 @@ function AdminPageInner() {
     [router],
   );
 
+  if (roleError) {
+    return (
+      <div className="p-6 text-sm text-red-600 dark:text-red-400">
+        {roleError}
+      </div>
+    );
+  }
+  if (!role) {
+    return (
+      <div className="p-6 text-sm text-gray-500 dark:text-gray-400">
+        Loading…
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 p-4 sm:p-6">
-      {/* Tab bar */}
+      {/* Tab bar — role-filtered */}
       <div className="flex gap-1 border-b border-gray-200 dark:border-gray-700 pb-px">
-        {(
-          [
-            { id: "users", label: "Users" },
-            { id: "audit", label: "Audit Log" },
-            {
-              id: "observability",
-              label: "LLM Observability",
-            },
-            {
-              id: "maintenance",
-              label: "Maintenance",
-            },
-            {
-              id: "transactions",
-              label: "Transactions",
-            },
-            {
-              id: "scheduler",
-              label: "Scheduler",
-            },
-          ] as const
-        ).map((t) => (
+        {visibleTabs.map((t) => (
           <button
             key={t.id}
             data-testid={`admin-tab-${t.id}`}
@@ -1884,6 +2146,17 @@ function AdminPageInner() {
           <TransactionsTab />
         )}
         {tab === "scheduler" && <SchedulerTab />}
+        {tab === "recommendations" && (
+          <RecommendationsTab />
+        )}
+        {tab === "my_account" && <MyAccountTab />}
+        {tab === "my_audit" && (
+          <AuditLogTab
+            scope="self"
+            title="My Audit Log"
+          />
+        )}
+        {tab === "my_llm" && <MyLLMUsageTab />}
       </div>
     </div>
   );

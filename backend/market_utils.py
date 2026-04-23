@@ -15,6 +15,13 @@ _INDIAN_INDEX_TICKERS = frozenset((
     "^INDIAVIX",  # India VIX
 ))
 
+# Stringified NaN/null sentinels that pandas, json.dumps,
+# and repr()-round-trips can produce from a float NaN.
+# ``safe_str`` treats these as missing.
+_MISSING_SENTINELS = frozenset((
+    "nan", "none", "null", "n/a", "na", "nat",
+))
+
 
 def detect_market(
     ticker: str,
@@ -51,3 +58,66 @@ def is_indian_market(
 ) -> bool:
     """Convenience: True when *ticker* is Indian."""
     return detect_market(ticker, registry_market) == "india"
+
+
+def safe_str(val) -> str | None:
+    """Return a clean string or ``None``.
+
+    Handles the three broken paths that bite this project:
+
+    * ``None`` → ``None``
+    * pandas/numpy ``float('nan')`` → ``None`` (NaN is
+      *truthy* in Python so ``x or fallback`` silently
+      keeps it)
+    * empty / whitespace-only string → ``None``
+
+    Use this wherever you read optional string fields from
+    Iceberg rows (sector, industry, company_name,
+    currency, ...). ETFs and indices return NaN for
+    ``company_info.sector``, and mixing NaN into labels,
+    prompts, or groupby keys corrupts downstream logic.
+    """
+    if val is None:
+        return None
+    # pandas NaN is a float. Checking isinstance(float)
+    # first avoids importing pandas for non-numeric
+    # values.
+    if isinstance(val, float):
+        import math
+
+        if math.isnan(val):
+            return None
+        return str(val)
+    if isinstance(val, str):
+        stripped = val.strip()
+        if not stripped:
+            return None
+        # Reject sentinel tokens that pandas / repr() / JSON
+        # round-trips often produce when a float NaN is
+        # stringified somewhere up the pipeline.  Without
+        # this, ``safe_sector`` would preserve the literal
+        # "NaN" and leak it into LLM prompts, groupby keys,
+        # and the Sectors tab.
+        if stripped.lower() in _MISSING_SENTINELS:
+            return None
+        return stripped
+    try:
+        return str(val)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def safe_sector(
+    val,
+    fallback: str = "Other",
+) -> str:
+    """Return a non-empty sector label.
+
+    Thin wrapper around :func:`safe_str` that always
+    returns a string so it's safe to use as a dict key,
+    groupby key, or prompt token.  Pass a custom
+    *fallback* (e.g. ``"ETF"``) where that makes more
+    sense than ``"Other"``.
+    """
+    cleaned = safe_str(val)
+    return cleaned if cleaned else fallback

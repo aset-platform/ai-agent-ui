@@ -95,6 +95,12 @@ class User(Base):
     subscription_end_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
     )
+    chat_request_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0",
+    )
+    byo_monthly_limit: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="100",
+    )
 
     tickers = relationship(
         "UserTicker", back_populates="user",
@@ -102,6 +108,10 @@ class User(Base):
     )
     payment_transactions = relationship(
         "PaymentTransaction", back_populates="user",
+    )
+    llm_keys = relationship(
+        "UserLLMKey", back_populates="user",
+        cascade="all, delete-orphan",
     )
 
     __table_args__ = (

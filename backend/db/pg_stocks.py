@@ -15,6 +15,9 @@ from backend.db.models.pipeline import (
 from backend.db.models.registry import StockRegistry
 from backend.db.models.scheduler import ScheduledJob
 from backend.db.models.scheduler_run import SchedulerRun
+from backend.db.models.sentiment_dormant import (
+    SentimentDormant,
+)
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +77,129 @@ async def upsert_registry(
 
     await session.commit()
     log.info("Upserted registry: %s", ticker)
+
+
+# ── Sentiment dormancy ──────────────────────────────────
+
+
+# Capped exponential cooldown (days). Index = number of
+# consecutive empty fetches; floor 1 → 2 days, cap at 30.
+_DORMANT_COOLDOWN_DAYS = (2, 4, 8, 16, 30)
+
+
+def _compute_next_retry(
+    consecutive_empty: int,
+    *,
+    now: datetime | None = None,
+) -> datetime:
+    """Return next retry timestamp for a given streak."""
+    streak = max(1, consecutive_empty)
+    idx = min(streak - 1, len(_DORMANT_COOLDOWN_DAYS) - 1)
+    days = _DORMANT_COOLDOWN_DAYS[idx]
+    base = now or datetime.now(timezone.utc)
+    return base + timedelta(days=days)
+
+
+async def get_dormant_tickers(
+    session: AsyncSession,
+) -> set[str]:
+    """Return tickers whose retry window hasn't lifted.
+
+    Used by ``execute_run_sentiment`` to skip per-ticker
+    headline fetches for tickers known to return zero
+    headlines.
+    """
+    now = datetime.now(timezone.utc)
+    result = await session.execute(
+        select(SentimentDormant.ticker).where(
+            SentimentDormant.next_retry_at.isnot(None),
+            SentimentDormant.next_retry_at > now,
+        )
+    )
+    return {r[0] for r in result.all()}
+
+
+async def get_dormant_eligible_for_probe(
+    session: AsyncSession,
+    limit: int | None = None,
+) -> list[str]:
+    """Dormant tickers ordered by oldest last_checked_at.
+
+    Used for the periodic re-discovery probe. Limit caps
+    the sample size; ``None`` returns all.
+    """
+    stmt = (
+        select(SentimentDormant.ticker)
+        .where(
+            SentimentDormant.next_retry_at.isnot(None),
+        )
+        .order_by(SentimentDormant.last_checked_at.asc())
+    )
+    if limit is not None and limit > 0:
+        stmt = stmt.limit(limit)
+    result = await session.execute(stmt)
+    return [r[0] for r in result.all()]
+
+
+async def record_empty_fetch(
+    session: AsyncSession,
+    ticker: str,
+) -> None:
+    """Bump consecutive_empty + reschedule next retry."""
+    now = datetime.now(timezone.utc)
+    result = await session.execute(
+        select(SentimentDormant).where(
+            SentimentDormant.ticker == ticker,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        new_count = 1
+        row = SentimentDormant(
+            ticker=ticker,
+            consecutive_empty=new_count,
+            last_checked_at=now,
+            next_retry_at=_compute_next_retry(
+                new_count, now=now,
+            ),
+            last_headline_count=0,
+        )
+        session.add(row)
+    else:
+        row.consecutive_empty = (
+            row.consecutive_empty + 1
+        )
+        row.last_checked_at = now
+        row.next_retry_at = _compute_next_retry(
+            row.consecutive_empty, now=now,
+        )
+    await session.commit()
+
+
+async def record_successful_fetch(
+    session: AsyncSession,
+    ticker: str,
+    headline_count: int,
+) -> None:
+    """Clear dormancy state on a successful fetch."""
+    now = datetime.now(timezone.utc)
+    result = await session.execute(
+        select(SentimentDormant).where(
+            SentimentDormant.ticker == ticker,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        # Nothing to clear; only insert if the row would
+        # carry useful diagnostics. Skip to keep table
+        # tight (we only persist when there's dormancy).
+        return
+    row.consecutive_empty = 0
+    row.last_checked_at = now
+    row.next_retry_at = None
+    row.last_headline_count = headline_count
+    row.last_seen_headlines_at = now
+    await session.commit()
 
 
 async def get_scheduled_jobs(
@@ -527,12 +653,18 @@ async def get_latest_recommendation_run(
     session: AsyncSession,
     user_id: str,
     scope: str = "all",
+    exclude_test: bool = True,
 ) -> dict | None:
     """Return the most recent run for a user.
 
     When *scope* is ``"india"`` or ``"us"``, only
     returns runs matching that scope.  ``"all"``
     returns the latest regardless of scope.
+
+    When *exclude_test* is True (the default), rows
+    with ``run_type='admin_test'`` are filtered out —
+    those are superuser-only test runs and must never
+    surface in user-facing consumers.
     """
     from backend.db.models.recommendation import (
         RecommendationRun,
@@ -546,7 +678,12 @@ async def get_latest_recommendation_run(
         stmt = stmt.where(
             RecommendationRun.scope == scope,
         )
+    if exclude_test:
+        stmt = stmt.where(
+            RecommendationRun.run_type != "admin_test",
+        )
     stmt = stmt.order_by(
+        RecommendationRun.created_at.desc(),
         RecommendationRun.run_date.desc(),
     ).limit(1)
 
@@ -576,8 +713,16 @@ async def get_recommendation_history(
     session: AsyncSession,
     user_id: str,
     months_back: int = 6,
+    exclude_test: bool = True,
 ) -> list[dict]:
-    """Return runs with rec counts for a user."""
+    """Return runs with rec counts for a user.
+
+    When *exclude_test* is True (the default),
+    ``run_type='admin_test'`` rows are filtered out so
+    user-facing history never reveals superuser test
+    runs.  Each row also reports ``acted_on_count``
+    (recs with a non-null ``acted_on_date``).
+    """
     from backend.db.models.recommendation import (
         Recommendation,
         RecommendationRun,
@@ -586,12 +731,19 @@ async def get_recommendation_history(
     cutoff = date.today() - timedelta(
         days=months_back * 30,
     )
-    result = await session.execute(
+    acted_sum = func.sum(
+        func.cast(
+            Recommendation.acted_on_date.isnot(None),
+            Integer,
+        )
+    ).label("acted_on_count")
+    stmt = (
         select(
             RecommendationRun,
             func.count(Recommendation.id).label(
                 "rec_count",
             ),
+            acted_sum,
         )
         .outerjoin(
             Recommendation,
@@ -602,13 +754,23 @@ async def get_recommendation_history(
             RecommendationRun.user_id == user_id,
             RecommendationRun.run_date >= cutoff,
         )
-        .group_by(RecommendationRun.run_id)
-        .order_by(RecommendationRun.run_date.desc())
     )
+    if exclude_test:
+        stmt = stmt.where(
+            RecommendationRun.run_type != "admin_test",
+        )
+    stmt = stmt.group_by(
+        RecommendationRun.run_id,
+    ).order_by(
+        RecommendationRun.created_at.desc(),
+        RecommendationRun.run_date.desc(),
+    )
+    result = await session.execute(stmt)
     rows = []
-    for run, cnt in result.all():
+    for run, cnt, acted in result.all():
         d = _rec_run_to_dict(run)
         d["rec_count"] = cnt
+        d["acted_on_count"] = int(acted or 0)
         rows.append(d)
     return rows
 
@@ -616,62 +778,86 @@ async def get_recommendation_history(
 async def get_recommendation_stats(
     session: AsyncSession,
     user_id: str,
+    scope: str | None = None,
 ) -> dict:
-    """Aggregate stats: total runs, recs, hit rates."""
+    """Aggregate stats: total runs, recs, hit rates.
+
+    When *scope* is ``"india"`` or ``"us"`` the stats
+    are restricted to that scope.  Admin test runs are
+    always excluded so user-facing dashboards never
+    reflect superuser scratch data.
+    """
     from backend.db.models.recommendation import (
         Recommendation,
         RecommendationOutcome,
         RecommendationRun,
     )
 
+    def _scoped(stmt):
+        stmt = stmt.where(
+            RecommendationRun.user_id == user_id,
+            RecommendationRun.run_type != "admin_test",
+        )
+        if scope in ("india", "us"):
+            stmt = stmt.where(
+                RecommendationRun.scope == scope,
+            )
+        return stmt
+
     # Total runs
     run_cnt = await session.execute(
-        select(func.count(RecommendationRun.run_id))
-        .where(RecommendationRun.user_id == user_id)
+        _scoped(
+            select(
+                func.count(RecommendationRun.run_id)
+            )
+        )
     )
     total_runs = run_cnt.scalar() or 0
 
     # Total recs via subquery on user's runs
     rec_cnt = await session.execute(
-        select(func.count(Recommendation.id))
-        .join(
-            RecommendationRun,
-            Recommendation.run_id
-            == RecommendationRun.run_id,
+        _scoped(
+            select(func.count(Recommendation.id))
+            .join(
+                RecommendationRun,
+                Recommendation.run_id
+                == RecommendationRun.run_id,
+            )
         )
-        .where(RecommendationRun.user_id == user_id)
     )
     total_recs = rec_cnt.scalar() or 0
 
     # Outcome stats (hit = positive excess return)
     outcome_q = await session.execute(
-        select(
-            func.count(RecommendationOutcome.id),
-            func.avg(
-                RecommendationOutcome.return_pct,
-            ),
-            func.avg(
-                RecommendationOutcome.excess_return_pct,
-            ),
-            func.sum(
-                func.cast(
+        _scoped(
+            select(
+                func.count(RecommendationOutcome.id),
+                func.avg(
+                    RecommendationOutcome.return_pct,
+                ),
+                func.avg(
                     RecommendationOutcome
-                    .excess_return_pct > 0,
-                    Integer,
-                )
-            ),
+                    .excess_return_pct,
+                ),
+                func.sum(
+                    func.cast(
+                        RecommendationOutcome
+                        .excess_return_pct > 0,
+                        Integer,
+                    )
+                ),
+            )
+            .join(
+                Recommendation,
+                RecommendationOutcome.recommendation_id
+                == Recommendation.id,
+            )
+            .join(
+                RecommendationRun,
+                Recommendation.run_id
+                == RecommendationRun.run_id,
+            )
         )
-        .join(
-            Recommendation,
-            RecommendationOutcome.recommendation_id
-            == Recommendation.id,
-        )
-        .join(
-            RecommendationRun,
-            Recommendation.run_id
-            == RecommendationRun.run_id,
-        )
-        .where(RecommendationRun.user_id == user_id)
     )
     row = outcome_q.one()
     total_outcomes = row[0] or 0
@@ -684,10 +870,29 @@ async def get_recommendation_stats(
         else 0.0
     )
 
+    # Total recs acted on (non-null acted_on_date).
+    acted_q = await session.execute(
+        _scoped(
+            select(func.count(Recommendation.id))
+            .join(
+                RecommendationRun,
+                Recommendation.run_id
+                == RecommendationRun.run_id,
+            )
+            .where(
+                Recommendation.acted_on_date.isnot(
+                    None,
+                ),
+            )
+        )
+    )
+    total_acted_on = acted_q.scalar() or 0
+
     return {
         "total_runs": total_runs,
         "total_recs": total_recs,
         "total_outcomes": total_outcomes,
+        "total_acted_on": total_acted_on,
         "avg_return_pct": avg_return,
         "avg_excess_return_pct": avg_excess,
         "hit_rate_pct": hit_rate,
@@ -820,18 +1025,40 @@ async def expire_old_recommendations(
     user_id: str,
     current_run_id: str,
 ) -> int:
-    """Expire active recs from prior runs for user."""
+    """Expire active recs from prior runs for user.
+
+    Scoped by ``(user_id, scope)`` so that an India run
+    never expires US recs (and vice versa).  Scope is
+    read off the current run so callers don't need to
+    pass it explicitly.
+    """
     from backend.db.models.recommendation import (
         Recommendation,
         RecommendationRun,
     )
 
+    # Look up the current run's scope.  If the row is
+    # missing (shouldn't happen in the persist flow),
+    # fall back to no-scope (whole-user) to preserve
+    # prior behavior.
+    cur_scope_q = await session.execute(
+        select(RecommendationRun.scope).where(
+            RecommendationRun.run_id == current_run_id,
+        )
+    )
+    cur_scope = cur_scope_q.scalar_one_or_none()
+
+    run_filter = [
+        RecommendationRun.user_id == user_id,
+        RecommendationRun.run_id != current_run_id,
+    ]
+    if cur_scope:
+        run_filter.append(
+            RecommendationRun.scope == cur_scope,
+        )
     run_ids_q = (
         select(RecommendationRun.run_id)
-        .where(
-            RecommendationRun.user_id == user_id,
-            RecommendationRun.run_id != current_run_id,
-        )
+        .where(*run_filter)
     )
     result = await session.execute(
         select(Recommendation)
@@ -848,8 +1075,9 @@ async def expire_old_recommendations(
     if count:
         await session.commit()
         log.info(
-            "Expired %d old recs for user %s",
-            count, user_id,
+            "Expired %d old recs for user %s "
+            "scope=%s",
+            count, user_id, cur_scope or "*",
         )
     return count
 
@@ -882,3 +1110,135 @@ async def expire_stale_recommendations(
         await session.commit()
         log.info("Expired %d stale recs (>90d)", count)
     return count
+
+
+async def get_all_recommendations(
+    session: AsyncSession,
+    limit: int = 500,
+    offset: int = 0,
+) -> list[dict]:
+    """Return recommendations across all users with
+    joined user email/name and run metadata.
+
+    Used by the admin Recommendations tab. Ordered by
+    ``created_at DESC``. Joins:
+
+    ``recommendations`` → ``recommendation_runs``
+    → ``auth.users``.
+
+    Note: ``users.user_id`` is VARCHAR while
+    ``recommendation_runs.user_id`` is UUID — cast
+    both to text for the join.
+    """
+    from sqlalchemy import String, cast
+
+    from backend.db.models.recommendation import (
+        Recommendation,
+        RecommendationRun,
+    )
+    from backend.db.models.user import User
+
+    result = await session.execute(
+        select(
+            Recommendation,
+            RecommendationRun.scope,
+            RecommendationRun.run_type,
+            RecommendationRun.run_date,
+            RecommendationRun.user_id,
+            User.email,
+            User.full_name,
+        )
+        .join(
+            RecommendationRun,
+            Recommendation.run_id
+            == RecommendationRun.run_id,
+        )
+        .outerjoin(
+            User,
+            User.user_id
+            == cast(
+                RecommendationRun.user_id, String,
+            ),
+        )
+        .order_by(Recommendation.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    rows: list[dict] = []
+    for rec, scope, run_type, run_date, uid, email, name in result.all():
+        d = _rec_to_dict(rec)
+        d["scope"] = scope
+        d["run_type"] = run_type
+        d["run_date"] = (
+            run_date.isoformat() if run_date else None
+        )
+        d["user_id"] = uid
+        d["email"] = email
+        d["full_name"] = name
+        rows.append(d)
+    return rows
+
+
+async def delete_recommendation_run(
+    session: AsyncSession,
+    run_id: str,
+) -> int:
+    """Hard-delete a whole run.
+
+    The FK chain
+    ``recommendation_runs → recommendations →
+    recommendation_outcomes`` uses
+    ``ondelete=CASCADE`` at every hop, so a single
+    DELETE removes the entire tree.
+
+    Returns 1 if the run existed, 0 otherwise.
+    """
+    from backend.db.models.recommendation import (
+        RecommendationRun,
+    )
+
+    result = await session.execute(
+        select(RecommendationRun).where(
+            RecommendationRun.run_id == run_id,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return 0
+    await session.delete(row)
+    await session.commit()
+    log.info(
+        "Deleted recommendation run %s (cascade)",
+        run_id,
+    )
+    return 1
+
+
+async def delete_recommendation(
+    session: AsyncSession,
+    rec_id: str,
+) -> int:
+    """Hard-delete one recommendation by id.
+
+    The ``recommendations → recommendation_outcomes``
+    FK uses ``ondelete=CASCADE`` so outcomes are
+    removed automatically at the DB level.
+
+    Returns the number of rows deleted (0 or 1).
+    """
+    from backend.db.models.recommendation import (
+        Recommendation,
+    )
+
+    result = await session.execute(
+        select(Recommendation).where(
+            Recommendation.id == rec_id,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return 0
+    await session.delete(row)
+    await session.commit()
+    log.info("Deleted recommendation %s", rec_id)
+    return 1

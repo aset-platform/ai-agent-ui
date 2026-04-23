@@ -70,29 +70,71 @@ def _parse_scores(raw: str, count: int) -> list[float]:
     return [0.0] * count
 
 
-def score_headlines(
+def score_headlines_with_source(
     headlines: list[HeadlineItem],
     llm=None,
-) -> float | None:
-    """Score headlines via LLM, return weighted composite.
+) -> tuple[float | None, str]:
+    """Score headlines; return ``(score, source)``.
 
-    Computes ``Σ(score × source_weight) / Σ(source_weight)``
-    so that higher-trust sources contribute more.
+    ``source`` identifies which scorer actually produced
+    the value — one of ``"finbert"``, ``"llm"``, or
+    ``"none"`` (when no score could be computed).
 
     Args:
         headlines: Annotated headline items with weights.
         llm: LLM instance (FallbackLLM or any
-            ``BaseChatModel``).  If ``None``, returns
-            ``None``.
+            ``BaseChatModel``).  Only used when config
+            says ``sentiment_scorer != 'finbert'`` or
+            when FinBERT fails.
 
     Returns:
-        Weighted average score in [-1.0, +1.0], or
-        ``None`` if no headlines or LLM unavailable.
+        Tuple of (score in [-1.0, +1.0] or None,
+        source label).
     """
     if not headlines:
-        return None
+        return None, "none"
+
+    # ── FinBERT batch path (zero API cost) ──
+    try:
+        from config import get_settings
+        scorer = getattr(
+            get_settings(), "sentiment_scorer", "llm"
+        )
+    except Exception:
+        scorer = "llm"
+
+    if scorer == "finbert":
+        try:
+            from tools._sentiment_finbert import (
+                score_headlines_finbert,
+                compute_weighted_score,
+            )
+            from tools._date_utils import (
+                time_decay_weight,
+            )
+            titles = [h.title for h in headlines]
+            scored = score_headlines_finbert(titles)
+            if scored:
+                decay_weights = [
+                    h.weight * time_decay_weight(
+                        h.published
+                    )
+                    for h in headlines
+                ]
+                result = compute_weighted_score(
+                    scored, decay_weights,
+                )
+                if result is not None:
+                    return result, "finbert"
+        except Exception as exc:
+            _logger.warning(
+                "FinBERT scoring failed, falling "
+                "back to LLM: %s", exc,
+            )
+
+    # ── LLM path ──
     if llm is None:
-        return None
+        return None, "none"
 
     titles = [h.title for h in headlines]
     numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(titles))
@@ -115,7 +157,7 @@ def score_headlines(
             "Sentiment scoring failed: %s",
             exc,
         )
-        return None
+        return None, "none"
 
     from tools._date_utils import time_decay_weight
 
@@ -129,16 +171,33 @@ def score_headlines(
         total_weight += w
 
     if total_weight == 0:
-        return 0.0
+        return 0.0, "llm"
 
     avg = weighted_sum / total_weight
-    return max(-1.0, min(1.0, avg))
+    return max(-1.0, min(1.0, avg)), "llm"
+
+
+def score_headlines(
+    headlines: list[HeadlineItem],
+    llm=None,
+) -> float | None:
+    """Backward-compatible wrapper: score only.
+
+    Prefer :func:`score_headlines_with_source` when the
+    caller needs provenance.  Existing call sites that
+    just persist the score number keep working.
+    """
+    score, _ = score_headlines_with_source(
+        headlines, llm=llm,
+    )
+    return score
 
 
 def refresh_ticker_sentiment(
     ticker: str,
     llm=None,
     max_age_days: int = 7,
+    force: bool = False,
 ) -> float | None:
     """End-to-end: fetch → score → persist to Iceberg.
 
@@ -147,11 +206,19 @@ def refresh_ticker_sentiment(
     agent tools.
 
     Idempotent: skips scoring if a row for today already
-    exists in Iceberg.
+    exists in Iceberg.  When *force* is True, bypasses
+    the idempotency check and **overrides** today's row
+    via ``insert_sentiment_score`` (which does a scoped
+    delete + append, i.e. upsert).  Callers can use this
+    to replace a stale market-fallback score with a
+    fresh LLM/FinBERT one without manually deleting rows.
 
     Args:
         ticker: Stock ticker symbol.
         llm: LLM instance for scoring.
+        max_age_days: Max age of headlines to consider.
+        force: When True, re-score even if a row for
+            today already exists.
 
     Returns:
         Average sentiment score, or ``None`` on failure.
@@ -168,19 +235,24 @@ def refresh_ticker_sentiment(
         )
         return None
 
-    # Skip if already scored today.
-    existing = repo.get_sentiment_series(ticker)
-    if not existing.empty:
-        latest = pd.Timestamp(
-            existing["score_date"].max(),
-        ).date()
-        if latest >= date.today():
-            _logger.debug(
-                "Sentiment for %s already fresh (%s)",
-                ticker,
-                latest,
-            )
-            return float(existing["avg_score"].iloc[-1])
+    # Skip if already scored today — unless caller
+    # explicitly requested a forced re-score (upsert
+    # path).
+    if not force:
+        existing = repo.get_sentiment_series(ticker)
+        if not existing.empty:
+            latest = pd.Timestamp(
+                existing["score_date"].max(),
+            ).date()
+            if latest >= date.today():
+                _logger.debug(
+                    "Sentiment for %s already fresh (%s)",
+                    ticker,
+                    latest,
+                )
+                return float(
+                    existing["avg_score"].iloc[-1],
+                )
 
     # Fetch from all sources.
     headlines = fetch_all_headlines(
@@ -191,12 +263,63 @@ def refresh_ticker_sentiment(
             "No headlines for %s, skipping",
             ticker,
         )
+        # Persist dormancy state so the next batch can
+        # skip this ticker until its retry window lifts.
+        # Best-effort: never block scoring on a PG hiccup.
+        try:
+            from stocks.repository import (
+                _pg_session,
+                _run_pg,
+            )
+            from backend.db.pg_stocks import (
+                record_empty_fetch,
+            )
+
+            async def _empty_call():
+                async with _pg_session() as s:
+                    await record_empty_fetch(s, ticker)
+
+            _run_pg(_empty_call)
+        except Exception:
+            _logger.debug(
+                "record_empty_fetch failed for %s",
+                ticker, exc_info=True,
+            )
         return None
 
-    # Score via LLM.
-    avg = score_headlines(headlines, llm=llm)
+    # Headlines came in — clear any prior dormancy. Best-
+    # effort; do this BEFORE scoring so dormancy is
+    # cleared even if scoring fails downstream.
+    try:
+        from stocks.repository import (
+            _pg_session,
+            _run_pg,
+        )
+        from backend.db.pg_stocks import (
+            record_successful_fetch,
+        )
+
+        async def _ok_call():
+            async with _pg_session() as s:
+                await record_successful_fetch(
+                    s, ticker, len(headlines),
+                )
+
+        _run_pg(_ok_call)
+    except Exception:
+        _logger.debug(
+            "record_successful_fetch failed for %s",
+            ticker, exc_info=True,
+        )
+
+    # Score with provenance (finbert / llm / none).
+    avg, score_source = score_headlines_with_source(
+        headlines, llm=llm,
+    )
     if avg is None:
-        # LLM unavailable — write a zero-score row.
+        # Nothing scored — write a zero-score row
+        # tagged 'none' so the dashboard and stats
+        # queries can tell it apart from real data.
         repo.insert_sentiment_score(
             ticker,
             date.today(),
@@ -211,14 +334,17 @@ def refresh_ticker_sentiment(
         date.today(),
         avg,
         headline_count=len(headlines),
-        source="llm",
+        source=score_source,
     )
     _logger.info(
-        "Sentiment scored %s: %.3f (%d headlines, " "%d sources)",
+        "Sentiment scored %s: %.3f (%d headlines, "
+        "%d sources, src=%s%s)",
         ticker,
         avg,
         len(headlines),
         len({h.source for h in headlines}),
+        score_source,
+        ", force=upsert" if force else "",
     )
     return avg
 

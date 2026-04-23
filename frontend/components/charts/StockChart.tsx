@@ -384,24 +384,41 @@ export function StockChart({
 
     // ── Pane 1: Candlestick + overlays ──────────
 
-    const candleData = aggOhlcv
-      .filter(
-        (d) =>
-          !!d.date &&
-          _DATE_RE.test(d.date) &&
-          d.open != null &&
-          d.high != null &&
-          d.low != null &&
-          d.close != null,
-      )
-      .map((d) => ({
+    const _byTime = new Map<
+      string,
+      {
+        time: string;
+        open: number;
+        high: number;
+        low: number;
+        close: number;
+      }
+    >();
+    for (const d of aggOhlcv) {
+      if (
+        !d.date ||
+        !_DATE_RE.test(d.date) ||
+        d.open == null ||
+        d.high == null ||
+        d.low == null ||
+        d.close == null
+      ) {
+        continue;
+      }
+      // Last row wins when dates collide — backend
+      // dedup is the source of truth, this is just a
+      // safety net for stale caches.
+      _byTime.set(toTime(d.date), {
         time: toTime(d.date),
         open: d.open,
         high: d.high,
         low: d.low,
         close: d.close,
-      }))
-      .sort((a, b) => (a.time < b.time ? -1 : 1));
+      });
+    }
+    const candleData = Array.from(_byTime.values()).sort(
+      (a, b) => (a.time < b.time ? -1 : 1),
+    );
 
     const candleSeries = chart.addSeries(
       CandlestickSeries,

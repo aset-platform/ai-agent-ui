@@ -73,7 +73,7 @@ test.describe("Insights advanced filters", () => {
         .catch(() => false);
 
       if (selectorExists) {
-        await selector.selectOption("balance_sheet");
+        await selector.selectOption("balance");
         await page.waitForTimeout(1_000);
         const newText = await headers.allTextContents();
         // Headers should change for different statement

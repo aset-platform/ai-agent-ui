@@ -4,6 +4,63 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## 2026-04-16 — Model Pinning, Portfolio Periods & E2E Fixes (Sprint 7, Session 2)
+
+### Features
+- **Kimi K2 → Qwen3-32B** (ASETPLTFRM-306): Groq decommissioned kimi-k2-instruct; replaced with qwen3-32b across 22 files. tool_pool_primary 3→2 models, combined TPD 2.3M→2.0M
+- **Per-request model pinning** (ASETPLTFRM-305): Round-robin counter was incrementing per invoke(), not per request. Added `_pinned_model` to FallbackLLM with `pin_reset()` before ReAct loop. `skip_synthesis=True` on PORTFOLIO_CONFIG eliminates double-synthesis (6→4 LLM calls)
+- **Non-overlapping portfolio periods** (ASETPLTFRM-307): `_period_to_days()` helper, non-overlapping windows (period2=recent, period1=preceding), bfill() fix for 4152% return bug
+- **NeuralProphet evaluated & dropped** (ASETPLTFRM-203): Full POC built but pandas 3.0 incompatible (Series.view() + groupby changes). All code reverted, research report saved
+
+### E2E Fixes
+- **Route fix** (ASETPLTFRM-246): 9 `goto("/")` → `goto("/dashboard")` across 7 files, 45 of 109 failing tests unblocked
+- **ChatPage rewrite** (ASETPLTFRM-309, in progress): Scoped locators to chat-panel, removed agent selector, 15/26 tests passing
+
+### New Files
+- `claudedocs/research_neuralprophet_vs_prophet_2026-04-16.md`
+- `claudedocs/research_round_robin_model_affinity_2026-04-16.md`
+- `docs/superpowers/specs/2026-04-16-per-request-model-pinning-design.md`
+- `docs/superpowers/plans/2026-04-16-per-request-model-pinning.md`
+- `tests/backend/test_model_pinning.py`
+
+---
+
+## 2026-04-15 — Forecast Enrichment & Sanity Gates (Sprint 7)
+
+### Features
+- Volatility-regime adaptive Prophet: stable/moderate/volatile configs with per-regime growth mode, changepoint_prior_scale, log-transform, logistic bounds
+- 11 enriched regressors (Tier 1: volatility regime, trend strength, S/R position, Piotroski, revenue/EPS growth; Tier 2: sector RS, volume anomaly, OBV trend, calendar, F&O/earnings proximity)
+- Post-Prophet technical bias adjustment (RSI/MACD/volume dampener, ±15% cap, 30d taper)
+- Composite confidence score with High/Medium/Low/Rejected badges on Analysis + Portfolio UIs
+- Confidence badge UI with expandable explanation card showing metric breakdown
+- Sector index OHLCV ingestion for relative strength computation
+- forecast_runs schema evolution: `confidence_score`, `confidence_components` columns
+- FinBERT batch sentiment (ProsusAI/finbert, CPU-only, zero API cost) — replaces LLM for batch scoring
+
+### Sanity Gates (ASETPLTFRM-302)
+- Exp cap: forecasts beyond 4.5x current price capped/rejected
+- Extreme series skip: tickers with >200% OHLCV range skipped
+- Frontend "Low confidence" warning for NaN MAPE or rejected forecast
+- Data Health latest-run fix: uses latest `run_date` not MAX confidence
+
+### Performance
+- Batch DuckDB reads: 748 individual Iceberg scans → single bulk `WHERE ticker IN (...)`
+- Single bulk merge: 20 per-column writes → one merge
+- 9 zero-signal regressors pruned automatically
+- India forced run: ~46 min (was ~90 min)
+
+### Bug Fixes
+- XGBoost casing bug: technical indicator columns silently dropped (case mismatch fixed)
+- 5 column name mismatches in forecast feature extraction
+- Exp overflow on logistic growth for large-cap tickers
+- Data Health stale query (invalidate_metadata before scan)
+- Forecast dedup on write, React hydration error on badge, retention API blocking event loop
+
+### Tests
+- 79 new tests across 4 files: test_forecast_regime (21), test_forecast_features (38), test_forecast_confidence (15), test_forecast_enrichment_e2e (5)
+
+---
+
 ## Apr 14, 2026 — Data Health Fix Panel + ETF Ingestion + ticker_type
 
 ### Features

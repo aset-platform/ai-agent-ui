@@ -2,6 +2,448 @@
 
 ---
 
+## 2026-04-21 / 22 / 23 — Sprint 7 Closure: Sentiment Hardening + Iceberg Pipeline Integration + Portfolio Transparency
+
+**Sprint 7 closed at 75/75 SP (100%)**. ASETPLTFRM-324 (BYOM) and ASETPLTFRM-323 (Pro role) transitioned to Done after final verification. ~30 SP of follow-up work landed as comments on parent tickets (320, 315, 316, 319).
+
+### Sentiment data quality (extends ASETPLTFRM-320)
+
+- **Yahoo `^BSESN` stale-feed fallback** (`backend/market_routes.py`): Yahoo's BSE feed periodically freezes mid-session. Detect via `regularMarketTime` age (>300s during market hours), fall back to Google Finance scrape (`SENSEX:INDEXBOM`, regex `data-last-price="(...)"`). Overlay live price on Yahoo's intraday-stable `prev_close`. Nifty unaffected.
+- **FinBERT cache stall recovery**: HF XET CDN reproducibly cuts `pytorch_model.bin` at ~67 MB. Cleanup `.incomplete` artifacts + re-download via `huggingface_hub.snapshot_download(allow_patterns=...)`.
+- **Step-5 PyIceberg-direct rewrite** (`backend/jobs/executor.py`): post-worker `query_iceberg_df` was returning empty under concurrent commits because DuckDB resolves the latest snapshot via filesystem `glob` and can read a metadata file whose manifests aren't yet visible. Switched to `tbl.refresh().scan(EqualTo(score_date, today))` via PyIceberg directly. Pre-fix: 802/802 market_fallback overwrote finbert rows.
+- **market_cap selector fix**: top-50 learning batch was sorted alphabetically because `get_all_registry()` doesn't expose `market_cap`. Now joins `stocks.company_info.market_cap` → RELIANCE/HDFCBANK/INFY land in batch instead of obscure A-prefixed small-caps.
+- **Sentiment dormancy** (new PG table `sentiment_dormant` + Alembic `a9c1b3d5e7f2`): tickers returning 0 headlines K times get capped exponential cooldown (2/4/8/16/30 days). Excluded from learning/cold; 5% probe re-tested by oldest `last_checked_at`. ~60% reduction in daily HTTP calls.
+- **Source-aware Step-5 delete**: `In("source", ["market_fallback", "none"])` predicate prevents force-runs from clobbering finbert/llm rows.
+- **Hot-classifier source filter**: `IN ('finbert', 'llm')` (was `'llm'`-only — stale post-FinBERT cutover).
+- **Workers 15 → 5** in sentiment ThreadPoolExecutor (Yahoo/Google rate-limit above ~5 parallel).
+- **News widget 21-day max-age** on `/portfolio/news` — mid/small caps were surfacing 60-100d-old articles.
+- **"N holdings unanalyzed" chip** (`PortfolioNewsResponse.unanalyzed_tickers` + `NewsWidget.tsx`): transparency chip when portfolio sentiment is dominated by market_fallback.
+
+### Container / scheduler reliability
+
+- **`TZ=Asia/Kolkata`** added to `docker-compose.yml` backend service. Was UTC — `schedule` lib uses local time, so cron strings were firing at 08:00 UTC = 13:30 IST (5.5h late).
+- **`scheduler_catchup_enabled=False`** (default flipped in `backend/config.py`). Startup catchup of "missed" jobs was silently pulling mid-day partial data.
+
+### Iceberg infra (extends ASETPLTFRM-315)
+
+- **NaN-replaceable OHLCV dedup** (both `insert_ohlcv` + `batch_data_refresh`): existing-keys query filters `WHERE close IS NOT NULL AND NOT isnan(close)`, plus scoped pre-delete of NaN rows for the to-be-inserted `(ticker, date)` set before append. Without this, a stuck NaN-close row blocked Yahoo-late-close re-fetches forever as "duplicate."
+- **Daily Iceberg compaction in pipeline**: new `iceberg_maintenance` job_type registered in `backend/jobs/executor.py`, added as **step 6** of both India + USA daily pipelines. Compacts `stocks.{ohlcv, sentiment_scores, company_info, analysis_summary}`. Best-effort `expire_snapshots` + `cleanup_orphans`.
+- **Auto-backup before compaction** (preserves CLAUDE.md hard rule): `run_backup()` runs as **step 0** of `execute_iceberg_maintenance`. **Fail-closed** — if backup fails, compaction aborts. `rsync` added to `Dockerfile.backend` runtime stage.
+- **OHLCV file fragmentation observed**: pre-compaction had grown to 16,156 parquet files (was 817 after the original ASETPLTFRM-315 compaction). `Clean NaN Rows` button took 5+ min. Post-compaction: full-count of 1.5M rows in 0.50s. Reads ~18× faster.
+
+### Portfolio + Charts (user-visible bug fixes)
+
+- **Portfolio P&L NaN-truncation** (`_build_portfolio_performance` in `backend/dashboard_routes.py`): used to drop entire dates when any held ticker had NaN close (`val += qty × NaN` → `val > 0` False → date skipped). Different users saw different "latest" dates depending on which ETFs they held. Four defenses:
+  1. `math.isnan` guard in daily-aggregate loop
+  2. per-ticker `df["close"].ffill()` before building close_maps
+  3. `stale_tickers: list[StalePriceTicker]` field + amber chip on the P&L panel
+  4. ffill-to-series-end (extend each ticker's close_map forward from last known close to series end) — fixes the dip after `Clean NaN Rows`
+- **Stale-data chip pattern** (reusable UX): `PLTrendWidget::StaleTickerChip` + `NewsWidget::UnanalyzedChip` — amber chip near panel title when an aggregate has stale upstream inputs. Auto-clears when list empty. User explicitly endorsed this transparency-over-silence pattern.
+- **OHLCV chart triple-dedup**: defensive layers — Iceberg (NaN-replaceable upsert), backend route (`drop_duplicates(subset=["date"])` before serializing), frontend chart (`Map`-keyed by time before `setData`). Lightweight-charts asserts on duplicate timestamps; any single layer regressing won't crash the chart now.
+- **View-transactions modal** (extends ASETPLTFRM-319): eye icon replaces inline edit pencil on Portfolio tab. New `GET /v1/users/me/portfolio/{ticker}/transactions` endpoint returns date-sorted txns + summary. Per-row edit pencil opens `EditStockModal` scoped to that specific txn. View-first-edit-from-within UX.
+- **Backup Health panel suffix-tolerant date parsing** (fixes ASETPLTFRM-316): `_admin_backups_list` was crashing with `ValueError: Invalid isoformat string: '2026-04-22-pre-dedupe'`. Fix: try `datetime.fromisoformat(b["date"][:10])` first, fall back to dir mtime.
+
+### CLAUDE.md gotchas added
+
+- **uvicorn `--reload` doesn't re-register routes/Pydantic-fields**: adding new FastAPI routes or new fields on existing Pydantic response models requires `docker compose restart backend`. Verified across `PortfolioPerformanceResponse`, `PortfolioNewsResponse`, `/portfolio/{ticker}/transactions`.
+
+### Jira
+
+- Comments posted on ASETPLTFRM-320, 315, 316, 319 documenting the follow-up work
+- ASETPLTFRM-324 (BYOM, 13 SP) and ASETPLTFRM-323 (Pro role, 8 SP) transitioned In Progress → Done
+- Sprint 7 closes at 100% (75/75 SP)
+
+---
+
+## 2026-04-18 / 19 — Sprint 7 Session 6: BYOM + Insights Three-Tier Scoping + Hallucination Guards
+
+### ASETPLTFRM-324 (13 SP, In Progress): Bring-Your-Own-Model (BYOM) — Phase A + B
+
+**Product shift:** chat-agent LLM costs move from *platform-pays-all* to
+*platform-pays-first-10-then-BYO*. Every non-superuser gets 10 lifetime
+free chat turns; after that they must configure their own Groq and/or
+Anthropic key or chat is blocked (429). Non-chat flows (recommendations,
+sentiment, forecast) and superusers continue to use platform keys.
+Ollama remains a shared native fallback — free for all when available.
+
+**Phase A — storage + UI + observability:**
+- Alembic migration `f8e7d6c5b4a3`:
+  - `users.chat_request_count INT NOT NULL DEFAULT 0` (free-allowance counter, clamped to 10 for display).
+  - `users.byo_monthly_limit INT NOT NULL DEFAULT 100` (user-settable cap on own keys).
+  - New `user_llm_keys` table — `(user_id, provider)` unique, `encrypted_key BYTEA`, `label`, `last_used_at`, `request_count_30d`, FK cascade on user delete.
+- Fernet encryption in `backend/crypto/byo_secrets.py`. Master key `BYO_SECRET_KEY` env (32-byte URL-safe base64). Provider-aware `mask_key()` handles both Groq (`gsk_****abcd`) and Anthropic (`sk-ant-****wxyz`).
+- `auth/repo/byo_repo.py` + `auth/endpoints/byo_routes.py`: 4 self-scoped endpoints — `GET/PUT/DELETE /v1/users/me/llm-keys[/{provider}]` + `PATCH /v1/users/me/byo-settings`. All fire `BYO_KEY_ADDED / UPDATED / DELETED` audit events. Plaintext keys never returned.
+- Iceberg schema evolution on `stocks.llm_usage` — added nullable `key_source` column via `tbl.update_schema().add_column()`. Legacy null rows treated as `platform` at read time; no backfill.
+- Scope-self `/admin/metrics` response enriched with `quota`, `providers`, `daily_trend`, per-user per-model rollup (tokens, cost, last_used_at, `requests_platform`/`requests_user` split).
+- `get_dashboard_llm_usage` per-model rollup — filters `event_type == "request"` (drops `n/a`-model cascade/compression bookkeeping), ISO 8601 UTC with `Z` suffix on timestamps.
+- Frontend full rewrite of `MyLLMUsageTab.tsx`: free-allowance card with `BYOLimitEditor`, 3 provider cards (Groq/Anthropic configurable, Ollama native), 4 KPIs with free/user split, usage-by-model table with badge column, 30-day sparkline. New `ConfigureProviderKeyModal` (paste/show-hide/label/prefix validation). Delete goes through shared `ConfirmDialog`; 404 treated as already-gone.
+
+**Phase B — cascade routing + enforcement:**
+- New `backend/llm_byo.py`:
+  - `BYOContext` dataclass + module-level `ContextVar` + `apply_byo_context()` scoped context manager.
+  - `resolve_byo_for_chat()` — decides per-turn: None for superuser / under-10, `HTTPException(429)` for over-10 with no keys or over monthly limit, `BYOContext` otherwise.
+  - Redis counter `byo:month_counter:{user_id}:{yyyy-mm}` (IST, 40-day TTL).
+  - Fire-and-forget bump of `user_llm_keys.last_used_at`.
+  - Per-user LangChain client cache keyed on `(provider, model, sha256(key)[:12])`.
+- `FallbackLLM._try_model` (Groq) + Anthropic fallback: check active BYO context, build user-keyed client with identical tool binding, invoke, stamp `key_source="user"`. Graceful platform fallback on build error.
+- `bind_tools()` stores `_bound_tools` + kwargs so user-keyed clients rebind to the same tool set.
+- `llm_classifier.py` — Tier-2 intent classifier used raw `ChatGroq` bypassing FallbackLLM; now consults ContextVar and swaps to user-keyed client when BYO is active. Closed the last leak point on chat turns.
+- All 4 chat entry points resolve BYO at entry and wrap the worker in `apply_byo_context(byo_ctx)` **inside** the thread (ContextVars don't propagate through `run_in_executor`).
+- Post-chat `update_summary` moved inside BYO scope via new `_update_summary_in_byo_scope` helper (was leaking to platform).
+- `chat_request_count` bump is now guarded by `byo_active` so the free-allowance counter stays pinned at 10 once BYO kicks in. Scope-self response clamps `free_allowance_used = min(count, 10)` for historical drift.
+- WebSocket 429 delivery fix — `_handle_chat` used to return `event_queue` after enqueueing the error, but the drain loop hadn't started; client spun forever. Errors now go out via direct `ws.send_json({"type":"error"})` + `{"type":"final"}` terminator so the spinner clears.
+
+### Insights three-tier ticker scoping
+
+Replaced the binary `_get_user_tickers(user)` in `backend/insights_routes.py` with a scope-aware `_scoped_tickers(user, scope)`. Nine tabs mapped to three tiers:
+
+| Tier | Tabs | Pro / Superuser | General |
+|---|---|---|---|
+| `discovery` | Screener, ScreenQL, **Sectors**, **Piotroski** | full platform (stock + ETF, excluding index/commodity) | watchlist ∪ holdings |
+| `watchlist` | Risk, Targets, Dividends | watchlist ∪ holdings | watchlist ∪ holdings |
+| `portfolio` | Correlation, Quarterly | holdings only | holdings only |
+
+- Full-universe scope filters `ticker_type IN ('stock', 'etf')` so `^NSEI` / `GC=F` stay out of Screener.
+- Correlation's `source=portfolio|watchlist` param dropped — only `portfolio` was ever used.
+- Piotroski was platform-wide; now scoped. Cache key gained `user_id`.
+- Sectors "unnamed" bucket — 3 ETFs (`EQUAL50.NS`, `MOM50.NS`, `VALUE.NS`) had literal empty-string sectors that survived `dropna`. Fixed by routing `sector` through `market_utils.safe_str`.
+- 9 tests in `tests/backend/test_insights_scoping.py`.
+
+### Hallucination + data-integrity fixes
+
+- **Tool-result truncation hallucination**: `MessageCompressor.max_tool_result_chars` default 800 → 4000; progressive passes 500 → 2500 and 300 → 1500. The 800-char cap was clipping the 8-row portfolio-holdings table mid-row and the LLM invented *"[Truncated in display, but confirmed in memory context]"* (pure fabrication — that phrase is not in our code). Synthesis + portfolio prompts gained a `NO HALLUCINATION ON TRUNCATION` clause: when `[truncated N chars]` marker appears, list only visible rows and explicitly tell the user some rows were trimmed.
+- **NaN sentinel string leak**: `safe_str` / `safe_sector` already rejected numeric NaN, `None`, empty strings — but preserved literal `"NaN"`, `"None"`, `"null"`, `"N/A"`, `"NaT"` tokens that pandas / JSON round-trips produce. These leaked into LLM recommendation prompts ("large weight of NaN (41.8%)") and Sectors-tab groupby keys. Added `_MISSING_SENTINELS` frozenset + case-insensitive post-strip check. Legit substrings (`"Naniwa"`, `"Financial Services"`) still pass. 25 regression tests in `tests/backend/test_market_utils_safe.py`.
+- **Naïve UTC timestamp → frontend drift**: Iceberg `timestamp` column is `datetime64[us]` tz-naive. `str()` produced `"2026-04-19 00:15:33"` with no tz marker; frontend's `new Date()` parsed as local (IST = UTC+5:30), showing fresh rows as "5h ago". Fixed by coercing to UTC + emitting ISO 8601 with `Z` suffix in the per-model aggregator + new shared `_iso_utc()` helper in `routes.py` for provider-card `last_used_at`.
+- **Confirm-delete on BYO provider cards**: delete goes through shared `ConfirmDialog`; handler tolerates HTTP 404 (already-deleted) as success.
+
+### Operational learnings captured in Serena shared memory
+
+Six shared memories promoted on branch `docs/promote-memory-byom-and-patterns`:
+- `shared/architecture/byom-cascade-override` — full BYOM design.
+- `shared/architecture/pro-user-role-scoped-admin` — three-role model + scope=self|all pattern.
+- `shared/debugging/contextvar-run-in-executor` — `run_in_executor` doesn't auto-copy ContextVars.
+- `shared/debugging/llm-truncation-hallucination` — three-layer defense.
+- `shared/debugging/nan-string-sentinels` — stringified-NaN leak.
+- `shared/debugging/iceberg-tz-naive-timestamps` — extended with read-side UTC-Z fix.
+
+### Totals
+- 1 Jira ticket (ASETPLTFRM-324, 13 SP, In Progress) + 6 shared memories + 63 new tests (54 BYO/NaN + 9 Insights scoping).
+- 9 commits on `feature/sprint7`: Insights `3196fe4`, `62fc2e2`, `ec5a74e`; BYOM `608f8bd`, `4e34a1c`, `e1e49a0`, `ba528dd`, `38fd146`, `3022a3a`.
+
+### Follow-ups for next session
+1. Manual E2E verification of BYOM on pro user account.
+2. ASETPLTFRM-323 (Pro role) also pending user verification.
+3. Optional: OpenAI provider support, per-provider monthly limits, retroactive `key_source` backfill on legacy `llm_usage` rows.
+4. Merge `docs/promote-memory-byom-and-patterns` once reviewed.
+
+---
+
+## 2026-04-18 — Sprint 7 Session 5: Monthly Recommendations + Acted-On + Sentiment Hardening + Pro Role
+
+### ASETPLTFRM-318 (8 SP, Done): Recommendation monthly-per-scope quota + admin test workflow
+- New rule: **1 run per `(user, scope, IST calendar month)`**. Replaces the old "5 per rolling 30 days" cap.
+- Single consolidator `get_or_create_monthly_run(user_id, scope, *, run_type, repo, bypass_quota)` in `backend/jobs/recommendation_engine.py`. Widget, chat, and scheduler all delegate through it — cache hit returns existing run, cache miss runs stages 1→3 and persists.
+- `scope="all"` silently expands to `india` + `us` at every entry point.
+- New superuser endpoints:
+  - `POST /v1/admin/recommendations/force-refresh` — takes email OR UUID; bypasses quota; creates `run_type='admin_test'`.
+  - `POST /v1/admin/recommendation-runs/{id}/promote` — transactional delete of existing non-test run + relabel target to `run_type='admin'`.
+- `admin_test` rows hidden from user-facing tabs via default `exclude_test=True` on `get_latest_recommendation_run` + `get_recommendation_history`.
+- Fixed `expire_old_recommendations` — was cross-scope (incoming US run wiped India recs). Now scoped by `(user_id, scope)`.
+- IST month helpers: `current_month_start_ist()` + `next_month_start_ist()` via `ZoneInfo("Asia/Kolkata")`.
+- `scripts/truncate_recommendations.py` — one-shot cleanup (wiped 41 runs / 284 recs pre-deploy).
+- Frontend: `RunTypeBadge` variants ADMIN (fuchsia) + TEST (amber), Force-refresh panel + Replace button in Admin Recommendations tab, widget Generate button disables + shows `Next available {reset_at}` when cached.
+
+### ASETPLTFRM-319 (5 SP, Done): Recommendation acted-on auto-detection + in-place portfolio modals
+- Backend hook in `auth/endpoints/ticker_routes.py` on `POST/PUT/DELETE /users/me/portfolio`. Daemon thread calls `update_recommendation_status(user, ticker, actions, "acted_on")` via NullPool async engine.
+  - POST (new holding) → `buy/accumulate` recs.
+  - PUT (qty decrease) → `sell/reduce/trim` recs.
+  - DELETE → `sell/reduce/trim` recs.
+- Stats corrections:
+  - `get_recommendation_history` — `acted_on_count` computed via SUM of `CAST(acted_on_date IS NOT NULL AS Integer)` grouped per run.
+  - `get_recommendation_stats` — new `total_acted_on`; scope filter; `admin_test` excluded.
+  - `/history` + `/stats` endpoints return real values (were hardcoded 0).
+- `/stats?scope=india|us|all` — scope-aware adoption rate.
+- KPI formatter fix: null Hit Rate now renders `0.0%` (was em-dash).
+- Frontend: shared `RecActionButton.tsx` — green `+ Buy` / amber pencil `Edit` / green disabled `Acted ✓` pills, wired into `RecommendationCard` (slideover) + `RecRow` (Analysis → Recommendations).
+- `PortfolioActionsProvider` at authenticated-layout level — mounts Add/Edit/Delete modals once; `usePortfolioActions()` hook replaces the old `/dashboard?add=TICKER` route-redirect pattern.
+- Modal z-index raised to `z-[70]` so action modals layer above `RecommendationSlideOver` (`z-[60]`).
+- One-off data backfill: 9 recs across 3 users flipped to `acted_on` for existing holdings.
+
+### ASETPLTFRM-320 (5 SP, Done): Sentiment batch hardening + FinBERT provenance + Data Health details modal
+- Four bugs fixed in `backend/jobs/executor.py::execute_run_sentiment`:
+  1. **1599/802 double-count**: DuckDB metadata cache stale-read caused Step-5 gap-fill to see 0 new rows and overwrite 797 genuine LLM scores with market-fallback. Fix: `invalidate_metadata("stocks.sentiment_scores")` before the re-query.
+  2. **Deadlocked pool**: 15 concurrent `yf.Ticker().news` sockets hung indefinitely. Fix: `_run_with_timeout(fn, *args, timeout=10)` wrapper in `_sentiment_sources.py` applied to all three fetchers + market-headlines feedparser.
+  3. **Force flag ignored**: per-ticker `refresh_ticker_sentiment` had its own idempotency early-return. Fix: added `force` param; propagated executor → gap_filler → per-ticker.
+  4. **Unused LLM build in FinBERT mode**: 802× `FallbackLLM` constructors per run (log noise, CPU waste). Fix: `refresh_sentiment` reads `settings.sentiment_scorer`, skips LLM when `finbert`.
+- Learning-set cap: 767 → top 50 by `market_cap`; tail drops into Step-5 market-fallback. Runtime 802 → ~85 tickers (~30s).
+- Accurate source labels: new `score_headlines_with_source()` returns `(score, source)`; `sentiment_scores.source` now carries `finbert | llm | market_fallback | none`. Log format: `Sentiment scored TCS.NS: 0.340 (4 headlines, 3 sources, src=finbert, force=upsert)`.
+- New endpoint `GET /v1/admin/data-health/sentiment-details?scope=all|india|us` (superuser, 60s Redis cache).
+- New `SentimentDetailsModal.tsx` on Admin → Maintenance → Data Health → Sentiment card: source tiles (FinBERT indigo, LLM violet, fallback amber, none grey), filterable + paginated (10/25/50/100) ticker table, CSV download, scope tabs.
+
+### ASETPLTFRM-321 (3 SP, Done): NaN-truthy sector audit + shared helpers
+- Root cause: `row.get("sector") or "Other"` kept `float('nan')` for ETFs (NaN is truthy in Python). Recommendation prompt leaked literal "NaN (41.8%)".
+- New shared helpers in `backend/market_utils.py`:
+  - `safe_str(val) -> str | None` — handles None / NaN / whitespace.
+  - `safe_sector(val, fallback="Other") -> str` — non-empty label safe for dict keys + prompts.
+- Applied across 10 files:
+  - **Write paths** (sanitize before Iceberg insert): `stocks/repository.py` (company_info + piotroski_scores), `backend/jobs/batch_refresh.py`, `backend/pipeline/jobs/fundamentals.py`, `backend/pipeline/universe.py`, `backend/pipeline/screener/screen.py`, `backend/tools/stock_data_tool.py`.
+  - **Read paths** (handle pre-existing NaN): `backend/jobs/recommendation_engine.py` (3 sites), `backend/dashboard_routes.py`, `backend/agents/report_builder.py`, `backend/insights_routes.py`.
+
+### ASETPLTFRM-322 (3 SP, Done): UX polish — Asset Perf + Scheduler + CSV consistency
+- `AssetPerformanceWidget`: fixed body height (9 rows ~292px) with overflow-y scroll; dropped top-7/bottom-7 truncation.
+- Scheduler labels: `progressUnit(jobType)` returns `users/user` for `recommendations`, `tickers/ticker` otherwise. "Last Run" stat card shows `N processed`.
+- Scheduler Force Run: greyed "Off" pill with tooltip ONLY on `recommendations` jobs; other job types keep the amber menu.
+- New `DownloadCsvButton` shared component (`components/common/`) matches Screener's icon+label pattern. Used by Admin Recommendations, Analysis Recommendations, Sentiment Details modal, and refactored `InsightsTable`.
+- Modal z-index normalised: Add/Edit/ConfirmDialog → `z-[70]`.
+
+### Pro user role (unticketed, shipped same session)
+- Third role between `general` and `superuser`: paying users (`subscription_tier ∈ {pro, premium}`) get `role=pro`.
+- `auth/dependencies.py`: new `require_role(*allowed)` factory + `pro_or_superuser` alias.
+- `auth/repo/user_writes.py::update()`: tier→role auto-sync (superuser sticky — never auto-demoted). Fires `ROLE_PROMOTED` / `ROLE_DEMOTED` audit events post-commit via PyIceberg catalog.
+- `UserCreateRequest.role` + `UserUpdateRequest.role` Literals extended to `general | pro | superuser`.
+- `/admin/audit-log`, `/admin/metrics`, `/admin/usage-stats` switched to `pro_or_superuser` with `?scope=self|all` query param. Pro forced to `scope=self`; `scope=all` → 403 unless superuser.
+- Pro admin view: 3-tab scoped strip (My Account, My Audit Log, My LLM Usage). Superuser still sees all 7 tabs.
+- `AuditLogTab` + `ObservabilityTab` accept optional `{scope, title}` props; hide superuser-only sections (tier health, daily budget, cascade log, model budget) on self-scope.
+- New `MyAccountTab.tsx` — reuses canonical `EditProfileModal` + `ChangePasswordModal`.
+- `UserModal.tsx` role dropdown: General / Pro / Superuser.
+- `Sidebar.canSeeItem` extended so pros see Admin + Insights nav items.
+- `/admin` route gate: general users redirected to `/dashboard`.
+- `PATCH /auth/me` now writes `USER_UPDATED` audit event (pros see self-edits in My Audit Log).
+- **Known gap**: no cron for `subscription_end_at` expiry; webhooks cover the common path. Token retains old role up to 60min until next `/auth/refresh`.
+
+### Totals
+- **24 SP closed** in Jira (5 tickets). Pro role shipped but awaits ticketing.
+- **~40 files modified** across `auth/`, `backend/`, `stocks/`, `frontend/app/(authenticated)/admin/`, `frontend/components/admin/`, `frontend/components/recommendations/`, `frontend/components/widgets/`, `frontend/hooks/`, `frontend/providers/`.
+- **2 new shared helpers** (`safe_str`/`safe_sector`, `DownloadCsvButton`).
+- **2 new standalone artifacts** (`scripts/truncate_recommendations.py`, `SentimentDetailsModal`).
+- **Memories updated**: Serena `session/2026-04-18-sprint7-session5`; auto-memory `project_recommendation_monthly_quota.md` + `project_pro_user_role.md`.
+
+---
+
+## 2026-04-16/17 — Sprint 7 Session 4: ScreenQL, CSV, Iceberg Maintenance, Bulk OHLCV
+
+### ASETPLTFRM-312 (3 SP, Done): Piotroski Fix + Delete Modals
+- stock_master PG fallback for blank company names (Piotroski + ScreenQL)
+- ConfirmDialog on scheduler delete buttons (jobs + pipelines)
+
+### ASETPLTFRM-313 (5 SP, Done): CSV Download + Transactions Refactor
+- `frontend/lib/downloadCsv.ts` — centralized CSV utility
+- InsightsTable `onDownload` prop, CSV button in footer
+- 10 tabs: 7 Insights + Users + Audit Log + Transactions
+- Transactions: custom HTML table → InsightsTable with pagination + sorting
+
+### ASETPLTFRM-314 (13 SP, Done): ScreenQL Universal Screener
+- `backend/insights/screen_parser.py` — tokenizer, recursive descent parser, SQL generator
+- 36-field catalog across 6 Iceberg tables, 7 categories
+- CTE-based DuckDB SQL with parameterized queries, dynamic JOINs
+- `query_iceberg_multi()` for cross-table Iceberg queries
+- 6 preset templates, autocomplete, dynamic columns, currency symbols (₹/$)
+- RSI extracted via regexp from rsi_signal text
+- Design spec: `docs/superpowers/specs/2026-04-16-screenql-universal-screener-design.md`
+
+### ASETPLTFRM-315 (8 SP, In Progress): Iceberg Maintenance
+- `backend/maintenance/backup.py` — rsync + catalog.db + 2-rotation
+- `backend/maintenance/iceberg_maintenance.py` — compact, expire, purge, drop_dead_tables
+- OHLCV freshness gate: `>= today` (was `>= yesterday`)
+- OHLCV upsert: scoped delete + re-append for today's rows
+- asyncio.to_thread for fix-ohlcv (was blocking event loop)
+- Warehouse cleanup: 41 GB → 14 GB (dropped 3 dead tables: 27 GB)
+- Compacted 7 active tables (company_info: 4055→1 file for 830 rows)
+- CRITICAL: never delete Iceberg metadata/parquet files directly
+
+### ASETPLTFRM-316 (5 SP, Done): Backup Health Panel
+- 3 API endpoints: /admin/backups, /admin/backups/health, /admin/backups/{date}/contents
+- BackupHealthPanel.tsx on Admin Maintenance tab
+- Redis caching: data-health 60s, backup endpoints 120s
+
+### ASETPLTFRM-317 (5 SP, Done): Bulk OHLCV Download
+- `_bulk_fetch_ohlcv()` — yf.download() batches of 100
+- 804 per-ticker → 9 batch calls, 44% → 0.2% failure rate, 280s → 58s
+- Auto-retry failed tickers in batches of 50
+
+### Bug Fixes
+- Portfolio allocation: ETF sector detection (BEES/ETF → "ETF" label)
+- ForecastTarget: nullable float fields (fixes 500 for new users)
+- KpiTooltip: viewport clamping (right-edge clip fix)
+
+### Stats
+- 6 Jira tickets, 39 story points (34 done, 5 in progress)
+- 4 new backend modules, ~3,000 lines added
+- 16 files modified across frontend + backend
+
+---
+
+## 2026-04-16 — Sprint 7 Session 3: E2E Test Coverage Overhaul
+
+### ASETPLTFRM-308 (8 SP, Done): E2E Coverage Overhaul (Parent)
+- Broke into 3 tiered sub-tickets (309, 310, 311) + 1 feature (312)
+- All 5 tickets completed in single session
+
+### ASETPLTFRM-309 (5 SP, Done): Tier 1 — ChatPage Rewrite
+- Rewrote dark-mode tests to use sidebar theme toggle
+- Rewrote navigation tests for sidebar + Next.js routing (no iframes)
+- Fixed chat/websocket tests (skipped removed features)
+- 26/26 tests passing
+
+### ASETPLTFRM-310 (5 SP, Done): Tier 2 — Modals + Billing
+- Added testids: add-stock-modal, edit-stock-modal,
+  watchlist-edit/delete buttons
+- Fixed billing tests (billing-current-plan testid,
+  case-insensitive tier, unlimited usage meter)
+- Fixed payment/subscription/profile/session tests
+- Moved portfolio-crud to analytics-chromium (general user auth)
+- 34/42 passing (6 dashboard flaky — below-fold timeout)
+
+### ASETPLTFRM-311 (3 SP, Done): Tier 3 — New Tests
+- dashboard-widgets.spec.ts (10 tests)
+- insights-piotroski.spec.ts (6 tests)
+- insights-recommendations.spec.ts (2 tests)
+- admin-tabs.spec.ts (8 tests)
+- visual-regression.spec.ts (5 tests)
+- 19 visual regression baselines regenerated
+
+### ASETPLTFRM-312 (Done): CSV Download + Pagination
+- insights-csv-pagination.spec.ts (12 tests, all passing)
+- Piotroski blank names fix (stock_master PG fallback)
+- Scheduler delete confirmation modals
+- downloadCsv.ts utility + InsightsTable CSV button
+
+### E2E Performance Fix
+- Workers: 3 → 1 locally (CPU: 1000% → 30%)
+- Video: disabled locally (kept on CI)
+- maxFailures: 10 locally
+- Chromium flags: --disable-gpu, --disable-dev-shm-usage
+
+### Stats
+- 43 new tests + 34 fixed = 77 tests touched
+- 257 total E2E tests across 38 files
+- 7 commits
+
+### Files Created
+- `e2e/tests/frontend/dashboard-widgets.spec.ts`
+- `e2e/tests/frontend/insights-piotroski.spec.ts`
+- `e2e/tests/frontend/insights-recommendations.spec.ts`
+- `e2e/tests/frontend/admin-tabs.spec.ts`
+- `e2e/tests/frontend/visual-regression.spec.ts`
+- `e2e/tests/frontend/insights-csv-pagination.spec.ts`
+- `frontend/lib/downloadCsv.ts`
+
+---
+
+## 2026-04-16 — Sprint 7 Session 2: Model Pinning, Portfolio Periods & E2E Fixes
+
+### ASETPLTFRM-306 (2 SP): Kimi K2 → Qwen3-32B
+- Groq decommissioned moonshotai/kimi-k2-instruct
+- Replaced with qwen/qwen3-32b across 22 files (config, token_budget,
+  llm_fallback, frontend, tests, docs, Serena memories)
+- tool_pool_primary: 3→2 models, synthesis_pool: qwen replaces kimi
+- Combined TPD: 2.3M→2.0M
+
+### ASETPLTFRM-203 (Done): NeuralProphet Evaluated & Dropped
+- Built full POC: `_forecast_neuralprophet.py`, ensemble wiring,
+  comparison script
+- Hard blocker: pandas 3.0 incompatible (Series.view() + groupby changes)
+- All code reverted, research report saved
+
+### ASETPLTFRM-305 (5 SP): Per-Request Model Pinning
+- Round-robin counter was incrementing per `invoke()`, not per request
+  (3 different models per chat)
+- Added `_pinned_model` to `FallbackLLM`, `pin_reset()` before ReAct loop
+- Portfolio period parsing examples added to prompt
+- Synthesis table preservation directive added
+- `skip_synthesis=True` on PORTFOLIO_CONFIG — eliminated double-synthesis
+  (6→4 LLM calls)
+
+### ASETPLTFRM-307 (2 SP): Non-Overlapping Portfolio Periods
+- `_period_to_days()` helper for arbitrary NX period strings
+- Non-overlapping windows: period2=recent, period1=preceding
+- `bfill()` fix for 4152% return bug
+
+### ASETPLTFRM-246 (5 SP): E2E Route Fix
+- Updated 9 `goto("/")` → `goto("/dashboard")` across 7 files
+- 45 of 109 failing tests unblocked
+
+### ASETPLTFRM-309 (In Progress): ChatPage Rewrite
+- Scoped all locators to chat-panel, toggle-open in `goto()`
+- Removed agent selector (no longer in UI)
+- 15/26 tests passing, 11 remaining
+
+### Files Created
+- `claudedocs/research_neuralprophet_vs_prophet_2026-04-16.md`
+- `claudedocs/research_round_robin_model_affinity_2026-04-16.md`
+- `docs/superpowers/specs/2026-04-16-per-request-model-pinning-design.md`
+- `docs/superpowers/plans/2026-04-16-per-request-model-pinning.md`
+- `tests/backend/test_model_pinning.py`
+
+### Commits: ~17
+
+---
+
+## 2026-04-15 — Sprint 7: Forecast Enrichment & Sanity Gates
+
+### Forecast Pipeline Overhaul
+- **Volatility regime classification** — 3 regimes (stable/moderate/volatile)
+  with per-regime Prophet config: growth mode, changepoint_prior_scale,
+  log-transform, logistic bounds
+- **Tier 1 regressors** — 6 new signals from existing Iceberg data:
+  volatility regime, trend strength, S/R position, Piotroski F-Score,
+  revenue growth, EPS growth
+- **Tier 2 features** — 7 computed signals: sector relative strength,
+  volume anomaly, OBV trend, day-of-week, month-of-year, F&O expiry
+  proximity, earnings proximity
+- **Post-Prophet technical bias** — RSI/MACD/volume dampener (±15% cap,
+  30-day taper)
+- **Composite confidence score** — weighted from directional accuracy,
+  MASE, coverage, interval width, data completeness → High/Medium/Low/
+  Rejected badge
+- **Sector index ingestion** — 10 sector ETFs/indices added to pipeline
+  for relative strength computation
+- **Frontend confidence badge** — color-coded pill with expandable
+  explanation card showing metric breakdown
+- **API enrichment** — confidence_score + confidence_components returned
+  in forecast endpoint
+- **Schema evolution** — 2 new columns in forecast_runs Iceberg table
+
+### Sanity Gates (ASETPLTFRM-302)
+- **Exp cap** — max 4.5x current price; forecasts beyond that capped/rejected
+- **Extreme series skip** — tickers with >200% OHLCV range flagged and skipped
+- **Frontend "Low confidence" warning** — shown when NaN MAPE or rejected forecast
+- **Data Health latest-run fix** — uses latest `run_date` not MAX confidence score
+
+### Performance
+- **Batch DuckDB reads** — replaced 748 individual Iceberg scans with single bulk `WHERE ticker IN (...)`
+- **Single bulk merge** — replaced 20 per-column Iceberg writes with one merge operation
+- **9 zero-signal regressors pruned** — data-driven pruning removes noise features automatically
+- **Low-data ticker skip** — tickers with <30d OHLCV skipped; 30d cadence for sparse data
+- **India forced run** — ~46 min end-to-end (down from ~90 min)
+
+### FinBERT POC (ASETPLTFRM-203)
+- **ProsusAI/finbert** replaces LLM for batch sentiment scoring (CPU-only, zero API cost)
+- **XGBoost casing bug fixed** — technical indicator column names were silently dropped due to case mismatch
+- Docker rebuilt with torch CPU + transformers; `_sentiment_finbert.py` module created
+
+### Bug Fixes
+- 5 column name mismatches in forecast feature extraction
+- Exp overflow on logistic growth (large-cap tickers)
+- Data Health stale query (now calls `invalidate_metadata()` before scan)
+- Forecast dedup (duplicate run_date rows now deduplicated on write)
+- React hydration error on forecast confidence badge (SSR mismatch)
+- Retention API blocking event loop (converted to async)
+
+### Files Created
+- `backend/tools/_forecast_regime.py` — regime classification + bias
+- `backend/tools/_forecast_features.py` — Tier 1/2 feature computation
+- `backend/tools/_sentiment_finbert.py` — FinBERT batch inference
+- `poc_forecast_comparison.py` — baseline vs enriched forecast comparison
+- `tests/backend/test_forecast_regime.py` — 21 tests
+- `tests/backend/test_forecast_features.py` — 38 tests
+- `tests/backend/test_forecast_confidence.py` — 15 tests
+- `tests/backend/test_forecast_enrichment_e2e.py` — 5 E2E tests
+
+### Commits: 38
+
+---
+
 # Session: Apr 14, 2026 — Sprint 6: Data Health Fix + ETF Ingestion + ticker_type
 
 ## Data Health Fix Panel (Maintenance page)

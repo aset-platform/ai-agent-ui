@@ -31,6 +31,8 @@ import pandas as pd
 import pyarrow as pa
 import yfinance as yf
 
+from market_utils import safe_str
+
 _logger = logging.getLogger(__name__)
 
 
@@ -104,19 +106,223 @@ def _get_fetch_end_date() -> date:
     return now_ist.date() + timedelta(days=1)
 
 
+OHLCV_BATCH_SIZE = 100
+
+
+def _bulk_fetch_ohlcv(
+    tickers: list[str],
+    start_dates: dict[str, str | None],
+    batch_size: int = OHLCV_BATCH_SIZE,
+) -> dict[str, pd.DataFrame]:
+    """Fetch OHLCV via yf.download() in batches.
+
+    Uses bulk download (1 HTTP call per batch of
+    100 tickers) instead of per-ticker .history().
+
+    Args:
+        tickers: Tickers needing OHLCV (not skip).
+        start_dates: ticker -> start date or None.
+        batch_size: Tickers per yf.download() call.
+
+    Returns:
+        Dict[ticker -> DataFrame].
+    """
+    if not tickers:
+        return {}
+
+    end_str = str(_get_fetch_end_date())
+    # Use earliest start across all tickers in
+    # each batch; individual trimming done after.
+    all_data: dict[str, pd.DataFrame] = {}
+    n_batches = math.ceil(
+        len(tickers) / batch_size,
+    )
+
+    for i in range(0, len(tickers), batch_size):
+        batch = tickers[i : i + batch_size]
+        batch_num = i // batch_size + 1
+
+        # Find earliest start for this batch
+        starts = [
+            start_dates.get(t)
+            for t in batch
+            if start_dates.get(t) not in (
+                None, "__skip__",
+            )
+        ]
+        if starts:
+            min_start = min(starts)
+        else:
+            min_start = None
+
+        _logger.info(
+            "[batch] Bulk OHLCV batch %d/%d: "
+            "%d tickers (start=%s end=%s)",
+            batch_num,
+            n_batches,
+            len(batch),
+            min_start or "10y",
+            end_str,
+        )
+
+        try:
+            t0 = time.monotonic()
+            kwargs = {
+                "group_by": "ticker",
+                "auto_adjust": False,
+                "threads": True,
+                "progress": False,
+            }
+            if min_start:
+                kwargs["start"] = min_start
+                kwargs["end"] = end_str
+            else:
+                kwargs["period"] = "10y"
+                kwargs["end"] = end_str
+
+            raw = yf.download(batch, **kwargs)
+            elapsed = time.monotonic() - t0
+
+            # Split multi-ticker DataFrame
+            if len(batch) == 1:
+                tk = batch[0]
+                if not raw.empty:
+                    raw.index = pd.to_datetime(
+                        raw.index,
+                    ).tz_localize(None)
+                    all_data[tk] = raw
+            else:
+                for tk in batch:
+                    try:
+                        df = raw[tk].dropna(
+                            how="all",
+                        )
+                        if not df.empty:
+                            df.index = (
+                                pd.to_datetime(
+                                    df.index,
+                                ).tz_localize(None)
+                            )
+                            # Trim to ticker's
+                            # own start date
+                            s = start_dates.get(tk)
+                            if s and s != "__skip__":
+                                df = df[
+                                    df.index
+                                    >= s
+                                ]
+                            all_data[tk] = df
+                    except KeyError:
+                        pass
+
+            got = sum(
+                1 for tk in batch
+                if tk in all_data
+            )
+            _logger.info(
+                "[batch] Bulk OHLCV batch %d: "
+                "%d/%d tickers in %.1fs",
+                batch_num,
+                got,
+                len(batch),
+                elapsed,
+            )
+        except Exception:
+            _logger.warning(
+                "[batch] Bulk OHLCV batch %d "
+                "failed, will retry individually",
+                batch_num,
+                exc_info=True,
+            )
+
+    # Retry: tickers that got no data
+    failed = [
+        t for t in tickers if t not in all_data
+    ]
+    if failed:
+        _logger.info(
+            "[batch] Retrying %d failed tickers "
+            "in smaller batches",
+            len(failed),
+        )
+        retry_size = min(50, batch_size // 2)
+        for i in range(0, len(failed), retry_size):
+            batch = failed[i : i + retry_size]
+            try:
+                raw = yf.download(
+                    batch,
+                    period="5d",
+                    group_by="ticker",
+                    auto_adjust=False,
+                    threads=True,
+                    progress=False,
+                )
+                if len(batch) == 1:
+                    tk = batch[0]
+                    if not raw.empty:
+                        raw.index = (
+                            pd.to_datetime(
+                                raw.index,
+                            ).tz_localize(None)
+                        )
+                        all_data[tk] = raw
+                else:
+                    for tk in batch:
+                        try:
+                            df = raw[tk].dropna(
+                                how="all",
+                            )
+                            if not df.empty:
+                                df.index = (
+                                    pd.to_datetime(
+                                        df.index,
+                                    ).tz_localize(
+                                        None,
+                                    )
+                                )
+                                all_data[tk] = df
+                        except KeyError:
+                            pass
+            except Exception:
+                pass
+
+    still_failed = [
+        t for t in tickers if t not in all_data
+    ]
+    if still_failed:
+        _logger.warning(
+            "[batch] %d tickers still missing "
+            "after retry: %s",
+            len(still_failed),
+            still_failed[:20],
+        )
+
+    _logger.info(
+        "[batch] Bulk OHLCV total: %d/%d "
+        "tickers fetched",
+        len(all_data),
+        len(tickers),
+    )
+    return all_data
+
+
 def _fetch_one_ticker(
     ticker: str,
-    ohlcv_start: str | None = None,
+    ohlcv_df: pd.DataFrame | None = None,
     skip_quarterly: bool = False,
     skip_dividends: bool = False,
     skip_info: bool = False,
 ) -> dict:
-    """Fetch yfinance data for a single ticker.
+    """Fetch fundamentals for a single ticker.
+
+    OHLCV is pre-fetched via bulk download and
+    passed in as ``ohlcv_df``. This function only
+    fetches .info, .dividends, and .quarterly_*.
 
     Args:
         ticker: Ticker symbol (e.g. RELIANCE.NS).
-        ohlcv_start: If set, fetch OHLCV from this
-            date (delta). If None, fetch full 10y.
+        ohlcv_df: Pre-fetched OHLCV DataFrame
+            (from _bulk_fetch_ohlcv), or None to skip.
 
     Returns dict with raw data (no Iceberg writes).
     Keys: ticker, ohlcv_df, info, dividends_df,
@@ -131,47 +337,13 @@ def _fetch_one_ticker(
         t0 = time.monotonic()
         yt = yf.Ticker(ticker)
 
-        # OHLCV (skip / delta / full)
-        # end= excludes today's incomplete data when
-        # market is still open (before 17:30 IST).
-        try:
-            t1 = time.monotonic()
-            _end = _get_fetch_end_date()
-            if ohlcv_start == "__skip__":
-                result["ohlcv_df"] = pd.DataFrame()
-            elif ohlcv_start:
-                ohlcv = yt.history(
-                    start=ohlcv_start,
-                    end=str(_end),
-                    auto_adjust=False,
-                )
-                if not ohlcv.empty:
-                    ohlcv.index = pd.to_datetime(
-                        ohlcv.index,
-                    ).tz_localize(None)
-                result["ohlcv_df"] = ohlcv
-            else:
-                ohlcv = yt.history(
-                    period="10y",
-                    end=str(_end),
-                    auto_adjust=False,
-                )
-                if not ohlcv.empty:
-                    ohlcv.index = pd.to_datetime(
-                        ohlcv.index,
-                    ).tz_localize(None)
-                result["ohlcv_df"] = ohlcv
-            result["timings"]["ohlcv"] = round(
-                time.monotonic() - t1,
-                2,
-            )
-        except Exception:
-            _logger.warning(
-                "[batch] OHLCV fetch failed: %s",
-                ticker,
-                exc_info=True,
-            )
-            result["ohlcv_df"] = pd.DataFrame()
+        # OHLCV: use pre-fetched bulk data
+        result["ohlcv_df"] = (
+            ohlcv_df
+            if ohlcv_df is not None
+            else pd.DataFrame()
+        )
+        result["timings"]["ohlcv"] = 0.0
 
         # Company info (skip if fresh today)
         if skip_info:
@@ -426,7 +598,7 @@ def batch_data_refresh(
 
     for t in tickers:
         latest = latest_map.get(t)
-        if latest is not None and latest >= yesterday:
+        if latest is not None and latest >= today:
             ohlcv_starts[t] = "__skip__"
         elif latest is not None:
             ohlcv_starts[t] = str(latest)
@@ -443,9 +615,33 @@ def batch_data_refresh(
         total - fresh_count,
     )
 
-    # ── Phase 1: Parallel yfinance fetch ──────────────
+    # ── Phase 1A: Bulk OHLCV download ─────────────
+    ohlcv_tickers = [
+        t for t in tickers
+        if ohlcv_starts.get(t) != "__skip__"
+    ]
+    if ohlcv_tickers:
+        _logger.info(
+            "[batch] Phase 1A: bulk OHLCV for "
+            "%d tickers",
+            len(ohlcv_tickers),
+        )
+        bulk_ohlcv = _bulk_fetch_ohlcv(
+            ohlcv_tickers,
+            ohlcv_starts,
+        )
+    else:
+        _logger.info(
+            "[batch] Phase 1A: all OHLCV fresh, "
+            "skip bulk download",
+        )
+        bulk_ohlcv = {}
+
+    # ── Phase 1B: Per-ticker fundamentals ───────
     _logger.info(
-        "[batch] Phase 1: fetching %d tickers " "(%d workers)",
+        "[batch] Phase 1B: fetching "
+        "fundamentals for %d tickers "
+        "(%d workers)",
         total,
         max_workers,
     )
@@ -456,13 +652,13 @@ def batch_data_refresh(
     lock = threading.Lock()
 
     def _submit_fetch(t):
-        start = ohlcv_starts.get(t)
+        pre_ohlcv = bulk_ohlcv.get(t)
         skip_qtr = t in qtr_fresh
         skip_div = t in div_fresh
         skip_ci = t in info_fresh
         return _fetch_one_ticker(
             t,
-            start,
+            pre_ohlcv,
             skip_qtr,
             skip_div,
             skip_ci,
@@ -601,16 +797,31 @@ def batch_data_refresh(
             all_ohlcv,
             ignore_index=True,
         )
-        # Dedup: load existing (ticker, date) pairs
+        # Dedup + upsert: skip historical dupes,
+        # but replace today's rows (intraday →
+        # closing data correction).
         try:
             from backend.db.duckdb_engine import (
                 query_iceberg_df,
             )
 
+            # Existing-keys query filters NaN-close
+            # rows so a stuck NaN row from a previous
+            # Yahoo gap doesn't block a fresh re-fetch
+            # from being inserted. Those NaN rows are
+            # then explicitly cleaned up below for the
+            # exact (ticker, date) pairs we're about to
+            # write.
             existing = query_iceberg_df(
                 "stocks.ohlcv",
-                "SELECT ticker, date FROM ohlcv",
+                "SELECT ticker, date FROM ohlcv "
+                "WHERE close IS NOT NULL "
+                "AND NOT isnan(close)",
             )
+            combined["_date"] = pd.to_datetime(
+                combined["date"],
+            ).dt.date
+
             if not existing.empty:
                 existing_keys = set(
                     zip(
@@ -618,10 +829,8 @@ def batch_data_refresh(
                         existing["date"],
                     )
                 )
-                combined["_date"] = pd.to_datetime(
-                    combined["date"],
-                ).dt.date
-                mask = ~combined.apply(
+                # Pure new rows (not in Iceberg)
+                mask_new = ~combined.apply(
                     lambda row: (
                         row["ticker"],
                         row["_date"],
@@ -629,13 +838,140 @@ def batch_data_refresh(
                     in existing_keys,
                     axis=1,
                 )
-                new_only = combined[mask].drop(
-                    columns=["_date"],
+                new_only = combined[mask_new]
+
+                # Upsert: today's rows that
+                # already exist — delete old,
+                # keep fresh from yfinance
+                today_d = date.today()
+                today_mask = (
+                    combined["_date"] == today_d
                 )
+                today_existing = combined[
+                    today_mask
+                    & ~mask_new
+                ]
+                if not today_existing.empty:
+                    upsert_tickers = (
+                        today_existing["ticker"]
+                        .unique()
+                        .tolist()
+                    )
+                    _logger.info(
+                        "[batch] OHLCV upsert: "
+                        "%d tickers for %s",
+                        len(upsert_tickers),
+                        today_d,
+                    )
+                    # Scoped delete: today's rows
+                    # for these tickers
+                    from pyiceberg.expressions import (
+                        EqualTo,
+                        In,
+                    )
+
+                    from tools._stock_shared import (
+                        _require_repo,
+                    )
+
+                    _repo = _require_repo()
+                    _repo.delete_rows(
+                        "stocks.ohlcv",
+                        In(
+                            "ticker",
+                            upsert_tickers,
+                        )
+                        & EqualTo(
+                            "date",
+                            today_d.isoformat(),
+                        ),
+                    )
+                    # Include upsert rows
+                    new_only = pd.concat(
+                        [new_only, today_existing],
+                        ignore_index=True,
+                    )
             else:
                 new_only = combined
+
+            # Pre-delete any historical NaN-close rows
+            # for the (ticker, date) pairs we're about
+            # to insert. The existing-keys filter above
+            # excludes NaN rows from the dedup set, so
+            # `new_only` will include rows that overlap
+            # with NaN rows on disk — without this
+            # delete we'd end up with two rows per
+            # (ticker, date), causing the duplicate-
+            # timestamp chart assertion. No-op when
+            # there are no NaN rows to clean up.
+            if not new_only.empty:
+                try:
+                    nan_pairs_df = new_only[
+                        ["ticker", "_date"]
+                    ].drop_duplicates()
+                    nan_tickers = (
+                        nan_pairs_df["ticker"]
+                        .unique()
+                        .tolist()
+                    )
+                    nan_dates = sorted(
+                        set(
+                            d.isoformat()
+                            for d in nan_pairs_df[
+                                "_date"
+                            ]
+                        ),
+                    )
+                    if nan_tickers and nan_dates:
+                        from pyiceberg.expressions import (
+                            And as _And,
+                            In as _In,
+                            IsNaN as _IsNaN,
+                            IsNull as _IsNull,
+                            Or as _Or,
+                        )
+
+                        from tools._stock_shared import (
+                            _require_repo as _req_repo,
+                        )
+
+                        _req_repo().delete_rows(
+                            "stocks.ohlcv",
+                            _And(
+                                _In(
+                                    "ticker",
+                                    nan_tickers,
+                                ),
+                                _In(
+                                    "date", nan_dates,
+                                ),
+                                _Or(
+                                    _IsNull("close"),
+                                    _IsNaN("close"),
+                                ),
+                            ),
+                        )
+                except Exception:
+                    _logger.debug(
+                        "[batch] NaN pre-delete "
+                        "failed (non-fatal)",
+                        exc_info=True,
+                    )
+
+            new_only = new_only.drop(
+                columns=["_date"],
+                errors="ignore",
+            )
         except Exception:
-            new_only = combined
+            _logger.warning(
+                "[batch] OHLCV dedup failed, "
+                "appending all",
+                exc_info=True,
+            )
+            new_only = combined.drop(
+                columns=["_date"],
+                errors="ignore",
+            )
 
         if not new_only.empty:
             now = _now_utc()
@@ -738,11 +1074,19 @@ def batch_data_refresh(
                             pa.string(),
                         ),
                         "sector": pa.array(
-                            [info.get("sector")],
+                            [
+                                safe_str(
+                                    info.get("sector"),
+                                )
+                            ],
                             pa.string(),
                         ),
                         "industry": pa.array(
-                            [info.get("industry")],
+                            [
+                                safe_str(
+                                    info.get("industry"),
+                                )
+                            ],
                             pa.string(),
                         ),
                         "market_cap": pa.array(

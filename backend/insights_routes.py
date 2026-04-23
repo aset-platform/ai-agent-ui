@@ -1,12 +1,19 @@
 """Insights API endpoints.
 
-Provides data for the native Next.js Insights page (7 tabs):
-Screener, Price Targets, Dividends, Risk Metrics, Sectors,
-Correlation, and Quarterly.  All queries are scoped to the
-authenticated user's linked tickers.
+Provides data for the native Next.js Insights page (9 tabs):
+Screener, Risk Metrics, Sectors, Price Targets, Dividends,
+Correlation, Quarterly, Piotroski F-Score, and ScreenQL.
 
-Responses are cached in Redis with 300 s TTL.  Cache keys
-use the ``cache:insights:`` prefix and are invalidated by
+Ticker visibility is scoped per tab via ``_scoped_tickers``:
+- Discovery (Screener, ScreenQL, Sectors, Piotroski): full
+  platform universe for pro + superuser; watchlist ∪ holdings
+  for general.
+- Watchlist (Risk, Targets, Dividends): user's watchlist ∪
+  current holdings for all roles.
+- Portfolio (Correlation, Quarterly): current holdings only.
+
+Responses are cached in Redis with 300 s TTL. Cache keys use
+the ``cache:insights:`` prefix and are invalidated by
 :mod:`stocks.repository` on Iceberg writes.
 """
 
@@ -14,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -23,11 +31,17 @@ import auth.endpoints.helpers as _helpers
 from auth.dependencies import get_current_user
 from auth.models import UserContext
 from cache import get_cache, TTL_STABLE
-from market_utils import detect_market as _market
+from market_utils import (
+    detect_market as _market,
+    safe_str,
+)
 from insights_models import (
     CorrelationResponse,
     DividendRow,
     DividendsResponse,
+    ScreenFieldsResponse,
+    ScreenQLRequest,
+    ScreenQLResponse,
     PiotroskiResponse,
     PiotroskiRow,
     QuarterlyResponse,
@@ -80,6 +94,22 @@ def _safe_int(val) -> int | None:
         return None
 
 
+def _parse_confidence(val) -> dict | None:
+    """Parse confidence_components from JSON string or dict."""
+    if val is None:
+        return None
+    if isinstance(val, dict):
+        return val
+    if isinstance(val, str):
+        try:
+            import json
+
+            return json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return None
+
+
 def _safe_str(val) -> str | None:
     """Convert to str or return None for NaN."""
     if val is None:
@@ -94,29 +124,85 @@ def _safe_str(val) -> str | None:
         return None
 
 
-async def _get_user_tickers(user: UserContext) -> list[str]:
-    """Fetch tickers visible to user.
+_DISCOVERY_ROLES = frozenset({"pro", "superuser"})
+_ANALYZABLE_TICKER_TYPES = frozenset({"stock", "etf"})
+TickerScope = Literal["discovery", "watchlist", "portfolio"]
 
-    Superusers see all registry tickers (full universe).
-    Other roles see only their linked watchlist tickers.
+
+def _portfolio_tickers(stock_repo, user_id) -> list[str]:
+    """Current-holdings tickers for a user.
+
+    Derived from Iceberg portfolio_transactions (quantity > 0).
+    """
+    holdings_df = stock_repo.get_portfolio_holdings(user_id)
+    if holdings_df is None or holdings_df.empty:
+        return []
+    return list(holdings_df["ticker"].astype(str).unique())
+
+
+def _full_universe(stock_repo) -> list[str]:
+    """Platform-wide tradeable stock + ETF universe."""
+    registry = stock_repo.get_all_registry()
+    return [
+        t
+        for t, meta in registry.items()
+        if meta.get("ticker_type", "stock")
+        in _ANALYZABLE_TICKER_TYPES
+    ]
+
+
+def _dedup(*lists: list[str]) -> list[str]:
+    """Union of ticker lists, preserving first-seen order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for lst in lists:
+        for t in lst:
+            key = t.upper()
+            if key not in seen:
+                seen.add(key)
+                out.append(t)
+    return out
+
+
+async def _scoped_tickers(
+    user: UserContext,
+    scope: TickerScope,
+) -> list[str]:
+    """Return tickers visible to the user for a given tab scope.
+
+    - ``discovery``: Screener / ScreenQL. Pro + superuser see the
+      full platform universe (stocks + ETFs) unioned with their
+      watchlist + holdings. General sees watchlist ∪ holdings.
+    - ``watchlist``: Risk, Sectors, Targets, Dividends, Piotroski.
+      All roles see their watchlist ∪ holdings.
+    - ``portfolio``: Correlation, Quarterly. All roles see only
+      current holdings (``quantity > 0``).
     """
     repo = _helpers._get_repo()
-    user_list = await repo.get_user_tickers(user.user_id)
-
-    if user.role != "superuser":
-        return user_list
-
-    # Superuser: merge with full registry
     stock_repo = _get_stock_repo()
-    registry = stock_repo.get_all_registry()
+    watchlist = await repo.get_user_tickers(user.user_id)
+    portfolio = _portfolio_tickers(stock_repo, user.user_id)
 
-    seen = set(t.upper() for t in user_list)
-    merged = list(user_list)
-    for t in registry:
-        if t.upper() not in seen:
-            merged.append(t)
-            seen.add(t.upper())
-    return merged
+    if scope == "portfolio":
+        return portfolio
+    if scope == "watchlist":
+        return _dedup(watchlist, portfolio)
+    # discovery
+    if user.role in _DISCOVERY_ROLES:
+        return _dedup(
+            _full_universe(stock_repo),
+            watchlist,
+            portfolio,
+        )
+    return _dedup(watchlist, portfolio)
+
+
+async def _get_user_tickers(user: UserContext) -> list[str]:
+    """Deprecated alias — new code should use ``_scoped_tickers``.
+
+    Kept as a back-compat shim resolving to the ``watchlist`` scope.
+    """
+    return await _scoped_tickers(user, "watchlist")
 
 
 def _get_company_info_df(
@@ -154,7 +240,7 @@ def _sector_for_ticker(
     match = company_df[company_df["ticker"] == ticker]
     if match.empty:
         return None
-    return str(match.iloc[-1].get("sector", "")) or None
+    return _safe_str(match.iloc[-1].get("sector"))
 
 
 def _collect_sectors(
@@ -205,7 +291,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = await _get_user_tickers(user)
+        tickers = await _scoped_tickers(user, "discovery")
         if not tickers:
             return ScreenerResponse()
 
@@ -422,7 +508,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = await _get_user_tickers(user)
+        tickers = await _scoped_tickers(user, "watchlist")
         if not tickers:
             return TargetsResponse()
 
@@ -443,7 +529,9 @@ def create_insights_router() -> APIRouter:
                 "target_6m_pct_change, "
                 "target_9m_price, "
                 "target_9m_pct_change, "
-                "sentiment "
+                "sentiment, "
+                "confidence_score, "
+                "confidence_components "
                 "FROM forecast_runs "
                 f"WHERE ticker IN ({ph})",
             )
@@ -490,6 +578,12 @@ def create_insights_router() -> APIRouter:
                     target_9m_price=_safe(row.get("target_9m_price")),
                     target_9m_pct=_safe(row.get("target_9m_pct_change")),
                     sentiment=str(row.get("sentiment", "")) or None,
+                    confidence_score=_safe(
+                        row.get("confidence_score")
+                    ),
+                    confidence_components=_parse_confidence(
+                        row.get("confidence_components")
+                    ),
                     market=_market(t),
                     sector=_sector_for_ticker(
                         t,
@@ -532,7 +626,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = await _get_user_tickers(user)
+        tickers = await _scoped_tickers(user, "watchlist")
         if not tickers:
             return DividendsResponse()
 
@@ -624,7 +718,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = await _get_user_tickers(user)
+        tickers = await _scoped_tickers(user, "watchlist")
         if not tickers:
             return RiskResponse()
 
@@ -727,7 +821,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = await _get_user_tickers(user)
+        tickers = await _scoped_tickers(user, "discovery")
         if not tickers:
             return SectorsResponse()
 
@@ -783,8 +877,15 @@ def create_insights_router() -> APIRouter:
         )
         sector_map = company_df.set_index("ticker")["sector"].to_dict()
 
-        # Join sector onto analysis.
-        analysis_df["sector"] = analysis_df["ticker"].map(sector_map)
+        # Join sector onto analysis. ``safe_str`` collapses
+        # NaN / None / "None" / empty / whitespace to None so
+        # dropna removes all of them — stops ETFs and legacy
+        # empty-string rows from forming an unnamed sector bucket.
+        analysis_df["sector"] = (
+            analysis_df["ticker"]
+            .map(sector_map)
+            .map(safe_str)
+        )
         analysis_df = analysis_df.dropna(
             subset=["sector"],
         )
@@ -840,18 +941,16 @@ def create_insights_router() -> APIRouter:
             "all",
             description="'all', 'india', or 'us'",
         ),
-        source: str = Query(
-            "portfolio",
-            description=("'portfolio' or 'watchlist'"),
-        ),
         user: UserContext = Depends(get_current_user),
     ):
-        """Pairwise daily-returns correlation matrix."""
+        """Pairwise daily-returns correlation matrix.
+
+        Portfolio-scoped: only the caller's current holdings.
+        """
         cache = get_cache()
         ck = (
             f"cache:insights:correlation:"
             f"{user.user_id}:{period}:{market}"
-            f":{source}"
         )
         hit = cache.get(ck)
         if hit is not None:
@@ -861,20 +960,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-
-        # Source: portfolio or watchlist
-        if source == "portfolio":
-            holdings_df = stock_repo.get_portfolio_holdings(
-                user.user_id,
-            )
-            if holdings_df.empty:
-                tickers = []
-            else:
-                tickers = list(
-                    holdings_df["ticker"].astype(str).unique(),
-                )
-        else:
-            tickers = await _get_user_tickers(user)
+        tickers = await _scoped_tickers(user, "portfolio")
 
         if not tickers:
             return CorrelationResponse(period=period)
@@ -1004,7 +1090,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = await _get_user_tickers(user)
+        tickers = await _scoped_tickers(user, "portfolio")
         if not tickers:
             return QuarterlyResponse()
 
@@ -1131,7 +1217,7 @@ def create_insights_router() -> APIRouter:
         cache = get_cache()
         ck = (
             f"cache:insights:piotroski:"
-            f"{min_score}:{sector}:{market}"
+            f"{user.user_id}:{min_score}:{sector}:{market}"
         )
         hit = cache.get(ck)
         if hit is not None:
@@ -1156,7 +1242,21 @@ def create_insights_router() -> APIRouter:
         if df.empty:
             return PiotroskiResponse()
 
-        # Patch empty company_name from company_info
+        # Scope: pro + superuser see full universe; others get
+        # their watchlist ∪ portfolio.
+        scoped = set(
+            t.upper() for t in await _scoped_tickers(
+                user, "discovery",
+            )
+        )
+        if not scoped:
+            return PiotroskiResponse()
+        df = df[df["ticker"].str.upper().isin(scoped)]
+        if df.empty:
+            return PiotroskiResponse()
+
+        # Patch empty company_name from company_info,
+        # then stock_master PG as final fallback
         empty_mask = (
             df["company_name"].isna()
             | (df["company_name"] == "")
@@ -1179,11 +1279,68 @@ def create_insights_router() -> APIRouter:
                 for idx in df[empty_mask].index:
                     tk = df.at[idx, "ticker"]
                     if tk in ci.index:
-                        df.at[idx, "company_name"] = (
-                            ci.at[tk, "company_name"]
-                        )
+                        name = ci.at[tk, "company_name"]
+                        if name and str(name) not in (
+                            "", "None",
+                        ):
+                            df.at[
+                                idx, "company_name"
+                            ] = name
             except Exception:
                 pass
+
+        # Re-check: stock_master PG fallback for
+        # tickers still missing names
+        empty_mask = (
+            df["company_name"].isna()
+            | (df["company_name"] == "")
+            | (df["company_name"] == "None")
+        )
+        if empty_mask.any():
+            try:
+                from sqlalchemy import select
+
+                from backend.db.engine import (
+                    get_session_factory,
+                )
+                from backend.db.models.stock_master import (
+                    StockMaster,
+                )
+
+                missing = df.loc[
+                    empty_mask, "ticker"
+                ].tolist()
+                async with (
+                    get_session_factory()() as s
+                ):
+                    rows = (
+                        await s.execute(
+                            select(
+                                StockMaster.yf_ticker,
+                                StockMaster.name,
+                            ).where(
+                                StockMaster.yf_ticker.in_(
+                                    missing,
+                                ),
+                            ),
+                        )
+                    ).all()
+                sm_map = {
+                    r.yf_ticker: r.name
+                    for r in rows
+                }
+                for idx in df[empty_mask].index:
+                    tk = df.at[idx, "ticker"]
+                    if tk in sm_map and sm_map[tk]:
+                        df.at[
+                            idx, "company_name"
+                        ] = sm_map[tk]
+            except Exception:
+                _logger.debug(
+                    "stock_master name fallback "
+                    "failed for piotroski",
+                    exc_info=True,
+                )
 
         latest_date = (
             df["score_date"].max()
@@ -1285,6 +1442,224 @@ def create_insights_router() -> APIRouter:
             result.model_dump_json(),
             TTL_STABLE,
         )
+        return result
+
+    # -----------------------------------------------------------
+    # ScreenQL — universal screener
+    # -----------------------------------------------------------
+
+    @router.get(
+        "/screen/fields",
+        response_model=ScreenFieldsResponse,
+    )
+    async def get_screen_fields():
+        """Return field catalog for autocomplete."""
+        from backend.insights.screen_parser import (
+            get_field_catalog_json,
+        )
+
+        return ScreenFieldsResponse(
+            fields=get_field_catalog_json(),
+        )
+
+    @router.post(
+        "/screen",
+        response_model=ScreenQLResponse,
+    )
+    async def run_screen(
+        req: ScreenQLRequest,
+        user: UserContext = Depends(
+            get_current_user,
+        ),
+    ):
+        """Execute a ScreenQL query."""
+        from hashlib import sha256
+
+        from backend.insights.screen_parser import (
+            ScreenQLError,
+            generate_sql,
+            parse_query,
+        )
+
+        # Cache check
+        cache = get_cache()
+        ck = (
+            "cache:insights:screenql:"
+            + sha256(
+                f"{req.query}:{req.page}:"
+                f"{req.page_size}:"
+                f"{req.sort_by}:"
+                f"{req.sort_dir}:"
+                f"{user.user_id}".encode()
+            ).hexdigest()[:16]
+        )
+        if cache:
+            hit = cache.get(ck)
+            if hit:
+                return ScreenQLResponse.model_validate_json(
+                    hit,
+                )
+
+        # Parse query
+        try:
+            ast = parse_query(req.query)
+        except ScreenQLError as e:
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=422,
+                detail=str(e),
+            )
+
+        # User scope — ScreenQL is discovery-tier
+        tickers = await _scoped_tickers(user, "discovery")
+
+        # Generate SQL
+        gen = generate_sql(
+            ast,
+            page=req.page,
+            page_size=req.page_size,
+            sort_by=req.sort_by,
+            sort_dir=req.sort_dir,
+            ticker_filter=(
+                tickers if tickers else None
+            ),
+        )
+
+        # Execute via DuckDB
+        try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_multi,
+            )
+
+            # Map table aliases to Iceberg names
+            alias_to_iceberg = {
+                "ci": "stocks.company_info",
+                "as_": "stocks.analysis_summary",
+                "ps": "stocks.piotroski_scores",
+                "fr": "stocks.forecast_runs",
+                "ss": "stocks.sentiment_scores",
+                "qr": "stocks.quarterly_results",
+            }
+            tables = [
+                alias_to_iceberg[a]
+                for a in gen.tables_used
+                if a in alias_to_iceberg
+            ]
+            rows = query_iceberg_multi(
+                tables,
+                gen.sql,
+                params=gen.params,
+            )
+            count_rows = query_iceberg_multi(
+                tables,
+                gen.count_sql,
+                params=gen.params[
+                    : -2  # exclude LIMIT/OFFSET
+                ],
+            )
+            total = (
+                count_rows[0]["cnt"]
+                if count_rows
+                else 0
+            )
+        except Exception:
+            _logger.exception(
+                "ScreenQL query failed",
+            )
+            rows = []
+            total = 0
+
+        # Sanitize rows
+        clean: list[dict] = []
+        for r in rows:
+            d: dict = {}
+            for k, v in r.items():
+                if k == "rn":
+                    continue
+                if v is None:
+                    d[k] = None
+                elif isinstance(v, float):
+                    d[k] = (
+                        None
+                        if pd.isna(v)
+                        else round(v, 4)
+                    )
+                else:
+                    d[k] = v
+            clean.append(d)
+
+        # Patch blank company_name from stock_master
+        missing = [
+            d["ticker"]
+            for d in clean
+            if not d.get("company_name")
+            and d.get("ticker")
+        ]
+        if missing:
+            try:
+                from sqlalchemy import select
+
+                from backend.db.engine import (
+                    get_session_factory,
+                )
+                from backend.db.models.stock_master import (
+                    StockMaster,
+                )
+
+                async with (
+                    get_session_factory()() as s
+                ):
+                    sm_rows = (
+                        await s.execute(
+                            select(
+                                StockMaster.yf_ticker,
+                                StockMaster.name,
+                            ).where(
+                                StockMaster.yf_ticker.in_(
+                                    missing,
+                                ),
+                            ),
+                        )
+                    ).all()
+                sm_map = {
+                    r.yf_ticker: r.name
+                    for r in sm_rows
+                }
+                for d in clean:
+                    tk = d.get("ticker")
+                    if (
+                        not d.get("company_name")
+                        and tk in sm_map
+                    ):
+                        d["company_name"] = (
+                            sm_map[tk]
+                        )
+            except Exception:
+                _logger.debug(
+                    "stock_master fallback "
+                    "failed for screenql",
+                    exc_info=True,
+                )
+
+        result = ScreenQLResponse(
+            rows=clean,
+            total=int(total),
+            page=req.page,
+            page_size=req.page_size,
+            columns_used=gen.columns_used,
+            excluded_null_count=max(
+                0, int(total) - len(clean),
+            ),
+        )
+
+        if cache:
+            cache.set(
+                ck,
+                result.model_dump_json(),
+                TTL_STABLE,
+            )
+
         return result
 
     return router

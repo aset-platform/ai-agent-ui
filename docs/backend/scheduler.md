@@ -37,8 +37,13 @@ SchedulerService (daemon thread, 30s tick)
 | `run_sentiment` | `execute_run_sentiment` | LLM headline scoring via Groq | 3.5 min |
 | `run_forecasts` | `execute_run_forecasts` | Prophet price forecasts + CV accuracy | 8 min (weekly) / 34 min (monthly force) |
 | `run_piotroski` | `execute_run_piotroski` | Piotroski F-Score from quarterly results | 2s |
+| `recommendations` | `execute_run_recommendations` | LLM Smart Funnel — generates per-user recommendations | 5-15 min |
+| `recommendation_outcomes` | `execute_run_recommendation_outcomes` | 30/60/90d outcome checkpoints | 15s |
+| `iceberg_maintenance` | `execute_iceberg_maintenance` | Backup-then-compact for hot Iceberg tables (fail-closed) | ~2 min |
 
 All executors accept: `(scope, run_id, repo, cancel_event=None, force=False)`
+
+`iceberg_maintenance` is the final step in both daily pipelines (added Apr 23). Sequence: `run_backup()` first (rsync to `~/Documents/projects/ai-agent-ui-backups/`, rotation MAX_BACKUPS=2). If backup fails, compaction is skipped and the run is marked `failed` — preserves the "backup before maintenance" hard rule. Otherwise compacts `stocks.{ohlcv, sentiment_scores, company_info, analysis_summary}` then best-effort `expire_snapshots` + `cleanup_orphans`. Requires `rsync` in the container (added to `Dockerfile.backend`).
 
 ---
 
@@ -137,9 +142,23 @@ trigger bypasses freshness gates. Use for:
 
 ### Catchup Logic
 
-On startup, the scheduler checks if any enabled job missed its
-last scheduled window (within 7 days). If so, it triggers a
-catchup run automatically.
+On startup, the scheduler can check if any enabled job missed its
+last scheduled window (within 7 days) and trigger a catchup run
+automatically.
+
+**Default DISABLED (Apr 23+):** `scheduler_catchup_enabled=False`
+in `backend/config.py`. Startup catchup was silently pulling
+mid-day partial data on every restart. Opt-in via env:
+`SCHEDULER_CATCHUP_ENABLED=true`.
+
+### Container timezone
+
+Backend container runs in **`TZ=Asia/Kolkata`** (set in
+`docker-compose.yml`). The `schedule` library uses
+`datetime.now()` which returns local time — cron strings like
+`"08:00"` mean 08:00 IST. Pre-Apr-23 the container was UTC and
+all jobs were firing 5.5 hours late vs the IST times shown in
+the admin UI.
 
 ---
 

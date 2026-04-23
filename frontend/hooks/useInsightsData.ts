@@ -98,10 +98,9 @@ export function useSectors(
 export function useCorrelation(
   period: string = "1y",
   market: string = "all",
-  source: string = "portfolio",
 ): InsightsData<CorrelationResponse> {
   return useInsightsFetch<CorrelationResponse>(
-    `/insights/correlation?period=${period}&market=${market}&source=${source}`,
+    `/insights/correlation?period=${period}&market=${market}`,
   );
 }
 
@@ -143,9 +142,13 @@ export function useRecommendationHistory(
   );
 }
 
-export function useRecommendationStats(): InsightsData<RecommendationStatsResponse> {
+export function useRecommendationStats(
+  scope?: "all" | "india" | "us",
+): InsightsData<RecommendationStatsResponse> {
+  const qs =
+    scope && scope !== "all" ? `?scope=${scope}` : "";
   return useInsightsFetch<RecommendationStatsResponse>(
-    `/dashboard/portfolio/recommendations/stats`,
+    `/dashboard/portfolio/recommendations/stats${qs}`,
   );
 }
 

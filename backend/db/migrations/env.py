@@ -25,6 +25,7 @@ from backend.db.models import (  # noqa: F401
     RecommendationRun,
     ScheduledJob,
     SchedulerRun,
+    SentimentDormant,
     StockMaster,
     StockRegistry,
     StockTag,

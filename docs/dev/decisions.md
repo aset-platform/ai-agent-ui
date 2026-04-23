@@ -43,7 +43,7 @@ Both `GeneralAgent` and `StockAgent` use `FallbackLLM` from `backend/llm_fallbac
 | Tier | Model | TPM | Notes |
 |------|-------|-----|-------|
 | 1 | `llama-3.3-70b-versatile` | 12K | Reliable tool-calling, parallel tools |
-| 2 | `moonshotai/kimi-k2-instruct` | 10K | Parallel tools |
+| 2 | `qwen/qwen3-32b` | 6K | Parallel tools |
 | 3 | `openai/gpt-oss-120b` | 8K | Quality |
 | 4 | `meta-llama/llama-4-scout-17b` | 30K | Fast, small |
 | 5 | `claude-sonnet-4-6` | unlimited | Paid Anthropic fallback |

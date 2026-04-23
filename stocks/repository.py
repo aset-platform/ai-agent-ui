@@ -62,6 +62,8 @@ import pandas as pd
 import pyarrow as pa
 from pyiceberg.exceptions import CommitFailedException
 
+from market_utils import safe_str
+
 _logger = logging.getLogger(__name__)
 
 _NAMESPACE = "stocks"
@@ -1317,22 +1319,35 @@ class StockRepository:
                 " failed for %s",
                 ticker,
             )
+        # Sanitise strings so NaN / whitespace never
+        # lands in the Iceberg company_info table. NaN
+        # is truthy in Python; downstream consumers that
+        # do ``row.get("sector") or "Other"`` would keep
+        # the NaN and corrupt prompts / groupby keys.
         row = pa.table(
             {
                 "info_id": pa.array([str(uuid.uuid4())], pa.string()),
                 "ticker": pa.array([ticker], pa.string()),
                 "company_name": pa.array(
                     [
-                        str(
-                            info.get("company_name")
-                            or info.get("longName")
-                            or ""
+                        safe_str(
+                            info.get("company_name"),
                         )
+                        or safe_str(
+                            info.get("longName"),
+                        )
+                        or ticker
                     ],
                     pa.string(),
                 ),
-                "sector": pa.array([info.get("sector")], pa.string()),
-                "industry": pa.array([info.get("industry")], pa.string()),
+                "sector": pa.array(
+                    [safe_str(info.get("sector"))],
+                    pa.string(),
+                ),
+                "industry": pa.array(
+                    [safe_str(info.get("industry"))],
+                    pa.string(),
+                ),
                 "market_cap": pa.array(
                     [
                         _safe_int(
@@ -1499,7 +1514,12 @@ class StockRepository:
             df.index
         ).date  # numpy array of date objects
 
-        # Dedup: fetch existing dates for this ticker
+        # Dedup: fetch existing dates for this ticker.
+        # Filter to rows with a valid (non-NaN) close so
+        # a previously-written NaN row does NOT block a
+        # fresh re-fetch from replacing it. The NaN row
+        # itself is scoped-deleted just before the
+        # append below.
         existing_dates: set = set()
         tbl = self._load_table(_OHLCV)
         # DuckDB fast path
@@ -1511,7 +1531,9 @@ class StockRepository:
             edf = query_iceberg_df(
                 _OHLCV,
                 "SELECT date FROM ohlcv"
-                " WHERE ticker = ?",
+                " WHERE ticker = ?"
+                " AND close IS NOT NULL"
+                " AND NOT isnan(close)",
                 [ticker],
             )
             if not edf.empty:
@@ -1521,16 +1543,23 @@ class StockRepository:
                 }
         except Exception:
             pass
-        # PyIceberg fallback
+        # PyIceberg fallback. Also exclude NaN-close
+        # rows from the dedup set for consistency with
+        # the DuckDB path above.
         if not existing_dates:
             try:
                 from pyiceberg.expressions import (
+                    And,
                     EqualTo,
+                    NotNaN,
+                    NotNull,
                 )
 
                 existing_arrow = tbl.scan(
-                    row_filter=EqualTo(
-                        "ticker", ticker,
+                    row_filter=And(
+                        EqualTo("ticker", ticker),
+                        NotNull("close"),
+                        NotNaN("close"),
                     ),
                     selected_fields=("date",),
                 ).to_arrow()
@@ -1551,7 +1580,8 @@ class StockRepository:
                 full_df = tbl.scan().to_pandas()
                 if not full_df.empty:
                     mask = (
-                        full_df["ticker"] == ticker
+                        (full_df["ticker"] == ticker)
+                        & full_df["close"].notna()
                     )
                     existing_dates = {
                         _to_date(d)
@@ -1608,6 +1638,45 @@ class StockRepository:
                 ),
             }
         )
+        # Scoped pre-delete: any existing NaN-close rows
+        # for the (ticker, date) pairs we're about to
+        # insert. Without this, an earlier write that
+        # left NaN closes (Yahoo upstream gap) would not
+        # be replaced — the insert above only added
+        # genuinely-new dates, so the NaN row would
+        # silently survive alongside the new valid one
+        # only if dedup misclassified.  This delete
+        # makes the upsert atomic for the NaN-→-valid
+        # transition.  No-op when there are no NaN rows
+        # to clean up (common case).
+        try:
+            from pyiceberg.expressions import (
+                And as _And,
+                EqualTo as _EqualTo,
+                In as _In,
+                IsNaN as _IsNaN,
+                IsNull as _IsNull,
+                Or as _Or,
+            )
+
+            self._delete_rows(
+                _OHLCV,
+                _And(
+                    _EqualTo("ticker", ticker),
+                    _In("date", new_dates),
+                    _Or(
+                        _IsNull("close"),
+                        _IsNaN("close"),
+                    ),
+                ),
+            )
+        except Exception:
+            _logger.debug(
+                "NaN pre-delete failed for %s "
+                "(non-fatal)", ticker,
+                exc_info=True,
+            )
+
         self._append_rows(_OHLCV, arrow_tbl)
         _logger.debug(
             "Inserted %d new OHLCV rows for %s", len(new_dates), ticker
@@ -2359,7 +2428,14 @@ class StockRepository:
         )
         if df.empty:
             return None
-        return df.sort_values("run_date", ascending=False).iloc[0].to_dict()
+        sort_col = (
+            "computed_at"
+            if "computed_at" in df.columns
+            else "run_date"
+        )
+        return df.sort_values(
+            sort_col, ascending=False,
+        ).iloc[0].to_dict()
 
     def get_all_latest_forecast_runs(
         self, horizon_months: int
@@ -2564,6 +2640,12 @@ class StockRepository:
                         rd.get("mape"),
                     ),
                     "computed_at": _now_utc(),
+                    "confidence_score": _safe_float(
+                        rd.get("confidence_score"),
+                    ),
+                    "confidence_components": rd.get(
+                        "confidence_components"
+                    ),
                 }
             )
         tbl = self._load_table(_FORECAST_RUNS)
@@ -3014,11 +3096,17 @@ class StockRepository:
                     pa.int64(),
                 ),
                 "sector": pa.array(
-                    [s.get("sector") for s in scores],
+                    [
+                        safe_str(s.get("sector"))
+                        for s in scores
+                    ],
                     pa.string(),
                 ),
                 "industry": pa.array(
-                    [s.get("industry") for s in scores],
+                    [
+                        safe_str(s.get("industry"))
+                        for s in scores
+                    ],
                     pa.string(),
                 ),
                 "company_name": pa.array(
@@ -3082,6 +3170,66 @@ class StockRepository:
             "total_score",
             ascending=False,
         ).reset_index(drop=True)
+
+    def get_piotroski_scores_batch(
+        self,
+        tickers: list[str],
+    ) -> dict[str, dict]:
+        """Get latest Piotroski scores for multiple tickers.
+
+        Uses predicate-pushdown scan instead of reading
+        the entire table.
+        """
+        df = self._scan_tickers(
+            _PIOTROSKI_SCORES, tickers,
+        )
+        if df.empty:
+            return {}
+        if "score_date" in df.columns:
+            df = df.sort_values(
+                "score_date", ascending=False,
+            )
+            df = df.drop_duplicates(
+                subset=["ticker"], keep="first",
+            )
+        result: dict[str, dict] = {}
+        for row in df.to_dict(orient="records"):
+            t = row.get("ticker", "")
+            if t:
+                result[t] = row
+        return result
+
+    def get_quarterly_results_batch(
+        self,
+        tickers: list[str],
+    ) -> dict[str, list[dict]]:
+        """Get latest 2 quarters per ticker.
+
+        Single batch scan instead of N individual reads.
+        """
+        df = self._scan_tickers(
+            _QUARTERLY_RESULTS, tickers,
+        )
+        if df.empty:
+            return {}
+        # Sort descending by quarter_end, keep top 2
+        sort_col = (
+            "quarter_end"
+            if "quarter_end" in df.columns
+            else df.columns[1]
+        )
+        df = df.sort_values(
+            [sort_col], ascending=False,
+        )
+        result: dict[str, list[dict]] = {}
+        for t, grp in df.groupby("ticker"):
+            rows = (
+                grp.head(2)
+                .to_dict(orient="records")
+            )
+            if rows:
+                result[str(t)] = rows
+        return result
 
     # ── Bulk delete ──────────────────────────────────────
 
@@ -3367,6 +3515,13 @@ class StockRepository:
                 [e.get("error_code") for e in events],
                 type=pa.string(),
             ),
+            "key_source": pa.array(
+                [
+                    e.get("key_source", "platform")
+                    for e in events
+                ],
+                type=pa.string(),
+            ),
         }
         self._append_rows(self._LLM_USAGE, pa.table(arrays))
 
@@ -3508,7 +3663,15 @@ class StockRepository:
             )
             if df.empty:
                 return df
-            idx = df.groupby("ticker")["run_date"].idxmax()
+            # Use computed_at (exact timestamp) to pick
+            # the truly latest run when multiple runs
+            # share the same run_date.
+            sort_col = (
+                "computed_at"
+                if "computed_at" in df.columns
+                else "run_date"
+            )
+            idx = df.groupby("ticker")[sort_col].idxmax()
             return df.loc[idx].reset_index(drop=True)
         except Exception as exc:
             _logger.warning(
@@ -3663,11 +3826,31 @@ class StockRepository:
             if math.isnan(avg_latency):
                 avg_latency = 0.0
 
-            # Per-model breakdown (include provider).
+            # Per-model breakdown (include provider + tokens).
             per_model: dict = {}
             has_provider = "provider" in df.columns
-            if "model" in df.columns:
-                for model, grp in df.groupby("model"):
+            has_input = "prompt_tokens" in df.columns
+            has_output = "completion_tokens" in df.columns
+            # Iceberg column is ``timestamp``; keep the
+            # old name as a fallback for any legacy caller.
+            if "timestamp" in df.columns:
+                ts_col = "timestamp"
+            elif "request_timestamp" in df.columns:
+                ts_col = "request_timestamp"
+            else:
+                ts_col = None
+            has_source = "key_source" in df.columns
+            # Drop non-request bookkeeping events (cascade,
+            # compression) from the per-model rollup —
+            # they're stamped with model="n/a" and would
+            # otherwise surface as a row on the usage table.
+            req_df = df
+            if "event_type" in df.columns:
+                req_df = df[
+                    df["event_type"] == "request"
+                ]
+            if "model" in req_df.columns:
+                for model, grp in req_df.groupby("model"):
                     prov = ""
                     if has_provider:
                         prov = (
@@ -3675,12 +3858,64 @@ class StockRepository:
                             if not grp["provider"].dropna().empty
                             else ""
                         )
+                    last_used = None
+                    if ts_col and not grp[
+                        ts_col
+                    ].dropna().empty:
+                        # Emit ISO 8601 UTC with the ``Z``
+                        # suffix so the frontend's
+                        # ``new Date()`` parses it as UTC
+                        # rather than local time (which
+                        # otherwise produced a ~5.5h drift
+                        # in IST).
+                        _ts = grp[ts_col].max()
+                        try:
+                            last_used = (
+                                _ts.tz_localize("UTC")
+                                .isoformat()
+                                .replace("+00:00", "Z")
+                            )
+                        except (TypeError, AttributeError):
+                            last_used = (
+                                f"{_ts}Z"
+                                if "Z" not in str(_ts)
+                                else str(_ts)
+                            )
+                    # Split requests by key source. Legacy
+                    # rows (no column or null) count as
+                    # "platform" so existing data still
+                    # sums to the total.
+                    requests_platform = 0
+                    requests_user = 0
+                    if has_source:
+                        src = grp["key_source"].fillna(
+                            "platform",
+                        )
+                        requests_platform = int(
+                            (src != "user").sum(),
+                        )
+                        requests_user = int(
+                            (src == "user").sum(),
+                        )
+                    else:
+                        requests_platform = len(grp)
                     per_model[str(model)] = {
                         "requests": len(grp),
+                        "requests_platform": requests_platform,
+                        "requests_user": requests_user,
                         "cost": float(
                             grp["estimated_cost_usd"].sum(skipna=True)
                         ),
                         "provider": str(prov),
+                        "input_tokens": int(
+                            grp["prompt_tokens"].sum(skipna=True)
+                        ) if has_input else 0,
+                        "output_tokens": int(
+                            grp[
+                                "completion_tokens"
+                            ].sum(skipna=True)
+                        ) if has_output else 0,
+                        "last_used_at": last_used,
                     }
 
             # Daily trend (last N days)
@@ -4865,6 +5100,9 @@ class StockRepository:
                 ),
                 "ticker_type": str(
                     row.get("ticker_type", "stock"),
+                ),
+                "is_tradeable": bool(
+                    row.get("is_tradeable", True),
                 ),
                 "file_path": str(
                     Path(__file__).parent.parent

@@ -62,12 +62,35 @@ sentiment per ticker.
 
 **Fix**: Run Sentiment pipeline (`pipeline.runner sentiment`).
 
+**View details**: click "View details →" on the Sentiment data-health
+card to open the Sentiment Details modal. It lists today's scoring
+breakdown by source (`finbert` / `llm` / `market_fallback` / `none`)
+with counts + average score per category, plus a filterable +
+paginated table of scored tickers (excluding fallback rows) with
+CSV download and scope tabs (all / india / us). Endpoint:
+`GET /v1/admin/data-health/sentiment-details?scope=all|india|us`
+(superuser, 60s Redis cache).
+
 **Scoring strategy:**
 
 - Hot tickers (>10 headlines): re-scored every run
-- Learning tickers (5-10 headlines): scored via trickle
+- Learning tickers (5-10 headlines): **capped at top-50 by market
+  cap** per run — the tail drops into market-fallback. Cap keeps the
+  batch runtime bounded (~30s for ~85 tickers vs hours for 800+).
 - Cold tickers (<5 headlines): use market-level fallback score
-- Fresh tickers (scored <24h ago): skipped
+- Fresh tickers (scored <24h ago): skipped (unless `force=true`,
+  which upserts and overrides today's row)
+
+**Safety net (added Sprint 7):**
+
+- Per-source 10s HTTP timeout (`_run_with_timeout`) on all three
+  headline fetchers — protects against `yf.Ticker().news` deadlocks.
+- `invalidate_metadata("stocks.sentiment_scores")` before the Step-5
+  gap-fill re-query — prevents the DuckDB metadata cache from
+  masking pool-inserted rows and double-counting fallback inserts.
+- Accurate `source` provenance: rows tagged `finbert` vs `llm` vs
+  `market_fallback` vs `none` based on the scorer that actually
+  produced the value.
 
 ### Piotroski F-Score
 
@@ -192,6 +215,54 @@ Read-only analysis showing:
 - Local data sufficiency rate
 
 Risk level: None (read-only).
+
+---
+
+## Daily auto-backup + auto-compaction (Apr 23+)
+
+Both `India Daily Pipeline` and `USA Daily Pipeline` end with **step 6 = `iceberg_maintenance`**, which runs automatically as part of the daily cron. Sequence inside the step:
+
+1. **Step 0 — backup** (`run_backup()`). Fail-closed: if backup fails, the maintenance step exits with `failed` status and **skips compaction** — preserves the "backup before maintenance" hard rule. No auto-compact without a fresh restore point.
+2. **Step 1..N — compact each hot table** via `compact_table()` (read all via DuckDB → `tbl.overwrite()` writes back as one file per partition):
+   - `stocks.ohlcv`
+   - `stocks.sentiment_scores`
+   - `stocks.company_info`
+   - `stocks.analysis_summary`
+3. After each table: best-effort `expire_snapshots()` + `cleanup_orphans()`. Failures here are logged but don't fail the run.
+
+### Container changes for backup
+
+`run_backup()` shells to `rsync` (~14 GB warehouse) which wasn't in the runtime image. `Dockerfile.backend` now installs both `curl` (for healthcheck) and `rsync` (for backup):
+
+```dockerfile
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl rsync && \
+    rm -rf /var/lib/apt/lists/*
+```
+
+The host backup directory is mounted at the same path inside the container via `docker-compose.override.yml`, so `run_backup()` writes to `~/Documents/projects/ai-agent-ui-backups/` and the file appears on host transparently. Rotation policy `MAX_BACKUPS=2` (default in `backend/maintenance/backup.py`).
+
+### Why this matters
+
+OHLCV file count grew to **16,156 parquets** within a week of the original ASETPLTFRM-315 compaction (was 817 → grew unbounded from per-ticker daily writes). Reads slowed to 5+ seconds; the `Clean NaN Rows` admin button took **5+ minutes**. Daily auto-compaction prevents recurrence:
+
+| Metric | Pre-compaction | Post-compaction |
+|---|---|---|
+| OHLCV parquet files | 16,156 | ~800 (1 per ticker partition) |
+| Full-count of 1.5M rows | ~5 s | **0.50 s** (~10× faster) |
+| `Clean NaN Rows` action | 5+ min | seconds |
+
+Old parquets become orphans on disk after `overwrite()` (Iceberg references only the new files). `cleanup_orphans` removes empty partition dirs but per the "NEVER delete parquet directly" rule, orphan parquets themselves stay until snapshot expiry releases their references.
+
+### NaN-replaceable OHLCV upsert (Apr 23+)
+
+Both write paths now treat NaN-close rows as "absent" for dedup purposes, so a stuck NaN row from a Yahoo upstream gap doesn't block future re-fetches:
+
+- **Existing-keys query** filters `WHERE close IS NOT NULL AND NOT isnan(close)`
+- **Pre-delete** scoped delete of NaN rows for the to-be-inserted `(ticker, date)` set before append
+
+Pattern in both `stocks/repository.py::insert_ohlcv` and `backend/jobs/batch_refresh.py::batch_data_refresh`. `Clean NaN Rows` admin button is now mostly redundant (kept as escape hatch for permanent gap days where Yahoo never publishes a close at all).
 
 ---
 
