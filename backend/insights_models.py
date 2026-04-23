@@ -15,19 +15,36 @@ from pydantic import BaseModel, Field
 
 
 class ScreenerRow(BaseModel):
-    """Single row in the Screener table."""
+    """Single row in the Screener table.
 
+    All fields beyond ``ticker`` are optional — not every
+    ticker has data for every metric. The frontend column
+    selector (ASETPLTFRM-333) lets users pick which subset
+    to render; the server always returns the full shape so
+    CSV export and client-side column toggles work without
+    extra round-trips.
+    """
+
+    # --- Identity ---
     ticker: str
+    company_name: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    market: str = "us"
+    currency: str | None = None
+    tags: list[str] = Field(default_factory=list)
+
+    # --- Pricing / returns (analysis_summary + ohlcv) ---
     price: float | None = None
-    rsi_14: float | None = None
-    rsi_signal: str | None = None
-    macd_signal: str | None = None
-    sma_200_signal: str | None = None
-    sentiment_score: float | None = None
-    sentiment_headlines: int | None = None
-    annualized_return_pct: float | None = None
-    annualized_volatility_pct: float | None = None
-    sharpe_ratio: float | None = None
+    current_price: float | None = None
+    week_52_high: float | None = None
+    week_52_low: float | None = None
+
+    # --- Valuation (company_info + derived) ---
+    market_cap: float | None = None
+    pe_ratio: float | None = None
+    price_to_book: float | None = None
+    dividend_yield: float | None = None
     # PEG (Price/Earnings-to-Growth). Three sources:
     # - `peg_ratio` — P/E ÷ (earnings_growth × 100)
     #   using yfinance-sourced pe_ratio +
@@ -46,9 +63,39 @@ class ScreenerRow(BaseModel):
     peg_ratio: float | None = None
     peg_ratio_yf: float | None = None
     peg_ratio_ttm: float | None = None
-    sector: str | None = None
-    market: str = "us"
-    tags: list[str] = Field(default_factory=list)
+
+    # --- Profitability (company_info + quarterly_results) ---
+    profit_margins: float | None = None
+    earnings_growth: float | None = None
+    revenue_growth: float | None = None
+    eps: float | None = None
+    revenue: float | None = None
+    net_income: float | None = None
+
+    # --- Risk (analysis_summary) ---
+    annualized_return_pct: float | None = None
+    annualized_volatility_pct: float | None = None
+    sharpe_ratio: float | None = None
+    max_drawdown_pct: float | None = None
+    beta: float | None = None
+
+    # --- Technical (analysis_summary + sentiment_scores) ---
+    rsi_14: float | None = None
+    rsi_signal: str | None = None
+    macd_signal: str | None = None
+    sma_200_signal: str | None = None
+    sentiment_score: float | None = None
+    sentiment_headlines: int | None = None
+
+    # --- Quality (piotroski_scores + forecast_runs) ---
+    piotroski_score: int | None = None
+    piotroski_label: str | None = None
+    forecast_confidence: float | None = None
+
+    # --- Forecast (forecast_runs) ---
+    target_3m_pct: float | None = None
+    target_6m_pct: float | None = None
+    target_9m_pct: float | None = None
 
 
 class ScreenerResponse(BaseModel):
@@ -298,6 +345,14 @@ class ScreenQLRequest(BaseModel):
     page_size: int = Field(25, ge=1, le=100)
     sort_by: str | None = None
     sort_dir: str = Field("desc")
+    # ASETPLTFRM-333: extra display columns to include
+    # in the SELECT beyond what the WHERE clause
+    # references. Unknown field names are silently
+    # ignored; base columns + filter fields are always
+    # included regardless.
+    display_columns: list[str] = Field(
+        default_factory=list,
+    )
 
 
 class ScreenQLResponse(BaseModel):

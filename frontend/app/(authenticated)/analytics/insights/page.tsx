@@ -34,6 +34,12 @@ import {
 } from "@/components/insights/InsightsTable";
 import { InsightsFilters } from "@/components/insights/InsightsFilters";
 import {
+  ColumnSelector,
+} from "@/components/insights/ColumnSelector";
+import {
+  useColumnSelection,
+} from "@/lib/useColumnSelection";
+import {
   downloadCsv,
   type CsvColumn,
 } from "@/lib/downloadCsv";
@@ -330,6 +336,194 @@ const screenerCols: Column<ScreenerRow>[] = [
     label: "PEG (Q)",
     numeric: true,
     render: (r) => fmtNum(r.peg_ratio_ttm),
+  },
+  // ── Identity / context ──────────────────────────
+  {
+    key: "company_name",
+    label: "Company",
+    render: (r) => r.company_name ?? "—",
+  },
+  {
+    key: "sector",
+    label: "Sector",
+    render: (r) => r.sector ?? "—",
+  },
+  {
+    key: "industry",
+    label: "Industry",
+    render: (r) => r.industry ?? "—",
+  },
+  {
+    key: "currency",
+    label: "Currency",
+    render: (r) => r.currency ?? "—",
+  },
+  // ── Pricing ─────────────────────────────────────
+  {
+    key: "current_price",
+    label: "Live Price",
+    numeric: true,
+    render: (r) => fmtNum(r.current_price),
+  },
+  {
+    key: "week_52_high",
+    label: "52W High",
+    numeric: true,
+    render: (r) => fmtNum(r.week_52_high),
+  },
+  {
+    key: "week_52_low",
+    label: "52W Low",
+    numeric: true,
+    render: (r) => fmtNum(r.week_52_low),
+  },
+  // ── Valuation ───────────────────────────────────
+  {
+    key: "market_cap",
+    label: "Market Cap",
+    numeric: true,
+    render: (r) =>
+      r.market_cap != null
+        ? (r.market_cap / 1e7).toFixed(0)
+        : "—",
+  },
+  {
+    key: "pe_ratio",
+    label: "P/E",
+    numeric: true,
+    render: (r) => fmtNum(r.pe_ratio),
+  },
+  {
+    key: "price_to_book",
+    label: "P/B",
+    numeric: true,
+    render: (r) => fmtNum(r.price_to_book),
+  },
+  {
+    key: "dividend_yield",
+    label: "Div Yield",
+    numeric: true,
+    render: (r) =>
+      r.dividend_yield != null
+        ? `${(r.dividend_yield * 100).toFixed(2)}%`
+        : "—",
+  },
+  // ── Profitability ───────────────────────────────
+  {
+    key: "profit_margins",
+    label: "Profit Margin",
+    numeric: true,
+    render: (r) =>
+      r.profit_margins != null
+        ? `${(r.profit_margins * 100).toFixed(2)}%`
+        : "—",
+  },
+  {
+    key: "earnings_growth",
+    label: "EPS Growth",
+    numeric: true,
+    render: (r) =>
+      r.earnings_growth != null
+        ? `${(r.earnings_growth * 100).toFixed(1)}%`
+        : "—",
+  },
+  {
+    key: "revenue_growth",
+    label: "Rev Growth",
+    numeric: true,
+    render: (r) =>
+      r.revenue_growth != null
+        ? `${(r.revenue_growth * 100).toFixed(1)}%`
+        : "—",
+  },
+  {
+    key: "eps",
+    label: "EPS",
+    numeric: true,
+    render: (r) => fmtNum(r.eps),
+  },
+  {
+    key: "revenue",
+    label: "Revenue (Cr)",
+    numeric: true,
+    render: (r) =>
+      r.revenue != null
+        ? (r.revenue / 1e7).toFixed(0)
+        : "—",
+  },
+  {
+    key: "net_income",
+    label: "Net Income (Cr)",
+    numeric: true,
+    render: (r) =>
+      r.net_income != null
+        ? (r.net_income / 1e7).toFixed(0)
+        : "—",
+  },
+  // ── Risk ────────────────────────────────────────
+  {
+    key: "max_drawdown_pct",
+    label: "Max DD %",
+    numeric: true,
+    render: (r) => fmtNum(r.max_drawdown_pct),
+  },
+  {
+    key: "beta",
+    label: "Beta",
+    numeric: true,
+    render: (r) => fmtNum(r.beta),
+  },
+  // ── Quality ─────────────────────────────────────
+  {
+    key: "piotroski_score",
+    label: "Piotroski",
+    numeric: true,
+    render: (r) =>
+      r.piotroski_score != null
+        ? String(r.piotroski_score)
+        : "—",
+  },
+  {
+    key: "piotroski_label",
+    label: "Piotroski Rating",
+    render: (r) => r.piotroski_label ?? "—",
+  },
+  {
+    key: "forecast_confidence",
+    label: "Forecast Conf.",
+    numeric: true,
+    render: (r) =>
+      r.forecast_confidence != null
+        ? r.forecast_confidence.toFixed(2)
+        : "—",
+  },
+  // ── Forecast ────────────────────────────────────
+  {
+    key: "target_3m_pct",
+    label: "3M Target %",
+    numeric: true,
+    render: (r) =>
+      r.target_3m_pct != null
+        ? `${r.target_3m_pct.toFixed(1)}%`
+        : "—",
+  },
+  {
+    key: "target_6m_pct",
+    label: "6M Target %",
+    numeric: true,
+    render: (r) =>
+      r.target_6m_pct != null
+        ? `${r.target_6m_pct.toFixed(1)}%`
+        : "—",
+  },
+  {
+    key: "target_9m_pct",
+    label: "9M Target %",
+    numeric: true,
+    render: (r) =>
+      r.target_9m_pct != null
+        ? `${r.target_9m_pct.toFixed(1)}%`
+        : "—",
   },
   {
     key: "action",
@@ -723,6 +917,69 @@ const piotroskiCols: Column<PiotroskiRow>[] = [
 ];
 
 // ---------------------------------------------------------------
+// Screener column catalog (for ColumnSelector popover)
+// ASETPLTFRM-333
+// ---------------------------------------------------------------
+
+/** Column key → category mapping shown in the selector. */
+const SCREENER_COL_CATALOG = [
+  { key: "ticker", label: "Ticker", category: "Identity" },
+  { key: "company_name", label: "Company", category: "Identity" },
+  { key: "sector", label: "Sector", category: "Identity" },
+  { key: "industry", label: "Industry", category: "Identity" },
+  { key: "currency", label: "Currency", category: "Identity" },
+  { key: "price", label: "Price", category: "Pricing" },
+  { key: "current_price", label: "Live Price", category: "Pricing" },
+  { key: "week_52_high", label: "52W High", category: "Pricing" },
+  { key: "week_52_low", label: "52W Low", category: "Pricing" },
+  { key: "market_cap", label: "Market Cap", category: "Valuation" },
+  { key: "pe_ratio", label: "P/E", category: "Valuation" },
+  { key: "peg_ratio", label: "PEG (T)", category: "Valuation" },
+  { key: "peg_ratio_yf", label: "PEG (YF)", category: "Valuation" },
+  { key: "peg_ratio_ttm", label: "PEG (Q)", category: "Valuation" },
+  { key: "price_to_book", label: "P/B", category: "Valuation" },
+  { key: "dividend_yield", label: "Div Yield", category: "Valuation" },
+  { key: "profit_margins", label: "Profit Margin", category: "Profitability" },
+  { key: "earnings_growth", label: "EPS Growth", category: "Profitability" },
+  { key: "revenue_growth", label: "Rev Growth", category: "Profitability" },
+  { key: "eps", label: "EPS", category: "Profitability" },
+  { key: "revenue", label: "Revenue (Cr)", category: "Profitability" },
+  { key: "net_income", label: "Net Income (Cr)", category: "Profitability" },
+  { key: "annualized_return_pct", label: "Ann. Ret %", category: "Risk" },
+  { key: "annualized_volatility_pct", label: "Vol %", category: "Risk" },
+  { key: "sharpe_ratio", label: "Sharpe", category: "Risk" },
+  { key: "max_drawdown_pct", label: "Max DD %", category: "Risk" },
+  { key: "beta", label: "Beta", category: "Risk" },
+  { key: "rsi_14", label: "RSI", category: "Technical" },
+  { key: "rsi_signal", label: "RSI Signal", category: "Technical" },
+  { key: "macd_signal", label: "MACD", category: "Technical" },
+  { key: "sma_200_signal", label: "vs SMA 200", category: "Technical" },
+  { key: "sentiment_score", label: "Sentiment", category: "Technical" },
+  { key: "piotroski_score", label: "Piotroski", category: "Quality" },
+  { key: "piotroski_label", label: "Piotroski Rating", category: "Quality" },
+  { key: "forecast_confidence", label: "Forecast Conf.", category: "Quality" },
+  { key: "target_3m_pct", label: "3M Target %", category: "Forecast" },
+  { key: "target_6m_pct", label: "6M Target %", category: "Forecast" },
+  { key: "target_9m_pct", label: "9M Target %", category: "Forecast" },
+  { key: "action", label: "Action", category: "Identity" },
+];
+
+/** Default columns shown on first load (~13, matches
+ *  the pre-selector UI so there's zero regression). */
+const SCREENER_DEFAULT_COLS = [
+  "ticker", "price", "rsi_14", "rsi_signal",
+  "sentiment_score", "macd_signal", "sma_200_signal",
+  "annualized_return_pct",
+  "annualized_volatility_pct", "sharpe_ratio",
+  "peg_ratio", "peg_ratio_yf", "peg_ratio_ttm",
+  "action",
+];
+
+const SCREENER_ALL_COL_KEYS = SCREENER_COL_CATALOG.map(
+  (c) => c.key,
+);
+
+// ---------------------------------------------------------------
 // CSV column definitions (for downloadCsv)
 // ---------------------------------------------------------------
 
@@ -751,6 +1008,32 @@ const screenerCsvCols: CsvColumn<ScreenerRow>[] = [
   { key: "peg_ratio_yf", header: "PEG (yfinance)" },
   { key: "peg_ratio_ttm", header: "PEG (quarterly TTM)" },
   { key: "sector", header: "Sector" },
+  // Extended columns (ASETPLTFRM-333) — included in
+  // CSV when user toggles them on.
+  { key: "company_name", header: "Company" },
+  { key: "industry", header: "Industry" },
+  { key: "currency", header: "Currency" },
+  { key: "current_price", header: "Live Price" },
+  { key: "week_52_high", header: "52W High" },
+  { key: "week_52_low", header: "52W Low" },
+  { key: "market_cap", header: "Market Cap" },
+  { key: "pe_ratio", header: "P/E" },
+  { key: "price_to_book", header: "P/B" },
+  { key: "dividend_yield", header: "Div Yield" },
+  { key: "profit_margins", header: "Profit Margin" },
+  { key: "earnings_growth", header: "EPS Growth" },
+  { key: "revenue_growth", header: "Rev Growth" },
+  { key: "eps", header: "EPS" },
+  { key: "revenue", header: "Revenue" },
+  { key: "net_income", header: "Net Income" },
+  { key: "max_drawdown_pct", header: "Max DD %" },
+  { key: "beta", header: "Beta" },
+  { key: "piotroski_score", header: "Piotroski" },
+  { key: "piotroski_label", header: "Piotroski Rating" },
+  { key: "forecast_confidence", header: "Forecast Conf." },
+  { key: "target_3m_pct", header: "3M Target %" },
+  { key: "target_6m_pct", header: "6M Target %" },
+  { key: "target_9m_pct", header: "9M Target %" },
 ];
 
 const riskCsvCols: CsvColumn<RiskRow>[] = [
@@ -850,6 +1133,29 @@ function ScreenerTab() {
   const [rsiFilter, setRsiFilter] = useState("all");
   const [tag, setTag] = useState("all");
 
+  const [
+    selectedCols, setSelectedCols, resetCols,
+  ] = useColumnSelection(
+    "insights.columns.screener",
+    SCREENER_DEFAULT_COLS,
+    SCREENER_ALL_COL_KEYS,
+  );
+
+  // Filter the master screenerCols list to only the
+  // keys the user has toggled on, preserving the
+  // catalog's canonical ordering.
+  const visibleCols = useMemo(() => {
+    const s = new Set(selectedCols);
+    return screenerCols.filter((c) => s.has(c.key));
+  }, [selectedCols]);
+
+  const visibleCsvCols = useMemo(() => {
+    const s = new Set(selectedCols);
+    return screenerCsvCols.filter((c) =>
+      s.has(c.key as string),
+    );
+  }, [selectedCols]);
+
   const filtered = useMemo(() => {
     if (!data.value?.rows) return [];
     let rows = applyFilters(
@@ -885,15 +1191,24 @@ function ScreenerTab() {
         rsiFilter={rsiFilter}
         onRsiFilterChange={setRsiFilter}
       />
+      <div className="flex justify-end">
+        <ColumnSelector
+          catalog={SCREENER_COL_CATALOG}
+          selected={selectedCols}
+          onChange={setSelectedCols}
+          onReset={resetCols}
+          lockedKeys={["ticker"]}
+        />
+      </div>
       <InsightsTable<ScreenerRow>
-        columns={screenerCols}
+        columns={visibleCols}
         rows={filtered}
         defaultSort={{
           col: "ticker",
           dir: "asc",
         }}
         onDownload={(r) =>
-          downloadCsv(r, screenerCsvCols, "screener")
+          downloadCsv(r, visibleCsvCols, "screener")
         }
       />
     </div>
@@ -1702,6 +2017,33 @@ function ScreenQLTab() {
   const [fields, setFields] = useState<
     ScreenField[]
   >([]);
+  // Column picker — selected keys are extra display
+  // columns passed to `/screen` as `display_columns`.
+  // Catalog is /screen/fields (37-field set).
+  const screenqlCatalog = useMemo(
+    () =>
+      fields.map((f) => ({
+        key: f.name,
+        label: f.label,
+        category: f.category,
+      })),
+    [fields],
+  );
+  const screenqlAllKeys = useMemo(
+    () => fields.map((f) => f.name),
+    [fields],
+  );
+  const [
+    selectedScreenqlCols,
+    setSelectedScreenqlCols,
+    resetScreenqlCols,
+  ] = useColumnSelection(
+    "insights.columns.screenql",
+    // Default: no extras — the filter-referenced
+    // fields + base columns render by themselves.
+    [],
+    screenqlAllKeys,
+  );
   const [suggestions, setSuggestions] = useState<
     ScreenField[]
   >([]);
@@ -1761,6 +2103,7 @@ function ScreenQLTab() {
               page_size: 25,
               sort_by: null,
               sort_dir: "desc",
+              display_columns: selectedScreenqlCols,
             }),
           },
         );
@@ -1789,8 +2132,17 @@ function ScreenQLTab() {
       }
       setLoading(false);
     },
-    [query, router],
+    [query, router, selectedScreenqlCols],
   );
+
+  // Re-run the current query when the user toggles a
+  // column so new fields appear/disappear in results.
+  // Only fires if a query has already been executed.
+  useEffect(() => {
+    if (!results) return;
+    runScreen(query);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedScreenqlCols]);
 
   // Autocomplete logic
   const handleQueryChange = useCallback(
@@ -2186,29 +2538,40 @@ function ScreenQLTab() {
         </div>
       )}
 
-      {/* Results table */}
+      {/* Column selector + results table */}
       {results && dynamicCols.length > 0 && (
-        <InsightsTable<
-          Record<string, unknown>
-        >
-          columns={dynamicCols}
-          rows={
-            results.rows as Record<
-              string,
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              any
-            >[]
-          }
-          defaultSort={{
-            col: "market_cap",
-            dir: "desc",
-          }}
-          onDownload={(r) =>
-            downloadCsv(
-              r, csvCols, "screenql-results",
-            )
-          }
-        />
+        <>
+          <div className="flex justify-end">
+            <ColumnSelector
+              catalog={screenqlCatalog}
+              selected={selectedScreenqlCols}
+              onChange={setSelectedScreenqlCols}
+              onReset={resetScreenqlCols}
+              buttonLabel="Extra columns"
+            />
+          </div>
+          <InsightsTable<
+            Record<string, unknown>
+          >
+            columns={dynamicCols}
+            rows={
+              results.rows as Record<
+                string,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                any
+              >[]
+            }
+            defaultSort={{
+              col: "market_cap",
+              dir: "desc",
+            }}
+            onDownload={(r) =>
+              downloadCsv(
+                r, csvCols, "screenql-results",
+              )
+            }
+          />
+        </>
       )}
 
       {results &&

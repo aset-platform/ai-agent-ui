@@ -770,13 +770,38 @@ def generate_sql(
     sort_by: str | None = None,
     sort_dir: str = "desc",
     ticker_filter: list[str] | None = None,
+    display_columns: list[str] | None = None,
 ) -> GeneratedQuery:
-    """Generate DuckDB SQL from parsed AST."""
+    """Generate DuckDB SQL from parsed AST.
+
+    ``display_columns`` (ASETPLTFRM-333): optional list
+    of field names to add to the SELECT beyond what the
+    WHERE references. Lets the UI column selector
+    expose fields like ``piotroski_score`` or ``eps``
+    in results even when they're not part of the
+    filter. Unknown / unregistered field names are
+    silently ignored.
+    """
     tables = _collect_tables(ast)
     fields_used = _collect_fields(ast)
 
     # Always need ci for base columns
     tables.add("ci")
+
+    # Merge display-only columns into the field set,
+    # preserving filter-referenced columns first so the
+    # SELECT ordering stays predictable for the UI.
+    if display_columns:
+        extra: list[str] = []
+        seen = set(fields_used)
+        for name in display_columns:
+            if name in FIELD_CATALOG and name not in seen:
+                extra.append(name)
+                seen.add(name)
+                fd = FIELD_CATALOG[name]
+                if fd.table != "st":
+                    tables.add(fd.table)
+        fields_used = [*fields_used, *extra]
 
     # Build params
     params: list[Any] = []
