@@ -171,49 +171,14 @@ export default function AuthenticatedLayout({
 }) {
   useAuthGuard();
 
-  // Render nothing meaningful on the server to
-  // prevent hydration mismatches from context
-  // providers, localStorage reads, and WebSocket.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-
-  if (!mounted) {
-    // Lighthouse's FCP heuristic counts only text, image, or
-    // <svg> content — a pure-CSS border-spinner alone does not
-    // fire FCP, which pushed the authenticated-route FCP floor
-    // to ~3.5 s (measured 2026-04-23). Include a text label
-    // + a sidebar-shaped silhouette so FCP + LCP catch the
-    // first paint (~500 ms target) instead of waiting for the
-    // full shell to hydrate.
-    return (
-      <div
-        aria-busy="true"
-        className="flex h-screen bg-gray-50 dark:bg-gray-950 overflow-hidden"
-      >
-        <aside
-          className="hidden md:block w-[62px] border-r border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900"
-          aria-hidden="true"
-        />
-        <div className="flex-1 flex flex-col min-w-0">
-          <header
-            className="h-14 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 flex items-center px-4"
-            aria-hidden="true"
-          >
-            <span className="text-sm font-medium text-gray-500 dark:text-gray-400">
-              AI Agent UI
-            </span>
-          </header>
-          <main className="flex-1 flex items-center justify-center gap-3">
-            <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-            <span className="text-sm text-gray-500 dark:text-gray-400">
-              Loading…
-            </span>
-          </main>
-        </div>
-      </div>
-    );
-  }
-
+  // Previously gated behind `mounted` state to avoid hydration
+  // mismatches — pushed FCP + LCP to ~3.5 s because Lighthouse
+  // couldn't measure any meaningful paint until hydration
+  // finished. All providers here are SSR-safe (useState w/
+  // stable defaults, localStorage/WebSocket reads deferred to
+  // useEffect). Removing the gate lets server-rendered page
+  // content (see dashboard/page.tsx) paint in the first HTML
+  // response, enabling LCP < 2 s on hero-driven routes.
   return (
     <LayoutProvider>
       <ChatProvider>
