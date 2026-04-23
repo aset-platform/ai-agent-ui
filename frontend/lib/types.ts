@@ -721,6 +721,7 @@ export interface PiotroskiRow {
   sector: string | null;
   industry: string | null;
   score_date: string | null;
+  action?: string;
 }
 
 export interface PiotroskiResponse {

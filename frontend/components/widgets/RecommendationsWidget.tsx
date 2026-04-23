@@ -165,10 +165,12 @@ export function RecommendationsWidget({
 
         {/* ── Health score row ────────────────────── */}
         <div className="px-5 py-3 flex items-center justify-between">
-          <HealthScoreBadge
-            score={resp?.health_score}
-            label={resp?.health_label}
-          />
+          {resp && (
+            <HealthScoreBadge
+              score={resp.health_score}
+              label={resp.health_label}
+            />
+          )}
           {totalCount > 0 && (
             <span className="text-xs text-gray-400 dark:text-gray-500">
               {totalCount} recommendation

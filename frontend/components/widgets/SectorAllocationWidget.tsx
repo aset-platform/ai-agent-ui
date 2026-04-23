@@ -40,7 +40,8 @@ export function SectorAllocationWidget({ data }: Props) {
     return {
       tooltip: {
         trigger: "item",
-        formatter: (p: Record<string, unknown>) => {
+        formatter: (raw: unknown) => {
+          const p = raw as Record<string, unknown>;
           const d = p.data as {
             name: string;
             value: number;
