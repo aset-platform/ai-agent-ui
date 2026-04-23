@@ -28,12 +28,14 @@ import {
 import { useRegistry } from "@/hooks/useDashboardData";
 import { AddStockModal } from "@/components/widgets/AddStockModal";
 import { EditStockModal } from "@/components/widgets/EditStockModal";
+import { PortfolioTransactionsModal } from "@/components/widgets/PortfolioTransactionsModal";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 interface PortfolioActionsCtx {
   openAdd: (ticker?: string) => void;
   openEdit: (ticker: string) => void;
   openDelete: (ticker: string) => void;
+  openTransactions: (ticker: string) => void;
 }
 
 const Ctx =
@@ -50,6 +52,7 @@ export function usePortfolioActions():
       openAdd: () => {},
       openEdit: () => {},
       openDelete: () => {},
+      openTransactions: () => {},
     };
   }
   return v;
@@ -81,6 +84,9 @@ export function PortfolioActionsProvider({
     ticker: string;
     txnId: string;
   } | null>(null);
+  const [txnTicker, setTxnTicker] = useState<
+    string | null
+  >(null);
 
   const openAdd = useCallback(
     (ticker?: string) => {
@@ -109,9 +115,19 @@ export function PortfolioActionsProvider({
     [portfolio.holdings],
   );
 
+  const openTransactions = useCallback(
+    (ticker: string) => setTxnTicker(ticker),
+    [],
+  );
+
   const ctxValue = useMemo<PortfolioActionsCtx>(
-    () => ({ openAdd, openEdit, openDelete }),
-    [openAdd, openEdit, openDelete],
+    () => ({
+      openAdd,
+      openEdit,
+      openDelete,
+      openTransactions,
+    }),
+    [openAdd, openEdit, openDelete, openTransactions],
   );
 
   // Lookup existing holding for the Edit modal
@@ -159,6 +175,12 @@ export function PortfolioActionsProvider({
           }}
         />
       )}
+
+      <PortfolioTransactionsModal
+        isOpen={txnTicker !== null}
+        ticker={txnTicker}
+        onClose={() => setTxnTicker(null)}
+      />
 
       <ConfirmDialog
         open={deleteConfirm !== null}

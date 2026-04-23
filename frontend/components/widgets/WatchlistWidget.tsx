@@ -20,7 +20,7 @@ interface WatchlistWidgetProps {
   portfolio?: PortfolioHolding[];
   portfolioLoading?: boolean;
   onAddStock?: () => void;
-  onEditStock?: (ticker: string) => void;
+  onViewStock?: (ticker: string) => void;
   onDeleteStock?: (ticker: string) => void;
 }
 
@@ -83,7 +83,7 @@ export function WatchlistWidget({
   portfolio = [],
   portfolioLoading = false,
   onAddStock,
-  onEditStock,
+  onViewStock,
   onDeleteStock,
 }: WatchlistWidgetProps) {
   const [activeTab, setActiveTab] =
@@ -404,18 +404,19 @@ export function WatchlistWidget({
                         </svg>
                       )}
                     </button>
-                    {onEditStock && (
+                    {onViewStock && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          onEditStock(h.ticker);
+                          onViewStock(h.ticker);
                         }}
-                        title="Edit holding"
-                        data-testid={`watchlist-edit-${h.ticker}`}
+                        title="View transactions"
+                        data-testid={`watchlist-view-${h.ticker}`}
                         className="p-1 rounded text-gray-400 hover:text-indigo-600 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
                       >
                         <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                          <circle cx="12" cy="12" r="3" />
                         </svg>
                       </button>
                     )}

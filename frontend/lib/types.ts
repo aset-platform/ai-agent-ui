@@ -752,3 +752,31 @@ export interface RecommendationStatsResponse {
   avg_return_60d?: number | null;
   avg_return_90d?: number | null;
 }
+
+export interface PortfolioTransaction {
+  transaction_id: string;
+  trade_date: string;
+  side: string;
+  quantity: number;
+  price: number;
+  fees: number;
+  notes?: string | null;
+}
+
+export interface PortfolioTransactionSummary {
+  total_quantity: number;
+  avg_price: number;
+  invested: number;
+  current_price: number | null;
+  current_value: number | null;
+  gain: number | null;
+  gain_pct: number | null;
+}
+
+export interface PortfolioTransactionsResponse {
+  ticker: string;
+  currency: string;
+  market: string;
+  transactions: PortfolioTransaction[];
+  summary: PortfolioTransactionSummary;
+}

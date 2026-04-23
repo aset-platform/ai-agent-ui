@@ -73,7 +73,7 @@ export default function DashboardPage() {
       ),
     [registryData.value],
   );
-  const { openAdd, openEdit, openDelete } =
+  const { openAdd, openTransactions, openDelete } =
     usePortfolioActions();
 
   // Single request for all widget data
@@ -290,7 +290,9 @@ export default function DashboardPage() {
           portfolio={filteredPortfolio}
           portfolioLoading={portfolioData.loading}
           onAddStock={() => openAdd()}
-          onEditStock={(ticker) => openEdit(ticker)}
+          onViewStock={(ticker) =>
+            openTransactions(ticker)
+          }
           onDeleteStock={(ticker) => openDelete(ticker)}
         />
         <AnalysisSignalsWidget
