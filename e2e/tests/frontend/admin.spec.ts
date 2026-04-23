@@ -114,7 +114,7 @@ test.describe("Admin page", () => {
     ).toBeVisible({ timeout: 15_000 });
   });
 
-  test("summary cards show Total Requests, Cascades, Compressions", async () => {
+  test("summary cards show Total Requests, Cascades, Tokens", async () => {
     await admin.clickTab("observability");
 
     await expect(

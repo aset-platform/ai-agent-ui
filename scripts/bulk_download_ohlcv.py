@@ -240,6 +240,14 @@ async def run(
         ticker_map[yf_t] = s["symbol"]
         yf_tickers.append(yf_t)
 
+    # Include sector indices for forecast enrichment
+    from tools._stock_registry import SECTOR_INDICES
+
+    for idx in SECTOR_INDICES:
+        if idx not in ticker_map:
+            ticker_map[idx] = idx
+            yf_tickers.append(idx)
+
     _logger.info(
         "Bulk downloading %d tickers (period=%s)",
         len(yf_tickers), period,

@@ -22,6 +22,10 @@ services:
       - DATABASE_URL=postgresql+asyncpg://app:${PG_PASSWORD:-devpass123}@postgres:5432/aiagent
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - AI_AGENT_UI_HOME=${AI_AGENT_UI_HOME:-/Users/abhay/.ai-agent-ui}
+      # Schedule lib uses datetime.now() (process-local
+      # tz). Default UTC made cron jobs fire 5.5 hrs late
+      # vs the IST times set in the UI.
+      - TZ=Asia/Kolkata
     volumes:
       # Mount at the SAME path as host so Iceberg
       # catalog metadata file paths resolve correctly.

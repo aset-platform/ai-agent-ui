@@ -7,24 +7,17 @@
 import Link from "next/link";
 import type { RecommendationItem } from "@/lib/types";
 import { SignalPill } from "./SignalPill";
+import { TierBadge } from
+  "@/components/recommendations/badges";
+import {
+  RecActionButton,
+} from "@/components/recommendations/RecActionButton";
 
 interface RecommendationCardProps {
   rec: RecommendationItem;
   expanded?: boolean;
+  onActionClick?: () => void;
 }
-
-/* ── Tier badge colors ─────────────────────────────── */
-const tierStyles: Record<string, string> = {
-  portfolio:
-    "bg-blue-100 text-blue-700 " +
-    "dark:bg-blue-900/30 dark:text-blue-400",
-  watchlist:
-    "bg-emerald-100 text-emerald-700 " +
-    "dark:bg-emerald-900/30 dark:text-emerald-400",
-  discovery:
-    "bg-purple-100 text-purple-700 " +
-    "dark:bg-purple-900/30 dark:text-purple-400",
-};
 
 /* ── Severity left-border ──────────────────────────── */
 const severityBorder: Record<string, string> = {
@@ -68,11 +61,10 @@ function labelFromKey(key: string): string {
 export function RecommendationCard({
   rec,
   expanded = false,
+  onActionClick,
 }: RecommendationCardProps) {
   const border =
     severityBorder[rec.severity] ?? severityBorder.low;
-  const tierCls =
-    tierStyles[rec.tier] ?? tierStyles.discovery;
 
   const signals = Object.entries(rec.data_signals ?? {});
 
@@ -87,15 +79,7 @@ export function RecommendationCard({
     >
       {/* Top row: tier + category + ticker */}
       <div className="flex items-center gap-2 flex-wrap">
-        <span
-          className={
-            "text-[10px] font-semibold uppercase " +
-            "rounded-full px-2 py-0.5 " +
-            tierCls
-          }
-        >
-          {rec.tier}
-        </span>
+        <TierBadge tier={rec.tier} />
         <span className="text-xs text-gray-500 dark:text-gray-400">
           {rec.category}
         </span>
@@ -147,25 +131,35 @@ export function RecommendationCard({
         </div>
       )}
 
-      {/* Expected impact + View link */}
-      <div className="flex items-center justify-between pt-1">
+      {/* Expected impact + actions */}
+      <div className="flex items-center justify-between pt-1 gap-2">
         {rec.expected_impact && (
-          <span className="text-xs text-gray-500 dark:text-gray-400 italic">
+          <span className="text-xs text-gray-500 dark:text-gray-400 italic truncate">
             {rec.expected_impact}
           </span>
         )}
-        {rec.ticker && (
-          <Link
-            href={
-              `/analytics/analysis?ticker=${rec.ticker}`
-            }
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
-          >
-            View &rarr;
-          </Link>
-        )}
+        <div className="ml-auto flex items-center gap-2 shrink-0">
+          {rec.ticker && (
+            <RecActionButton
+              ticker={rec.ticker}
+              action={rec.action}
+              actedOn={!!rec.acted_on_date}
+              onBeforeNavigate={onActionClick}
+            />
+          )}
+          {rec.ticker && (
+            <Link
+              href={
+                `/analytics/analysis?ticker=${rec.ticker}`
+              }
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+            >
+              View &rarr;
+            </Link>
+          )}
+        </div>
       </div>
     </div>
   );

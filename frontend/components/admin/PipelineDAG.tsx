@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef } from "react";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import type { Pipeline, PipelineStep } from "@/hooks/useSchedulerData";
 
 // ---------------------------------------------------------------
@@ -433,6 +434,9 @@ export default function PipelineDAG({
   onEdit?: (pipeline: Pipeline) => void;
   onNewPipeline?: () => void;
 }) {
+  const [deletePipelineId, setDeletePipelineId] =
+    useState<string | null>(null);
+
   const handleTrigger = useCallback(
     async (id: string, force = false) => {
       await apiFetch(
@@ -448,16 +452,17 @@ export default function PipelineDAG({
     [mutatePipelines],
   );
 
-  const handleDelete = useCallback(
-    async (id: string) => {
-      if (!confirm("Delete this pipeline?")) return;
+  const confirmDeletePipeline = useCallback(
+    async () => {
+      if (!deletePipelineId) return;
       await apiFetch(
-        `${API_URL}/admin/scheduler/pipelines/${id}`,
+        `${API_URL}/admin/scheduler/pipelines/${deletePipelineId}`,
         { method: "DELETE" },
       );
+      setDeletePipelineId(null);
       mutatePipelines();
     },
-    [mutatePipelines],
+    [deletePipelineId, mutatePipelines],
   );
 
   const handleResume = useCallback(
@@ -533,10 +538,26 @@ export default function PipelineDAG({
             onResume={handleResume}
             onToggle={handleToggle}
             onEdit={onEdit}
-            onDelete={handleDelete}
+            onDelete={setDeletePipelineId}
           />
         ))
       )}
+
+      <ConfirmDialog
+        open={deletePipelineId !== null}
+        title="Delete Pipeline"
+        message={
+          `Are you sure you want to delete "${
+            pipelines.find(
+              (p) => p.pipeline_id === deletePipelineId,
+            )?.name ?? deletePipelineId
+          }"? This action cannot be undone.`
+        }
+        confirmLabel="Delete"
+        variant="danger"
+        onConfirm={confirmDeletePipeline}
+        onCancel={() => setDeletePipelineId(null)}
+      />
     </div>
   );
 }

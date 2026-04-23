@@ -82,8 +82,51 @@ Refresh tokens are rotated on every `/auth/refresh` call — the old token is im
 
 | Role | Permissions |
 |---|---|
-| `superuser` | Full access: all user CRUD + audit log |
-| `general` | Chat and dashboard only; cannot access `/users` or `/admin/*` |
+| `superuser` | Full access: all user CRUD + all `/admin/*` endpoints + scope=all on self-scoped admin routes |
+| `pro` | Insights access + scoped Admin view: My Account, My Audit Log, My LLM Usage. Forced to `scope=self` on `/admin/audit-log`, `/admin/metrics`, `/admin/usage-stats`; all other `/admin/*` routes return 403. |
+| `general` | Chat + dashboard + portfolio only. `/admin` frontend route redirects to `/dashboard`; `/admin/*` API returns 403. |
+
+### Role ↔ subscription auto-sync
+
+Role is tier-driven with one rule: **superuser is sticky**. The pinch
+point is `auth/repo/user_writes.py::update()` — every `subscription_tier`
+write flows through it.
+
+| `subscription_tier` | Resulting role (for non-superusers) |
+|---|---|
+| `free` | `general` |
+| `pro`, `premium` | `pro` |
+
+Superusers are never auto-demoted. A role change fires either
+`ROLE_PROMOTED` or `ROLE_DEMOTED` in the audit log with metadata
+`{old_role, new_role, reason: "subscription_tier_change", new_tier}`.
+
+### Dependency guards
+
+| Guard | Use case | File |
+|---|---|---|
+| `get_current_user` | Any authenticated endpoint | `auth/dependencies.py:105` |
+| `superuser_only` | ~45 admin endpoints (Users, Scheduler, Maintenance, Transactions, Recommendations, Backup Health, Data Health) | `auth/dependencies.py:162` |
+| `require_role(*allowed)` | Factory for custom role sets | `auth/dependencies.py:198` |
+| `pro_or_superuser` | Self-scoped admin endpoints (`/admin/audit-log`, `/admin/metrics`, `/admin/usage-stats`) | same file, alias |
+| `require_tier(min_tier)` | Subscription-gated features | `auth/dependencies.py` |
+
+### Self-scope query param pattern
+
+Endpoints accessible to `pro` take `?scope=self|all`:
+
+- `scope=self` — always allowed. Filters results to the caller.
+- `scope=all` — superuser only. Returns 403 for `pro`.
+
+Pro users default to `scope=self` if omitted; superusers default to
+`scope=all`.
+
+### Manual promotion
+
+Superusers can change any user's role via
+`PATCH /users/{user_id}` — role dropdown in the Users tab edit modal
+offers General / Pro / Superuser. Audit metadata records `old_role`
+and `new_role` on change.
 
 ---
 

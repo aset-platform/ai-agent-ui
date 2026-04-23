@@ -22,6 +22,24 @@ import pandas as pd
 # Module-level logger (not a mutable global).
 _logger = logging.getLogger(__name__)
 
+# Sector indices for forecast enrichment.
+# Downloaded during bulk-download pipeline runs so that
+# relative-strength calculations have index OHLCV available.
+SECTOR_INDICES: list[str] = [
+    # India sector indices
+    "^NSEBANK",
+    "^CNXIT",
+    "^CNXPHARMA",
+    "^CNXFMCG",
+    "^CNXAUTO",
+    # US sector ETFs (broad sector proxies)
+    "XLK",
+    "XLF",
+    "XLE",
+    "XLV",
+    "XLY",
+]
+
 
 def _load_registry() -> dict:
     """Load the full stock registry from Iceberg.

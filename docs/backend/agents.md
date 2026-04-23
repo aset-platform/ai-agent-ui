@@ -365,7 +365,7 @@ Both agents use `FallbackLLM` from `backend/llm_fallback.py`, which cascades thr
 
 ```
 Tier 1: llama-3.3-70b-versatile   (12K TPM, reliable tool-calling)
-Tier 2: kimi-k2-instruct          (10K TPM, parallel tools)
+Tier 2: qwen3-32b                 (6K TPM, parallel tools)
 Tier 3: gpt-oss-120b              (8K TPM, quality)
 Tier 4: llama-4-scout-17b         (30K TPM, fast)
 Tier 5: claude-sonnet-4-6         (paid, unlimited — Anthropic fallback)

@@ -3,7 +3,7 @@
  * Generic sortable + paginated table for Insights tabs.
  *
  * Handles client-side sorting, pagination, and optional
- * market/sector/ticker filtering via props.
+ * CSV download via `onDownload` callback.
  */
 
 import { useState, useMemo, useCallback } from "react";
@@ -11,6 +11,7 @@ import {
   KpiTooltip,
   KPI_TIPS,
 } from "@/components/KpiTooltip";
+import { DownloadCsvButton } from "@/components/common/DownloadCsvButton";
 
 export interface Column<T> {
   key: keyof T & string;
@@ -20,7 +21,8 @@ export interface Column<T> {
   sortable?: boolean;
   /** Right-align numeric columns. */
   numeric?: boolean;
-  /** Tooltip text (auto-looked up from KPI_TIPS if omitted). */
+  /** Tooltip text (auto-looked up from KPI_TIPS
+   *  if omitted). */
   tooltip?: string;
 }
 
@@ -34,6 +36,10 @@ interface InsightsTableProps<T> {
   rows: T[];
   pageSize?: number;
   defaultSort?: SortState;
+  /** Called when user clicks Download CSV.
+   *  Receives the full sorted (not paginated) rows
+   *  so caller can build the CSV from filtered data. */
+  onDownload?: (rows: T[]) => void;
 }
 
 export function InsightsTable<
@@ -44,6 +50,7 @@ export function InsightsTable<
   rows,
   pageSize: initialPageSize = 10,
   defaultSort,
+  onDownload,
 }: InsightsTableProps<T>) {
   const [sort, setSort] = useState<SortState | null>(
     defaultSort ?? null,
@@ -62,7 +69,10 @@ export function InsightsTable<
       if (av == null && bv == null) return 0;
       if (av == null) return 1;
       if (bv == null) return -1;
-      if (typeof av === "number" && typeof bv === "number") {
+      if (
+        typeof av === "number" &&
+        typeof bv === "number"
+      ) {
         return dir === "asc" ? av - bv : bv - av;
       }
       const sa = String(av);
@@ -113,7 +123,11 @@ export function InsightsTable<
   return (
     <div className="space-y-3">
       {/* Table */}
-      <div data-testid="insights-table" className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+      <div
+        data-testid="insights-table"
+        className="overflow-x-auto rounded-lg border
+          border-gray-200 dark:border-gray-700"
+      >
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 dark:bg-gray-800/50">
@@ -159,7 +173,8 @@ export function InsightsTable<
               <tr>
                 <td
                   colSpan={columns.length}
-                  className="px-3 py-8 text-center text-gray-400"
+                  className="px-3 py-8 text-center
+                    text-gray-400"
                   data-testid="insights-empty"
                 >
                   No data available
@@ -169,14 +184,17 @@ export function InsightsTable<
               paginated.map((row, i) => (
                 <tr
                   key={i}
-                  className="hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors"
+                  className="hover:bg-gray-50
+                    dark:hover:bg-gray-800/30
+                    transition-colors"
                 >
                   {columns.map((col) => (
                     <td
                       key={col.key}
                       className={`
                         px-3 py-2
-                        text-gray-700 dark:text-gray-200
+                        text-gray-700
+                        dark:text-gray-200
                         whitespace-nowrap
                         ${col.numeric ? "text-right tabular-nums" : "text-left"}
                       `}
@@ -195,7 +213,7 @@ export function InsightsTable<
         </table>
       </div>
 
-      {/* Pagination controls */}
+      {/* Footer: row count + download + pagination */}
       <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
         <div className="flex items-center gap-2">
           <span>
@@ -207,7 +225,9 @@ export function InsightsTable<
             onChange={(e) =>
               handlePageSize(Number(e.target.value))
             }
-            className="rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-1.5 py-0.5 text-xs"
+            className="rounded border border-gray-300
+              dark:border-gray-600 bg-white
+              dark:bg-gray-800 px-1.5 py-0.5 text-xs"
           >
             {[10, 25, 50].map((n) => (
               <option key={n} value={n}>
@@ -215,6 +235,12 @@ export function InsightsTable<
               </option>
             ))}
           </select>
+
+          {onDownload && sorted.length > 0 && (
+            <DownloadCsvButton
+              onClick={() => onDownload(sorted)}
+            />
+          )}
         </div>
 
         <div className="flex items-center gap-1">
@@ -223,7 +249,11 @@ export function InsightsTable<
               setPage((p) => Math.max(1, p - 1))
             }
             disabled={page <= 1}
-            className="rounded px-2 py-1 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            className="rounded px-2 py-1
+              hover:bg-gray-200 dark:hover:bg-gray-700
+              disabled:opacity-30
+              disabled:cursor-not-allowed
+              transition-colors"
           >
             Prev
           </button>
@@ -237,7 +267,11 @@ export function InsightsTable<
               )
             }
             disabled={page >= maxPages}
-            className="rounded px-2 py-1 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            className="rounded px-2 py-1
+              hover:bg-gray-200 dark:hover:bg-gray-700
+              disabled:opacity-30
+              disabled:cursor-not-allowed
+              transition-colors"
           >
             Next
           </button>

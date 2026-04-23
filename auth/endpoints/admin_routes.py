@@ -11,11 +11,12 @@ import json
 import logging
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 import auth.endpoints.helpers as _helpers
 from auth.dependencies import (
     get_auth_service,
+    pro_or_superuser,
     superuser_only,
 )
 from auth.models import (
@@ -36,20 +37,49 @@ def register(router: APIRouter) -> None:
 
     @router.get("/admin/audit-log", tags=["admin"])
     async def get_audit_log(
-        _: UserContext = Depends(superuser_only),
+        scope: str = Query(
+            "self",
+            description=(
+                "'self' returns only events involving"
+                " the caller; 'all' is superuser-only."
+            ),
+        ),
+        caller: UserContext = Depends(pro_or_superuser),
     ) -> Any:
-        """Return all audit events, newest-first.
+        """Return audit events, newest-first.
 
-        Cached in Redis for 60 s to avoid repeated
-        full Iceberg table scans.
+        * ``scope='self'`` — always allowed. Events where
+          the caller is the actor OR the target.
+        * ``scope='all'`` — superuser only. 403 otherwise.
+
+        Cached in Redis for 60 s; cache is keyed by
+        scope so self and all don't collide.
         """
+        if scope not in ("self", "all"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "scope must be 'self' or 'all'"
+                ),
+            )
+        if scope == "all" and caller.role != "superuser":
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "scope='all' requires superuser"
+                ),
+            )
+
         try:
             from cache import get_cache, TTL_VOLATILE
         except ImportError:
             get_cache = None  # type: ignore[assignment]
 
         cache = get_cache() if get_cache else None
-        cache_key = "cache:admin:audit"
+        cache_key = (
+            "cache:admin:audit:all" if scope == "all"
+            else f"cache:admin:audit:self:{caller.user_id}"
+        )
 
         if cache is not None:
             hit = cache.get(cache_key)
@@ -62,8 +92,14 @@ def register(router: APIRouter) -> None:
         repo = _helpers._get_repo()
         raw_events = await repo.list_audit_events()
         events = []
+        uid = str(caller.user_id)
         for ev in raw_events:
             d = dict(ev)
+            if scope == "self":
+                actor = str(d.get("actor_user_id") or "")
+                target = str(d.get("target_user_id") or "")
+                if actor != uid and target != uid:
+                    continue
             ts = d.get("event_timestamp")
             if ts is not None and hasattr(
                 ts, "isoformat"
@@ -71,7 +107,7 @@ def register(router: APIRouter) -> None:
                 d["event_timestamp"] = ts.isoformat()
             events.append(d)
 
-        result = {"events": events}
+        result = {"events": events, "scope": scope}
         if cache is not None:
             cache.set(
                 cache_key,

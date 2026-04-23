@@ -79,10 +79,11 @@ test.describe("Profile & password modals", () => {
     const modal = page.getByTestId("edit-profile-modal");
     await expect(modal).toBeVisible({ timeout: 5_000 });
 
-    const closeBtn = modal.getByRole("button", {
-      name: /cancel|close/i,
+    // Use the Cancel button (not the X close icon)
+    const cancelBtn = modal.getByRole("button", {
+      name: /^cancel$/i,
     });
-    await closeBtn.click();
+    await cancelBtn.click();
     await expect(modal).toBeHidden({ timeout: 5_000 });
   });
 
@@ -133,10 +134,10 @@ test.describe("Profile & password modals", () => {
     );
     await expect(modal).toBeVisible({ timeout: 5_000 });
 
-    const closeBtn = modal.getByRole("button", {
-      name: /cancel|close/i,
+    const cancelBtn = modal.getByRole("button", {
+      name: /^cancel$/i,
     });
-    await closeBtn.click();
+    await cancelBtn.click();
     await expect(modal).toBeHidden({ timeout: 5_000 });
   });
 

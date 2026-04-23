@@ -50,7 +50,7 @@ class UserCreateRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
     full_name: str = Field(..., min_length=1, max_length=200)
-    role: Literal["general", "superuser"] = "general"
+    role: Literal["general", "pro", "superuser"] = "general"
 
 
 class UserUpdateRequest(BaseModel):
@@ -67,7 +67,7 @@ class UserUpdateRequest(BaseModel):
 
     full_name: str | None = Field(None, max_length=200)
     email: EmailStr | None = None
-    role: Literal["general", "superuser"] | None = None
+    role: Literal["general", "pro", "superuser"] | None = None
     is_active: bool | None = None
     page_permissions: Dict[str, bool] | None = None
 

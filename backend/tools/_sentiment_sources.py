@@ -29,11 +29,50 @@ _WEIGHT_GOOGLE_RSS = 0.6
 # Dedup threshold — 0.8 = 80 % title similarity.
 _DEDUP_THRESHOLD = 0.8
 
-# Feed timeout in seconds.
+# Per-source timeout in seconds. Yahoo and yfinance
+# sporadically hang on unthrottled sockets (see
+# Sprint 7 stuck-sentiment incident).  We wrap every
+# fetcher in a thread + Future.result(timeout=...) so
+# a stuck call releases its pool worker instead of
+# deadlocking the whole batch.
 _FEED_TIMEOUT = 10
 
 # Max headlines per source.
 _MAX_PER_SOURCE = 10
+
+
+def _run_with_timeout(
+    fn,
+    *args,
+    timeout: float = _FEED_TIMEOUT,
+):
+    """Run *fn(\*args)* with a hard time bound.
+
+    Uses a one-shot ``ThreadPoolExecutor`` so that a
+    blocked C socket call (``yf.Ticker().news``,
+    ``feedparser.parse``) can be orphaned after the
+    timeout.  The underlying thread keeps running in
+    the background but the caller is freed — good
+    enough to keep the sentiment batch moving.  Raises
+    :class:`TimeoutError` when the wait expires.
+    """
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=1,
+    ) as pool:
+        future = pool.submit(fn, *args)
+        try:
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError as exc:
+            # Don't wait for the orphan on shutdown.
+            pool.shutdown(
+                wait=False, cancel_futures=True,
+            )
+            raise TimeoutError(
+                f"{fn.__name__} exceeded "
+                f"{timeout:.1f}s",
+            ) from exc
 
 
 @dataclass
@@ -75,7 +114,14 @@ def fetch_all_headlines(
         _fetch_google_rss,
     ):
         try:
-            items.extend(fetcher(ticker))
+            items.extend(
+                _run_with_timeout(fetcher, ticker),
+            )
+        except TimeoutError as exc:
+            _logger.warning(
+                "%s timed out for %s: %s",
+                fetcher.__name__, ticker, exc,
+            )
         except Exception:
             _logger.debug(
                 "%s failed for %s",
@@ -231,7 +277,9 @@ def fetch_market_headlines(
                 f"?q={quote_plus(q)}"
                 "&hl=en-IN&gl=IN&ceid=IN:en"
             )
-            feed = feedparser.parse(url)
+            feed = _run_with_timeout(
+                feedparser.parse, url,
+            )
             for entry in feed.entries[:_MAX_PER_SOURCE]:
                 title = getattr(entry, "title", "")
                 if not title:

@@ -45,11 +45,15 @@ function canSeeItem(
   if (item.superuserOnly) {
     if (!profile) return false;
     if (profile.role === "superuser") return true;
+    // Pro users see the Admin link; page gate narrows
+    // them to a three-tab self-scoped view.
+    if (profile.role === "pro") return true;
     return profile.page_permissions?.admin === true;
   }
   if (item.requiresInsights) {
     if (!profile) return false;
     if (profile.role === "superuser") return true;
+    if (profile.role === "pro") return true;
     return (
       profile.page_permissions?.insights === true
     );

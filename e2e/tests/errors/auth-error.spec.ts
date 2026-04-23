@@ -28,7 +28,7 @@ test.describe("Auth error handling", () => {
       }),
     );
 
-    await page.goto("/");
+    await page.goto("/dashboard");
     // Should redirect to login since token is invalid
     await page.waitForURL(/\/login/, { timeout: 15_000 });
   });

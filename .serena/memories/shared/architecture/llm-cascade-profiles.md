@@ -8,13 +8,13 @@ N-tier fallback with local Ollama (Tier 0), Groq cloud (Tiers 1-4), and Anthropi
 ### Sentiment/Batch (`ollama_first=True`)
 ```
 Tier 0: Ollama gpt-oss:20b (local, zero cost)
-Tier 1-4: Groq (llama-3.3-70b → kimi-k2 → gpt-oss-120b → llama-4-scout)
+Tier 1-4: Groq (llama-3.3-70b → qwen3-32b → gpt-oss-120b → llama-4-scout)
 Tier 5: Anthropic claude-sonnet-4-6 (paid)
 ```
 
 ### Interactive Chat (`ollama_first=False`)
 ```
-Tier 1-4: Groq (same order)
+Tier 1-4: Groq (llama-3.3-70b → qwen3-32b → gpt-oss-120b → llama-4-scout)
 Tier 5: Ollama gpt-oss:20b (local, before paid)
 Tier 6: Anthropic claude-sonnet-4-6 (paid)
 ```

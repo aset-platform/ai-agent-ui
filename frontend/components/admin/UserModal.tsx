@@ -14,7 +14,7 @@ export interface UserFormData {
   full_name: string;
   email: string;
   password: string;
-  role: "superuser" | "general";
+  role: "superuser" | "pro" | "general";
   is_active: boolean;
   page_permissions: Record<string, boolean>;
 }
@@ -52,7 +52,7 @@ export function UserModal({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<
-    "superuser" | "general"
+    "superuser" | "pro" | "general"
   >("general");
   const [active, setActive] = useState(true);
   const [perms, setPerms] = useState<
@@ -66,7 +66,7 @@ export function UserModal({
       setName(user.full_name);
       setEmail(user.email);
       setPassword("");
-      setRole(user.role);
+      setRole(user.role as "superuser" | "pro" | "general");
       setActive(user.is_active);
       setPerms(
         user.page_permissions ?? {
@@ -182,6 +182,7 @@ export function UserModal({
               setRole(
                 e.target.value as
                   | "superuser"
+                  | "pro"
                   | "general",
               )
             }
@@ -189,12 +190,19 @@ export function UserModal({
             className={inputClass}
           >
             <option value="general">
-              General User
+              General User (free tier)
+            </option>
+            <option value="pro">
+              Pro User (paid tier)
             </option>
             <option value="superuser">
               Superuser
             </option>
           </select>
+          <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+            Pro and general are auto-synced from
+            subscription tier on webhook events.
+          </p>
         </div>
 
         {/* Page Permissions (general role only) */}

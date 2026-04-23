@@ -309,12 +309,25 @@ def _get_scoring_llm():
         return None
 
 
-def refresh_sentiment(ticker: str) -> float | None:
-    """Score today's headlines for *ticker* via LLM.
+def refresh_sentiment(
+    ticker: str,
+    force: bool = False,
+) -> float | None:
+    """Score today's headlines for *ticker*.
 
-    Uses the shared multi-source pipeline from
-    ``_sentiment_scorer.refresh_ticker_sentiment`` with
-    FallbackLLM for full observability.
+    Uses the shared multi-source pipeline in
+    ``_sentiment_scorer.refresh_ticker_sentiment``.
+    When ``settings.sentiment_scorer == 'finbert'``
+    (the project default) no LLM is constructed —
+    FinBERT handles scoring end-to-end and the LLM
+    fallback is only built when the config explicitly
+    asks for it.  Skipping the unused LLM build avoids
+    ~N log lines and N FallbackLLM constructor calls
+    per batch run.
+
+    When *force* is True the per-ticker freshness
+    check is bypassed and today's row is upserted in
+    place.
 
     Returns:
         The average sentiment score, or ``None`` on failure.
@@ -324,10 +337,25 @@ def refresh_sentiment(ticker: str) -> float | None:
             refresh_ticker_sentiment,
         )
 
-        llm = _get_scoring_llm()
+        llm = None
+        try:
+            from config import get_settings
+
+            scorer = getattr(
+                get_settings(),
+                "sentiment_scorer",
+                "llm",
+            )
+        except Exception:
+            scorer = "llm"
+
+        if scorer != "finbert":
+            llm = _get_scoring_llm()
+
         return refresh_ticker_sentiment(
             ticker,
             llm=llm,
+            force=force,
         )
     except Exception:
         _logger.debug(

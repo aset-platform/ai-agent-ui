@@ -77,5 +77,5 @@ All use async NullPool for PG access (not session_factory — fails in thread po
 - /{run_id} route must be registered AFTER /history and /stats (FastAPI path matching)
 - cache.set(key, value, ttl) not cache.setex(); cache.invalidate(pattern) not cache.delete()
 - Stage 1 SQL: analysis_summary uses analysis_date, ohlcv uses lowercase close/volume, piotroski uses total_score
-- Groq TPD limits exhaust across recommendation runs → cascade to Kimi K2 → Anthropic
+- Groq TPD limits exhaust across recommendation runs → cascade to Qwen3-32B → Anthropic
 - Hallucinated tickers (e.g. "SMALLCAP ETF") → deterministic fallback when all recs removed

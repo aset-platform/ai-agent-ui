@@ -107,6 +107,47 @@ def _create_view(
     return view_name
 
 
+def query_iceberg_multi(
+    table_names: list[str],
+    sql: str,
+    params: list | None = None,
+) -> list[dict]:
+    """Run SQL across multiple Iceberg tables.
+
+    Creates views for each table, then executes
+    the query. Useful for JOIN queries across
+    tables (e.g. ScreenQL).
+
+    Args:
+        table_names: e.g. ['stocks.company_info',
+            'stocks.analysis_summary']
+        sql: SQL with $1, $2 placeholders
+        params: Query parameters
+
+    Returns:
+        List of dicts (column_name: value)
+    """
+    conn = get_connection()
+    try:
+        for tn in table_names:
+            try:
+                _create_view(conn, tn)
+            except FileNotFoundError:
+                pass
+        result = conn.execute(
+            sql, params or [],
+        )
+        columns = [
+            desc[0] for desc in result.description
+        ]
+        return [
+            dict(zip(columns, row))
+            for row in result.fetchall()
+        ]
+    finally:
+        conn.close()
+
+
 def query_iceberg_table(
     table_name: str,
     sql: str,

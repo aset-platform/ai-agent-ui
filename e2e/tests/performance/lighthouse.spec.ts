@@ -109,7 +109,7 @@ test.describe("Lighthouse performance", () => {
   test("chat page meets thresholds", async ({
     page,
   }) => {
-    await page.goto("/");
+    await page.goto("/dashboard");
     const m = await collectMetrics(page);
 
     expect(m.fcp).toBeLessThan(THRESHOLDS.FCP);

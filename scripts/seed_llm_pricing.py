@@ -52,12 +52,6 @@ _INITIAL_RATES = [
     },
     {
         "provider": "groq",
-        "model": "moonshotai/kimi-k2-instruct",
-        "input_cost": 0.40,
-        "output_cost": 0.40,
-    },
-    {
-        "provider": "groq",
         "model": "qwen/qwen3-32b",
         "input_cost": 0.34,
         "output_cost": 0.34,

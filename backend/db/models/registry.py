@@ -1,7 +1,7 @@
 """StockRegistry ORM model — ticker fetch metadata."""
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Integer, String, func
+from sqlalchemy import Boolean, Date, DateTime, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.db.base import Base
@@ -32,6 +32,12 @@ class StockRegistry(Base):
         String(20),
         nullable=False,
         server_default="stock",
+        index=True,
+    )
+    is_tradeable: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default="true",
         index=True,
     )
     created_at: Mapped[datetime] = mapped_column(

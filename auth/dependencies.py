@@ -195,6 +195,57 @@ def superuser_only(
     return user
 
 
+def require_role(
+    *allowed: str,
+) -> Callable[..., UserContext]:
+    """Factory returning a dependency that allows *allowed* roles.
+
+    Unlike :func:`superuser_only` (single-role gate), this helper
+    accepts any number of role names and passes when the caller's
+    role is in the set.  Used for endpoints that both ``pro`` and
+    ``superuser`` should reach (e.g. self-scoped admin views).
+
+    Args:
+        *allowed: Role names to admit (``"general"``, ``"pro"``,
+            ``"superuser"``).
+
+    Returns:
+        FastAPI-compatible dependency.
+
+    Example:
+        >>> dep = require_role("pro", "superuser")
+        >>> callable(dep)
+        True
+    """
+    allowed_set = set(allowed)
+
+    def _guard(
+        user: UserContext = Depends(get_current_user),
+    ) -> UserContext:
+        if user.role not in allowed_set:
+            logger.warning(
+                "Role guard: user_id=%s role=%s"
+                " not in %s",
+                user.user_id,
+                user.role,
+                sorted(allowed_set),
+            )
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "This action requires one of: "
+                    f"{', '.join(sorted(allowed_set))}"
+                ),
+            )
+        return user
+
+    return _guard
+
+
+# Named alias used by self-scoped admin endpoints.
+pro_or_superuser = require_role("pro", "superuser")
+
+
 def require_tier(
     min_tier: str,
 ) -> Callable[..., UserContext]:

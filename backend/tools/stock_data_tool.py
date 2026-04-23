@@ -164,13 +164,15 @@ def _ensure_stock_master(
         industry = None
         market_cap = None
         if info:
+            from market_utils import safe_str
+
             name = (
-                info.get("longName")
-                or info.get("shortName")
+                safe_str(info.get("longName"))
+                or safe_str(info.get("shortName"))
                 or symbol
             )
-            sector = info.get("sector")
-            industry = info.get("industry")
+            sector = safe_str(info.get("sector"))
+            industry = safe_str(info.get("industry"))
             mc = info.get("marketCap")
             if mc is not None:
                 try:

@@ -6,13 +6,13 @@ Replaces sequential tier-first cascade with pool-aware round-robin. Spreads Groq
 ## Pool Configuration
 
 ### Tool Profile (sub-agents with tool calls)
-- Pool 1 "tool": llama-3.3-70b, kimi-k2, qwen3-32b (round-robin)
+- Pool 1 "tool": llama-3.3-70b, qwen3-32b (round-robin)
 - Pool 2 "quality": gpt-oss-120b, gpt-oss-20b (round-robin)
 - Pool 3 "fast": llama-4-scout-17b (single)
 - Anthropic fallback
 
 ### Synthesis Profile (text-only final response)
-- Pool 1 "quality": gpt-oss-120b, gpt-oss-20b, kimi-k2 (round-robin)
+- Pool 1 "quality": gpt-oss-120b, gpt-oss-20b, qwen3-32b (round-robin)
 - Pool 2 "fast": llama-4-scout-17b (single)
 
 ## Algorithm
@@ -40,7 +40,7 @@ After ReAct tool loop in sub_agents.py, final text re-invoked with synthesis-tie
 ## Rollback
 Set `ROUND_ROBIN_ENABLED=false` → reverts to legacy sequential cascade.
 
-## Combined Free-Tier TPD: ~2.3M (up from ~1.1M)
+## Combined Free-Tier TPD: ~2.0M (was ~2.3M before kimi-k2 decommission)
 
 ## Added
 2026-04-01

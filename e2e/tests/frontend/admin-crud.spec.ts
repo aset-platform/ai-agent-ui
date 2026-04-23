@@ -49,34 +49,31 @@ test.describe.serial("Admin user CRUD", () => {
   test("create new user via UserModal", async ({ page }) => {
     await admin.addUserBtn().click();
 
-    // data-testid="admin-user-modal"
-    const modal = page.getByTestId("admin-user-modal");
-    await expect(modal).toBeVisible({ timeout: 5_000 });
+    // Wait for the user modal form to appear
+    const emailInput = page.getByTestId(
+      "user-modal-email",
+    );
+    await expect(emailInput).toBeVisible({
+      timeout: 5_000,
+    });
 
     // Fill form fields
-    // data-testid="admin-user-modal-email"
+    await emailInput.fill(TEST_EMAIL);
     await page
-      .getByTestId("admin-user-modal-email")
-      .fill(TEST_EMAIL);
-    // data-testid="admin-user-modal-password"
-    await page
-      .getByTestId("admin-user-modal-password")
+      .getByTestId("user-modal-password")
       .fill(TEST_PASSWORD);
-    // data-testid="admin-user-modal-name"
     await page
-      .getByTestId("admin-user-modal-name")
+      .getByTestId("user-modal-name")
       .fill("E2E Test User");
-    // data-testid="admin-user-modal-role" (select)
     const roleSelect = page.getByTestId(
-      "admin-user-modal-role",
+      "user-modal-role",
     );
     if (await roleSelect.isVisible()) {
       await roleSelect.selectOption("user");
     }
 
-    // data-testid="admin-user-modal-submit"
     await page
-      .getByTestId("admin-user-modal-submit")
+      .getByTestId("user-modal-submit")
       .click();
 
     // Modal should close

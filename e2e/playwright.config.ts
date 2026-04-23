@@ -5,6 +5,16 @@ const FRONTEND_URL =
 const BACKEND_URL =
   process.env.BACKEND_URL || "http://127.0.0.1:8181";
 
+/**
+ * Resource budget:
+ *
+ * Local: 1 worker (single Chromium). E2E runs alongside
+ * 5 Docker services (backend, frontend, PG, Redis, docs)
+ * + dev tools. One browser keeps CPU under control and
+ * avoids starving backend APIs.
+ *
+ * CI: 2 workers — dedicated runner with no dev tools.
+ */
 export default defineConfig({
   testDir: "./tests",
   timeout: 30_000,
@@ -18,7 +28,10 @@ export default defineConfig({
   },
   globalTimeout: 1_800_000,
   retries: process.env.CI ? 2 : 1,
-  workers: process.env.CI ? 3 : 3,
+  workers: process.env.CI ? 2 : 1,
+  /* Stop early locally — if services are down, no point
+     burning CPU on 250 doomed tests. */
+  maxFailures: process.env.CI ? 0 : 10,
   forbidOnly: !!process.env.CI,
   reporter: [["html", { open: "never" }], ["list"]],
   outputDir: process.env.CI
@@ -27,8 +40,20 @@ export default defineConfig({
   use: {
     headless: true,
     screenshot: "only-on-failure",
+    /* Video recording adds ~30% CPU per browser.
+       Only on CI where we need failure artifacts. */
+    video: process.env.CI
+      ? "retain-on-failure"
+      : "off",
     trace: "on-first-retry",
-    video: "retain-on-failure",
+    /* Reduce per-browser CPU overhead. */
+    launchOptions: {
+      args: [
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--disable-extensions",
+      ],
+    },
   },
 
   projects: [
@@ -59,13 +84,14 @@ export default defineConfig({
         /dashboard.*\.spec\.ts/,
         /insights.*\.spec\.ts/,
         /marketplace.*\.spec\.ts/,
+        /portfolio.*\.spec\.ts/,
         /admin.*\.spec\.ts/,
         /theme-consistency.*\.spec\.ts/,
       ],
       use: {
         ...devices["Desktop Chrome"],
         baseURL: FRONTEND_URL,
-        storageState: ".auth/general-user.json",
+        storageState: ".auth/superuser.json",
       },
       dependencies: ["setup"],
     },
@@ -79,6 +105,7 @@ export default defineConfig({
         /dashboard.*\.spec\.ts/,
         /insights.*\.spec\.ts/,
         /marketplace.*\.spec\.ts/,
+        /portfolio.*\.spec\.ts/,
         /theme-consistency.*\.spec\.ts/,
       ],
       use: {

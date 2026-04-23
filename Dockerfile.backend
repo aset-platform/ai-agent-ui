@@ -18,15 +18,24 @@ RUN apt-get update && \
 COPY backend/requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --prefix=/install -r requirements.txt
+# PyTorch CPU-only for FinBERT sentiment scoring
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --prefix=/install \
+    torch --index-url https://download.pytorch.org/whl/cpu
 
 # Stage 2: Runtime
 FROM python:3.12-slim
 
 WORKDIR /app
 
-# Runtime deps (curl for healthcheck)
+# Runtime deps:
+#   curl  — /v1/health probe
+#   rsync — daily Iceberg backup (called by the
+#           iceberg_maintenance pipeline step before
+#           it compacts hot tables)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl && \
+    apt-get install -y --no-install-recommends \
+        curl rsync && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy installed Python packages

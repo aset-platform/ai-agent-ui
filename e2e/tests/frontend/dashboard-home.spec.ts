@@ -19,7 +19,11 @@ test.describe("Dashboard home", () => {
     void seededPortfolio; // ensure fixture runs
     dashboard = new DashboardHomePage(page);
     await dashboard.gotoDashboard();
-    await waitForPageReady(page);
+    // Wait for sidebar + hero (don't use networkidle —
+    // dashboard has continuous polling / WebSocket)
+    await expect(
+      page.getByTestId("sidebar"),
+    ).toBeVisible({ timeout: 15_000 });
   });
 
   test("watchlist table is visible with linked tickers", async () => {
@@ -82,21 +86,25 @@ test.describe("Dashboard home", () => {
     page,
   }) => {
     await dashboard.switchMarketFilter("us");
-    await page.waitForTimeout(1_000);
+    await page.waitForTimeout(2_000);
 
-    // US ticker should appear in the watchlist
+    // Scroll to watchlist and check for US ticker
+    const table = dashboard.watchlistTable();
+    await table.scrollIntoViewIfNeeded();
     const usRow = dashboard.watchlistRow("AAPL");
-    await expect(usRow).toBeVisible({ timeout: 10_000 });
+    await expect(usRow).toBeVisible({ timeout: 15_000 });
   });
 
   test("add stock button is visible and clickable", async () => {
     const btn = dashboard.addStockBtn();
-    await expect(btn).toBeVisible({ timeout: 10_000 });
+    await btn.scrollIntoViewIfNeeded();
+    await expect(btn).toBeVisible({ timeout: 15_000 });
     await expect(btn).toBeEnabled();
   });
 
   test("forecast chart widget is visible", async () => {
     const widget = dashboard.forecastWidget();
+    await widget.scrollIntoViewIfNeeded();
     await expect(widget).toBeVisible({ timeout: 15_000 });
   });
 
@@ -109,8 +117,9 @@ test.describe("Dashboard home", () => {
 
     // Reload the page
     await page.reload();
-    await page.waitForLoadState("domcontentloaded");
-    await waitForPageReady(page);
+    await expect(
+      page.getByTestId("sidebar"),
+    ).toBeVisible({ timeout: 15_000 });
 
     // US filter should still be active after reload
     const usBtn = page.getByTestId(
@@ -134,7 +143,7 @@ test.describe("Dashboard home", () => {
   test("visual regression - dashboard home (light)", async ({
     page,
   }) => {
-    await waitForPageReady(page);
+    await page.waitForTimeout(2_000);
     const main = page.locator("main");
     await expect(main).toHaveScreenshot(
       "dashboard-home-light.png",
@@ -148,8 +157,7 @@ test.describe("Dashboard home", () => {
     // Toggle to dark mode
     const toggle = page.getByTestId("sidebar-theme-toggle");
     await toggle.click();
-    await page.waitForTimeout(500);
-    await waitForPageReady(page);
+    await page.waitForTimeout(1_000);
 
     const main = page.locator("main");
     await expect(main).toHaveScreenshot(

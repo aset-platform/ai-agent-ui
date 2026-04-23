@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # N-tier Groq model cascade (comma-separated)
     groq_model_tiers: str = (
         "llama-3.3-70b-versatile,"
-        "moonshotai/kimi-k2-instruct,"
+        "qwen/qwen3-32b,"
         "openai/gpt-oss-120b,"
         "meta-llama/llama-4-scout-17b-16e-instruct"
     )
@@ -72,12 +72,12 @@ class Settings(BaseSettings):
 | Field | Env Var | Default |
 |-------|---------|---------|
 | `round_robin_enabled` | `ROUND_ROBIN_ENABLED` | `true` |
-| `tool_pool_primary` | `TOOL_POOL_PRIMARY` | `llama-3.3-70b-versatile,moonshotai/kimi-k2-instruct,qwen/qwen3-32b` |
+| `tool_pool_primary` | `TOOL_POOL_PRIMARY` | `llama-3.3-70b-versatile,qwen/qwen3-32b` |
 | `tool_pool_secondary` | `TOOL_POOL_SECONDARY` | `openai/gpt-oss-120b,openai/gpt-oss-20b` |
 | `tool_pool_tertiary` | `TOOL_POOL_TERTIARY` | `meta-llama/llama-4-scout-17b-16e-instruct` |
-| `synthesis_pool_primary` | `SYNTHESIS_POOL_PRIMARY` | `openai/gpt-oss-120b,openai/gpt-oss-20b,moonshotai/kimi-k2-instruct` |
+| `synthesis_pool_primary` | `SYNTHESIS_POOL_PRIMARY` | `openai/gpt-oss-120b,openai/gpt-oss-20b,qwen/qwen3-32b` |
 | `synthesis_pool_secondary` | `SYNTHESIS_POOL_SECONDARY` | `meta-llama/llama-4-scout-17b-16e-instruct` |
-| `synthesis_model_tiers` | `SYNTHESIS_MODEL_TIERS` | `openai/gpt-oss-120b,openai/gpt-oss-20b,moonshotai/kimi-k2-instruct` |
+| `synthesis_model_tiers` | `SYNTHESIS_MODEL_TIERS` | `openai/gpt-oss-120b,openai/gpt-oss-20b,qwen/qwen3-32b` |
 
 Set `ROUND_ROBIN_ENABLED=false` to revert to legacy sequential cascade.
 
@@ -109,7 +109,7 @@ LOG_LEVEL=INFO
 LOG_TO_FILE=true
 AGENT_TIMEOUT_SECONDS=900
 # Groq model tiers (comma-separated, tried in order)
-GROQ_MODEL_TIERS=llama-3.3-70b-versatile,moonshotai/kimi-k2-instruct,openai/gpt-oss-120b,meta-llama/llama-4-scout-17b-16e-instruct
+GROQ_MODEL_TIERS=llama-3.3-70b-versatile,qwen/qwen3-32b,openai/gpt-oss-120b,meta-llama/llama-4-scout-17b-16e-instruct
 # Message compression
 MAX_HISTORY_TURNS=3
 MAX_TOOL_RESULT_CHARS=2000
