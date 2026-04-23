@@ -27,10 +27,13 @@ async function login(page, baseUrl, email, password) {
     'input[type="password"], input[name="password"]',
   ).first();
 
+  // React onChange needs real keystrokes — `.fill()`
+  // silently no-ops on prod builds (login submit stays
+  // disabled because the form never marks itself dirty).
   await emailInput.click();
-  await emailInput.fill(email);
+  await emailInput.pressSequentially(email, { delay: 15 });
   await pwdInput.click();
-  await pwdInput.fill(password);
+  await pwdInput.pressSequentially(password, { delay: 15 });
 
   // Wait for submit button to become enabled
   await page.waitForSelector(

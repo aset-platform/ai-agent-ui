@@ -1,0 +1,31 @@
+# ── Perf audit runner: Playwright + Lighthouse ───────
+# Reproducible Lighthouse audits across all authenticated
+# routes (34 points) against a frontend running inside the
+# compose network. Writes JSON to a host-mounted volume.
+#
+# Build: docker compose --profile perf build perf
+# Run:   docker compose --profile perf run --rm perf
+#
+# The image ships Playwright's Chromium (locked to a known
+# good major) plus Lighthouse. The runner script is mounted
+# at /app/scripts so edits don't require a rebuild.
+
+FROM mcr.microsoft.com/playwright:v1.48.0-noble
+
+WORKDIR /app
+
+# Local install keeps module resolution predictable:
+# `require("lighthouse")` finds /app/node_modules/lighthouse
+# without fighting NODE_PATH. Playwright is pre-baked into
+# the base image but we reinstall the Node bindings here so
+# the bundled chromium binary is picked up by chromium.launch*.
+RUN echo '{"name":"perf-runner","private":true}' > package.json \
+    && npm install --no-audit --no-fund \
+        lighthouse@12 playwright@1.48.0
+
+ENV NODE_PATH=/app/node_modules
+ENV PERF_BASE=http://frontend-perf:3000
+ENV PERF_PORT=9222
+ENV CI=true
+
+CMD ["node", "/app/scripts/perf-lighthouse-all-routes.js"]

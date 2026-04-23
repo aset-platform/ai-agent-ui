@@ -8,6 +8,13 @@ const withBundleAnalyzer = bundleAnalyzer({
 const nextConfig: NextConfig = {
   output: "standalone",
   devIndicators: false,
+  async rewrites() {
+    const backend =
+      process.env.BACKEND_URL || "http://localhost:8181";
+    return [
+      { source: "/v1/:path*", destination: `${backend}/v1/:path*` },
+    ];
+  },
 };
 
 export default withBundleAnalyzer(nextConfig);
