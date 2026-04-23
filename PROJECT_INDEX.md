@@ -1,7 +1,7 @@
 # Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-04-19 (Sprint 7 Session 6 — BYOM Phase A+B, Insights three-tier scoping, hallucination guards)
+> Last refreshed: 2026-04-23 (Sprint 7 closed at 75/75 SP — sentiment hardening, daily Iceberg compaction in pipeline, portfolio P&L NaN-truncation defenses, transparency chips, container TZ=IST)
 
 ---
 
@@ -89,11 +89,13 @@ ai-agent-ui/
 
 ## Database (Hybrid PG + Iceberg)
 
-**PostgreSQL (18 tables)**: users, user_tickers, payments, registry,
+**PostgreSQL (19 tables)**: users, user_tickers, payments, registry,
 scheduled_jobs, scheduler_runs, recommendation_runs, recommendations,
 recommendation_outcomes, market_indices, user_memories (pgvector
 768-dim), conversation_contexts, stock_master, stock_tags,
-ingestion_cursor, ingestion_skipped, pipelines, pipeline_steps.
+ingestion_cursor, ingestion_skipped, sentiment_dormant (per-ticker
+headline-fetch dormancy, capped expo cooldown 2/4/8/16/30d),
+pipelines, pipeline_steps.
 
 **Iceberg (12 active tables)**: ohlcv (1.5M rows), company_info,
 dividends, quarterly_results, analysis_summary, forecast_runs
@@ -105,6 +107,13 @@ technical_indicators (unused, computed on-the-fly).
 **Maintenance**: `backend/maintenance/` — backup (rsync + catalog.db,
 2-rotation), compaction (overwrite → 1 file/partition), 11yr retention.
 Backup dir: `/Users/abhay/Documents/projects/ai-agent-ui-backups/`.
+**Daily auto-backup + auto-compact** runs as step 6 of both daily
+pipelines (`iceberg_maintenance` job, fail-closed if backup fails;
+`rsync` installed in `Dockerfile.backend`).
+**OHLCV upsert is NaN-replaceable** (Apr 23+): dedup query filters
+`close IS NOT NULL AND NOT isnan(close)` + scoped pre-delete of NaN
+rows for to-be-inserted `(ticker, date)` set; pattern in both
+`insert_ohlcv` + `batch_data_refresh`.
 
 **Rule**: Mutable state → PG. Append-only analytics → Iceberg.
 DuckDB for ALL Iceberg reads (metadata cache, auto-invalidated).
@@ -236,6 +245,9 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 | `auth/repo/byo_repo.py` | 1 | BYO key CRUD + provider/prefix validators + chat counter bump |
 | `auth/endpoints/byo_routes.py` | 1 | Self-scoped `/v1/users/me/llm-keys` + `/byo-settings` endpoints |
 | `backend/db/models/user_llm_key.py` | 1 | `user_llm_keys` ORM (encrypted_key BYTEA, unique per provider) |
+| `backend/db/models/sentiment_dormant.py` | 1 | Per-ticker dormancy state — capped expo cooldown 2/4/8/16/30d, 5% probe |
+| `backend/jobs/executor.py::execute_iceberg_maintenance` | 1 | Daily pipeline step 6 — backup (fail-closed) then compact 4 hot tables |
+| `backend/market_routes.py` | 1 | Yahoo Sensex `^BSESN` stale-feed detection + Google Finance fallback |
 | `backend/insights/screen_parser.py` | 1 | ScreenQL: tokenizer, parser, SQL gen, 36-field catalog |
 | `backend/maintenance/` | 3 | Backup (rsync), compaction, retention, dead table cleanup |
 | `backend/jobs/` | 8 | Executor registry, pipeline chaining, batch refresh (bulk OHLCV), recs |
@@ -246,7 +258,10 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 | `frontend/components/` | 30+ | Admin, charts, insights, widgets, modals |
 | `frontend/lib/downloadCsv.ts` | 1 | CSV export utility (escape, blob, browser download) |
 | `frontend/components/common/DownloadCsvButton.tsx` | 1 | Shared CSV button (icon + loading state) — used by all exports |
-| `frontend/providers/PortfolioActionsProvider.tsx` | 1 | Layout-level Add/Edit/Delete modals via `usePortfolioActions()` |
+| `frontend/providers/PortfolioActionsProvider.tsx` | 1 | Layout-level Add/Edit/Delete/**Transactions** modals via `usePortfolioActions()` |
+| `frontend/components/widgets/PortfolioTransactionsModal.tsx` | 1 | Eye-icon modal — date-sorted txns + per-row edit + summary footer |
+| `frontend/components/widgets/PLTrendWidget.tsx::StaleTickerChip` | 1 | Amber chip — "N holdings using previous close" w/ tooltip |
+| `frontend/components/widgets/NewsWidget.tsx::UnanalyzedChip` | 1 | Amber chip — "N holdings unanalyzed" (sentiment market_fallback proxy) |
 | `frontend/components/admin/MyAccountTab.tsx` | 1 | Pro scoped admin tab (profile + password, no role/tier) |
 | `frontend/components/admin/MyLLMUsageTab.tsx` | 1 | BYO allowance + provider cards + usage/model split + sparkline |
 | `frontend/components/admin/ConfigureProviderKeyModal.tsx` | 1 | Paste Groq/Anthropic key, show/hide, prefix validation |
@@ -259,19 +274,29 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 
 ## Scheduler & Jobs
 
-6 job types: `data_refresh`, `compute_analytics`, `run_sentiment`,
-`run_forecasts`, `run_piotroski`, `recommendations`. All accept
+8 job types: `data_refresh`, `compute_analytics`, `run_sentiment`,
+`run_forecasts`, `run_piotroski`, `recommendations`,
+`recommendation_outcomes`, `iceberg_maintenance`. All accept
 `force=False`. Market ticker runs independently (30s poll, not scheduled).
 
 Freshness gates: daily (OHLCV, analytics, sentiment), weekly
 (forecasts), monthly (CV accuracy auto-refresh via 30-day TTL).
 
-Pipeline: sequential steps with skip-on-failure + post-pipeline
-snapshot expiry. India (5 steps, ~5 min) and USA (5 steps, ~1 min).
-Bulk OHLCV: yf.download() batches of 100 (99.8% success, 58s).
+**Daily pipeline (6 steps, ~12 min)**: India `08:00 IST` + USA
+`08:15 IST`, Tue–Sat. Container TZ=`Asia/Kolkata` (was UTC; cron
+was firing 5.5h late). `scheduler_catchup_enabled=False` default
+(opt-in via env). Sequence: `data_refresh → compute_analytics →
+run_sentiment → run_piotroski → recommendation_outcomes →
+iceberg_maintenance` (step 6 = backup-then-compact, fail-closed).
 
+Sentiment dormancy: `sentiment_dormant` PG table excludes ~60% of
+universe from per-ticker headline fetches (5% probe re-test).
+Hot-classifier filter `IN ('finbert','llm')`. Top-50 learning
+batch joins `company_info.market_cap` (was alphabetical).
+
+Bulk OHLCV: yf.download() batches of 100 (99.8% success, 58s).
 Chat-discovered tickers auto-inserted into stock_master for
-pipeline pickup (scheduler refreshes them daily).
+pipeline pickup.
 
 ---
 
@@ -295,10 +320,10 @@ pipeline pickup (scheduler refreshes them daily).
 
 ## File Counts
 
-Python: 246 modules (+102 test files) | TypeScript/TSX: 117 |
-Backend tests: 102 files (~902) | E2E: 51 specs (~257) |
-Frontend: 18 vitest | Docs: 60 pages | Scripts: 30 |
-Alembic migrations: 12
+Backend Python: 173 modules | Frontend TS/TSX: 131 |
+Tests: ~153 (97 pytest + 51 e2e + 18 vitest) |
+Docs: 60+ pages | Scripts: 30 |
+Alembic migrations: 13 (`a9c1b3d5e7f2_add_sentiment_dormant` latest)
 
 ---
 

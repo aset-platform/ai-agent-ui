@@ -284,6 +284,7 @@ graph LR
 | `stock_tags` | Temporal tags (nifty50, largecap, etf, etc.) |
 | `ingestion_cursor` | Keyset pagination cursor |
 | `ingestion_skipped` | Failed ticker log + retry |
+| `sentiment_dormant` | Per-ticker headline-fetch dormancy (capped expo cooldown) |
 | `pipelines` | Pipeline chain definitions |
 | `pipeline_steps` | Ordered steps within pipelines |
 
@@ -313,12 +314,25 @@ DuckDB serves as the primary read engine with in-memory metadata cache.
 | Recommendations | recommendation_runs | `< 30 days` | Monthly |
 | Rec Outcomes | outcome checkpoints | daily price check | Daily |
 
-### Pipeline (India Daily — 4 steps, ~10 min)
+### Pipeline (India + USA Daily — 6 steps each, ~12 min)
+
+Cron: `08:00 IST` (India) / `08:15 IST` (USA), Tue–Sat. Container runs
+in `TZ=Asia/Kolkata` so cron strings match wall-clock IST.
 
 ```
-Data Refresh → Compute Analytics → Sentiment → Piotroski
-  (5 min)         (45s)            (3.5 min)     (2s)
+Data Refresh → Compute Analytics → Sentiment → Piotroski → Rec Outcomes → Iceberg Maintenance
+  (5 min)         (45s)            (3.5 min)     (2s)        (15s)         (~2 min, backup+compact)
 ```
+
+Step 6 (`iceberg_maintenance`) is **fail-closed**: runs `run_backup()`
+first, and if backup fails the compaction is skipped — preserving the
+"backup before maintenance" safety rule. Compacts hot tables
+(`ohlcv`, `sentiment_scores`, `company_info`, `analysis_summary`)
+so file count stays bounded.
+
+`scheduler_catchup_enabled=False` by default — startup catchup of
+"missed" jobs is opt-in only (was silently pulling mid-day partial
+data). Set `SCHEDULER_CATCHUP_ENABLED=true` to enable.
 
 ### Performance
 

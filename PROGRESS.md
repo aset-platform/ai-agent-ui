@@ -2,6 +2,59 @@
 
 ---
 
+## 2026-04-21 / 22 / 23 — Sprint 7 Closure: Sentiment Hardening + Iceberg Pipeline Integration + Portfolio Transparency
+
+**Sprint 7 closed at 75/75 SP (100%)**. ASETPLTFRM-324 (BYOM) and ASETPLTFRM-323 (Pro role) transitioned to Done after final verification. ~30 SP of follow-up work landed as comments on parent tickets (320, 315, 316, 319).
+
+### Sentiment data quality (extends ASETPLTFRM-320)
+
+- **Yahoo `^BSESN` stale-feed fallback** (`backend/market_routes.py`): Yahoo's BSE feed periodically freezes mid-session. Detect via `regularMarketTime` age (>300s during market hours), fall back to Google Finance scrape (`SENSEX:INDEXBOM`, regex `data-last-price="(...)"`). Overlay live price on Yahoo's intraday-stable `prev_close`. Nifty unaffected.
+- **FinBERT cache stall recovery**: HF XET CDN reproducibly cuts `pytorch_model.bin` at ~67 MB. Cleanup `.incomplete` artifacts + re-download via `huggingface_hub.snapshot_download(allow_patterns=...)`.
+- **Step-5 PyIceberg-direct rewrite** (`backend/jobs/executor.py`): post-worker `query_iceberg_df` was returning empty under concurrent commits because DuckDB resolves the latest snapshot via filesystem `glob` and can read a metadata file whose manifests aren't yet visible. Switched to `tbl.refresh().scan(EqualTo(score_date, today))` via PyIceberg directly. Pre-fix: 802/802 market_fallback overwrote finbert rows.
+- **market_cap selector fix**: top-50 learning batch was sorted alphabetically because `get_all_registry()` doesn't expose `market_cap`. Now joins `stocks.company_info.market_cap` → RELIANCE/HDFCBANK/INFY land in batch instead of obscure A-prefixed small-caps.
+- **Sentiment dormancy** (new PG table `sentiment_dormant` + Alembic `a9c1b3d5e7f2`): tickers returning 0 headlines K times get capped exponential cooldown (2/4/8/16/30 days). Excluded from learning/cold; 5% probe re-tested by oldest `last_checked_at`. ~60% reduction in daily HTTP calls.
+- **Source-aware Step-5 delete**: `In("source", ["market_fallback", "none"])` predicate prevents force-runs from clobbering finbert/llm rows.
+- **Hot-classifier source filter**: `IN ('finbert', 'llm')` (was `'llm'`-only — stale post-FinBERT cutover).
+- **Workers 15 → 5** in sentiment ThreadPoolExecutor (Yahoo/Google rate-limit above ~5 parallel).
+- **News widget 21-day max-age** on `/portfolio/news` — mid/small caps were surfacing 60-100d-old articles.
+- **"N holdings unanalyzed" chip** (`PortfolioNewsResponse.unanalyzed_tickers` + `NewsWidget.tsx`): transparency chip when portfolio sentiment is dominated by market_fallback.
+
+### Container / scheduler reliability
+
+- **`TZ=Asia/Kolkata`** added to `docker-compose.yml` backend service. Was UTC — `schedule` lib uses local time, so cron strings were firing at 08:00 UTC = 13:30 IST (5.5h late).
+- **`scheduler_catchup_enabled=False`** (default flipped in `backend/config.py`). Startup catchup of "missed" jobs was silently pulling mid-day partial data.
+
+### Iceberg infra (extends ASETPLTFRM-315)
+
+- **NaN-replaceable OHLCV dedup** (both `insert_ohlcv` + `batch_data_refresh`): existing-keys query filters `WHERE close IS NOT NULL AND NOT isnan(close)`, plus scoped pre-delete of NaN rows for the to-be-inserted `(ticker, date)` set before append. Without this, a stuck NaN-close row blocked Yahoo-late-close re-fetches forever as "duplicate."
+- **Daily Iceberg compaction in pipeline**: new `iceberg_maintenance` job_type registered in `backend/jobs/executor.py`, added as **step 6** of both India + USA daily pipelines. Compacts `stocks.{ohlcv, sentiment_scores, company_info, analysis_summary}`. Best-effort `expire_snapshots` + `cleanup_orphans`.
+- **Auto-backup before compaction** (preserves CLAUDE.md hard rule): `run_backup()` runs as **step 0** of `execute_iceberg_maintenance`. **Fail-closed** — if backup fails, compaction aborts. `rsync` added to `Dockerfile.backend` runtime stage.
+- **OHLCV file fragmentation observed**: pre-compaction had grown to 16,156 parquet files (was 817 after the original ASETPLTFRM-315 compaction). `Clean NaN Rows` button took 5+ min. Post-compaction: full-count of 1.5M rows in 0.50s. Reads ~18× faster.
+
+### Portfolio + Charts (user-visible bug fixes)
+
+- **Portfolio P&L NaN-truncation** (`_build_portfolio_performance` in `backend/dashboard_routes.py`): used to drop entire dates when any held ticker had NaN close (`val += qty × NaN` → `val > 0` False → date skipped). Different users saw different "latest" dates depending on which ETFs they held. Four defenses:
+  1. `math.isnan` guard in daily-aggregate loop
+  2. per-ticker `df["close"].ffill()` before building close_maps
+  3. `stale_tickers: list[StalePriceTicker]` field + amber chip on the P&L panel
+  4. ffill-to-series-end (extend each ticker's close_map forward from last known close to series end) — fixes the dip after `Clean NaN Rows`
+- **Stale-data chip pattern** (reusable UX): `PLTrendWidget::StaleTickerChip` + `NewsWidget::UnanalyzedChip` — amber chip near panel title when an aggregate has stale upstream inputs. Auto-clears when list empty. User explicitly endorsed this transparency-over-silence pattern.
+- **OHLCV chart triple-dedup**: defensive layers — Iceberg (NaN-replaceable upsert), backend route (`drop_duplicates(subset=["date"])` before serializing), frontend chart (`Map`-keyed by time before `setData`). Lightweight-charts asserts on duplicate timestamps; any single layer regressing won't crash the chart now.
+- **View-transactions modal** (extends ASETPLTFRM-319): eye icon replaces inline edit pencil on Portfolio tab. New `GET /v1/users/me/portfolio/{ticker}/transactions` endpoint returns date-sorted txns + summary. Per-row edit pencil opens `EditStockModal` scoped to that specific txn. View-first-edit-from-within UX.
+- **Backup Health panel suffix-tolerant date parsing** (fixes ASETPLTFRM-316): `_admin_backups_list` was crashing with `ValueError: Invalid isoformat string: '2026-04-22-pre-dedupe'`. Fix: try `datetime.fromisoformat(b["date"][:10])` first, fall back to dir mtime.
+
+### CLAUDE.md gotchas added
+
+- **uvicorn `--reload` doesn't re-register routes/Pydantic-fields**: adding new FastAPI routes or new fields on existing Pydantic response models requires `docker compose restart backend`. Verified across `PortfolioPerformanceResponse`, `PortfolioNewsResponse`, `/portfolio/{ticker}/transactions`.
+
+### Jira
+
+- Comments posted on ASETPLTFRM-320, 315, 316, 319 documenting the follow-up work
+- ASETPLTFRM-324 (BYOM, 13 SP) and ASETPLTFRM-323 (Pro role, 8 SP) transitioned In Progress → Done
+- Sprint 7 closes at 100% (75/75 SP)
+
+---
+
 ## 2026-04-18 / 19 — Sprint 7 Session 6: BYOM + Insights Three-Tier Scoping + Hallucination Guards
 
 ### ASETPLTFRM-324 (13 SP, In Progress): Bring-Your-Own-Model (BYOM) — Phase A + B

@@ -5,6 +5,53 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.12.0] — 2026-04-23: Sprint 7 Closure — Sentiment Hardening, Iceberg Pipeline Integration, Portfolio Transparency
+
+Sprint 7 closed at **75/75 SP (100%)**. ASETPLTFRM-324 (BYOM) + ASETPLTFRM-323 (Pro role) marked Done. ~30 SP of follow-up work landed as comments on parent tickets (320, 315, 316, 319).
+
+### Added
+
+- **Sentiment dormancy** (`backend/db/models/sentiment_dormant.py` + Alembic `a9c1b3d5e7f2`): per-ticker dormancy table tracks tickers returning 0 headlines K times. Capped exponential cooldown (2/4/8/16/30 days). Excluded from learning/cold buckets in the daily sentiment batch; 5% probe re-tested by oldest `last_checked_at` so newly-trending tickers self-recover. ~60% reduction in daily Yahoo/Google HTTP calls. `force=True` runs ignore dormancy. Mirrors `ingestion_skipped` pattern. PG helpers in `backend/db/pg_stocks.py`.
+- **Daily Iceberg compaction in pipeline** (`iceberg_maintenance` job_type): new step 6 of both `India Daily Pipeline` and `USA Daily Pipeline`. Compacts hot tables (`stocks.{ohlcv, sentiment_scores, company_info, analysis_summary}`) so OHLCV file count never grows unbounded again. Best-effort `expire_snapshots` + `cleanup_orphans` after each table.
+- **Auto-backup before compaction** (preserves CLAUDE.md hard rule): `run_backup()` runs as **step 0** of `execute_iceberg_maintenance`. Fail-closed — if backup fails, compaction aborts. `rsync` added to `Dockerfile.backend` runtime stage so the container can run rsync (was host-only before).
+- **Portfolio P&L stale-ticker chip** (`PortfolioPerformanceResponse.stale_tickers: list[StalePriceTicker]` + `PLTrendWidget::StaleTickerChip`): amber chip near panel title when held tickers' last valid close is older than the series end. Hover tooltip lists each ticker with its `last_valid_close_date` and days-stale. Auto-clears when list empty.
+- **News & Sentiment unanalyzed chip** (`PortfolioNewsResponse.unanalyzed_tickers: list[str]` + `NewsWidget::UnanalyzedChip`): amber chip when portfolio sentiment aggregate is dominated by `market_fallback`/`none` proxy scores. Same UX pattern as the stale-price chip.
+- **News widget 21-day max-age filter** on `/portfolio/news` — drops articles older than 21 days (mid/small caps were surfacing 60-100d-old items with no decisioning value).
+- **Yahoo `^BSESN` stale-feed → Google Finance fallback** (`backend/market_routes.py`): Yahoo's BSE feed periodically freezes mid-session. Detect via `regularMarketTime` age (>300s during market hours), fall back to Google Finance scrape (`SENSEX:INDEXBOM`, `data-last-price` regex). Overlay live price on Yahoo's intraday-stable `prev_close`.
+- **View-transactions modal on Portfolio tab**: eye icon replaces inline edit pencil. New `GET /v1/users/me/portfolio/{ticker}/transactions` endpoint returns date-sorted txns + summary (total qty, avg price, current price, gain/loss). Per-row edit pencil opens `EditStockModal` scoped to that specific txn. New `PortfolioActionsProvider.openTransactions(ticker)` context method.
+- **CLAUDE.md gotcha**: uvicorn `--reload` doesn't re-register routes / new Pydantic fields — `docker compose restart backend` needed.
+
+### Changed
+
+- **Container `TZ=Asia/Kolkata`** in `docker-compose.yml` backend service (was UTC). The `schedule` library uses local time — cron strings like `"08:00"` were firing at 08:00 UTC = 13:30 IST (5.5h late). Now matches scheduled IST times verbatim.
+- **`scheduler_catchup_enabled=False`** default in `backend/config.py` (was `True`). Startup catchup of "missed" jobs was silently pulling mid-day partial data on every restart. Opt-in via `SCHEDULER_CATCHUP_ENABLED=true` env if needed.
+- **OHLCV upsert is now NaN-replaceable** (both `insert_ohlcv` + `batch_data_refresh`): existing-keys query filters `WHERE close IS NOT NULL AND NOT isnan(close)`, plus scoped pre-delete of NaN rows for the to-be-inserted `(ticker, date)` set before append. Without this, a stuck NaN-close row blocked future Yahoo-late-close re-fetches forever as "duplicate."
+- **Sentiment Step-5 freshness re-query uses PyIceberg directly** (was DuckDB `query_iceberg_df`): under concurrent commits, DuckDB reads a metadata file via filesystem `glob` whose manifests aren't yet visible — returned empty, causing 802/802 market_fallback to overwrite finbert rows. Switched to `tbl.refresh().scan(EqualTo(score_date, today))` (SQLite catalog atomic per commit).
+- **Sentiment Step-5 delete is source-aware**: predicate adds `In("source", ["market_fallback", "none"])` so force-runs cannot clobber finbert/llm rows.
+- **Sentiment hot-classifier source filter** updated to `IN ('finbert', 'llm')` (was `'llm'`-only — stale post-FinBERT cutover; bucket was always empty).
+- **Sentiment `market_cap` selector** now joins `stocks.company_info.market_cap` for the top-50 learning batch (was sorted alphabetically because `get_all_registry()` doesn't expose `market_cap` → picked obscure A-prefixed small-caps).
+- **Sentiment workers 15 → 5** in `ThreadPoolExecutor` — Yahoo/Google rate-limit above ~5 parallel. Combined with dormancy, total HTTP calls drop ~60%; throughput unchanged.
+- **`PortfolioActionsProvider`** extended with `openTransactions(ticker)`. Inline edit pencil REMOVED from portfolio rows (view-first-edit-from-within UX).
+- **Sprint 7 status**: ASETPLTFRM-324 (BYOM, 13 SP) and ASETPLTFRM-323 (Pro role, 8 SP) transitioned In Progress → Done.
+
+### Fixed
+
+- **Portfolio P&L NaN-truncation** (`_build_portfolio_performance` in `backend/dashboard_routes.py`): used to drop entire dates when any held ticker had NaN close (`val += qty × NaN` → `val > 0` False → date skipped). Different users saw different "latest" dates depending on which ETFs they held. Four defenses landed:
+  1. `math.isnan` guard in daily-aggregate loop
+  2. per-ticker `df["close"].ffill()` before building close_maps
+  3. `stale_tickers` field + amber chip on the P&L panel
+  4. ffill-to-series-end (extend each ticker's close_map forward from last known close to series end) — fixes the dip after `Clean NaN Rows` admin action.
+- **OHLCV chart duplicate-timestamp assertion** (`Assertion failed: data must be asc ordered by time, ... time=X, prev time=X`): three defensive layers added — Iceberg (NaN-replaceable upsert), backend route (`drop_duplicates(subset=["date"])` before serializing), frontend chart (`Map`-keyed by time before `setData`). Lightweight-charts asserts on duplicate timestamps; any single layer regressing won't crash the chart.
+- **Backup Health panel renders empty** (fixes ASETPLTFRM-316): `_admin_backups_list` was crashing with `ValueError: Invalid isoformat string: '2026-04-22-pre-dedupe'` because it parsed the directory-name suffix as ISO date. Fix: try `datetime.fromisoformat(b["date"][:10])` first, fall back to dir mtime. Custom-named backups now coexist safely with scheduled `backup-YYYY-MM-DD` ones.
+- **FinBERT cache stalled mid-download**: HF XET CDN reproducibly cut `pytorch_model.bin` transfer at ~67 MB. Cleanup `.incomplete` artifacts + re-download via `huggingface_hub.snapshot_download(allow_patterns=...)` skips the safetensors race. ~15s clean re-download.
+- **OHLCV file fragmentation** observed at 16,156 parquet files for `stocks.ohlcv` (was 817 after the original ASETPLTFRM-315 compaction; grew unbounded from per-ticker daily writes). `Clean NaN Rows` button took 5+ min. Daily auto-compaction prevents recurrence; post-fix full-count of 1.5M rows runs in 0.50s (~18× faster than fragmented state).
+
+### Migrations
+
+- `a9c1b3d5e7f2` — `add_sentiment_dormant` table (PG).
+
+---
+
 ## [0.11.0] — 2026-04-19: Bring-Your-Own-Model + Insights Three-Tier Scoping + Hallucination Guards (Sprint 7)
 
 ### Added
