@@ -215,7 +215,11 @@ class Settings(BaseSettings):
     # Job scheduler
     scheduler_enabled: bool = True
     scheduler_max_workers: int = 3
-    scheduler_catchup_enabled: bool = True
+    # Catchup fires "missed" jobs on startup, which can
+    # silently pull mid-day partial data after a restart.
+    # Off by default — explicit manual or scheduled runs
+    # only. Set SCHEDULER_CATCHUP_ENABLED=true to opt in.
+    scheduler_catchup_enabled: bool = False
 
     # Smart cache warming: pre-warm Redis for the top
     # N most active users at startup.
