@@ -593,9 +593,35 @@ _CTE_TEMPLATES: dict[str, str] = {
     "ci": (
         "ci_raw AS (\n"
         "  SELECT *,\n"
-        "    CASE WHEN ticker LIKE '%.NS'\n"
-        "      OR ticker LIKE '%.BO'\n"
-        "      THEN 'india' ELSE 'us'\n"
+        # Market classification — authoritative source
+        # is yfinance's `exchange` field stored on
+        # `company_info` (CLAUDE.md Rule 19: don't
+        # reinvent classification locally). Yahoo
+        # returns internal codes, not "NSE"/"BSE":
+        #   NSI = NSE, BSE = BSE (both → india)
+        #   NMS/NYQ/SNP/CXI/… → us
+        # Fallbacks preserve behaviour on rows missing
+        # `exchange` (current warehouse has ~13 NaN):
+        #   1. `.NS`/`.BO` suffix → india
+        #   2. Known Indian index tickers → india
+        #   3. Otherwise → us
+        # Long-term fix (separate ticket): materialise
+        # a `market` column on company_info at write
+        # time via detect_market() and read it here
+        # directly.
+        "    CASE\n"
+        "      WHEN exchange IN ('NSI', 'BSE')\n"
+        "        THEN 'india'\n"
+        "      WHEN exchange IS NOT NULL\n"
+        "        AND exchange != ''\n"
+        "        THEN 'us'\n"
+        "      WHEN ticker LIKE '%.NS'\n"
+        "        OR ticker LIKE '%.BO'\n"
+        "        THEN 'india'\n"
+        "      WHEN ticker IN (\n"
+        "        '^NSEI', '^BSESN', '^INDIAVIX'\n"
+        "      ) THEN 'india'\n"
+        "      ELSE 'us'\n"
         "    END AS market,\n"
         # PEG = P/E divided by growth%. Undefined for
         # loss-makers (pe_ratio<=0) or declining-
