@@ -89,49 +89,122 @@ def _get_catalog():
 def drop_dead_tables() -> dict:
     """Drop tables migrated to PG or unused.
 
-    Removes from Iceberg catalog and deletes
-    data files on disk.
+    Removes from Iceberg catalog then deletes the
+    on-disk data directory — but only for tables
+    that successfully dropped from the catalog.
+
+    Safety:
+        * Always runs a full warehouse backup first
+          (fail-closed — aborts without mutating
+          anything if the backup fails). Matches the
+          daily ``iceberg_maintenance`` step pattern.
+        * Per-table rmtree is gated on the catalog
+          drop succeeding. A partial failure in the
+          catalog loop therefore cannot wipe on-disk
+          files that are still catalog-referenced.
+        * ``NoSuchTableError`` is treated as "already
+          dropped" and still enables directory cleanup
+          — safe to re-run idempotently.
 
     Returns:
-        Dict with dropped table names.
+        Dict with:
+        - ``backup``: path to the pre-op backup
+        - ``dropped``: tables removed from catalog
+          (including already-absent ones)
+        - ``skipped``: tables the catalog failed to
+          drop (kept on disk for recovery)
+        - ``dirs_removed``: raw warehouse dirs rmtreed
     """
+    from backend.maintenance.backup import run_backup
+
+    # Fail-closed backup — any caller (ad-hoc or
+    # pipeline) gets a restore point before we touch
+    # either the catalog or the filesystem.
+    try:
+        backup_path = run_backup()
+        _logger.info(
+            "[maint] drop_dead_tables: backup %s",
+            backup_path,
+        )
+    except Exception as exc:
+        _logger.error(
+            "[maint] drop_dead_tables: backup FAILED "
+            "— aborting to preserve recoverability",
+            exc_info=True,
+        )
+        return {
+            "error": f"backup failed: {exc}",
+            "dropped": [],
+            "skipped": [],
+            "dirs_removed": [],
+        }
+
     catalog = _get_catalog()
     dropped: list[str] = []
+    dropped_ok: set[str] = set()
     skipped: list[str] = []
 
     for tn in DEAD_TABLES:
         try:
             catalog.drop_table(tn)
             dropped.append(tn)
+            dropped_ok.add(tn)
             _logger.info(
                 "[maint] Dropped dead table: %s",
                 tn,
             )
         except Exception as exc:
-            skipped.append(f"{tn}: {exc}")
-            _logger.debug(
-                "[maint] Skip drop %s: %s",
-                tn, exc,
-            )
+            # NoSuchTableError means the table is
+            # already gone from the catalog — safe to
+            # proceed to dir cleanup. Import lazily
+            # to keep this function decoupled from
+            # the pyiceberg version-shaped exception
+            # module path.
+            exc_name = type(exc).__name__
+            if exc_name == "NoSuchTableError":
+                dropped.append(tn)
+                dropped_ok.add(tn)
+                _logger.info(
+                    "[maint] Dead table %s already "
+                    "absent from catalog",
+                    tn,
+                )
+            else:
+                skipped.append(f"{tn}: {exc}")
+                _logger.warning(
+                    "[maint] Skip drop %s: %s (data "
+                    "dir preserved for recovery)",
+                    tn, exc,
+                )
 
-    # Also remove leftover data dirs
+    # Only rmtree directories whose catalog entry was
+    # successfully removed. A catalog failure above
+    # leaves the table catalog-referenced; wiping
+    # its files would produce FileNotFoundError on
+    # next read.
     import shutil
 
+    dirs_removed: list[str] = []
     for tn in DEAD_TABLES:
+        if tn not in dropped_ok:
+            continue
         table_dir = (
             WAREHOUSE_DIR
             / tn.replace(".", "/")
         )
         if table_dir.exists():
             shutil.rmtree(table_dir)
+            dirs_removed.append(str(table_dir))
             _logger.info(
                 "[maint] Removed data dir: %s",
                 table_dir,
             )
 
     return {
+        "backup": str(backup_path),
         "dropped": dropped,
         "skipped": skipped,
+        "dirs_removed": dirs_removed,
     }
 
 
