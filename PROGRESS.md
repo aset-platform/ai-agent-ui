@@ -23,11 +23,30 @@
 - 7939 orphans deleted, 964 MB reclaimed
 - PyIceberg scan + DuckDB count + dashboard endpoints all 200/sub-2ms after
 
-### Phase 4-5 (deferred to next batch)
+### Phase 4 — full sequential rollout (live sweep)
 
-- Phase 4: rollout to `company_info` → `sentiment_scores` → `ohlcv` (size order). Each gets a fresh backup. ~10-12 GB reclaim total expected (96-100% orphan ratio per design memory baseline).
-- Phase 5: weekly `iceberg_orphan_sweep` job in `public.scheduled_jobs` (Sun 03:00 IST), gated on day's `iceberg_maintenance` success.
-- Phase 6: docs + CLAUDE.md Rule 20 amendment + Jira closure.
+| Table | Before | After | Reclaim | Snaps expired | Sweep time |
+|---|---:|---:|---:|---:|---:|
+| `analysis_summary` | 938 MB / 7964 files | 3.5 MB / 25 | −99.6% | 1626 | 24.8 s |
+| `company_info` | 5.6 GB / 18 832 | 8.2 MB / 25 | −99.9% | 4134 | 412.0 s |
+| `sentiment_scores` | 2.0 GB / 30 944 | 12 MB / 1650 | −99.4% | 2402 | 154.7 s |
+| `ohlcv` | 4.0 GB / 34 116 | 97 MB / 1661 | −97.6% | 3137 | 241.1 s |
+| **Total** | **12.5 GB / 91 856** | **120 MB / 3361** | **−12.4 GB** | **11 299** | **~14 min** |
+
+Warehouse total: 16 GB → 3.6 GB (−78%). Endpoint p95 sub-5 ms after each sweep.
+
+### Phase 5 — weekly schedule + executor
+
+- New `@register_job("iceberg_orphan_sweep")` in `backend/jobs/executor.py` — single fail-closed backup at the top, then `cleanup_orphans_v2(tbl, skip_backup=True)` for each hot table in ascending size order. `verified: False` recorded as non-fatal so other tables still get cleaned.
+- Scheduled row in `public.scheduled_jobs`: `cron_days='sun'`, `cron_time='03:00'`, `scope='all'`, `enabled=true`. Backend restarted to pick up the new `@register_job` decorator (per `shared/conventions/backend-restart-triggers`).
+- Verified: `iceberg_orphan_sweep` in `JOB_EXECUTORS` after restart.
+
+### Phase 6 — docs + amendment + closure
+
+- New `docs/backend/iceberg-orphan-sweep.md` (290 lines) — full prose guide: rationale, algorithm, live-failure case study, manual invocation, recovery procedure, before/after numbers per table.
+- Updated `shared/architecture/iceberg-orphan-sweep-design` Serena memory with the live-prod failure + the `snapshot.manifest_list` learning that's now load-bearing in step 2b.
+- CLAUDE.md Rule 20 amended: still NEVER `rm` directly; sanctioned reclamation path is `cleanup_orphans_v2()`. Pattern Index row added.
+- ASETPLTFRM-338 transitioned to Done.
 
 ---
 

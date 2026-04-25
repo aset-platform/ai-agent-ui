@@ -80,7 +80,7 @@ DB inventory: 18 PG OLTP + 16 Iceberg OLAP — `→ db-table-inventory`. Data ho
 17. Iceberg writes MUST NOT be silenced — let errors propagate.
 18. **Scoped deletes** — `In("ticker", batch)` not `EqualTo("score_date")`. Prevents cross-market overwrite.
 19. Indian stocks `.NS` everywhere; use `detect_market` from `backend/market_utils.py`. NEVER local suffix checks.
-20. **NEVER delete Iceberg metadata/parquet directly** — use `overwrite()` / `delete_rows()` API. Direct `rm` breaks SQLite catalog.
+20. **NEVER delete Iceberg metadata/parquet directly** — use `overwrite()` / `delete_rows()` API. Direct `rm` breaks SQLite catalog. The sanctioned reclamation path is `cleanup_orphans_v2()` (PyIceberg 0.11.1 native expire_snapshots + reference-set guard) — `→ iceberg-orphan-sweep`.
 
 ### 4.4 Process & git
 
@@ -471,6 +471,7 @@ When you're about to do X, read pattern Y first.
 | Convert sync code to async | 6.7 | `sync-async-migration-patterns`, `asyncpg-sync-async-bridge` |
 | Patch a function in tests | 4.2 #16 | `mock-patching-gotchas`, `test-isolation-gotchas` |
 | Recover from Iceberg table corruption | 6.4 | `iceberg-table-corruption-recovery` |
+| Reclaim Iceberg disk (orphan parquet sweep) | 4.3 #20 | `iceberg-orphan-sweep-design`, `docs/backend/iceberg-orphan-sweep.md` |
 | Open / close a Jira ticket | 7 | `jira-3phase-lifecycle` |
 | Read NaN-prone numeric column | 6.1 | `nan-handling-iceberg-pandas` |
 | Debug LLM "hallucinating" rows | 5.2 | `llm-truncation-hallucination`, `llm-hallucination-guardrail` |

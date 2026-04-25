@@ -2738,3 +2738,163 @@ def execute_iceberg_maintenance(
         errors, cancelled,
         started_at=_run_start,
     )
+
+
+@register_job("iceberg_orphan_sweep")
+def execute_iceberg_orphan_sweep(
+    scope: str,
+    run_id: str,
+    repo,
+    cancel_event=None,
+    force: bool = False,
+) -> None:
+    """Weekly physical orphan-parquet sweep.
+
+    Runs ``cleanup_orphans_v2`` on each hot Iceberg
+    table in ascending size order. Each call expires
+    old snapshots (keep latest 5), computes the
+    Iceberg-authoritative referenced set, walks the
+    on-disk file tree, and unlinks anything not
+    referenced + older than the 30-min mtime grace.
+
+    A single full warehouse backup is taken at the
+    start (fail-closed). The per-table calls below
+    skip their own backups since this outer one
+    already provided the restore point.
+
+    Designed as a Sunday-03:00-IST weekly job —
+    daily would be too aggressive (snapshots from
+    today's writes are already live, and the
+    algorithm only reclaims orphans from prior
+    days). Idempotent: running twice in a row is
+    near-zero work on the second pass.
+
+    See ASETPLTFRM-338 + the design memory
+    ``shared/architecture/iceberg-orphan-sweep-
+    design`` for the safety rationale and the
+    ``snapshot.manifest_list`` bug (live-prod
+    failure 2026-04-25, fixed + locked by
+    regression test in
+    ``tests/backend/test_iceberg_orphan_sweep``).
+    """
+    from backend.maintenance.backup import run_backup
+    from backend.maintenance.iceberg_maintenance import (
+        cleanup_orphans_v2,
+    )
+
+    _run_start = datetime.now(timezone.utc)
+    # Sweep order: smallest first (lowest blast
+    # radius if anything goes wrong on the first
+    # table — bail before touching the larger ones).
+    sweep_order = (
+        "stocks.analysis_summary",
+        "stocks.company_info",
+        "stocks.sentiment_scores",
+        "stocks.ohlcv",
+    )
+    total = len(sweep_order) + 1
+    done = 0
+    errors: list[str] = []
+    cancelled = False
+
+    _logger.info(
+        "[orphan-sweep] Starting weekly sweep "
+        "(backup + %d hot tables)",
+        len(sweep_order),
+    )
+
+    # Step 0: single fail-closed backup. Per-table
+    # calls reuse this restore point via skip_backup.
+    try:
+        backup_path = run_backup()
+        _logger.info(
+            "[orphan-sweep] Backup complete: %s",
+            backup_path,
+        )
+        done += 1
+        try:
+            repo.update_scheduler_run(
+                run_id, {"tickers_done": done},
+            )
+        except Exception:
+            pass
+    except Exception as exc:
+        _logger.error(
+            "[orphan-sweep] Backup failed — "
+            "aborting to preserve recoverability",
+            exc_info=True,
+        )
+        errors.append(f"backup: {str(exc)[:200]}")
+        _finalize_run(
+            repo, run_id, done, total,
+            errors, cancelled,
+            started_at=_run_start,
+        )
+        return
+
+    for tbl in sweep_order:
+        if cancel_event and cancel_event.is_set():
+            cancelled = True
+            break
+        try:
+            r = cleanup_orphans_v2(
+                tbl, skip_backup=True,
+            )
+            if r.get("error"):
+                errors.append(
+                    f"{tbl}: {r['error']}",
+                )
+                _logger.warning(
+                    "[orphan-sweep] %s error: %s",
+                    tbl, r["error"],
+                )
+            elif not r.get("verified"):
+                errors.append(
+                    f"{tbl}: read-verify FAILED "
+                    f"(deleted "
+                    f"{r.get('deleted_files', 0)} "
+                    f"files; restore from backup if "
+                    f"reads break)"
+                )
+                _logger.error(
+                    "[orphan-sweep] %s read-verify "
+                    "FAILED — deleted %d files, may "
+                    "need restore from %s",
+                    tbl,
+                    r.get("deleted_files", 0),
+                    backup_path,
+                )
+            else:
+                _logger.info(
+                    "[orphan-sweep] %s: deleted %d "
+                    "files (%.2f MB), kept %d "
+                    "snapshots",
+                    tbl,
+                    r.get("deleted_files", 0),
+                    r.get("deleted_bytes", 0)
+                    / 1_048_576,
+                    r.get("expired_snapshots", 0),
+                )
+        except Exception as exc:
+            _logger.warning(
+                "[orphan-sweep] %s failed: %s",
+                tbl, exc, exc_info=True,
+            )
+            errors.append(
+                f"{tbl}: {str(exc)[:200]}",
+            )
+
+        done += 1
+        try:
+            repo.update_scheduler_run(
+                run_id,
+                {"tickers_done": done},
+            )
+        except Exception:
+            pass
+
+    _finalize_run(
+        repo, run_id, done, total,
+        errors, cancelled,
+        started_at=_run_start,
+    )
