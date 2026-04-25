@@ -475,7 +475,11 @@ function UsersTab() {
     [openEdit, openReset, handleToggle],
   );
 
-  if (admin.loading) return <WidgetSkeleton />;
+  // Render the header + search + table shell immediately; gating
+  // on admin.loading hid the LCP element (input placeholder /
+  // count heading) until SWR resolved (~5 s on perf runs). The
+  // useAdminUsers hook returns users=[] during load so the table
+  // safely renders an empty body.
   if (admin.error)
     return <WidgetError message={admin.error} />;
 
@@ -596,7 +600,9 @@ function AuditLogTab({
     );
   }, [audit.events, search]);
 
-  if (audit.loading) return <WidgetSkeleton />;
+  // Render the header + search immediately so the title + count
+  // become the LCP candidate; the table renders empty during
+  // SWR load (audit.events default = []).
   if (audit.error)
     return <WidgetError message={audit.error} />;
 
@@ -942,6 +948,11 @@ function ObservabilityTab({
 } = {}) {
   const obs = useObservability(scope);
 
+  // Keep this loading gate — rendering the empty grid of summary
+  // cards (5 cards x 4 stats) and conditional tier/model panes
+  // during load creates more layout shift than the static
+  // skeleton. Reverted: regression caught in 2026-04-25 audit
+  // (5472 → 6385 ms when gate was removed).
   if (obs.loading) return <WidgetSkeleton />;
   if (obs.error)
     return <WidgetError message={obs.error} />;
@@ -2169,9 +2180,28 @@ function AdminPageInner() {
   );
 }
 
+// Static page-chrome skeleton rendered during SSR (useSearchParams
+// inside AdminPageInner forces the inner subtree to client-only).
+// The previous fallback was `null` — the entire admin route SSR'd
+// as empty, so every tab paid ~3.5 s of hydration delay before
+// any content appeared. Outer wrapper mirrors AdminPageInner's
+// `space-y-6 p-4 sm:p-6` + 600 px content reserve (matches the
+// `min-h-[600px]` already used inside AdminPageInner) to keep
+// CLS ≤ 0.02 across the swap.
+function AdminPageSkeleton() {
+  return (
+    <div className="space-y-6 p-4 sm:p-6">
+      <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+        Admin Console
+      </h1>
+      <div className="min-h-[600px]" aria-hidden />
+    </div>
+  );
+}
+
 export default function AdminPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<AdminPageSkeleton />}>
       <AdminPageInner />
     </Suspense>
   );

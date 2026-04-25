@@ -5,7 +5,6 @@ import type { DashboardData } from "@/hooks/useDashboardData";
 import type { WatchlistResponse } from "@/lib/types";
 import type { UserProfile } from "@/hooks/useEditProfile";
 import type { MarketFilter } from "@/app/(authenticated)/dashboard/DashboardClient";
-import { WidgetSkeleton } from "./WidgetSkeleton";
 import { WidgetError } from "./WidgetError";
 
 interface HeroSectionProps {
@@ -43,14 +42,12 @@ export function HeroSection({
   portfolioHoldingsCount = 0,
 }: HeroSectionProps) {
   const router = useRouter();
-  if (watchlist.loading) {
-    return (
-      <div className="col-span-full">
-        <WidgetSkeleton className="h-56" />
-      </div>
-    );
-  }
-
+  // Hero greeting + portfolio value come from `profile` and
+  // `portfolioTotals` props — NOT from watchlist. Gating the
+  // entire hero on watchlist.loading hides the LCP text element
+  // until SWR resolves (~5 s on perf runs); render the structure
+  // immediately and let downstream widgets show their own
+  // skeletons. Errors still bubble up.
   if (watchlist.error) {
     return (
       <div className="col-span-full">

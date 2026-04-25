@@ -1195,7 +1195,10 @@ function ScreenerTab() {
     return rows;
   }, [data.value, market, sector, rsiFilter, tag]);
 
-  if (data.loading) return <WidgetSkeleton />;
+  // Render filters + table shell immediately; gating on
+  // data.loading hid the LCP element until SWR resolved
+  // (~5 s on perf runs). Hooks return data.value=null during
+  // load and the JSX uses ?? [] guards everywhere.
   if (data.error)
     return <WidgetError message={data.error} data-testid="insights-error" />;
 
@@ -1253,7 +1256,10 @@ function TargetsTab() {
     );
   }, [data.value, market, sector, ticker]);
 
-  if (data.loading) return <WidgetSkeleton />;
+  // Render filters + table shell immediately; gating on
+  // data.loading hid the LCP element until SWR resolved
+  // (~5 s on perf runs). Hooks return data.value=null during
+  // load and the JSX uses ?? [] guards everywhere.
   if (data.error)
     return <WidgetError message={data.error} data-testid="insights-error" />;
 
@@ -1302,7 +1308,10 @@ function DividendsTab() {
     );
   }, [data.value, market, sector, ticker]);
 
-  if (data.loading) return <WidgetSkeleton />;
+  // Render filters + table shell immediately; gating on
+  // data.loading hid the LCP element until SWR resolved
+  // (~5 s on perf runs). Hooks return data.value=null during
+  // load and the JSX uses ?? [] guards everywhere.
   if (data.error)
     return <WidgetError message={data.error} data-testid="insights-error" />;
 
@@ -1350,7 +1359,10 @@ function RiskTab() {
     );
   }, [data.value, market, sector]);
 
-  if (data.loading) return <WidgetSkeleton />;
+  // Render filters + table shell immediately; gating on
+  // data.loading hid the LCP element until SWR resolved
+  // (~5 s on perf runs). Hooks return data.value=null during
+  // load and the JSX uses ?? [] guards everywhere.
   if (data.error)
     return <WidgetError message={data.error} data-testid="insights-error" />;
 
@@ -1382,6 +1394,11 @@ function SectorsTab() {
   const [market, setMarket] = useState("all");
   const data = useSectors(market);
 
+  // Keep this gate — the chart appears conditionally on
+  // (rows.length > 0), so a no-gate render lets it pop in
+  // mid-page after data load and triggers CLS = 0.254 (caught
+  // in 2026-04-25 audit). Page-level InsightsPageSkeleton
+  // already provides the LCP win at SSR.
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
     return <WidgetError message={data.error} data-testid="insights-error" />;
@@ -1436,6 +1453,10 @@ function CorrelationTab() {
   const [period, setPeriod] = useState("1y");
   const data = useCorrelation(period, "all");
 
+  // Keep this loading gate — the heatmap canvas is much larger
+  // than any header text, so removing the gate lets the heatmap
+  // become the LCP candidate (paints ~2 s late). The pre-existing
+  // skeleton fallback was actually doing the right thing here.
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
     return (
@@ -1605,6 +1626,10 @@ function QuarterlyTab() {
     portfolioTickerSet,
   ]);
 
+  // Keep this gate — the dynamic-columns table changes width
+  // significantly when stmtType data arrives; without the
+  // gate, content shifts and CLS spikes to 0.254 (caught in
+  // 2026-04-25 audit). InsightsPageSkeleton handles LCP at SSR.
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
     return <WidgetError message={data.error} data-testid="insights-error" />;
@@ -1823,6 +1848,13 @@ function PiotroskiTab() {
     return data.value.rows;
   }, [data.value]);
 
+  // Keep this gate — Piotroski stock names ("Ahluwalia
+  // Contracts (India) Limited" etc.) are wider than the
+  // page-level h1 fallback, so once the table populates the
+  // largest cell becomes the LCP candidate at ~5 s. The
+  // InsightsPageSkeleton handles SSR LCP; the WidgetSkeleton
+  // here keeps the table out of the LCP window during data
+  // load (caught in 2026-04-25 iter3 audit).
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
     return (
@@ -2659,9 +2691,28 @@ function InsightsPageInner() {
   );
 }
 
+// Static page-chrome skeleton — `useSearchParams` inside
+// InsightsPageInner forces the inner subtree to client-only, so
+// the SSR fallback paints first. The previous fallback was `null`
+// (empty SSR HTML) which delayed the LCP candidate on
+// data-heavy tabs (sectors, piotroski). Outer wrapper mirrors
+// InsightsPageInner's `space-y-6 p-4 sm:p-6` exactly + a 400 px
+// content reserve so the swap doesn't shift layout (CLS budget
+// ≤ 0.02 — see CLAUDE.md §5.15).
+function InsightsPageSkeleton() {
+  return (
+    <div className="space-y-6 p-4 sm:p-6">
+      <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+        Insights
+      </h1>
+      <div className="min-h-[400px]" aria-hidden />
+    </div>
+  );
+}
+
 export default function InsightsPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<InsightsPageSkeleton />}>
       <InsightsPageInner />
     </Suspense>
   );
