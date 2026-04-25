@@ -255,6 +255,20 @@ OHLCV file count grew to **16,156 parquets** within a week of the original ASETP
 
 Old parquets become orphans on disk after `overwrite()` (Iceberg references only the new files). `cleanup_orphans` removes empty partition dirs but per the "NEVER delete parquet directly" rule, orphan parquets themselves stay until snapshot expiry releases their references.
 
+> **Status (2026-04-25):** orphan files are accumulating without cleanup — ohlcv has 22 722 parquets on disk vs 817 referenced by the live snapshot (96% orphans), and the trend is +2 500 parquets/day. `compact_table()` is logically correct (live reads stay fast, scanning only 817 files via DuckDB) but disk usage and metadata count grow unbounded. The current `expire_snapshots()` is also a no-op based on an outdated assumption — PyIceberg 0.11.1 actually ships `tbl.maintenance.expire_snapshots().by_ids(...).commit()`. Sprint-8 ticket **ASETPLTFRM-338** (5 SP, due 2026-04-29) implements a proper orphan-parquet sweep: backup → expire old snapshots → compute referenced set via `tbl.inspect.all_files()` + `all_manifests()` + catalog `metadata_location` + last K metadata.json → walk on-disk → mtime grace 30 min → paranoid catalog-pointer assertion → unlink → `tbl.scan(limit=1)` verify. Phased rollout: synthetic tests → `analysis_summary` dry-run → `company_info` → `sentiment_scores` → `ohlcv` → weekly schedule. Design in `.serena/memories/shared/architecture/iceberg-orphan-sweep-design.md`. Estimated reclaim: ~10-12 GB / ~50K orphan files.
+
+### Dropping dead Iceberg tables
+
+`backend/maintenance/iceberg_maintenance.py::drop_dead_tables()` removes tables flagged in the `DEAD_TABLES` constant — currently empty after the 2026-04-25 cleanup that retired `stocks.scheduler_runs` and `stocks.scheduled_jobs` (migrated to PG in Sprint 4) plus `stocks.technical_indicators` (replaced by compute-on-demand via `backend/tools/_analysis_indicators.py`).
+
+Hardened by **ASETPLTFRM-328** with three guards:
+
+1. **Fail-closed `run_backup()`** at function entry — if the rsync backup fails, the function returns `{"error": "backup failed: ..."}` without touching the catalog or filesystem.
+2. **Per-table rmtree gating** — `shutil.rmtree(table_dir)` only runs for tables whose `catalog.drop_table()` succeeded. Previously a partial catalog failure could wipe on-disk files for a table the catalog still referenced (FileNotFoundError on next read).
+3. **Idempotent `NoSuchTableError` handling** — re-running on an already-dropped table is safe; counts as success and proceeds to dir cleanup.
+
+Returns a dict: `{"backup": str(path), "dropped": [...], "skipped": [...], "dirs_removed": [...], "error": str?}`. Tests in `tests/backend/test_iceberg_drop_dead_tables.py`.
+
 ### NaN-replaceable OHLCV upsert (Apr 23+)
 
 Both write paths now treat NaN-close rows as "absent" for dedup purposes, so a stuck NaN row from a Yahoo upstream gap doesn't block future re-fetches:
@@ -316,3 +330,64 @@ Permanent fix: ASETPLTFRM-302 (model tuning).
 
 Usually a ticker without quarterly results data in Iceberg
 (e.g., newly listed stock). Run `fill-gaps` to attempt fetch.
+
+---
+
+## Iceberg Disk Reclaim — Orphan Sweep
+
+Daily compaction reduces fragmentation but **leaves orphan parquets
+on disk**: `tbl.overwrite()` creates a new snapshot referencing one
+file per partition, while the prior snapshot still references the
+OLD parquets. Across daily runs this grows ~2.5K parquets/day on
+`ohlcv` alone. Without periodic physical reclamation, on-disk file
+count and disk usage drift unbounded — the 2026-04-25 baseline
+showed **96-100 % orphan ratio** across hot tables (warehouse: 16 GB
+on disk vs ~4 GB live).
+
+### Fix — `cleanup_orphans_v2()`
+
+Shipped as ASETPLTFRM-338 (2026-04-25). Now runs **daily as part of
+`iceberg_maintenance`**, immediately after each `compact_table()`
+call. Uses PyIceberg 0.11.1 native `expire_snapshots()` +
+`inspect.all_files()` / `inspect.all_manifests()` to compute the
+authoritative referenced set, then unlinks anything not in it +
+older than a 30-min mtime grace (concurrent-write race protection).
+
+Hard safety guards:
+
+- **Mandatory backup** at the start (fail-closed via `run_backup()`).
+- **Catalog-pointer hard-exclusion** + paranoid pre-unlink assertion
+  (refuses to delete the file the SQLite catalog references — the
+  failure mode that gave us CLAUDE.md Rule 20).
+- **Read-verify** after each table sweep — `verified=False` is
+  recorded as non-fatal so the operator sees a clear warning on
+  the scheduler dashboard.
+
+### First full sweep results (2026-04-25)
+
+| Table | Before | After | Reclaim |
+|---|---:|---:|---:|
+| `analysis_summary` | 938 MB / 7964 files | 3.5 MB / 25 | −99.6 % |
+| `company_info` | 5.6 GB / 18 832 | 8.2 MB / 25 | −99.9 % |
+| `sentiment_scores` | 2.0 GB / 30 944 | 12 MB / 1650 | −99.4 % |
+| `ohlcv` | 4.0 GB / 34 116 | 97 MB / 1661 | −97.6 % |
+| **Total** | **12.5 GB / 91 856** | **120 MB / 3361** | **−12.4 GB** |
+
+Warehouse total: 16 GB → 3.6 GB (**−78 %**). Endpoint p95 sub-5 ms
+after each sweep.
+
+### Manual trigger
+
+Pick the **Iceberg Maintenance** tile in the Admin → Scheduler
+job-type picker, or run from the backend:
+
+```bash
+docker compose exec -T backend python3 -c "
+from backend.maintenance.iceberg_maintenance import cleanup_orphans_v2
+import json
+print(json.dumps(cleanup_orphans_v2('stocks.ohlcv'),
+                 indent=2, default=str))
+"
+```
+
+Full algorithm + recovery procedure: [Iceberg Orphan Sweep](iceberg-orphan-sweep.md).

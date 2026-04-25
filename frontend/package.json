@@ -11,6 +11,7 @@
     "perf:check": "bash ../scripts/perf-check.sh",
     "perf:audit": "node ../scripts/perf-check-auth.js",
     "perf:full": "node ../scripts/perf-audit-full.js",
+    "perf:container": "cd .. && docker compose --profile perf up -d postgres redis backend frontend-perf && docker compose --profile perf run --rm perf",
     "perf:sweep": "npx unlighthouse --site http://localhost:3000 --output-path perf-reports"
   },
   "dependencies": {

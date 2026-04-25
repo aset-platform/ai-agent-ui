@@ -13,10 +13,11 @@ import {
   getSubscriptionTierFromToken,
   getUsageRemainingFromToken,
 } from "@/lib/auth";
+import { apiFetch } from "@/lib/apiFetch";
 import { useChatContext } from "@/providers/ChatProvider";
 import { type View } from "@/lib/constants";
 import type { UserProfile } from "@/hooks/useEditProfile";
-import { BACKEND_URL } from "@/lib/config";
+import { API_URL, BACKEND_URL } from "@/lib/config";
 
 /** Compact usage indicator in the header bar. */
 function UsageBadge() {
@@ -90,6 +91,15 @@ export function ChatHeader({
   const chatContext = useChatContext();
   const handleSignOut = async () => {
     await chatContext.flush();
+    // Backend /auth/logout clears the access_token + refresh_token
+    // HttpOnly cookies; without this call proxy.ts sees the
+    // refresh_token cookie (legacy-session hotfix) and bounces
+    // /login back to /dashboard, leaving the user "logged in".
+    try {
+      await apiFetch(`${API_URL}/auth/logout`, { method: "POST" });
+    } catch {
+      // best-effort — fall through to local cleanup either way
+    }
     clearTokens();
     window.location.href = "/login";
   };

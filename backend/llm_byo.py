@@ -92,8 +92,20 @@ async def _check_and_increment_byo_counter(
 ) -> int:
     """Atomically increment the monthly counter.
 
-    Raises ``HTTPException(429)`` when the post-increment count
-    would exceed ``limit``. Returns the new counter value.
+    Uses Redis INCRBY + EXPIRE in a pipeline so two
+    concurrent chat requests from the same user can
+    never both pass the limit check with the same
+    pre-value (the GET/SET TOCTOU in the prior
+    implementation). When the post-increment count
+    exceeds *limit*, the increment is rolled back
+    (DECRBY) and a 429 is raised — so the persisted
+    counter value is always bounded by *limit*.
+
+    Raises:
+        HTTPException(429): Limit reached for this month.
+
+    Returns:
+        The new (post-increment) counter value.
     """
     try:
         from cache import get_cache
@@ -101,12 +113,23 @@ async def _check_and_increment_byo_counter(
         if cache is None:
             return 0
         key = _month_key(user_id)
-        # CacheService.get() returns ``str | None`` (Redis
-        # client is configured with decode_responses=True)
-        # so no ``.decode()`` here.
-        current = cache.get(key)
-        count = int(current) if current else 0
-        if count >= limit:
+        # Atomic pipeline: INCRBY + EXPIRE as one
+        # round-trip. Returns the post-increment
+        # value or None when Redis is unavailable.
+        new_count = cache.incr(
+            key, by=1, ttl=40 * 24 * 3600,
+        )
+        if new_count is None:
+            # Cache down — fall through. Without
+            # Redis the counter is best-effort;
+            # callers relying on absolute enforcement
+            # should use a DB-backed counter instead.
+            return 0
+        if new_count > limit:
+            # Roll back to keep the stored value at
+            # or below the limit — concurrent losers
+            # don't permanently inflate the counter.
+            cache.decr(key, by=1)
             raise HTTPException(
                 status_code=429,
                 detail=(
@@ -115,10 +138,7 @@ async def _check_and_increment_byo_counter(
                     "or wait for next month's reset."
                 ),
             )
-        # CacheService.set() takes ``ttl`` (not ``ex``) —
-        # see backend/cache.py:80.
-        cache.set(key, str(count + 1), ttl=40 * 24 * 3600)
-        return count + 1
+        return new_count
     except HTTPException:
         raise
     except Exception:

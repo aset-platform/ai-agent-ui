@@ -2614,20 +2614,29 @@ def execute_iceberg_maintenance(
     rows took the ``Clean NaN Rows`` button several
     minutes).
 
-    Each ``compact_table`` call reads the table via
-    DuckDB then ``overwrite()`` writes back as one
-    file per partition. Reads stay fast; old parquets
-    become orphans cleaned up by ``cleanup_orphans``.
+    Each table goes through two steps in order:
 
-    Idempotent — re-running on a freshly-compacted
-    table is a near-no-op (still rewrites, but the
-    output has the same shape).
+    1. ``compact_table`` reads the table via DuckDB
+       then ``overwrite()`` writes back as one file
+       per partition. Reads stay fast.
+    2. ``cleanup_orphans_v2`` (skip_backup=True since
+       we already took one above) expires old
+       snapshots and physically reclaims the orphan
+       parquets/avros that compaction left behind.
+       Without this step, on-disk file count grows
+       ~2.5K parquets/day on ohlcv alone.
+
+    The orphan sweep is idempotent — running on a
+    freshly-swept table is near-zero work.
+
+    See ``docs/backend/iceberg-orphan-sweep.md`` and
+    ``shared/architecture/iceberg-orphan-sweep-design``
+    for the safety algorithm + recovery procedure.
     """
     from backend.maintenance.backup import run_backup
     from backend.maintenance.iceberg_maintenance import (
-        cleanup_orphans,
+        cleanup_orphans_v2,
         compact_table,
-        expire_snapshots,
     )
 
     _run_start = datetime.now(timezone.utc)
@@ -2707,21 +2716,56 @@ def execute_iceberg_maintenance(
                 f"{tbl} compact: {str(exc)[:100]}",
             )
 
-        # Best-effort housekeeping; failures here are
-        # logged but don't fail the run.
+        # Orphan sweep — physical disk reclamation.
+        # Uses the outer backup taken at step 0
+        # (skip_backup=True), expires snapshots
+        # beyond the retention window, then unlinks
+        # parquet/avro/metadata.json files no longer
+        # referenced by any retained snapshot.
+        # `verified=False` is recorded as non-fatal
+        # so other tables still get cleaned and the
+        # operator sees the warning on the
+        # scheduler dashboard.
         try:
-            expire_snapshots(tbl)
-        except Exception:
-            _logger.debug(
-                "[maint] expire_snapshots %s failed",
-                tbl, exc_info=True,
+            sw = cleanup_orphans_v2(
+                tbl, skip_backup=True,
             )
-        try:
-            cleanup_orphans(tbl)
-        except Exception:
-            _logger.debug(
-                "[maint] cleanup_orphans %s failed",
-                tbl, exc_info=True,
+            if sw.get("error"):
+                errors.append(
+                    f"{tbl} sweep: {sw['error']}",
+                )
+            elif not sw.get("verified"):
+                errors.append(
+                    f"{tbl} sweep: read-verify "
+                    f"FAILED (deleted "
+                    f"{sw.get('deleted_files', 0)} "
+                    f"files; restore from "
+                    f"{backup_path} if reads break)"
+                )
+                _logger.error(
+                    "[maint] %s sweep read-verify "
+                    "FAILED — deleted %d files",
+                    tbl, sw.get("deleted_files", 0),
+                )
+            else:
+                _logger.info(
+                    "[maint] %s sweep: deleted %d "
+                    "files (%.2f MB), expired %d "
+                    "snapshots",
+                    tbl,
+                    sw.get("deleted_files", 0),
+                    sw.get("deleted_bytes", 0)
+                    / 1_048_576,
+                    sw.get("expired_snapshots", 0),
+                )
+        except Exception as exc:
+            _logger.warning(
+                "[maint] cleanup_orphans_v2 %s "
+                "failed: %s",
+                tbl, exc, exc_info=True,
+            )
+            errors.append(
+                f"{tbl} sweep: {str(exc)[:120]}",
             )
 
         done += 1

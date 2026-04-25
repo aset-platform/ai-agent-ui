@@ -38,6 +38,26 @@ _COOKIE_KEY = "refresh_token"
 _COOKIE_PATH = "/"
 _COOKIE_MAX_AGE = 7 * 24 * 3600  # 7 days
 
+# Cookie config for the HttpOnly access token. Set
+# alongside the JSON-body access_token so RSC routes
+# can server-fetch backend data using the cookie
+# (ASETPLTFRM-334 phase A); existing client-side
+# code reading the JSON body still works unchanged.
+_ACCESS_COOKIE_KEY = "access_token"
+_ACCESS_COOKIE_MAX_AGE = 60 * 60  # matches JWT TTL
+
+
+def _is_secure_env() -> bool:
+    """True when settings.debug is False (i.e. prod)."""
+    try:
+        from config import get_settings as _get_settings
+
+        return not getattr(
+            _get_settings(), "debug", True,
+        )
+    except Exception:
+        return False
+
 
 def _set_refresh_cookie(
     response: JSONResponse,
@@ -49,22 +69,38 @@ def _set_refresh_cookie(
         response: The outgoing response.
         refresh_token: JWT refresh token string.
     """
-    try:
-        from config import get_settings as _get_settings
-
-        _secure = not getattr(
-            _get_settings(), "debug", True,
-        )
-    except Exception:
-        _secure = False
     response.set_cookie(
         key=_COOKIE_KEY,
         value=refresh_token,
         httponly=True,
-        secure=_secure,
+        secure=_is_secure_env(),
         samesite="lax",  # lax for payment redirects
         path=_COOKIE_PATH,
         max_age=_COOKIE_MAX_AGE,
+    )
+
+
+def _set_access_cookie(
+    response: JSONResponse,
+    access_token: str,
+) -> None:
+    """Attach the access token as an HttpOnly cookie.
+
+    SameSite=Lax (not Strict) so the cookie travels
+    on cross-site GETs from OAuth/payment redirects,
+    matching the refresh cookie's policy. Path=/ so
+    the edge proxy can read it on every navigation.
+    HttpOnly keeps it out of JS — the JSON body
+    delivers the same token to client-side ``apiFetch``.
+    """
+    response.set_cookie(
+        key=_ACCESS_COOKIE_KEY,
+        value=access_token,
+        httponly=True,
+        secure=_is_secure_env(),
+        samesite="lax",
+        path=_COOKIE_PATH,
+        max_age=_ACCESS_COOKIE_MAX_AGE,
     )
 
 
@@ -87,6 +123,14 @@ def _clear_refresh_cookie(response: JSONResponse) -> None:
             key=_COOKIE_KEY,
             path=legacy,
         )
+
+
+def _clear_access_cookie(response: JSONResponse) -> None:
+    """Remove the access-token cookie."""
+    response.delete_cookie(
+        key=_ACCESS_COOKIE_KEY,
+        path=_COOKIE_PATH,
+    )
 
 
 def register(router: APIRouter) -> None:
@@ -160,6 +204,7 @@ def register(router: APIRouter) -> None:
             ).model_dump(),
         )
         _set_refresh_cookie(resp, refresh)
+        _set_access_cookie(resp, access)
         return resp
 
     @router.post(
@@ -292,6 +337,7 @@ def register(router: APIRouter) -> None:
             ).model_dump(),
         )
         _set_refresh_cookie(resp, new_refresh)
+        _set_access_cookie(resp, access)
         return resp
 
     @router.post("/auth/logout", tags=["auth"])
@@ -330,6 +376,7 @@ def register(router: APIRouter) -> None:
             content={"detail": "Logged out successfully"},
         )
         _clear_refresh_cookie(resp)
+        _clear_access_cookie(resp)
         return resp
 
     @router.post("/auth/password-reset/request", tags=["auth"])

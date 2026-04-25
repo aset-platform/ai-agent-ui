@@ -23,33 +23,39 @@ import dynamic from "next/dynamic";
 import { usePreferences } from "@/hooks/usePreferences";
 
 // Dynamic imports — lightweight-charts requires window/document
+// Skeleton heights match each chart's rendered height to keep
+// CLS ≤ 0.02 when the dynamic import resolves. Measured
+// 2026-04-23: mismatched skeleton (h-64, 256 px) against
+// ~480–700 px charts was the sole CLS source on
+// `analysis?tab=portfolio-forecast` (0.129) and `?tab=forecast`
+// (0.100).
 const StockChart = dynamic(
   () =>
     import("@/components/charts/StockChart").then(
       (m) => m.StockChart,
     ),
-  { ssr: false, loading: () => <ChartSkeleton /> },
+  { ssr: false, loading: () => <ChartSkeleton h="h-[700px]" /> },
 );
 const ForecastChart = dynamic(
   () =>
     import("@/components/charts/ForecastChart").then(
       (m) => m.ForecastChart,
     ),
-  { ssr: false, loading: () => <ChartSkeleton /> },
+  { ssr: false, loading: () => <ChartSkeleton h="h-[550px]" /> },
 );
 const PortfolioChart = dynamic(
   () =>
     import("@/components/charts/PortfolioChart").then(
       (m) => m.PortfolioChart,
     ),
-  { ssr: false, loading: () => <ChartSkeleton /> },
+  { ssr: false, loading: () => <ChartSkeleton h="h-[500px]" /> },
 );
 const PortfolioForecastChart = dynamic(
   () =>
     import(
       "@/components/charts/PortfolioForecastChart"
     ).then((m) => m.PortfolioForecastChart),
-  { ssr: false, loading: () => <ChartSkeleton /> },
+  { ssr: false, loading: () => <ChartSkeleton h="h-[480px]" /> },
 );
 import type {
   OHLCVResponse,
@@ -113,7 +119,7 @@ import {
   type IndicatorVisibility,
   type ChartInterval,
   DEFAULT_INDICATORS,
-} from "@/components/charts/StockChart";
+} from "@/components/charts/StockChart.types";
 
 const INDICATOR_OPTIONS: {
   key: keyof IndicatorVisibility;
@@ -748,6 +754,15 @@ function ForecastTab({
             ))}
           </div>
         </div>
+        {/* Suspense boundary so the chart's hydration
+            cost (Plotly init + dataset processing,
+            historically 6-7s on this tab) doesn't
+            block hydration of the rest of the route.
+            React 19 streams the surrounding tree in;
+            the chart resolves into the boundary as
+            its dynamic chunk arrives. (ASETPLTFRM-334
+            phase B) */}
+        <Suspense fallback={<ChartSkeleton h="h-[550px]" />}>
         <ForecastChart
           historicalDates={
             ohlcv?.data.map((d) => d.date) ?? []
@@ -789,6 +804,7 @@ function ForecastTab({
           height={550}
           onCrosshairMove={handleFcMove}
         />
+        </Suspense>
       </div>
 
       {/* Forecast target cards */}
@@ -1663,7 +1679,11 @@ function PortfolioForecastTab({
     <div className="space-y-4">
       <div
         data-testid="portfolio-forecast-chart"
-        className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm overflow-hidden"
+        // min-height reserves space for the header bar + chart
+        // canvas regardless of whether the lazy chart has loaded.
+        // Without it, the 4-card grid below shifts (measured CLS
+        // 0.129–0.162 on 2026-04-23) as the dynamic import arrives.
+        className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm overflow-hidden min-h-[760px]"
       >
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-3 border-b border-gray-100 dark:border-gray-800">
           <div className="flex items-center gap-3">
@@ -1748,6 +1768,9 @@ function PortfolioForecastTab({
             </div>
           </div>
         </div>
+        {/* See ForecastChart Suspense above —
+            same rationale (ASETPLTFRM-334 phase B). */}
+        <Suspense fallback={<ChartSkeleton h="h-[480px]" />}>
         <PortfolioForecastChart
           perfData={perf?.data ?? []}
           forecastData={truncated.data}
@@ -1760,6 +1783,7 @@ function PortfolioForecastTab({
           )}
           onCrosshairMove={handleFcCrosshair}
         />
+        </Suspense>
       </div>
 
       {/* Summary cards — 4 with explainability */}

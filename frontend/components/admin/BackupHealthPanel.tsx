@@ -23,15 +23,38 @@ interface BackupEntry {
   size_mb: number;
   age_hours: number;
   has_catalog: boolean;
+  completed_at?: string | null;
 }
 
 interface BackupHealth {
   status: "healthy" | "stale" | "critical" | "missing";
   latest_date: string | null;
+  completed_at?: string | null;
   age_hours: number | null;
   backup_count: number;
   has_catalog: boolean;
   size_mb?: number;
+}
+
+// Render an ISO 8601 UTC timestamp in IST
+// (Asia/Kolkata) so the displayed time matches the
+// user's mental model regardless of where the
+// browser thinks it is.
+function fmtIst(iso: string | null | undefined): string {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }) + " IST";
+  } catch {
+    return iso;
+  }
 }
 
 interface TableContents {
@@ -244,6 +267,7 @@ export function BackupHealthPanel() {
               <p
                 className="text-[10px]
                   text-gray-400 mt-0.5"
+                title={fmtIst(health.completed_at)}
               >
                 {fmtAge(health.age_hours)}
               </p>
@@ -420,6 +444,7 @@ export function BackupHealthPanel() {
                     className="px-3 py-2
                       text-gray-500
                       dark:text-gray-400"
+                    title={fmtIst(b.completed_at)}
                   >
                     {fmtAge(b.age_hours)}
                   </td>

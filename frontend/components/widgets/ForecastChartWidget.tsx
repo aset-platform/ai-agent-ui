@@ -11,7 +11,7 @@ import type {
 import { WidgetSkeleton } from "./WidgetSkeleton";
 import { WidgetError } from "./WidgetError";
 
-import type { MarketFilter } from "@/app/(authenticated)/dashboard/page";
+import type { MarketFilter } from "@/app/(authenticated)/dashboard/DashboardClient";
 
 interface ForecastChartWidgetProps {
   data: DashboardData<ForecastsResponse>;
@@ -681,7 +681,22 @@ export function ForecastChartWidget({
                 text-gray-900 dark:text-gray-100
               "
             >
-              {formatPrice(selected.current_price, sym)}
+              {formatPrice(
+                selected.latest_close ?? selected.current_price,
+                sym,
+              )}
+              {selected.latest_close != null
+                && selected.latest_close !== selected.current_price && (
+                <span
+                  className="
+                    ml-2 text-xs font-normal
+                    text-gray-400 dark:text-gray-500
+                  "
+                >
+                  (anchored at {formatPrice(selected.current_price, sym)}
+                  {selected.run_date ? ` on ${selected.run_date}` : ""})
+                </span>
+              )}
               {selected.sentiment && (
                 <span
                   className="

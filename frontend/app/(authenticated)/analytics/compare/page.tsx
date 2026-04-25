@@ -121,19 +121,11 @@ function TickerMultiSelect({
     );
   }, [tickers, search]);
 
-  if (tickersLoading) {
-    return (
-      <div
-        className="rounded-2xl border border-gray-200
-          bg-white p-4 dark:border-gray-800
-          dark:bg-gray-900/80"
-      >
-        <div className="h-10 w-full animate-pulse rounded-xl bg-gray-200 dark:bg-gray-700" />
-      </div>
-    );
-  }
-
-  if (tickers.length === 0) {
+  // tickersLoading short-circuit hid the static "Select tickers
+  // to compare" label until SWR resolved (~5 s on perf runs).
+  // Render the structure always; an empty `tickers` array yields
+  // the same empty state path one tick later.
+  if (!tickersLoading && tickers.length === 0) {
     return (
       <div
         data-testid="compare-empty"

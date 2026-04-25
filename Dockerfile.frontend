@@ -25,6 +25,13 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ARG NEXT_PUBLIC_BACKEND_URL=http://localhost:8181
 ENV NEXT_PUBLIC_BACKEND_URL=$NEXT_PUBLIC_BACKEND_URL
 
+# `next build` serializes the rewrite destination string from
+# `next.config.ts` into routes-manifest.json — it's build-time,
+# not per-request. Expose BACKEND_URL as an ARG so the perf
+# profile can redirect `/v1/*` to the docker-network backend.
+ARG BACKEND_URL=http://localhost:8181
+ENV BACKEND_URL=$BACKEND_URL
+
 RUN npm run build
 
 # Stage 3: Production runner (minimal image)

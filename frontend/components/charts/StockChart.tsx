@@ -31,6 +31,11 @@ import {
   type Time,
   type TimeChartOptions,
 } from "lightweight-charts";
+import {
+  DEFAULT_INDICATORS,
+  type ChartInterval,
+  type IndicatorVisibility,
+} from "./StockChart.types";
 
 // ---------------------------------------------------------------
 // Types
@@ -57,7 +62,7 @@ export interface IndicatorRow {
   bb_lower: number | null;
 }
 
-export type ChartInterval = "D" | "W" | "M";
+// ChartInterval moved to `./StockChart.types` (re-exported below).
 
 /**
  * Aggregate daily OHLCV rows into weekly or monthly
@@ -172,23 +177,14 @@ export function aggregateIndicators(
   return result;
 }
 
-export interface IndicatorVisibility {
-  sma50: boolean;
-  sma200: boolean;
-  bollinger: boolean;
-  volume: boolean;
-  rsi: boolean;
-  macd: boolean;
-}
-
-export const DEFAULT_INDICATORS: IndicatorVisibility = {
-  sma50: true,
-  sma200: true,
-  bollinger: false,
-  volume: false,
-  rsi: true,
-  macd: true,
-};
+// Types + defaults moved to `./StockChart.types` so consumer
+// pages can import them without dragging lightweight-charts
+// into the initial bundle. Re-exported here for backward compat.
+export type {
+  ChartInterval,
+  IndicatorVisibility,
+} from "./StockChart.types";
+export { DEFAULT_INDICATORS } from "./StockChart.types";
 
 interface StockChartProps {
   ohlcv: OHLCVRow[];
