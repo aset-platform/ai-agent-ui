@@ -33,6 +33,18 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 const ACCESS_COOKIE = "access_token";
+// Sessions that pre-date phase A.1 (2026-04-25) only
+// have the refresh_token cookie + a localStorage
+// access token — no `access_token` cookie. Treat
+// the refresh cookie as a sufficient signal that
+// the user is authenticated; the client's next
+// `apiFetch` call will trigger /v1/auth/refresh,
+// which sets the new access_token cookie. Without
+// this, those sessions infinite-loop between
+// /login and /dashboard because the client thinks
+// it's authenticated (localStorage) but the proxy
+// thinks it isn't (no access_token cookie).
+const REFRESH_COOKIE = "refresh_token";
 
 // Routes that don't require auth. Anything else
 // matched by `config.matcher` below is treated as
@@ -50,6 +62,13 @@ function isPublicPath(pathname: string): boolean {
   return pathname.startsWith("/auth/");
 }
 
+function hasAuthCookie(request: NextRequest): boolean {
+  return (
+    request.cookies.has(ACCESS_COOKIE)
+    || request.cookies.has(REFRESH_COOKIE)
+  );
+}
+
 export default function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
@@ -64,10 +83,7 @@ export default function proxy(request: NextRequest) {
     // Authenticated user landing on /login → bounce
     // them to /dashboard so they don't see the form
     // they don't need.
-    if (
-      pathname === "/login"
-      && request.cookies.has(ACCESS_COOKIE)
-    ) {
+    if (pathname === "/login" && hasAuthCookie(request)) {
       return NextResponse.redirect(
         new URL("/dashboard", request.url),
       );
@@ -75,8 +91,11 @@ export default function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Protected route — require access_token cookie.
-  if (!request.cookies.has(ACCESS_COOKIE)) {
+  // Protected route — require either access or
+  // refresh cookie. The refresh-only path is the
+  // pre-phase-A.1 session shape; client refreshes
+  // on first XHR and the access cookie lands.
+  if (!hasAuthCookie(request)) {
     const loginUrl = new URL("/login", request.url);
     // Preserve where the user was trying to go so
     // they can be sent back after authentication.
