@@ -162,18 +162,29 @@ Implemented in `backend/maintenance/iceberg_maintenance.py::cleanup_orphans_v2`:
 Warehouse total: 16 GB → 3.6 GB (−78 %). Endpoint p95 sub-5 ms after
 each sweep.
 
-## Scheduled execution
+## Scheduled execution — consolidated into `iceberg_maintenance`
 
-Weekly job in `public.scheduled_jobs` (Sun 03:00 IST, scope=all).
-Executor `execute_iceberg_orphan_sweep` in
-`backend/jobs/executor.py` takes ONE backup at the start (fail-closed)
-then calls `cleanup_orphans_v2(tbl, skip_backup=True)` for each
-hot table in ascending size order.
+**Updated 2026-04-25 (same day as initial ship)**: the standalone
+`iceberg_orphan_sweep` weekly job was removed. Orphan sweep now runs
+INSIDE `execute_iceberg_maintenance` immediately after `compact_table`
+on each hot table, sharing the same outer backup. One job type, one
+dashboard entry, one daily execution as part of both India + USA
+pipeline chains.
+
+Per-table flow inside `execute_iceberg_maintenance`:
+
+1. `compact_table(tbl)` — DuckDB read → `tbl.overwrite()`.
+2. `cleanup_orphans_v2(tbl, skip_backup=True)` — uses the outer
+   backup, expires beyond `SNAPSHOT_KEEP=5`, sweeps + verifies.
 
 `verified: False` on any per-table sweep is recorded as non-fatal —
 the run continues and the operator sees the warning on the scheduler
 dashboard. CLAUDE.md Rule 20 amended to reflect that the sanctioned
 path is `cleanup_orphans_v2()`, not direct `rm`.
+
+The job is surfaced in the Admin → Scheduler tab job-type picker
+(amber `ZapIcon` tile, label "Iceberg Maintenance", sub-label
+"Compact + orphan sweep") so operators can trigger ad-hoc runs.
 
 ## Things to verify before re-running on a fresh table
 

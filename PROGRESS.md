@@ -37,9 +37,15 @@ Warehouse total: 16 GB → 3.6 GB (−78%). Endpoint p95 sub-5 ms after each swe
 
 ### Phase 5 — weekly schedule + executor
 
-- New `@register_job("iceberg_orphan_sweep")` in `backend/jobs/executor.py` — single fail-closed backup at the top, then `cleanup_orphans_v2(tbl, skip_backup=True)` for each hot table in ascending size order. `verified: False` recorded as non-fatal so other tables still get cleaned.
-- Scheduled row in `public.scheduled_jobs`: `cron_days='sun'`, `cron_time='03:00'`, `scope='all'`, `enabled=true`. Backend restarted to pick up the new `@register_job` decorator (per `shared/conventions/backend-restart-triggers`).
-- Verified: `iceberg_orphan_sweep` in `JOB_EXECUTORS` after restart.
+- Initially shipped as a standalone `@register_job("iceberg_orphan_sweep")` weekly Sunday-03:00-IST job. **Consolidated into `iceberg_maintenance` later the same day** (see Phase 7 below).
+
+### Phase 7 — consolidation into `iceberg_maintenance` (single job type)
+
+- `execute_iceberg_maintenance` in `backend/jobs/executor.py` now calls `cleanup_orphans_v2(tbl, skip_backup=True)` immediately after `compact_table(tbl)` — same outer backup, two passes per table.
+- Standalone `execute_iceberg_orphan_sweep` removed (158 lines deleted). The legacy no-op `cleanup_orphans()` + `expire_snapshots()` call sites in the daily maintenance loop replaced by the real `cleanup_orphans_v2()`.
+- `public.scheduled_jobs` row for `iceberg_orphan_sweep` deleted (idempotent SQL).
+- Frontend: added **Iceberg Maintenance** tile to `SchedulerTab.tsx` job-type picker (amber ZapIcon, sub: "Compact + orphan sweep") + filter dropdown option + `typeLabelMap` entry.
+- Backend restarted; verified `iceberg_orphan_sweep` removed from `JOB_EXECUTORS`, `iceberg_maintenance` present.
 
 ### Phase 6 — docs + amendment + closure
 
