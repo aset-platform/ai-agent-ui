@@ -1428,6 +1428,13 @@ def create_app(
           user's monthly-usage row.
         * pro default (or when superuser passes
           ``scope='self'``) returns only the caller's row.
+
+        Cached 30 s in Redis (ASETPLTFRM-334 phase C):
+        the underlying ``get_usage_stats`` aggregates
+        across all users and is 500-1500 ms cold; the
+        admin tab polls/refreshes frequently enough that
+        a 30 s window is invisible to operators but
+        flatlines hot-path latency.
         """
         if scope not in ("self", "all"):
             raise HTTPException(
@@ -1439,6 +1446,19 @@ def create_app(
                 status_code=403,
                 detail="scope='all' requires superuser",
             )
+        from cache import get_cache
+
+        cache = get_cache()
+        cache_key = (
+            f"cache:admin:usage-stats:{scope}:"
+            f"{user.user_id if scope == 'self' else 'all'}"
+        )
+        if cache:
+            hit = cache.get(cache_key)
+            if hit is not None:
+                import json
+                return json.loads(hit)
+
         from usage_tracker import get_usage_stats
 
         all_rows = await get_usage_stats()
@@ -1448,7 +1468,13 @@ def create_app(
                 r for r in all_rows
                 if str(r.get("user_id", "")) == uid
             ]
-        return {"users": all_rows, "scope": scope}
+        result = {"users": all_rows, "scope": scope}
+        if cache:
+            import json
+            cache.set(
+                cache_key, json.dumps(result), 30,
+            )
+        return result
 
     async def _admin_reset_selected(
         request: Request,

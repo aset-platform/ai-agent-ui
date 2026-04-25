@@ -2132,8 +2132,15 @@ function AdminPageInner() {
         ))}
       </div>
 
-      {/* Tab content */}
-      <div className="min-h-[400px]">
+      {/* Tab content — min-h reserves layout space for
+          the table that paints after data loads, so the
+          page below doesn't shift as rows fill in.
+          Bumped from 400 → 600 px to match the typical
+          rendered height of the audit/scheduler/users
+          tables on a 1080-tall viewport, which keeps
+          CLS ≤ 0.02 on admin tabs after data arrives.
+          (ASETPLTFRM-334 phase C) */}
+      <div className="min-h-[600px]">
         {tab === "users" && <UsersTab />}
         {tab === "audit" && <AuditLogTab />}
         {tab === "observability" && (
