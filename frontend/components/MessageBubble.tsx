@@ -6,10 +6,29 @@
  */
 
 import React from "react";
-import { MarkdownContent } from "./MarkdownContent";
+import dynamic from "next/dynamic";
 import { ActionButtons } from "./ActionButtons";
 import { formatTime } from "@/lib/constants";
 import type { Message } from "@/lib/constants";
+
+// MarkdownContent transitively pulls react-markdown +
+// remark-gfm (~105 KB pre-gzip). Dashboard loads
+// MessageBubble for the chat panel but the panel is
+// collapsed by default — defer the chunk so its
+// parse cost doesn't show up in initial dashboard
+// LCP. (ASETPLTFRM-334 phase C)
+const MarkdownContent = dynamic(
+  () =>
+    import("./MarkdownContent").then(
+      (m) => m.MarkdownContent,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="text-sm text-gray-400">…</div>
+    ),
+  },
+);
 
 interface MessageBubbleProps {
   message: Message;

@@ -19,7 +19,7 @@ import logging
 import os
 import shutil
 import subprocess
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 _logger = logging.getLogger(__name__)
@@ -178,7 +178,18 @@ def list_backups(
     """List available backups with dates and sizes.
 
     Returns:
-        List of dicts with date, path, size_mb.
+        List of dicts with:
+          - date: folder-name date (e.g. "2026-04-25").
+            Suffixed names like "2026-04-22-pre-dedupe"
+            preserved verbatim.
+          - path: absolute filesystem path.
+          - size_mb: directory size in MB.
+          - completed_at: ISO 8601 UTC timestamp with
+            ``Z`` suffix derived from the directory's
+            mtime — the actual backup completion time.
+            Use this (not ``date``) for age math; the
+            folder name only carries the calendar date,
+            not the time-of-completion.
     """
     root = Path(backup_root or BACKUP_ROOT)
     if not root.exists():
@@ -190,12 +201,26 @@ def list_backups(
             "backup-",
         ):
             dt = d.name.replace("backup-", "")
+            # Convert mtime → UTC ISO string with Z so
+            # the frontend's `new Date(...)` parses it
+            # unambiguously and renders in the user's
+            # browser TZ. Mirrors the `_iso_utc()`
+            # convention used by other admin endpoints.
+            completed_at = (
+                datetime.fromtimestamp(
+                    d.stat().st_mtime,
+                    tz=timezone.utc,
+                )
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
             backups.append({
                 "date": dt,
                 "path": str(d),
                 "size_mb": round(
                     _dir_size_mb(d), 1,
                 ),
+                "completed_at": completed_at,
             })
     return backups
 

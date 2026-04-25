@@ -243,6 +243,153 @@ def _sector_for_ticker(
     return _safe_str(match.iloc[-1].get("sector"))
 
 
+def _compute_peg(
+    pe: float | None,
+    earnings_growth: float | None,
+) -> float | None:
+    """Compute trailing PEG from PE and TTM YoY growth.
+
+    Undefined for loss-makers (PE<=0) or declining
+    earnings (growth<=0) — returns None in those cases
+    rather than a misleading negative or huge number.
+    """
+    if pe is None or pe <= 0:
+        return None
+    if earnings_growth is None or earnings_growth <= 0:
+        return None
+    return round(pe / (earnings_growth * 100.0), 3)
+
+
+def _peg_for_ticker(
+    ticker: str,
+    company_df: pd.DataFrame,
+) -> tuple[float | None, float | None]:
+    """Return (peg_ratio_computed, peg_ratio_yf)."""
+    if company_df.empty or "ticker" not in company_df:
+        return (None, None)
+    match = company_df[company_df["ticker"] == ticker]
+    if match.empty:
+        return (None, None)
+    row = match.iloc[-1]
+    pe = _safe(row.get("pe_ratio"))
+    eg = _safe(row.get("earnings_growth"))
+    # peg_ratio_yf only present post schema evolution —
+    # returns None for legacy rows via DataFrame.get()
+    # guard.
+    yf_val = None
+    if "peg_ratio_yf" in match.columns:
+        yf_val = _safe(row.get("peg_ratio_yf"))
+    return (_compute_peg(pe, eg), yf_val)
+
+
+def _peg_ttm_from_quarters(
+    eps_desc: list[float],
+    latest_close: float | None,
+) -> float | None:
+    """Pure PEG-from-quarterly computation.
+
+    Inputs:
+      eps_desc: quarterly ``eps_diluted`` values, most
+        recent first. Need ≥5 items for single-quarter
+        YoY growth.
+      latest_close: price driving the P/E numerator.
+
+    Guards: ≥5 quarters, positive TTM EPS, positive
+    year-ago quarter, positive growth, positive close.
+    Returns ``None`` when any guard fails (matches the
+    other PEG variants' "undefined for declining /
+    loss-making" convention).
+    """
+    if latest_close is None or latest_close <= 0:
+        return None
+    if len(eps_desc) < 5:
+        return None
+    ttm_eps = sum(eps_desc[:4])
+    q_latest = eps_desc[0]
+    q_year_ago = eps_desc[4]
+    if ttm_eps <= 0 or q_latest <= 0:
+        return None
+    if q_year_ago <= 0:
+        return None
+    growth = (q_latest / q_year_ago) - 1.0
+    if growth <= 0:
+        return None
+    pe = float(latest_close) / ttm_eps
+    if pe <= 0:
+        return None
+    return round(pe / (growth * 100.0), 3)
+
+
+def _compute_peg_ttm_batch(
+    tickers: list[str],
+    price_map: dict[str, float | None],
+) -> dict[str, float | None]:
+    """PEG computed from our own quarterly filings.
+
+    TTM EPS (sum of last 4 quarterly ``eps_diluted``)
+    drives the P/E numerator. Growth is the quarter-vs-
+    year-earlier-quarter YoY change in ``eps_diluted``
+    — the closest proxy we can compute given that our
+    ``quarterly_results`` table currently caps at ~5
+    quarters per ticker (not enough for TTM-vs-prior-
+    TTM growth). When quarterly history deepens to 8+
+    quarters, swap the single-quarter YoY for proper
+    TTM-vs-prior-TTM growth without changing callers.
+
+    Guards: requires ≥5 quarters, positive TTM EPS,
+    positive year-ago quarter EPS, positive growth, and
+    a latest close price. Returns a ticker→peg dict;
+    unqualified tickers are omitted (callers coerce
+    missing entries to ``None``).
+    """
+    if not tickers:
+        return {}
+    try:
+        from backend.db.duckdb_engine import (
+            query_iceberg_df,
+        )
+    except Exception:
+        return {}
+
+    placeholders = ",".join(f"'{t}'" for t in tickers)
+    try:
+        qr_df = query_iceberg_df(
+            "stocks.quarterly_results",
+            "SELECT ticker, quarter_end, eps_diluted "
+            "FROM quarterly_results "
+            f"WHERE ticker IN ({placeholders}) "
+            "  AND statement_type = 'income' "
+            "  AND eps_diluted IS NOT NULL",
+        )
+    except Exception as exc:
+        _logger.warning(
+            "peg_ttm quarterly_results read failed: %s",
+            exc,
+        )
+        return {}
+
+    if qr_df.empty:
+        return {}
+
+    result: dict[str, float | None] = {}
+    for ticker, group in qr_df.groupby("ticker"):
+        g = group.sort_values(
+            "quarter_end", ascending=False,
+        ).reset_index(drop=True)
+        try:
+            eps_desc = [
+                float(v) for v in g["eps_diluted"]
+            ]
+        except Exception:
+            continue
+        peg = _peg_ttm_from_quarters(
+            eps_desc, price_map.get(str(ticker)),
+        )
+        if peg is not None:
+            result[str(ticker)] = peg
+    return result
+
+
 def _collect_sectors(
     company_df: pd.DataFrame,
     tickers: list[str],
@@ -253,6 +400,220 @@ def _collect_sectors(
     filtered = company_df[company_df["ticker"].isin(tickers)]
     sectors = filtered["sector"].dropna().unique().tolist()
     return sorted(str(s) for s in sectors if s)
+
+
+def _piotroski_map(tickers: list[str]) -> dict[str, dict]:
+    """Latest Piotroski score + label per ticker.
+
+    Returns ``{ticker: {"score": int, "label": str}}``.
+    Empty dict on any read failure (never fatal — the
+    column is optional).
+    """
+    if not tickers:
+        return {}
+    try:
+        from backend.db.duckdb_engine import (
+            query_iceberg_df,
+        )
+    except Exception:
+        return {}
+    ph = ",".join(f"'{t}'" for t in tickers)
+    try:
+        df = query_iceberg_df(
+            "stocks.piotroski_scores",
+            "SELECT ticker, total_score, label "
+            "FROM ("
+            "  SELECT ticker, total_score, label, "
+            "  ROW_NUMBER() OVER ("
+            "    PARTITION BY ticker "
+            "    ORDER BY score_date DESC"
+            "  ) AS rn "
+            "  FROM piotroski_scores "
+            f"  WHERE ticker IN ({ph})"
+            ") WHERE rn = 1",
+        )
+    except Exception as exc:
+        _logger.debug("piotroski_map read: %s", exc)
+        return {}
+    out: dict[str, dict] = {}
+    for _, r in df.iterrows():
+        t = str(r["ticker"])
+        try:
+            score = int(r["total_score"])
+        except Exception:
+            score = None
+        out[t] = {
+            "score": score,
+            "label": _safe_str(r.get("label")),
+        }
+    return out
+
+
+def _forecast_map(tickers: list[str]) -> dict[str, dict]:
+    """Latest non-backtest forecast run per ticker.
+
+    Exposes ``confidence_score`` + 3/6/9-month
+    ``target_*_pct_change`` on one dict per ticker.
+    Returns empty dict on any read failure.
+    """
+    if not tickers:
+        return {}
+    try:
+        from backend.db.duckdb_engine import (
+            query_iceberg_df,
+        )
+    except Exception:
+        return {}
+    ph = ",".join(f"'{t}'" for t in tickers)
+    try:
+        df = query_iceberg_df(
+            "stocks.forecast_runs",
+            "SELECT ticker, confidence_score, "
+            "target_3m_pct_change, "
+            "target_6m_pct_change, "
+            "target_9m_pct_change "
+            "FROM ("
+            "  SELECT ticker, confidence_score, "
+            "  target_3m_pct_change, "
+            "  target_6m_pct_change, "
+            "  target_9m_pct_change, "
+            "  ROW_NUMBER() OVER ("
+            "    PARTITION BY ticker "
+            "    ORDER BY computed_at DESC"
+            "  ) AS rn "
+            "  FROM forecast_runs "
+            f"  WHERE ticker IN ({ph}) "
+            "    AND horizon_months != 0"
+            ") WHERE rn = 1",
+        )
+    except Exception as exc:
+        _logger.debug("forecast_map read: %s", exc)
+        return {}
+    out: dict[str, dict] = {}
+    for _, r in df.iterrows():
+        t = str(r["ticker"])
+        out[t] = {
+            "confidence": _safe(
+                r.get("confidence_score"),
+            ),
+            "target_3m_pct": _safe(
+                r.get("target_3m_pct_change"),
+            ),
+            "target_6m_pct": _safe(
+                r.get("target_6m_pct_change"),
+            ),
+            "target_9m_pct": _safe(
+                r.get("target_9m_pct_change"),
+            ),
+        }
+    return out
+
+
+def _quarterly_latest_map(
+    tickers: list[str],
+) -> dict[str, dict]:
+    """Latest income-statement snapshot per ticker.
+
+    Returns ``{ticker: {"eps", "revenue", "net_income"}}``
+    from the most recent ``quarter_end`` where
+    ``statement_type == 'income'``. Uses
+    ``eps_diluted`` for EPS when available (falls
+    back to ``eps_basic``).
+    """
+    if not tickers:
+        return {}
+    try:
+        from backend.db.duckdb_engine import (
+            query_iceberg_df,
+        )
+    except Exception:
+        return {}
+    ph = ",".join(f"'{t}'" for t in tickers)
+    try:
+        df = query_iceberg_df(
+            "stocks.quarterly_results",
+            "SELECT ticker, eps_diluted, eps_basic, "
+            "revenue, net_income "
+            "FROM ("
+            "  SELECT ticker, eps_diluted, eps_basic, "
+            "  revenue, net_income, "
+            "  ROW_NUMBER() OVER ("
+            "    PARTITION BY ticker "
+            "    ORDER BY quarter_end DESC"
+            "  ) AS rn "
+            "  FROM quarterly_results "
+            f"  WHERE ticker IN ({ph}) "
+            "    AND statement_type = 'income'"
+            ") WHERE rn = 1",
+        )
+    except Exception as exc:
+        _logger.debug(
+            "quarterly_latest_map read: %s", exc,
+        )
+        return {}
+    out: dict[str, dict] = {}
+    for _, r in df.iterrows():
+        t = str(r["ticker"])
+        eps = _safe(r.get("eps_diluted"))
+        if eps is None:
+            eps = _safe(r.get("eps_basic"))
+        out[t] = {
+            "eps": eps,
+            "revenue": _safe(r.get("revenue")),
+            "net_income": _safe(r.get("net_income")),
+        }
+    return out
+
+
+def _company_info_for_ticker(
+    ticker: str,
+    company_df: pd.DataFrame,
+) -> dict:
+    """Pull company_info row fields for a ticker.
+
+    Returns dict with the full set of screener-relevant
+    columns, each ``None`` if missing.
+    """
+    empty = {
+        "company_name": None,
+        "industry": None,
+        "currency": None,
+        "market_cap": None,
+        "pe_ratio": None,
+        "price_to_book": None,
+        "dividend_yield": None,
+        "beta": None,
+        "earnings_growth": None,
+        "revenue_growth": None,
+        "profit_margins": None,
+        "current_price": None,
+        "week_52_high": None,
+        "week_52_low": None,
+    }
+    if company_df.empty or "ticker" not in company_df:
+        return empty
+    match = company_df[company_df["ticker"] == ticker]
+    if match.empty:
+        return empty
+    row = match.iloc[-1]
+    return {
+        "company_name": _safe_str(row.get("company_name")),
+        "industry": _safe_str(row.get("industry")),
+        "currency": _safe_str(row.get("currency")),
+        "market_cap": _safe(row.get("market_cap")),
+        "pe_ratio": _safe(row.get("pe_ratio")),
+        "price_to_book": _safe(row.get("price_to_book")),
+        "dividend_yield": _safe(row.get("dividend_yield")),
+        "beta": _safe(row.get("beta")),
+        "earnings_growth": _safe(
+            row.get("earnings_growth"),
+        ),
+        "revenue_growth": _safe(row.get("revenue_growth")),
+        "profit_margins": _safe(row.get("profit_margins")),
+        "current_price": _safe(row.get("current_price")),
+        "week_52_high": _safe(row.get("week_52_high")),
+        "week_52_low": _safe(row.get("week_52_low")),
+    }
 
 
 def _set_cache_header(response: Response):
@@ -309,7 +670,8 @@ def create_insights_router() -> APIRouter:
                 "sma_200_signal, "
                 "annualized_return_pct, "
                 "annualized_volatility_pct, "
-                "sharpe_ratio "
+                "sharpe_ratio, "
+                "max_drawdown_pct "
                 "FROM analysis_summary "
                 f"WHERE ticker IN ({ph})",
             )
@@ -440,37 +802,101 @@ def create_insights_router() -> APIRouter:
                 exc_info=True,
             )
 
+        # Batch-compute ground-truth TTM PEG from
+        # quarterly_results filings. Single DuckDB read;
+        # returns a sparse dict keyed by ticker.
+        peg_ttm_map = _compute_peg_ttm_batch(
+            tickers, price_map,
+        )
+
+        # Extended metrics — one batched DuckDB read
+        # per source. All three are ~20.5%–65%
+        # coverage in the universe today.
+        piotroski = _piotroski_map(tickers)
+        forecasts = _forecast_map(tickers)
+        quarterly = _quarterly_latest_map(tickers)
+
         rows: list[ScreenerRow] = []
         for _, row in df.iterrows():
             t = str(row["ticker"])
             s_tup = sent_map.get(t)
+            ci = _company_info_for_ticker(t, company_df)
+            peg_t, peg_yf = _peg_for_ticker(t, company_df)
+            pio = piotroski.get(t) or {}
+            fc = forecasts.get(t) or {}
+            qr = quarterly.get(t) or {}
             rows.append(
                 ScreenerRow(
                     ticker=t,
+                    company_name=ci["company_name"],
+                    industry=ci["industry"],
+                    currency=ci["currency"],
+                    sector=_sector_for_ticker(
+                        t, company_df,
+                    ),
+                    market=_market(t),
+                    tags=tags_map.get(t, []),
+                    # Pricing
                     price=price_map.get(t),
-                    rsi_14=rsi_map.get(t),
-                    rsi_signal=str(row.get("rsi_signal", "")) or None,
-                    macd_signal=str(row.get("macd_signal_text", "")) or None,
-                    sma_200_signal=str(row.get("sma_200_signal", "")) or None,
-                    sentiment_score=(
-                        s_tup[0] if s_tup else None
-                    ),
-                    sentiment_headlines=(
-                        s_tup[1] if s_tup else None
-                    ),
+                    current_price=ci["current_price"],
+                    week_52_high=ci["week_52_high"],
+                    week_52_low=ci["week_52_low"],
+                    # Valuation
+                    market_cap=ci["market_cap"],
+                    pe_ratio=ci["pe_ratio"],
+                    price_to_book=ci["price_to_book"],
+                    dividend_yield=ci["dividend_yield"],
+                    peg_ratio=peg_t,
+                    peg_ratio_yf=peg_yf,
+                    peg_ratio_ttm=peg_ttm_map.get(t),
+                    # Profitability
+                    profit_margins=ci["profit_margins"],
+                    earnings_growth=ci["earnings_growth"],
+                    revenue_growth=ci["revenue_growth"],
+                    eps=qr.get("eps"),
+                    revenue=qr.get("revenue"),
+                    net_income=qr.get("net_income"),
+                    # Risk
                     annualized_return_pct=_safe(
                         row.get("annualized_return_pct")
                     ),
                     annualized_volatility_pct=_safe(
                         row.get("annualized_volatility_pct")
                     ),
-                    sharpe_ratio=_safe(row.get("sharpe_ratio")),
-                    sector=_sector_for_ticker(
-                        t,
-                        company_df,
+                    sharpe_ratio=_safe(
+                        row.get("sharpe_ratio")
                     ),
-                    market=_market(t),
-                    tags=tags_map.get(t, []),
+                    max_drawdown_pct=_safe(
+                        row.get("max_drawdown_pct")
+                    ),
+                    beta=ci["beta"],
+                    # Technical + sentiment
+                    rsi_14=rsi_map.get(t),
+                    rsi_signal=str(
+                        row.get("rsi_signal", "")
+                    ) or None,
+                    macd_signal=str(
+                        row.get("macd_signal_text", "")
+                    ) or None,
+                    sma_200_signal=str(
+                        row.get("sma_200_signal", "")
+                    ) or None,
+                    sentiment_score=(
+                        s_tup[0] if s_tup else None
+                    ),
+                    sentiment_headlines=(
+                        s_tup[1] if s_tup else None
+                    ),
+                    # Quality
+                    piotroski_score=pio.get("score"),
+                    piotroski_label=pio.get("label"),
+                    forecast_confidence=fc.get(
+                        "confidence",
+                    ),
+                    # Forecast
+                    target_3m_pct=fc.get("target_3m_pct"),
+                    target_6m_pct=fc.get("target_6m_pct"),
+                    target_9m_pct=fc.get("target_9m_pct"),
                 )
             )
 
@@ -1481,8 +1907,13 @@ def create_insights_router() -> APIRouter:
             parse_query,
         )
 
-        # Cache check
+        # Cache check — key includes display_columns so
+        # toggling column visibility re-runs the query
+        # rather than returning a stale subset.
         cache = get_cache()
+        dcols = ",".join(
+            sorted(req.display_columns or []),
+        )
         ck = (
             "cache:insights:screenql:"
             + sha256(
@@ -1490,6 +1921,7 @@ def create_insights_router() -> APIRouter:
                 f"{req.page_size}:"
                 f"{req.sort_by}:"
                 f"{req.sort_dir}:"
+                f"{dcols}:"
                 f"{user.user_id}".encode()
             ).hexdigest()[:16]
         )
@@ -1524,6 +1956,7 @@ def create_insights_router() -> APIRouter:
             ticker_filter=(
                 tickers if tickers else None
             ),
+            display_columns=req.display_columns,
         )
 
         # Execute via DuckDB

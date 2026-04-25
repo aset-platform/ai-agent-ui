@@ -95,6 +95,14 @@ FIELD_CATALOG: dict[str, FieldDef] = {
         "ci", "pe_ratio", FieldType.NUMBER,
         "P/E Ratio", "Valuation",
     ),
+    "peg_ratio": FieldDef(
+        "ci", "peg_ratio", FieldType.NUMBER,
+        "PEG (trailing)", "Valuation",
+    ),
+    "peg_ratio_yf": FieldDef(
+        "ci", "peg_ratio_yf", FieldType.NUMBER,
+        "PEG (yfinance)", "Valuation",
+    ),
     "price_to_book": FieldDef(
         "ci", "price_to_book", FieldType.NUMBER,
         "Price/Book", "Valuation",
@@ -585,10 +593,50 @@ _CTE_TEMPLATES: dict[str, str] = {
     "ci": (
         "ci_raw AS (\n"
         "  SELECT *,\n"
-        "    CASE WHEN ticker LIKE '%.NS'\n"
-        "      OR ticker LIKE '%.BO'\n"
-        "      THEN 'india' ELSE 'us'\n"
+        # Market classification — authoritative source
+        # is yfinance's `exchange` field stored on
+        # `company_info` (CLAUDE.md Rule 19: don't
+        # reinvent classification locally). Yahoo
+        # returns internal codes, not "NSE"/"BSE":
+        #   NSI = NSE, BSE = BSE (both → india)
+        #   NMS/NYQ/SNP/CXI/… → us
+        # Fallbacks preserve behaviour on rows missing
+        # `exchange` (current warehouse has ~13 NaN):
+        #   1. `.NS`/`.BO` suffix → india
+        #   2. Known Indian index tickers → india
+        #   3. Otherwise → us
+        # Long-term fix (separate ticket): materialise
+        # a `market` column on company_info at write
+        # time via detect_market() and read it here
+        # directly.
+        "    CASE\n"
+        "      WHEN exchange IN ('NSI', 'BSE')\n"
+        "        THEN 'india'\n"
+        "      WHEN exchange IS NOT NULL\n"
+        "        AND exchange != ''\n"
+        "        THEN 'us'\n"
+        "      WHEN ticker LIKE '%.NS'\n"
+        "        OR ticker LIKE '%.BO'\n"
+        "        THEN 'india'\n"
+        "      WHEN ticker IN (\n"
+        "        '^NSEI', '^BSESN', '^INDIAVIX'\n"
+        "      ) THEN 'india'\n"
+        "      ELSE 'us'\n"
         "    END AS market,\n"
+        # PEG = P/E divided by growth%. Undefined for
+        # loss-makers (pe_ratio<=0) or declining-
+        # earnings stocks (earnings_growth<=0) — they
+        # return NULL rather than a garbage value.
+        "    CASE\n"
+        "      WHEN pe_ratio IS NULL\n"
+        "        OR pe_ratio <= 0\n"
+        "        THEN NULL\n"
+        "      WHEN earnings_growth IS NULL\n"
+        "        OR earnings_growth <= 0\n"
+        "        THEN NULL\n"
+        "      ELSE pe_ratio\n"
+        "        / (earnings_growth * 100.0)\n"
+        "    END AS peg_ratio,\n"
         "    ROW_NUMBER() OVER (\n"
         "      PARTITION BY ticker\n"
         "      ORDER BY fetched_at DESC\n"
@@ -748,13 +796,38 @@ def generate_sql(
     sort_by: str | None = None,
     sort_dir: str = "desc",
     ticker_filter: list[str] | None = None,
+    display_columns: list[str] | None = None,
 ) -> GeneratedQuery:
-    """Generate DuckDB SQL from parsed AST."""
+    """Generate DuckDB SQL from parsed AST.
+
+    ``display_columns`` (ASETPLTFRM-333): optional list
+    of field names to add to the SELECT beyond what the
+    WHERE references. Lets the UI column selector
+    expose fields like ``piotroski_score`` or ``eps``
+    in results even when they're not part of the
+    filter. Unknown / unregistered field names are
+    silently ignored.
+    """
     tables = _collect_tables(ast)
     fields_used = _collect_fields(ast)
 
     # Always need ci for base columns
     tables.add("ci")
+
+    # Merge display-only columns into the field set,
+    # preserving filter-referenced columns first so the
+    # SELECT ordering stays predictable for the UI.
+    if display_columns:
+        extra: list[str] = []
+        seen = set(fields_used)
+        for name in display_columns:
+            if name in FIELD_CATALOG and name not in seen:
+                extra.append(name)
+                seen.add(name)
+                fd = FIELD_CATALOG[name]
+                if fd.table != "st":
+                    tables.add(fd.table)
+        fields_used = [*fields_used, *extra]
 
     # Build params
     params: list[Any] = []

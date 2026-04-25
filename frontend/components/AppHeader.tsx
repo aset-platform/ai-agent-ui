@@ -11,10 +11,11 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { clearTokens } from "@/lib/auth";
+import { apiFetch } from "@/lib/apiFetch";
 import { useChatContext } from "@/providers/ChatProvider";
 import { useLayoutContext } from "@/providers/LayoutProvider";
 import type { UserProfile } from "@/hooks/useEditProfile";
-import { BACKEND_URL } from "@/lib/config";
+import { API_URL, BACKEND_URL } from "@/lib/config";
 import { MarketTicker } from "@/components/MarketTicker";
 
 interface AppHeaderProps {
@@ -90,6 +91,15 @@ export function AppHeader({
 
   const handleSignOut = async () => {
     await chatContext.flush();
+    // Backend /auth/logout clears the access_token + refresh_token
+    // HttpOnly cookies; without this call proxy.ts sees the
+    // refresh_token cookie (legacy-session hotfix) and bounces
+    // /login back to /dashboard, leaving the user "logged in".
+    try {
+      await apiFetch(`${API_URL}/auth/logout`, { method: "POST" });
+    } catch {
+      // best-effort — fall through to local cleanup either way
+    }
     clearTokens();
     window.location.href = "/login";
   };

@@ -44,6 +44,23 @@ export const KPI_TIPS: Record<string, string> = {
   "Sharpe Ratio":
     "Risk-adjusted return. >1 = good, " +
     ">2 = very good, <0 = losing money.",
+  "PEG (T)":
+    "Trailing PEG = P/E divided by TTM YoY " +
+    "earnings growth (yfinance-sourced). " +
+    "<1 = undervalued vs growth, ≈1 = fair, " +
+    ">2 = overvalued. " +
+    "Blank for loss-makers or declining earnings.",
+  "PEG (YF)":
+    "Forward PEG from yfinance (analyst-consensus " +
+    "growth). Mostly populated for US large-caps; " +
+    "sparse for Indian equities (yfinance data " +
+    "limitation).",
+  "PEG (Q)":
+    "PEG computed from our quarterly filings: " +
+    "TTM EPS for P/E + quarter-vs-year-earlier " +
+    "EPS growth. Ground-truth over yfinance's " +
+    "derived fields — populated where we have " +
+    "5+ quarters of income data.",
   "Ann. Ret %":
     "Annualized return percentage \u2014 " +
     "compound annual growth rate.",

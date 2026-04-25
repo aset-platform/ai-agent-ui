@@ -83,8 +83,11 @@ export function AssetPerformanceWidget({
       tooltip: {
         trigger: "axis",
         axisPointer: { type: "shadow" },
-        formatter: (p: Record<string, unknown>[]) => {
-          const d = p[0];
+        formatter: (params: unknown) => {
+          const arr = Array.isArray(params)
+            ? (params as Record<string, unknown>[])
+            : [params as Record<string, unknown>];
+          const d = arr[0];
           return `${d.name}: ${(d.value as number).toFixed(2)}%`;
         },
       },

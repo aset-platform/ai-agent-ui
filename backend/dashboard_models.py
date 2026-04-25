@@ -39,6 +39,7 @@ class TickerForecast(BaseModel):
     ticker: str
     run_date: str
     current_price: float
+    latest_close: float | None = None
     sentiment: str | None = None
     targets: list[ForecastTarget] = Field(
         default_factory=list,

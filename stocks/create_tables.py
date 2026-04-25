@@ -1727,13 +1727,18 @@ def create_tables() -> None:
         _ticker_partition_spec(ohlcv_schema),
     )
 
-    ti_schema = _technical_indicators_schema()
-    _create_table(
-        catalog,
-        _TECHNICAL_INDICATORS_TABLE,
-        ti_schema,
-        _ticker_partition_spec(ti_schema),
-    )
+    # ``stocks.technical_indicators`` was scaffolded
+    # for persisted RSI/MACD/SMA/etc. but the design
+    # moved to compute-on-demand from OHLCV via
+    # ``backend/tools/_analysis_indicators.py``. The
+    # Iceberg table was never populated and is listed
+    # in ``backend/maintenance/iceberg_maintenance.py
+    # ::DEAD_TABLES`` for cleanup. Removed from the
+    # ensure-tables pass so ``drop_dead_tables()`` can
+    # remove it permanently — re-add this block if a
+    # future ticket revives persisted indicators.
+    # The ``_technical_indicators_schema`` helper is
+    # left in place for that scenario.
 
     forecasts_schema = _forecasts_schema()
     _create_table(
@@ -1842,6 +1847,34 @@ def evolve_quarterly_results_schema() -> None:
     _logger.info(
         "Evolved quarterly_results schema: added %s",
         [f.name for f in to_add],
+    )
+
+
+def evolve_company_info_peg_yf() -> None:
+    """Add ``peg_ratio_yf`` to ``company_info`` if missing.
+
+    Captures yfinance's own ``pegRatio`` (or
+    ``trailingPegRatio``) — forward-looking, analyst-
+    consensus-driven — alongside our trailing PEG
+    computed from ``pe_ratio / earnings_growth``.
+    Idempotent: no-op when the column already exists.
+    """
+    catalog = _get_catalog()
+    tbl = catalog.load_table(_COMPANY_INFO_TABLE)
+    existing = {f.name for f in tbl.schema().fields}
+    if "peg_ratio_yf" in existing:
+        _logger.info(
+            "company_info already has peg_ratio_yf — "
+            "skipping evolution."
+        )
+        return
+    with tbl.update_schema() as update:
+        update.add_column(
+            path="peg_ratio_yf",
+            field_type=DoubleType(),
+        )
+    _logger.info(
+        "Evolved company_info schema: added peg_ratio_yf"
     )
 
 

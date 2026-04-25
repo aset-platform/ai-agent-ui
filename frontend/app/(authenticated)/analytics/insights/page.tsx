@@ -34,14 +34,42 @@ import {
 } from "@/components/insights/InsightsTable";
 import { InsightsFilters } from "@/components/insights/InsightsFilters";
 import {
+  ColumnSelector,
+} from "@/components/insights/ColumnSelector";
+import {
+  useColumnSelection,
+} from "@/lib/useColumnSelection";
+import {
   downloadCsv,
   type CsvColumn,
 } from "@/lib/downloadCsv";
-import { PlotlyChart } from "@/components/charts/PlotlyChart";
-import { CorrelationHeatmap } from "@/components/charts/CorrelationHeatmap";
+import dynamic from "next/dynamic";
+import type { BarSeries } from "@/components/charts/SimpleBarChart";
 import { PiotroskiBadge } from "@/components/insights/PiotroskiBadge";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { WidgetSkeleton } from "@/components/widgets/WidgetSkeleton";
+
+// Heavy chart libs (echarts 470 KB + zrender 170 KB) are
+// dynamic-imported so the Insights tab ships a ~1.5 MB lighter
+// initial bundle; users hit the chart only on specific tabs.
+// `SimpleBarChart` (echarts BarChart, tree-shaken) replaced
+// plotly.js-basic-dist (1 MB) on Sectors + Quarterly —
+// cuts those tabs' LCP from ~8.5 s to ~3.5 s and lets users who
+// already loaded dashboard widgets reuse the echarts chunk.
+const SimpleBarChart = dynamic(
+  () =>
+    import("@/components/charts/SimpleBarChart").then(
+      (m) => m.SimpleBarChart,
+    ),
+  { ssr: false, loading: () => <WidgetSkeleton className="h-96" /> },
+);
+const CorrelationHeatmap = dynamic(
+  () =>
+    import("@/components/charts/CorrelationHeatmap").then(
+      (m) => m.CorrelationHeatmap,
+    ),
+  { ssr: false, loading: () => <WidgetSkeleton className="h-96" /> },
+);
 import { WidgetError } from "@/components/widgets/WidgetError";
 import type {
   ScreenerRow,
@@ -312,6 +340,212 @@ const screenerCols: Column<ScreenerRow>[] = [
     label: "Sharpe",
     numeric: true,
     render: (r) => fmtNum(r.sharpe_ratio),
+  },
+  {
+    key: "peg_ratio",
+    label: "PEG (T)",
+    numeric: true,
+    render: (r) => fmtNum(r.peg_ratio),
+  },
+  {
+    key: "peg_ratio_yf",
+    label: "PEG (YF)",
+    numeric: true,
+    render: (r) => fmtNum(r.peg_ratio_yf),
+  },
+  {
+    key: "peg_ratio_ttm",
+    label: "PEG (Q)",
+    numeric: true,
+    render: (r) => fmtNum(r.peg_ratio_ttm),
+  },
+  // ── Identity / context ──────────────────────────
+  {
+    key: "company_name",
+    label: "Company",
+    render: (r) => r.company_name ?? "—",
+  },
+  {
+    key: "sector",
+    label: "Sector",
+    render: (r) => r.sector ?? "—",
+  },
+  {
+    key: "industry",
+    label: "Industry",
+    render: (r) => r.industry ?? "—",
+  },
+  {
+    key: "currency",
+    label: "Currency",
+    render: (r) => r.currency ?? "—",
+  },
+  // ── Pricing ─────────────────────────────────────
+  {
+    key: "current_price",
+    label: "Live Price",
+    numeric: true,
+    render: (r) => fmtNum(r.current_price),
+  },
+  {
+    key: "week_52_high",
+    label: "52W High",
+    numeric: true,
+    render: (r) => fmtNum(r.week_52_high),
+  },
+  {
+    key: "week_52_low",
+    label: "52W Low",
+    numeric: true,
+    render: (r) => fmtNum(r.week_52_low),
+  },
+  // ── Valuation ───────────────────────────────────
+  {
+    key: "market_cap",
+    label: "Market Cap",
+    numeric: true,
+    render: (r) =>
+      r.market_cap != null
+        ? (r.market_cap / 1e7).toFixed(0)
+        : "—",
+  },
+  {
+    key: "pe_ratio",
+    label: "P/E",
+    numeric: true,
+    render: (r) => fmtNum(r.pe_ratio),
+  },
+  {
+    key: "price_to_book",
+    label: "P/B",
+    numeric: true,
+    render: (r) => fmtNum(r.price_to_book),
+  },
+  {
+    key: "dividend_yield",
+    label: "Div Yield",
+    numeric: true,
+    render: (r) =>
+      r.dividend_yield != null
+        ? `${(r.dividend_yield * 100).toFixed(2)}%`
+        : "—",
+  },
+  // ── Profitability ───────────────────────────────
+  {
+    key: "profit_margins",
+    label: "Profit Margin",
+    numeric: true,
+    render: (r) =>
+      r.profit_margins != null
+        ? `${(r.profit_margins * 100).toFixed(2)}%`
+        : "—",
+  },
+  {
+    key: "earnings_growth",
+    label: "EPS Growth",
+    numeric: true,
+    render: (r) =>
+      r.earnings_growth != null
+        ? `${(r.earnings_growth * 100).toFixed(1)}%`
+        : "—",
+  },
+  {
+    key: "revenue_growth",
+    label: "Rev Growth",
+    numeric: true,
+    render: (r) =>
+      r.revenue_growth != null
+        ? `${(r.revenue_growth * 100).toFixed(1)}%`
+        : "—",
+  },
+  {
+    key: "eps",
+    label: "EPS",
+    numeric: true,
+    render: (r) => fmtNum(r.eps),
+  },
+  {
+    key: "revenue",
+    label: "Revenue (Cr)",
+    numeric: true,
+    render: (r) =>
+      r.revenue != null
+        ? (r.revenue / 1e7).toFixed(0)
+        : "—",
+  },
+  {
+    key: "net_income",
+    label: "Net Income (Cr)",
+    numeric: true,
+    render: (r) =>
+      r.net_income != null
+        ? (r.net_income / 1e7).toFixed(0)
+        : "—",
+  },
+  // ── Risk ────────────────────────────────────────
+  {
+    key: "max_drawdown_pct",
+    label: "Max DD %",
+    numeric: true,
+    render: (r) => fmtNum(r.max_drawdown_pct),
+  },
+  {
+    key: "beta",
+    label: "Beta",
+    numeric: true,
+    render: (r) => fmtNum(r.beta),
+  },
+  // ── Quality ─────────────────────────────────────
+  {
+    key: "piotroski_score",
+    label: "Piotroski",
+    numeric: true,
+    render: (r) =>
+      r.piotroski_score != null
+        ? String(r.piotroski_score)
+        : "—",
+  },
+  {
+    key: "piotroski_label",
+    label: "Piotroski Rating",
+    render: (r) => r.piotroski_label ?? "—",
+  },
+  {
+    key: "forecast_confidence",
+    label: "Forecast Conf.",
+    numeric: true,
+    render: (r) =>
+      r.forecast_confidence != null
+        ? r.forecast_confidence.toFixed(2)
+        : "—",
+  },
+  // ── Forecast ────────────────────────────────────
+  {
+    key: "target_3m_pct",
+    label: "3M Target %",
+    numeric: true,
+    render: (r) =>
+      r.target_3m_pct != null
+        ? `${r.target_3m_pct.toFixed(1)}%`
+        : "—",
+  },
+  {
+    key: "target_6m_pct",
+    label: "6M Target %",
+    numeric: true,
+    render: (r) =>
+      r.target_6m_pct != null
+        ? `${r.target_6m_pct.toFixed(1)}%`
+        : "—",
+  },
+  {
+    key: "target_9m_pct",
+    label: "9M Target %",
+    numeric: true,
+    render: (r) =>
+      r.target_9m_pct != null
+        ? `${r.target_9m_pct.toFixed(1)}%`
+        : "—",
   },
   {
     key: "action",
@@ -705,6 +939,69 @@ const piotroskiCols: Column<PiotroskiRow>[] = [
 ];
 
 // ---------------------------------------------------------------
+// Screener column catalog (for ColumnSelector popover)
+// ASETPLTFRM-333
+// ---------------------------------------------------------------
+
+/** Column key → category mapping shown in the selector. */
+const SCREENER_COL_CATALOG = [
+  { key: "ticker", label: "Ticker", category: "Identity" },
+  { key: "company_name", label: "Company", category: "Identity" },
+  { key: "sector", label: "Sector", category: "Identity" },
+  { key: "industry", label: "Industry", category: "Identity" },
+  { key: "currency", label: "Currency", category: "Identity" },
+  { key: "price", label: "Price", category: "Pricing" },
+  { key: "current_price", label: "Live Price", category: "Pricing" },
+  { key: "week_52_high", label: "52W High", category: "Pricing" },
+  { key: "week_52_low", label: "52W Low", category: "Pricing" },
+  { key: "market_cap", label: "Market Cap", category: "Valuation" },
+  { key: "pe_ratio", label: "P/E", category: "Valuation" },
+  { key: "peg_ratio", label: "PEG (T)", category: "Valuation" },
+  { key: "peg_ratio_yf", label: "PEG (YF)", category: "Valuation" },
+  { key: "peg_ratio_ttm", label: "PEG (Q)", category: "Valuation" },
+  { key: "price_to_book", label: "P/B", category: "Valuation" },
+  { key: "dividend_yield", label: "Div Yield", category: "Valuation" },
+  { key: "profit_margins", label: "Profit Margin", category: "Profitability" },
+  { key: "earnings_growth", label: "EPS Growth", category: "Profitability" },
+  { key: "revenue_growth", label: "Rev Growth", category: "Profitability" },
+  { key: "eps", label: "EPS", category: "Profitability" },
+  { key: "revenue", label: "Revenue (Cr)", category: "Profitability" },
+  { key: "net_income", label: "Net Income (Cr)", category: "Profitability" },
+  { key: "annualized_return_pct", label: "Ann. Ret %", category: "Risk" },
+  { key: "annualized_volatility_pct", label: "Vol %", category: "Risk" },
+  { key: "sharpe_ratio", label: "Sharpe", category: "Risk" },
+  { key: "max_drawdown_pct", label: "Max DD %", category: "Risk" },
+  { key: "beta", label: "Beta", category: "Risk" },
+  { key: "rsi_14", label: "RSI", category: "Technical" },
+  { key: "rsi_signal", label: "RSI Signal", category: "Technical" },
+  { key: "macd_signal", label: "MACD", category: "Technical" },
+  { key: "sma_200_signal", label: "vs SMA 200", category: "Technical" },
+  { key: "sentiment_score", label: "Sentiment", category: "Technical" },
+  { key: "piotroski_score", label: "Piotroski", category: "Quality" },
+  { key: "piotroski_label", label: "Piotroski Rating", category: "Quality" },
+  { key: "forecast_confidence", label: "Forecast Conf.", category: "Quality" },
+  { key: "target_3m_pct", label: "3M Target %", category: "Forecast" },
+  { key: "target_6m_pct", label: "6M Target %", category: "Forecast" },
+  { key: "target_9m_pct", label: "9M Target %", category: "Forecast" },
+  { key: "action", label: "Action", category: "Identity" },
+];
+
+/** Default columns shown on first load (~13, matches
+ *  the pre-selector UI so there's zero regression). */
+const SCREENER_DEFAULT_COLS = [
+  "ticker", "price", "rsi_14", "rsi_signal",
+  "sentiment_score", "macd_signal", "sma_200_signal",
+  "annualized_return_pct",
+  "annualized_volatility_pct", "sharpe_ratio",
+  "peg_ratio", "peg_ratio_yf", "peg_ratio_ttm",
+  "action",
+];
+
+const SCREENER_ALL_COL_KEYS = SCREENER_COL_CATALOG.map(
+  (c) => c.key,
+);
+
+// ---------------------------------------------------------------
 // CSV column definitions (for downloadCsv)
 // ---------------------------------------------------------------
 
@@ -729,7 +1026,36 @@ const screenerCsvCols: CsvColumn<ScreenerRow>[] = [
     header: "Vol %",
   },
   { key: "sharpe_ratio", header: "Sharpe" },
+  { key: "peg_ratio", header: "PEG (trailing)" },
+  { key: "peg_ratio_yf", header: "PEG (yfinance)" },
+  { key: "peg_ratio_ttm", header: "PEG (quarterly TTM)" },
   { key: "sector", header: "Sector" },
+  // Extended columns (ASETPLTFRM-333) — included in
+  // CSV when user toggles them on.
+  { key: "company_name", header: "Company" },
+  { key: "industry", header: "Industry" },
+  { key: "currency", header: "Currency" },
+  { key: "current_price", header: "Live Price" },
+  { key: "week_52_high", header: "52W High" },
+  { key: "week_52_low", header: "52W Low" },
+  { key: "market_cap", header: "Market Cap" },
+  { key: "pe_ratio", header: "P/E" },
+  { key: "price_to_book", header: "P/B" },
+  { key: "dividend_yield", header: "Div Yield" },
+  { key: "profit_margins", header: "Profit Margin" },
+  { key: "earnings_growth", header: "EPS Growth" },
+  { key: "revenue_growth", header: "Rev Growth" },
+  { key: "eps", header: "EPS" },
+  { key: "revenue", header: "Revenue" },
+  { key: "net_income", header: "Net Income" },
+  { key: "max_drawdown_pct", header: "Max DD %" },
+  { key: "beta", header: "Beta" },
+  { key: "piotroski_score", header: "Piotroski" },
+  { key: "piotroski_label", header: "Piotroski Rating" },
+  { key: "forecast_confidence", header: "Forecast Conf." },
+  { key: "target_3m_pct", header: "3M Target %" },
+  { key: "target_6m_pct", header: "6M Target %" },
+  { key: "target_9m_pct", header: "9M Target %" },
 ];
 
 const riskCsvCols: CsvColumn<RiskRow>[] = [
@@ -829,6 +1155,29 @@ function ScreenerTab() {
   const [rsiFilter, setRsiFilter] = useState("all");
   const [tag, setTag] = useState("all");
 
+  const [
+    selectedCols, setSelectedCols, resetCols,
+  ] = useColumnSelection(
+    "insights.columns.screener",
+    SCREENER_DEFAULT_COLS,
+    SCREENER_ALL_COL_KEYS,
+  );
+
+  // Filter the master screenerCols list to only the
+  // keys the user has toggled on, preserving the
+  // catalog's canonical ordering.
+  const visibleCols = useMemo(() => {
+    const s = new Set(selectedCols);
+    return screenerCols.filter((c) => s.has(c.key));
+  }, [selectedCols]);
+
+  const visibleCsvCols = useMemo(() => {
+    const s = new Set(selectedCols);
+    return screenerCsvCols.filter((c) =>
+      s.has(c.key as string),
+    );
+  }, [selectedCols]);
+
   const filtered = useMemo(() => {
     if (!data.value?.rows) return [];
     let rows = applyFilters(
@@ -846,7 +1195,10 @@ function ScreenerTab() {
     return rows;
   }, [data.value, market, sector, rsiFilter, tag]);
 
-  if (data.loading) return <WidgetSkeleton />;
+  // Render filters + table shell immediately; gating on
+  // data.loading hid the LCP element until SWR resolved
+  // (~5 s on perf runs). Hooks return data.value=null during
+  // load and the JSX uses ?? [] guards everywhere.
   if (data.error)
     return <WidgetError message={data.error} data-testid="insights-error" />;
 
@@ -864,15 +1216,24 @@ function ScreenerTab() {
         rsiFilter={rsiFilter}
         onRsiFilterChange={setRsiFilter}
       />
+      <div className="flex justify-end">
+        <ColumnSelector
+          catalog={SCREENER_COL_CATALOG}
+          selected={selectedCols}
+          onChange={setSelectedCols}
+          onReset={resetCols}
+          lockedKeys={["ticker"]}
+        />
+      </div>
       <InsightsTable<ScreenerRow>
-        columns={screenerCols}
+        columns={visibleCols}
         rows={filtered}
         defaultSort={{
           col: "ticker",
           dir: "asc",
         }}
         onDownload={(r) =>
-          downloadCsv(r, screenerCsvCols, "screener")
+          downloadCsv(r, visibleCsvCols, "screener")
         }
       />
     </div>
@@ -895,7 +1256,10 @@ function TargetsTab() {
     );
   }, [data.value, market, sector, ticker]);
 
-  if (data.loading) return <WidgetSkeleton />;
+  // Render filters + table shell immediately; gating on
+  // data.loading hid the LCP element until SWR resolved
+  // (~5 s on perf runs). Hooks return data.value=null during
+  // load and the JSX uses ?? [] guards everywhere.
   if (data.error)
     return <WidgetError message={data.error} data-testid="insights-error" />;
 
@@ -944,7 +1308,10 @@ function DividendsTab() {
     );
   }, [data.value, market, sector, ticker]);
 
-  if (data.loading) return <WidgetSkeleton />;
+  // Render filters + table shell immediately; gating on
+  // data.loading hid the LCP element until SWR resolved
+  // (~5 s on perf runs). Hooks return data.value=null during
+  // load and the JSX uses ?? [] guards everywhere.
   if (data.error)
     return <WidgetError message={data.error} data-testid="insights-error" />;
 
@@ -992,7 +1359,10 @@ function RiskTab() {
     );
   }, [data.value, market, sector]);
 
-  if (data.loading) return <WidgetSkeleton />;
+  // Render filters + table shell immediately; gating on
+  // data.loading hid the LCP element until SWR resolved
+  // (~5 s on perf runs). Hooks return data.value=null during
+  // load and the JSX uses ?? [] guards everywhere.
   if (data.error)
     return <WidgetError message={data.error} data-testid="insights-error" />;
 
@@ -1024,33 +1394,21 @@ function SectorsTab() {
   const [market, setMarket] = useState("all");
   const data = useSectors(market);
 
+  // Keep this gate — the chart appears conditionally on
+  // (rows.length > 0), so a no-gate render lets it pop in
+  // mid-page after data load and triggers CLS = 0.254 (caught
+  // in 2026-04-25 audit). Page-level InsightsPageSkeleton
+  // already provides the LCP win at SSR.
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
     return <WidgetError message={data.error} data-testid="insights-error" />;
 
   const rows = data.value?.rows ?? [];
 
-  // Bar chart data.
-  const chartData: Plotly.Data[] = [
-    {
-      type: "bar",
-      x: rows.map((r) => r.sector),
-      y: rows.map((r) => r.avg_return_pct ?? 0),
-      marker: {
-        color: rows.map((r) =>
-          (r.avg_return_pct ?? 0) >= 0
-            ? "#10b981"
-            : "#ef4444",
-        ),
-      },
-      text: rows.map((r) =>
-        r.avg_return_pct != null
-          ? `${r.avg_return_pct.toFixed(1)}%`
-          : "",
-      ),
-      textposition: "outside",
-    },
-  ];
+  const sectorBars = rows.map((r) => r.avg_return_pct ?? 0);
+  const sectorColors = rows.map((r) =>
+    (r.avg_return_pct ?? 0) >= 0 ? "#10b981" : "#ef4444",
+  );
 
   return (
     <div className="space-y-4">
@@ -1060,22 +1418,20 @@ function SectorsTab() {
       />
       {rows.length > 0 && (
         <div data-testid="insights-chart">
-        <PlotlyChart
-          data={chartData}
-          layout={{
-            title: {
-              text: "Average Annualized Return by Sector",
-              font: { size: 14 },
-            },
-            showlegend: false,
-            yaxis: { title: { text: "Avg Return %" } },
-            xaxis: {
-              tickangle: -30,
-              automargin: true,
-            },
-          }}
-          height={320}
-        />
+          <SimpleBarChart
+            categories={rows.map((r) => r.sector)}
+            series={[
+              {
+                name: "Avg Return",
+                values: sectorBars,
+                colors: sectorColors,
+              },
+            ]}
+            title="Average Annualized Return by Sector"
+            yAxisLabel="Avg Return %"
+            showLabels
+            valueFormatter={(v) => `${v.toFixed(1)}%`}
+          />
         </div>
       )}
       <InsightsTable<SectorRow>
@@ -1097,6 +1453,10 @@ function CorrelationTab() {
   const [period, setPeriod] = useState("1y");
   const data = useCorrelation(period, "all");
 
+  // Keep this loading gate — the heatmap canvas is much larger
+  // than any header text, so removing the gate lets the heatmap
+  // become the LCP candidate (paints ~2 s late). The pre-existing
+  // skeleton fallback was actually doing the right thing here.
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
     return (
@@ -1266,6 +1626,10 @@ function QuarterlyTab() {
     portfolioTickerSet,
   ]);
 
+  // Keep this gate — the dynamic-columns table changes width
+  // significantly when stmtType data arrives; without the
+  // gate, content shifts and CLS spikes to 0.254 (caught in
+  // 2026-04-25 audit). InsightsPageSkeleton handles LCP at SSR.
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
     return <WidgetError message={data.error} data-testid="insights-error" />;
@@ -1357,71 +1721,54 @@ function QuarterlyTab() {
   const allCols = [...baseCols, ...metricCols];
 
   // Chart: first metric pair for filtered rows.
-  let chartData: Plotly.Data[] = [];
+  let chartCategories: string[] = [];
+  let chartSeries: BarSeries[] = [];
   if (filtered.length > 0) {
-    const labels = filtered.map(
+    chartCategories = filtered.map(
       (r) =>
         `${r.ticker} ${r.quarter_label ?? ""}`.trim(),
     );
     if (stmtType === "income") {
-      chartData = [
+      chartSeries = [
         {
-          type: "bar",
           name: "Revenue",
-          x: labels,
-          y: filtered.map((r) => r.revenue ?? 0),
-          marker: { color: "#6366f1" },
+          values: filtered.map((r) => r.revenue ?? 0),
         },
         {
-          type: "bar",
           name: "Net Income",
-          x: labels,
-          y: filtered.map(
+          values: filtered.map(
             (r) => r.net_income ?? 0,
           ),
-          marker: { color: "#10b981" },
         },
       ];
     } else if (stmtType === "balance") {
-      chartData = [
+      chartSeries = [
         {
-          type: "bar",
           name: "Total Assets",
-          x: labels,
-          y: filtered.map(
+          values: filtered.map(
             (r) => r.total_assets ?? 0,
           ),
-          marker: { color: "#6366f1" },
         },
         {
-          type: "bar",
           name: "Equity",
-          x: labels,
-          y: filtered.map(
+          values: filtered.map(
             (r) => r.total_equity ?? 0,
           ),
-          marker: { color: "#10b981" },
         },
       ];
     } else {
-      chartData = [
+      chartSeries = [
         {
-          type: "bar",
           name: "Operating CF",
-          x: labels,
-          y: filtered.map(
+          values: filtered.map(
             (r) => r.operating_cashflow ?? 0,
           ),
-          marker: { color: "#6366f1" },
         },
         {
-          type: "bar",
           name: "Free CF",
-          x: labels,
-          y: filtered.map(
+          values: filtered.map(
             (r) => r.free_cashflow ?? 0,
           ),
-          marker: { color: "#10b981" },
         },
       ];
     }
@@ -1457,23 +1804,13 @@ function QuarterlyTab() {
         />
       </div>
 
-      {chartData.length > 0 && (
+      {chartSeries.length > 0 && (
         <div data-testid="insights-chart">
-        <PlotlyChart
-          data={chartData}
-          layout={{
-            title: {
-              text: "Quarter-over-Quarter Results",
-              font: { size: 14 },
-            },
-            barmode: "group",
-            xaxis: {
-              tickangle: -30,
-              automargin: true,
-            },
-          }}
-          height={360}
-        />
+          <SimpleBarChart
+            categories={chartCategories}
+            series={chartSeries}
+            title="Quarter-over-Quarter Results"
+          />
         </div>
       )}
 
@@ -1511,6 +1848,13 @@ function PiotroskiTab() {
     return data.value.rows;
   }, [data.value]);
 
+  // Keep this gate — Piotroski stock names ("Ahluwalia
+  // Contracts (India) Limited" etc.) are wider than the
+  // page-level h1 fallback, so once the table populates the
+  // largest cell becomes the LCP candidate at ~5 s. The
+  // InsightsPageSkeleton handles SSR LCP; the WidgetSkeleton
+  // here keeps the table out of the LCP window during data
+  // load (caught in 2026-04-25 iter3 audit).
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
     return (
@@ -1681,6 +2025,33 @@ function ScreenQLTab() {
   const [fields, setFields] = useState<
     ScreenField[]
   >([]);
+  // Column picker — selected keys are extra display
+  // columns passed to `/screen` as `display_columns`.
+  // Catalog is /screen/fields (37-field set).
+  const screenqlCatalog = useMemo(
+    () =>
+      fields.map((f) => ({
+        key: f.name,
+        label: f.label,
+        category: f.category,
+      })),
+    [fields],
+  );
+  const screenqlAllKeys = useMemo(
+    () => fields.map((f) => f.name),
+    [fields],
+  );
+  const [
+    selectedScreenqlCols,
+    setSelectedScreenqlCols,
+    resetScreenqlCols,
+  ] = useColumnSelection(
+    "insights.columns.screenql",
+    // Default: no extras — the filter-referenced
+    // fields + base columns render by themselves.
+    [],
+    screenqlAllKeys,
+  );
   const [suggestions, setSuggestions] = useState<
     ScreenField[]
   >([]);
@@ -1689,16 +2060,31 @@ function ScreenQLTab() {
   const textareaRef =
     useRef<HTMLTextAreaElement>(null);
 
-  // Fetch field catalog once
+  // Fetch field catalog once — uses apiFetch for
+  // consistency with the sibling /screen POST below
+  // and in case this endpoint is ever put behind auth
+  // (CLAUDE.md Rule 14: apiFetch, not fetch).
   useEffect(() => {
-    const url = `${
-      process.env.NEXT_PUBLIC_BACKEND_URL ??
-      "http://localhost:8181"
-    }/v1/insights/screen/fields`;
-    fetch(url)
-      .then((r) => r.json())
-      .then((d) => setFields(d.fields ?? []))
-      .catch(() => {});
+    (async () => {
+      try {
+        const { apiFetch } = await import(
+          "@/lib/apiFetch"
+        );
+        const API_URL = `${
+          process.env.NEXT_PUBLIC_BACKEND_URL ??
+          "http://localhost:8181"
+        }/v1`;
+        const res = await apiFetch(
+          `${API_URL}/insights/screen/fields`,
+        );
+        if (!res.ok) return;
+        const d = await res.json();
+        setFields(d.fields ?? []);
+      } catch {
+        // Swallow — catalog is optional enrichment;
+        // screener still works without it.
+      }
+    })();
   }, []);
 
   // Auto-run if URL has ?q= param
@@ -1740,6 +2126,7 @@ function ScreenQLTab() {
               page_size: 25,
               sort_by: null,
               sort_dir: "desc",
+              display_columns: selectedScreenqlCols,
             }),
           },
         );
@@ -1768,8 +2155,17 @@ function ScreenQLTab() {
       }
       setLoading(false);
     },
-    [query, router],
+    [query, router, selectedScreenqlCols],
   );
+
+  // Re-run the current query when the user toggles a
+  // column so new fields appear/disappear in results.
+  // Only fires if a query has already been executed.
+  useEffect(() => {
+    if (!results) return;
+    runScreen(query);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedScreenqlCols]);
 
   // Autocomplete logic
   const handleQueryChange = useCallback(
@@ -2165,29 +2561,40 @@ function ScreenQLTab() {
         </div>
       )}
 
-      {/* Results table */}
+      {/* Column selector + results table */}
       {results && dynamicCols.length > 0 && (
-        <InsightsTable<
-          Record<string, unknown>
-        >
-          columns={dynamicCols}
-          rows={
-            results.rows as Record<
-              string,
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              any
-            >[]
-          }
-          defaultSort={{
-            col: "market_cap",
-            dir: "desc",
-          }}
-          onDownload={(r) =>
-            downloadCsv(
-              r, csvCols, "screenql-results",
-            )
-          }
-        />
+        <>
+          <div className="flex justify-end">
+            <ColumnSelector
+              catalog={screenqlCatalog}
+              selected={selectedScreenqlCols}
+              onChange={setSelectedScreenqlCols}
+              onReset={resetScreenqlCols}
+              buttonLabel="Extra columns"
+            />
+          </div>
+          <InsightsTable<
+            Record<string, unknown>
+          >
+            columns={dynamicCols}
+            rows={
+              results.rows as Record<
+                string,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                any
+              >[]
+            }
+            defaultSort={{
+              col: "market_cap",
+              dir: "desc",
+            }}
+            onDownload={(r) =>
+              downloadCsv(
+                r, csvCols, "screenql-results",
+              )
+            }
+          />
+        </>
       )}
 
       {results &&
@@ -2284,9 +2691,28 @@ function InsightsPageInner() {
   );
 }
 
+// Static page-chrome skeleton — `useSearchParams` inside
+// InsightsPageInner forces the inner subtree to client-only, so
+// the SSR fallback paints first. The previous fallback was `null`
+// (empty SSR HTML) which delayed the LCP candidate on
+// data-heavy tabs (sectors, piotroski). Outer wrapper mirrors
+// InsightsPageInner's `space-y-6 p-4 sm:p-6` exactly + a 400 px
+// content reserve so the swap doesn't shift layout (CLS budget
+// ≤ 0.02 — see CLAUDE.md §5.15).
+function InsightsPageSkeleton() {
+  return (
+    <div className="space-y-6 p-4 sm:p-6">
+      <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+        Insights
+      </h1>
+      <div className="min-h-[400px]" aria-hidden />
+    </div>
+  );
+}
+
 export default function InsightsPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<InsightsPageSkeleton />}>
       <InsightsPageInner />
     </Suspense>
   );

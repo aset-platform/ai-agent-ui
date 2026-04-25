@@ -30,6 +30,7 @@ from functools import lru_cache
 _logger = logging.getLogger(__name__)
 
 # Default TTLs (seconds) grouped by volatility.
+TTL_HERO = 10  # /dashboard/home aggregate — keep tight
 TTL_VOLATILE = 60  # watchlist, llm-usage
 TTL_STABLE = 300  # charts, insights, registry
 TTL_ADMIN = 30  # tier-health, metrics
@@ -93,6 +94,70 @@ class CacheService:
                 "cache SET failed key=%s", key,
                 exc_info=True,
             )
+
+    # ----------------------------------------------------------
+    # Atomic counters
+    # ----------------------------------------------------------
+
+    def incr(
+        self,
+        key: str,
+        by: int = 1,
+        ttl: int | None = None,
+    ) -> int | None:
+        """Atomically increment *key* by *by* and
+        return the new value.
+
+        Uses a Redis pipeline so ``INCRBY`` and the
+        optional ``EXPIRE`` execute as one round-trip
+        — safe against the GET/SET race that a
+        read-check-write pattern exhibits under
+        concurrent access from the same user.
+
+        Returns ``None`` when the Redis client is
+        unavailable (caller should treat as "cache
+        down, fall through to source of truth").
+        """
+        if self._client is None:
+            return None
+        try:
+            pipe = self._client.pipeline()
+            pipe.incrby(key, by)
+            if ttl is not None:
+                pipe.expire(key, ttl)
+            results = pipe.execute()
+            new_val = results[0]
+            return (
+                int(new_val)
+                if new_val is not None
+                else None
+            )
+        except self._redis.RedisError:
+            _logger.warning(
+                "cache INCR failed key=%s", key,
+                exc_info=True,
+            )
+            return None
+
+    def decr(
+        self, key: str, by: int = 1,
+    ) -> int | None:
+        """Atomically decrement *key* by *by*.
+
+        Pairs with :meth:`incr` for rollback on
+        conditional increments (over-limit detected
+        post-increment).
+        """
+        if self._client is None:
+            return None
+        try:
+            return int(self._client.decrby(key, by))
+        except self._redis.RedisError:
+            _logger.warning(
+                "cache DECR failed key=%s", key,
+                exc_info=True,
+            )
+            return None
 
     # ----------------------------------------------------------
     # Invalidation
@@ -162,6 +227,19 @@ class _NoOpCache:
         self, key: str, value: str, ttl: int = 0,
     ) -> None:
         pass
+
+    def incr(
+        self,
+        key: str,
+        by: int = 1,
+        ttl: int | None = None,
+    ) -> None:
+        return None
+
+    def decr(
+        self, key: str, by: int = 1,
+    ) -> None:
+        return None
 
     def invalidate(self, pattern: str) -> None:
         pass

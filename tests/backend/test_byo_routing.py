@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
@@ -9,6 +11,36 @@ import pytest
 from fastapi import HTTPException
 
 import backend.llm_byo as byo
+
+
+class _AtomicFakeCache:
+    """In-memory cache with a thread-safe ``incr`` /
+    ``decr`` pair — the behaviour we need a real
+    Redis pipeline to guarantee."""
+
+    def __init__(self):
+        self._store: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    def incr(self, key, by=1, ttl=None):
+        with self._lock:
+            v = self._store.get(key, 0) + by
+            self._store[key] = v
+            return v
+
+    def decr(self, key, by=1):
+        with self._lock:
+            v = self._store.get(key, 0) - by
+            self._store[key] = v
+            return v
+
+    # get/set kept so TestBYOContextVar fixtures still work
+    def get(self, key):
+        v = self._store.get(key)
+        return str(v) if v is not None else None
+
+    def set(self, key, value, ttl=None):
+        self._store[key] = int(value)
 
 
 @pytest.fixture
@@ -57,24 +89,12 @@ class TestBYOContextVar:
 class TestMonthlyCounter:
     @pytest.mark.asyncio
     async def test_increments_and_returns_new_count(
-        self, _fake_cache, monkeypatch,
+        self, monkeypatch,
     ):
-        # override cache module lookup inside the helper
         import backend.llm_byo as mod
-        fake = MagicMock()
-        store = {}
-
-        def _get(k):
-            return store.get(k)
-
-        def _set(k, v, ttl=None):
-            store[k] = v if isinstance(v, bytes) else v.encode()
-
-        fake.get.side_effect = _get
-        fake.set.side_effect = _set
-
+        cache = _AtomicFakeCache()
         monkeypatch.setattr(
-            "cache.get_cache", lambda: fake,
+            "cache.get_cache", lambda: cache,
         )
         n1 = await mod._check_and_increment_byo_counter(
             "u2", 100,
@@ -87,18 +107,14 @@ class TestMonthlyCounter:
 
     @pytest.mark.asyncio
     async def test_raises_429_at_limit(
-        self, _fake_cache, monkeypatch,
+        self, monkeypatch,
     ):
         import backend.llm_byo as mod
-        fake = MagicMock()
-        fake.get.return_value = "100"
-
-        def _set(k, v, ttl=None):
-            pass
-        fake.set.side_effect = _set
-
+        cache = _AtomicFakeCache()
+        # Pre-seed counter at limit
+        cache._store[mod._month_key("u3")] = 100
         monkeypatch.setattr(
-            "cache.get_cache", lambda: fake,
+            "cache.get_cache", lambda: cache,
         )
         with pytest.raises(HTTPException) as exc:
             await mod._check_and_increment_byo_counter(
@@ -106,6 +122,68 @@ class TestMonthlyCounter:
             )
         assert exc.value.status_code == 429
         assert "limit reached" in exc.value.detail.lower()
+        # Over-limit increment was rolled back:
+        # counter still at the limit, not 101.
+        assert cache._store[mod._month_key("u3")] == 100
+
+    @pytest.mark.asyncio
+    async def test_parallel_requests_never_exceed_limit(
+        self, monkeypatch,
+    ):
+        """Regression for the GET/SET TOCTOU bug.
+
+        Two asyncio tasks hammering the counter with
+        the limit set to their combined headroom must
+        never both succeed past the limit — the
+        persisted value after the dust settles is
+        exactly ``limit``, and exactly ``limit``
+        requests returned success.
+        """
+        import backend.llm_byo as mod
+        cache = _AtomicFakeCache()
+        monkeypatch.setattr(
+            "cache.get_cache", lambda: cache,
+        )
+
+        LIMIT = 50
+        TOTAL_REQUESTS = 200  # 150 over-limit
+
+        successes = 0
+        rejections = 0
+        lock = asyncio.Lock()
+
+        async def one_request():
+            nonlocal successes, rejections
+            try:
+                await mod._check_and_increment_byo_counter(
+                    "race_user", LIMIT,
+                )
+                async with lock:
+                    successes += 1
+            except HTTPException as e:
+                if e.status_code == 429:
+                    async with lock:
+                        rejections += 1
+                else:
+                    raise
+
+        await asyncio.gather(*[
+            one_request()
+            for _ in range(TOTAL_REQUESTS)
+        ])
+
+        # Exactly LIMIT requests served, the rest 429
+        assert successes == LIMIT, (
+            f"Expected {LIMIT} successes, got "
+            f"{successes} (rejections={rejections})"
+        )
+        assert rejections == TOTAL_REQUESTS - LIMIT
+        # Persisted counter is bounded by the limit —
+        # every rollback succeeded.
+        assert (
+            cache._store[mod._month_key("race_user")]
+            == LIMIT
+        )
 
 
 class TestResolveByoForChat:
