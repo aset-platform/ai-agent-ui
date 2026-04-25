@@ -39,11 +39,20 @@ SchedulerService (daemon thread, 30s tick)
 | `run_piotroski` | `execute_run_piotroski` | Piotroski F-Score from quarterly results | 2s |
 | `recommendations` | `execute_run_recommendations` | LLM Smart Funnel — generates per-user recommendations | 5-15 min |
 | `recommendation_outcomes` | `execute_run_recommendation_outcomes` | 30/60/90d outcome checkpoints | 15s |
-| `iceberg_maintenance` | `execute_iceberg_maintenance` | Backup-then-compact for hot Iceberg tables (fail-closed) | ~2 min |
+| `iceberg_maintenance` | `execute_iceberg_maintenance` | Backup → per-table compact + orphan sweep (consolidated) | ~2-15 min |
 
 All executors accept: `(scope, run_id, repo, cancel_event=None, force=False)`
 
-`iceberg_maintenance` is the final step in both daily pipelines (added Apr 23). Sequence: `run_backup()` first (rsync to `~/Documents/projects/ai-agent-ui-backups/`, rotation MAX_BACKUPS=2). If backup fails, compaction is skipped and the run is marked `failed` — preserves the "backup before maintenance" hard rule. Otherwise compacts `stocks.{ohlcv, sentiment_scores, company_info, analysis_summary}` then best-effort `expire_snapshots` + `cleanup_orphans`. Requires `rsync` in the container (added to `Dockerfile.backend`).
+`iceberg_maintenance` is the final step in both daily pipelines and is also surfaced as a tile in the Admin → Scheduler job-type picker (amber `ZapIcon`, "Iceberg Maintenance — Compact + orphan sweep"). Sequence:
+
+1. **`run_backup()`** — rsync the entire warehouse + `catalog.db` to `~/Documents/projects/ai-agent-ui-backups/` (rotation `MAX_BACKUPS=2`). Fail-closed: if backup fails, the run is marked `failed` and no further mutation happens. Preserves the "backup before maintenance" hard rule.
+2. **For each hot table** (`stocks.{ohlcv, sentiment_scores, company_info, analysis_summary}`):
+    - **`compact_table(tbl)`** — DuckDB read → `tbl.overwrite()` writes back as one file per partition.
+    - **`cleanup_orphans_v2(tbl, skip_backup=True)`** — uses the outer backup, expires snapshots beyond `SNAPSHOT_KEEP=5` via PyIceberg 0.11.1 native `expire_snapshots()`, computes the Iceberg-authoritative referenced set (`inspect.all_files()` + `inspect.all_manifests()` + `snapshot.manifest_list` per retained snapshot + catalog pointer + last 10 metadata.json chain), unlinks orphans older than the 30-min mtime grace, then read-verifies. `verified=False` is recorded as non-fatal so other tables still get cleaned.
+
+Consolidated 2026-04-25 from a separate `iceberg_orphan_sweep` weekly job (ASETPLTFRM-338) — single backup, single dashboard entry, daily execution. The first full sweep reclaimed **12.4 GB** across 91 856 → 3361 files. See [Iceberg Orphan Sweep](iceberg-orphan-sweep.md) for the algorithm + recovery procedure.
+
+Requires `rsync` in the container (added to `Dockerfile.backend`).
 
 ---
 

@@ -22,7 +22,7 @@ A fullstack agentic chat application with stock analysis, Prophet forecasting, a
 - **ScreenQL universal screener** — text-based stock query language (36 fields, 6 Iceberg tables), recursive descent parser, DuckDB SQL, 6 presets, autocomplete, dynamic columns, currency symbols
 - **Insights screener** — 809 tickers with sentiment, RSI, MACD, Sharpe, tag/index filters (Nifty 50/100/500, cap sizes), CSV export on all data tabs
 - **CSV download** — centralized utility on 10 tabs (Insights + Admin), respects current filters
-- **Iceberg maintenance** — backup (rsync + catalog.db), compaction, 11yr retention, post-pipeline snapshot expiry
+- **Iceberg maintenance** — backup (rsync + catalog.db), per-table compaction + safe orphan-parquet sweep (`cleanup_orphans_v2`, PyIceberg 0.11.1 `expire_snapshots` + reference-set guard) consolidated into a single daily job. First production sweep reclaimed **12.4 GB** (warehouse 16 GB → 3.6 GB, −78%). Surfaced as the **Iceberg Maintenance** tile in Admin → Scheduler. Algorithm + recovery procedure: [docs/backend/iceberg-orphan-sweep.md](docs/backend/iceberg-orphan-sweep.md).
 - **Backup Health panel** — readonly admin dashboard with health badge, folder browser, Redis-cached
 - **Bulk OHLCV download** — yf.download() batches of 100 (99.8% success, 58s for 804 tickers)
 - **Live market ticker** — Nifty 50 + Sensex in header, dual-source (NSE India + Yahoo Finance), 30s refresh

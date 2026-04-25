@@ -1,7 +1,7 @@
 # Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-04-25 (Sprint 8 closure-state — 57 SP Done across 10 stories, 5 SP open in ASETPLTFRM-338 (Iceberg orphan-parquet sweep, due 2026-04-29). LCP <2s push (334) shipped via React Server Components + cookie-auth + Suspense — 10/34 routes hit target, 24 chart-heavy/admin routes filed for Sprint 9. Three dead Iceberg tables dropped (scheduler_runs, scheduled_jobs, technical_indicators). 25 commits ahead of origin on `feature/sprint8`.)
+> Last refreshed: 2026-04-25 evening (**Sprint 8 closed at 62/62 SP, 14 tickets Done**, 6 days early). Headline outcomes: ASETPLTFRM-338 (Iceberg orphan-parquet sweep) shipped end-to-end with `cleanup_orphans_v2` + 17 unit tests + same-day consolidation into `iceberg_maintenance` (single job type) + UI tile — first production sweep reclaimed **12.4 GB** (warehouse 16 GB → 3.6 GB, −78%); LCP <2s push (334) shipped via React Server Components + cookie-auth + Suspense — 10/34 routes hit target, 24 chart-heavy/admin routes filed for Sprint 9; CLAUDE.md restructured as enforceable dev-rule layer (1208 → ~580 lines, 9 sections, 57-row Pattern Index, 6 new shared Serena memories); three dead Iceberg tables dropped (scheduler_runs, scheduled_jobs, technical_indicators). 30 commits on `feature/sprint8`, all pushed.
 
 ---
 
