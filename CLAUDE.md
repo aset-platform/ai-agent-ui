@@ -35,7 +35,7 @@ Fullstack agentic chat app: stock analysis, Prophet forecasting (volatility-regi
 |---|---|---|---|
 | Backend | 8181 | `backend/main.py` | Python 3.12, FastAPI, LangChain 1.x, SQLAlchemy 2.0 async |
 | Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19 |
-| PostgreSQL | 5432 | Docker | pgvector/pg16 (18 OLTP tables) |
+| PostgreSQL | 5432 | Docker | pgvector/pg16 (19 OLTP tables) |
 | Redis | 6379 | Docker | Redis 7 Alpine |
 | Docs | 8000 | Docker | MkDocs Material 9 |
 | Alembic | — | `backend/db/migrations/` | PG schema migrations |
@@ -47,7 +47,7 @@ docker compose build backend             # after requirements.txt
 ollama-profile coding|reasoning|embedding|status|unload
 ```
 
-DB inventory: 18 PG OLTP + 16 Iceberg OLAP — `→ db-table-inventory`. Data home: `~/.ai-agent-ui/` (override `AI_AGENT_UI_HOME`); paths in `backend/paths.py`.
+DB inventory: 19 PG OLTP + 12 Iceberg OLAP — `→ db-table-inventory`. Data home: `~/.ai-agent-ui/` (override `AI_AGENT_UI_HOME`); paths in `backend/paths.py`.
 
 ---
 
@@ -80,7 +80,7 @@ DB inventory: 18 PG OLTP + 16 Iceberg OLAP — `→ db-table-inventory`. Data ho
 17. Iceberg writes MUST NOT be silenced — let errors propagate.
 18. **Scoped deletes** — `In("ticker", batch)` not `EqualTo("score_date")`. Prevents cross-market overwrite.
 19. Indian stocks `.NS` everywhere; use `detect_market` from `backend/market_utils.py`. NEVER local suffix checks.
-20. **NEVER delete Iceberg metadata/parquet directly** — use `overwrite()` / `delete_rows()` API. Direct `rm` breaks SQLite catalog. The sanctioned reclamation path is `cleanup_orphans_v2()` (PyIceberg 0.11.1 native expire_snapshots + reference-set guard) — `→ iceberg-orphan-sweep`.
+20. **NEVER delete Iceberg metadata/parquet directly** — use `overwrite()` / `delete_rows()` API. Direct `rm` breaks SQLite catalog. The sanctioned reclamation path is `cleanup_orphans_v2()` (PyIceberg 0.11.1 native expire_snapshots + reference-set guard) — `→ iceberg-orphan-sweep-design`.
 
 ### 4.4 Process & git
 
@@ -279,6 +279,7 @@ EVERY new interactive element MUST have `data-testid`. EVERY new page test MUST 
 - **Below-fold widgets**: `waitFor({ state: "attached" })` then `scrollIntoViewIfNeeded()`.
 - **Strict mode**: `/cancel|close/i` matches both Cancel + Close X. Use `/^cancel$/i`.
 - **Workers**: 1 local, 2 CI. NEVER raise — 3 workers consumed >1000% CPU and starved Docker.
+- **`maxFailures: 10` local cap** — Playwright stops scheduling new tests after 10 failures; use `--max-failures=0` when investigating tech-debt counts (CI is uncapped).
 
 `→ e2e-test-patterns`, `test-isolation-gotchas`
 
@@ -394,7 +395,7 @@ flake8 backend/ auth/ stocks/ scripts/
 cd frontend && npx eslint . --fix
 
 # Test
-python -m pytest tests/ -v               # ~925 tests
+python -m pytest tests/ -v               # count drifts; see PROJECT_INDEX
 cd frontend && npx vitest run            # 18 frontend tests
 cd e2e && npx playwright test --project=frontend-chromium    # ~3 min, 1 worker
 cd e2e && npx playwright test --project=analytics-chromium
@@ -488,7 +489,7 @@ When you're about to do X, read pattern Y first.
 | Debug Iceberg stale read | 6.4 | `iceberg-schema-evolution-backend-restart` |
 | Debug LCP regression | 6.6 | `auth-layout-ssr-unlock`, `lighthouse-fcp-text-heuristic`, `loading-gate-lcp-anti-pattern`, `suspense-fallback-null-ssr-hole` |
 | Add a new authenticated route w/ `useSearchParams` | 5.3 | `suspense-fallback-null-ssr-hole`, `cookie-auth-rsc-pattern` |
-| Add or change a Sign Out / logout flow | 5.3, 6.6 | `§5.3 Sign Out rule` (POST `/v1/auth/logout` before `clearTokens()`) |
+| Add or change a Sign Out / logout flow | 5.3, 6.6 | §5.3 (POST `/v1/auth/logout` before `clearTokens()`) — see `cookie-auth-rsc-pattern` |
 | Add or rebuild Playwright auth fixture | 5.14 | `playwright-cookie-fixture`, `cookie-auth-rsc-pattern` |
 | Debug ECharts theme | 5.3 | `echarts-theme-hydration` |
 | Debug `bind_tools` empty payload | 5.2 | `bind-tools-model-lookup` |
