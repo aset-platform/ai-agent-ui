@@ -903,6 +903,7 @@ function NewScheduleForm({
         run_forecasts: "Run Forecasts",
         recommendations: "Recommendations",
         recommendation_outcomes: "Outcome Tracker",
+        iceberg_maintenance: "Iceberg Maintenance",
       };
       const typeLabel = typeLabelMap[jobType]
         || "Data Refresh";
@@ -1207,6 +1208,37 @@ function NewScheduleForm({
                 </p>
                 <p className="text-[10px] text-gray-400 dark:text-gray-500">
                   30/60/90d checkpoints
+                </p>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setJobType("iceberg_maintenance")
+              }
+              className={`flex items-center gap-2.5
+                rounded-xl border p-3 text-left
+                transition-all ${
+                  jobType === "iceberg_maintenance"
+                    ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-500/12"
+                    : "border-gray-200 dark:border-gray-700"
+                }`}
+            >
+              <div
+                className="flex h-9 w-9 items-center
+                  justify-center rounded-[10px]
+                  bg-amber-100 text-amber-700
+                  dark:bg-amber-500/15
+                  dark:text-amber-400"
+              >
+                <ZapIcon />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-gray-900 dark:text-gray-100">
+                  Iceberg Maintenance
+                </p>
+                <p className="text-[10px] text-gray-400 dark:text-gray-500">
+                  Compact + orphan sweep
                 </p>
               </div>
             </button>
@@ -1635,6 +1667,9 @@ function RunTimeline() {
             </option>
             <option value="recommendation_outcomes">
               Outcome Tracker
+            </option>
+            <option value="iceberg_maintenance">
+              Iceberg Maintenance
             </option>
           </select>
           <select

@@ -1414,6 +1414,22 @@ class StockRepository:
                 "earnings_growth": pa.array(
                     [_safe_float(info.get("earningsGrowth"))], pa.float64()
                 ),
+                # yfinance's own PEG. Forward-looking
+                # (analyst consensus growth), distinct
+                # from our trailing PEG computed via
+                # pe_ratio / earnings_growth. Newer
+                # yfinance versions expose
+                # `trailingPegRatio` instead of the
+                # legacy `pegRatio`; fall through both.
+                "peg_ratio_yf": pa.array(
+                    [
+                        _safe_float(
+                            info.get("pegRatio")
+                            or info.get("trailingPegRatio")
+                        )
+                    ],
+                    pa.float64(),
+                ),
                 "revenue_growth": pa.array(
                     [_safe_float(info.get("revenueGrowth"))], pa.float64()
                 ),
@@ -1437,6 +1453,26 @@ class StockRepository:
                 ),
             }
         )
+        # Drop `peg_ratio_yf` from the row if the table
+        # hasn't yet been evolved to include it. Keeps
+        # this insert compatible with older deployments
+        # that haven't run `evolve_company_info_peg_yf()`.
+        # Once the evolution ships, the column persists
+        # on subsequent writes.
+        try:
+            _existing = {
+                f.name for f in tbl.schema().fields
+            }
+            if "peg_ratio_yf" not in _existing:
+                row = row.drop_columns(["peg_ratio_yf"])
+        except Exception:
+            # If the schema probe itself fails, fall
+            # back to dropping defensively so writes
+            # don't error.
+            try:
+                row = row.drop_columns(["peg_ratio_yf"])
+            except Exception:
+                pass
         self._append_rows(_COMPANY_INFO, row)
         _logger.debug("company_info snapshot appended for %s", ticker)
 

@@ -37,10 +37,10 @@ async function fetcher<T>(url: string): Promise<T> {
 }
 
 function useInsightsFetch<T>(
-  endpoint: string,
+  endpoint: string | null,
 ): InsightsData<T> {
   const { data, error, isLoading } = useSWR<T>(
-    `${API_URL}${endpoint}`,
+    endpoint ? `${API_URL}${endpoint}` : null,
     fetcher,
     {
       revalidateOnFocus: false,

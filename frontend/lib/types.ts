@@ -45,6 +45,7 @@ export interface TickerForecast {
   ticker: string;
   run_date: string;
   current_price: number;
+  latest_close: number | null;
   sentiment: string | null;
   targets: ForecastTarget[];
   mae: number | null;
@@ -299,20 +300,63 @@ export interface PortfolioForecastResponse {
 // ---------------------------------------------------------------
 
 export interface ScreenerRow {
+  // Identity
   ticker: string;
+  company_name: string | null;
+  sector: string | null;
+  industry: string | null;
+  market: string;
+  currency: string | null;
+  tags: string[];
+
+  // Pricing
   price: number | null;
+  current_price: number | null;
+  week_52_high: number | null;
+  week_52_low: number | null;
+
+  // Valuation
+  market_cap: number | null;
+  pe_ratio: number | null;
+  price_to_book: number | null;
+  dividend_yield: number | null;
+  peg_ratio: number | null;
+  peg_ratio_yf: number | null;
+  peg_ratio_ttm: number | null;
+
+  // Profitability
+  profit_margins: number | null;
+  earnings_growth: number | null;
+  revenue_growth: number | null;
+  eps: number | null;
+  revenue: number | null;
+  net_income: number | null;
+
+  // Risk
+  annualized_return_pct: number | null;
+  annualized_volatility_pct: number | null;
+  sharpe_ratio: number | null;
+  max_drawdown_pct: number | null;
+  beta: number | null;
+
+  // Technical
   rsi_14: number | null;
   rsi_signal: string | null;
   macd_signal: string | null;
   sma_200_signal: string | null;
   sentiment_score: number | null;
   sentiment_headlines: number | null;
-  annualized_return_pct: number | null;
-  annualized_volatility_pct: number | null;
-  sharpe_ratio: number | null;
-  sector: string | null;
-  market: string;
-  tags: string[];
+
+  // Quality
+  piotroski_score: number | null;
+  piotroski_label: string | null;
+  forecast_confidence: number | null;
+
+  // Forecast
+  target_3m_pct: number | null;
+  target_6m_pct: number | null;
+  target_9m_pct: number | null;
+
   action?: string;
 }
 
@@ -678,6 +722,7 @@ export interface PiotroskiRow {
   sector: string | null;
   industry: string | null;
   score_date: string | null;
+  action?: string;
 }
 
 export interface PiotroskiResponse {

@@ -84,6 +84,7 @@ describe("ForecastsResponse", () => {
           ticker: "AAPL",
           run_date: "2026-03-15",
           current_price: 198,
+          latest_close: 201.5,
           sentiment: "bullish",
           targets: [
             {
@@ -97,6 +98,9 @@ describe("ForecastsResponse", () => {
           ],
           mae: 3.5,
           rmse: 4.1,
+          mape: 2.3,
+          confidence_score: 0.75,
+          confidence_components: null,
         },
       ],
     };
@@ -111,10 +115,14 @@ describe("ForecastsResponse", () => {
           ticker: "TSLA",
           run_date: "2026-03-15",
           current_price: 180,
+          latest_close: null,
           sentiment: null,
           targets: [],
           mae: null,
           rmse: null,
+          mape: null,
+          confidence_score: null,
+          confidence_components: null,
         },
       ],
     };

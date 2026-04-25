@@ -140,6 +140,15 @@ test.describe("Insights advanced filters", () => {
 
       const allRows = table.locator("tbody tr");
       await expect(allRows.first()).toBeVisible();
+      // Wait for SWR to fully populate the table — the
+      // ScreenerTab loading gate was removed in commit b1c816e,
+      // so an early count can race the empty/loading state.
+      await expect
+        .poll(
+          async () => await allRows.count(),
+          { timeout: 10_000 },
+        )
+        .toBeGreaterThan(5);
       const totalCount = await allRows.count();
 
       // Apply filter
