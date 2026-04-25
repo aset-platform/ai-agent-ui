@@ -1727,13 +1727,18 @@ def create_tables() -> None:
         _ticker_partition_spec(ohlcv_schema),
     )
 
-    ti_schema = _technical_indicators_schema()
-    _create_table(
-        catalog,
-        _TECHNICAL_INDICATORS_TABLE,
-        ti_schema,
-        _ticker_partition_spec(ti_schema),
-    )
+    # ``stocks.technical_indicators`` was scaffolded
+    # for persisted RSI/MACD/SMA/etc. but the design
+    # moved to compute-on-demand from OHLCV via
+    # ``backend/tools/_analysis_indicators.py``. The
+    # Iceberg table was never populated and is listed
+    # in ``backend/maintenance/iceberg_maintenance.py
+    # ::DEAD_TABLES`` for cleanup. Removed from the
+    # ensure-tables pass so ``drop_dead_tables()`` can
+    # remove it permanently — re-add this block if a
+    # future ticket revives persisted indicators.
+    # The ``_technical_indicators_schema`` helper is
+    # left in place for that scenario.
 
     forecasts_schema = _forecasts_schema()
     _create_table(
