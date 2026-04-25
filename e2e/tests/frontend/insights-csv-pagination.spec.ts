@@ -202,10 +202,16 @@ test.describe("Insights — CSV download & pagination", () => {
   test("row count label shows total", async ({
     page,
   }) => {
-    // Should show "X rows" text
+    // Should show "X rows" text. Wait for non-zero count —
+    // ScreenerTab loading gate was removed in commit b1c816e
+    // so the label can briefly read "0 rows" before SWR
+    // resolves.
     const rowCount = page.getByText(/\d+ rows/);
     await expect(rowCount).toBeVisible({
       timeout: 5_000,
+    });
+    await expect(rowCount).not.toHaveText(/^0 rows/, {
+      timeout: 10_000,
     });
     const text = await rowCount.textContent();
     const match = text?.match(/(\d+) rows/);

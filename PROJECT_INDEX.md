@@ -1,7 +1,7 @@
 # Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-04-23 (Sprint 7 closed at 75/75 SP — sentiment hardening, daily Iceberg compaction in pipeline, portfolio P&L NaN-truncation defenses, transparency chips, container TZ=IST)
+> Last refreshed: 2026-04-25 night (post-LCP follow-on — 4 evening commits `b1c816e`/`c9e0054`/`d081827`/`096edc5` on top of the Sprint 8 closure). Headline outcomes: ASETPLTFRM-338 (Iceberg orphan-parquet sweep) shipped end-to-end with `cleanup_orphans_v2` + 17 unit tests + UI tile — first production sweep reclaimed **12.4 GB** (warehouse 16 GB → 3.6 GB, −78%); **LCP follow-on (no SP)**: cut **mean LCP −33.7% across 34 routes** (4202 → 2786 ms) by removing premature loading-gate skeletons + replacing `<Suspense fallback={null}>` with dimensionally-matched static page-chrome skeletons in `admin/page.tsx` + `analytics/insights/page.tsx`; 13 routes −62% to −75% individually (login, dashboard, admin*, insights?tab=sectors, analytics/compare); CLAUDE.md restructured as enforceable dev-rule layer (1208 → ~580 lines, 9 sections, 57-row Pattern Index, 9 shared Serena memories incl. 3 new from 04-25 night: `loading-gate-lcp-anti-pattern`, `suspense-fallback-null-ssr-hole`, `playwright-cookie-fixture`); two pre-existing bugs surfaced + fixed (Sign Out left HttpOnly cookies → `/v1/auth/logout` now called from `AppHeader.handleSignOut` + `ChatHeader.handleSignOut`; Playwright auth fixture dropped Set-Cookie → `e2e/setup/auth.setup.ts` now parses & rewrites domain to frontend host, lifted suite from 2 → 111 passing on analytics-chromium); three dead Iceberg tables dropped. **34 commits on `feature/sprint8`** — latest 4 pushed; earlier 19 still local.
 
 ---
 
@@ -25,7 +25,7 @@ ai-agent-ui/
 │   │   ├── jobs/          # ohlcv, fundamentals, fill_gaps, seed
 │   │   └── screener/      # Piotroski F-Score
 │   ├── insights/          # ScreenQL query engine
-│   │   ├── screen_parser.py # Tokenizer, parser, SQL generator, 36-field catalog
+│   │   ├── screen_parser.py # Tokenizer, parser, SQL generator, 39-field catalog
 │   │   └── __init__.py
 │   ├── maintenance/       # Iceberg ops + backup
 │   │   ├── iceberg_maintenance.py # Compact, expire, purge, drop_dead_tables
@@ -139,6 +139,14 @@ JWT role is cached — role change only propagates after
 `/auth/refresh`. Pro admin page shows 3 tabs (My Account,
 My Audit Log, My LLM Usage); superuser sees full 7-tab strip.
 
+**Sign Out** (commit `c9e0054`, 2026-04-25): `AppHeader.handleSignOut`
++ `ChatHeader.handleSignOut` MUST POST `/v1/auth/logout` *before*
+`clearTokens()`. Backend `auth_routes.py:343` calls
+`_clear_refresh_cookie` + `_clear_access_cookie`. Without this,
+`proxy.ts` edge gate sees the lingering `refresh_token` cookie
+(legacy-session hotfix `e33172d`) and bounces `/login` back to
+`/dashboard` — Sign Out appears to do nothing.
+
 ---
 
 ## BYOM — Bring Your Own Model
@@ -248,7 +256,8 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 | `backend/db/models/sentiment_dormant.py` | 1 | Per-ticker dormancy state — capped expo cooldown 2/4/8/16/30d, 5% probe |
 | `backend/jobs/executor.py::execute_iceberg_maintenance` | 1 | Daily pipeline step 6 — backup (fail-closed) then compact 4 hot tables |
 | `backend/market_routes.py` | 1 | Yahoo Sensex `^BSESN` stale-feed detection + Google Finance fallback |
-| `backend/insights/screen_parser.py` | 1 | ScreenQL: tokenizer, parser, SQL gen, 36-field catalog |
+| `backend/insights/screen_parser.py` | 1 | ScreenQL: tokenizer, parser, SQL gen, 39-field catalog (incl. 3 PEG variants), `display_columns` param for user-pickable result columns |
+| `backend/insights_routes.py` | 1 | Screener endpoint: batched DuckDB reads (piotroski / forecast_runs / quarterly_results / company_info) populate 41-field `ScreenerRow`; `_compute_peg*` helpers for T/YF/Q variants |
 | `backend/maintenance/` | 3 | Backup (rsync), compaction, retention, dead table cleanup |
 | `backend/jobs/` | 8 | Executor registry, pipeline chaining, batch refresh (bulk OHLCV), recs |
 | `backend/pipeline/` | 21 | CLI: download, seed, bulk-download, analytics, forecast, screen |
@@ -258,6 +267,8 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 | `frontend/components/` | 30+ | Admin, charts, insights, widgets, modals |
 | `frontend/lib/downloadCsv.ts` | 1 | CSV export utility (escape, blob, browser download) |
 | `frontend/components/common/DownloadCsvButton.tsx` | 1 | Shared CSV button (icon + loading state) — used by all exports |
+| `frontend/lib/useColumnSelection.ts` | 1 | localStorage-backed column selection hook — tolerant to catalog evolution, two-phase SSR/client hydration |
+| `frontend/components/insights/ColumnSelector.tsx` | 1 | Grouped-by-category column picker popover (search, per-category toggle, locked keys, reset) — used on Screener + ScreenQL |
 | `frontend/providers/PortfolioActionsProvider.tsx` | 1 | Layout-level Add/Edit/Delete/**Transactions** modals via `usePortfolioActions()` |
 | `frontend/components/widgets/PortfolioTransactionsModal.tsx` | 1 | Eye-icon modal — date-sorted txns + per-row edit + summary footer |
 | `frontend/components/widgets/PLTrendWidget.tsx::StaleTickerChip` | 1 | Amber chip — "N holdings using previous close" w/ tooltip |
@@ -269,6 +280,10 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 | `frontend/components/recommendations/RecActionButton.tsx` | 1 | +Buy / Edit / Acted ✓ pills on rec cards |
 | `e2e/utils/selectors.ts` | 1 | Centralised data-testid constants (217 lines) |
 | `e2e/playwright.config.ts` | 1 | 6 projects, 1 worker local / 2 CI, video off local |
+| `e2e/setup/auth.setup.ts` | 1 | Login fixture — parses Set-Cookie + rewrites domain to frontend host so storageState carries the HttpOnly cookies the proxy.ts edge gate requires (`d081827`) |
+| `frontend/components/widgets/HeroSection.tsx` | 1 | Dashboard hero — greeting + portfolio value/PL render from props always; do NOT gate on `watchlist.loading` (`b1c816e`) |
+| `frontend/app/(authenticated)/admin/page.tsx::AdminPageSkeleton` | 1 | Static SSR fallback (h1 + min-h-[600px]) for `<Suspense>` over `useSearchParams` — mirrors AdminPageInner outer wrapper exactly to hold CLS ≤ 0.02 |
+| `frontend/app/(authenticated)/analytics/insights/page.tsx::InsightsPageSkeleton` | 1 | Same pattern at min-h-[400px] — SSR shell that ships LCP candidate text before client hydration |
 
 ---
 
@@ -320,10 +335,32 @@ pipeline pickup.
 
 ## File Counts
 
-Backend Python: 173 modules | Frontend TS/TSX: 131 |
-Tests: ~153 (97 pytest + 51 e2e + 18 vitest) |
+Backend Python: 173 modules | Frontend TS/TSX: 129 |
+Tests: ~154 (98 pytest / ~925 cases + 51 e2e + 18 vitest) |
 Docs: 60+ pages | Scripts: 30 |
 Alembic migrations: 13 (`a9c1b3d5e7f2_add_sentiment_dormant` latest)
+
+E2E pass rate (analytics-chromium full sweep, post-`096edc5`):
+**111 / 147 tests pass**, 34 fail (pre-existing tech debt:
+marketplace tests after Sprint 7 route deprecation; `insights.spec.ts`
+references old Plotly tabs since Sprint 6 ECharts migration;
+`insights-recommendations.spec.ts` references "recommendations" tab
+moved to `/analytics/analysis`; modal/timing flakes in portfolio-crud
++ theme-consistency).
+
+## Lighthouse Performance Snapshots
+
+Stored at `.lighthouseci/`:
+- `pw-lh-summary-baseline-2026-04-25.json` — pre-LCP-follow-on baseline
+- `pw-lh-summary-iteration2-final.json` — first iter after gate fixes
+- `pw-lh-summary-iteration3.json` — Suspense-fallback-skeleton sized
+- `pw-lh-summary-iteration4-final.json` — sectors/quarterly/piotroski
+  CLS reverts. **34 routes, mean LCP 2786 ms (-33.7% from baseline).**
+- `pw-lh-summary.json` — current (= iter4).
+
+Diff with `python3 /tmp/compare_lcp.py` (script saved per-session;
+re-create from `shared/debugging/loading-gate-lcp-anti-pattern`
+walkthrough if missing).
 
 ---
 

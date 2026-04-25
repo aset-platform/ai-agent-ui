@@ -1,821 +1,497 @@
 # CLAUDE.md — AI Agent UI
 
-> Slim project instructions for Claude Code. Detailed rationale and
-> historical context live in Serena shared memories — run
-> `list_memories` to browse.
+> Slim project rules. **New features and bug fixes MUST follow the
+> patterns below** — they encode a year of hardening. Detailed
+> architecture, table inventories, and historical debugging context
+> live in Serena memories (referenced inline as `→ memory-name`).
+> Pattern Index at §9.
 
 ---
 
-## Session Startup (every new session)
+## 1. Session Startup
 
-1. **Activate Serena** — `activate_project ai-agent-ui` (required
-   before `read_memory` / `write_memory` / `list_memories`)
-2. **Check Ollama** — SessionStart hook reports model status; run
-   `ollama-profile coding` if delegation needed
-3. **Superpowers skills** — check for applicable skill before work
-   (brainstorming, TDD, executing-plans)
-4. **SuperClaude commands** — `/sc:` prefix for git, build, test,
-   analyze, implement, troubleshoot
+1. **Serena**: `activate_project ai-agent-ui` (required for memory ops)
+2. **Ollama**: SessionStart hook reports status; `ollama-profile coding` if delegating
+3. **Superpowers skill**: invoke applicable skill before work (brainstorming, TDD, executing-plans)
+4. **SuperClaude**: `/sc:` for git/build/test/analyze/implement/troubleshoot
+5. **Branch**: `git checkout dev && git pull && git checkout -b feature/<desc>` — NEVER commit on `dev`/`qa`/`release`/`main`
 
-### MCP tools
+## 2. MCP Tools
 
 | Server | Purpose |
-|--------|---------|
+|---|---|
 | Serena | Code analysis, shared memories, symbol nav |
 | Ollama | Local LLM delegation (Qwen for code gen) |
 | Context7 | Library/framework docs lookup |
-| Playwright | Browser automation, E2E testing |
-| Chrome DevTools | Page inspection, perf, screenshots |
+| Playwright / Chrome DevTools | Browser automation, perf, screenshots |
 | Atlassian (Jira) | Sprint/ticket management |
 | Sequential Thinking | Multi-step reasoning |
 
----
+## 3. Project Overview & Stack
 
-## Project Overview
-
-Fullstack agentic chat app with stock analysis and Prophet
-forecasting. Volatility-regime adaptive forecasts with confidence
-scoring (High/Medium/Low). FinBERT batch sentiment + XGBoost
-ensemble. Native portfolio dashboard (lightweight-charts +
-react-plotly). Memory-augmented chat with pgvector retrieval.
-Dual payment gateways (Razorpay INR + Stripe USD). Chat agent
-supports BYO provider keys (Groq / Anthropic) for non-superuser
-users past 10-turn free allowance — see `docs/backend/byom.md`.
-All pages migrated from Dash to Next.js.
+Fullstack agentic chat app: stock analysis, Prophet forecasting (volatility-regime adaptive), FinBERT batch sentiment + XGBoost ensemble, native portfolio dashboard, memory-augmented chat with pgvector retrieval, Razorpay INR + Stripe USD billing, BYO chat keys (Groq / Anthropic) past 10-turn free allowance for non-superusers.
 
 | Service | Port | Entry | Stack |
-|---------|------|-------|-------|
+|---|---|---|---|
 | Backend | 8181 | `backend/main.py` | Python 3.12, FastAPI, LangChain 1.x, SQLAlchemy 2.0 async |
 | Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19 |
-| PostgreSQL | 5432 | Docker | pgvector/pg16 (18 OLTP tables) |
+| PostgreSQL | 5432 | Docker | pgvector/pg16 (19 OLTP tables) |
 | Redis | 6379 | Docker | Redis 7 Alpine |
 | Docs | 8000 | Docker | MkDocs Material 9 |
 | Alembic | — | `backend/db/migrations/` | PG schema migrations |
 
 ```bash
-./run.sh start | stop | restart [svc] | rebuild [svc]
-./run.sh status | logs <svc> [-f] | logs --errors | doctor
+./run.sh start | stop | restart [svc] | rebuild [svc] | status | logs <svc> [-f] | doctor
 docker compose up -d                     # alt to run.sh
 docker compose build backend             # after requirements.txt
 ollama-profile coding|reasoning|embedding|status|unload
 ```
 
-**Key dirs**: `backend/` (agents, tools), `backend/pipeline/` (19
-CLI cmds), `backend/jobs/` (scheduler, pipeline chain, bulk OHLCV),
-`backend/db/` (ORM, async engine, Alembic, DuckDB),
-`backend/insights/` (ScreenQL parser, 36-field catalog),
-`backend/maintenance/` (backup, compact, retain), `backend/tools/`
-(forecast, sentiment, analysis), `auth/` (JWT + RBAC + OAuth),
-`stocks/` (Iceberg, 12 OLAP tables), `frontend/`,
-`frontend/providers/` (Chat, Layout, PortfolioActions contexts),
-`e2e/` (Playwright), `hooks/`.
-
-**Docker**: `Dockerfile.{backend,frontend,docs}`,
-`docker-compose.yml`, `docker-compose.override.yml` (hot-reload),
-`.env.example` / `.env`.
-
-**Config**: `pyproject.toml` + `.flake8` (79 chars),
-`frontend/eslint.config.mjs`.
-
-**Data**: `~/.ai-agent-ui/` (override `AI_AGENT_UI_HOME`); paths
-in `backend/paths.py`.
+DB inventory: 19 PG OLTP + 12 Iceberg OLAP — `→ db-table-inventory`. Data home: `~/.ai-agent-ui/` (override `AI_AGENT_UI_HOME`); paths in `backend/paths.py`.
 
 ---
 
-## LLM Cascade Architecture
+## 4. Hard Rules — NON-NEGOTIABLE
 
-`FallbackLLM` in `backend/llm_fallback.py` — N-tier:
+### 4.1 Performance
 
-| Tier | Provider | Model |
-|------|----------|-------|
-| 1-5 | Groq (free) | Round-robin pools: [70b, qwen3-32b] → [gpt-oss-120b, gpt-oss-20b] → scout-17b |
-| N-1 | Ollama | gpt-oss:20b (`ollama_first=False`) |
-| N | Anthropic | claude-sonnet-4-6 |
+1. **Batch reads** — single DuckDB `WHERE ticker IN (...)` → pre-load dict. Never N individual Iceberg reads.
+2. **Bulk writes** — accumulate in memory, write 1–2 Iceberg commits after the loop. Never per-ticker `_append_rows`.
+3. **Iceberg = append-only analytics** — row-level `update` is full table scan + overwrite (~9s). Use PG for mutable state.
+4. **NullPool for sync→async PG** — `_pg_session()` uses NullPool. `→ pg-nullpool-sync-async-bridge`
+5. **No nested parallelism** — outer `ThreadPoolExecutor` workers must NOT spawn inner `ProcessPoolExecutor`. Prophet CV `parallel=None`. `workers = cpu_count // 2`.
+6. **Cache scope-level data** — VIX, indices, macro identical across tickers; TTL-cache.
+7. **Throttle expensive I/O** — >100ms costs go to finalize batch or time-interval.
+8. **No OHLCV full scans** — 1.5M rows. `ROW_NUMBER() OVER (PARTITION BY ticker)` or `WHERE ticker IN (...)` + date filter.
 
-- `RoundRobinPool` (`backend/token_budget.py`): atomic per-pool
-  counter, `get_token_budget()` singleton seeded from Iceberg.
-  `ROUND_ROBIN_ENABLED=false` → legacy sequential.
-- `OllamaManager` (`backend/ollama_manager.py`): TTL-cached health
-  probe; cascade skips when unavailable.
-- Admin API: `GET/POST /v1/admin/ollama/{status,load,unload}`.
-- Per-request model pinning via `_pinned_model` — see LLM gotchas.
-
----
-
-## Stock Data Pipeline
-
-- **Module**: `backend/pipeline/` — 19 CLI cmds via
-  `PYTHONPATH=.:backend python -m backend.pipeline.runner`
-- **Sources**: yfinance primary (bulk/daily), jugaad-data fallback
-  (retry/correct), racing (chat).
-- **Ticker format**: ALL Indian stocks use `.NS` suffix everywhere.
-  Never canonical (no-suffix) for data ops.
-- **Market detection**: `detect_market` from
-  `backend/market_utils.py`. Never local suffix checks.
-- **Docs**: `docs/backend/stock-pipeline.md`.
-- **Daily chain (6 steps, cron 08:00/08:15 IST Tue–Sat)**:
-  `data_refresh → compute_analytics → run_sentiment → run_piotroski
-  → recommendation_outcomes → iceberg_maintenance` (step 6 =
-  backup-then-compact, fail-closed if backup fails).
-
----
-
-## Hybrid DB Architecture
-
-OLTP/OLAP split — PostgreSQL for row CRUD, Iceberg for append-only
-analytics.
-
-### PostgreSQL tables (SQLAlchemy 2.0 async ORM)
-
-| Table | Module | Pattern |
-|-------|--------|---------|
-| `auth.users` | `db/models/user.py` | CRUD via `UserRepository` |
-| `auth.user_tickers` | `db/models/user_ticker.py` | Insert + delete |
-| `auth.payment_transactions` | `db/models/payment.py` | Insert + update |
-| `stocks.registry` | `db/pg_stocks.py` | Upsert (`ticker_type`: stock/etf/index/commodity) |
-| `stocks.scheduled_jobs` | `db/pg_stocks.py` | Upsert (has `force`) |
-| `stocks.scheduler_runs` | `db/pg_stocks.py` | Insert + UPDATE |
-| `stocks.recommendation_runs` | `db/models/recommendation.py` | Smart Funnel meta. `run_type ∈ {manual,chat,scheduled,admin,admin_test}`; `admin_test` hidden from user reads |
-| `stocks.recommendations` | `db/models/recommendation.py` | `data_signals` JSONB; `acted_on_date` auto-set by portfolio hook |
-| `stocks.recommendation_outcomes` | `db/models/recommendation.py` | 30/60/90d checkpoints |
-| `stocks.market_indices` | `db/models/market_index.py` | Single-row Nifty+Sensex cache |
-| `public.user_memories` | `db/models/memory.py` | pgvector 768-dim |
-| `public.conversation_contexts` | `db/models/conversation_context.py` | Cross-session chat ctx |
-| `stock_master` | `db/models/stock_master.py` | symbol, yf_ticker, ISIN |
-| `stock_tags` | `db/models/stock_tag.py` | nifty50/100/500 temporal |
-| `ingestion_cursor`/`_skipped` | `db/models/` | Keyset pagination + retry log |
-| `sentiment_dormant` | `db/models/sentiment_dormant.py` | Per-ticker headline-fetch dormancy (capped expo cooldown 2/4/8/16/30d, 5% probe re-test) |
-| `pipelines` / `pipeline_steps` | `db/models/pipeline.py` | Chain definitions + steps |
-
-### Iceberg tables (12 active — append / scoped-delete)
-
-`company_info`, `dividends`, `ohlcv` (1.5M rows), `analysis_summary`,
-`forecast_runs` (27 cols), `forecasts`, `quarterly_results`,
-`piotroski_scores`, `sentiment_scores`, `llm_pricing`, `llm_usage`,
-`portfolio_transactions`. Maintenance: `backend/maintenance/`.
-
-### Key components
-
-- `db/engine.py` — async `session_factory` (asyncpg, `pool_pre_ping=True`)
-- `db/models/` — 18 ORM models (FK cascade, JSONB, pgvector)
-- `auth/repo/repository.py` — `UserRepository` (per-call sessions)
-- `db/pg_stocks.py` — registry + scheduler + pipeline PG funcs
-- `jobs/pipeline_executor.py` — sequential chain, skip-on-fail,
-  resume-from-step
-- `db/duckdb_engine.py` — DuckDB read engine; call
-  `invalidate_metadata()` after writes (auto-wired in repo)
-
----
-
-## Hard Rules (NON-NEGOTIABLE)
-
-### Performance
-
-1. **Batch reads** — single DuckDB `WHERE ticker IN (...)` →
-   pre-load dict. Never N individual Iceberg reads.
-2. **Bulk writes** — accumulate in memory, write 1-2 Iceberg
-   commits after the loop. Never per-ticker `_append_rows`.
-3. **Iceberg = append-only analytics** — row-level `update` does
-   full table scan + overwrite (~9s). Use PG for mutable state.
-4. **NullPool for sync→async PG** — `_pg_session()` uses NullPool.
-   See `shared/debugging/pg-nullpool-sync-async-bridge`.
-5. **No nested parallelism** — outer `ThreadPoolExecutor` workers
-   must NOT spawn inner `ProcessPoolExecutor`. Prophet CV
-   `parallel=None`. `workers = cpu_count // 2`.
-6. **Cache scope-level data** — VIX, indices, macro identical
-   across tickers in scope. TTL cache.
-7. **Throttle expensive I/O** — >100ms costs go to finalize batch
-   or time-interval.
-8. **No OHLCV full scans** — 1.4M rows. Use `ROW_NUMBER() OVER
-   (PARTITION BY ticker)` or `WHERE ticker IN (...)` + date filter.
-
-### Code Style
+### 4.2 Code style
 
 9. Line length 79 chars (black/isort/flake8 aligned).
-10. No bare `print()` — `logging.getLogger(__name__)`.
+10. No bare `print()` — `_logger = logging.getLogger(__name__)`. Levels: DEBUG/INFO/WARNING/ERROR. Never log secrets/tokens/passwords at INFO.
 11. `X | None` not `Optional[X]` (PEP 604).
 12. No module-level mutable globals (exception: `_logger`).
 13. No bare `except:` — `except Exception` or specific.
-14. `apiFetch` not `fetch` (auto-refreshes JWT).
+14. `apiFetch` not bare `fetch` (auto-refreshes JWT).
 15. `<Image />` not `<img>` (ESLint enforced).
-16. Patch at SOURCE module, not the importing module.
+16. Patch at SOURCE module, not the importing module. `→ mock-patching-gotchas`
 
-### Data & Writes
+### 4.3 Data & writes
 
 17. Iceberg writes MUST NOT be silenced — let errors propagate.
-18. **Scoped deletes** — `In("ticker", batch)` not
-    `EqualTo("score_date")`. Prevents cross-market overwrite.
-19. Indian stocks `.NS` suffix everywhere; use `detect_market`.
-20. **NEVER delete Iceberg metadata/parquet files directly** — use
-    `overwrite()` / `delete_rows()` API only. Direct deletion
-    breaks SQLite catalog. Backup before maintenance.
+18. **Scoped deletes** — `In("ticker", batch)` not `EqualTo("score_date")`. Prevents cross-market overwrite.
+19. Indian stocks `.NS` everywhere; use `detect_market` from `backend/market_utils.py`. NEVER local suffix checks.
+20. **NEVER delete Iceberg metadata/parquet directly** — use `overwrite()` / `delete_rows()` API. Direct `rm` breaks SQLite catalog. The sanctioned reclamation path is `cleanup_orphans_v2()` (PyIceberg 0.11.1 native expire_snapshots + reference-set guard) — `→ iceberg-orphan-sweep-design`.
 
-### Process & Git
+### 4.4 Process & git
 
 21. Branch off `dev` — NEVER push to `dev`/`qa`/`release`/`main`.
 22. Co-Authored-By: `Abhay Kumar Singh <asequitytrading@gmail.com>`.
 23. Update `PROGRESS.md` after every session (dated).
-24. `git add .serena/` before final push (memories are tracked).
-25. Test-after-feature — happy path + 1 error path minimum.
-26. Jira story points — set BOTH `customfield_10016` (estimate)
-    AND `customfield_10036` (board display). `_10036` works on
-    Stories but not Tasks.
+24. `git add .serena/` before final push (memories tracked).
+25. Test-after-feature — happy + 1 error path minimum.
+26. **PR merge on `dev`: squash only.** `gh pr merge <n> --squash` (merge-commit + rebase blocked).
+27. Jira 3-phase: create → In Progress → comment+Done. `→ jira-3phase-lifecycle`
 
-### Infra & Config
+### 4.5 Infra & config
 
-27. `NEXT_PUBLIC_BACKEND_URL=http://localhost:8181` — never
-    `127.0.0.1` (cookie hostname mismatch).
-28. No `@traceable` on `FallbackLLM.invoke()` — breaks LangChain
-    tool-call parsing.
-29. Ollama is host-native (not containerized); cascade falls back
-    to Groq/Anthropic.
-30. LHCI can't audit authenticated routes — use `npm run perf:full`.
-31. **Container `TZ=Asia/Kolkata`** in `docker-compose.yml` backend
-    service. `schedule` lib uses local time — UTC fires cron 5.5h
-    late.
-32. **`scheduler_catchup_enabled=False` default** — startup catchup
-    of "missed" jobs silently pulled mid-day partial data. Opt-in
-    via env if needed.
+28. `NEXT_PUBLIC_BACKEND_URL=http://localhost:8181` — never `127.0.0.1` (cookie hostname mismatch).
+29. `BACKEND_URL=http://backend:8181` required on dev frontend container for RSC server fetches.
+30. **`API_URL` for all API calls** (mounted under `/v1/`); `BACKEND_URL` only for static assets + WS URL. WebSocket `/ws/chat` NOT versioned. `→ api-versioning`
+31. No `@traceable` on `FallbackLLM.invoke()` — breaks LangChain tool-call parsing.
+32. Container `TZ=Asia/Kolkata` in `docker-compose.yml` backend; `schedule` lib uses local time.
+33. `scheduler_catchup_enabled=False` default — startup catchup pulled mid-day partial data.
+34. After cache-touching code change: `redis-cli FLUSHALL`.
 
 ---
 
-## Serena Shared Memories
+## 5. Development Patterns — ALWAYS follow
 
-`list_memories` to browse. Categories: `shared/architecture/`,
-`shared/conventions/`, `shared/debugging/`, `shared/onboarding/`.
+These encode "the one true way" for recurring problems. Deviating creates rework or trust-breaking UX inconsistency.
 
----
+### 5.1 Backend
 
-## Gotchas (learned the hard way)
+- **Iceberg vs PG**: mutable state → PG; append-only analytics → Iceberg. `→ db-table-inventory`
+- **Iceberg writes**: bulk + scoped delete (`In("ticker", batch)`), never per-ticker hot loop. NaN-replaceable upsert: filter dedup query to non-NaN AND scoped pre-delete NaN rows for incoming keys before append. `→ iceberg-nan-replaceable-dedup`
+- **Chat tool freshness**: every chat tool fetching from external APIs MUST check Iceberg freshness first; only call yfinance if stale. 7-day window covers weekends. `→ iceberg-freshness-checks`
+- **Tools return error strings; endpoints raise `HTTPException`** — `try/except` → `return f"Error: {exc}"` for `@tool`-decorated functions; `raise HTTPException(status_code=...)` for FastAPI routes.
+- **NullPool sync→async PG**: `_pg_session()` ~2-5ms/call. Don't use in hot loops — batch via DuckDB or bulk PG. `_run_pg(_call)` with callable (NOT coroutine) from sync threads. `pool_pre_ping=True` mandatory in `create_async_engine()`.
+- **Iceberg `TimestampType` is tz-naive** — strip `tzinfo` BEFORE write (`v.replace(tzinfo=None)`); emit ISO 8601 UTC with `Z` on read via `_iso_utc()` in `routes.py`. `→ iceberg-tz-naive-timestamps`
+- **Per-ticker refresh = 6 steps**: OHLCV (CRITICAL) → company_info → dividends → technical → quarterly → Prophet (CRITICAL). On success, status endpoint MUST invalidate `cache:dash:*`, `cache:chart:ohlcv:{t}`, `cache:chart:indicators:{t}`, `cache:chart:forecast:{t}:*`, `cache:insights:*`. `→ per-ticker-refresh`
+- **ContextVar through worker thread**: `loop.run_in_executor` does NOT copy ContextVars. Set INSIDE worker via scoped context manager (`apply_byo_context`); post-chat side-effects must run inside the same `with` block. `→ contextvar-run-in-executor`
+- **Sync I/O in async routes**: wrap with `asyncio.to_thread()`. Applies to retention cleanup, `backfill_nan`, `backfill_missing`.
+- **Pipeline step pattern**: fail-closed step 0 backup before any destructive maintenance. If backup fails, abort. `→ iceberg-daily-pipeline-compaction`
+- **Iceberg schema evolution requires backend restart**: after `update_schema().add_column()`, in-process DuckDB connection caches old schema. Redis FLUSHALL is NOT enough. `→ backend-restart-triggers`
+- **DuckDB read-after-write**: `invalidate_metadata()` after every Iceberg write. Under concurrent writes prefer `tbl.refresh().scan(filter)` over DuckDB filesystem-glob (race).
 
-### Data & Pipeline
+### 5.2 Chat agent
 
-- **yfinance pre-market flat candles**: O=H=L with NaN close
-  before settlement. Pipelines at 08:00 IST — delete NaN, refetch.
-- **Forecast backtest convention**: `horizon_months=0`, actual in
-  `lower_bound`. Persist when CV runs.
-- **Prophet CV from stdin**: `parallel="processes"` →
-  `FileNotFoundError: /app/<stdin>`. Use `parallel=None`.
-- **DuckDB metadata cache**: `invalidate_metadata()` in
-  `_retry_commit()`. Stale-read ⇒ check invalidation wired.
-- **Iceberg `company_info` upsert**: deletes existing ticker row
-  before append. One row per ticker.
-- **Iceberg concurrent writes**: SQLite catalog conflicts under
-  Semaphore(10). Fundamentals uses Semaphore(1).
-- **Iceberg flush window**: `ObservabilityCollector` flushes 30s.
-  Restarts lose unflushed events. Seed on startup.
-- **yfinance sectors**: "Technology" not "IT", "Financial Services"
-  not "Financials".
-- **jugaad-data timeout**: NseSource wraps in
-  `asyncio.wait_for(timeout=60.0)`.
-- **Forecast regime**: stable (<30% vol), moderate (30-60%),
-  volatile (>60%). Each gets different Prophet config.
-- **Log-transform**: applied for moderate/volatile. `np.log(y)`
-  before fit, `np.exp(yhat)` after — guarantees non-negative.
-- **Technical bias**: RSI/MACD/volume dampen forecast ±15%, taper
-  30d. Post-processing, not model change.
-- **Confidence score**: 5-component (direction, MASE, coverage,
-  interval, completeness). <0.25 rejected (hidden).
-- **FinBERT sentiment**: `sentiment_scorer=finbert` routes batch
-  to ProsusAI/finbert (CPU, free); LLM cascade for chat only.
-  `refresh_ticker_sentiment()` idempotent — won't re-score if
-  today's data exists, even forced.
-- **XGBoost casing**: `compute_indicators()` returns Title-case
-  (`RSI_14`); `_FEATURES` expects lowercase. Fix:
-  `tech.columns = [c.lower() for c in tech.columns]`.
-- **Forecast run dedup**: use `computed_at` (UTC ts) not
-  `run_date`. Affects `get_dashboard_forecast_runs()` /
-  `get_latest_forecast_run()`.
-- **Portfolio period overlap**: `get_portfolio_comparison` uses
-  `_period_to_days()` for non-overlapping windows.
-- **Portfolio bfill**: `_compute_daily_portfolio()` needs
-  `ffill().bfill()` — without bfill, partial first-rows inflate
-  returns to 4000%+.
-- **Portfolio ETF sector NaN**: `company_info.sector` is `NaN`
-  (float) for ETFs. Use `safe_str` / `safe_sector` (see NaN-truthy
-  trap below).
-- **ForecastTarget nullable**: `target_price`, `pct_change`,
-  `lower_bound`, `upper_bound` must be `float | None`. Sparse
-  portfolios → `None` else 500.
-- **Bulk OHLCV download**: `_bulk_fetch_ohlcv()` uses
-  `yf.download()` batches of 100 (99.8% vs 56% per-ticker).
-  `^`-prefixed indices fail in bulk.
-- **company_info snapshot bloat**: per-ticker appends without
-  retention → 4055 files for 830 rows. `overwrite()` to compact.
+- **Cascade routing**: chat = BYO + platform fallback; batch (recommendations/sentiment/forecast) = platform-only; superusers always platform. `→ byom-cascade-override`
+- **Sentiment routing**: `sentiment_scorer="finbert"` → ProsusAI/finbert (CPU, free) for batch; LLM cascade ONLY for chat or FinBERT failure.
+- **Tool-result truncation guards**: `max_tool_result_chars=4000` default; pass 2 = 2500; pass 3 = 1500. Don't drop <3000 without testing portfolio + screener. Synthesis prompt includes "NO HALLUCINATION ON TRUNCATION" — mirror in any new table-returning sub-agent prompt. `→ llm-truncation-hallucination`
+- **Hallucination guardrail**: `_is_hallucinated()` rejects responses with 3+ stock patterns and zero `tool_done` events.
+- **Tool-call ID sanitization**: `_sanitize_tool_ids()` cleans Groq IDs before Anthropic fallback.
+- **Per-request model pinning**: `_pinned_model` locks model after first invoke. Budget exhaust → compress, unpin, cascade. `pin_reset()` before each new ReAct loop.
+- **TokenBudget atomic ops**: `reserve()`/`release()`, NOT `can_afford()`/`record()` (TOCTOU). Singleton via `get_token_budget()`; seeds from Iceberg on restart.
+- **bind_tools rebuild lookup**: `_model_lookup` must be rebuilt after `FallbackLLM.bind_tools()`.
+- **`max_retries=0` on `ChatGroq`**: Groq SDK internal retries caused 45–56s delays before cascade kicked in.
+- **Iteration counter MUST be passed** from sub-agent loop into `FallbackLLM.invoke(messages, *, iteration=...)` — otherwise progressive compression never engages from iter 2+.
+- **Cascade profile at agent startup**: `tool` (loop) vs `synthesis` (final response) vs `test` (no Anthropic). After first tool iteration, route to synthesis cascade. `→ groq-chunking-strategy`, `llm-cascade-profiles`
+- **New agent class**: subclass `BaseAgent`, override only `format_response()`. Any attribute used in `_build_llm()` MUST exist BEFORE constructor (constructor → `_setup` → `_build_llm`). `→ agent-init-pattern`
+- **Sub-agent message construction** — three regimes: (1) first message = `prompt + query`; (2) same-intent follow-up = `prompt + summary + query`; (3) **intent switch = `prompt + query` only** (NO summary, NO history — cross-intent contamination causes hallucination). `→ summary-based-context`
+- **Chat-tool ticker discovery**: any chat tool fetching a new ticker from yfinance MUST also call `_ensure_stock_master(ticker, info)`, else ticker never enters daily pipeline. `→ stock-master-auto-insert`
+- **Chat clarification gate**: `?` ending bypasses keyword gate in `_is_clarification()`.
+- **Currency-aware system prompt**: `_build_context_block()` injects portfolio currency mix; LLM must use ₹ for INR, $ for USD.
+- **Tool-forcing prompts**: system prompt MUST be directive ("YOUR FIRST RESPONSE MUST ONLY be a tool call"). `→ llm-tool-forcing`
+- **WebSocket protocol**: auth-first handshake; events `thinking`/`tool_start`/`tool_done`/`warning`/`final`/`error`/`timeout`; close codes 4001/4002/4003. `_handle_chat` MUST send errors via `ws.send_json({"type":"error"})` + `{"type":"final"}` — returning the queue after enqueueing error spins drain loop forever. `→ streaming-protocol`
 
-### Database & PG
+### 5.3 Frontend
 
-- **`_pg_session()` NullPool**: ~2-5ms/call. Don't use in hot
-  loops — batch via DuckDB or bulk PG.
-- **asyncpg `pool_pre_ping=True`** required in `engine.py` —
-  stale conns crash on uvicorn reload.
-- **Iceberg NaT/NaN → PG**: sanitize before insert; PG rejects.
-- **UserMemory `extend_existing=True`** — dual import causes
-  "Table already defined".
-- **FastAPI `Query()` defaults**: pass explicitly in internal
-  calls (`ticker=None`).
+- **Data fetch**: ALWAYS via `apiFetch` + SWR hook in `frontend/hooks/`. Never raw `useEffect + fetch`. 2-min dedup, `revalidateOnFocus: false`. `→ swr-data-fetch-pattern`
+- **Authenticated route SSR**: RSC + cookie auth + `serverApiOrNull` + SWR `fallbackData`. `proxy.ts` (Next 16 rename of middleware.ts) accepts EITHER `access_token` OR `refresh_token` cookie. `→ cookie-auth-rsc-pattern`
+- **ECharts theme**: `useDarkMode` (MutationObserver on `<html>` class) NOT `useTheme()`. `notMerge={true}` + `key={isDark ? "d" : "l"}`. `→ echarts-theme-hydration`
+- **TradingView theme**: `useDomDark(isDarkProp)` from `frontend/components/charts/useDarkMode.ts` (also MutationObserver). Apply to every TradingView chart. `→ ssr-hydration-mismatches`
+- **ECharts tree-shake**: register only used types in `frontend/lib/echarts.ts` (200KB vs 800KB full). New chart type → add to `use([...])`.
+- **Currency**: `tickerCurrency(ticker)` helper. Never hardcode `$`.
+- **Images**: `<Image />` from `next/image` (ESLint enforced).
+- **SSR safety**: localStorage in `useEffect`; `crypto.randomUUID` guarded by `typeof window`; `toLocaleString("en-US")` with explicit locale.
+- **Inline content**: `<span>` not `<div>` inside `<p>` (hydration).
+- **Loading shells need text**: Lighthouse FCP doesn't fire on pure-CSS divs. Include text/img/svg. `→ lighthouse-fcp-text-heuristic`
+- **Loading-gate LCP anti-pattern**: top-level `if (X.loading) return <Skeleton/>` over prop-driven hero text hides the LCP candidate (Render Delay = 100% of LCP, FCP healthy). Render structure always with `?? 0` placeholders. **BUT keep the inner gate** when body has conditional charts (`rows.length > 0`), wide cells > h1 fallback (Piotroski stock names), heatmap canvases, or many empty-stat cards re-painting — page-level `<Suspense>` provides SSR LCP, inner gate keeps data-bound elements out of the LCP/CLS window. Today's keep-gated tabs: Sectors, Quarterly, Piotroski, Correlation, Observability. `→ loading-gate-lcp-anti-pattern`
+- **Suspense `fallback={null}` blanks SSR** when subtree calls `useSearchParams`. Replace with a static `<h1>` + `min-h-[Npx]` reserve that mirrors the inner wrapper outer dimensions exactly (otherwise CLS spikes on swap). Verify with `curl -s -b $JAR /admin | grep -oE '<h1[^>]*>[^<]+'`. `→ suspense-fallback-null-ssr-hole`
+- **Sign Out MUST POST `/v1/auth/logout` before `clearTokens()`** — proxy.ts edge gate accepts either cookie (hotfix `e33172d`); localStorage-only sign-out bounces `/login` back to `/dashboard`. Canonical call sites: `AppHeader.handleSignOut`, `ChatHeader.handleSignOut`. Wrap in try/catch.
 
-### Docker & Infra
+### 5.4 ★ Tabular page pattern (Insights, Admin)
 
-- Health check: `/v1/health` not `/health`.
-- Iceberg mount: `~/.ai-agent-ui` at SAME path inside container
-  (SQLite catalog stores absolute paths).
-- Ollama: `host.docker.internal:11434`.
-- `.pyiceberg.yaml`: mount `/app/.pyiceberg.yaml:ro` else silent
-  read fail.
-- Frontend: `node:22-slim` (glibc), `HOSTNAME=0.0.0.0`.
-- Seed script: set `PYICEBERG_CATALOG__LOCAL__URI` before pyiceberg
-  import; mount `fixtures/`.
-- Backup: `rsync` not in container — run from host or install in
-  image.
-- After code changes touching cache: `redis-cli FLUSHALL`.
-- **Sync Iceberg I/O in async routes**: wrap in
-  `asyncio.to_thread()`. Applies to retention cleanup,
-  `backfill_nan` / `backfill_missing` data-health actions.
-- **`env_file` reload**: `docker compose restart backend` does NOT
-  re-read `.env`. New env vars need
-  `docker compose up -d --force-recreate backend`.
-- **Alembic `.pyc` cache**: renaming a migration file isn't enough
-  — also edit the `revision: str = "..."` line inside AND clear
-  `/app/backend/db/migrations/versions/__pycache__/` in container,
-  else cycle/duplicate-revision errors.
-- **uvicorn `--reload` doesn't re-register routes/models**: adding
-  a new FastAPI route or a new field on an existing Pydantic
-  response model triggers `StatReload`, but `app.include_router()`
-  and `response_model` schema binding happen at app-startup time.
-  Result: the file is reloaded but OpenAPI + the live worker still
-  use the old shape — new routes return 404, new fields are
-  silently dropped from responses. Fix: `docker compose restart
-  backend` (or `--force-recreate` if env also changed). Verify via
-  `curl /openapi.json | jq` that the new schema/route is present.
+EVERY new table/list page MUST follow this. Hardened across Sprint 7 (ScreenQL) + Sprint 8 (column selector + admin tabs).
 
-### Iceberg Maintenance (CRITICAL)
+- `useColumnSelection(storageKey, defaults, validKeys)` — localStorage-backed, SSR-safe, tolerates catalog evolution.
+- `<ColumnSelector catalog lockedKeys={["ticker"]} />` — popover w/ category groups, search, reset. Use when catalog ≥ 8.
+- **Single source of truth**: `visibleCols = allCols.filter(c ∈ selected)`. CSV export consumes the SAME filter — never diverge.
+- `<DownloadCsvButton rows={sortedRows} cols={visibleCols} />` — placed next to pagination, NOT in panel header.
+- Server-side pagination if `total > 200`; else client-side. Default page size 25.
+- Sort: column-header click + arrow; default = relevance.
+- Locked identity column (`ticker`).
+- Empty state: skeleton during load, primary CTA when empty.
+- Stale-data chip in panel-title row when aggregate uses ffill (§5.5).
 
-- **NEVER delete metadata files** — SQLite catalog stores absolute
-  paths to `.metadata.json`. Recovery:
-  ```sql
-  sqlite3 ~/.ai-agent-ui/data/iceberg/catalog.db
-  UPDATE iceberg_tables
-  SET metadata_location='file:///path/to/latest.metadata.json'
-  WHERE table_name='ohlcv';
-  ```
-- **NEVER delete parquet directly** — use `overwrite()` /
-  `delete_rows()`. Orphan cleanup may only remove empty dirs.
-- **Compaction**: `overwrite()` (read all via DuckDB → write back
-  as one batch). OHLCV: 8670 → 817 files, 9s → 0.24s reads.
-- **Backup before maintenance**: always `run_backup()`. Includes
-  warehouse + `catalog.db`. Location:
-  `/Users/abhay/Documents/projects/ai-agent-ui-backups/` (2 latest).
-- **OHLCV freshness**: `latest >= today` (not yesterday). Evening
-  runs re-fetch closing data.
-- **OHLCV upsert (NaN-replaceable)**: dedup query filters
-  `WHERE close IS NOT NULL AND NOT isnan(close)` so a stuck NaN row
-  doesn't block a future re-fetch. Pre-delete NaN rows for the
-  to-be-inserted `(ticker, date)` set before append. Today's data
-  additionally uses scoped delete + re-append for intraday → close
-  correction. Pattern in both `insert_ohlcv` + `batch_data_refresh`.
-- **Daily auto-compaction**: `iceberg_maintenance` step in both
-  daily pipelines runs `run_backup()` (fail-closed) then
-  `compact_table()` for `ohlcv`, `sentiment_scores`, `company_info`,
-  `analysis_summary`. `rsync` installed in `Dockerfile.backend` for
-  container-side backup. Without this, OHLCV file count grew to 16K
-  parquets within a week → reads 5+s, `Clean NaN Rows` 5+ min.
-- **Post-pipeline expiry**: `pipeline_executor.py` calls
-  `expire_snapshots()` (currently logs only — PyIceberg API fragile).
-- **torch CPU-only**: install via
-  `pip install torch --index-url .../whl/cpu`. Do NOT add to
-  requirements.txt. Add `transformers>=4.40` separately.
+Reference: ScreenerTab, ScreenQLTab, RecommendationHistoryTab, Admin Users tab. Don't apply when catalog < 8 columns. `→ tabular-page-pattern`
 
-### LLM & Chat
+### 5.5 ★ Stale-data transparency chip
 
-- **TokenBudget**: use `reserve()`/`release()` (atomic), not
-  `can_afford()`/`record()` (TOCTOU).
-- **Hallucination guardrail**: `_is_hallucinated()` rejects 3+
-  stock patterns with zero `tool_done` events.
-- **Chat clarification**: `?` ending bypasses keyword gate —
-  `_is_clarification()` in `guardrail.py`.
-- **ReAct iteration**: `sub_agents.py` MUST pass
-  `iteration=iteration+1`.
-- **Groq tool-call IDs**: `_sanitize_tool_ids()` cleans before
-  Anthropic fallback.
-- **`bind_tools` model_lookup**: must rebuild after
-  `FallbackLLM.bind_tools()`.
-- **Groq TPD**: ~2.0M combined across 5 models. `TokenBudget`
-  seeds from Iceberg on restart.
-- **Model pinning**: `_pinned_model` locks model after first invoke
-  per request. Hits budget → compress, then unpin + cascade. Call
-  `pin_reset()` before each new ReAct loop.
-- **Double-synthesis**: portfolio uses `skip_synthesis=True` —
-  tools return formatted tables. Graph synthesis passes through
-  responses >100 chars.
+When aggregating across N entities and some have stale inputs (NaN closes, market_fallback sentiment), use the chip pattern instead of silent ffill or hard truncation.
 
-### Recommendations
+- Backend response: `stale_tickers: list[StaleTicker]` (or `unanalyzed_tickers: list[str]`).
+- Frontend amber chip in panel-title row, hover/click tooltip lists entities, auto-clears when empty (no dismiss button).
+- Smooth aggregate (no dip, no truncation) + transparency in one row.
 
-- **Monthly-per-scope quota**: 1 run per `(user, scope, IST month)`.
-  All entry points (widget/chat/scheduler) → `get_or_create_monthly_run`
-  in `jobs/recommendation_engine.py`. `scope="all"` expands to
-  india + us. IST via `ZoneInfo("Asia/Kolkata")`.
-- **`run_type`**: `manual | chat | scheduled | admin | admin_test`.
-  User reads filter `admin_test` via `exclude_test=True`. Admin tab
-  passes `exclude_test=False`.
-- **Admin force-refresh + promote** (superuser-only):
-  `POST /v1/admin/recommendations/force-refresh {user_id|email,
-  scope}` bypasses quota → `admin_test`.
-  `POST /admin/recommendation-runs/{id}/promote` deletes existing
-  non-test run for same `(user, scope, month)` + relabels to
-  `run_type='admin'`.
-- **`expire_old_recommendations` IS scope-aware** — don't regress.
-  Cross-scope wipe was a real bug.
-- **Acted-on auto-detect**: `POST/PUT/DELETE /v1/users/me/portfolio`
-  fires daemon thread → `update_recommendation_status(uid, ticker,
-  actions, "acted_on")` via NullPool bridge. BUY/ACCUMULATE on POST;
-  SELL/REDUCE/TRIM on qty-decrease (PUT) or delete. Only matches
-  `status='active'`; expired recs silently skipped.
-- **Stats**: `/recommendations/stats` + `/history` are scope-aware
-  (`?scope=india|us|all`). `total_acted_on` derived from
-  `acted_on_date`, NOT `recommendation_outcomes` (those are
-  30/60/90d price checks).
+Reference: `PLTrendWidget::StaleTickerChip`, `NewsWidget::UnanalyzedChip`. `→ portfolio-pl-stale-ticker-chip`
 
-### Auth & RBAC
+### 5.6 ★ Modal stacking + cross-page modals
 
-- **Three roles**: `general | pro | superuser`
-  (`auth.users.role VARCHAR(50)`). Pydantic Literals enforce in
-  `UserCreateRequest`/`UserUpdateRequest`.
-- **Tier → role auto-sync** (`auth/repo/user_writes.py::update()`):
-  when `subscription_tier` in updates AND role ≠ `superuser`,
-  flips: `free→general`, `pro|premium→pro`. **Superuser is
-  sticky**. Fires `ROLE_PROMOTED`/`ROLE_DEMOTED` post-commit.
-- **Dependency guards**: `superuser_only` for ~45 admin endpoints;
-  `pro_or_superuser` alias for `/admin/audit-log`,
-  `/admin/metrics`, `/admin/usage-stats`. Pro forced to
-  `scope=self`; `scope=all` → 403 unless superuser.
-- **JWT role cached**: `get_current_user` reads claim (no DB
-  re-read). Role change propagates only after `/auth/refresh`
-  (≤60 min). `BillingTab.tsx` calls `refreshAccessToken()` after
-  subscription writes.
-- **Audit vocabulary**: `LOGIN`, `PASSWORD_RESET`, `OAUTH_LOGIN`,
-  `USER_CREATED/UPDATED/DELETED`, `ADMIN_PASSWORD_RESET`,
-  `ROLE_PROMOTED/DEMOTED`, `BYO_KEY_ADDED/UPDATED/DELETED`.
-  `PATCH /auth/me` writes `USER_UPDATED` (actor==target).
+z-index ladder: slideovers `z-[60]` · modals (incl. opened from inside slideovers) `z-[70]` · tooltips/popovers `z-[80]` · toasts `z-[90]`.
 
-### Sentiment Batch
+Cross-page portfolio modals (Add/Edit/Delete/Transactions) mounted ONCE in `(authenticated)/layout.tsx` via `PortfolioActionsProvider`. Pages dispatch via `usePortfolioActions()`. NEVER route-redirect to open a modal (stacks behind slideovers).
 
-- **Step-5 read uses PyIceberg, NOT DuckDB**: `query_iceberg_df`
-  returns empty under concurrent commits because filesystem-glob
-  latest-snapshot lookup is racy (DuckDB reads a metadata file
-  whose manifests aren't yet visible). Use
-  `tbl.refresh().scan(EqualTo(score_date, today))` for the
-  post-worker freshness re-query. Pre-fix: 802/802 market_fallback
-  overwrote finbert.
-- **Step-5 source-aware delete**: predicate includes
-  `In("source", ["market_fallback", "none"])` so force-runs cannot
-  clobber finbert/llm rows.
-- **Hot classifier source filter**: `IN ('finbert', 'llm')` (was
-  `'llm'`-only — stale post-FinBERT cutover).
-- **market_cap selector**: top-50 learning batch joins
-  `stocks.company_info.market_cap` (registry doesn't expose it →
-  was sorted alphabetically, picked obscure A-prefixed small caps).
-- **Workers 5 (was 15)**: Yahoo/Google rate-limit above ~5 parallel.
-  Combined with dormancy (~60% fewer total HTTP calls), throughput
-  unchanged.
-- **Sentiment dormancy**: `sentiment_dormant` PG table tracks
-  tickers returning 0 headlines K times. Excluded from
-  learning/cold; 5% probe re-tested by oldest `last_checked_at`.
-  `force=True` runs ignore dormancy. Capped expo cooldown via
-  `_compute_next_retry()` in `pg_stocks.py`.
-- **News widget 21-day max-age + unanalyzed chip**:
-  `/portfolio/news` drops articles >21d old; response includes
-  `unanalyzed_tickers: list[str]` (tickers whose latest sentiment
-  is `market_fallback`/`none`). See Frontend → stale-data chip.
-- **Per-source 10s timeout**: `_fetch_yfinance`, `_fetch_yahoo_rss`,
-  `_fetch_google_rss`, `fetch_market_headlines` wrapped with
-  `_run_with_timeout(fn, *args, timeout=10)` in
-  `tools/_sentiment_sources.py`. Without it, `yf.Ticker().news`
-  deadlocks the 15-worker pool.
-- **Learning-set cap**: `execute_run_sentiment` caps `learning` at
-  top-50 by `market_cap`; tail → Step-5 fallback. Tune
-  `_LEARNING_CAP` if more coverage needed.
-- **FinBERT mode skips LLM build**: when
-  `settings.sentiment_scorer == "finbert"`, `refresh_sentiment`
-  passes `llm=None`. LLM only built when config is `"llm"` or
-  FinBERT fails.
-- **`source` column**: `finbert | llm | market_fallback | none`.
-  `none` = no headlines fetched. `score_headlines_with_source()`
-  returns `(score, source)`; `score_headlines()` is back-compat.
-- **Force = upsert**: scheduler `force=true` → skips per-ticker
-  idempotency. `insert_sentiment_score` already upserts (scoped
-  delete + append by `(ticker, score_date)`).
+View-first edit-from-within: eye icon on rows opens view modal; edit pencil lives INSIDE the view modal per-row.
 
-### Insights ticker scoping (three-tier)
+Confirm-modal DELETE handlers MUST treat 404 as success alongside 204. `→ modal-stacking-pattern`
 
-- `insights_routes.py::_scoped_tickers(user, scope)` is the single
-  helper. Scope: `"discovery" | "watchlist" | "portfolio"`.
-- **Tab → scope**:
-  - `discovery` (Screener, ScreenQL, Sectors, Piotroski) →
-    pro/superuser see full universe (`stock`+`etf`); general sees
-    watchlist ∪ holdings.
-  - `watchlist` (Risk, Targets, Dividends) → everyone sees
-    watchlist ∪ holdings.
-  - `portfolio` (Correlation, Quarterly) → holdings only
-    (`get_portfolio_holdings` where `quantity > 0`).
-- **Full-universe filter**: `ticker_type IN ('stock', 'etf')`.
-  Indices (`^NSEI`, `^GSPC`) and commodity (`GC=F`) excluded.
-- **Per-user cache key** on Piotroski: include `user_id` in Redis
-  key (was platform-wide; cross-user cache leak fixed).
-- Legacy shim `_get_user_tickers(user)` resolves to `watchlist`.
+### 5.7 ★ Admin scope-aware (pro vs superuser)
 
-### NaN-truthy trap
+`?scope=self|all` query param; pro forced to self (403 on `all`), superuser defaults to `all`. Applies to `/admin/audit-log`, `/admin/metrics`, `/admin/usage-stats`. `pro_or_superuser` guard for those three; `superuser_only` for ~45 others.
 
-- `float('nan')` is truthy. `row.get("sector") or "Other"` KEEPS
-  the NaN. yfinance returns NaN for ETF sector/industry/name —
-  leaked literal `"NaN (41.8%)"` into LLM prompts.
-- **Use shared helpers** in `backend/market_utils.py`:
-  - `safe_str(val) -> str | None` — None/NaN/whitespace → None.
-    Also rejects stringified-NaN sentinels `{nan, none, null, n/a,
-    na, nat}` (case-insensitive, post-strip). Legit substrings
-    (`Naniwa`, `Financial Services`) pass.
-  - `safe_sector(val, fallback="Other") -> str` — always non-empty.
-- Applied at write-paths (repo, batch_refresh, pipeline
-  fundamentals, universe, screener, stock_data_tool) and read-paths
-  (recommendation_engine stage2, dashboard_routes portfolio,
-  report_builder, insights_routes). Existing rows may still have
-  NaN; reads handle it.
-- **NaN propagation through arithmetic**: `val += qty * NaN` makes
-  `val` NaN. `NaN > 0` is False → silently drops the date in any
-  `if val > 0: append(...)` aggregator. Always guard with
-  `math.isnan` (or use `_safe_float` returning None) BEFORE
-  accumulating in any per-ticker → portfolio aggregation loop.
+`TabDef.roles: Role[]` filters admin tab strip. Pro = 3-tab strip (`my_account`, `my_audit`, `my_llm`). General forced to `/dashboard` by route gate.
 
-### BYOM (Bring Your Own Model)
+Tier→role auto-sync: `free→general`, `pro|premium→pro`, superuser sticky. Fires `ROLE_PROMOTED`/`ROLE_DEMOTED`. Frontend calls `refreshAccessToken()` after subscription writes (JWT cached).
 
-- **Product rule**: every non-superuser gets 10 free chat turns.
-  After 10, must configure Groq and/or Anthropic key — else 429
-  "Configure a Groq or Anthropic key on the My LLM Usage page".
-  Non-chat flows (recs, sentiment, forecast) + superusers stay on
-  platform keys.
-- **ContextVar pattern**: `backend/llm_byo.py` exposes `BYOContext`
-  + `apply_byo_context()`. MUST be set INSIDE worker thread —
-  `run_in_executor` doesn't propagate ContextVars. Every chat entry
-  point (`/chat`, `/chat/stream`, LangGraph variants, WS
-  `_run_graph`/`_run_legacy`) wraps worker in
-  `apply_byo_context(byo_ctx)`.
-- **Post-chat side-effect trap**: `update_summary()` MUST run inside
-  the `apply_byo_context()` block or it leaks to platform keys.
-  Use `_update_summary_in_byo_scope()` (WS) or nest in `with` (HTTP).
-- **`chat_request_count` bump**: guard with `byo_active=bool` so
-  free-allowance counter freezes once BYO kicks in. Scope-self
-  response clamps `free_allowance_used = min(count, 10)`.
-- **Raw `ChatGroq`/`ChatAnthropic` audit**: any node bypassing
-  `FallbackLLM` MUST also check `get_active_byo_context()` and swap
-  to user-keyed client. Past offender:
-  `agents/nodes/llm_classifier.py` (fixed). Audit when adding new
-  nodes.
-- **Fernet setup**: `BYO_SECRET_KEY` env (32-byte URL-safe base64).
-  Generate via `Fernet.generate_key().decode()`. Container must be
-  recreated to pick up new env: `docker compose up -d
-  --force-recreate backend`.
-- **Redis counter**: `byo:month_counter:{user_id}:{yyyy-mm}` (IST
-  month, 40d TTL). `CacheService.set()` uses `ttl=` (NOT `ex=`);
-  wrong kwarg → silent `TypeError`. `cache.get()` returns `str`
-  (decode_responses=True), not `bytes`.
-- **`FallbackLLM.bind_tools()`** stores `_bound_tools` +
-  `_bound_tools_kwargs` so BYO clients rebind on each
-  `_try_model()`. Don't remove.
-- **Per-user client cache** keyed `(provider, model,
-  sha256(key)[:12])`.
-- **WS 429 delivery**: `_handle_chat` MUST send errors directly
-  via `ws.send_json({"type":"error"})` + `{"type":"final"}` —
-  returning `event_queue` after enqueueing error spins drain loop
-  forever. Same trap on monthly-quota path.
-- **Iceberg `key_source` column**: nullable on `stocks.llm_usage`.
-  Legacy null rows = `platform` at read time. Schema evolved via
-  `tbl.update_schema().add_column()` — no backfill.
+**Audit event vocabulary**: `LOGIN`, `OAUTH_LOGIN`, `PASSWORD_RESET`, `USER_CREATED/UPDATED/DELETED`, `ADMIN_PASSWORD_RESET`, `ROLE_PROMOTED/DEMOTED`, `BYO_KEY_ADDED/UPDATED/DELETED`. New events MUST be added to enum + test. `→ pro-user-role-scoped-admin`, `observability`
 
-### ContextVar propagation (async → thread)
+### 5.8 Recommendation engine
 
-- `loop.run_in_executor(executor, fn)` does NOT copy calling task's
-  ContextVars. ContextVars set in async route handler are EMPTY in
-  worker thread.
-- **Fix**: set ContextVar INSIDE worker via scoped context manager
-  (`apply_byo_context`, `apply_X_context`) or
-  `contextvars.copy_context().run(fn)`.
-- Block-exit auto-clears for next request — verify in unit test
-  (`test_apply_and_auto_clear`).
+- Monthly-per-scope quota: 1 run per `(user, scope, IST month)` via single `get_or_create_monthly_run` — all entry points (widget/chat/scheduler) MUST go through it.
+- `run_type ∈ {manual, chat, scheduled, admin, admin_test}`. User reads filter `admin_test` via `exclude_test=True`.
+- Acted-on auto-detect: `POST/PUT/DELETE /portfolio` fires daemon thread → `update_recommendation_status`.
+- Stats scope-aware: `/recommendations/stats` and `/history` take `?scope=india|us|all`. `total_acted_on` derives from `acted_on_date`, NOT `recommendation_outcomes`.
+- `expire_old_recommendations` IS scope-aware — don't regress to cross-scope wipe. `→ recommendation-engine`
 
-### Tool-result truncation hallucination
+### 5.9 Insights ticker scoping (3-tier)
 
-- `MessageCompressor` (`backend/message_compressor.py`) truncates
-  `ToolMessage.content` with literal `[truncated N chars]` marker.
-  Mid-table marker → LLM hallucinates missing rows in synthesis.
-- **Defaults**: `max_tool_result_chars=4000`; pass 2 = 2500;
-  pass 3 = 1500. Don't drop <3000 without testing portfolio +
-  screener.
-- **Prompt guardrails**: `_SYNTHESIS_PROMPT` + portfolio sub-agent
-  prompt include NO HALLUCINATION ON TRUNCATION clause. Don't
-  remove. Mirror in any new table-returning sub-agent prompt.
+`insights_routes.py::_scoped_tickers(user, scope)` — single helper. Scope ∈ `{discovery, watchlist, portfolio}`.
 
-### Frontend
+| Tab → scope | Who sees what |
+|---|---|
+| `discovery` (Screener, ScreenQL, Sectors, Piotroski) | Pro/superuser: full universe (`stock`+`etf`); General: watchlist ∪ holdings |
+| `watchlist` (Risk, Targets, Dividends) | Everyone: watchlist ∪ holdings |
+| `portfolio` (Correlation, Quarterly) | Holdings only (`quantity > 0`) |
 
-- **ScreenQL multi-line AND**: newlines are implicit AND. Lines
-  starting with `AND`/`OR` don't add another. Parser handles in
-  `tokenize()` smart newline join.
-- **ScreenQL RSI field**: `rsi_14` extracted via
-  `TRY_CAST(regexp_extract(rsi_signal, 'RSI:\\s*([\\d.]+)', 1) AS
-  DOUBLE)` — not standalone column. Map in `screen_parser.py`.
-- **ScreenQL columns**: base 5 always (ticker, company, sector,
-  mcap, price); query fields auto-added; `currency` and `market`
-  hidden helpers.
-- **CSV download**: `downloadCsv()` in `frontend/lib/`.
-  `InsightsTable.onDownload` receives sorted (not paginated) rows.
-  Excludes `action` cols.
-- **KpiTooltip**: clamp `left` to `viewport - tipWidth - 8px` to
-  prevent right-edge overflow.
-- **Admin API caching**: `data-health` 60s, backup 120s in Redis.
-  First load post-expiry slow (~1-12s) due to 113K orphans.
-- **ChatInput**: `readOnly` not `disabled` (keeps focus).
-- **Sidebar**: collapsed by default; hover flyout for submenus.
-- **ECharts dark/light**: `MutationObserver` on `<html>` class,
-  not `useTheme()`. `notMerge={true}` + `key`.
-- **Perf script login**: `type()` not `fill()` (React `onChange`
-  needs keystrokes).
-- **`apiFetch`** requires full URL: `${API_URL}/path`, not
-  relative `/path` (relative hits Next.js 3000 not backend 8181).
-- **Market ticker**: `MarketTicker` in `AppHeader.tsx` center.
-  NSE + Yahoo dual-source, 30s poll, PG+Redis. Off-hours: zero
-  upstream calls.
-- **Yahoo `^BSESN` freezes mid-session**: Yahoo's BSE feed stops
-  emitting new ticks after ~10 min of market open. Detected via
-  `regularMarketTime` in `_is_yahoo_quote_stale()` (>300s old
-  during market hours). Fallback: Google Finance scrape
-  (`SENSEX:INDEXBOM`, `data-last-price` regex) overlaid on
-  Yahoo's `prev_close`. Nifty unaffected (NSE primary source).
-- **`ticker_type`**: stock (755), etf (54), index (4), commodity
-  (4). `_analyzable_tickers()` = stock+etf;
-  `_has_financials()` = stock only.
-- **ETF bulk-download**: `--tickers` expects symbols WITHOUT `.NS`
-  (script auto-appends from `stock_master.yf_ticker`).
-- **DuckDB stale reads**: data-health calls `invalidate_metadata()`
-  before queries, else fix results don't show until restart.
-- **`<div>` in `<p>`**: use `<span>` for inline (e.g. confidence
-  badge) — `<div>` causes hydration error.
-- **PortfolioActionsProvider**: Add/Edit/Delete/**Transactions**
-  portfolio modals mounted ONCE at
-  `frontend/app/(authenticated)/layout.tsx`. Pages use
-  `usePortfolioActions()` → `{openAdd, openEdit, openDelete,
-  openTransactions}`. Do NOT route-redirect to
-  `/dashboard?add=TICKER` — stacks behind open slideover.
-  `openTransactions(ticker)` opens `PortfolioTransactionsModal`
-  (date-sorted txns + per-row edit pencil + summary footer).
-  Eye icon on portfolio rows opens this; inline edit pencil REMOVED
-  from portfolio rows (view-first-edit-from-within UX).
-- **Portfolio P&L NaN truncation**: `_build_portfolio_performance`
-  used to drop entire dates when any held ticker had NaN close
-  (`val += qty * NaN` → `val > 0` False). Four defenses now in
-  place: (1) `math.isnan` guard in daily loop, (2) per-ticker
-  `df["close"].ffill()` pre-`close_maps`, (3) `stale_tickers` field
-  + amber chip, (4) ffill-to-series-end so a ticker missing a
-  trailing date carries last close to series end.
-- **Stale-data chip pattern** (reusable):
-  `PLTrendWidget::StaleTickerChip` + `NewsWidget::UnanalyzedChip`.
-  Backend exposes `stale_tickers: list[StalePriceTicker]` /
-  `unanalyzed_tickers: list[str]`. Amber chip near panel title,
-  hover/click tooltip lists entities, auto-clears when list empty.
-  When adding a new aggregate over per-entity values where some
-  can be stale, mirror this pattern (Serena
-  `shared/architecture/portfolio-pl-stale-ticker-chip`).
-- **OHLCV chart triple-dedup**: defensive layers — Iceberg
-  (NaN-replaceable upsert), backend route (`drop_duplicates` before
-  serializing), frontend chart (`Map`-keyed by time before
-  `setData`). Lightweight-charts asserts on duplicate timestamps;
-  any single layer regressing won't crash the chart.
-- **Modal z-index**: Add/Edit/Confirm = `z-[70]` (above
-  `RecommendationSlideOver` `z-[60]`). New modals triggered from
-  inside slideovers must also be `z-[70]`.
-- **Shared `DownloadCsvButton`**:
-  `frontend/components/common/DownloadCsvButton.tsx` (icon + "CSV"
-  text, Screener pattern). All CSV exports use it. Place next to
-  pagination, not headers. `loading` prop for async-collecting.
-- **Pro role admin UI**: `frontend/app/(authenticated)/admin/page.tsx`
-  has single `ALL_TABS` array with `roles: Role[]` per entry. Pros
-  see only `my_account`, `my_audit`, `my_llm`. Route gate redirects
-  general → `/dashboard`.
-- **`MyLLMUsageTab.tsx`**: standalone (NOT delegating to superuser
-  `ObservabilityTab`). Consumes scope-self shape (`quota`,
-  `providers`, `daily_trend`, per-model rollup with
-  `requests_platform` + `requests_user`). Mirror backend shape
-  changes in `frontend/lib/types.ts::UserModelUsage`.
-- **Scope-aware admin hooks**: `useAdminAudit(scope)`,
-  `useObservability(scope)`, `getUsageStats(scope)` all take
-  `"self" | "all"`. `obsFetcher` skips superuser-only `tier-health`
-  GET on `scope="self"`.
-- **Idempotent DELETE UX**: handlers via confirm modal treat 404
-  as success (already-removed) alongside 204. See
-  `useAdminData::deleteKey`.
-- **Timestamp parsing**: `fmtRelative()` needs ISO 8601 with TZ
-  marker (`Z` or `+HH:MM`). Iceberg timestamps come tz-naive —
-  backend must stamp `Z` (shared `_iso_utc()` in `routes.py`).
-  Without it, `new Date()` parses as local → "5h ago" in IST.
+Full-universe filter: `ticker_type IN ('stock', 'etf')` (excludes indices + commodity). Per-user cache key MUST include `user_id` (cross-user leak fixed Sprint 7).
 
-### Testing & Config
+### 5.10 Forecast pipeline
 
-- **Test mock dates**: never hardcode — use
-  `str(int(time.time()) - 86400)` for "yesterday".
-- **`settings.local.json`**: no `()` in Bash patterns.
-- **slowapi rate limiter**: `limiter.enabled = False` in test
-  fixtures, not `limiter.reset()`.
-- **`get_settings().debug`**: use `getattr()` with fallback.
-- **StockRepository**: always via `_require_repo()`.
-- **Superuser insights**: `_get_user_tickers()` shows full registry
-  for superusers, watchlist-only for general.
+- Volatility regime: stable (<30%), moderate (30-60%), volatile (≥60%) — different Prophet config per regime.
+- Log-transform for moderate/volatile (`np.log(y)` before fit, `np.exp(yhat)` after — guarantees non-negative).
+- Technical bias: RSI/MACD/volume dampen forecast ±15%, taper 30d. Post-processing.
+- 5-component confidence score (direction/MASE/coverage/interval/completeness). <0.25 rejected.
+- Sanity gates: log-transform exp cap (`np.exp(last_log_y ± 1.5)`, max 4.5×); >200% deviation → series skip.
+- Run dedup: `computed_at` (UTC ts), NOT `run_date`.
+- Backtest: `horizon_months=0`, actual in `lower_bound`. `→ forecast-enrichment-sanity-gates`
 
-### E2E Testing (Playwright)
+### 5.11 Payments & Subscription (Razorpay INR + Stripe USD)
 
-`e2e/playwright.config.ts`: Local 1 worker; CI 2 workers, retries
-2, `maxFailures 0`, video retain-on-failure.
+- **Read tier from Iceberg via `repo.get_by_id()`, NOT JWT** (JWT is stale cache). Same for `subscription_status`.
+- **Webhook signature verification MANDATORY** — fail-closed with 503 if secret not configured. `_plan_id_to_tier()` returns `None` for unknown plans (don't default to "pro").
+- **Upgrades use PATCH not cancel+create** — Razorpay `subscription.edit` w/ `schedule_change_at="now"`; Stripe `Subscription.modify`. Cancel+create makes orphan subs.
+- Concurrent writes: webhook + cancel race → `CommitFailedException`. `_safe_update()` retries 3×.
+- Every payment event writes to `auth.payment_transactions` ledger with `event_type` + `tier_before`/`tier_after` + raw payload.
 
-| Project | Auth | Tests |
-|---------|------|-------|
-| `frontend-chromium` | superuser | chat, billing, profile, dark-mode, nav |
-| `analytics-chromium` | general | dashboard, insights, marketplace, portfolio-crud |
-| `admin-chromium` | superuser | admin CRUD, observability, scheduler |
+`→ subscription-billing`, `payment-transaction-ledger`, `razorpay-integration-gotchas`, `security-hardening-patterns`
 
-**Conventions**:
-- Credentials: `admin@demo.com` / `Admin123!` (run
-  `seed_demo_data.py` if login fails).
-- Chat panel: collapsible on `/dashboard`. `ChatPage.goto()` clicks
-  "Toggle chat panel". Locators scoped to `[data-testid="chat-panel"]`.
-- Testid constants: all in `e2e/utils/selectors.ts` (FE object).
-  Page objects use `this.tid(FE.xxx)`. Never hardcode strings.
-- Visual baselines: regenerate via
-  `npx playwright test --update-snapshots`. In `*.spec.ts-snapshots/`,
-  committed.
+### 5.12 Chat memory layer (pgvector)
 
-**Gotchas**:
-- **Never `networkidle`** — dashboard polls 30s + WebSocket. Use
-  explicit element waits (`getByTestId("sidebar").toBeVisible()`).
-- **Below-fold widgets** (Watchlist, Forecast, P&L): need
-  `waitFor({ state: "attached" })` then `scrollIntoViewIfNeeded()`.
-- **After `page.reload()`**: chat panel closes; wait for sidebar.
-- **CSS `uppercase` vs DOM**: `getByText("CURRENT PLAN")` fails
-  when DOM has "Current Plan" w/ CSS uppercase. Use `getByTestId`
-  or exact case.
-- **Strict mode**: `/cancel|close/i` matches Cancel button + Close
-  X. Use `/^cancel$/i`.
-- **Statement type options**: Quarterly tab uses `income`, `balance`,
-  `cashflow` (not `balance_sheet`).
-- **Never increase workers** — 3 workers consumed >1000% CPU and
-  starved Docker.
+- **Write path**: async fire-and-forget from WS worker via `asyncio.run_coroutine_threadsafe()`. Skip responses <50 chars.
+- **Read path**: sync before `graph.invoke()` — top-5 cosine similarity from pgvector, 3s timeout, formatted as `[Memory context]` block in sub-agent prompt.
+- **Embeddings**: Ollama `nomic-embed-text` (768 dim). Falls back to `ConversationContext.summary` when Ollama down.
+- **ConversationContext**: dual-layer in-memory dict + PG persistence via `ConversationContextStore.upsert()` synchronous (NOT daemon thread — fails inside uvicorn).
+- Cross-session resume via `get_latest_for_user(user_id)` when frontend generates new `session_id`.
+
+`→ memory-augmented-chat`, `conversation-context-persistence`
+
+### 5.13 ★ Redis caching strategy
+
+EVERY new endpoint returning Iceberg-derived data MUST follow this. Hardened Sprint 4 (cache layer) + Sprint 6 (aggregate `/dashboard/home`).
+
+- **TTL constants**: `TTL_VOLATILE=60` (per-user dashboards), `TTL_STABLE=300` (charts, insights), `TTL_ADMIN=30`. Don't invent new TTLs.
+- **Key schema**: `cache:<area>:<endpoint>:<scope>` — e.g. `cache:dash:home:{user_id}`, `cache:chart:ohlcv:{ticker}`. Per-user keys MUST include `user_id`.
+- **Write-through invalidation**: every Iceberg write through `_retry_commit()` calls `_invalidate_cache(table)` consulting `_CACHE_INVALIDATION_MAP`. New Iceberg table → add map entry.
+- **Route pattern**: `cache.get(key)` → return Response if hit; else compute, `cache.set(key, json, TTL_*)`, return.
+- **`cache.set(key, value, ttl=...)`** — kwarg is `ttl` NOT `ex` (silent `TypeError`). `cache.invalidate(pattern)` is glob; `cache.invalidate_exact(*keys)` is exact.
+- No-op cache when `REDIS_URL` empty — graceful degradation. `→ redis-cache-layer`
+
+### 5.14 ★ E2E test conventions (Playwright)
+
+EVERY new interactive element MUST have `data-testid`. EVERY new page test MUST follow Page Object Model.
+
+- **Testid registry**: all selectors in `e2e/utils/selectors.ts` `FE` object. Pattern `component-element`. NEVER hardcode in spec files.
+- **Page Object Model**: pages extend `BasePage` (`e2e/pages/frontend/`). Use `this.tid(FE.selectorName)`.
+- **Auth fixtures**: import from `fixtures/portfolio.fixture` etc. Storage state pre-loaded for `general-user` and `superuser`. NEVER call `/auth/login` in spec (rate-limit). `auth.setup.ts` MUST capture Set-Cookie + rewrite domain to frontend host; `e2e/.auth/*.json` `cookies[]` must contain access + refresh tokens with `domain: "localhost"`. `→ playwright-cookie-fixture`
+- **Locator scoping**: chat tests use `[data-testid="chat-panel"]` scope; never globals that could match side panel + main content.
+- **Never `networkidle`** — dashboard polls 30s + WebSocket. Use explicit element waits.
+- **Below-fold widgets**: `waitFor({ state: "attached" })` then `scrollIntoViewIfNeeded()`.
+- **Strict mode**: `/cancel|close/i` matches both Cancel + Close X. Use `/^cancel$/i`.
+- **Workers**: 1 local, 2 CI. NEVER raise — 3 workers consumed >1000% CPU and starved Docker.
+- **`maxFailures: 10` local cap** — Playwright stops scheduling new tests after 10 failures; use `--max-failures=0` when investigating tech-debt counts (CI is uncapped).
+
+`→ e2e-test-patterns`, `test-isolation-gotchas`
+
+### 5.15 ★ Performance budgets (per-route LCP/perf gates)
+
+Pre-PR `npm run perf:check` (LHCI on /login) is a soft gate; full audit via containerized 34-route Lighthouse (§8) before any major frontend ship.
+
+**Iterating on LCP fixes**: save `pw-lh-summary.json` per cycle, diff LCP **and** CLS per route (every gate removal can spike CLS — verify ≤ 0.02 held). Phase 0 always: read the LCP element + phase breakdown from the per-route JSON before fixing; `Render Delay = 100% of LCP` ≠ `chart paints late`. `→ loading-gate-lcp-anti-pattern`, `suspense-fallback-null-ssr-hole`
+
+| Route bucket | Perf | LCP | TBT | CLS |
+|---|---:|---:|---:|---:|
+| `/`, `/login`, `/auth/oauth/callback` | ≥ 90 | ≤ 2.0–2.5 s | — | ≤ 0.1 |
+| `/dashboard`, `/analytics` | ≥ 80 | ≤ 2.5 s | — | ≤ 0.1 |
+| `/analytics/*`, `/insights` | ≥ 75 | ≤ 3.0 s | — | ≤ 0.1 |
+| `/admin` | ≥ 70 | ≤ 3.5 s | — | ≤ 0.1 |
+| `/docs` | ≥ 85 | ≤ 2.0 s | — | ≤ 0.1 |
+| All pages | — | — | ≤ 200 ms | ≤ 0.02 |
+
+Hard rules: JS < 500 KB gzipped per route · mobile baseline (4× CPU, slow 4G) · heavy chart libs via `next/dynamic({ ssr: false })` · `<Suspense>` around chart Client Components when migrating to RSC · `react-markdown` lazy-loaded.
+
+`→ lighthouse-performance-workflow`, `auth-layout-ssr-unlock`, `lighthouse-runner-gotchas`
 
 ---
 
-## Quick Reference
+## 6. Bug-Fix Patterns — recurring footguns
+
+Treat as enforced rules. Each came from a real incident.
+
+### 6.1 NaN handling
+
+- **String sentinels**: `"NaN"`, `"None"`, `"null"`, `"N/A"`, `"na"`, `"NaT"` are truthy. Use `safe_str` / `safe_sector` from `backend/market_utils.py` — case-insensitive post-strip rejection. Legit substrings (`"Naniwa"`, `"Financial Services"`) pass.
+- **Arithmetic propagation**: `val += qty * NaN` → NaN; `NaN > 0` is False → silently drops the date. Always guard with `math.isnan` before accumulating.
+- **`val or default` is broken for pandas numerics** — NaN is truthy, ALL comparisons (`<= 0`, `>= 0`, `== 0`) return False. Use `_safe_float(val)` helper. `→ nan-handling-iceberg-pandas`
+- **Iceberg dedup**: a NaN row blocks future re-fetch. Filter dedup query to non-NaN AND scoped pre-delete NaN rows for incoming keys. `→ iceberg-nan-replaceable-dedup`
+- **NaN→PG sanitize** before inserting (PG rejects NaT/NaN).
+
+### 6.2 Backend restart triggers (uvicorn --reload isn't enough)
+
+| Change | Action |
+|---|---|
+| New `@router.get/post/...` decorator | `restart` |
+| New field on `response_model` class | `restart` |
+| New `app.include_router()` call | `restart` |
+| New `@register_job(...)` decorator | `restart` |
+| Iceberg `add_column()` ran | `restart` + Redis FLUSHALL |
+| New env var in `.env` | `up -d --force-recreate backend` |
+| Renamed Alembic migration | edit `revision: str = "..."` + clear `__pycache__/*.pyc` + `restart` |
+| `Dockerfile.backend` / `requirements.txt` changed | `compose build backend` + `up -d` |
+
+After restart, sleep 5s before auth-dependent calls (asyncpg shutdown race). `→ backend-restart-triggers`
+
+### 6.3 Cookie hostname
+
+`localhost` and `127.0.0.1` are DIFFERENT hostnames for cookies. `NEXT_PUBLIC_BACKEND_URL=http://localhost:8181` — never `127.0.0.1`. Logout clears cookies at `/`, `/auth`, AND `/v1/auth` (legacy compat). `→ cookie-hostname-mismatch`
+
+### 6.4 Iceberg / DuckDB
+
+- `invalidate_metadata()` after every Iceberg write (already wired in `_retry_commit()`; if stale-read, check it's invoked).
+- Concurrent-write race: DuckDB filesystem-glob latest-snapshot read can miss commits. Use `tbl.refresh().scan(filter)` via PyIceberg directly when reading after concurrent writes.
+- **Backup BEFORE maintenance** — `run_backup()` is mandatory step 0 of `execute_iceberg_maintenance` (fail-closed).
+- **NEVER `rm` metadata or parquet files** — SQLite catalog stores absolute paths. Recovery requires manual SQL update of `iceberg_tables.metadata_location`. `→ iceberg-table-corruption-recovery`
+- `ObservabilityCollector` flushes 30s — restart loses unflushed events. Seed on startup.
+
+### 6.5 yfinance / data
+
+- **Pre-market flat candles** (Indian, 08:00 IST pipelines): O=H=L with NaN close. Delete + refetch.
+- **Bulk download**: `yf.download()` batches of 100 (99.8% vs 56% per-ticker). `^`-prefixed indices fail in bulk — fetch separately.
+- **Sectors casing**: `"Technology"` not `"IT"`, `"Financial Services"` not `"Financials"`.
+- **jugaad-data timeout**: `NseSource` wraps in `asyncio.wait_for(timeout=60.0)`.
+- **Yahoo `^BSESN` freezes mid-session**: stops emitting after ~10 min of market open. `_is_yahoo_quote_stale()` checks `regularMarketTime` >300s old; falls back to Google Finance scrape (`SENSEX:INDEXBOM`).
+- **Per-source 10s timeout** in sentiment fetchers (`_fetch_yfinance`, `_fetch_yahoo_rss`, `_fetch_google_rss`) — without it `yf.Ticker().news` deadlocks the worker pool.
+- **Pre-1980 date corruption**: yfinance returns `date=1970-01-01` (epoch zero) → TradingView crashes. Backend filter `df[df["date"] >= "1980-01-01"]` BEFORE Iceberg write; frontend regex `/^(19[89]\d|2\d{3})-/` in `aggregateOHLCV`/`aggregateIndicators`/`filterNull`. `→ iceberg-epoch-dates`
+
+### 6.6 Frontend hydration
+
+- `<div>` in `<p>` → hydration error. Use `<span>` for inline badges.
+- Lighthouse FCP only fires on text/img/svg, not pure-CSS divs. Loading shells MUST include text.
+- Mount-gate kills SSR — `if (!mounted) return <Spinner />` in layout floors LCP at hydration. Audit providers for SSR safety, then remove. `→ auth-layout-ssr-unlock`
+- **LCP regression** — Render Delay = 100% of LCP w/ FCP healthy → loading-gate hiding hero text; or empty SSR HTML → `<Suspense fallback={null}>` over `useSearchParams`. `→ loading-gate-lcp-anti-pattern`, `suspense-fallback-null-ssr-hole`
+- **Sign Out bounces to /dashboard** — frontend not calling `/v1/auth/logout`; cookies persist. See §5.3.
+- Modal z-index opened from slideovers MUST be `z-[70]` (slideover is `z-[60]`).
+
+### 6.7 Sync→async migration footguns
+
+Coroutines returned silently instead of values — no compile-time error.
+
+- **Missing `await` on async repo methods** — grep `repo\.` across `auth/`, `backend/`, `stocks/`. Bare coroutine passes truthiness checks.
+- **Test mocks**: replace `MagicMock` with `AsyncMock` for any mocked async repo. Awaiting a `MagicMock` returns a coroutine.
+- **Sync callers of async PG**: pass *callable* not coroutine (`_run_pg(_call)` not `_run_pg(_call())`); use `_pg_session()` (fresh engine) NOT `get_session_factory()` (cached, binds to uvicorn loop).
+- **Thread-local across executor boundaries**: `threading.local()` set on event-loop thread is invisible to executor workers. Set inside the worker closure.
+- `pool_pre_ping=True` mandatory in `create_async_engine()`.
+
+`→ sync-async-migration-patterns`, `asyncpg-sync-async-bridge`
+
+---
+
+## 7. Process & Workflow
+
+- **Git**: branch off `dev`; squash-only merge to `dev` (merge-commit + rebase blocked by branch protection); Co-Authored-By Abhay; `git add .serena/` before final push; keep feature branch until sprint history no longer needed; hotfix: branch off `main`, PR to `main`, sync DOWN.
+- **Jira 3-phase**: create with full metadata → mark In Progress BEFORE code → comment with impl detail + transition Done at ship. Story points: BOTH `customfield_10016` (numeric) AND `customfield_10036` (string). `→ jira-3phase-lifecycle`
+- **Test-after-feature**: write tests immediately after smoke test passes. Happy + 1 error path minimum. Don't defer.
+- **Doc triggers**: `PROGRESS.md` every session · `docs/` for new/changed API · new Serena memory for new architecture/pattern · `README.md` env-vars table for new config · `stocks/create_tables.py` + `docs/` for new Iceberg table · this file (CLAUDE.md) for new regression-preventing rule.
+
+---
+
+## 8. Quick Reference
 
 ```bash
 # Lint
-black backend/ auth/ stocks/ scripts/
-isort backend/ auth/ stocks/ scripts/ --profile black
+black backend/ auth/ stocks/ scripts/ && \
+isort backend/ auth/ stocks/ scripts/ --profile black && \
 flake8 backend/ auth/ stocks/ scripts/
 cd frontend && npx eslint . --fix
 
 # Test
-python -m pytest tests/ -v               # ~902 tests
+python -m pytest tests/ -v               # count drifts; see PROJECT_INDEX
 cd frontend && npx vitest run            # 18 frontend tests
-cd e2e && npm test                       # ~257 E2E (live services)
-
-# E2E (one project at a time, 1 worker, ~3 min each)
-cd e2e && npx playwright test --project=frontend-chromium
+cd e2e && npx playwright test --project=frontend-chromium    # ~3 min, 1 worker
 cd e2e && npx playwright test --project=analytics-chromium
 cd e2e && npx playwright test --project=admin-chromium
 cd e2e && npx playwright test --update-snapshots
 
-# Migrations
+# Migrations / seed
 PYTHONPATH=. alembic upgrade head
 PYTHONPATH=. alembic revision --autogenerate -m "desc"
-PYTHONPATH=backend python scripts/migrate_iceberg_to_pg.py
-
-# Seed
-PYTHONPATH=backend python scripts/seed_demo_data.py
 docker compose exec backend python scripts/seed_demo_data.py
 
 # BYOM first-time
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 docker compose up -d --force-recreate backend  # re-read .env
 
-# Alembic stale bytecode
+# Alembic stale bytecode (renamed migration)
 docker compose exec backend rm -f /app/backend/db/migrations/versions/__pycache__/*.pyc
-
-# Destructive maintenance
-docker compose exec backend python3 scripts/truncate_recommendations.py --yes
-docker compose exec backend python3 scripts/detect_illiquid.py
 
 # Stock pipeline (PYTHONPATH=.:backend python -m backend.pipeline.runner ...)
 download | seed --csv ... | bulk-download | fill-gaps | status
 analytics --scope india | sentiment --scope india | forecast --scope india
-screen | refresh --scope india --force
+screen | refresh --scope india --force | recommend
 
-# Performance (cd frontend)
-npm run perf:check       # LHCI on /login (pre-PR gate)
-npm run perf:audit       # Playwright 10-route quick
-npm run perf:full        # Full 42-point audit
-npm run analyze          # Bundle treemap
+# Performance — containerized 34-route Lighthouse
+docker compose --profile perf build frontend-perf
+docker compose --profile perf up -d postgres redis backend frontend-perf
+docker compose --profile perf run --rm perf       # ~15-20 min
+# Output: frontend/.lighthouseci/pw-lh-summary.json
 ```
+
+---
+
+## 9. Pattern Index
+
+When you're about to do X, read pattern Y first.
+
+| Doing... | § | Memory |
+|---|---|---|
+| Add a tabular list page | 5.4 | `tabular-page-pattern`, `insights-column-selector-pattern` |
+| Aggregate w/ stale per-entity inputs | 5.5 | `portfolio-pl-stale-ticker-chip` |
+| Add a modal (any kind) | 5.6 | `modal-stacking-pattern` |
+| Add a portfolio-related modal | 5.6 | `portfolio-management` |
+| Add an authenticated route | 5.3, 5.7 | `cookie-auth-rsc-pattern` |
+| Add a data-fetching hook | 5.3 | `swr-data-fetch-pattern` |
+| Add an admin tab | 5.7 | `pro-user-role-scoped-admin` |
+| Add a cached endpoint | 5.13 | `redis-cache-layer` |
+| Add an E2E test | 5.14 | `e2e-test-patterns` |
+| Pre-PR perf check / hit a budget | 5.15 | `lighthouse-performance-workflow` |
+| Add an Iceberg column (schema evolution) | 5.1, 6.4 | `backend-restart-triggers`, `iceberg-schema-evolution-backend-restart` |
+| Add a new Iceberg table | 4.3 | `db-table-inventory`, `iceberg-maintenance` |
+| Add a PG table | 4.3 | `db-table-inventory` |
+| Add a chat agent tool | 5.1, 5.2 | `iceberg-freshness-checks`, `llm-tool-forcing` |
+| Add a chat tool that fetches a new ticker | 5.2 | `stock-master-auto-insert` |
+| Add a chat sub-agent / message-construction path | 5.2 | `summary-based-context`, `llm-truncation-hallucination` |
+| Add a new agent class | 5.2 | `agent-init-pattern`, `llm-cascade-profiles` |
+| Add chat intent / router branch | 5.2 | `intent-aware-routing` |
+| Add WebSocket event type | 5.2 | `streaming-protocol` |
+| Touch LLM cascade | 5.2 | `byom-cascade-override`, `round-robin-cascade`, `groq-chunking-strategy` |
+| Touch chat ContextVar / BYO | 5.1, 5.2 | `contextvar-run-in-executor` |
+| Touch chat memory / extractor / retriever | 5.12 | `memory-augmented-chat`, `conversation-context-persistence` |
+| Use Ollama (cascade or embedding) | 5.2, 5.12 | `ollama-local-llm` |
+| Add a sentiment source / scorer | 5.2 | `finbert-sentiment-scoring`, `sentiment-dormancy-tracking` |
+| Add a recommendation entry point | 5.8 | `recommendation-engine` |
+| Add a forecast field / regressor | 5.10 | `forecast-enrichment-sanity-gates` |
+| Add a per-ticker refresh entry / step | 5.1 | `per-ticker-refresh`, `ohlcv-freshness-gate` |
+| Add a pipeline / chain step | 5.1 | `pipeline-chaining-dag`, `iceberg-daily-pipeline-compaction` |
+| Touch any Iceberg timestamp column | 5.1, 6.4 | `iceberg-tz-naive-timestamps` |
+| Touch ticker_type classification / filter | 5.9 | `ticker-type-classification` |
+| Add subscription gateway endpoint | 5.11 | `subscription-billing` |
+| Add a webhook endpoint | 5.11 | `security-hardening-patterns` |
+| Touch Razorpay flow | 5.11 | `razorpay-integration-gotchas` |
+| Add payment event to ledger | 5.11 | `payment-transaction-ledger` |
+| Add OAuth provider / change JWT | 5.7 | `auth-jwt-flow` |
+| Add a tier-health metric / observability field | 5.7 | `observability` |
+| Add new audit event | 5.7 | `observability`, `security-hardening` |
+| Add input validation / rate limit / security header | 4.2, 4.5 | `security-hardening-patterns` |
+| Add an ECharts chart type | 5.3 | `portfolio-analytics` (tree-shake) |
+| Add a TradingView chart | 5.3 | `ssr-hydration-mismatches` |
+| Add multi-source / multi-derivation metric (PEG-style) | 5.4 | `peg-ratio-multi-source-pattern` |
+| Add portfolio CRUD endpoint | 5.6, 5.8 | `portfolio-management`, `portfolio-watchlist-sync` |
+| Convert sync code to async | 6.7 | `sync-async-migration-patterns`, `asyncpg-sync-async-bridge` |
+| Patch a function in tests | 4.2 #16 | `mock-patching-gotchas`, `test-isolation-gotchas` |
+| Recover from Iceberg table corruption | 6.4 | `iceberg-table-corruption-recovery` |
+| Reclaim Iceberg disk (orphan parquet sweep) | 4.3 #20 | `iceberg-orphan-sweep-design`, `docs/backend/iceberg-orphan-sweep.md` |
+| Open / close a Jira ticket | 7 | `jira-3phase-lifecycle` |
+| Read NaN-prone numeric column | 6.1 | `nan-handling-iceberg-pandas` |
+| Debug LLM "hallucinating" rows | 5.2 | `llm-truncation-hallucination`, `llm-hallucination-guardrail` |
+| Debug NaN crash / silent data loss | 6.1 | `nan-string-sentinels`, `iceberg-nan-replaceable-dedup` |
+| Debug "field missing from response" | 6.2 | `uvicorn-reload-routes-models-gotcha` |
+| Debug random redirect to login | 6.3 | `cookie-hostname-mismatch` |
+| Debug Iceberg stale read | 6.4 | `iceberg-schema-evolution-backend-restart` |
+| Debug LCP regression | 6.6 | `auth-layout-ssr-unlock`, `lighthouse-fcp-text-heuristic`, `loading-gate-lcp-anti-pattern`, `suspense-fallback-null-ssr-hole` |
+| Add a new authenticated route w/ `useSearchParams` | 5.3 | `suspense-fallback-null-ssr-hole`, `cookie-auth-rsc-pattern` |
+| Add or change a Sign Out / logout flow | 5.3, 6.6 | §5.3 (POST `/v1/auth/logout` before `clearTokens()`) — see `cookie-auth-rsc-pattern` |
+| Add or rebuild Playwright auth fixture | 5.14 | `playwright-cookie-fixture`, `cookie-auth-rsc-pattern` |
+| Debug ECharts theme | 5.3 | `echarts-theme-hydration` |
+| Debug `bind_tools` empty payload | 5.2 | `bind-tools-model-lookup` |
+
+All paths are `shared/<category>/<name>`. `list_memories` browses 158 memories (~70 architecture · 23 conventions · 37 debugging · 3 onboarding · 25 dated session checkpoints).

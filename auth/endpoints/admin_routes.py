@@ -109,10 +109,16 @@ def register(router: APIRouter) -> None:
 
         result = {"events": events, "scope": scope}
         if cache is not None:
+            # Tightened from VOLATILE (60 s) to 30 s
+            # to match /admin/usage-stats and shorten
+            # the staleness window for the admin tab
+            # without re-paying the cold-cache cost on
+            # every panel refresh (ASETPLTFRM-334
+            # phase C).
             cache.set(
                 cache_key,
                 json.dumps(result),
-                TTL_VOLATILE,
+                30,
             )
         return result
 

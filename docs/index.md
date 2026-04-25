@@ -22,6 +22,8 @@ A fullstack agentic chat application with stock analysis, Prophet forecasting, a
 - **54 NSE ETFs** — broad market, sectoral, factor, gold/silver, international, debt ETFs with OHLCV, analytics, sentiment, and Prophet forecasts
 - **Data Health dashboard** — 5 health cards with async fix buttons, live progress bars, parallelized DuckDB queries (~1.4s), per-pipeline ticker filtering (stock+ETF vs stock-only)
 - **Live market ticker** — Nifty 50 + Sensex in header, dual-source (NSE India + Yahoo Finance), 30s refresh, PG-persisted for restart resilience
+- **RSC dashboard** — `/dashboard` is a React Server Component (Next.js 16) pre-fetching `/v1/dashboard/home` server-side via an HttpOnly access-token cookie; SWR's `fallbackData` seeds the client tree on hydrate so the first paint shows real data, no skeleton step. Edge `proxy.ts` gates protected routes on cookie presence. Pattern documented in [frontend/ssr-patterns](frontend/ssr-patterns.md).
+- **Containerized Lighthouse audit** — `Dockerfile.perf` + `frontend-perf` compose service runs Playwright-authenticated Lighthouse against 9 base + 25 tab routes (`docker compose --profile perf run --rm perf`). Used as the perf-regression gate for every Sprint 8+ frontend story. Numbers in [frontend/bundle-analysis](frontend/bundle-analysis.md).
 
 ---
 

@@ -170,7 +170,16 @@ export function useForecastBacktest(
  * Returns individual ``DashboardData`` wrappers so the
  * page can pass them to widgets unchanged.
  */
-export function useDashboardHome() {
+export function useDashboardHome(
+  initialData?: DashboardHomeResponse,
+) {
+  // Seeding `fallbackData` lets a parent RSC pre-fetch
+  // /dashboard/home and pass the response down — SWR
+  // returns it on first render with isLoading=false,
+  // so the dashboard paints instantly with real data
+  // instead of going through a skeleton step (Phase A.4
+  // of ASETPLTFRM-334). SWR still revalidates on the
+  // background after that, so the data stays fresh.
   const { data, error, isLoading, mutate } =
     useSWR<DashboardHomeResponse>(
       `${API_URL}/dashboard/home`,
@@ -178,6 +187,7 @@ export function useDashboardHome() {
       {
         revalidateOnFocus: false,
         dedupingInterval: 120_000,
+        fallbackData: initialData,
       },
     );
 
