@@ -65,6 +65,9 @@ const JOB_LABELS: Record<string, string> = {
   run_sentiment: "Sentiment Scoring",
   run_piotroski: "Piotroski F-Score",
   run_forecasts: "Forecasts",
+  recommendations: "Recommendations",
+  recommendation_outcomes: "Outcome Tracker",
+  iceberg_maintenance: "Iceberg Maintenance",
 };
 
 // ---------------------------------------------------------------
