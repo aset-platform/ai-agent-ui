@@ -179,9 +179,115 @@ Idiomatic places:
   ```
 - **Per-tab content** when each tab has its own
   data load.
+- **Routes whose inner subtree calls
+  `useSearchParams()`** — Next 16 forces such subtrees
+  to client-only and the surrounding `<Suspense>`
+  fallback is what SSR ships. See "Suspense
+  fallback over `useSearchParams`" below.
 
 Don't wrap UI that doesn't suspend (plain HTML, sync
 JS) — adds nothing.
+
+### Suspense fallback over `useSearchParams` (admin, insights)
+
+When the inner client subtree calls `useSearchParams()`,
+Next 16 forces it to render client-only. **The
+`<Suspense>` fallback is what SSR ships** — so a
+`fallback={null}` literally blanks the SSR HTML for
+that route, costing 3-4 s of post-hydration LCP on
+every tab variant.
+
+Two requirements for the fallback:
+
+1. **Ship LCP-eligible text.** A static `<h1>` in the
+   initial HTML becomes the LCP candidate at FCP, so
+   the route's LCP isn't waiting on hydration.
+2. **Match the inner wrapper's outer dimensions
+   exactly.** Same `space-y-*`, same `p-*`, same
+   `min-h-*` content reserve. Otherwise the
+   fallback → real swap shifts layout downward
+   when content streams in (CLS regression).
+
+Pattern from `frontend/app/(authenticated)/admin/page.tsx`:
+
+```tsx
+// AdminPageInner returns:
+//   <div className="space-y-6 p-4 sm:p-6">
+//     <TabStrip />
+//     <div className="min-h-[600px]">{tab content}</div>
+//   </div>
+
+function AdminPageSkeleton() {
+  return (
+    <div className="space-y-6 p-4 sm:p-6">
+      <h1 className="text-2xl font-semibold ...">
+        Admin Console
+      </h1>
+      <div className="min-h-[600px]" aria-hidden />
+    </div>
+  );
+}
+
+export default function AdminPage() {
+  return (
+    <Suspense fallback={<AdminPageSkeleton />}>
+      <AdminPageInner />
+    </Suspense>
+  );
+}
+```
+
+Verify SSR is shipping the heading:
+
+```bash
+JAR=$(mktemp)
+curl -s -c $JAR -X POST http://localhost:3000/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@demo.com","password":"Admin123!"}' >/dev/null
+curl -s -b $JAR http://localhost:3000/admin \
+  | grep -oE '<h1[^>]*>[^<]+'
+# Expected: <h1 ...>Admin Console
+```
+
+If the static heading is **smaller in viewport area
+than a likely data-bound element on the final page**
+(long table cell, multi-line textarea), Lighthouse
+picks the bigger element and the LCP win is lost.
+Examples from the 2026-04-25 audit:
+
+- `/insights?tab=piotroski` — long stock-name cells
+  beat the `text-2xl` h1 → still 5.1 s LCP.
+- `/insights?tab=screenql` — 4-row textarea beats
+  the h1 → still 3.7 s LCP.
+
+These need RSC pre-fetch (real fix), not bigger
+fallbacks.
+
+Reference: `shared/debugging/suspense-fallback-null-ssr-hole`,
+`shared/debugging/loading-gate-lcp-anti-pattern`.
+
+### Anti-pattern: gating static text behind a single SWR loading state
+
+```tsx
+function HeroSection({ watchlist, profile, portfolioTotals }) {
+  if (watchlist.loading) return <Skeleton h-56 />;  // ❌
+  return (
+    <div>
+      <p className="text-3xl">Welcome back, {profile.name}</p>
+      <p className="text-4xl">{portfolioTotals.value}</p>
+    </div>
+  );
+}
+```
+
+The displayed text comes from `profile` and
+`portfolioTotals`, not from `watchlist`. Gating on
+`watchlist.loading` hides the LCP candidate until SWR
+resolves, costing 3-5 s LCP. Phase breakdown
+signature: `Render Delay = 100% of LCP`, FCP healthy.
+Fix: render the structure always; show inline mini-
+skeletons or `?? 0` placeholders only on the
+data-bound bits.
 
 ---
 

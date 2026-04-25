@@ -115,6 +115,95 @@ patterns:
 
 ---
 
+## 2026-04-25 evening — post-closure LCP follow-on (no SP)
+
+Re-audited after a Phase-0 trace pass revealed the LCP element on most
+remaining routes was being **gated behind a single SWR loading state**
+that hid static text it shouldn't have, OR was being SSR'd as `null`
+because the surrounding `<Suspense fallback={null}>` over a
+`useSearchParams`-using inner subtree blanked the initial HTML.
+
+Fix shipped in commit `b1c816e` (4 files, +100/-30):
+
+- Drop premature loading-gate skeletons in `HeroSection.tsx`,
+  `admin/page.tsx` (Users, AuditLog), `analytics/insights/page.tsx`
+  (Screener, Targets, Dividends, Risk, Correlation),
+  `analytics/compare/page.tsx` (TickerMultiSelect).
+- Replace `<Suspense fallback={null}>` with `<AdminPageSkeleton/>`
+  + `<InsightsPageSkeleton/>` — static `<h1>` + `min-h-[600px]`/
+  `min-h-[400px]` that mirrors each page's outer wrapper exactly so
+  the SSR → real swap doesn't shift layout.
+
+### Headline metrics (same 34 routes, post-`b1c816e`)
+
+**Mean LCP across 34 routes: 4202 → 2786 ms (−33.7%, −48 s cumulative).**
+
+13 routes dropped −62% to −75% individually:
+
+| Route | LCP (was → now) | Δ |
+|---|---:|---:|
+| `/login` | 5713 → 2118 | −63.4% |
+| `/dashboard` | 4956 → 1554 | −68.6% |
+| `/admin` | 5465 → 1519 | −72.3% |
+| `/analytics/compare` | 5328 → 1519 | −71.5% |
+| `/admin?tab=users` | 5446 → 1513 | −72.2% |
+| `/admin?tab=audit` | 5663 → 1515 | −73.2% |
+| `/admin?tab=observability` | 5472 → 1519 | −72.2% |
+| `/admin?tab=transactions` | 6061 → 1517 | −75.0% |
+| `/admin?tab=my_account` | 5479 → 1516 | −72.3% |
+| `/admin?tab=my_audit` | 5457 → 1515 | −72.1% |
+| `/admin?tab=my_llm` | 5471 → 1515 | −72.3% |
+| `/insights?tab=sectors` | 4854 → 1512 | −68.9% |
+| `/analytics/analysis?tab=compare` | 6706 → 5415 | −19.3% |
+
+### Iteration discipline
+
+4 docker-perf rebuild + audit cycles, ~25 min each. Iter2 introduced
+two 0.254 CLS regressions on Sectors / Quarterly tabs (chart appears
+conditionally on `rows.length > 0`, so an ungated render lets it pop
+in mid-page). Iter4 reverted those two specific tab-level gates +
+Piotroski (table-cell wins LCP intrinsically) — page-level Suspense
+fallback already provides the LCP win at SSR for all three. Net
+result: **0 CLS regressions caused by this work.**
+
+Snapshots preserved at:
+- `.lighthouseci/pw-lh-summary-baseline-2026-04-25.json`
+- `.lighthouseci/pw-lh-summary-iteration2-final.json`
+- `.lighthouseci/pw-lh-summary-iteration3.json`
+- `.lighthouseci/pw-lh-summary-iteration4-final.json`
+- `.lighthouseci/pw-lh-summary.json` (= iter4)
+
+### Sprint 9 candidates updated
+
+Of the original 5 (TBD-A through E), this evening's work partially
+landed **TBD-B (admin tab RSC)** without an actual RSC migration —
+the Suspense fallback fix was sufficient to bring every admin tab
+into budget except the three with intrinsically large internal data
+(scheduler, recommendations, maintenance). TBD-A, C, D, E unchanged.
+
+Routes still over budget (need real RSC pre-fetch):
+
+| Route | LCP | Reason |
+|---|---:|---|
+| `/analytics/analysis*` | ~7000 | TradingView OHLCV — TBD-A |
+| `/analytics` | 4819 | Registry data fetch — TBD-C-adjacent |
+| `/admin?tab=scheduler` | 5006 | Large internal table; static h1 too small |
+| `/admin?tab=recommendations` | 4927 | Same |
+| `/admin?tab=maintenance` | 4898 | Same |
+| `/insights?tab=screenql` | 3722 | 4-row textarea > h1 fallback |
+| `/insights?tab=piotroski` | 5105 | Long stock-name cells > h1 fallback |
+| `/docs` | 4217 | MkDocs iframe |
+
+### Patterns memo'd to Serena
+
+- `shared/debugging/loading-gate-lcp-anti-pattern` — diagnose
+  `Render Delay = 100% of LCP` as a premature loading-gate skeleton.
+- `shared/debugging/suspense-fallback-null-ssr-hole` —
+  `<Suspense fallback={null}>` over `useSearchParams` blanks SSR;
+  fix with dimensionally-matched static skeleton.
+
+---
+
 ## Original Sprint 8 baseline (ASETPLTFRM-331, 2026-04-23/24)
 
 ## Headline — bundle size

@@ -182,14 +182,26 @@ Exchange a valid refresh token for a new access + refresh token pair.  The old r
 
 #### `POST /auth/logout`
 
-Revoke the supplied refresh token.
+Revoke the refresh token AND clear both HttpOnly cookies
+(`access_token` + `refresh_token`).  Reads the refresh token from
+the HttpOnly cookie first, falling back to the request body for
+backward compatibility.
 
 ```http
 Authorization: Bearer <access_token>
 ```
 ```json
-{ "refresh_token": "eyJ..." }
+{ "refresh_token": "eyJ..." }   // optional — cookie preferred
 ```
+
+> **Frontend MUST call this on Sign Out** (commit `c9e0054`,
+> 2026-04-25). After Sprint 8's `proxy.ts` edge gate landed, a
+> `clearTokens()`-only sign-out flow left the cookies intact and
+> the proxy bounced `/login` straight back to `/dashboard`. Both
+> `AppHeader.handleSignOut` and `ChatHeader.handleSignOut` now
+> POST `/v1/auth/logout` *before* `clearTokens()`, wrapped in
+> try/catch so a server hiccup still falls through to local
+> cleanup.
 
 ---
 
