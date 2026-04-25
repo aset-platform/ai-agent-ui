@@ -133,8 +133,8 @@ analytics.
 | `auth.user_tickers` | `db/models/user_ticker.py` | Insert + delete |
 | `auth.payment_transactions` | `db/models/payment.py` | Insert + update |
 | `stocks.registry` | `db/pg_stocks.py` | Upsert (`ticker_type`: stock/etf/index/commodity) |
-| `stocks.scheduled_jobs` | `db/pg_stocks.py` | Upsert (has `force`) |
-| `stocks.scheduler_runs` | `db/pg_stocks.py` | Insert + UPDATE |
+| `public.scheduled_jobs` | `db/pg_stocks.py` | Upsert (has `force`) — schema is `public`, NOT `stocks` |
+| `public.scheduler_runs` | `db/pg_stocks.py` | Insert + UPDATE — schema is `public` |
 | `stocks.recommendation_runs` | `db/models/recommendation.py` | Smart Funnel meta. `run_type ∈ {manual,chat,scheduled,admin,admin_test}`; `admin_test` hidden from user reads |
 | `stocks.recommendations` | `db/models/recommendation.py` | `data_signals` JSONB; `acted_on_date` auto-set by portfolio hook |
 | `stocks.recommendation_outcomes` | `db/models/recommendation.py` | 30/60/90d checkpoints |
@@ -354,6 +354,17 @@ analytics.
   silently dropped from responses. Fix: `docker compose restart
   backend` (or `--force-recreate` if env also changed). Verify via
   `curl /openapi.json | jq` that the new schema/route is present.
+- **Backend restart asyncpg shutdown race**: `docker compose
+  restart backend` first request returns 500 with empty body for
+  ~5 s while the asyncpg pool finishes terminating ("Event loop is
+  closed" in logs). Sleep 5 s before any auth-dependent test/curl,
+  or you'll waste a debug cycle on a phantom failure.
+- **`BACKEND_URL=http://backend:8181` required on dev frontend**
+  for RSC server-side fetches (`frontend/lib/serverApi.ts`).
+  `localhost` from inside the frontend container points to the
+  container itself, not the host backend. Set in
+  `docker-compose.override.yml` for both `frontend` and
+  `frontend-perf` services.
 
 ### Iceberg Maintenance (CRITICAL)
 
@@ -386,8 +397,18 @@ analytics.
   `analysis_summary`. `rsync` installed in `Dockerfile.backend` for
   container-side backup. Without this, OHLCV file count grew to 16K
   parquets within a week → reads 5+s, `Clean NaN Rows` 5+ min.
-- **Post-pipeline expiry**: `pipeline_executor.py` calls
-  `expire_snapshots()` (currently logs only — PyIceberg API fragile).
+- **Snapshot expiry**: current `expire_snapshots()` in
+  `pipeline_executor.py` and `iceberg_maintenance.py` is a no-op
+  (logs only). The "PyIceberg API fragile" comment is **outdated** —
+  PyIceberg 0.11.1 ships a working `tbl.maintenance.expire_snapshots()
+  .by_ids(...).commit()` (also `.older_than()`, `.by_id()`).
+  ASETPLTFRM-338 implements the proper orphan sweep using it; design
+  in `.serena/memories/shared/architecture/iceberg-orphan-sweep-design.md`.
+- **DEAD_TABLES** in `iceberg_maintenance.py` is now empty after
+  2026-04-25 cleanup that dropped `stocks.scheduler_runs`,
+  `stocks.scheduled_jobs`, `stocks.technical_indicators` (commit
+  `c0447dc`). PG `public.scheduler_runs/scheduled_jobs` are the
+  canonical sources; `_analysis_indicators.py` computes TA on demand.
 - **Schema evolution + backend restart**: after
   `tbl.update_schema().add_column()`, backend worker's
   in-process DuckDB connection caches the old schema.
@@ -629,6 +650,23 @@ analytics.
 
 ### Frontend
 
+- **RSC + cookie-auth pattern** (Sprint 8, ASETPLTFRM-334):
+  authenticated routes can pre-fetch on the server via
+  `frontend/lib/serverApi.ts` (reads `access_token` cookie set by
+  `/v1/auth/login`). `frontend/proxy.ts` (Next.js 16 rename of
+  `middleware.ts`) gates protected routes on cookie presence —
+  must accept EITHER `access_token` OR `refresh_token`, otherwise
+  pre-A.1 sessions infinite-loop. RSC `page.tsx` can ONLY have a
+  default async export — move shared types (e.g. `MarketFilter`)
+  to the sibling client file. Full guide:
+  `docs/frontend/ssr-patterns.md`.
+- **`cacheComponents: false`** in `next.config.ts` is intentional
+  (Next 16 renamed `experimental.ppr` to top-level
+  `cacheComponents`). Flipping to `true` surfaces "new Date() /
+  useTheme() in Client Component without Suspense" errors on
+  /dashboard, /analytics, /admin. Activate only after wrapping
+  those Client Components in `<Suspense>` (Sprint 9 candidate
+  TBD-D).
 - **ScreenQL multi-line AND**: newlines are implicit AND. Lines
   starting with `AND`/`OR` don't add another. Parser handles in
   `tokenize()` smart newline join.
