@@ -171,20 +171,14 @@ export default function AuthenticatedLayout({
 }) {
   useAuthGuard();
 
-  // Render nothing meaningful on the server to
-  // prevent hydration mismatches from context
-  // providers, localStorage reads, and WebSocket.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-
-  if (!mounted) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-gray-50 dark:bg-gray-950">
-        <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
-
+  // Previously gated behind `mounted` state to avoid hydration
+  // mismatches — pushed FCP + LCP to ~3.5 s because Lighthouse
+  // couldn't measure any meaningful paint until hydration
+  // finished. All providers here are SSR-safe (useState w/
+  // stable defaults, localStorage/WebSocket reads deferred to
+  // useEffect). Removing the gate lets server-rendered page
+  // content (see dashboard/page.tsx) paint in the first HTML
+  // response, enabling LCP < 2 s on hero-driven routes.
   return (
     <LayoutProvider>
       <ChatProvider>

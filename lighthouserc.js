@@ -35,13 +35,14 @@ module.exports = {
       url: [
         // Public
         "http://localhost:3030/login",
-        // Authenticated
+        // Authenticated. `/analytics/marketplace` dropped —
+        // it now 302s to `/analytics` and its Lighthouse
+        // numbers were a distraction.
         "http://localhost:3030/dashboard",
         "http://localhost:3030/analytics",
         "http://localhost:3030/analytics/analysis",
         "http://localhost:3030/analytics/compare",
         "http://localhost:3030/analytics/insights",
-        "http://localhost:3030/analytics/marketplace",
         "http://localhost:3030/admin",
         "http://localhost:3030/docs",
         "http://localhost:3030/insights",

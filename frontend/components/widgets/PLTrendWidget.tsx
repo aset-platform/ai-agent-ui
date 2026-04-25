@@ -118,9 +118,10 @@ export function PLTrendWidget({ market }: Props) {
     return {
       tooltip: {
         trigger: "axis",
-        formatter: (
-          params: Record<string, unknown>[],
-        ) => {
+        formatter: (raw: unknown) => {
+          const params = (
+            Array.isArray(raw) ? raw : [raw]
+          ) as Record<string, unknown>[];
           const d = params[0];
           const inv = params[1];
           const date = d.axisValue as string;

@@ -41,3 +41,60 @@ services:
     command: npx next dev --port 3000 --hostname 0.0.0.0
     environment:
       - NEXT_PUBLIC_BACKEND_URL=http://localhost:8181
+      # Server-side fetches from RSC use the docker
+      # network hostname (`backend:8181`) since
+      # `localhost` inside the container points to
+      # the frontend container itself, not the host.
+      # ASETPLTFRM-334 phase A.4 added serverApi.ts
+      # which reads this var.
+      - BACKEND_URL=http://backend:8181
+
+  # ── Perf profile: prod build + Lighthouse runner ────
+  # Not started by default. Launch with:
+  #   docker compose --profile perf up -d \
+  #       postgres redis backend frontend-perf
+  #   docker compose --profile perf run --rm perf
+  #
+  # `frontend-perf` bakes `NEXT_PUBLIC_BACKEND_URL=` (empty)
+  # so `lib/config.ts` resolves `API_URL` to relative `/v1`,
+  # and the Next.js `/v1/*` rewrite proxies to
+  # `BACKEND_URL=http://backend:8181` at runtime. Zero CORS.
+  frontend-perf:
+    profiles: ["perf"]
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        # Empty baked NEXT_PUBLIC_BACKEND_URL → `lib/config.ts`
+        # returns relative `API_URL=/v1` (proxied via rewrite).
+        NEXT_PUBLIC_BACKEND_URL: ""
+        # Rewrite destination is baked into routes-manifest.json
+        # at `next build` — must flow through as a build ARG,
+        # not runtime env.
+        BACKEND_URL: http://backend:8181
+    # Host port 3001 → container port 3000 (frontend's
+    # default). Keeps the Dockerfile healthcheck intact
+    # while staying off 3000 so the dev `frontend` can
+    # run alongside if someone wants both up.
+    ports:
+      - "3001:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  perf:
+    profiles: ["perf"]
+    build:
+      context: .
+      dockerfile: Dockerfile.perf
+    depends_on:
+      - frontend-perf
+    environment:
+      # Container-to-container: frontend-perf listens on
+      # port 3000 internally; compose DNS resolves the name.
+      - PERF_BASE=http://frontend-perf:3000
+      - PERF_TEST_EMAIL=${PERF_TEST_EMAIL:-admin@demo.com}
+      - PERF_TEST_PASSWORD=${PERF_TEST_PASSWORD:-Admin123!}
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./.lighthouseci:/app/.lighthouseci

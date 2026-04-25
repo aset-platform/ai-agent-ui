@@ -99,7 +99,11 @@ npx playwright test tests/frontend/chat.spec.ts --debug
 
 ### Frontend tests
 
-The `setup` project logs in via API and produces `storageState` files (`.auth/general-user.json`, `.auth/superuser.json`) with JWTs pre-loaded in `localStorage`. Frontend tests use these directly — no login UI needed.
+The `setup` project logs in via API and produces `storageState` files (`.auth/general-user.json`, `.auth/superuser.json`) with **both the JWT in `localStorage` AND the HttpOnly `access_token` + `refresh_token` cookies in `cookies[]`**. Frontend tests use these directly — no login UI needed.
+
+> **Why the cookies matter** (commit `d081827`, 2026-04-25): Sprint 8's `proxy.ts` edge gate (`b446b9e`) and its legacy-session hotfix (`e33172d`) require either `access_token` *or* `refresh_token` HttpOnly cookie on protected routes. The original `auth.setup.ts` used `request.post()` which silently discards the response's `Set-Cookie` headers — so storageState had only localStorage and the cookie array was empty. Every dependent project hit the redirect loop `/dashboard ↔ /login?next=/dashboard` and the suite collapsed to **2 passed out of ~75**. The current setup parses `headersArray()` for `Set-Cookie` entries and rewrites the cookie domain from the backend host (`127.0.0.1:8181`) to the frontend host (`localhost:3000`) so the cookie travels with the actual page request. After fix: **111 passed** on analytics-chromium. Pattern memo at `shared/conventions/playwright-cookie-fixture`.
+
+If the suite suddenly starts redirect-looping again, the first thing to check is `e2e/.auth/superuser.json` — the `cookies` array should contain two entries with `domain: "localhost"`, NOT empty and NOT `domain: "127.0.0.1"`.
 
 ### Dashboard tests
 
