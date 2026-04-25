@@ -41,6 +41,13 @@ services:
     command: npx next dev --port 3000 --hostname 0.0.0.0
     environment:
       - NEXT_PUBLIC_BACKEND_URL=http://localhost:8181
+      # Server-side fetches from RSC use the docker
+      # network hostname (`backend:8181`) since
+      # `localhost` inside the container points to
+      # the frontend container itself, not the host.
+      # ASETPLTFRM-334 phase A.4 added serverApi.ts
+      # which reads this var.
+      - BACKEND_URL=http://backend:8181
 
   # ── Perf profile: prod build + Lighthouse runner ────
   # Not started by default. Launch with:

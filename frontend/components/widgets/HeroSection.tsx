@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import type { DashboardData } from "@/hooks/useDashboardData";
 import type { WatchlistResponse } from "@/lib/types";
 import type { UserProfile } from "@/hooks/useEditProfile";
-import type { MarketFilter } from "@/app/(authenticated)/dashboard/page";
+import type { MarketFilter } from "@/app/(authenticated)/dashboard/DashboardClient";
 import { WidgetSkeleton } from "./WidgetSkeleton";
 import { WidgetError } from "./WidgetError";
 

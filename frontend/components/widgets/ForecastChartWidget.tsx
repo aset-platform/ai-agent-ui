@@ -11,7 +11,7 @@ import type {
 import { WidgetSkeleton } from "./WidgetSkeleton";
 import { WidgetError } from "./WidgetError";
 
-import type { MarketFilter } from "@/app/(authenticated)/dashboard/page";
+import type { MarketFilter } from "@/app/(authenticated)/dashboard/DashboardClient";
 
 interface ForecastChartWidgetProps {
   data: DashboardData<ForecastsResponse>;
