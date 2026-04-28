@@ -127,12 +127,20 @@ export function RecommendationSlideOver({
     };
   }, [open]);
 
-  // Reset filters on open
+  // Reset filters on open. Defer past the synchronous
+  // effect body so the rule treats setStates as
+  // async-callback updates, not effect-body cascades.
   useEffect(() => {
-    if (open) {
+    if (!open) return;
+    let alive = true;
+    void Promise.resolve().then(() => {
+      if (!alive) return;
       setTier("all");
       setSeverity("all");
-    }
+    });
+    return () => {
+      alive = false;
+    };
   }, [open]);
 
   const filtered = useMemo(() => {

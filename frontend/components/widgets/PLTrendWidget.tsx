@@ -104,9 +104,15 @@ export function PLTrendWidget({ market }: Props) {
   // SWR refetches when period or market changes
   const data = usePortfolioPerformance(market, period);
 
-  const pts = data.value?.data ?? [];
+  const pts = useMemo(
+    () => data.value?.data ?? [],
+    [data.value],
+  );
   const metrics = data.value?.metrics;
-  const stale = data.value?.stale_tickers ?? [];
+  const stale = useMemo(
+    () => data.value?.stale_tickers ?? [],
+    [data.value],
+  );
 
   const option = useMemo<EChartsOption>(() => {
     const dates = pts.map((p) => p.date);

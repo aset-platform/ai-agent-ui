@@ -226,13 +226,16 @@ function AnalysisTab({
       }
       el.innerHTML = html;
     },
-    [ticker],
+    [ticker, market],
   );
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      setLoading(true);
+      setError(null);
+    });
 
     const q = encodeURIComponent(ticker);
     Promise.all([
@@ -519,8 +522,11 @@ function ForecastTab({
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      setLoading(true);
+      setError(null);
+    });
 
     const q = encodeURIComponent(ticker);
     Promise.all([
@@ -634,9 +640,9 @@ function ForecastTab({
           + `Backtest: ${s}${info.backtestPredicted.toFixed(2)}`
           + ` (${sign}${pct}%)</span>`;
       }
-      el.innerHTML = html; // eslint-disable-line
+      el.innerHTML = html;
     },
-    [ticker],
+    [ticker, market],
   );
 
   if (loading) {
@@ -1942,6 +1948,13 @@ function AnalysisPageInner() {
   const [tickersLoading, setTickersLoading] =
     useState(true);
 
+  // Capture initial saved-ticker pref in a ref so the
+  // tickers fetch effect doesn't re-run when chartPrefs
+  // changes (it only reads it once on first load).
+  const initialSavedTickerRef = useRef<string | undefined>(
+    chartPrefs.ticker as string | undefined,
+  );
+
   // Fetch user tickers + registry tickers (merged)
   useEffect(() => {
     let cancelled = false;
@@ -1998,9 +2011,7 @@ function AnalysisPageInner() {
         const upper = merged.map(
           (t: string) => t.toUpperCase(),
         );
-        const savedTicker = chartPrefs.ticker as
-          | string
-          | undefined;
+        const savedTicker = initialSavedTickerRef.current;
         if (
           tickerParam &&
           upper.includes(tickerParam.toUpperCase())

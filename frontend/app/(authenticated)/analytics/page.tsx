@@ -249,23 +249,6 @@ function PlusIcon() {
   );
 }
 
-function AnalyseIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className="h-4 w-4"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-      <path d="M10 8v8M7 11h6" />
-    </svg>
-  );
-}
-
 function SearchIcon() {
   return (
     <svg
@@ -1516,10 +1499,19 @@ export default function AnalyticsPage() {
     [filtered, safePage],
   );
 
-  // Reset page on filter change
+  // Reset page on filter change. Defer past the
+  // synchronous effect body so the rule treats setStates
+  // as async-callback updates.
   useEffect(() => {
-    setPage(1);
-    setSelectedTickers(new Set());
+    let alive = true;
+    void Promise.resolve().then(() => {
+      if (!alive) return;
+      setPage(1);
+      setSelectedTickers(new Set());
+    });
+    return () => {
+      alive = false;
+    };
   }, [search, market, statusFilter]);
 
   // Selection

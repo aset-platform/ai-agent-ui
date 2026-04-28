@@ -33,7 +33,8 @@ export function MyAccountTab() {
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
+    // loading already starts as true via useState; effect
+    // has [] deps so this runs only on mount
     apiFetch(`${API_URL}/auth/me`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);

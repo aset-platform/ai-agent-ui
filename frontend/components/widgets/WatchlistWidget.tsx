@@ -172,7 +172,10 @@ export function WatchlistWidget({
     [onRefresh],
   );
 
-  const tickers = data.value?.tickers ?? [];
+  const tickers = useMemo(
+    () => data.value?.tickers ?? [],
+    [data.value],
+  );
   const maxPages = Math.max(
     1,
     Math.ceil(tickers.length / PAGE_SIZE),
