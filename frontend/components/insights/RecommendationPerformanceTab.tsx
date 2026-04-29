@@ -30,6 +30,8 @@ import { SimpleBarChart, type BarSeries } from
   "@/components/charts/SimpleBarChart";
 import { DownloadCsvButton } from
   "@/components/common/DownloadCsvButton";
+import { InfoTooltip } from
+  "@/components/common/InfoTooltip";
 import type { PerfBucket, PerfSummary } from "@/lib/types";
 
 type Granularity = "week" | "month" | "quarter";
@@ -132,12 +134,14 @@ function summaryExcess(
 interface KpiTileProps {
   label: string;
   value: string;
-  tooltip: string;
+  tooltip?: string;
+  /** Rich popover content. Falls back to ``tooltip``. */
+  info?: React.ReactNode;
   valueClass?: string;
 }
 
 function KpiTile({
-  label, value, tooltip, valueClass,
+  label, value, tooltip, info, valueClass,
 }: KpiTileProps) {
   return (
     <div
@@ -146,15 +150,21 @@ function KpiTile({
         "dark:border-gray-700 bg-white " +
         "dark:bg-gray-800 px-3 py-2"
       }
-      title={tooltip}
+      title={info ? undefined : tooltip}
     >
       <div
         className={
-          "text-[10px] uppercase tracking-wide " +
+          "inline-flex items-center text-[10px] " +
+          "uppercase tracking-wide " +
           "text-gray-500 dark:text-gray-400"
         }
       >
         {label}
+        {info && (
+          <InfoTooltip placement="left">
+            {info}
+          </InfoTooltip>
+        )}
       </div>
       <div
         className={
@@ -389,20 +399,79 @@ export function RecommendationPerformanceTab() {
         <KpiTile
           label="Total recs"
           value={String(summary?.total_recs ?? 0)}
-          tooltip="Recommendations issued in window"
+          info={
+            <>
+              <p className="font-semibold mb-1">
+                What
+              </p>
+              <p className="mb-2">
+                Recommendations issued in the selected
+                window (last 14 months by default).
+              </p>
+              <p>
+                Filters above this row (Scope,
+                Acted-on only) narrow the count
+                immediately.
+              </p>
+            </>
+          }
         />
         <KpiTile
           label="Acted on"
           value={String(summary?.acted_on_count ?? 0)}
-          tooltip="Recs the user acted on"
+          info={
+            <>
+              <p className="font-semibold mb-1">
+                What
+              </p>
+              <p className="mb-2">
+                Of those recs, how many the user
+                actually acted on — added, replaced,
+                or trimmed the suggested ticker in
+                their portfolio.
+              </p>
+              <p>
+                <span className="font-semibold">
+                  How:
+                </span>{" "}
+                rec&apos;s{" "}
+                <span className="font-mono text-[11px]">
+                  acted_on_date
+                </span>{" "}
+                stamp is set automatically when a
+                portfolio change matches a ticker.
+              </p>
+            </>
+          }
         />
         <KpiTile
           label={`Hit rate ${horizon}d`}
           value={fmtPct(
             summaryHitRate(summary, horizon),
           )}
-          tooltip={
-            `Beat-benchmark rate at ${horizon} days`
+          info={
+            <>
+              <p className="font-semibold mb-1">
+                What
+              </p>
+              <p className="mb-2">
+                Share of recs whose return beat the
+                benchmark {horizon} days after issue.
+                Granularity = {granularity}, so this
+                tile tracks the {horizon}-day horizon.
+              </p>
+              <p className="font-semibold mb-1">How</p>
+              <p>
+                A &ldquo;hit&rdquo; = excess return
+                (rec − benchmark) &gt; 0 at the{" "}
+                {horizon}-day outcome check.{" "}
+                <span className="font-semibold">
+                  Formula:
+                </span>{" "}
+                hits ÷ recs with a {horizon}d outcome
+                × 100.
+              </p>
+            </>
           }
         />
         <KpiTile
@@ -413,9 +482,37 @@ export function RecommendationPerformanceTab() {
           valueClass={returnColor(
             summaryExcess(summary, horizon),
           )}
-          tooltip={
-            "Avg excess return vs benchmark at "
-            + `${horizon}d`
+          info={
+            <>
+              <p className="font-semibold mb-1">
+                What
+              </p>
+              <p className="mb-2">
+                Mean gap between each rec&apos;s return
+                and its benchmark return at the{" "}
+                {horizon}-day check. Positive = recs
+                beat the benchmark on average.
+              </p>
+              <p className="font-semibold mb-1">How</p>
+              <p className="mb-2">
+                Per outcome:{" "}
+                <span className="font-mono text-[11px]">
+                  excess = rec_return − benchmark_return
+                </span>
+                . The tile shows the mean across all{" "}
+                {horizon}-day outcomes in scope.
+              </p>
+              <p className="text-amber-700 dark:text-amber-300">
+                <span className="font-semibold">
+                  Heads up:
+                </span>{" "}
+                benchmark_return_pct is currently 0
+                in the daily outcomes job (TODO to
+                wire to a real index), so excess ≡
+                recommendation return until that&apos;s
+                fixed.
+              </p>
+            </>
           }
         />
       </div>
