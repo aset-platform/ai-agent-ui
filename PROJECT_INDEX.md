@@ -1,7 +1,7 @@
 # Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-04-25 night (post-LCP follow-on — 4 evening commits `b1c816e`/`c9e0054`/`d081827`/`096edc5` on top of the Sprint 8 closure). Headline outcomes: ASETPLTFRM-338 (Iceberg orphan-parquet sweep) shipped end-to-end with `cleanup_orphans_v2` + 17 unit tests + UI tile — first production sweep reclaimed **12.4 GB** (warehouse 16 GB → 3.6 GB, −78%); **LCP follow-on (no SP)**: cut **mean LCP −33.7% across 34 routes** (4202 → 2786 ms) by removing premature loading-gate skeletons + replacing `<Suspense fallback={null}>` with dimensionally-matched static page-chrome skeletons in `admin/page.tsx` + `analytics/insights/page.tsx`; 13 routes −62% to −75% individually (login, dashboard, admin*, insights?tab=sectors, analytics/compare); CLAUDE.md restructured as enforceable dev-rule layer (1208 → ~580 lines, 9 sections, 57-row Pattern Index, 9 shared Serena memories incl. 3 new from 04-25 night: `loading-gate-lcp-anti-pattern`, `suspense-fallback-null-ssr-hole`, `playwright-cookie-fixture`); two pre-existing bugs surfaced + fixed (Sign Out left HttpOnly cookies → `/v1/auth/logout` now called from `AppHeader.handleSignOut` + `ChatHeader.handleSignOut`; Playwright auth fixture dropped Set-Cookie → `e2e/setup/auth.setup.ts` now parses & rewrites domain to frontend host, lifted suite from 2 → 111 passing on analytics-chromium); three dead Iceberg tables dropped. **34 commits on `feature/sprint8`** — latest 4 pushed; earlier 19 still local.
+> Last refreshed: **2026-04-29 evening** (Apr 29 hotfixes + Recommendation Performance feature — Jira `ASETPLTFRM-339`, 8 SP, Done). 14 new commits since 04-25 refresh: morning hotfixes `2faa7fb`/`567369e`/`6d57b38` (scheduler `cron_days=''` silently skipping registration; Firefox `NetworkError` on dev-server stale keep-alive sockets; `/login → /dashboard` bounce loop on stale-cookie sessions); afternoon feature shipped end-to-end on a `feature/recommendation-performance-history` branch (off `dev`) and merged into `feature/sprint8` (merge commit `c3a7585`) for verification before the eventual cleanup PR. Plus `df1aa2f` retired the 4 long-standing eslint-security warnings on `analytics/analysis/page.tsx` via a new `renderTooltip(el, segments)` helper, and `a5044f1` synced README + CHANGELOG + `docs/backend/recommendation-performance.md` + 5 Serena memories. **Current state: `feature/sprint8` is 67 commits ahead of `origin/dev` (entire Sprint 8 + 04-25 LCP follow-on + 04-29 work); cleanup PR `feature/sprint8 → dev` is the next gate.** Prior outcomes still in scope: ASETPLTFRM-338 orphan-parquet sweep (`cleanup_orphans_v2`, 17 unit tests, UI tile, **12.4 GB reclaimed** in first production sweep), LCP follow-on (mean −33.7% across 34 routes, 4202 → 2786 ms), CLAUDE.md restructure (1208 → ~580 lines, 9 sections, 57-row Pattern Index).
 
 ---
 
@@ -214,6 +214,41 @@ thread → `update_recommendation_status(uid, ticker, actions,
 "acted_on")`. BUY/ACCUMULATE on POST; SELL/REDUCE/TRIM on qty
 decrease or delete. Only matches `status='active'`.
 
+**Performance analytics** (ASETPLTFRM-339, 2026-04-29):
+`GET /v1/dashboard/portfolio/recommendations/performance` returns
+cohort-bucketed analytics over `recommendation_outcomes` (4 horizons
+`{7, 30, 60, 90}`). Granularity `week|month|quarter` drives the
+primary horizon shown (Weekly→7d, Monthly→30d, Quarterly→90d).
+Frontend at `/analytics/analysis?tab=recommendations&subtab=performance`
+(new `RecommendationsPanel` parent + `RecommendationPerformanceTab` view
++ reusable `InfoTooltip`). `pending_count` granularity-aware. PG helper
+`get_recommendation_performance_buckets()` in `backend/db/pg_stocks.py`
+— CTE-based raw SQL with IST `date_trunc` + `CAST(:scope AS VARCHAR)`
+for asyncpg NULL-param compat. Cache key `cache:portfolio:recs:{uid}:perf:*`,
+TTL_STABLE 300s. Full doc: `docs/backend/recommendation-performance.md`.
+
+**Retention**: 14-month hard cap via daily `recommendation_cleanup`
+job (03:00 IST mon-sun). FK CASCADE wipes child recs + outcomes.
+Idempotent. Cache invalidates `cache:portfolio:recs:*` on non-zero
+deletes.
+
+**Outcomes pipeline** (overhauled 2026-04-29): self-healing
+window-match — picks up any rec ≥ N days old that lacks an outcome
+at horizon N. Was a strict `created_at = today − N ± 2d` window
+which silently dropped outcomes if the daily run skipped a day or
+a horizon was added retroactively. Now also fetches OHLCV close at
+`created_at + N days` (next trading day on weekends) instead of
+"latest close per ticker" — only correct under the original strict
+window. Memo: `shared/debugging/recommendation-outcomes-self-healing`.
+
+**Known gaps**: (1) recommendation engine doesn't populate
+`price_at_rec` from OHLCV at issue time — 41 existing recs were
+backfilled out-of-band; engine fix is a Sprint 9 follow-up. (2)
+`benchmark_return_pct` is hardcoded `0.0` in the executor — wire
+to a real index (Nifty India / S&P US) so `excess ≡ return` stops
+being a TODO. The Performance tab's "Avg excess" tile carries an
+amber heads-up callout about this in its tooltip.
+
 ---
 
 ## Chat Agent Architecture
@@ -289,10 +324,13 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 
 ## Scheduler & Jobs
 
-8 job types: `data_refresh`, `compute_analytics`, `run_sentiment`,
+9 job types: `data_refresh`, `compute_analytics`, `run_sentiment`,
 `run_forecasts`, `run_piotroski`, `recommendations`,
-`recommendation_outcomes`, `iceberg_maintenance`. All accept
-`force=False`. Market ticker runs independently (30s poll, not scheduled).
+`recommendation_outcomes` (now 7/30/60/90d horizons + self-healing
+window-match, see Recommendation Engine §), `recommendation_cleanup`
+(daily 03:00 IST, 14-month retention purge, FK CASCADE; new 2026-04-29),
+`iceberg_maintenance`. All accept `force=False`. Market ticker runs
+independently (30s poll, not scheduled).
 
 Freshness gates: daily (OHLCV, analytics, sentiment), weekly
 (forecasts), monthly (CV accuracy auto-refresh via 30-day TTL).
@@ -335,10 +373,14 @@ pipeline pickup.
 
 ## File Counts
 
-Backend Python: 173 modules | Frontend TS/TSX: 129 |
-Tests: ~154 (98 pytest / ~925 cases + 51 e2e + 18 vitest) |
-Docs: 60+ pages | Scripts: 30 |
-Alembic migrations: 13 (`a9c1b3d5e7f2_add_sentiment_dormant` latest)
+Backend Python: **218 modules** | Frontend TS/TSX: **128** (added
+`RecommendationsPanel.tsx`, `RecommendationPerformanceTab.tsx`,
+`common/InfoTooltip.tsx`, `lib/renderTooltip.ts` on 2026-04-29 — net
+delta also reflects pruning) | Tests: pytest **538 cases** (incl. 11
+new in `test_recommendation_performance.py`), vitest **66 cases**
+(was 61, +5 in `RecommendationsPanel.test.tsx`), e2e **51 specs** |
+Docs: **65 pages** (added `recommendation-performance.md`) | Scripts: **33** |
+Alembic migrations: **13** (`f8e7d6c5b4a3_add_byo_foundation` latest)
 
 E2E pass rate (analytics-chromium full sweep, post-`096edc5`):
 **111 / 147 tests pass**, 34 fail (pre-existing tech debt:
@@ -346,7 +388,9 @@ marketplace tests after Sprint 7 route deprecation; `insights.spec.ts`
 references old Plotly tabs since Sprint 6 ECharts migration;
 `insights-recommendations.spec.ts` references "recommendations" tab
 moved to `/analytics/analysis`; modal/timing flakes in portfolio-crud
-+ theme-consistency).
++ theme-consistency). Sprint 9 follow-up: an E2E spec for the new
+Performance sub-tab, pending auth-fixture wiring per
+`shared/conventions/playwright-cookie-fixture`.
 
 ## Lighthouse Performance Snapshots
 

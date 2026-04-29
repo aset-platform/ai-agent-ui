@@ -12,17 +12,11 @@ import { useTheme } from "@/hooks/useTheme";
 
 // Tree-shake: import only what we need
 import * as echarts from "echarts/core";
-import {
-  HeatmapChart,
-  type HeatmapSeriesOption,
-} from "echarts/charts";
+import { HeatmapChart } from "echarts/charts";
 import {
   GridComponent,
   TooltipComponent,
   VisualMapComponent,
-  type GridComponentOption,
-  type TooltipComponentOption,
-  type VisualMapComponentOption,
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 
@@ -33,13 +27,6 @@ echarts.use([
   VisualMapComponent,
   CanvasRenderer,
 ]);
-
-type EChartsOption = echarts.ComposeOption<
-  | HeatmapSeriesOption
-  | GridComponentOption
-  | TooltipComponentOption
-  | VisualMapComponentOption
->;
 
 // Dynamic import for SSR safety
 const ReactECharts = dynamic(

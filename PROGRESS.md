@@ -2,6 +2,72 @@
 
 ---
 
+## 2026-04-29 — Sprint 9 candidate: recommendation history & performance analytics
+
+**Scope**: groomed + shipped a 14-month cohort-bucketed performance view for recommendations. Latest run still surfaces via the dashboard widget unchanged; older recs explorable via a new "Performance" sub-tab inside `/analytics/analysis?tab=recommendations`. New backend endpoint, retention cleanup job, frontend sub-tab. Branch: `feature/recommendation-performance-history` (off `dev`).
+
+### Brainstorm decisions (2026-04-29)
+
+1. **Bucket axis = cohort** (when issued). April bucket = recs created in April + their attached 30/60/90d outcomes. Best answers "how good were the April recommendations?".
+2. **Default cohort = all** recommendations (engine-quality view). UI toggle for acted-on-only.
+3. **Retention = 14 months hard cap.** Nightly cleanup job DELETEs runs older than 14 months; FK CASCADE wipes child recs + outcomes.
+4. **Placement = new "Performance" sub-tab** sibling to "History" inside the existing `tab=recommendations` panel. History view (existing `RecommendationHistoryTab.tsx`) stays untouched.
+
+### Phase A — backend `/performance` route (commit 46e6298)
+
+- New PG helper `get_recommendation_performance_buckets()` in `backend/db/pg_stocks.py`. CTE-based raw SQL (PG only — uses `date_trunc(:granularity, t AT TIME ZONE 'Asia/Kolkata')` + explicit `CAST(:scope AS VARCHAR)` to dodge asyncpg's `AmbiguousParameterError` on NULL params). Returns per-bucket totals + 30/60/90d hit_rate / avg_return / avg_excess + a `pending_count` (recs <30d old, no outcomes yet).
+- New route `GET /v1/dashboard/portfolio/recommendations/performance` taking `granularity=week|month|quarter`, `months_back=1..14`, `scope`, `acted_on_only`. Cache key `cache:portfolio:recs:{uid}:perf:{...}` at TTL_STABLE (300s) — caught by the existing `/refresh` invalidation glob.
+- Pydantic models in `backend/recommendation_models.py`: `PerfBucket`, `PerfSummary`, `RecommendationPerformanceResponse`.
+- Added `scope` param to existing `/history` route + `get_recommendation_history()` helper. Backward compatible.
+- 11 new tests in `tests/backend/test_recommendation_performance.py` — label formatting + input validation (granularity guard, months_back clamp, scope coercion, empty result). Full SQL paths verified manually with synthetic 60d-old fixture: 30d hit_rate=100%, 60d hit_rate=0%, returns/excess match seeded values.
+
+### Phase B — `recommendation_cleanup` job (commit af7b964)
+
+- New executor `recommendation_cleanup` in `backend/jobs/executor.py`. Runs `DELETE FROM stocks.recommendation_runs WHERE run_date < CURRENT_DATE - INTERVAL '14 months'`. CASCADE wipes child rows. PG storage reclaimed via autovacuum.
+- Inserts `scheduled_jobs` row (cron 03:00 IST mon-sun, scope=all, enabled). Idempotent guard (`WHERE NOT EXISTS`).
+- Cache invalidation on non-zero deletes: `cache:portfolio:recs:*` glob.
+- Verified manually: synthetic 15-month-old run → trigger via `POST /v1/admin/scheduler/jobs/{id}/trigger` → status=success, deleted=1, duration=0.04s. Re-trigger → deleted=0 (idempotent).
+- Scheduler service now reports "Loaded 7 jobs, 2 pipelines" (was 6).
+
+### Phase C — frontend Performance sub-tab (commit 0efc31b)
+
+- New parent `frontend/components/insights/RecommendationsPanel.tsx` owns the inner sub-tab strip (History / Performance) and persists the choice as `?subtab=performance` URL param. Hydrates from URL on mount via deferred `Promise.resolve().then` to satisfy `react-hooks/set-state-in-effect` (the React Compiler-aligned rule).
+- New `RecommendationPerformanceTab.tsx` — period strip (Weekly/Monthly/Quarterly), scope pills, acted-on toggle, 4 KPI tiles, amber pending-count chip, two `SimpleBarChart` blocks (hit-rate per horizon; avg return vs benchmark), CSV download.
+- New SWR hook `useRecommendationPerformance({granularity, scope, actedOnOnly, monthsBack})` in `frontend/hooks/useInsightsData.ts`. `useRecommendationHistory()` now also accepts a scope arg.
+- Type additions in `frontend/lib/types.ts`: `PerfBucket`, `PerfSummary`, `RecommendationPerformanceResponse`.
+- Wire-up in `frontend/app/(authenticated)/analytics/analysis/page.tsx`: `<RecommendationHistoryTab />` mount → `<RecommendationsPanel />`.
+- 5 new vitest specs in `frontend/tests/RecommendationsPanel.test.tsx` covering sub-tab dispatch + URL hydration. Suite: 66/66 (was 61).
+
+### Verification summary
+
+- 22 new automated tests (11 backend + 11 frontend including the 5 new + 6 already present that exercise the panel-adjacent flow).
+- TypeScript clean (4 pre-existing test-fixture errors unchanged).
+- ESLint clean on every changed file.
+- Backend smoke: every variant (`week`/`month`/`quarter`, `scope=all/india/us`, `acted_on_only=true/false`) returns 200; 422 on invalid input; cache hit ~8 ms vs cold ~50 ms.
+- Cleanup smoke: 1 → 0 over-cap rows, idempotent on re-run.
+- SSR fetch of the new sub-tab URL returns 200.
+
+### Out of scope (carried as Sprint 9 follow-ups)
+
+- Tier-gating (Free 6m / Pro+ 14m). Currently uniform 14m for everyone.
+- Per-recommendation drill-down chart (returns curve per ticker) — reachable via the existing rationale modal.
+- Outcome-window axis (April = checks landing in April) — explicitly rejected in favor of cohort axis.
+- Backfill outcomes for runs that pre-date the daily executor — not building; surface `pending_count` chip for transparency.
+- Jira ticket creation (Sprint 9 isn't groomed yet — this branch waits on grooming + ticket assignment before merging to dev).
+
+### Follow-on session (afternoon)
+
+After noticing the Performance tab showed empty charts (cohort 11 days old, no outcomes yet at 30/60/90d), brought the granularity-horizon mismatch to the surface and reworked it:
+
+- **Outcomes job (commit `e4a5d78`)**: added 7-day horizon, replaced the strict ±2-day window-match with self-healing (any rec ≥ N days old without an outcome at horizon N), and replaced "latest close" with target-date close lookup (`created_at + N` rolled to next trading day, ±6d forward scan). Backfilled `price_at_rec` for 41 existing recs that had it NULL, then triggered the job — 41 outcomes inserted at 7d.
+- **Frontend horizon mapping (commit `86c9148`)**: granularity now drives the primary horizon emphasised in the chart. Weekly→7d, Monthly→30d, Quarterly→90d. Single-series hit-rate chart at the chosen horizon. Added a "Recommendations issued vs acted on" Activity chart that's always renderable so the tab is never empty.
+- **Metric-explainer tooltips (commit `9723594`)**: new reusable `InfoTooltip` component (`frontend/components/common/InfoTooltip.tsx`) with What / How / Formula sections on every KPI card across History + Performance sub-tabs. Includes a heads-up callout on Avg Excess: `benchmark_return_pct` is currently 0 in the executor (TODO to wire to a real index), so excess ≡ rec return until that's fixed.
+- **Tooltip auto-placement (commits `7cf5dcd`, `8e5fb09`)**: leftmost / rightmost cards' popovers now anchor to the icon's left / right edge respectively (auto-detected via `getBoundingClientRect`); previous "centre fits if 12px clear" rule was too lenient (popover ended up under the sidebar visually). Stricter rule: require a full popover-width (288px) of clearance on each side before picking centre.
+
+Documented data-quality follow-ups in CLAUDE.md §5.8: (1) recommendation engine should populate `price_at_rec` from OHLCV at issue time so outcomes can be computed without backfill; (2) `benchmark_return_pct` should be wired to a real index (Nifty for India, S&P for US) instead of the current 0 placeholder.
+
+---
+
 ## 2026-04-25 — Sprint 8 ASETPLTFRM-338 phase 1-3: orphan-parquet sweep impl + tests + analysis_summary swept
 
 **Scope**: implement the safe orphan-parquet sweep designed in `shared/architecture/iceberg-orphan-sweep-design`; ship clean impl + 17 tests; sweep `stocks.analysis_summary` end-to-end as the lowest-risk validation.

@@ -32,7 +32,6 @@ import { useTheme } from "@/hooks/useTheme";
 import type {
   CompareResponse,
   CompareMetric,
-  WatchlistResponse,
 } from "@/lib/types";
 
 // ---------------------------------------------------------------

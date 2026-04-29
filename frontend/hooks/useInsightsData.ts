@@ -20,6 +20,7 @@ import type {
   QuarterlyResponse,
   PiotroskiResponse,
   RecommendationHistoryResponse,
+  RecommendationPerformanceResponse,
   RecommendationResponse,
   RecommendationStatsResponse,
 } from "@/lib/types";
@@ -136,9 +137,43 @@ export function usePiotroski(
 
 export function useRecommendationHistory(
   monthsBack: number = 6,
+  scope?: "all" | "india" | "us",
 ): InsightsData<RecommendationHistoryResponse> {
+  const scopeQs =
+    scope && scope !== "all" ? `&scope=${scope}` : "";
   return useInsightsFetch<RecommendationHistoryResponse>(
-    `/dashboard/portfolio/recommendations/history?months_back=${monthsBack}`,
+    `/dashboard/portfolio/recommendations/history?months_back=${monthsBack}${scopeQs}`,
+  );
+}
+
+/**
+ * Cohort-bucketed performance — feeds the Performance
+ * sub-tab. Bucket axis = when recs were issued
+ * (week / month / quarter, IST-truncated). Each bucket
+ * carries the 30 / 60 / 90-day outcome aggregates.
+ */
+export function useRecommendationPerformance(opts: {
+  granularity: "week" | "month" | "quarter";
+  scope?: "all" | "india" | "us";
+  actedOnOnly?: boolean;
+  monthsBack?: number;
+}): InsightsData<RecommendationPerformanceResponse> {
+  const {
+    granularity,
+    scope = "all",
+    actedOnOnly = false,
+    monthsBack = 14,
+  } = opts;
+  const params = new URLSearchParams({
+    granularity,
+    scope,
+    months_back: String(monthsBack),
+    acted_on_only: String(actedOnOnly),
+  });
+  return useInsightsFetch<
+    RecommendationPerformanceResponse
+  >(
+    `/dashboard/portfolio/recommendations/performance?${params.toString()}`,
   );
 }
 

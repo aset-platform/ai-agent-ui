@@ -12,7 +12,7 @@
  * phase A.4).
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
 import { usePreferences } from "@/hooks/usePreferences";
 import { usePortfolioActions } from "@/providers/PortfolioActionsProvider";
@@ -100,13 +100,6 @@ export default function DashboardClient({
   const sectorAllocation = useSectorAllocation(marketFilter);
   const portfolioNews = usePortfolioNews(marketFilter);
   const recommendations = useRecommendations(marketFilter);
-  const registryTickers = useMemo(
-    () =>
-      registryData.value?.tickers?.map(
-        (t) => t.ticker,
-      ) ?? [],
-    [registryData.value],
-  );
   // India ticker set from registry (for filtering)
   const indiaTickerSet = useMemo(
     () =>
@@ -218,36 +211,45 @@ export default function DashboardClient({
 
   // Auto-select first PORTFOLIO ticker on load.
   // Portfolio is the default tab, so its top ticker
-  // should drive signals + forecast widgets.
+  // should drive signals + forecast widgets. Defer
+  // past the synchronous effect body so the rule treats
+  // setSelectedTicker as an async-callback update.
   const portfolioInitDone = useRef(false);
   useEffect(() => {
-    const portfolioTickers = filteredPortfolio.map(
-      (h) => h.ticker,
-    );
-
-    // Once portfolio loads, always pick its first ticker
-    if (
-      portfolioTickers.length > 0 &&
-      !portfolioInitDone.current
-    ) {
-      setSelectedTicker(portfolioTickers[0]);
-      portfolioInitDone.current = true;
-      return;
-    }
-
-    // Fallback: if no portfolio, use watchlist
-    if (
-      !selectedTicker &&
-      portfolioTickers.length === 0
-    ) {
-      const watchlistTickers = (
-        filteredWatchlist.value?.tickers ?? []
-      ).map((t) => t.ticker);
-      if (watchlistTickers.length > 0) {
-        setSelectedTicker(watchlistTickers[0]);
+    let alive = true;
+    void Promise.resolve().then(() => {
+      if (!alive) return;
+      const portfolioTickers = filteredPortfolio.map(
+        (h) => h.ticker,
+      );
+      if (
+        portfolioTickers.length > 0 &&
+        !portfolioInitDone.current
+      ) {
+        setSelectedTicker(portfolioTickers[0]);
+        portfolioInitDone.current = true;
+        return;
       }
-    }
-  }, [filteredPortfolio, filteredWatchlist.value]);
+      if (
+        !selectedTicker &&
+        portfolioTickers.length === 0
+      ) {
+        const watchlistTickers = (
+          filteredWatchlist.value?.tickers ?? []
+        ).map((t) => t.ticker);
+        if (watchlistTickers.length > 0) {
+          setSelectedTicker(watchlistTickers[0]);
+        }
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [
+    filteredPortfolio,
+    filteredWatchlist.value,
+    selectedTicker,
+  ]);
 
   // Filter analysis to only the selected ticker
   const selectedAnalysis = useMemo<

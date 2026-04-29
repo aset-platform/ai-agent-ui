@@ -25,12 +25,38 @@
  * can consume `res.body` as usual.
  */
 
+import { API_URL } from "@/lib/config";
 import {
   clearTokens,
   getAccessToken,
   isTokenExpired,
   refreshAccessToken,
 } from "@/lib/auth";
+
+/**
+ * Best-effort cookie wipe + local cleanup + redirect to /login.
+ *
+ * The HttpOnly `access_token` / `refresh_token` cookies are NOT
+ * accessible from JS, so `clearTokens()` (localStorage only) leaves
+ * proxy.ts seeing them and bouncing /login → /dashboard. We POST
+ * /v1/auth/logout (auth-tolerant on the backend) to get the server
+ * to send Set-Cookie clears, then clear localStorage, then navigate.
+ *
+ * See CLAUDE.md §5.3 / §6.6 — this mirrors `AppHeader.handleSignOut`.
+ */
+async function bounceToLogin(): Promise<void> {
+  if (typeof window === "undefined") return;
+  try {
+    await fetch(`${API_URL}/auth/logout`, {
+      method: "POST",
+      credentials: "include",
+    });
+  } catch {
+    // Best effort — proceed with local cleanup either way.
+  }
+  clearTokens();
+  window.location.href = "/login";
+}
 
 /**
  * Perform an authenticated HTTP request.
@@ -51,10 +77,11 @@ export async function apiFetch(
   if (isTokenExpired(token)) {
     token = await refreshAccessToken();
     if (!token) {
-      // Refresh failed — send the user to login.
-      if (typeof window !== "undefined") {
-        window.location.href = "/login";
-      }
+      // Refresh failed — clear server cookies AND local
+      // token, then bounce to /login (otherwise proxy.ts
+      // sees the lingering refresh_token cookie and
+      // redirects right back to /dashboard).
+      void bounceToLogin();
       // Return a synthetic 401 so callers that await the result don't hang.
       return new Response(JSON.stringify({ detail: "Unauthorized" }), {
         status: 401,
@@ -74,12 +101,10 @@ export async function apiFetch(
     credentials: "include",
   });
 
-  // The server rejected our token — clear storage and redirect.
+  // The server rejected our token — clear cookies AND
+  // localStorage, then redirect (see bounceToLogin).
   if (response.status === 401) {
-    clearTokens();
-    if (typeof window !== "undefined") {
-      window.location.href = "/login";
-    }
+    void bounceToLogin();
   }
 
   return response;

@@ -39,6 +39,28 @@ _DAY_MAP = {
     "sun": "sunday",
 }
 
+_ALL_DAYS = [
+    "mon", "tue", "wed", "thu", "fri", "sat", "sun",
+]
+
+
+def _parse_cron_days(raw: str | None) -> list[str]:
+    """Normalize the ``cron_days`` field into day abbrevs.
+
+    Empty / whitespace-only input is treated as "every day"
+    (returns all 7 abbrevs). This matches the admin UI's
+    contract, where leaving the day picker empty alongside
+    an empty ``cron_dates`` means "fire daily". Without
+    this normalization, ``"".split(",")`` yields ``[""]``
+    which silently registers no schedule.
+    """
+    if raw is None or not raw.strip():
+        return list(_ALL_DAYS)
+    return [
+        d.strip().lower() for d in raw.split(",")
+        if d.strip().lower() in _DAY_MAP
+    ]
+
 
 def _next_run_ist(
     cron_days: list[str], cron_time: str,
@@ -247,13 +269,9 @@ class SchedulerService:
             cron_dates = (
                 job.get("cron_dates", "") or ""
             ).strip()
-            cron_days = (
-                job.get("cron_days", "") or ""
-            ).split(",")
-            cron_days = [
-                d.strip().lower() for d in cron_days
-                if d.strip()
-            ]
+            cron_days = _parse_cron_days(
+                job.get("cron_days"),
+            )
             cron_time = job.get("cron_time", "18:00")
 
             if cron_dates:
@@ -370,9 +388,9 @@ class SchedulerService:
         cron_dates = (
             job.get("cron_dates", "") or ""
         ).strip()
-        cron_days = (
-            job.get("cron_days", "") or ""
-        ).split(",")
+        cron_days = _parse_cron_days(
+            job.get("cron_days"),
+        )
         cron_time = job.get("cron_time", "18:00")
         job_id = job["job_id"]
 
@@ -386,7 +404,6 @@ class SchedulerService:
             ).tag(job_id)
         else:
             for day_abbr in cron_days:
-                day_abbr = day_abbr.strip().lower()
                 day_full = _DAY_MAP.get(day_abbr)
                 if not day_full:
                     continue
@@ -405,9 +422,9 @@ class SchedulerService:
         cron_dates = (
             pipeline.get("cron_dates", "") or ""
         ).strip()
-        cron_days = (
-            pipeline.get("cron_days", "") or ""
-        ).split(",")
+        cron_days = _parse_cron_days(
+            pipeline.get("cron_days"),
+        )
         cron_time = pipeline.get("cron_time", "18:00")
         pid = pipeline["pipeline_id"]
         tag = f"pipeline:{pid}"
@@ -420,7 +437,6 @@ class SchedulerService:
             ).tag(tag)
         else:
             for day_abbr in cron_days:
-                day_abbr = day_abbr.strip().lower()
                 day_full = _DAY_MAP.get(day_abbr)
                 if not day_full:
                     continue
@@ -642,9 +658,9 @@ class SchedulerService:
             cron_dates = (
                 p.get("cron_dates", "") or ""
             ).strip()
-            cron_days = (
-                p.get("cron_days", "") or ""
-            ).split(",")
+            cron_days = _parse_cron_days(
+                p.get("cron_days"),
+            )
             cron_time = p.get("cron_time", "18:00")
             if cron_dates:
                 nxt = _next_run_ist_dates(
@@ -906,9 +922,9 @@ class SchedulerService:
             cron_dates = (
                 job.get("cron_dates", "") or ""
             ).strip()
-            cron_days = (
-                job.get("cron_days", "") or ""
-            ).split(",")
+            cron_days = _parse_cron_days(
+                job.get("cron_days"),
+            )
             cron_time = job.get("cron_time", "18:00")
             if cron_dates:
                 nxt = _next_run_ist_dates(

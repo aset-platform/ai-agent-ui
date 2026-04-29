@@ -527,15 +527,17 @@ function UsersTab() {
       </div>
 
       {/* Modals */}
-      <UserModal
-        isOpen={modalOpen}
-        mode={modalMode}
-        user={editUser}
-        saving={modalSaving}
-        error={modalError}
-        onClose={() => setModalOpen(false)}
-        onSave={handleSave}
-      />
+      {modalOpen && (
+        <UserModal
+          key={editUser?.user_id ?? "new"}
+          mode={modalMode}
+          user={editUser}
+          saving={modalSaving}
+          error={modalError}
+          onClose={() => setModalOpen(false)}
+          onSave={handleSave}
+        />
+      )}
       <ResetPasswordModal
         isOpen={resetOpen}
         userName={

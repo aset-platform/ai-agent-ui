@@ -1796,11 +1796,6 @@ function PipelineRunGroup({
     (s, r) => s + (r.duration_secs ?? 0),
     0,
   );
-  const pipelineName =
-    steps[0]?.job_name?.replace(
-      /^Daily\s+\w+\s+-\s+/,
-      "",
-    ) ?? "Pipeline";
   const scope = steps[0]?.scope ?? "";
 
   const scopeBadge: Record<string, string> = {

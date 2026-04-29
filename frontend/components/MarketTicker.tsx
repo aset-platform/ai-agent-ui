@@ -6,7 +6,7 @@
  * Hidden on mobile (< md breakpoint).
  */
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
 
@@ -83,23 +83,28 @@ export function MarketTicker() {
     null,
   );
 
-  const fetchIndices = useCallback(async () => {
-    try {
-      const res = await apiFetch(`${API_URL}/market/indices`);
-      if (res.ok) {
-        const json: MarketIndices = await res.json();
-        setData(json);
-      }
-    } catch {
-      // Keep showing last known data.
-    }
-  }, []);
-
   useEffect(() => {
-    fetchIndices();
+    let cancelled = false;
+    const fetchIndices = async () => {
+      try {
+        const res = await apiFetch(
+          `${API_URL}/market/indices`,
+        );
+        if (cancelled || !res.ok) return;
+        const json: MarketIndices = await res.json();
+        if (cancelled) return;
+        setData(json);
+      } catch {
+        // Keep showing last known data.
+      }
+    };
+    void fetchIndices();
     const id = setInterval(fetchIndices, POLL_INTERVAL);
-    return () => clearInterval(id);
-  }, [fetchIndices]);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
 
   if (!data) return null;
 

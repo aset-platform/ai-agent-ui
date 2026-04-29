@@ -38,7 +38,8 @@ SchedulerService (daemon thread, 30s tick)
 | `run_forecasts` | `execute_run_forecasts` | Prophet price forecasts + CV accuracy | 8 min (weekly) / 34 min (monthly force) |
 | `run_piotroski` | `execute_run_piotroski` | Piotroski F-Score from quarterly results | 2s |
 | `recommendations` | `execute_run_recommendations` | LLM Smart Funnel — generates per-user recommendations | 5-15 min |
-| `recommendation_outcomes` | `execute_run_recommendation_outcomes` | 30/60/90d outcome checkpoints | 15s |
+| `recommendation_outcomes` | `execute_run_recommendation_outcomes` | **7/30/60/90d** outcome checkpoints (self-healing window-match) | 15s |
+| `recommendation_cleanup` | `execute_recommendation_cleanup` | Daily 14-month retention purge — `DELETE FROM stocks.recommendation_runs WHERE run_date < CURRENT_DATE - INTERVAL '14 months'` (FK CASCADE wipes children) | <1s |
 | `iceberg_maintenance` | `execute_iceberg_maintenance` | Backup → per-table compact + orphan sweep (consolidated) | ~2-15 min |
 
 All executors accept: `(scope, run_id, repo, cancel_event=None, force=False)`

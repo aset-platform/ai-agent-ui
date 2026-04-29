@@ -4,7 +4,7 @@
  * (ASETPLTFRM-288). Uses existing portfolio holdings data.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { WidgetSkeleton } from "./WidgetSkeleton";
 import { WidgetError } from "./WidgetError";
@@ -20,15 +20,14 @@ const ReactECharts = dynamic(
 function useDarkMode(): boolean {
   const [dark, setDark] = useState(false);
 
-  const sync = useCallback(() => {
-    setDark(
-      document.documentElement.classList.contains(
-        "dark",
-      ),
-    );
-  }, []);
-
   useEffect(() => {
+    const sync = () => {
+      setDark(
+        document.documentElement.classList.contains(
+          "dark",
+        ),
+      );
+    };
     sync();
     const obs = new MutationObserver(sync);
     obs.observe(document.documentElement, {
@@ -36,7 +35,7 @@ function useDarkMode(): boolean {
       attributeFilter: ["class"],
     });
     return () => obs.disconnect();
-  }, [sync]);
+  }, []);
 
   return dark;
 }

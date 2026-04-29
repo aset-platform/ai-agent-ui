@@ -258,7 +258,14 @@ export function StockChart({
   // Memoize visibility by individual keys to avoid
   // object identity changes triggering rebuilds.
   const vis = useMemo(
-    () => visibleIndicators,
+    () => ({
+      sma50: visibleIndicators.sma50,
+      sma200: visibleIndicators.sma200,
+      bollinger: visibleIndicators.bollinger,
+      volume: visibleIndicators.volume,
+      rsi: visibleIndicators.rsi,
+      macd: visibleIndicators.macd,
+    }),
     [
       visibleIndicators.sma50,
       visibleIndicators.sma200,
@@ -303,16 +310,19 @@ export function StockChart({
     return () => obs.disconnect();
   }, []);
 
-  // Use whichever source has resolved to dark.
+  // Use whichever source has resolved to dark — passed
+  // into buildChart's dep list so the chart rebuilds when
+  // the user toggles theme. Internally buildChart still
+  // reads liveDark from the DOM at build time as a
+  // stale-closure safeguard.
   const actualDark = isDark || domDark;
 
-  const bg = actualDark ? "#111827" : "#ffffff";
-  const text = actualDark ? "#9ca3af" : "#6b7280";
-  const grid = actualDark
-    ? "rgba(55,65,81,0.3)"
-    : "rgba(229,231,235,0.6)";
-
   const buildChart = useCallback(() => {
+    // Reference actualDark so the rebuild-on-theme-toggle
+    // trigger isn't flagged as an unused dep — the actual
+    // theme color values are read live from the DOM
+    // below as a stale-closure safeguard.
+    void actualDark;
     const el = containerRef.current;
     if (!el || aggOhlcv.length === 0) return;
 
@@ -796,7 +806,7 @@ export function StockChart({
     } else {
       chart.timeScale().fitContent();
     }
-  }, [aggOhlcv, aggIndicators, actualDark, height, interval, bg, text, grid, vis]);
+  }, [aggOhlcv, aggIndicators, actualDark, height, interval, vis]);
 
   // Build chart on mount / data change
   useEffect(() => {

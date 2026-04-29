@@ -2278,12 +2278,20 @@ def execute_run_recommendation_outcomes(
     cancel_event=None,
     **kwargs,
 ) -> None:
-    """Track recommendation outcomes at 30/60/90d.
+    """Track recommendation outcomes at 7/30/60/90d.
 
     Daily job — checks which active recommendations
-    are due for outcome evaluation, fetches current
-    prices, computes return, labels outcome, and
-    persists to PG.  Expires stale (>90d) recs.
+    are due for outcome evaluation, fetches the close
+    price on the target check date (created_at + N days,
+    rolled forward to the next available trading day),
+    computes return, labels outcome, and persists to PG.
+    Expires stale (>90d) recs.
+
+    Window-match is self-healing: any rec at least N
+    days old that lacks an outcome at horizon N gets one
+    computed on the next run, even if the daily run was
+    skipped on the original target date. Idempotent —
+    a rec is checked at most once per (rec, horizon).
     """
     import asyncio
     import uuid as _uuid
@@ -2306,6 +2314,11 @@ def execute_run_recommendation_outcomes(
     )
     from db.duckdb_engine import query_iceberg_df
 
+    # Horizons we compute outcomes for. 7d unlocks the
+    # weekly-granularity Performance view; 30/60/90 keep
+    # the existing monthly/quarterly KPIs.
+    _HORIZONS = (7, 30, 60, 90)
+
     _run_start = datetime.now(timezone.utc)
     today = date.today()
 
@@ -2322,10 +2335,8 @@ def execute_run_recommendation_outcomes(
     async def _get_due():
         results = []
         async with _factory() as s:
-            for days in (30, 60, 90):
-                target = today - timedelta(days=days)
-                w_start = target - timedelta(days=2)
-                w_end = target + timedelta(days=2)
+            for days in _HORIZONS:
+                cutoff = today - timedelta(days=days)
 
                 existing = (
                     sa_select(
@@ -2338,6 +2349,13 @@ def execute_run_recommendation_outcomes(
                     .scalar_subquery()
                 )
 
+                # Self-healing: any rec at least N days
+                # old without an outcome at horizon N.
+                # A late or skipped run still picks up
+                # recs that crossed the boundary days
+                # ago. Idempotency comes from the
+                # `id.notin_(existing)` subselect, not
+                # from a tight date window.
                 q = await s.execute(
                     sa_select(RecModel).where(
                         RecModel.status.in_(
@@ -2346,7 +2364,7 @@ def execute_run_recommendation_outcomes(
                         RecModel.ticker.isnot(None),
                         func.date(
                             RecModel.created_at
-                        ).between(w_start, w_end),
+                        ) <= cutoff,
                         RecModel.id.notin_(existing),
                     )
                 )
@@ -2356,6 +2374,9 @@ def execute_run_recommendation_outcomes(
                         "ticker": r.ticker,
                         "action": r.action,
                         "price_at_rec": r.price_at_rec,
+                        "created_date": (
+                            r.created_at.date()
+                        ),
                         "days_due": days,
                     })
         await _eng.dispose()
@@ -2430,37 +2451,85 @@ def execute_run_recommendation_outcomes(
         )
         return
 
-    # ── Batch fetch current prices ────────────────────
-    tickers = list({
+    # ── Batch fetch closes by (ticker, target date) ──
+    # Each rec has its own target_check_date =
+    # created_at + days_due. We fetch a date-range slice
+    # of OHLCV per ticker covering all targets, then for
+    # each rec resolve the close on the first trading
+    # day at or after target (handles weekends/holidays
+    # transparently — at most a 6-day forward scan).
+    tickers = sorted({
         r["ticker"] for r in due_recs
         if r.get("ticker")
     })
-    price_map: dict[str, float] = {}
+    # close_map: (ticker, ISO-date-str) → close price.
+    close_map: dict[tuple[str, str], float] = {}
     if tickers:
-        placeholders = ",".join(
-            [f"'{t}'" for t in tickers],
-        )
-        try:
-            price_df = query_iceberg_df(
-                "stocks.ohlcv",
-                "SELECT ticker, close, date "
-                "FROM ohlcv "
-                f"WHERE ticker IN ({placeholders}) "
-                "QUALIFY ROW_NUMBER() OVER ("
-                "PARTITION BY ticker "
-                "ORDER BY date DESC) = 1",
+        # Per-rec target = created_date + days_due, but
+        # cap at today (we don't have future data).
+        targets = [
+            min(
+                r["created_date"]
+                + timedelta(days=r["days_due"]),
+                today,
             )
-            if not price_df.empty:
-                for _, row in price_df.iterrows():
-                    price_map[row["ticker"]] = float(
-                        row["close"],
-                    )
-        except Exception as exc:
-            _logger.warning(
-                "[rec-outcomes] Price fetch "
-                "failed: %s",
-                exc,
+            for r in due_recs
+            if r.get("ticker") and r.get("created_date")
+        ]
+        if targets:
+            d_min = min(targets)
+            # +6 days for the next-trading-day scan.
+            d_max = min(
+                max(targets) + timedelta(days=6), today,
             )
+            placeholders = ",".join(
+                [f"'{t}'" for t in tickers],
+            )
+            try:
+                df = query_iceberg_df(
+                    "stocks.ohlcv",
+                    "SELECT ticker, date, close "
+                    "FROM ohlcv "
+                    f"WHERE ticker IN ({placeholders}) "
+                    "  AND date BETWEEN "
+                    f"    DATE '{d_min.isoformat()}' "
+                    "    AND "
+                    f"    DATE '{d_max.isoformat()}'",
+                )
+                if not df.empty:
+                    for _, row in df.iterrows():
+                        d = row["date"]
+                        d_iso = (
+                            d.isoformat()
+                            if hasattr(d, "isoformat")
+                            else str(d)[:10]
+                        )
+                        close_map[
+                            (row["ticker"], d_iso)
+                        ] = float(row["close"])
+            except Exception as exc:
+                _logger.warning(
+                    "[rec-outcomes] Close fetch "
+                    "failed: %s",
+                    exc,
+                )
+
+    def _resolve_close(
+        ticker: str, target: date,
+    ) -> tuple[float | None, date | None]:
+        """Find close on `target` or first trading day
+        after (within 6 days). Returns (close, actual
+        date) — date may be > target if target was a
+        weekend/holiday.
+        """
+        for offset in range(7):
+            d = target + timedelta(days=offset)
+            if d > today:
+                break
+            v = close_map.get((ticker, d.isoformat()))
+            if v is not None:
+                return v, d
+        return None, None
 
     # ── Compute + persist outcomes ────────────────────
     done = 0
@@ -2478,28 +2547,49 @@ def execute_run_recommendation_outcomes(
         action = rec.get("action", "hold")
         price_at_rec = rec.get("price_at_rec")
         days_due = rec.get("days_due", 30)
+        created_d = rec.get("created_date")
 
-        current_price = price_map.get(ticker)
-        if current_price is None or not price_at_rec:
+        if (
+            not price_at_rec
+            or not ticker
+            or not created_d
+        ):
+            done += 1
+            continue
+
+        target = min(
+            created_d + timedelta(days=days_due), today,
+        )
+        actual_price, check_d = _resolve_close(
+            ticker, target,
+        )
+        if actual_price is None or check_d is None:
+            # No OHLCV at/after target — leave
+            # un-checked; next run with fresh data
+            # will pick it up.
             done += 1
             continue
 
         return_pct = (
-            (current_price - price_at_rec)
+            (actual_price - price_at_rec)
             / price_at_rec
         ) * 100.0
         label = compute_outcome_label(
             action, return_pct,
         )
+        # Benchmark stays 0.0 here — pre-existing TODO,
+        # tracked separately. excess == return_pct in
+        # the meantime so beat-benchmark filters still
+        # behave (rec > 0 ↔ "beat 0").
         bench_return = 0.0
         excess = return_pct - bench_return
 
         outcomes_to_insert.append({
             "id": str(_uuid.uuid4()),
             "recommendation_id": rec_id,
-            "check_date": today,
+            "check_date": check_d,
             "days_elapsed": days_due,
-            "actual_price": current_price,
+            "actual_price": actual_price,
             "return_pct": round(return_pct, 2),
             "benchmark_return_pct": round(
                 bench_return, 2,
@@ -2509,13 +2599,14 @@ def execute_run_recommendation_outcomes(
         })
 
         _logger.info(
-            "[rec-outcomes] %s/%s: %.1f%% -> %s "
-            "(%dd)",
+            "[rec-outcomes] %s/%s @%dd "
+            "(check=%s): %.2f%% -> %s",
             ticker,
             rec_id[:8],
+            days_due,
+            check_d.isoformat(),
             return_pct,
             label,
-            days_due,
         )
         done += 1
         repo.update_scheduler_run(
@@ -2780,5 +2871,133 @@ def execute_iceberg_maintenance(
     _finalize_run(
         repo, run_id, done, total,
         errors, cancelled,
+        started_at=_run_start,
+    )
+
+
+# ──────────────────────────────────────────────────────
+# Recommendation history retention — 14m hard cap
+# ──────────────────────────────────────────────────────
+
+
+@register_job("recommendation_cleanup")
+def execute_recommendation_cleanup(
+    scope: str,
+    run_id: str,
+    repo,
+    cancel_event=None,
+    **kwargs,
+) -> None:
+    """Delete recommendation runs older than 14 months.
+
+    The Performance sub-tab (cohort-bucketed) reads
+    ``stocks.recommendations`` joined with
+    ``stocks.recommendation_outcomes`` over a 14-month
+    window. Without a retention bound the tables grow
+    indefinitely (no TTL was wired when the Smart
+    Funnel pipeline shipped). This job hard-caps the
+    history at 14 months by deleting old runs;
+    foreign-key CASCADE wipes child recommendations
+    and outcomes automatically.
+
+    The ``cleanup_orphans_v2`` analogy from Iceberg
+    maintenance does NOT apply — PG storage is
+    automatically reclaimed on DELETE + autovacuum.
+
+    Idempotent: running daily after the bound moves
+    forward by one day deletes only the runs that
+    crossed the 14-month boundary that day.
+    """
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+    from sqlalchemy.pool import NullPool
+
+    from cache import get_cache
+    from config import get_settings
+
+    _run_start = datetime.now(timezone.utc)
+
+    # Async NullPool — safe in thread pool workers.
+    _eng = create_async_engine(
+        get_settings().database_url,
+        poolclass=NullPool,
+    )
+    _factory = async_sessionmaker(
+        _eng, class_=AsyncSession,
+    )
+
+    deleted = 0
+    errors: list[str] = []
+
+    async def _purge() -> int:
+        async with _factory() as s:
+            # Returns the rows deleted from the parent
+            # table; child rows go via FK CASCADE.
+            res = await s.execute(
+                text(
+                    "DELETE FROM "
+                    "stocks.recommendation_runs "
+                    "WHERE run_date < ("
+                    "  CURRENT_DATE - INTERVAL "
+                    "'14 months'"
+                    ")"
+                )
+            )
+            await s.commit()
+            return res.rowcount or 0
+
+    try:
+        deleted = asyncio.run(_purge())
+        _logger.info(
+            "[recommendation_cleanup] Deleted %d "
+            "runs older than 14 months "
+            "(child recs + outcomes wiped via "
+            "FK CASCADE)",
+            deleted,
+        )
+        if deleted:
+            # Bust the perf-tab cache (and everything
+            # else under cache:portfolio:recs:*).
+            try:
+                get_cache().invalidate(
+                    "cache:portfolio:recs:*",
+                )
+            except Exception as exc:
+                _logger.debug(
+                    "Cache invalidate skipped: %s",
+                    exc,
+                )
+    except Exception as exc:
+        _logger.error(
+            "[recommendation_cleanup] Failed: %s",
+            exc,
+            exc_info=True,
+        )
+        errors.append(str(exc)[:200])
+    finally:
+        # Don't leak the one-shot engine.
+        try:
+            asyncio.run(_eng.dispose())
+        except Exception:
+            pass
+
+    # tickers_total/done used loosely to surface the
+    # delete count in the admin UI's run detail.
+    repo.update_scheduler_run(
+        run_id,
+        {
+            "tickers_total": deleted,
+            "tickers_done": deleted,
+        },
+    )
+    _finalize_run(
+        repo, run_id, deleted, deleted,
+        errors, cancelled=False,
         started_at=_run_start,
     )

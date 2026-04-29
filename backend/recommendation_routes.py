@@ -22,8 +22,11 @@ from cache import TTL_STABLE, get_cache
 from recommendation_models import (
     AggregateStats,
     HistoryRunItem,
+    PerfBucket,
+    PerfSummary,
     RecommendationHistoryResponse,
     RecommendationItem,
+    RecommendationPerformanceResponse,
     RecommendationResponse,
     RecommendationStatsResponse,
 )
@@ -298,11 +301,21 @@ def create_recommendation_router() -> APIRouter:
         months_back: int = Query(
             6, ge=1, le=24,
         ),
+        scope: str = Query(
+            "all",
+            description="all|india|us",
+        ),
         user: UserContext = Depends(
             get_current_user,
         ),
     ):
-        """Return past runs with rec counts."""
+        """Return past runs with rec counts.
+
+        ``scope`` filters runs to a single market when
+        set to ``"india"`` or ``"us"``. Default ``"all"``
+        keeps the historical cross-scope total. Stats
+        are scoped to match.
+        """
         from backend.db.pg_stocks import (
             get_recommendation_history,
             get_recommendation_stats,
@@ -310,16 +323,21 @@ def create_recommendation_router() -> APIRouter:
 
         factory = _get_session_factory()
         uid = str(user.user_id)
+        scope_filter = (
+            scope if scope in ("india", "us") else None
+        )
 
         async with factory() as session:
             rows = (
                 await get_recommendation_history(
                     session, uid, months_back,
+                    scope=scope_filter,
                 )
             )
         async with factory() as session:
             stats = await get_recommendation_stats(
                 session, uid,
+                scope=scope_filter,
             )
 
         run_items = []
@@ -461,6 +479,112 @@ def create_recommendation_router() -> APIRouter:
         )
         return Response(
             content=resp.model_dump_json(),
+            media_type="application/json",
+        )
+
+    # --------------------------------------------------
+    # GET /performance — cohort-bucketed perf view
+    # --------------------------------------------------
+    @router.get(
+        "/performance",
+        response_model=(
+            RecommendationPerformanceResponse
+        ),
+    )
+    async def get_performance(
+        granularity: str = Query(
+            ...,
+            description="week|month|quarter",
+        ),
+        months_back: int = Query(
+            14, ge=1, le=14,
+        ),
+        scope: str = Query(
+            "all",
+            description="all|india|us",
+        ),
+        acted_on_only: bool = Query(
+            False,
+            description=(
+                "Restrict cohort to recs the user "
+                "actually acted on."
+            ),
+        ),
+        user: UserContext = Depends(
+            get_current_user,
+        ),
+    ):
+        """Cohort-bucketed performance for a window.
+
+        A *cohort* bucket groups recommendations by
+        when they were issued (week / month / quarter,
+        IST). Each bucket carries the 30 / 60 / 90-day
+        outcome aggregates for that cohort, plus
+        ``pending_count`` for recs <30d old.
+        """
+        if granularity not in (
+            "week", "month", "quarter",
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "granularity must be "
+                    "week|month|quarter"
+                ),
+            )
+
+        scope_filter = (
+            scope if scope in ("india", "us") else None
+        )
+        cache = get_cache()
+        ck = (
+            "cache:portfolio:recs"
+            f":{user.user_id}:perf"
+            f":{granularity}:{scope}"
+            f":{int(bool(acted_on_only))}"
+            f":{months_back}"
+        )
+        hit = cache.get(ck)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        from backend.db.pg_stocks import (
+            get_recommendation_performance_buckets,
+        )
+
+        factory = _get_session_factory()
+        async with factory() as session:
+            data = (
+                await
+                get_recommendation_performance_buckets(
+                    session,
+                    str(user.user_id),
+                    granularity=granularity,
+                    months_back=months_back,
+                    scope=scope_filter,
+                    acted_on_only=acted_on_only,
+                )
+            )
+
+        buckets = [
+            PerfBucket(**b) for b in data["buckets"]
+        ]
+        summary = PerfSummary(**data["summary"])
+        resp = RecommendationPerformanceResponse(
+            granularity=granularity,
+            scope=scope,
+            acted_on_only=acted_on_only,
+            months_back=months_back,
+            buckets=buckets,
+            summary=summary,
+        )
+        body = resp.model_dump_json()
+        cache.set(ck, body, TTL_STABLE)
+        return Response(
+            content=body,
             media_type="application/json",
         )
 

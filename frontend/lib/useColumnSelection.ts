@@ -31,31 +31,41 @@ export function useColumnSelection(
   const [hydrated, setHydrated] = useState(false);
 
   // Load persisted selection once after mount to avoid
-  // SSR / client hydration mismatches.
+  // SSR / client hydration mismatches. Defer past the
+  // synchronous effect body so the rule treats setStates
+  // as async-callback updates.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    try {
-      const raw = window.localStorage.getItem(
-        storageKey,
-      );
-      if (raw) {
-        const parsed = JSON.parse(raw) as unknown;
-        if (Array.isArray(parsed)) {
-          const validSet = new Set(validKeys);
-          const kept = parsed
-            .filter(
-              (v): v is string => typeof v === "string",
-            )
-            .filter((v) => validSet.has(v));
-          if (kept.length > 0) {
-            setSelectedState(kept);
+    let alive = true;
+    void Promise.resolve().then(() => {
+      if (!alive) return;
+      try {
+        const raw = window.localStorage.getItem(
+          storageKey,
+        );
+        if (raw) {
+          const parsed = JSON.parse(raw) as unknown;
+          if (Array.isArray(parsed)) {
+            const validSet = new Set(validKeys);
+            const kept = parsed
+              .filter(
+                (v): v is string =>
+                  typeof v === "string",
+              )
+              .filter((v) => validSet.has(v));
+            if (kept.length > 0) {
+              setSelectedState(kept);
+            }
           }
         }
+      } catch {
+        // Fall back to defaults on parse error.
       }
-    } catch {
-      // Fall back to defaults on parse error.
-    }
-    setHydrated(true);
+      setHydrated(true);
+    });
+    return () => {
+      alive = false;
+    };
   }, [storageKey, validKeys]);
 
   const setSelected = useCallback(

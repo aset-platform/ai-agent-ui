@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "name": "ai-agent-ui",
+  "description": "Fullstack agentic chat application with stock analysis, Prophet forecasting, portfolio management, and Smart Funnel recommendations.",
+  "last_refreshed": "2026-04-29",
+  "branch": "feature/sprint8",
+  "commits_ahead_of_dev": 67,
+  "stack": {
+    "backend": {
+      "language": "python",
+      "version": "3.12",
+      "framework": "FastAPI",
+      "port": 8181,
+      "entry": "backend/main.py",
+      "key_libs": [
+        "FastAPI 0.135",
+        "LangChain 1.2",
+        "SQLAlchemy 2.0 async (asyncpg)",
+        "PyIceberg 0.11",
+        "DuckDB 1.2",
+        "Prophet 1.3",
+        "transformers (FinBERT, CPU)",
+        "pgvector (768-dim embeddings)"
+      ]
+    },
+    "frontend": {
+      "language": "typescript",
+      "framework": "Next.js 16 (App Router) + React 19",
+      "port": 3000,
+      "entry": "frontend/app/page.tsx",
+      "edge": "frontend/proxy.ts",
+      "key_libs": [
+        "SWR 2.3",
+        "lightweight-charts 5.1",
+        "Apache ECharts (tree-shaken)",
+        "react-markdown",
+        "TailwindCSS"
+      ]
+    },
+    "data": {
+      "postgres": {
+        "version": "16 + pgvector",
+        "tables": 19,
+        "url_env": "DATABASE_URL",
+        "scope": "mutable OLTP — auth, portfolio, recommendations, scheduler, conversation context"
+      },
+      "iceberg": {
+        "version": "0.11.1 (PyIceberg)",
+        "tables": 12,
+        "scope": "append-only analytics — ohlcv, sentiment_scores, company_info, analysis_summary, etc.",
+        "read_engine": "DuckDB",
+        "warehouse_path": "~/.ai-agent-ui/data/iceberg/"
+      },
+      "redis": {
+        "version": "7 alpine",
+        "url_env": "REDIS_URL",
+        "scope": "TTL_VOLATILE=60s, TTL_STABLE=300s; per-user cache keys"
+      }
+    }
+  },
+  "entry_points": {
+    "cli_pipeline": "backend/pipeline/runner.py",
+    "demo_seed": "scripts/seed_demo_data.py",
+    "alembic": "backend/db/migrations/",
+    "health": "GET /v1/health",
+    "websocket": "/ws/chat (NOT /v1/-versioned)",
+    "lifecycle": "./run.sh start|stop|restart|rebuild|status|logs|doctor"
+  },
+  "directories": {
+    "backend/": "FastAPI app — routes, agents, tools, jobs",
+    "auth/": "Auth + RBAC + OAuth + BYOM key encryption (Fernet)",
+    "stocks/": "Stock-data domain (Iceberg writers, repos, retention)",
+    "frontend/": "Next.js 16 app + components + tests",
+    "tests/": "Backend pytest suite (538 cases)",
+    "e2e/": "Playwright E2E (51 specs across 3 chromium projects)",
+    "scripts/": "Ops utilities (seed, perf-check, migrations)",
+    "docs/": "MkDocs Material site (65 pages)",
+    "fixtures/": "Test data CSVs",
+    ".serena/memories/": "Shared architecture / convention / debugging memos (~75 files)"
+  },
+  "core_modules": {
+    "backend/agents/": "LangGraph supervisor + 6 sub-agents + 10 nodes + conversation_context",
+    "backend/tools/": "35 LLM-callable tool modules",
+    "backend/jobs/": "Scheduler service + 9 executors + recommendation engine + pipeline_executor",
+    "backend/db/pg_stocks.py": "PG repository for stocks/recommendations + perf-bucket helper",
+    "backend/recommendation_routes.py": "/v1/dashboard/portfolio/recommendations/* (incl. /performance)",
+    "backend/recommendation_models.py": "Pydantic models — incl. PerfBucket, PerfSummary, RecommendationPerformanceResponse",
+    "backend/maintenance/iceberg_maintenance.py": "compact_table + cleanup_orphans_v2 (PyIceberg 0.11.1 native)",
+    "frontend/components/insights/": "Tabbed-page components (Screener, ScreenQL, Recommendations, Piotroski, etc.)",
+    "frontend/components/insights/RecommendationsPanel.tsx": "Sub-tab parent (History | Performance)",
+    "frontend/components/insights/RecommendationPerformanceTab.tsx": "Cohort-bucketed performance view",
+    "frontend/components/common/InfoTooltip.tsx": "Reusable popover with auto-flip placement",
+    "frontend/lib/renderTooltip.ts": "DOM-construction helper for chart tooltips (replaces innerHTML)",
+    "frontend/hooks/useInsightsData.ts": "SWR hooks for insights endpoints",
+    "frontend/lib/apiFetch.ts": "Authenticated fetch wrapper (auto-refresh, bounceToLogin on 401)"
+  },
+  "api_routes": {
+    "auth": [
+      "POST /v1/auth/login",
+      "POST /v1/auth/refresh",
+      "POST /v1/auth/logout (auth-tolerant since 2026-04-29)",
+      "POST /v1/auth/oauth/{provider}"
+    ],
+    "dashboard": [
+      "GET /v1/dashboard/home",
+      "GET /v1/dashboard/portfolio/forecast",
+      "GET /v1/dashboard/portfolio/performance"
+    ],
+    "recommendations": [
+      "GET /v1/dashboard/portfolio/recommendations",
+      "POST /v1/dashboard/portfolio/recommendations/refresh",
+      "GET /v1/dashboard/portfolio/recommendations/history",
+      "GET /v1/dashboard/portfolio/recommendations/stats",
+      "GET /v1/dashboard/portfolio/recommendations/performance (new 2026-04-29)",
+      "GET /v1/dashboard/portfolio/recommendations/{run_id}"
+    ],
+    "insights": [
+      "GET /v1/insights/{screener|targets|dividends|risk|sectors|correlation|quarterly}"
+    ],
+    "admin": [
+      "GET /v1/admin/audit-log",
+      "GET /v1/admin/scheduler/{jobs|pipelines|runs|stats}",
+      "POST /v1/admin/scheduler/jobs/{id}/trigger",
+      "POST /v1/admin/recommendations/force-refresh",
+      "POST /v1/admin/recommendation-runs/{id}/promote"
+    ]
+  },
+  "scheduler_jobs": [
+    "data_refresh",
+    "compute_analytics",
+    "run_sentiment",
+    "run_forecasts",
+    "run_piotroski",
+    "recommendations",
+    "recommendation_outcomes (4 horizons {7,30,60,90}, self-healing window)",
+    "recommendation_cleanup (14m retention purge — new 2026-04-29)",
+    "iceberg_maintenance"
+  ],
+  "tests": {
+    "pytest_cases": 538,
+    "vitest_cases": 66,
+    "e2e_specs": 51,
+    "e2e_pass_rate": "111/147 on analytics-chromium (34 known-flaky pre-existing)",
+    "frontend_lint_baseline": 0,
+    "frontend_tsc_errors": "4 pre-existing test-fixture errors (unchanged baseline)"
+  },
+  "docs": {
+    "site": "MkDocs Material 9 (Dockerfile.docs, port 8000)",
+    "pages": 65,
+    "key_pages": [
+      "docs/backend/api-reference.md",
+      "docs/backend/scheduler.md",
+      "docs/backend/recommendation-performance.md (new 2026-04-29)",
+      "docs/backend/iceberg-orphan-sweep.md",
+      "docs/backend/agents.md",
+      "docs/backend/tools.md",
+      "docs/backend/byom.md"
+    ]
+  },
+  "rules_and_patterns": {
+    "claude_md": "CLAUDE.md (~580 lines, 9 sections, 57-row Pattern Index)",
+    "serena_memories": ".serena/memories/{shared/architecture, shared/conventions, shared/debugging}",
+    "memory_count_approx": 75,
+    "key_patterns": [
+      "shared/conventions/tabular-page-pattern",
+      "shared/conventions/swr-data-fetch-pattern",
+      "shared/conventions/info-tooltip-pattern (new 2026-04-29)",
+      "shared/conventions/render-tooltip-helper (new 2026-04-29)",
+      "shared/architecture/recommendation-performance-tab (new 2026-04-29)",
+      "shared/debugging/asyncpg-null-param-cast (new 2026-04-29)",
+      "shared/debugging/recommendation-outcomes-self-healing (new 2026-04-29)"
+    ]
+  },
+  "current_state": {
+    "sprint": "8 (id 138, ends 2026-05-01)",
+    "sprint_status": "62 SP / 14 issues Done as of 2026-04-28; +ASETPLTFRM-339 (8 SP, Done) on 2026-04-29",
+    "active_jira": "ASETPLTFRM-339 — Recommendation Performance Analytics",
+    "pending_pr": "feature/sprint8 → dev (squash) — not opened yet, gating Sprint 9 grooming",
+    "known_followups": [
+      "Engine: populate price_at_rec from OHLCV at issue time",
+      "Outcomes: wire benchmark_return_pct to a real index (Nifty / S&P)",
+      "Retention: tier-gate (Free 6m / Pro+ 14m)",
+      "Performance tab: per-rec drill-down chart",
+      "E2E: spec for new Performance sub-tab (auth-fixture wiring)",
+      "Stats: refactor /stats hit_rate_30d/60d/90d to actually be per-horizon"
+    ]
+  },
+  "quickstart": [
+    "cp .env.example .env",
+    "./run.sh start",
+    "docker compose exec backend python scripts/seed_demo_data.py",
+    "open http://localhost:3000  -> admin@demo.com / Admin123!"
+  ]
+}

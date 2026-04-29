@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports -- CommonJS Node build script */
 /**
  * Patch lightningcss/node/index.js to use absolute require
  * paths for the native binary. Turbopack's PostCSS worker

@@ -211,8 +211,11 @@ Tier→role auto-sync: `free→general`, `pro|premium→pro`, superuser sticky. 
 - Monthly-per-scope quota: 1 run per `(user, scope, IST month)` via single `get_or_create_monthly_run` — all entry points (widget/chat/scheduler) MUST go through it.
 - `run_type ∈ {manual, chat, scheduled, admin, admin_test}`. User reads filter `admin_test` via `exclude_test=True`.
 - Acted-on auto-detect: `POST/PUT/DELETE /portfolio` fires daemon thread → `update_recommendation_status`.
-- Stats scope-aware: `/recommendations/stats` and `/history` take `?scope=india|us|all`. `total_acted_on` derives from `acted_on_date`, NOT `recommendation_outcomes`.
+- Stats scope-aware: `/recommendations/stats`, `/history`, and `/performance` take `?scope=india|us|all`. `total_acted_on` derives from `acted_on_date`, NOT `recommendation_outcomes`.
 - `expire_old_recommendations` IS scope-aware — don't regress to cross-scope wipe. `→ recommendation-engine`
+- **Retention: 14 months hard cap.** Daily `recommendation_cleanup` job (`scheduled_jobs`, 03:00 IST, mon-sun) deletes `stocks.recommendation_runs` where `run_date < CURRENT_DATE - INTERVAL '14 months'`; FK CASCADE wipes child `recommendations` + `recommendation_outcomes`. Idempotent. The cohort-bucketed `/performance` endpoint reads up to 14 months; don't widen the window without widening retention.
+- **Performance endpoint** `/recommendations/performance` returns cohort-bucketed analytics (week / month / quarter, IST-truncated) joining the 7/30/60/90d outcomes from `recommendation_outcomes`. Granularity drives the primary horizon shown (weekly→7d, monthly→30d, quarterly→90d). Hit-rate uses `excess_return_pct > 0` to match `/stats`. `pending_count` is granularity-aware = recs younger than the chosen horizon — surface via amber chip per §5.5. `acted_on_only=true` restricts cohort to `acted_on_date IS NOT NULL`.
+- **Outcomes job (`recommendation_outcomes`)**: 4 horizons {7, 30, 60, 90}. Self-healing window — picks up any rec at least N days old that lacks an outcome at horizon N (idempotent via `id.notin_(existing)`). Computes return at the close on `created_at + N days` (next trading day if weekend, ±6d forward scan), not latest close. ⚠ `benchmark_return_pct` currently hardcoded to 0 — TODO to wire to a real index. ⚠ `price_at_rec` not always populated by the engine — fix upstream so future cohorts have baseline price; existing rows can be backfilled from OHLCV at `created_at`.
 
 ### 5.9 Insights ticker scoping (3-tier)
 

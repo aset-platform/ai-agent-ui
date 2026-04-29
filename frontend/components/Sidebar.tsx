@@ -21,6 +21,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { NAV_ITEMS, type NavItem } from "@/lib/constants";
+import { DOCS_URL } from "@/lib/config";
 import { useChatContext } from "@/providers/ChatProvider";
 import { useLayoutContext } from "@/providers/LayoutProvider";
 import { useTheme } from "@/hooks/useTheme";
@@ -167,6 +168,25 @@ function GroupChevron({
       strokeLinejoin="round"
     >
       <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+}
+
+/** Document icon for the Docs footer link. */
+function DocsIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      className="w-4 h-4 shrink-0"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
     </svg>
   );
 }
@@ -553,6 +573,35 @@ export function Sidebar({ profile }: SidebarProps) {
     );
   }
 
+  // ---- Docs link (opens MkDocs in a new tab) ----
+
+  function renderDocsLink(mobile: boolean) {
+    return (
+      <a
+        href={DOCS_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        data-testid="sidebar-docs-link"
+        title={!mobile && collapsed ? "Docs" : undefined}
+        onClick={() => {
+          if (mobile) setMobileMenuOpen(false);
+        }}
+        className={[
+          "flex items-center gap-3 text-sm w-full",
+          "rounded-lg transition-colors",
+          mobile ? "px-4 py-3" : "px-3 py-2.5",
+          "text-gray-600 dark:text-gray-400",
+          "hover:bg-gray-100 dark:hover:bg-gray-800",
+        ].join(" ")}
+      >
+        <DocsIcon />
+        {(mobile || !collapsed) && (
+          <span className="truncate">Docs</span>
+        )}
+      </a>
+    );
+  }
+
   // ---- Theme toggle button ----
 
   function renderThemeToggle(mobile: boolean) {
@@ -661,7 +710,7 @@ export function Sidebar({ profile }: SidebarProps) {
           )}
         </nav>
 
-        {/* Footer: theme + collapse toggle */}
+        {/* Footer: docs + theme + collapse toggle */}
         <div
           className={[
             "border-t border-gray-200",
@@ -669,6 +718,7 @@ export function Sidebar({ profile }: SidebarProps) {
             "px-2 py-2 space-y-1",
           ].join(" ")}
         >
+          {renderDocsLink(false)}
           {renderThemeToggle(false)}
 
           <button
@@ -776,14 +826,15 @@ export function Sidebar({ profile }: SidebarProps) {
               )}
             </div>
 
-            {/* Footer: theme toggle */}
+            {/* Footer: docs + theme toggle */}
             <div
               className={[
                 "border-t border-gray-200",
                 "dark:border-gray-700",
-                "px-2 py-2",
+                "px-2 py-2 space-y-1",
               ].join(" ")}
             >
+              {renderDocsLink(true)}
               {renderThemeToggle(true)}
             </div>
           </nav>
