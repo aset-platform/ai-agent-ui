@@ -1107,18 +1107,6 @@ const dividendCsvCols: CsvColumn<DividendRow>[] = [
   { key: "currency", header: "Currency" },
 ];
 
-const quarterlyCsvKeys: (keyof QuarterlyRow)[] = [
-  "ticker",
-  "quarter_label",
-  "revenue",
-  "net_income",
-  "eps",
-  "total_assets",
-  "total_equity",
-  "operating_cashflow",
-  "free_cashflow",
-];
-
 const piotroskiCsvCols: CsvColumn<PiotroskiRow>[] = [
   { key: "ticker", header: "Ticker" },
   { key: "company_name", header: "Company" },

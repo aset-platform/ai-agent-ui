@@ -56,14 +56,12 @@ export function ChatProvider({
   const agentId = "general";
   // Generate sessionId only on client to avoid SSR
   // hydration mismatch (server vs client UUID).
-  const sessionIdRef = useRef<string>("");
-  if (
-    typeof window !== "undefined" &&
-    !sessionIdRef.current
-  ) {
-    sessionIdRef.current = crypto.randomUUID();
-  }
-  const sessionId = sessionIdRef.current;
+  const [sessionId, setSessionId] = useState<string>(
+    () =>
+      typeof window !== "undefined"
+        ? crypto.randomUUID()
+        : "",
+  );
   const ws = useWebSocket();
   const { flush } = useChatSession(
     messages,
@@ -89,7 +87,7 @@ export function ChatProvider({
       // Flush current session before starting new
       flush();
       // Generate a fresh session ID
-      sessionIdRef.current = crypto.randomUUID();
+      setSessionId(crypto.randomUUID());
       // Clear messages and inject a system note
       setMessages([
         {
@@ -105,9 +103,12 @@ export function ChatProvider({
     [flush],
   );
 
-  // Flush on tab close / browser close as last resort
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages;
+  // Flush on tab close / browser close as last resort.
+  // Sync via effect so we never write to a ref during render.
+  const messagesRef = useRef<Message[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     const handleBeforeUnload = () => {

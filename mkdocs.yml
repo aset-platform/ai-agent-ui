@@ -72,6 +72,7 @@ nav:
       - Scheduler & Pipelines: backend/scheduler.md
       - Maintenance & Data Health: backend/maintenance.md
       - Iceberg Orphan Sweep: backend/iceberg-orphan-sweep.md
+      - Recommendation Performance: backend/recommendation-performance.md
   - Dashboard:
       - Overview: dashboard/overview.md
   - Frontend:

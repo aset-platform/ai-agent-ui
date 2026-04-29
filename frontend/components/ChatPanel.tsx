@@ -7,7 +7,7 @@
  * and ``ChatInput`` components inside a panel with drag-to-resize.
  */
 
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useChatContext } from "@/providers/ChatProvider";
 import { useSendMessage } from "@/hooks/useSendMessage";
 import { useResizePanel } from "@/hooks/useResizePanel";

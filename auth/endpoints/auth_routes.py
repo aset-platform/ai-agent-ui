@@ -345,33 +345,34 @@ def register(router: APIRouter) -> None:
         request: Request,
         body: LogoutRequest | None = None,
         service: AuthService = Depends(get_auth_service),
-        current_user: UserContext = Depends(
-            get_current_user,
-        ),
     ):
         """Invalidate the refresh token and clear the cookie.
 
+        Auth-tolerant: this endpoint MUST clear the HttpOnly
+        cookies regardless of whether the caller's access
+        token is still valid. ``apiFetch`` calls it on the
+        401-redirect path to break the proxy.ts → /dashboard
+        bounce loop (see CLAUDE.md §5.3 / §6.6) — at that
+        point the access token is by definition stale, so
+        gating logout on it would prevent the loop break.
+
         Reads the refresh token from the HttpOnly cookie
         first, falling back to the request body.
-
-        Args:
-            request: The incoming HTTP request.
-            body: Optional request body with ``refresh_token``.
-            service: Injected :class:`~auth.service.AuthService`.
-            current_user: Authenticated user context.
-
-        Returns:
-            A JSON response with a ``"detail"`` message.
         """
         token = request.cookies.get(_COOKIE_KEY)
         if not token and body:
             token = body.refresh_token
         if token:
-            service.revoke_refresh_token(token)
-        _logger.info(
-            "User logged out: user_id=%s",
-            current_user.user_id,
-        )
+            try:
+                service.revoke_refresh_token(token)
+            except Exception:
+                # Idempotent: if the token is already revoked
+                # or malformed, still clear the client cookies.
+                _logger.debug(
+                    "Logout revoke skipped (token already "
+                    "invalid)",
+                )
+        _logger.info("User logged out (cookies cleared)")
         resp = JSONResponse(
             content={"detail": "Logged out successfully"},
         )

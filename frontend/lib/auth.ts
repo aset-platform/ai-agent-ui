@@ -54,6 +54,8 @@ export function getRefreshToken(): string | null {
  * token is set as an HttpOnly cookie by the server.
  */
 export function setTokens(access: string, _refresh?: string): void {
+  void _refresh; // Kept for back-compat with tests; refresh
+  // is set server-side as an HttpOnly cookie.
   if (typeof window === "undefined") return;
   localStorage.setItem(ACCESS_KEY, access);
 }

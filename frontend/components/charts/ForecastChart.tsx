@@ -361,6 +361,8 @@ export function ForecastChart({
     forecastPredicted,
     forecastUpper,
     forecastLower,
+    backtestDates,
+    backtestPredicted,
     isDark,
     height,
     handleCrosshair,

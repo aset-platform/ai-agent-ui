@@ -7,7 +7,7 @@
  * page permissions for non-superuser roles.
  */
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import type { UserResponse } from "@/lib/types";
 
 export interface UserFormData {
@@ -20,7 +20,6 @@ export interface UserFormData {
 }
 
 interface UserModalProps {
-  isOpen: boolean;
   mode: "add" | "edit";
   user: UserResponse | null;
   saving: boolean;
@@ -40,7 +39,6 @@ const labelClass =
   "block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1";
 
 export function UserModal({
-  isOpen,
   mode,
   user,
   saving,
@@ -48,43 +46,38 @@ export function UserModal({
   onClose,
   onSave,
 }: UserModalProps) {
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  // Lazy-init form state from props on mount. Parent
+  // controls visibility by mounting the modal only when
+  // open + keying it on user identity, so the form
+  // resets cleanly without a setState-in-effect cascade.
+  const isEdit = mode === "edit" && user !== null;
+  const [name, setName] = useState(
+    isEdit ? user.full_name : "",
+  );
+  const [email, setEmail] = useState(
+    isEdit ? user.email : "",
+  );
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<
     "superuser" | "pro" | "general"
-  >("general");
-  const [active, setActive] = useState(true);
+  >(
+    isEdit
+      ? (user.role as "superuser" | "pro" | "general")
+      : "general",
+  );
+  const [active, setActive] = useState(
+    isEdit ? user.is_active : true,
+  );
   const [perms, setPerms] = useState<
     Record<string, boolean>
-  >({ insights: false, admin: false });
-
-  // Reset form when modal opens.
-  useEffect(() => {
-    if (!isOpen) return;
-    if (mode === "edit" && user) {
-      setName(user.full_name);
-      setEmail(user.email);
-      setPassword("");
-      setRole(user.role as "superuser" | "pro" | "general");
-      setActive(user.is_active);
-      setPerms(
-        user.page_permissions ?? {
+  >(
+    isEdit
+      ? (user.page_permissions ?? {
           insights: false,
           admin: false,
-        },
-      );
-    } else {
-      setName("");
-      setEmail("");
-      setPassword("");
-      setRole("general");
-      setActive(true);
-      setPerms({ insights: false, admin: false });
-    }
-  }, [isOpen, mode, user]);
-
-  if (!isOpen) return null;
+        })
+      : { insights: false, admin: false },
+  );
 
   const handleSave = () =>
     onSave({

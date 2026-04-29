@@ -137,32 +137,39 @@ export function BackupHealthPanel() {
     Record<string, BackupContents>
   >({});
   const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [hRes, bRes] = await Promise.all([
-        apiFetch(
-          `${API_URL}/admin/backups/health`,
-        ),
-        apiFetch(`${API_URL}/admin/backups`),
-      ]);
-      if (hRes.ok) {
-        setHealth(await hRes.json());
-      }
-      if (bRes.ok) {
-        const d = await bRes.json();
-        setBackups(d.backups ?? []);
-      }
-    } catch {
-      /* ignore */
-    }
-    setLoading(false);
-  }, []);
+  const fetchData = useCallback(
+    () => setRefreshKey((k) => k + 1),
+    [],
+  );
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    let cancelled = false;
+    setLoading(true);
+    void (async () => {
+      try {
+        const [hRes, bRes] = await Promise.all([
+          apiFetch(`${API_URL}/admin/backups/health`),
+          apiFetch(`${API_URL}/admin/backups`),
+        ]);
+        if (cancelled) return;
+        if (hRes.ok) setHealth(await hRes.json());
+        if (cancelled) return;
+        if (bRes.ok) {
+          const d = await bRes.json();
+          if (!cancelled) setBackups(d.backups ?? []);
+        }
+      } catch {
+        /* ignore */
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
 
   const toggleContents = useCallback(
     async (dt: string) => {

@@ -63,21 +63,30 @@ function DonutChart({
   const cy = 50;
   const r = 35;
   const circumference = 2 * Math.PI * r;
-  let offset = 0;
+
+  // Pre-compute cumulative offsets so the .map below is
+  // pure (no in-place accumulator → React Compiler safe).
+  const dashLengths = models.map(
+    (m) => (m.request_count / totalRequests) * circumference,
+  );
+  const offsets = dashLengths.reduce<number[]>(
+    (acc, len) => [
+      ...acc,
+      (acc[acc.length - 1] ?? 0) + len,
+    ],
+    [0],
+  );
 
   const segments = models.map((m, i) => {
-    const pct = m.request_count / totalRequests;
-    const dashLen = pct * circumference;
-    const seg = {
+    const dashLen = dashLengths[i];
+    return {
       model: m,
       color: DONUT_COLORS[i % DONUT_COLORS.length],
       dasharray: `${dashLen} ${circumference - dashLen}`,
-      dashoffset: -offset,
-      pct,
+      dashoffset: -offsets[i],
+      pct: m.request_count / totalRequests,
       idx: i,
     };
-    offset += dashLen;
-    return seg;
   });
 
   const active = hovered !== null ? segments[hovered] : null;

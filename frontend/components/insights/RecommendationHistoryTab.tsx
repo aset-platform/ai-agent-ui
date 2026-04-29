@@ -18,6 +18,7 @@ import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
 import { downloadCsv } from "@/lib/downloadCsv";
 import { DownloadCsvButton } from "@/components/common/DownloadCsvButton";
+import { InfoTooltip } from "@/components/common/InfoTooltip";
 import { RecActionButton } from "@/components/recommendations/RecActionButton";
 import type {
   HistoryRunItem,
@@ -37,23 +38,34 @@ function KpiCard({
   label,
   value,
   tooltip,
+  info,
 }: {
   label: string;
   value: string;
+  /** Native ``title``-attribute tooltip (legacy). */
   tooltip?: string;
+  /**
+   * Rich popover content shown via an info icon next
+   * to the label. Use this for multi-line "what /
+   * how" explanations; falls back to native title
+   * when omitted.
+   */
+  info?: React.ReactNode;
 }) {
   return (
     <div
       className="rounded-2xl border border-gray-200
         dark:border-gray-800 bg-white
         dark:bg-gray-900/80 p-5 flex flex-col gap-1"
-      title={tooltip}
+      title={info ? undefined : tooltip}
     >
       <span
-        className="text-xs font-medium text-gray-500
+        className="inline-flex items-center text-xs
+          font-medium text-gray-500
           dark:text-gray-400 uppercase tracking-wide"
       >
         {label}
+        {info && <InfoTooltip>{info}</InfoTooltip>}
       </span>
       <span
         className="text-2xl font-semibold
@@ -535,22 +547,130 @@ function StatsRow({
       <KpiCard
         label="Hit Rate 30d"
         value={fmtPct(stats.hit_rate_30d)}
-        tooltip="Percentage correct at 30 days"
+        info={
+          <>
+            <p className="font-semibold mb-1">
+              What
+            </p>
+            <p className="mb-2">
+              Share of recommendations whose return
+              beat the benchmark 30 days after issue.
+            </p>
+            <p className="font-semibold mb-1">How</p>
+            <p className="mb-2">
+              For each rec, an outcome row is recorded
+              at the 30-day mark with its return and
+              the benchmark return for the same window.
+              A &ldquo;hit&rdquo; = excess return
+              (rec − benchmark) &gt; 0.
+            </p>
+            <p>
+              <span className="font-semibold">
+                Formula:
+              </span>{" "}
+              hits ÷ recs with a 30-day outcome × 100
+            </p>
+          </>
+        }
       />
       <KpiCard
         label="Hit Rate 60d"
         value={fmtPct(stats.hit_rate_60d)}
-        tooltip="Percentage correct at 60 days"
+        info={
+          <>
+            <p className="font-semibold mb-1">
+              What
+            </p>
+            <p className="mb-2">
+              Same definition as Hit Rate 30d, but
+              measured 60 days after issue. Useful for
+              spotting recs that take longer to play
+              out.
+            </p>
+            <p className="font-semibold mb-1">How</p>
+            <p className="mb-2">
+              Hit = excess return &gt; 0 at the 60-day
+              outcome check.
+            </p>
+            <p>
+              <span className="font-semibold">
+                Formula:
+              </span>{" "}
+              hits ÷ recs with a 60-day outcome × 100
+            </p>
+          </>
+        }
       />
       <KpiCard
         label="Avg Excess Return"
         value={fmtReturn(stats.avg_return_30d)}
-        tooltip="Average return vs Nifty 50 at 30d"
+        info={
+          <>
+            <p className="font-semibold mb-1">
+              What
+            </p>
+            <p className="mb-2">
+              Average gap between a
+              recommendation&apos;s return and its
+              benchmark&apos;s return,
+              across all recorded outcomes. Positive =
+              rec beat the benchmark on average.
+            </p>
+            <p className="font-semibold mb-1">How</p>
+            <p className="mb-2">
+              For each outcome:{" "}
+              <span className="font-mono text-[11px]">
+                excess = rec_return − benchmark_return
+              </span>
+              . The card shows the mean across all
+              outcomes in scope.
+            </p>
+            <p className="text-amber-700 dark:text-amber-300">
+              <span className="font-semibold">
+                Heads up:
+              </span>{" "}
+              the daily outcomes job currently records
+              benchmark = 0 (a TODO to wire to a real
+              index), so excess ≡ recommendation
+              return until that&apos;s fixed.
+            </p>
+          </>
+        }
       />
       <KpiCard
         label="Adoption Rate"
         value={fmtPct(stats.adoption_rate_pct)}
-        tooltip="Percentage acted on by user"
+        info={
+          <>
+            <p className="font-semibold mb-1">
+              What
+            </p>
+            <p className="mb-2">
+              Share of recommendations the user
+              actually acted on (added, replaced, or
+              trimmed the suggested ticker in their
+              portfolio).
+            </p>
+            <p className="font-semibold mb-1">How</p>
+            <p className="mb-2">
+              When a user changes a portfolio holding
+              whose ticker matches an active rec, the
+              rec&apos;s{" "}
+              <span className="font-mono text-[11px]">
+                acted_on_date
+              </span>{" "}
+              gets stamped automatically. This card
+              counts those.
+            </p>
+            <p>
+              <span className="font-semibold">
+                Formula:
+              </span>{" "}
+              recs with non-null acted_on_date ÷ total
+              recs × 100
+            </p>
+          </>
+        }
       />
     </div>
   );

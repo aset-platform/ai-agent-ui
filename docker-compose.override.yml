@@ -22,6 +22,7 @@ services:
         --reload-dir /app/backend
         --reload-dir /app/auth
         --reload-dir /app/stocks
+        --timeout-keep-alive 65
 
   docs:
     volumes:
@@ -38,7 +39,7 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
-    command: npx next dev --port 3000 --hostname 0.0.0.0
+    command: node --require ./scripts/dev-keepalive.js ./node_modules/.bin/next dev --port 3000 --hostname 0.0.0.0
     environment:
       - NEXT_PUBLIC_BACKEND_URL=http://localhost:8181
       # Server-side fetches from RSC use the docker

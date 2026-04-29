@@ -5,6 +5,65 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.14.0] — 2026-04-29: Recommendation Performance analytics + Apr 29 hotfixes
+
+Two phases on `feature/sprint8`:
+
+1. **Morning hotfixes** — three independent bug fixes surfaced from the previous day's session.
+2. **Afternoon — Recommendation Performance** — Sprint 9-candidate feature shipped end-to-end and merged into `feature/sprint8` for verification (Jira [ASETPLTFRM-339](https://asequitytrading.atlassian.net/browse/ASETPLTFRM-339), Story, 8 SP, Done).
+
+13 commits total (3 hotfix + 9 feature + 1 merge commit). 17 commits ahead of `origin/dev` awaiting the cleanup PR.
+
+### Added
+
+- **`/v1/dashboard/portfolio/recommendations/performance`** endpoint (commit `46e6298`). Cohort-bucketed analytics over `recommendation_outcomes`. Query: `granularity=week|month|quarter`, `months_back=1..14`, `scope=all|india|us`, `acted_on_only=bool`. Returns per-bucket `total_recs / acted_on / pending` plus 7/30/60/90d hit-rate / avg-return / avg-excess. Cache key `cache:portfolio:recs:{uid}:perf:*`, TTL 300s. Backed by new PG helper `get_recommendation_performance_buckets()` (CTE-based raw SQL, IST-truncated `date_trunc`, asyncpg-friendly NULL casts). 11 pytest cases. Full doc at [docs/backend/recommendation-performance.md](docs/backend/recommendation-performance.md).
+- **`scope` query param on `GET /v1/.../recommendations/history`** (commit `46e6298`). Matches the existing `/stats` convention.
+- **`recommendation_cleanup` daily scheduler job** (commit `af7b964`). 14-month hard-cap retention: `DELETE FROM stocks.recommendation_runs WHERE run_date < CURRENT_DATE - INTERVAL '14 months'`. FK CASCADE wipes child `recommendations` + `recommendation_outcomes`. Cron `mon,tue,wed,thu,fri,sat,sun 03:00` IST. Idempotent. Cache invalidation glob on non-zero deletes.
+- **7-day horizon in `recommendation_outcomes` job** (commit `e4a5d78`). Was `(30, 60, 90)`, now `(7, 30, 60, 90)`. Unlocks the Weekly granularity on the Performance tab.
+- **Self-healing outcome window-match** (commit `e4a5d78`). Replaced strict `created_at = today − N ± 2d` with "any rec ≥ N days old without an outcome at horizon N". Idempotency comes from `id.notin_(existing)` subselect, not the date window. Recovers from skipped daily runs and lets newly-added horizons backfill retroactively. Memo: `shared/debugging/recommendation-outcomes-self-healing`.
+- **Target-date OHLCV close lookup** (commit `e4a5d78`). Was "latest close per ticker" (only correct under the strict ±2d window); now fetches close at `created_at + N days` (next trading day on weekends, ±6d forward scan).
+- **Performance sub-tab UI** (commits `0efc31b`, `86c9148`). New `RecommendationsPanel.tsx` parent owns inner sub-tab strip (History / Performance) with `?subtab=` URL param. New `RecommendationPerformanceTab.tsx` view: period strip, scope pills, acted-on toggle, 4 KPI tiles, amber pending-count chip, Activity chart (always renderable), Hit-rate chart at chosen horizon, Avg-return-vs-benchmark chart, CSV download. Granularity drives the primary horizon: Weekly→7d, Monthly→30d, Quarterly→90d. 5 vitest specs.
+- **`InfoTooltip` reusable popover** (commits `9723594`, `7cf5dcd`, `8e5fb09`) at `frontend/components/common/InfoTooltip.tsx`. Auto-flip placement based on viewport edges (`getBoundingClientRect()` measured on open; require full popover-width clearance on each side before picking centre). What / How / Formula tooltips on every KPI card across History + Performance sub-tabs. The Avg Excess tile carries an amber heads-up explaining `benchmark_return_pct` is hardcoded 0 in the executor (pre-existing TODO). Memo: `shared/conventions/info-tooltip-pattern`.
+- **`renderTooltip(el, segments)` helper** at `frontend/lib/renderTooltip.ts` (commit `df1aa2f`). Replaces 4 raw-DOM tooltip-string assignments in `analytics/analysis/page.tsx` (StockChart crosshair, ForecastChart, Portfolio P&L, Portfolio Forecast tooltips). Builds DOM nodes via `createElement` + `textContent` + `Object.assign(span.style, ...)` — eliminates the XSS surface even though the values are server-controlled numerics. Retires the eslint-security warnings the file had been accruing. Memo: `shared/conventions/render-tooltip-helper`.
+- **Five new Serena memories** distilled from the session:
+  - `shared/architecture/recommendation-performance-tab` — feature architecture
+  - `shared/conventions/info-tooltip-pattern` — KPI explainer popover
+  - `shared/conventions/render-tooltip-helper` — chart-tooltip DOM helper
+  - `shared/debugging/asyncpg-null-param-cast` — `AmbiguousParameterError` + `CAST(:p AS TYPE)` fix
+  - `shared/debugging/recommendation-outcomes-self-healing` — window-match overhaul
+
+### Changed
+
+- **`auth/endpoints/auth_routes.py::logout()`** is now auth-tolerant (commit `6d57b38`). Removed `Depends(get_current_user)` so a session with stale tokens can still call `/v1/auth/logout` to clear the HttpOnly cookies. Refresh-token revocation wrapped in try/except (idempotent — already-invalid tokens still emit Set-Cookie clears).
+- **`frontend/lib/apiFetch.ts`** 401 handler routes through new `bounceToLogin()` helper (commit `6d57b38`) — POSTs `/v1/auth/logout` (best-effort), then `clearTokens()`, then `window.location='/login'`. Mirrors `AppHeader.handleSignOut`. Breaks the `/login → /dashboard` bounce loop on stale-cookie sessions where `proxy.ts` was seeing the lingering `refresh_token` cookie.
+- **`backend/jobs/scheduler_service.py`** — empty `cron_days` now treated as "every day" (commit `2faa7fb`). New `_parse_cron_days()` helper. The two Recommendation jobs (`Recommendation - India` and `Recommendation - USA`) had `cron_days=''` since 2026-04-12 and were silently never registered with the schedule library — all 27 historical runs were `trigger_type='manual'`. Database backfill applied to both rows.
+- **uvicorn `--timeout-keep-alive 65`** (commit `567369e`) on backend dev (`docker-compose.override.yml`) and prod (`Dockerfile.backend`). Default 5s idle window caused Firefox-only `NetworkError` on dead-pool sockets (Chrome detects and reconnects; Firefox doesn't).
+- **Next.js dev keep-alive bump** via `frontend/scripts/dev-keepalive.js` `--require` preload (commit `567369e`). `next dev` exposes no `--keepAliveTimeout` flag (only `next start` does); the preload monkey-patches `http.createServer` with `keepAliveTimeout=65s`, `headersTimeout=70s`. Same Firefox `ChunkLoadError` symptom on `next/dynamic` chunk fetches; Turbopack + HMR untouched.
+- **CLAUDE.md §5.8** updated with retention + performance + outcomes-job lines (commit `14af032`). Pattern Index entry "Add a recommendation entry point | 5.8" still routes to `recommendation-engine` memory; this changelog entry is the cross-ref to the new architecture memory.
+
+### Fixed
+
+- **41 existing recommendations had `price_at_rec` set to NULL** (data-quality bug in the recommendation engine itself). Backfilled out-of-band via Python script reading OHLCV close at `created_at::date` (or first trading day after). Engine-side fix tracked as a Sprint 9 follow-up — future cohorts should arrive with the field set so outcomes can be computed without backfill.
+
+### Out of scope (Sprint 9 follow-ups)
+
+- Engine-side fix for `price_at_rec`.
+- `benchmark_return_pct` wiring to a real index (Nifty India / S&P US) — currently hardcoded 0 in the outcomes executor; `excess_return_pct` is just `return_pct` until this is fixed.
+- Tier-gating retention (Free 6m / Pro+ 14m).
+- Per-recommendation drill-down chart on the Performance tab.
+- Playwright E2E for the new sub-tab — existing rig needs auth-fixture wiring.
+- History tab `/stats` per-horizon refactor — `hit_rate_30d/60d/90d` all populate from a single overall hit-rate field today (different from the new `/performance` endpoint, which correctly groups by horizon).
+
+### Verification
+
+- Backend: 11/11 new pytest in `tests/backend/test_recommendation_performance.py`. tsc + eslint clean. Manual SQL fixture verified the aggregation paths (synthetic 60d-old rec → hit_rate_30d=100%, hit_rate_60d=0%, returns/excess match seeded values).
+- Frontend: 66/66 vitest (was 61). 5 new specs in `frontend/tests/RecommendationsPanel.test.tsx` covering sub-tab dispatch + URL hydration.
+- Live: `/v1/.../performance?granularity=week` returns real numbers (W16: hit_rate_7d=60%, avg_return_7d=−0.89%) for the 5 admin@demo.com recs after the self-healing outcomes job populated 41 outcomes at 7d horizon.
+- Cleanup smoke: 1 → 0 over-cap rows in 0.04s; idempotent on re-trigger. Scheduler service now reports "Loaded 7 jobs, 2 pipelines" (was 6).
+- SSR `/analytics/analysis?tab=recommendations&subtab=performance` → 200.
+
+---
+
 ## [0.13.1] — 2026-04-25 (evening): post-closure LCP follow-on, Sign Out fix, E2E auth fixture fix
 
 Five commits landed after Sprint 8 closure as bugfix follow-ons (no SP — surfaced from a 6-item LCP improvement proposal that turned into a Phase 0 evidence pass). All on `feature/sprint8`, all pushed to `origin`.

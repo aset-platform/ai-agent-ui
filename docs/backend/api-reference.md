@@ -80,6 +80,21 @@
 | `GET` | `/v1/dashboard/registry` | authenticated | get_registry |
 | `GET` | `/v1/dashboard/watchlist` | authenticated | get_watchlist |
 
+## Recommendations
+
+All routes below are mounted under `/v1/dashboard/portfolio/recommendations`. They share `cache:portfolio:recs:{user_id}:*` cache invalidation.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/v1/dashboard/portfolio/recommendations` | authenticated | latest run for the user (scope=all\|india\|us) |
+| `POST` | `/v1/dashboard/portfolio/recommendations/refresh` | authenticated | trigger or reuse the monthly run; one run per (user, scope, IST month) |
+| `GET` | `/v1/dashboard/portfolio/recommendations/history` | authenticated | past runs (months_back=1..24, scope=all\|india\|us) |
+| `GET` | `/v1/dashboard/portfolio/recommendations/stats` | authenticated | aggregate hit-rate / adoption stats (scope=all\|india\|us) |
+| `GET` | `/v1/dashboard/portfolio/recommendations/performance` | authenticated | cohort-bucketed analytics (granularity=week\|month\|quarter, months_back=1..14, scope, acted_on_only) |
+| `GET` | `/v1/dashboard/portfolio/recommendations/{run_id}` | authenticated | full detail for a specific run |
+
+**Performance endpoint** — added 2026-04-29 (ASETPLTFRM-339). Cohort axis = when issued (IST-truncated `date_trunc(:granularity, created_at)`). Granularity drives the primary horizon emphasised in the response: weekly→7d, monthly→30d, quarterly→90d. Hit-rate convention matches `/stats` (`excess_return_pct > 0`). `pending_count` is granularity-aware (recs younger than the chosen horizon). See [Recommendation Performance](recommendation-performance.md).
+
 ## Insights
 
 | Method | Path | Auth | Description |

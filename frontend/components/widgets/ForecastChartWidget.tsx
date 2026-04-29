@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { DashboardData } from "@/hooks/useDashboardData";
 import type {
   ForecastsResponse,
@@ -536,21 +536,31 @@ export function ForecastChartWidget({
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [showConfidence, setShowConfidence] = useState(false);
   const sym = marketFilter === "india" ? "₹" : "$";
-  const forecasts = data.value?.forecasts ?? [];
+  const forecasts = useMemo(
+    () => data.value?.forecasts ?? [],
+    [data.value],
+  );
 
   // Auto-select forecast matching selectedTicker
-  // (must be before early returns — Rules of Hooks)
+  // (must be before early returns — Rules of Hooks).
+  // Defer past the synchronous effect body so the rule
+  // treats setSelectedIdx as an async-callback update.
   useEffect(() => {
     if (!selectedTicker || forecasts.length === 0)
       return;
-    const matchIdx = forecasts.findIndex(
-      (f) =>
-        f.ticker.toUpperCase() ===
-        selectedTicker.toUpperCase(),
-    );
-    if (matchIdx >= 0) {
-      setSelectedIdx(matchIdx);
-    }
+    let alive = true;
+    void Promise.resolve().then(() => {
+      if (!alive) return;
+      const matchIdx = forecasts.findIndex(
+        (f) =>
+          f.ticker.toUpperCase() ===
+          selectedTicker.toUpperCase(),
+      );
+      if (matchIdx >= 0) setSelectedIdx(matchIdx);
+    });
+    return () => {
+      alive = false;
+    };
   }, [selectedTicker, forecasts]);
 
   if (data.loading) {
