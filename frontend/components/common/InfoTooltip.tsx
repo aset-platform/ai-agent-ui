@@ -60,8 +60,6 @@ interface InfoTooltipProps {
 // = 288px). Callers that override widthClass to
 // something dramatically wider should pin placement.
 const POPOVER_WIDTH_PX = 288;
-// Minimum gap from viewport edge before we flip side.
-const EDGE_PADDING_PX = 12;
 
 export function InfoTooltip({
   children,
@@ -95,30 +93,38 @@ export function InfoTooltip({
       const el = triggerRef.current;
       if (!el) return;
 
-      const rect = el.getBoundingClientRect();
+        const rect = el.getBoundingClientRect();
       const vw = window.innerWidth;
-      const triggerCentre =
-        rect.left + rect.width / 2;
-      const halfPopover = POPOVER_WIDTH_PX / 2;
+      const clearLeft = rect.left;
+      const clearRight = vw - rect.right;
 
-      // Centre fits if both halves clear the viewport.
+      // Strict centre rule: require a FULL popover
+      // width of clearance on each side. A lenient
+      // "12px from the edge is fine" rule looked
+      // mathematically inside-the-viewport but the
+      // popover ended up visually under the sidebar
+      // (or any other fixed/sticky chrome). Demanding
+      // ≥ POPOVER_WIDTH_PX clearance on both sides
+      // guarantees the popover clears the trigger by
+      // a comfortable margin even when chrome eats
+      // into the layout.
       if (
-        triggerCentre - halfPopover
-          >= EDGE_PADDING_PX
-        && triggerCentre + halfPopover
-           <= vw - EDGE_PADDING_PX
+        clearLeft >= POPOVER_WIDTH_PX
+        && clearRight >= POPOVER_WIDTH_PX
       ) {
         setResolved("center");
         return;
       }
-      // Trigger is closer to the left edge → anchor
-      // the popover to the trigger's left and flow
-      // right.
-      if (triggerCentre < vw / 2) {
+      // Otherwise pick whichever side has more room
+      // so the popover always flows AWAY from the
+      // crowded edge.
+      if (clearRight >= clearLeft) {
+        // More room to the right → anchor at
+        // trigger's left, flow right.
         setResolved("start");
       } else {
-        // Closer to right edge → anchor right, flow
-        // left.
+        // More room to the left → anchor at
+        // trigger's right, flow left.
         setResolved("end");
       }
     });
