@@ -17,6 +17,10 @@ import { CompareContent } from "../compare/page";
 import { RecommendationsPanel } from
   "@/components/insights/RecommendationsPanel";
 import { apiFetch } from "@/lib/apiFetch";
+import {
+  renderTooltip,
+  type TooltipSegment,
+} from "@/lib/renderTooltip";
 import { useTheme } from "@/hooks/useTheme";
 import { API_URL } from "@/lib/config";
 import dynamic from "next/dynamic";
@@ -209,22 +213,60 @@ function AnalysisTab({
       const l = data.low ?? 0;
       const c = data.close ?? 0;
       const v = data.volume ?? 0;
-      let html =
-        `<span class="text-gray-500 dark:text-gray-400">${data.date}</span> ` +
-        `O <span class="text-gray-900 dark:text-white">${s}${o.toFixed(2)}</span> ` +
-        `H <span class="text-emerald-600 dark:text-emerald-400">${s}${h.toFixed(2)}</span> ` +
-        `L <span class="text-red-600 dark:text-red-400">${s}${l.toFixed(2)}</span> ` +
-        `C <span class="text-gray-900 dark:text-white">${s}${c.toFixed(2)}</span> ` +
-        `<span class="text-gray-500 dark:text-gray-400">Vol ${(v / 1e6).toFixed(1)}M</span>`;
+      const segments: TooltipSegment[] = [
+        {
+          text: data.date,
+          className: "text-gray-500 dark:text-gray-400",
+        },
+        { text: "O" },
+        {
+          text: `${s}${o.toFixed(2)}`,
+          className: "text-gray-900 dark:text-white",
+          leadingSpace: false,
+        },
+        { text: "H" },
+        {
+          text: `${s}${h.toFixed(2)}`,
+          className: "text-emerald-600 dark:text-emerald-400",
+          leadingSpace: false,
+        },
+        { text: "L" },
+        {
+          text: `${s}${l.toFixed(2)}`,
+          className: "text-red-600 dark:text-red-400",
+          leadingSpace: false,
+        },
+        { text: "C" },
+        {
+          text: `${s}${c.toFixed(2)}`,
+          className: "text-gray-900 dark:text-white",
+          leadingSpace: false,
+        },
+        {
+          text: `Vol ${(v / 1e6).toFixed(1)}M`,
+          className: "text-gray-500 dark:text-gray-400",
+        },
+      ];
       if (data.overlays) {
         for (const ov of data.overlays) {
-          html +=
-            ` <span class="inline-block w-2 h-2 rounded-full mr-0.5" style="background:${ov.color}"></span>` +
-            `<span class="text-gray-500 dark:text-gray-400">${ov.name}</span> ` +
-            `<span class="text-gray-900 dark:text-white">${ov.value.toFixed(2)}</span>`;
+          segments.push({
+            text: "",
+            className:
+              "inline-block w-2 h-2 rounded-full mr-0.5",
+            style: { background: ov.color },
+          });
+          segments.push({
+            text: ov.name,
+            className: "text-gray-500 dark:text-gray-400",
+            leadingSpace: false,
+          });
+          segments.push({
+            text: ov.value.toFixed(2),
+            className: "text-gray-900 dark:text-white",
+          });
         }
       }
-      el.innerHTML = html;
+      renderTooltip(el, segments);
     },
     [ticker, market],
   );
@@ -613,18 +655,31 @@ function ForecastTab({
       const el = fcTooltip.current;
       if (!el || !info || info.price == null) return;
       const s = tickerCurrency(ticker, market);
-      const tag = info.isForecast
-        ? '<span class="text-emerald-500 text-[9px]">FORECAST</span> '
-        : "";
-      // NOTE: all values are numeric (from chart data),
-      // not user input — safe for innerHTML.
-      let html =
-        `<span class="text-gray-500 dark:text-gray-400">${info.date}</span> `
-        + tag
-        + `<span class="text-gray-900 dark:text-white font-semibold">${s}${info.price.toFixed(2)}</span>`;
+      const segments: TooltipSegment[] = [
+        {
+          text: info.date,
+          className: "text-gray-500 dark:text-gray-400",
+        },
+      ];
+      if (info.isForecast) {
+        segments.push({
+          text: "FORECAST",
+          className: "text-emerald-500 text-[9px]",
+        });
+      }
+      segments.push({
+        text: `${s}${info.price.toFixed(2)}`,
+        className:
+          "text-gray-900 dark:text-white font-semibold",
+      });
       if (info.lower != null && info.upper != null) {
-        html +=
-          ` <span class="text-gray-400 dark:text-gray-500">${s}${info.lower.toFixed(2)} \u2014 ${s}${info.upper.toFixed(2)}</span>`;
+        segments.push({
+          text:
+            `${s}${info.lower.toFixed(2)} — `
+            + `${s}${info.upper.toFixed(2)}`,
+          className:
+            "text-gray-400 dark:text-gray-500",
+        });
       }
       if (
         info.backtestPredicted != null
@@ -635,12 +690,15 @@ function ForecastTab({
           (diff / info.price) * 100
         ).toFixed(1);
         const sign = diff >= 0 ? "+" : "";
-        html +=
-          ` <span class="text-orange-500">`
-          + `Backtest: ${s}${info.backtestPredicted.toFixed(2)}`
-          + ` (${sign}${pct}%)</span>`;
+        segments.push({
+          text:
+            `Backtest: ${s}`
+            + `${info.backtestPredicted.toFixed(2)}`
+            + ` (${sign}${pct}%)`,
+          className: "text-orange-500",
+        });
       }
-      el.innerHTML = html;
+      renderTooltip(el, segments);
     },
     [ticker, market],
   );
@@ -1217,14 +1275,41 @@ function PortfolioTab({
         ? ((pt.value - pt.invested_value) / pt.invested_value * 100)
         : 0;
       const glPos = gl >= 0;
-      el.innerHTML =
-        `<span class="text-gray-500 dark:text-gray-400">${pt.date}</span> `
-        + `<span class="text-gray-900 dark:text-white font-semibold">${sym}${pt.value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> `
-        + `<span class="text-gray-400 dark:text-gray-500">Inv ${sym}${pt.invested_value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> `
-        + `<span class="${glPos ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}">`
-        + `${glPos ? "+" : ""}${gl.toFixed(2)}%</span> `
-        + `<span class="${pos ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}">`
-        + `${pos ? "+" : ""}${sym}${pt.daily_pnl.toFixed(2)}</span>`;
+      const fmt = (n: number) =>
+        n.toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+      const greenRed = (pos: boolean) =>
+        pos
+          ? "text-emerald-600 dark:text-emerald-400"
+          : "text-red-600 dark:text-red-400";
+      renderTooltip(el, [
+        {
+          text: pt.date,
+          className: "text-gray-500 dark:text-gray-400",
+        },
+        {
+          text: `${sym}${fmt(pt.value)}`,
+          className:
+            "text-gray-900 dark:text-white font-semibold",
+        },
+        {
+          text: `Inv ${sym}${fmt(pt.invested_value)}`,
+          className: "text-gray-400 dark:text-gray-500",
+        },
+        {
+          text:
+            `${glPos ? "+" : ""}${gl.toFixed(2)}%`,
+          className: greenRed(glPos),
+        },
+        {
+          text:
+            `${pos ? "+" : ""}${sym}`
+            + `${pt.daily_pnl.toFixed(2)}`,
+          className: greenRed(pos),
+        },
+      ]);
     },
     [sym],
   );
@@ -1620,16 +1705,38 @@ function PortfolioForecastTab({
       const el = fcTooltipRef.current;
       if (!el || !info) return;
       const pos = info.gainPct >= 0;
-      const tag = info.isForecast
-        ? '<span class="text-emerald-500 text-[9px]">FORECAST</span> '
-        : "";
-      el.innerHTML =
-        `<span class="text-gray-500 dark:text-gray-400">${info.date}</span> `
-        + tag
-        + `<span class="text-gray-900 dark:text-white font-semibold">${sym}${fmtNum(info.value)}</span> `
-        + `<span class="text-gray-400 dark:text-gray-500">Inv ${sym}${fmtNum(info.invested)}</span> `
-        + `<span class="${pos ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}">`
-        + `${pos ? "+" : ""}${info.gainPct.toFixed(2)}%</span>`;
+      const segments: TooltipSegment[] = [
+        {
+          text: info.date,
+          className: "text-gray-500 dark:text-gray-400",
+        },
+      ];
+      if (info.isForecast) {
+        segments.push({
+          text: "FORECAST",
+          className: "text-emerald-500 text-[9px]",
+        });
+      }
+      segments.push(
+        {
+          text: `${sym}${fmtNum(info.value)}`,
+          className:
+            "text-gray-900 dark:text-white font-semibold",
+        },
+        {
+          text: `Inv ${sym}${fmtNum(info.invested)}`,
+          className: "text-gray-400 dark:text-gray-500",
+        },
+        {
+          text:
+            `${pos ? "+" : ""}`
+            + `${info.gainPct.toFixed(2)}%`,
+          className: pos
+            ? "text-emerald-600 dark:text-emerald-400"
+            : "text-red-600 dark:text-red-400",
+        },
+      );
+      renderTooltip(el, segments);
     },
     [sym, fmtNum],
   );
