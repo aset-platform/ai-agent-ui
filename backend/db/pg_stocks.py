@@ -714,6 +714,7 @@ async def get_recommendation_history(
     user_id: str,
     months_back: int = 6,
     exclude_test: bool = True,
+    scope: str | None = None,
 ) -> list[dict]:
     """Return runs with rec counts for a user.
 
@@ -722,6 +723,10 @@ async def get_recommendation_history(
     user-facing history never reveals superuser test
     runs.  Each row also reports ``acted_on_count``
     (recs with a non-null ``acted_on_date``).
+
+    When *scope* is ``"india"`` or ``"us"`` the rows
+    are restricted to that scope so the History sub-tab
+    can match the Performance sub-tab's filter.
     """
     from backend.db.models.recommendation import (
         Recommendation,
@@ -758,6 +763,10 @@ async def get_recommendation_history(
     if exclude_test:
         stmt = stmt.where(
             RecommendationRun.run_type != "admin_test",
+        )
+    if scope in ("india", "us"):
+        stmt = stmt.where(
+            RecommendationRun.scope == scope,
         )
     stmt = stmt.group_by(
         RecommendationRun.run_id,
@@ -897,6 +906,337 @@ async def get_recommendation_stats(
         "avg_excess_return_pct": avg_excess,
         "hit_rate_pct": hit_rate,
     }
+
+
+_PERF_BUCKET_SQL = """
+WITH bucketed AS (
+    SELECT
+        date_trunc(
+            :granularity,
+            r.created_at AT TIME ZONE 'Asia/Kolkata'
+        )::date AS bucket_start,
+        r.id   AS rec_id,
+        r.acted_on_date,
+        (
+            (NOW() - r.created_at) < INTERVAL '30 days'
+        ) AS is_pending
+    FROM stocks.recommendations r
+    JOIN stocks.recommendation_runs run
+      ON r.run_id = run.run_id
+    WHERE run.user_id = :user_id
+      AND run.run_type != 'admin_test'
+      AND r.created_at >= (
+          NOW() - (INTERVAL '1 month' * :months_back)
+      )
+      AND (
+          CAST(:scope AS VARCHAR) IS NULL
+          OR run.scope = CAST(:scope AS VARCHAR)
+      )
+      AND (
+          NOT CAST(:acted_on_only AS BOOLEAN)
+          OR r.acted_on_date IS NOT NULL
+      )
+),
+totals AS (
+    SELECT
+        bucket_start,
+        COUNT(*)::int AS total_recs,
+        SUM(
+            CASE WHEN acted_on_date IS NOT NULL
+                 THEN 1 ELSE 0 END
+        )::int AS acted_on_count,
+        SUM(
+            CASE WHEN is_pending THEN 1 ELSE 0 END
+        )::int AS pending_count
+    FROM bucketed
+    GROUP BY bucket_start
+),
+outcomes_by_horizon AS (
+    SELECT
+        b.bucket_start,
+        o.days_elapsed,
+        AVG(o.return_pct)             AS avg_return,
+        AVG(o.excess_return_pct)      AS avg_excess,
+        (
+            SUM(
+                CASE WHEN o.excess_return_pct > 0
+                     THEN 1 ELSE 0 END
+            )::float
+            / NULLIF(COUNT(*), 0) * 100
+        ) AS hit_rate
+    FROM bucketed b
+    JOIN stocks.recommendation_outcomes o
+      ON o.recommendation_id = b.rec_id
+    WHERE o.days_elapsed IN (30, 60, 90)
+    GROUP BY b.bucket_start, o.days_elapsed
+)
+SELECT
+    t.bucket_start,
+    t.total_recs,
+    t.acted_on_count,
+    t.pending_count,
+    o30.avg_return  AS avg_return_30d,
+    o30.avg_excess  AS avg_excess_30d,
+    o30.hit_rate    AS hit_rate_30d,
+    o60.avg_return  AS avg_return_60d,
+    o60.avg_excess  AS avg_excess_60d,
+    o60.hit_rate    AS hit_rate_60d,
+    o90.avg_return  AS avg_return_90d,
+    o90.avg_excess  AS avg_excess_90d,
+    o90.hit_rate    AS hit_rate_90d
+FROM totals t
+LEFT JOIN outcomes_by_horizon o30
+       ON o30.bucket_start = t.bucket_start
+      AND o30.days_elapsed = 30
+LEFT JOIN outcomes_by_horizon o60
+       ON o60.bucket_start = t.bucket_start
+      AND o60.days_elapsed = 60
+LEFT JOIN outcomes_by_horizon o90
+       ON o90.bucket_start = t.bucket_start
+      AND o90.days_elapsed = 90
+ORDER BY t.bucket_start ASC
+"""
+
+
+def _bucket_label(bucket_start: date, granularity: str) -> str:
+    """Human-friendly label for a bucket start date.
+
+    week → ``2026-W17`` (ISO week)
+    month → ``Apr 2026``
+    quarter → ``Q2 2026``
+    """
+    if granularity == "week":
+        iso_year, iso_week, _ = bucket_start.isocalendar()
+        return f"{iso_year}-W{iso_week:02d}"
+    if granularity == "month":
+        return bucket_start.strftime("%b %Y")
+    if granularity == "quarter":
+        q = (bucket_start.month - 1) // 3 + 1
+        return f"Q{q} {bucket_start.year}"
+    return bucket_start.isoformat()
+
+
+async def get_recommendation_performance_buckets(
+    session: AsyncSession,
+    user_id: str,
+    *,
+    granularity: str,
+    months_back: int = 14,
+    scope: str | None = None,
+    acted_on_only: bool = False,
+) -> dict:
+    """Return cohort-bucketed performance for the user.
+
+    Cohort axis: a bucket groups recommendations by
+    when they were *issued* (``recommendations.created_at``
+    truncated to week / month / quarter in IST). Outcome
+    metrics for each bucket aggregate the 30 / 60 / 90-day
+    post-issuance checks already persisted in
+    ``recommendation_outcomes``.
+
+    Hit rate convention matches ``get_recommendation_stats``
+    (``excess_return_pct > 0``) so the new tab's KPIs are
+    directly comparable with the existing stats KPIs.
+
+    Args:
+        granularity: ``"week"``, ``"month"``, or ``"quarter"``.
+        months_back: 1..14 months window.
+        scope: Optional ``"india"`` / ``"us"`` filter.
+        acted_on_only: Restrict cohort to recs the user
+            actually acted on (``acted_on_date`` non-null).
+
+    Returns:
+        ``{"buckets": [...], "summary": {...}}`` — buckets
+        oldest-to-newest. Empty buckets are omitted (no
+        recs issued in that period).
+    """
+    from sqlalchemy import text
+
+    if granularity not in ("week", "month", "quarter"):
+        raise ValueError(
+            "granularity must be week|month|quarter"
+        )
+    months_back = max(1, min(int(months_back), 14))
+    if scope is not None and scope not in ("india", "us"):
+        scope = None
+
+    result = await session.execute(
+        text(_PERF_BUCKET_SQL),
+        {
+            "user_id": user_id,
+            "granularity": granularity,
+            "months_back": months_back,
+            "scope": scope,
+            "acted_on_only": acted_on_only,
+        },
+    )
+    rows = result.mappings().all()
+
+    buckets: list[dict] = []
+    s_total = 0
+    s_acted = 0
+    s_pending = 0
+    # Running sums for summary hit-rate / returns. We
+    # cannot just average per-bucket averages (Simpson's
+    # paradox); compute on raw outcomes via a follow-up
+    # cheap aggregate.
+    for r in rows:
+        bs: date = r["bucket_start"]
+        buckets.append({
+            "bucket_start": bs.isoformat(),
+            "bucket_label": _bucket_label(
+                bs, granularity,
+            ),
+            "total_recs": int(r["total_recs"] or 0),
+            "acted_on_count": int(
+                r["acted_on_count"] or 0,
+            ),
+            "pending_count": int(
+                r["pending_count"] or 0,
+            ),
+            "hit_rate_30d": (
+                round(float(r["hit_rate_30d"]), 1)
+                if r["hit_rate_30d"] is not None
+                else None
+            ),
+            "hit_rate_60d": (
+                round(float(r["hit_rate_60d"]), 1)
+                if r["hit_rate_60d"] is not None
+                else None
+            ),
+            "hit_rate_90d": (
+                round(float(r["hit_rate_90d"]), 1)
+                if r["hit_rate_90d"] is not None
+                else None
+            ),
+            "avg_return_30d": (
+                round(float(r["avg_return_30d"]), 2)
+                if r["avg_return_30d"] is not None
+                else None
+            ),
+            "avg_return_60d": (
+                round(float(r["avg_return_60d"]), 2)
+                if r["avg_return_60d"] is not None
+                else None
+            ),
+            "avg_return_90d": (
+                round(float(r["avg_return_90d"]), 2)
+                if r["avg_return_90d"] is not None
+                else None
+            ),
+            "avg_excess_30d": (
+                round(float(r["avg_excess_30d"]), 2)
+                if r["avg_excess_30d"] is not None
+                else None
+            ),
+            "avg_excess_60d": (
+                round(float(r["avg_excess_60d"]), 2)
+                if r["avg_excess_60d"] is not None
+                else None
+            ),
+            "avg_excess_90d": (
+                round(float(r["avg_excess_90d"]), 2)
+                if r["avg_excess_90d"] is not None
+                else None
+            ),
+        })
+        s_total += int(r["total_recs"] or 0)
+        s_acted += int(r["acted_on_count"] or 0)
+        s_pending += int(r["pending_count"] or 0)
+
+    summary = {
+        "total_recs": s_total,
+        "acted_on_count": s_acted,
+        "pending_count": s_pending,
+        # Roll-up hit-rate / return / excess across all
+        # buckets must be re-aggregated from raw outcomes.
+        "hit_rate_30d": None,
+        "hit_rate_60d": None,
+        "hit_rate_90d": None,
+        "avg_return_90d": None,
+        "avg_excess_90d": None,
+    }
+
+    if s_total:
+        # Single follow-up query — same filters, no
+        # bucket grouping. Avoids Simpson's-paradox in
+        # cross-bucket averages.
+        result2 = await session.execute(
+            text(
+                """
+                WITH bucketed AS (
+                    SELECT r.id AS rec_id
+                    FROM stocks.recommendations r
+                    JOIN stocks.recommendation_runs run
+                      ON r.run_id = run.run_id
+                    WHERE run.user_id = :user_id
+                      AND run.run_type != 'admin_test'
+                      AND r.created_at >= (
+                          NOW()
+                          - (
+                              INTERVAL '1 month'
+                              * :months_back
+                          )
+                      )
+                      AND (
+                          CAST(:scope AS VARCHAR)
+                              IS NULL
+                          OR run.scope =
+                             CAST(:scope AS VARCHAR)
+                      )
+                      AND (
+                          NOT CAST(
+                              :acted_on_only AS BOOLEAN
+                          )
+                          OR r.acted_on_date IS NOT NULL
+                      )
+                )
+                SELECT
+                    o.days_elapsed,
+                    AVG(o.return_pct) AS avg_return,
+                    AVG(o.excess_return_pct)
+                        AS avg_excess,
+                    (
+                        SUM(
+                            CASE WHEN
+                                o.excess_return_pct > 0
+                            THEN 1 ELSE 0 END
+                        )::float
+                        / NULLIF(COUNT(*), 0)
+                        * 100
+                    ) AS hit_rate
+                FROM bucketed b
+                JOIN stocks.recommendation_outcomes o
+                  ON o.recommendation_id = b.rec_id
+                WHERE o.days_elapsed IN (30, 60, 90)
+                GROUP BY o.days_elapsed
+                """,
+            ),
+            {
+                "user_id": user_id,
+                "months_back": months_back,
+                "scope": scope,
+                "acted_on_only": acted_on_only,
+            },
+        )
+        for r in result2.mappings().all():
+            d = int(r["days_elapsed"])
+            hr = r["hit_rate"]
+            if hr is not None:
+                summary[f"hit_rate_{d}d"] = round(
+                    float(hr), 1,
+                )
+            if d == 90:
+                if r["avg_return"] is not None:
+                    summary["avg_return_90d"] = round(
+                        float(r["avg_return"]), 2,
+                    )
+                if r["avg_excess"] is not None:
+                    summary["avg_excess_90d"] = round(
+                        float(r["avg_excess"]), 2,
+                    )
+
+    return {"buckets": buckets, "summary": summary}
 
 
 async def get_recommendations_due_for_outcome(
