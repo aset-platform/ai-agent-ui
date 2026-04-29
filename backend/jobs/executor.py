@@ -2782,3 +2782,131 @@ def execute_iceberg_maintenance(
         errors, cancelled,
         started_at=_run_start,
     )
+
+
+# ──────────────────────────────────────────────────────
+# Recommendation history retention — 14m hard cap
+# ──────────────────────────────────────────────────────
+
+
+@register_job("recommendation_cleanup")
+def execute_recommendation_cleanup(
+    scope: str,
+    run_id: str,
+    repo,
+    cancel_event=None,
+    **kwargs,
+) -> None:
+    """Delete recommendation runs older than 14 months.
+
+    The Performance sub-tab (cohort-bucketed) reads
+    ``stocks.recommendations`` joined with
+    ``stocks.recommendation_outcomes`` over a 14-month
+    window. Without a retention bound the tables grow
+    indefinitely (no TTL was wired when the Smart
+    Funnel pipeline shipped). This job hard-caps the
+    history at 14 months by deleting old runs;
+    foreign-key CASCADE wipes child recommendations
+    and outcomes automatically.
+
+    The ``cleanup_orphans_v2`` analogy from Iceberg
+    maintenance does NOT apply — PG storage is
+    automatically reclaimed on DELETE + autovacuum.
+
+    Idempotent: running daily after the bound moves
+    forward by one day deletes only the runs that
+    crossed the 14-month boundary that day.
+    """
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+    from sqlalchemy.pool import NullPool
+
+    from cache import get_cache
+    from config import get_settings
+
+    _run_start = datetime.now(timezone.utc)
+
+    # Async NullPool — safe in thread pool workers.
+    _eng = create_async_engine(
+        get_settings().database_url,
+        poolclass=NullPool,
+    )
+    _factory = async_sessionmaker(
+        _eng, class_=AsyncSession,
+    )
+
+    deleted = 0
+    errors: list[str] = []
+
+    async def _purge() -> int:
+        async with _factory() as s:
+            # Returns the rows deleted from the parent
+            # table; child rows go via FK CASCADE.
+            res = await s.execute(
+                text(
+                    "DELETE FROM "
+                    "stocks.recommendation_runs "
+                    "WHERE run_date < ("
+                    "  CURRENT_DATE - INTERVAL "
+                    "'14 months'"
+                    ")"
+                )
+            )
+            await s.commit()
+            return res.rowcount or 0
+
+    try:
+        deleted = asyncio.run(_purge())
+        _logger.info(
+            "[recommendation_cleanup] Deleted %d "
+            "runs older than 14 months "
+            "(child recs + outcomes wiped via "
+            "FK CASCADE)",
+            deleted,
+        )
+        if deleted:
+            # Bust the perf-tab cache (and everything
+            # else under cache:portfolio:recs:*).
+            try:
+                get_cache().invalidate(
+                    "cache:portfolio:recs:*",
+                )
+            except Exception as exc:
+                _logger.debug(
+                    "Cache invalidate skipped: %s",
+                    exc,
+                )
+    except Exception as exc:
+        _logger.error(
+            "[recommendation_cleanup] Failed: %s",
+            exc,
+            exc_info=True,
+        )
+        errors.append(str(exc)[:200])
+    finally:
+        # Don't leak the one-shot engine.
+        try:
+            asyncio.run(_eng.dispose())
+        except Exception:
+            pass
+
+    # tickers_total/done used loosely to surface the
+    # delete count in the admin UI's run detail.
+    repo.update_scheduler_run(
+        run_id,
+        {
+            "tickers_total": deleted,
+            "tickers_done": deleted,
+        },
+    )
+    _finalize_run(
+        repo, run_id, deleted, deleted,
+        errors, cancelled=False,
+        started_at=_run_start,
+    )
