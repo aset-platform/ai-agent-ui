@@ -275,4 +275,12 @@ export const FE = {
   algoKillSwitchArmConfirm: "kill-switch-arm-confirm",
   algoKillSwitchArmConfirmBtn: "kill-switch-arm-confirm-btn",
   algoKillSwitchReasonInput: "kill-switch-reason-input",
+
+  // ── Algo Trading — Paper supervisor (Slice 8c) ─
+  algoPaperActiveRunsPanel: "paper-active-runs-panel",
+  algoPaperActiveRunsEmpty: "paper-active-runs-empty",
+  algoPaperStartRunForm: "paper-start-run-form",
+  algoPaperStartStrategySelect: "paper-start-strategy-select",
+  algoPaperStartCapital: "paper-start-capital",
+  algoPaperStartBtn: "paper-start-btn",
 } as const;
