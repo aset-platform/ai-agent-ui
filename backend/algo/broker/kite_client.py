@@ -32,6 +32,8 @@ class KiteClient:
         api_key: str,
         access_token: str | None = None,
     ) -> None:
+        self._api_key = api_key
+        self._access_token = access_token
         self._kc = KiteConnect(api_key=api_key)
         if access_token:
             self._kc.set_access_token(access_token)
@@ -75,10 +77,32 @@ class KiteClient:
             else self._kc.instruments()
 
     async def stream_ticks(
-        self, symbols: list[str],
+        self,
+        instrument_tokens: list[int],
+        token_to_ticker: dict[int, str],
     ) -> AsyncIterator[dict]:
-        """Slice 6 fills this in. Stub for the ABC."""
-        raise NotImplementedError("Tick streaming lands in Slice 6")
+        """Live KiteTicker WebSocket → Tick stream.
+
+        Caller owns the lifecycle — wrap in ``async for`` and
+        break / cancel to stop. Yields ``Tick`` instances (the
+        AsyncIterator[dict] type hint is loose to satisfy the
+        ABC; concrete return is the Tick model).
+        """
+        from backend.algo.stream.sources import LiveTickSource
+
+        if self._access_token is None:
+            raise RuntimeError(
+                "stream_ticks requires an access_token; "
+                "complete the OAuth handshake first.",
+            )
+        src = LiveTickSource(
+            api_key=self._api_key,
+            access_token=self._access_token,
+            instrument_tokens=instrument_tokens,
+            token_to_ticker=token_to_ticker,
+        )
+        async for tick in src:
+            yield tick
 
     # ---- Write paths (BLOCKED in v1) -----------------------------
 
