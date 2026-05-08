@@ -11,8 +11,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
-
 from backend.advanced_analytics_filters import FUND_KEYS, TECH_KEYS
 
 _FRONTEND_FILE = (
@@ -29,13 +27,6 @@ _BLOCK_RE = re.compile(
     re.DOTALL,
 )
 _KEY_RE = re.compile(r'key:\s*"([a-z0-9_]+)"')
-
-
-# Remove this xfail mark in Task 5 once filterCatalogs.ts lands.
-pytestmark = pytest.mark.xfail(
-    reason="frontend filterCatalogs.ts lands in Task 5",
-    strict=False,
-)
 
 
 def _parse_keys(name: str) -> set[str]:

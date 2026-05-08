@@ -12,6 +12,8 @@ services:
       - ./scripts:/app/scripts
       - ./dashboard:/app/dashboard
       - ./fixtures:/app/fixtures
+      - ./tests:/app/tests
+      - ./frontend:/app/frontend:ro
       - ./.pyiceberg.yaml:/app/.pyiceberg.yaml:ro
       - ${AI_AGENT_UI_HOME:-~/.ai-agent-ui}:${AI_AGENT_UI_HOME:-/Users/abhay/.ai-agent-ui}
       - /Users/abhay/Documents/projects/ai-agent-ui-backups:/Users/abhay/Documents/projects/ai-agent-ui-backups
