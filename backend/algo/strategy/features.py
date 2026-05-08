@@ -32,6 +32,8 @@ FeatureSource = Literal[
 
 
 class Feature(BaseModel):
+    """A single feature in the strategy vocabulary."""
+
     key: str
     label: str
     type: FeatureType
