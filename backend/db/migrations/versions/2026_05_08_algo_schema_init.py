@@ -1,7 +1,7 @@
 """algo schema + 7 base tables (Slice 0 of the Algo Trading epic).
 
 Revision ID: 72a8a2cc1c1a
-Revises: f8e7d6c5b4a3
+Revises: a9c1b3d5e7f2
 Create Date: 2026-05-08
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision: str = "72a8a2cc1c1a"
-down_revision: Union[str, None] = "f8e7d6c5b4a3"
+down_revision: Union[str, None] = "a9c1b3d5e7f2"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
