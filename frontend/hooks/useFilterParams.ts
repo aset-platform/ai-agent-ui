@@ -58,15 +58,19 @@ export function useFilterParams(): UseFilterParamsResult {
 
   const [tech, setTechState] = useState<string[]>(initial.tech);
   const [fund, setFundState] = useState<string[]>(initial.fund);
+  const techRef = useRef<string[]>(initial.tech);
+  const fundRef = useRef<string[]>(initial.fund);
   const timerRef = useRef<number | null>(null);
 
   const flushToUrl = useCallback(
-    (nextTech: string[], nextFund: string[], resetPage = false) => {
+    (resetPage: boolean) => {
       if (timerRef.current !== null) {
         window.clearTimeout(timerRef.current);
       }
       timerRef.current = window.setTimeout(() => {
         const params = new URLSearchParams(sp.toString());
+        const nextTech = techRef.current;
+        const nextFund = fundRef.current;
         if (nextTech.length > 0) {
           params.set("tech", nextTech.join(","));
         } else {
@@ -77,9 +81,7 @@ export function useFilterParams(): UseFilterParamsResult {
         } else {
           params.delete("fund");
         }
-        if (resetPage) {
-          params.set("page", "1");
-        }
+        if (resetPage) params.set("page", "1");
         const qs = params.toString();
         router.replace(qs ? `${pathname}?${qs}` : pathname, {
           scroll: false,
@@ -92,23 +94,27 @@ export function useFilterParams(): UseFilterParamsResult {
   const setTech = useCallback(
     (next: string[]) => {
       const sorted = [...next].sort();
+      techRef.current = sorted;
       setTechState(sorted);
-      flushToUrl(sorted, fund, true);
+      flushToUrl(true);
     },
-    [flushToUrl, fund],
+    [flushToUrl],
   );
   const setFund = useCallback(
     (next: string[]) => {
       const sorted = [...next].sort();
+      fundRef.current = sorted;
       setFundState(sorted);
-      flushToUrl(tech, sorted, true);
+      flushToUrl(true);
     },
-    [flushToUrl, tech],
+    [flushToUrl],
   );
   const resetAll = useCallback(() => {
+    techRef.current = [];
+    fundRef.current = [];
     setTechState([]);
     setFundState([]);
-    flushToUrl([], [], false);
+    flushToUrl(false);
   }, [flushToUrl]);
 
   useEffect(

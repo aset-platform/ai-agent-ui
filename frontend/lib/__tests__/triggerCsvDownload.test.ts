@@ -45,6 +45,6 @@ describe("triggerCsvDownload", () => {
     });
     await expect(
       triggerCsvDownload("/v1/advanced-analytics/foo/export"),
-    ).rejects.toThrow(/413/);
+    ).rejects.toThrow(/Export exceeds 10,000 rows/);
   });
 });

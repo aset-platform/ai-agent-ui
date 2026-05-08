@@ -40,8 +40,15 @@ export function FilterDropdown({
       if (!ref.current) return;
       if (!ref.current.contains(e.target as Node)) setOpen(false);
     };
+    const keyHandler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
     document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    document.addEventListener("keydown", keyHandler);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("keydown", keyHandler);
+    };
   }, [open]);
 
   const selectedSet = useMemo(() => new Set(selected), [selected]);
@@ -148,13 +155,16 @@ export function FilterDropdown({
                             : undefined
                         }
                         checked={checked}
-                        onChange={
-                          isRadio ? undefined : () => handleToggle(opt)
-                        }
+                        onChange={() => handleToggle(opt)}
                         onClick={
-                          isRadio ? () => handleToggle(opt) : undefined
+                          /* For radios, browsers don't fire onChange
+                             when clicking an already-checked radio —
+                             handle deselection via onClick in that
+                             case only. Checkboxes always use onChange. */
+                          isRadio && checked
+                            ? () => handleToggle(opt)
+                            : undefined
                         }
-                        readOnly={isRadio}
                         data-testid={
                           `aa-filter-${bundleId}-option-${opt.key}`
                         }

@@ -20,7 +20,17 @@ function filenameFromHeader(h: string | null): string {
 export async function triggerCsvDownload(url: string): Promise<void> {
   const res = await apiFetch(url);
   if (!res.ok) {
-    throw new Error(`CSV export failed: HTTP ${res.status}`);
+    let detail = "";
+    try {
+      const body = await res.json();
+      detail = body?.detail ?? "";
+    } catch {
+      // Body wasn't JSON — fall through with empty detail.
+    }
+    throw new Error(
+      `CSV export failed: HTTP ${res.status}` +
+        (detail ? ` — ${detail}` : ""),
+    );
   }
   const blob = await res.blob();
   const objUrl = URL.createObjectURL(blob);
