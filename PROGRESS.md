@@ -2,6 +2,33 @@
 
 ---
 
+## 2026-05-08 (later 10) — Algo Trading Slice 8b: paper UI + scheduler/recovery wiring
+
+**Branch:** `feature/algo-trading-session-8-paper-ui` (built off Session 7's tip)
+**Epic:** Algo Trading Platform v1
+**Spec:** `docs/superpowers/specs/2026-05-08-algo-trading-platform-design.md`
+
+**Shipped (Slice 8b):**
+- `algo_risk_state_reset` scheduler job — IST-midnight zero of daily P&L counters for every user with a kill_switch row OR today's risk_state row. Wired via `@register_job` in `backend/jobs/executor.py`.
+- `replay_rebuilder.rebuild_risk_state_for_user` — restart-replay from today's `algo.events` order_filled rows through PositionTracker, persists realised P&L into algo.risk_state. Per spec § 5.3.
+- `GET /v1/algo/paper/events` — DuckDB over algo.events filtered by mode='paper' + caller's user_id, newest first, graceful empty when table missing.
+- Frontend hooks: `useKillSwitch` (state + arm/disarm mutations) + `usePaperEvents` (5s refresh).
+- `KillSwitchToggle` — Settings-tab arm/disarm with inline confirm dialogs; armed state uses rose tone + reason text. Per spec § 5.4.
+- `PaperEventsTimeline` — color-coded per-event-type list (sky=signal_generated, rose=signal_rejected, emerald=order_filled, etc.) with IST timestamps.
+- `PaperTab` composer — wires the timeline + a kill-switch-armed chip in the header when active. Replaces PlaceholderTab in `AlgoTradingClient`.
+- `SettingsTab` updated to mount `KillSwitchToggle` (replaces placeholder paragraph).
+
+**Tests:** 2 reset-job + 2 replay-rebuilder + 2 paper-events-route = **6 new pytest cases** (177 algo total). + 2 new Playwright smokes (paper tab loads, kill-switch toggle visible on Settings).
+
+**Deferred to Session 9 (Slice 8c — runtime supervisor + infra):**
+- Multi-strategy supervisor (one Kite WS per user → many PaperRuntime instances; per-strategy run start/stop endpoints).
+- Async Redis mirror for KillSwitchRepo (sub-ms is_active() reads).
+- Reconciliation loop (paper position diff vs broker; spec § 7.4 calls it "scaffold in place" for v2 anyway).
+- Per-strategy paper dashboard charts (active strategies list + per-strategy P&L cards).
+- Vitest unit tests for KillSwitchToggle confirm flow + PaperEventsTimeline rendering.
+
+---
+
 ## 2026-05-08 (later 9) — Algo Trading Slice 8a: paper runtime + risk engine + kill switch (backend)
 
 **Branch:** `feature/algo-trading-session-7-paper-runtime` (built off Session 6's tip)

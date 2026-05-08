@@ -264,4 +264,15 @@ export const FE = {
   algoBacktestEquityCurveEmpty: "backtest-equity-curve-empty",
   algoBacktestTradeTable: "backtest-trade-table",
   algoBacktestTradeTableEmpty: "backtest-trade-table-empty",
+
+  // ── Algo Trading — Paper + Kill switch (Slice 8b) ─
+  algoPaperTab: "paper-tab",
+  algoPaperEventsTimeline: "paper-events-timeline",
+  algoPaperEventsEmpty: "paper-events-empty",
+  algoKillSwitchToggle: "kill-switch-toggle",
+  algoKillSwitchArmBtn: "kill-switch-arm-btn",
+  algoKillSwitchDisarmBtn: "kill-switch-disarm-btn",
+  algoKillSwitchArmConfirm: "kill-switch-arm-confirm",
+  algoKillSwitchArmConfirmBtn: "kill-switch-arm-confirm-btn",
+  algoKillSwitchReasonInput: "kill-switch-reason-input",
 } as const;
