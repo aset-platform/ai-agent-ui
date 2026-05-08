@@ -25,7 +25,9 @@ from backend.algo.backtest.sim_broker import (
 from backend.algo.backtest.types import (
     BacktestRequest,
     BacktestSummary,
+    EquityPoint,
     OrderIntent,
+    TradeRow,
 )
 from backend.algo.strategy.ast import Strategy
 
@@ -40,6 +42,28 @@ def _features_for_bar(bar) -> dict[str, Decimal]:  # noqa: ANN001
         "today_ltp": bar.close,
         "today_vol": Decimal(bar.volume),
     }
+
+
+def _trade_row(p, fill_price: Decimal) -> TradeRow:  # noqa: ANN001
+    """Project a closed Position into a TradeRow for the UI."""
+    holding_days = (
+        (p.closed_at - p.opened_at).days if p.closed_at else 0
+    )
+    return_pct = (
+        ((fill_price - p.avg_price) / p.avg_price) * Decimal("100")
+        if p.avg_price > 0 else Decimal("0")
+    )
+    return TradeRow(
+        ticker=p.ticker,
+        qty=p.qty,
+        avg_price=p.avg_price,
+        fill_price=fill_price,
+        opened_at=p.opened_at,
+        closed_at=p.closed_at,
+        holding_days=holding_days,
+        realised_pnl_inr=p.realised_pnl_inr,
+        return_pct=return_pct,
+    )
 
 
 def run_backtest(
@@ -91,7 +115,7 @@ def run_backtest(
 
     fee_rates_version = ""
     total_fees = Decimal("0")
-    equity_curve: list[Decimal] = [request.initial_capital_inr]
+    equity_points: list[EquityPoint] = []
     peak_equity = request.initial_capital_inr
     max_drawdown_pct = Decimal("0")
 
@@ -169,7 +193,9 @@ def run_backtest(
             + pt.unrealised_pnl_inr(marks)
             - total_fees
         )
-        equity_curve.append(equity)
+        equity_points.append(EquityPoint(
+            bar_date=bar_date, equity_inr=equity,
+        ))
         if equity > peak_equity:
             peak_equity = equity
         if peak_equity > 0:
@@ -177,7 +203,10 @@ def run_backtest(
             if dd > max_drawdown_pct:
                 max_drawdown_pct = dd
 
-    final_equity = equity_curve[-1]
+    final_equity = (
+        equity_points[-1].equity_inr if equity_points
+        else request.initial_capital_inr
+    )
     total_pnl = final_equity - request.initial_capital_inr
     total_pnl_pct = (
         (total_pnl / request.initial_capital_inr) * Decimal("100")
@@ -191,9 +220,18 @@ def run_backtest(
         if closed else Decimal("0")
     )
 
+    trade_rows: list[TradeRow] = []
+    for p in closed:
+        implied_fill = (
+            p.avg_price + (p.realised_pnl_inr / Decimal(p.qty))
+            if p.qty > 0 else p.avg_price
+        )
+        trade_rows.append(_trade_row(p, implied_fill))
+
     summary = BacktestSummary(
         run_id=run_id,
         strategy_id=strategy.id,
+        status="completed",
         period_start=request.period_start,
         period_end=request.period_end,
         initial_capital_inr=request.initial_capital_inr,
@@ -209,6 +247,8 @@ def run_backtest(
         started_at=started_at,
         completed_at=datetime.now(timezone.utc),
         fee_rates_version=fee_rates_version or "n/a",
+        equity_curve=equity_points,
+        trade_list=trade_rows,
     )
 
     events.append(event_row(

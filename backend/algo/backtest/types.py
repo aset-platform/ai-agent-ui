@@ -77,6 +77,45 @@ class Position(BaseModel):
     realised_pnl_inr: Decimal = Field(default=Decimal("0.00"))
 
 
+class EquityPoint(BaseModel):
+    """One end-of-day equity snapshot."""
+    model_config = ConfigDict(extra="forbid")
+
+    bar_date: date
+    equity_inr: Decimal
+
+
+class TradeRow(BaseModel):
+    """One closed-position row for the trade table."""
+    model_config = ConfigDict(extra="forbid")
+
+    ticker: str
+    qty: int
+    avg_price: Decimal
+    fill_price: Decimal
+    opened_at: date
+    closed_at: date
+    holding_days: int
+    realised_pnl_inr: Decimal
+    return_pct: Decimal
+
+
+class BacktestRun(BaseModel):
+    """Row shape for GET /runs (list endpoint)."""
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID
+    strategy_id: UUID
+    status: Literal["pending", "running", "completed", "failed"]
+    period_start: date
+    period_end: date
+    started_at: datetime
+    completed_at: datetime | None = None
+    total_pnl_inr: Decimal | None = None
+    total_pnl_pct: Decimal | None = None
+    error_text: str | None = None
+
+
 class BacktestSummary(BaseModel):
     """Run-level metrics persisted to algo.runs and returned by
     GET /v1/algo/backtest/runs/{id}."""
@@ -84,6 +123,9 @@ class BacktestSummary(BaseModel):
 
     run_id: UUID
     strategy_id: UUID
+    status: Literal[
+        "pending", "running", "completed", "failed",
+    ] = "completed"
     period_start: date
     period_end: date
     initial_capital_inr: Decimal
@@ -99,3 +141,6 @@ class BacktestSummary(BaseModel):
     started_at: datetime
     completed_at: datetime
     fee_rates_version: str
+    equity_curve: list[EquityPoint] = Field(default_factory=list)
+    trade_list: list[TradeRow] = Field(default_factory=list)
+    error_text: str | None = None

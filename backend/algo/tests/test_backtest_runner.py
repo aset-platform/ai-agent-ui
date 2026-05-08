@@ -158,3 +158,39 @@ def test_runner_strategy_with_hold_root_zero_trades(patches):
     )
     assert summary.total_trades == 0
     assert summary.total_fees_inr == Decimal("0")
+
+
+def test_runner_emits_equity_curve(patches):
+    strategy = parse_strategy(_strategy_payload())
+    request = BacktestRequest(
+        strategy_id=strategy.id,
+        period_start=date(2026, 4, 1),
+        period_end=date(2026, 4, 30),
+    )
+    summary = run_backtest(
+        strategy=strategy,
+        request=request,
+        user_id=uuid4(),
+        universe=["FAKE.NS"],
+    )
+    assert len(summary.equity_curve) == 30
+    assert summary.equity_curve[0].bar_date == date(2026, 4, 1)
+    assert summary.equity_curve[-1].equity_inr > Decimal("0")
+
+
+def test_runner_trade_list_empty_when_no_closes(patches):
+    """The default strategy is BUY-only — no closed positions, so
+    trade_list is empty even though events fired."""
+    strategy = parse_strategy(_strategy_payload())
+    request = BacktestRequest(
+        strategy_id=strategy.id,
+        period_start=date(2026, 4, 1),
+        period_end=date(2026, 4, 30),
+    )
+    summary = run_backtest(
+        strategy=strategy,
+        request=request,
+        user_id=uuid4(),
+        universe=["FAKE.NS"],
+    )
+    assert summary.trade_list == []
