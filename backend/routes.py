@@ -3980,6 +3980,7 @@ def create_app(
         create_fees_router,
         create_instruments_router,
         create_kill_switch_router,
+        create_paper_router,
         create_strategies_router,
     )
 
@@ -4005,6 +4006,10 @@ def create_app(
     )
     app.include_router(
         create_kill_switch_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_paper_router(),
         prefix="/v1",
     )
 
