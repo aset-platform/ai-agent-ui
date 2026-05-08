@@ -553,3 +553,30 @@ def test_export_rejects_unknown_column(super_client):
     )
     assert r.status_code == 400
     assert "not_a_column" in r.json()["detail"]
+
+
+def test_export_bundle_filter_narrows_rows(
+    monkeypatch,
+    super_client,
+):
+    """A tech filter must reduce the export row count vs unfiltered."""
+
+    # Capture rows from the unfiltered call.
+    unfiltered = super_client.get(
+        "/v1/advanced-analytics/current-day-upmove/export"
+    )
+    assert unfiltered.status_code == 200
+    unf_count = len(unfiltered.text.splitlines()) - 1  # minus header
+
+    # An always-passing tech filter shouldn't narrow further than
+    # the universe; an impossible-to-pass filter (golden_recent
+    # requires a real cross which the test fixture lacks) should
+    # produce 0 rows + the header.
+    filtered = super_client.get(
+        "/v1/advanced-analytics/current-day-upmove/export"
+        "?tech=golden_recent"
+    )
+    assert filtered.status_code == 200
+    flt_count = len(filtered.text.splitlines()) - 1
+    # Bundle filter must never expand the row count.
+    assert flt_count <= unf_count

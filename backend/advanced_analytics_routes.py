@@ -1106,7 +1106,7 @@ _CSV_COLUMN_LABELS: dict[str, str] = {
 }
 
 
-def _validate_columns(raw: str, report: ReportName) -> list[str]:
+def _validate_columns(raw: str) -> list[str]:
     """Validate ``columns=`` param. Empty → safe defaults."""
     if not raw.strip():
         return ["ticker", "today_ltp", "sma_50", "sma_200", "rsi"]
@@ -1146,7 +1146,7 @@ def _csv_response(
     report: ReportName,
     as_of: date,
 ) -> StreamingResponse:
-    fname = f"advanced-analytics-{report}-" f"{as_of.strftime('%Y%m%d')}.csv"
+    fname = f"advanced-analytics-{report}-{as_of.strftime('%Y%m%d')}.csv"
 
     def _gen():
         # Stream in 64 KB chunks so very large CSVs don't
@@ -1181,7 +1181,7 @@ async def _stream_export(
     needle = search.strip().upper()
     tech_keys = parse_filter_csv(tech, TECH_KEYS, "tech")
     fund_keys = parse_filter_csv(fund, FUND_KEYS, "fund")
-    cols = _validate_columns(columns, report)
+    cols = _validate_columns(columns)
     as_of = _effective_trading_date()
     ck = (
         f"cache:advanced_analytics:{report}:{user.user_id}"
@@ -1211,6 +1211,9 @@ async def _stream_export(
         ]
     rows = [r for r in rows if _passes_filter(r, report)]
 
+    if sort_key and sort_key not in AdvancedRow.model_fields:
+        sort_key = None
+
     if sort_key:
         reverse = sort_dir == "desc"
         rows.sort(
@@ -1220,6 +1223,9 @@ async def _stream_export(
             ),
             reverse=reverse,
         )
+
+    if report == "top-50-delivery-by-qty":
+        rows = rows[:50]
 
     if len(rows) > _MAX_EXPORT_ROWS:
         raise HTTPException(
@@ -1341,6 +1347,7 @@ def create_advanced_analytics_router() -> APIRouter:
                 max_length=2000,
                 pattern="^[a-z0-9_,]*$",
             ),
+            # Reserved for future json/xlsx export formats; today only csv.
             fmt: str = Query("csv", pattern="^(csv)$"),
         ) -> StreamingResponse:
             try:
