@@ -253,4 +253,15 @@ export const FE = {
   algoTradingTabs: "algo-trading-tabs",
   algoTradingTab: (id: string) => `algo-trading-tab-${id}`,
   algoTradingPanel: (id: string) => `algo-trading-panel-${id}`,
+
+  // ── Algo Trading — Backtest tab (Slice 7b) ─────
+  algoBacktestTab: "backtest-tab",
+  algoBacktestRunForm: "backtest-run-form",
+  algoBacktestStrategySelect: "backtest-strategy-select",
+  algoBacktestSubmit: "backtest-submit",
+  algoBacktestSummaryCards: "backtest-summary-cards",
+  algoBacktestEquityCurve: "backtest-equity-curve",
+  algoBacktestEquityCurveEmpty: "backtest-equity-curve-empty",
+  algoBacktestTradeTable: "backtest-trade-table",
+  algoBacktestTradeTableEmpty: "backtest-trade-table-empty",
 } as const;

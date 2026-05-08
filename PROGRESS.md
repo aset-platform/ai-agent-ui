@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-05-08 (later 7) — Algo Trading Slice 7b: backtest UI + PG persistence
+
+**Branch:** `feature/algo-trading-session-5-backtest-ui` (built off Session 4's tip)
+**Epic:** Algo Trading Platform v1
+**Spec:** `docs/superpowers/specs/2026-05-08-algo-trading-platform-design.md`
+**Plan:** `docs/superpowers/plans/2026-05-08-algo-trading-session-5-backtest-ui.md`
+
+**Shipped (Slice 7b):**
+- Migration `b3c5e7d9f1a4`: `algo.runs.summary_json` (jsonb) + `error_text` (text). Cleaned up duplicate alembic_version row from Session 1's re-parenting.
+- BacktestSummary extended with `equity_curve: list[EquityPoint]` + `trade_list: list[TradeRow]` + `status` enum + `error_text`. Runner emits both.
+- `BacktestRunsRepo` for PG-backed run lifecycle (replaces in-memory `_RUNS` dict). Tests use stub session pattern (mirroring `test_instruments_repo`) to avoid pytest-asyncio event-loop issues.
+- `resolve_universe(user, strategy)` reusing `_scoped_tickers`.
+- `run_backtest_job` async wrapper; never raises — every error path writes via `mark_failed`.
+- `POST /run` returns 202 + run_id immediately via `BackgroundTasks`.
+- `GET /v1/algo/backtest/runs` list endpoint.
+- `algo.runs` added to `_CACHE_INVALIDATION_MAP` for write-through invalidation.
+- Frontend: `useBacktestRuns` + `useBacktestRun` SWR hooks (2s polling while pending/running), `BacktestRunForm` (uses existing `useStrategies` hook), `BacktestSummaryCards` (6 cards), `BacktestEquityCurve` (ECharts, useDarkMode MutationObserver), `BacktestTradeTable` (uses existing `useColumnSelection` + `ColumnSelector` + `DownloadCsvButton` + `downloadCsv`), `BacktestTab` composer wired into `AlgoTradingClient`.
+
+**Adaptations during execution:**
+- Plan's Task 1 left `<HEAD FROM STEP 1>` placeholder for `down_revision` — substituted `72a8a2cc1c1a` from `alembic current`. DB had a duplicate `alembic_version` row (Session 1 re-parenting artifact) — deleted to enable upgrade.
+- Plan's repo tests assumed FK violation tolerated; PG enforced FK strictly. Switched to stub-session pattern (matches `test_instruments_repo`) which avoids real DB entirely.
+- Plan's routes file captured `repo` at router-creation time, breaking `patch(BacktestRunsRepo)` in tests. Moved instantiation inside each handler.
+- Plan's `useColumnSelection` import path was hypothetical; actual import is `@/lib/useColumnSelection` + `@/components/insights/ColumnSelector` + `@/components/common/DownloadCsvButton` + `@/lib/downloadCsv`.
+- `useDarkMode` hook isn't centralized; inlined the MutationObserver pattern in `BacktestEquityCurve.tsx` (matching `AssetPerformanceWidget` precedent).
+- `useStrategies` returns `{ strategies, ... }` (not `{ rows, ... }`); adapted `BacktestRunForm`.
+- Vitest tests can't use `toBeInTheDocument` (no jest-dom setup); switched to `queryByTestId` + `not.toBeNull()`.
+- Playwright spec's `test.use({ storageState: ... })` overrode the project's `storageState` with a wrong-relative path; removed override to inherit from project config.
+
+**Tests:** 4 runs-repo + 2 universe + 3 job + 4 routes refactor + 2 runner extensions = **15 new pytest cases**. Total algo backend tests: **136 passing** (was 126). + 2 new vitest (BacktestEquityCurve) + 1 new Playwright smoke.
+
+**Deferred to Session 6 (Slice 7c — optional):**
+- MinIO artifact upload (PNG equity curve + JSONL events bundle + CSV trade list).
+- Walk-forward CV harness.
+- Slippage modelling beyond next-open fills.
+- BacktestRunForm strategy filter by status.
+- Run cancellation mid-flight.
+
+---
+
 ## 2026-05-08 (later 6) — Algo Trading Session 5 plan handoff (Slice 7b)
 
 **Branch:** `feature/algo-trading-session-5-backtest-ui` (cut off Session 4's tip; pushed to origin, plan-only)
