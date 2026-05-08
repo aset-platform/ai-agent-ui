@@ -2,6 +2,28 @@
 
 ---
 
+## 2026-05-08 (evening) — AA filter bundles + filtered CSV export
+
+**Branch:** `feature/aa-filter-bundles-csv` → PR (open)
+**Sprint:** 9 (Advanced Analytics epic continuation)
+
+**Shipped:**
+- `backend/advanced_analytics_filters.py` — TECH_KEYS (9) + FUND_KEYS (8) allowlist with NaN-safe predicates and a sorted-CSV parser. 27 unit tests.
+- `_compute_report` extended with `?tech=` / `?fund=` AND-combined filtering; inner cache key now distinguishes filter combos.
+- New `GET /v1/advanced-analytics/{report}/export` streams the full filtered CSV (10 000 row cap; 413 with helpful detail; honours top-50-delivery-by-qty semantic cap and validates `sort_key` against `AdvancedRow.model_fields`).
+- Frontend: `<FilterDropdown />` (radio + checkbox by section, ESC-to-close, keyboard arrow-key support) + `<ActiveFilterChips />` (tone-coded × removable + Clear all) + `useFilterParams` (URL ↔ state, 300 ms debounce, sorted-CSV serialisation, ref-based cross-bundle update safety).
+- `triggerCsvDownload` helper replaces page-only `downloadCsv` call in `AdvancedAnalyticsTable.tsx`; surfaces backend `detail` field in error messages.
+- CI gate `tests/backend/test_filter_catalog_sync.py` keeps the backend allowlist and frontend mirror in lockstep.
+- Bundle setters wrapped in component-local handlers that reset `page=1` so a stale page-4 state can't render an empty body when filters narrow the universe.
+
+**Tests:** 27 backend filter unit + 9 backend route (paginated + export) + 6 vitest FilterDropdown + 4 vitest ActiveFilterChips + 4 vitest useFilterParams + 2 vitest triggerCsvDownload + 2 backend↔frontend catalog sync + 4 Playwright (filter→URL, chip removal, Clear all, CSV download). All passing.
+
+**Spec / plan:** `docs/superpowers/specs/2026-05-08-aa-filter-dropdown-csv-design.md`, `docs/superpowers/plans/2026-05-08-aa-filter-bundles-csv.md`.
+
+**Lighthouse `/advanced-analytics`:** deferred (dev stack not running at branch ship time); will run via `docker compose --profile perf run --rm perf` before promotion to qa.
+
+---
+
 ## 2026-05-05 (evening) — AA RSI fix + golden cross highlighting (PR #138 → dev)
 
 **Scope**: two follow-up items on the Advanced Analytics page that shipped blank after the Sprint 9 merge.
