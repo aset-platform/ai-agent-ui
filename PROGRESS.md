@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-05-08 (later 6) — Algo Trading Session 5 plan handoff (Slice 7b)
+
+**Branch:** `feature/algo-trading-session-5-backtest-ui` (cut off Session 4's tip; pushed to origin, plan-only)
+**Epic:** Algo Trading Platform v1
+**Spec:** `docs/superpowers/specs/2026-05-08-algo-trading-platform-design.md`
+**Plan:** `docs/superpowers/plans/2026-05-08-algo-trading-session-5-backtest-ui.md`
+
+**Why this is a handoff, not a ship:** Plan written + reviewed + pushed. Implementation paused for an errand; resume in a fresh session.
+
+**12-task plan summary:**
+- Tasks 1–6 (backend): migration adding `algo.runs.summary_json` + `error_text`; extended `BacktestSummary` with `equity_curve` + `trade_list` + `status`; `BacktestRunsRepo` PG CRUD; `resolve_universe` reusing `_scoped_tickers`; async-job wrapper via `BackgroundTasks`; routes refactor replacing the in-memory `_RUNS` dict + `GET /runs` list endpoint.
+- Tasks 7–11 (frontend): `useBacktestRuns` SWR hooks (2s polling), `BacktestRunForm`, `BacktestSummaryCards`, `BacktestEquityCurve` (ECharts), `BacktestTradeTable` (column selector + CSV per CLAUDE.md §5.4), composed by `BacktestTab` and wired into `AlgoTradingClient`.
+- Task 12: Playwright smoke + PROGRESS + push.
+
+**Deferred from this slice:** MinIO artifact upload + walk-forward CV harness → moved to a future Slice 7c.
+
+**To resume:**
+1. `git fetch --prune origin && git checkout feature/algo-trading-session-5-backtest-ui`
+2. Read `docs/superpowers/plans/2026-05-08-algo-trading-session-5-backtest-ui.md`
+3. Invoke `superpowers:subagent-driven-development` (or executing-plans).
+
+---
+
 ## 2026-05-08 (later 5) — Algo Trading Slice 7a: backtest engine (headless)
 
 **Branch:** `feature/algo-trading-session-4-backtest-engine` (built off Session 3's tip)
