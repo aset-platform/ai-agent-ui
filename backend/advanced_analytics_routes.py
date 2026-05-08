@@ -1008,6 +1008,9 @@ async def _compute_report(
 
     stale: list[StaleTicker] = []
     seen: set[str] = set()
+    # Stale chips scoped to post-bundle-filter rows: a stale
+    # ticker that doesn't match the user's filter is irrelevant
+    # noise, not a transparency obligation.
     for r in rows:
         if r.ticker in seen:
             continue

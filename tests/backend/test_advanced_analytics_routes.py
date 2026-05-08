@@ -130,7 +130,7 @@ def _stub_safe_query(*, ohlcv, delivery, company):
             # _effective_trading_date issues a MAX(date) AS d query;
             # return the expected single-column aggregate shape so the
             # date-anchor logic can proceed without KeyError.
-            if "AS d" in sql:
+            if "MAX(date)" in sql:
                 return pd.DataFrame({"d": [date(2026, 5, 2)]})
             return delivery
         if table == "stocks.company_info":
