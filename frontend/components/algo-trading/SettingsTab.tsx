@@ -1,11 +1,13 @@
 // frontend/components/algo-trading/SettingsTab.tsx
 "use client";
 /**
- * Algo Trading — Settings tab. Slice 1 adds the Fee Preview
- * widget; later slices bring risk caps + the kill switch.
+ * Algo Trading — Settings tab. Slice 1 added the Fee Preview
+ * widget; Slice 8b adds the Kill Switch toggle. Risk caps + fee-
+ * version pinning land in later slices.
  */
 
 import { FeePreviewWidget } from "./FeePreviewWidget";
+import { KillSwitchToggle } from "./KillSwitchToggle";
 
 export function SettingsTab() {
   return (
@@ -13,10 +15,7 @@ export function SettingsTab() {
       <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
         Settings
       </h2>
-      <p className="text-sm text-gray-600 dark:text-gray-400">
-        Fee model preview. Risk caps, fee-version pinning, and
-        the kill switch will appear here as the epic progresses.
-      </p>
+      <KillSwitchToggle />
       <FeePreviewWidget />
     </div>
   );
