@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-05-08 (later 2) — Algo Trading Slices 4 + 5: strategy AST + visual builder
+
+**Branch:** `feature/algo-trading-session-2-strategy-ast` (built off Session 1's tip)
+**Epic:** Algo Trading Platform v1
+**Spec:** `docs/superpowers/specs/2026-05-08-algo-trading-platform-design.md`
+**Plan:** `docs/superpowers/plans/2026-05-08-algo-trading-session-2-strategy-ast.md`
+
+**Shipped:**
+- Slice 4: Backend AST grammar (Pydantic discriminated unions, 14 node types across condition / action / composite); 18-feature dictionary registry; `algo.strategies` async repo; `/v1/algo/strategies/*` CRUD with `pro_or_superuser` guard + per-user isolation; CI sync test (`test_feature_registry_sync.py`) blocks frontend↔backend feature drift.
+- Slice 5: Frontend visual builder shell (palette + read-only AST tree + live JSON pane with paste-to-import escape hatch); 3 starter templates (blank / golden cross / mean reversion); two-mode `StrategiesTab` (list ↔ builder).
+
+**Tests:** 29 backend AST validation + 4 strategies-route smoke + 1 sync gate + 3 vitest StrategiesTab + 4 vitest StrategyBuilder + 4 vitest AstTreeView. All passing.
+
+**Deferred:** in-tree node editing (Slice 5b), drag-and-drop palette (Slice 5c), Slices 2/3/6/7/8/9/10.
+
+---
+
 ## 2026-05-08 (later) — Algo Trading Slices 0 + 1: foundation + Indian Fee Model
 
 **Branch:** `feature/algo-trading-session-1-foundation-fees` → PR (open)
