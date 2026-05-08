@@ -2,6 +2,35 @@
 
 ---
 
+## 2026-05-08 (later 8) — Algo Trading Slice 6: tick stream + bar resampler
+
+**Branch:** `feature/algo-trading-session-6-tick-stream` (built off Session 5's tip)
+**Epic:** Algo Trading Platform v1
+**Spec:** `docs/superpowers/specs/2026-05-08-algo-trading-platform-design.md`
+**Plan:** `docs/superpowers/plans/2026-05-08-algo-trading-session-6-tick-stream.md`
+
+**Shipped (Slice 6 — backend infra only, no UI):**
+- `algo.intraday_bars` Iceberg table (partitioned by ticker + bar_date) — auto-created on backend startup via `create_algo_tables()`.
+- `Tick` + `Bar` Pydantic types under `backend/algo/stream/types.py`.
+- `Resampler` — pure tick → 1m + 5m OHLCV bars; close_partial_bars on shutdown.
+- `flush_bars()` — single Iceberg commit per batch, mirrors `event_writer.py` pattern.
+- `ReplayTickSource` — JSONL fixture for CI; "fast" + "realtime" pacing modes.
+- `LiveTickSource` — `KiteTicker` WebSocket adapter (callback → async iterator via asyncio.Queue + thread-safe put_nowait).
+- `TickStreamService` — orchestrator drains source through resampler, batches + flushes bars, returns total flushed count.
+- `KiteClient.stream_ticks()` implemented (replaces Slice 2 stub). Signature changed to `(instrument_tokens, token_to_ticker)` since Kite's WS subscribe API is token-keyed.
+- `KiteClient.__init__` now captures `_access_token` on the instance so the wrapper can construct a `KiteTicker` (set_access_token alone is insufficient).
+- 30-tick FAKE.NS fixture (`ticks_sample.jsonl`) covering 3 minutes for the orchestrator e2e test.
+
+**Tests:** 5 resampler + 2 replay source + 2 service = **9 new pytest cases**. Total algo backend tests: **145 passing** (was 136).
+
+**Deferred:**
+- Live WebSocket smoke test (requires real Kite credentials) → manual verification at Slice 8.
+- Per-user multiplexing across strategies (one WS, many subscribers) → Slice 8.
+- Reconnect-on-bar-close / backoff lifecycle gating → Slice 8 (kiteconnect's built-in reconnect handles transport-layer; strategy-aware gating is paper-runtime concern).
+- Tick stream observability counters / consumer endpoint → out of v1 scope.
+
+---
+
 ## 2026-05-08 (later 7) — Algo Trading Slice 7b: backtest UI + PG persistence
 
 **Branch:** `feature/algo-trading-session-5-backtest-ui` (built off Session 4's tip)
