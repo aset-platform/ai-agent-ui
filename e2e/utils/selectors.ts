@@ -247,4 +247,10 @@ export const FE = {
   aaActiveFilterChipX: (key: string) =>
     `aa-active-filter-chip-${key}-x`,
   aaActiveFilterClearAll: "aa-active-filter-clear-all",
+
+  // ── Algo Trading (Slice 0 of the epic) ──────────
+  algoTradingHeading: "algo-trading-heading",
+  algoTradingTabs: "algo-trading-tabs",
+  algoTradingTab: (id: string) => `algo-trading-tab-${id}`,
+  algoTradingPanel: (id: string) => `algo-trading-panel-${id}`,
 } as const;
