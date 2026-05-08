@@ -33,11 +33,12 @@ def _get_session_factory():
 def _get_redis():
     """Returns an async Redis client (or None).
 
-    Slice 8a ships PG-only; an async Redis mirror for sub-ms
-    is_active() reads lands in Slice 8b alongside the paper
-    runtime supervisor.
+    Wired in Slice 8c via backend/algo/redis_async.py — uses
+    redis.asyncio.from_url(REDIS_URL). Returns None gracefully
+    when REDIS_URL is empty so the repo runs PG-only.
     """
-    return None
+    from backend.algo.redis_async import get_async_redis
+    return get_async_redis()
 
 
 def create_kill_switch_router() -> APIRouter:
