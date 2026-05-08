@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-05-08 (later 3) — Algo Trading Slices 2 + 3: Kite OAuth + instrument master
+
+**Branch:** `feature/algo-trading-session-3-kite-instruments` (built off Session 2's tip)
+**Epic:** Algo Trading Platform v1
+**Spec:** `docs/superpowers/specs/2026-05-08-algo-trading-platform-design.md`
+**Plan:** `docs/superpowers/plans/2026-05-08-algo-trading-session-3-kite-instruments.md`
+
+**Shipped:**
+- Slice 2: KiteClient SDK wrapper (read-only; place_order raises); per-user broker_credentials repo with Fernet (reusing BYO_SECRET_KEY); `/v1/algo/broker/{api-key,login,callback,status,disconnect}`; daily 05:30 IST `algo_kite_reauth_notify` job; ConnectBrokerTab UI (4-state: disconnected/key_set/connected/expired).
+- Slice 3: InstrumentsRepo (paginated + filterable + bulk_upsert); Kite `/instruments` loader using first-connected-user token; `/v1/algo/instruments` listing + `/refresh`; `algo_kite_instruments_refresh` job for the 07:00 IST scheduler; InstrumentsTab UI.
+
+**Tests:** 6 broker creds repo + 7 broker route + 2 reauth job + 4 instruments repo + 4 instruments route + 5 vitest ConnectBrokerTab + 3 vitest InstrumentsTab. All passing (89 algo backend tests green; 11 vitest cases green).
+
+**Notable adaptations:**
+- Task 1 implementer pinned `kiteconnect==5.0.1` in `backend/requirements.txt` (not the repo-root file).
+- Task 4 added a new `write_audit_event()` async helper in `backend/audit_persistence.py` (the existing audit helper had a different signature).
+- Task 7 fixed an incorrect `backend.db.repository` → `backend.db.engine` import in `loader.py` that would have broken the 07:00 IST job.
+- Task 3 reduced `request_token` Query `min_length=8` → `min_length=4` to keep the plan's 7-char fixture happy.
+
+**Deferred:** Slices 6 / 7 / 8 / 9 / 10 — tick stream, backtest engine, paper-trading runtime, performance, replay.
+
+---
+
 ## 2026-05-08 (later 2) — Algo Trading Slices 4 + 5: strategy AST + visual builder
 
 **Branch:** `feature/algo-trading-session-2-strategy-ast` (built off Session 1's tip)
