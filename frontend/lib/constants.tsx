@@ -131,7 +131,6 @@ export const NAV_ITEMS: NavItem[] = [
     view: "algo-trading",
     href: "/algo-trading",
     label: "Algo Trading",
-    proOrSuperuserOnly: true,
     requiresAlgoTrading: true,
     icon: (
       <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

@@ -1,10 +1,12 @@
-// frontend/hooks/useFeePreview.ts
 "use client";
 /**
- * SWR fetcher for /v1/algo/fees/preview. Debounces 300 ms so
- * typing in the qty/price inputs doesn't fire a request per
- * keystroke. Mirrors the AA hook patterns (apiFetch, no
- * revalidateOnFocus, dedupingInterval).
+ * SWR fetcher for /v1/algo/fees/preview. Mirrors the AA hook
+ * patterns (apiFetch, no revalidateOnFocus, dedupingInterval).
+ *
+ * Note: no per-keystroke debounce in v1 — the endpoint is
+ * cheap and fast, and SWR's dedupingInterval (60s) absorbs
+ * repeated identical-key requests. Add a real useDebounce
+ * wrapper if Slice 7 starts hammering this in bulk.
  */
 
 import useSWR from "swr";
