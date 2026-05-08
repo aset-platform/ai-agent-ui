@@ -18,6 +18,7 @@ import {
   type AlgoTabId,
 } from "@/lib/types/algoTrading";
 
+import { ConnectBrokerTab } from "@/components/algo-trading/ConnectBrokerTab";
 import { SettingsTab } from "@/components/algo-trading/SettingsTab";
 import { StrategiesTab } from "@/components/algo-trading/StrategiesTab";
 
@@ -46,6 +47,8 @@ export default function AlgoTradingClient() {
 
   const tabPanel = useMemo(() => {
     switch (active) {
+      case "connect":
+        return <ConnectBrokerTab />;
       case "strategies":
         return <StrategiesTab />;
       case "settings":
