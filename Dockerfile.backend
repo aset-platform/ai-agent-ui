@@ -54,6 +54,7 @@ COPY dashboard/ ./dashboard/
 # runs from /app inside the container.
 COPY tests/ ./tests/
 COPY pyproject.toml ./
+COPY alembic.ini ./
 
 # Python path matches the venv layout
 ENV PYTHONPATH=/app/backend:/app/auth:/app/stocks:/app/dashboard
