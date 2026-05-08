@@ -9,6 +9,7 @@ from backend.algo.routes.paper import create_paper_router
 from backend.algo.routes.performance import (
     create_performance_router,
 )
+from backend.algo.routes.replay import create_replay_router
 from backend.algo.routes.strategies import create_strategies_router
 
 __all__ = [
@@ -19,5 +20,6 @@ __all__ = [
     "create_kill_switch_router",
     "create_paper_router",
     "create_performance_router",
+    "create_replay_router",
     "create_strategies_router",
 ]

@@ -3982,6 +3982,7 @@ def create_app(
         create_kill_switch_router,
         create_paper_router,
         create_performance_router,
+        create_replay_router,
         create_strategies_router,
     )
 
@@ -4015,6 +4016,10 @@ def create_app(
     )
     app.include_router(
         create_performance_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_replay_router(),
         prefix="/v1",
     )
 
