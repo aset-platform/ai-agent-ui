@@ -3318,3 +3318,14 @@ async def _job_algo_kite_instruments_refresh(
     """Daily 07:00 IST refresh of algo.instruments from Kite."""
     from backend.algo.jobs.instrument_refresh import run
     return await run(payload)
+
+
+@register_job("algo_risk_state_reset")
+async def _job_algo_risk_state_reset(
+    payload: dict | None = None,
+):
+    """Daily IST-midnight reset of algo.risk_state P&L counters."""
+    from backend.algo.jobs.risk_state_reset import (
+        run_risk_state_reset_job,
+    )
+    return await run_risk_state_reset_job(payload)
