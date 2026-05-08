@@ -3304,6 +3304,13 @@ def execute_promoter_holdings_quarterly(
     )
 
 
+@register_job("algo_kite_reauth_notify")
+async def _job_algo_kite_reauth_notify(payload: dict | None = None):
+    """Daily 05:30 IST notify users with expired/expiring Kite tokens."""
+    from backend.algo.jobs.reauth_notify import run_reauth_notify_job
+    return await run_reauth_notify_job(payload)
+
+
 @register_job("algo_kite_instruments_refresh")
 async def _job_algo_kite_instruments_refresh(
     payload: dict | None = None,
