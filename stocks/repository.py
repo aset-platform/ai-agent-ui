@@ -1068,6 +1068,14 @@ class StockRepository:
         "stocks.fundamentals_snapshot": [
             "cache:advanced_analytics:*",
         ],
+        # Algo Trading module — every event log write fans out
+        # to algo-event-derived caches. Pattern lives under
+        # ``cache:algo:*`` per the epic spec §3.3.
+        "algo.events": [
+            "cache:algo:events:*",
+            "cache:algo:performance:*",
+            "cache:algo:replay:*",
+        ],
     }
 
     def _invalidate_cache(
