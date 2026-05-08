@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-05-08 (later 11) — Algo Trading Slice 8c: paper supervisor + run lifecycle endpoints
+
+**Branch:** `feature/algo-trading-session-9-paper-supervisor` (built off Session 8's tip)
+**Epic:** Algo Trading Platform v1
+**Spec:** `docs/superpowers/specs/2026-05-08-algo-trading-platform-design.md`
+
+**Shipped (Slice 8c):**
+- `backend/algo/redis_async.py` — lazy-singleton `get_async_redis()` returning `redis.asyncio.Redis` (or None when REDIS_URL is empty). KillSwitch route `_get_redis()` now wires through to it; verified end-to-end set/get/delete on `algo:kill:{user_id}`.
+- `PaperSupervisor` — process-local registry of running PaperRuntime asyncio tasks keyed by (user_id, strategy_id). `start_run` / `stop_run` / `list_active`. Idempotent collision guard. `build_replay_source` helper validates fixture paths against the algo tests fixtures dir to prevent path traversal.
+- `POST /v1/algo/paper/runs` — kicks off a replay-fixture-driven run; reads kill-switch state at start. 404 on missing strategy, 400 on bad fixture path, 409 on collision, 201 on happy path.
+- `DELETE /v1/algo/paper/runs/{strategy_id}` — cancels + awaits the task. 404 if no active run.
+- `GET /v1/algo/paper/runs` — lists the user's active runs.
+- Frontend: `usePaperRuns` SWR hook (5s polling) + `startPaperRun`/`stopPaperRun` mutations.
+- `ActiveRunsPanel` — strategy picker + capital input + Start button + per-run Stop button. Mounted on `PaperTab` above the events timeline.
+
+**Tests:** 7 supervisor + 7 paper runs route = **14 new pytest cases**. Total algo backend tests: **191 passing** (was 177).
+
+**Deferred to v2:**
+- Live Kite WebSocket adapter wired into supervisor (one WS per user fan-out across strategies, per spec § 13 risk #6 — "connection storm" mitigation).
+- Reconciliation loop (paper position diff vs broker; spec § 7.4 — calls it scaffold-in-place anyway).
+- Per-strategy paper dashboard charts (P&L over time, fills histogram, etc.).
+- Vitest unit tests for ActiveRunsPanel + KillSwitchToggle confirm flow.
+
+---
+
 ## 2026-05-08 (later 10) — Algo Trading Slice 8b: paper UI + scheduler/recovery wiring
 
 **Branch:** `feature/algo-trading-session-8-paper-ui` (built off Session 7's tip)
