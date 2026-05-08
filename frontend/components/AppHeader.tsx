@@ -72,6 +72,7 @@ export function AppHeader({
       analytics: "Dashboard",
       docs: "Docs",
       admin: "Admin",
+      "algo-trading": "Algo Trading",
     };
 
     const subTitles: Record<string, string> = {

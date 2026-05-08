@@ -13,6 +13,7 @@ export type View =
   | "dashboard"
   | "analytics"
   | "advanced-analytics"
+  | "algo-trading"
   | "docs"
   | "admin";
 
@@ -51,6 +52,7 @@ export interface NavItem {
   superuserOnly?: boolean;
   proOrSuperuserOnly?: boolean;
   requiresInsights?: boolean;
+  requiresAlgoTrading?: boolean;     // NEW
   icon: ReactNode;
   children?: NavItem[];
 }
@@ -122,6 +124,18 @@ export const NAV_ITEMS: NavItem[] = [
       <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M3 3v18h18" />
         <path d="M7 15l3-4 4 3 5-7" />
+      </svg>
+    ),
+  },
+  {
+    view: "algo-trading",
+    href: "/algo-trading",
+    label: "Algo Trading",
+    proOrSuperuserOnly: true,
+    requiresAlgoTrading: true,
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2 12h2l3-9 4 18 3-9 2 5h6" />
       </svg>
     ),
   },
