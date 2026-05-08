@@ -3973,6 +3973,14 @@ def create_app(
         prefix="/v1",
     )
 
+    # Algo trading endpoints.
+    from backend.algo.routes.fees import create_fees_router
+
+    app.include_router(
+        create_fees_router(),
+        prefix="/v1",
+    )
+
     # WebSocket streaming endpoint.
     from ws import register_ws_routes
 

@@ -480,3 +480,58 @@ def test_compute_does_not_mutate_trade(model: IndianFeeModel):
     snap = t.model_dump()
     model.compute(t)
     assert t.model_dump() == snap
+
+
+# ---- Route smoke ----------------------------------------------------
+
+from fastapi import FastAPI  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+from auth.dependencies import pro_or_superuser  # noqa: E402
+from auth.models import UserContext  # noqa: E402
+from backend.algo.routes.fees import create_fees_router  # noqa: E402
+
+
+def _build_app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(create_fees_router(), prefix="/v1")
+    app.dependency_overrides[pro_or_superuser] = lambda: UserContext(
+        user_id="user-test", email="t@t", role="superuser",
+    )
+    return app
+
+
+def test_route_returns_breakdown_shape():
+    app = _build_app()
+    client = TestClient(app)
+    r = client.get(
+        "/v1/algo/fees/preview"
+        "?symbol=RELIANCE&exchange=NSE&side=BUY&product=DELIVERY"
+        "&qty=10&price=2945.20",
+    )
+    assert r.status_code == 200
+    body = r.json()
+    for k in (
+        "brokerage_inr", "stt_inr", "exchange_txn_inr", "sebi_inr",
+        "stamp_duty_inr", "gst_inr", "dp_charges_inr", "total_inr",
+        "rates_version",
+    ):
+        assert k in body
+
+
+def test_route_rejects_invalid_exchange():
+    app = _build_app()
+    client = TestClient(app)
+    r = client.get(
+        "/v1/algo/fees/preview?exchange=MCX",
+    )
+    assert r.status_code == 422  # FastAPI Query pattern violation
+
+
+def test_route_rejects_negative_qty():
+    app = _build_app()
+    client = TestClient(app)
+    r = client.get(
+        "/v1/algo/fees/preview?qty=-5",
+    )
+    assert r.status_code == 422
