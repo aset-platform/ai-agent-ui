@@ -45,6 +45,8 @@ export function useAdvancedAnalyticsReport(
   market: MarketFilter,
   tickerType: TickerTypeFilter,
   search: string,
+  tech: string[],
+  fund: string[],
   fallbackData?: AdvancedReportResponse,
 ): AdvancedAnalyticsData {
   const params = new URLSearchParams({
@@ -56,6 +58,9 @@ export function useAdvancedAnalyticsReport(
   });
   if (sortKey) params.set("sort_key", sortKey);
   if (search) params.set("search", search);
+  // Sorted joined CSV → cache stability across param order.
+  if (tech.length > 0) params.set("tech", [...tech].sort().join(","));
+  if (fund.length > 0) params.set("fund", [...fund].sort().join(","));
 
   const key = `${API_URL}/advanced-analytics/${report}?${params.toString()}`;
 

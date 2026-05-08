@@ -40,24 +40,33 @@ The response is the same superset shape across all 7 reports
 
 from __future__ import annotations
 
+import csv
 import logging
 import math
 from datetime import date
+from io import StringIO
 from typing import Literal
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
-
+from advanced_analytics_filters import (
+    FUND_KEYS,
+    TECH_KEYS,
+    parse_filter_csv,
+    passes_bundle_filters,
+)
 from advanced_analytics_models import (
     AdvancedReportResponse,
     AdvancedRow,
     StaleTicker,
 )
-from auth.dependencies import pro_or_superuser
-from auth.models import UserContext
 from cache import TTL_STABLE, get_cache
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import StreamingResponse
 from insights_routes import _get_stock_repo, _scoped_tickers
 from market_utils import detect_market
+
+from auth.dependencies import pro_or_superuser
+from auth.models import UserContext
 
 _logger = logging.getLogger(__name__)
 
@@ -270,7 +279,8 @@ def _effective_trading_date() -> date:
 
 
 def _load_ohlcv_25d(
-    tickers: list[str], as_of: date,
+    tickers: list[str],
+    as_of: date,
 ) -> pd.DataFrame:
     """Last 25 trading days of OHLCV per ticker, ending
     on or before *as_of*.
@@ -298,7 +308,8 @@ def _load_ohlcv_25d(
 
 
 def _load_delivery_25d(
-    tickers: list[str], as_of: date,
+    tickers: list[str],
+    as_of: date,
 ) -> pd.DataFrame:
     """Last 25 trading days of NSE delivery per ticker,
     ending on or before *as_of*."""
@@ -404,9 +415,7 @@ def _load_indicators_latest(tickers: list[str]) -> pd.DataFrame:
                 }
             )
         except Exception as exc:
-            _logger.debug(
-                "indicator compute skipped for %s: %s", tkr, exc
-            )
+            _logger.debug("indicator compute skipped for %s: %s", tkr, exc)
 
     if not result_rows:
         return pd.DataFrame()
@@ -824,7 +833,8 @@ def _df_to_dict(df: pd.DataFrame) -> dict[str, dict]:
 
 
 def _build_all_rows(
-    tickers: list[str], as_of: date,
+    tickers: list[str],
+    as_of: date,
 ) -> list[AdvancedRow]:
     """Run all 8 batched DuckDB reads, then compose rows.
 
@@ -880,7 +890,8 @@ def _build_all_rows(
 
 
 async def _cached_full_rows(
-    user: UserContext, as_of: date,
+    user: UserContext,
+    as_of: date,
 ) -> list[AdvancedRow]:
     """Return the full row list for *user* on *as_of*, cached.
 
@@ -897,17 +908,11 @@ async def _cached_full_rows(
     import json
 
     cache = get_cache()
-    ck = (
-        f"cache:aa:rows:{user.user_id}"
-        f":dt{as_of.isoformat()}"
-    )
+    ck = f"cache:aa:rows:{user.user_id}" f":dt{as_of.isoformat()}"
     blob = cache.get(ck)
     if blob is not None:
         try:
-            return [
-                AdvancedRow(**d)
-                for d in json.loads(blob)
-            ]
+            return [AdvancedRow(**d) for d in json.loads(blob)]
         except Exception:  # pragma: no cover — defensive
             _logger.warning(
                 "advanced_analytics row-cache parse failed",
@@ -940,19 +945,21 @@ async def _compute_report(
     market: MarketFilter = "all",
     ticker_type: TickerTypeFilter = "all",
     search: str = "",
+    tech: str = "",
+    fund: str = "",
 ) -> Response:
     """Shared cache / scope / compute pipeline for all 7 endpoints.
 
     Two cache layers:
-      1. Inner — full response keyed on every parameter
-         (cheap dedup for repeated identical requests).
-      2. Outer — full row list keyed on ``(user, as_of)``
-         only, so filter / sort / page changes reuse the
-         expensive DuckDB compute and apply transforms
-         in-memory.
+      1. Outer (unchanged) — full row list keyed on
+         ``(user, as_of)``.
+      2. Inner — full response keyed on every parameter
+         including the (sorted, deduped) bundle filters.
     """
     cache = get_cache()
     needle = search.strip().upper()
+    tech_keys = parse_filter_csv(tech, TECH_KEYS, "tech")
+    fund_keys = parse_filter_csv(fund, FUND_KEYS, "fund")
     # Anchor the report to the most-recent NSE bhavcopy day
     # so every ticker's "today" describes the same trading
     # session (handles weekends / public holidays / long
@@ -961,6 +968,8 @@ async def _compute_report(
     inner_ck = (
         f"cache:advanced_analytics:{report}:{user.user_id}"
         f":m{market}:t{ticker_type}:q{needle}"
+        f":ftech{','.join(tech_keys)}"
+        f":ffund{','.join(fund_keys)}"
         f":dt{as_of.isoformat()}"
         f":p{page}:s{sort_key or 'default'}:{sort_dir}"
         f":ps{page_size}"
@@ -985,6 +994,10 @@ async def _compute_report(
     rows = [r for r in full_rows if r.ticker in keep]
     if needle:
         rows = [r for r in rows if needle in r.ticker.upper()]
+    if tech_keys or fund_keys:
+        rows = [
+            r for r in rows if passes_bundle_filters(r, tech_keys, fund_keys)
+        ]
 
     filtered = [r for r in rows if _passes_filter(r, report)]
     page_rows, total = _apply_sort_paginate(
@@ -998,6 +1011,9 @@ async def _compute_report(
 
     stale: list[StaleTicker] = []
     seen: set[str] = set()
+    # Stale chips scoped to post-bundle-filter rows: a stale
+    # ticker that doesn't match the user's filter is irrelevant
+    # noise, not a transparency obligation.
     for r in rows:
         if r.ticker in seen:
             continue
@@ -1016,6 +1032,235 @@ async def _compute_report(
     payload = body.model_dump_json()
     cache.set(inner_ck, payload, ttl=TTL_STABLE)
     return Response(content=payload, media_type="application/json")
+
+
+# ---------------------------------------------------------------
+# CSV export helpers
+# ---------------------------------------------------------------
+
+# Hard cap — patched in tests; protects backend memory + browser
+# CSV parser. ~10k rows × ~50 columns ≈ 5 MB CSV.
+_MAX_EXPORT_ROWS = 10_000
+
+
+# CSV column header labels — mirrors columnCatalogs.ts UI labels
+# but lives here so the backend can format header rows without
+# pulling the frontend allowlist into Python. Source of truth for
+# CSV header text.
+_CSV_COLUMN_LABELS: dict[str, str] = {
+    "ticker": "Ticker",
+    "company_name": "Company",
+    "sector": "Sector",
+    "sub_sector": "Sub-sector",
+    "avg_emv_score": "Avg EMV Score",
+    "avg_14d_emv": "Avg 14d EMV",
+    "pscore": "P-Score",
+    "rsi": "RSI",
+    "sma_50": "SMA 50",
+    "sma_200": "SMA 200",
+    "golden_cross_days_ago": "Golden Cross (d ago)",
+    "today_ltp": "Today LTP",
+    "prev_day_ltp": "Prev LTP",
+    "prev_2_prev_day_ltp": "Prev-2 LTP",
+    "current_ppc": "Current PPC %",
+    "avg_10d_ppc": "Avg 10d PPC %",
+    "avg_20d_ppc": "Avg 20d PPC %",
+    "week_52_high": "52w High",
+    "week_52_low": "52w Low",
+    "away_from_52week_high": "Away from 52w High %",
+    "today_vol": "Today Vol",
+    "prev_day_vol": "Prev Vol",
+    "avg_10d_vol": "Avg 10d Vol",
+    "avg_20d_vol": "Avg 20d Vol",
+    "today_x_vol": "Today × Vol",
+    "prev_day_x_vol": "Prev × Vol",
+    "x_vol_10d": "× Vol 10d",
+    "x_vol_20d": "× Vol 20d",
+    "today_dv": "Today Deliv Qty",
+    "prev_day_dv": "Prev Deliv Qty",
+    "avg_10d_dv": "Avg 10d Deliv Qty",
+    "avg_20d_dv": "Avg 20d Deliv Qty",
+    "today_dpc": "Today Deliv %",
+    "prev_day_dpc": "Prev Deliv %",
+    "avg_10d_dpc": "Avg 10d Deliv %",
+    "avg_20d_dpc": "Avg 20d Deliv %",
+    "today_x_dv": "Today × Deliv",
+    "prev_day_x_dv": "Prev × Deliv",
+    "x_dv_10d": "× Deliv 10d",
+    "x_dv_20d": "× Deliv 20d",
+    "current_dpc": "Current Deliv %",
+    "today_not": "Today Notional",
+    "avg_10d_not": "Avg 10d Notional",
+    "avg_20d_not": "Avg 20d Notional",
+    "debt_to_eq": "Debt/Eq",
+    "yoy_qtr_prft": "YoY Qtr Profit %",
+    "yoy_qtr_sales": "YoY Qtr Sales %",
+    "sales_growth_3yrs": "Sales 3y %",
+    "prft_growth_3yrs": "Profit 3y %",
+    "sales_growth_5yrs": "Sales 5y %",
+    "prft_growth_5yrs": "Profit 5y %",
+    "roce": "ROCE %",
+    "chng_in_prom_hld": "Δ Promoter %",
+    "pledged": "Pledged %",
+    "prom_hld": "Promoter %",
+    "event": "Event",
+    "event_date": "Event Date",
+}
+
+
+def _validate_columns(raw: str) -> list[str]:
+    """Validate ``columns=`` param. Empty → safe defaults."""
+    if not raw.strip():
+        return ["ticker", "today_ltp", "sma_50", "sma_200", "rsi"]
+    cols: list[str] = []
+    seen: set[str] = set()
+    for tok in raw.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if tok not in _CSV_COLUMN_LABELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown column: {tok}",
+            )
+        if tok in seen:
+            continue
+        seen.add(tok)
+        cols.append(tok)
+    if "ticker" not in seen:
+        cols.insert(0, "ticker")
+    return cols
+
+
+def _format_csv_cell(value) -> str:  # type: ignore[no-untyped-def]
+    """Stable CSV cell rendering: None/NaN → empty, floats → 4dp."""
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if math.isnan(value):
+            return ""
+        return f"{value:.4f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
+def _csv_response(
+    payload: str,
+    report: ReportName,
+    as_of: date,
+) -> StreamingResponse:
+    fname = f"advanced-analytics-{report}-{as_of.strftime('%Y%m%d')}.csv"
+
+    def _gen():
+        # Stream in 64 KB chunks so very large CSVs don't
+        # block the event loop while serialising.
+        chunk = 64 * 1024
+        for i in range(0, len(payload), chunk):
+            yield payload[i : i + chunk]
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": (f'attachment; filename="{fname}"'),
+        },
+    )
+
+
+async def _stream_export(
+    user: UserContext,
+    report: ReportName,
+    sort_key: str | None,
+    sort_dir: str,
+    market: MarketFilter,
+    ticker_type: TickerTypeFilter,
+    search: str,
+    tech: str,
+    fund: str,
+    columns: str,
+) -> StreamingResponse:
+    """Build the filtered, sorted full-set list and stream as CSV."""
+    cache = get_cache()
+    needle = search.strip().upper()
+    tech_keys = parse_filter_csv(tech, TECH_KEYS, "tech")
+    fund_keys = parse_filter_csv(fund, FUND_KEYS, "fund")
+    cols = _validate_columns(columns)
+    as_of = _effective_trading_date()
+    # Cache key includes raw sort_key (before validation) so
+    # requests differing only in sort_key / sort_dir get distinct
+    # cache slots. Mirrors _compute_report key structure (§5.13).
+    ck = (
+        f"cache:advanced_analytics:{report}:{user.user_id}"
+        f":m{market}:t{ticker_type}:q{needle}"
+        f":ftech{','.join(tech_keys)}"
+        f":ffund{','.join(fund_keys)}"
+        f":s{sort_key or 'default'}:{sort_dir}"
+        f":dt{as_of.isoformat()}:export:{','.join(cols)}"
+    )
+    hit = cache.get(ck)
+    if hit is not None:
+        return _csv_response(hit, report, as_of)
+
+    full_rows = await _cached_full_rows(user, as_of)
+    keep = set(
+        _filter_tickers(
+            [r.ticker for r in full_rows],
+            market,
+            ticker_type,
+        )
+    )
+    rows = [r for r in full_rows if r.ticker in keep]
+    if needle:
+        rows = [r for r in rows if needle in r.ticker.upper()]
+    if tech_keys or fund_keys:
+        rows = [
+            r for r in rows if passes_bundle_filters(r, tech_keys, fund_keys)
+        ]
+    rows = [r for r in rows if _passes_filter(r, report)]
+
+    # Validate sort_key against the model; fall back to the
+    # report's default if missing. Mirrors _apply_sort_paginate
+    # so the export and paginated views share the same sort.
+    if sort_key and sort_key not in AdvancedRow.model_fields:
+        sort_key = None
+    use_key, use_dir = _DEFAULT_SORT[report]
+    if sort_key:
+        use_key = sort_key
+        use_dir = sort_dir
+    reverse = use_dir == "desc"
+    rows.sort(
+        key=lambda r: (
+            getattr(r, use_key) is None,
+            getattr(r, use_key) or 0,
+        ),
+        reverse=reverse,
+    )
+
+    if report == "top-50-delivery-by-qty":
+        rows = rows[:50]
+
+    if len(rows) > _MAX_EXPORT_ROWS:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Export exceeds {_MAX_EXPORT_ROWS:,} rows; "
+                "tighten filters."
+            ),
+        )
+
+    buf = StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow([_CSV_COLUMN_LABELS[c] for c in cols])
+    for row in rows:
+        writer.writerow([_format_csv_cell(getattr(row, c)) for c in cols])
+    payload = buf.getvalue()
+    try:
+        cache.set(ck, payload, ttl=TTL_STABLE)
+    except Exception:  # pragma: no cover — defensive
+        _logger.warning(
+            "advanced_analytics export-cache set failed",
+            exc_info=True,
+        )
+    return _csv_response(payload, report, as_of)
 
 
 # ---------------------------------------------------------------
@@ -1040,6 +1285,16 @@ def create_advanced_analytics_router() -> APIRouter:
             market: str = Query("all", pattern="^(all|india|us)$"),
             ticker_type: str = Query("all", pattern="^(all|stock|etf)$"),
             search: str = Query("", max_length=20),
+            tech: str = Query(
+                "",
+                max_length=200,
+                pattern="^[a-z0-9_,]*$",
+            ),
+            fund: str = Query(
+                "",
+                max_length=200,
+                pattern="^[a-z0-9_,]*$",
+            ),
         ) -> Response:
             try:
                 return await _compute_report(
@@ -1052,6 +1307,8 @@ def create_advanced_analytics_router() -> APIRouter:
                     market,  # type: ignore[arg-type]
                     ticker_type,  # type: ignore[arg-type]
                     search,
+                    tech,
+                    fund,
                 )
             except HTTPException:
                 raise
@@ -1076,6 +1333,69 @@ def create_advanced_analytics_router() -> APIRouter:
             methods=["GET"],
             response_model=AdvancedReportResponse,
             name=f"advanced_analytics_{report.replace('-', '_')}",
+        )
+
+    def _make_export_endpoint(report: ReportName):
+        async def _handler(
+            user: UserContext = Depends(pro_or_superuser),
+            sort_key: str | None = Query(None),
+            sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
+            market: str = Query("all", pattern="^(all|india|us)$"),
+            ticker_type: str = Query("all", pattern="^(all|stock|etf)$"),
+            search: str = Query("", max_length=20),
+            tech: str = Query(
+                "",
+                max_length=200,
+                pattern="^[a-z0-9_,]*$",
+            ),
+            fund: str = Query(
+                "",
+                max_length=200,
+                pattern="^[a-z0-9_,]*$",
+            ),
+            columns: str = Query(
+                "",
+                max_length=2000,
+                pattern="^[a-z0-9_,]*$",
+            ),
+            # Reserved for future json/xlsx export formats; today only csv.
+            fmt: str = Query("csv", pattern="^(csv)$"),
+        ) -> StreamingResponse:
+            try:
+                return await _stream_export(
+                    user,
+                    report,
+                    sort_key,
+                    sort_dir,
+                    market,  # type: ignore[arg-type]
+                    ticker_type,  # type: ignore[arg-type]
+                    search,
+                    tech,
+                    fund,
+                    columns,
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:
+                _logger.exception(
+                    "advanced_analytics %s export failed: %s",
+                    report,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=(f"advanced_analytics {report} export failed"),
+                )
+
+        _handler.__name__ = f"export_{report.replace('-', '_')}"
+        return _handler
+
+    for report in REPORTS:
+        router.add_api_route(
+            path=f"/{report}/export",
+            endpoint=_make_export_endpoint(report),
+            methods=["GET"],
+            name=(f"advanced_analytics_" f"{report.replace('-', '_')}_export"),
         )
 
     return router

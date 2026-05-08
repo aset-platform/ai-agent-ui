@@ -151,3 +151,31 @@ export const TICKER_TYPE_FILTER_OPTIONS: {
   { value: "stock", label: "Stocks only" },
   { value: "etf", label: "ETFs only" },
 ];
+
+// ---- Filter bundles --------------------------------------------------
+
+export type TechFilterKey =
+  | "golden_recent"
+  | "golden_established"
+  | "price_gt_sma50"
+  | "price_gt_sma200"
+  | "rsi_oversold"
+  | "rsi_neutral"
+  | "rsi_overbought"
+  | "vol_surge"
+  | "near_52w_high";
+
+export type FundFilterKey =
+  | "fscore_ge_7"
+  | "fscore_le_3"
+  | "debt_lt_0_5"
+  | "roce_gt_20"
+  | "sales_3y_gt_15"
+  | "profit_3y_gt_15"
+  | "prom_hld_gt_50"
+  | "pledged_lt_5";
+
+export type FilterBundleId = "tech" | "fund";
+
+/** Hard cap mirrored from backend ``_MAX_EXPORT_ROWS``. */
+export const FILTER_EXPORT_ROW_CAP = 10_000;

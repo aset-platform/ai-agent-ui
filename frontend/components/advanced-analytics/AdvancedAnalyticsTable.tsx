@@ -32,10 +32,13 @@ import {
   type StaleChipItem,
 } from "@/components/common/StaleTickerChip";
 import { useAdvancedAnalyticsReport } from "@/hooks/useAdvancedAnalyticsData";
-import { downloadCsv, type CsvColumn } from "@/lib/downloadCsv";
+import { useFilterParams } from "@/hooks/useFilterParams";
+import { triggerCsvDownload } from "@/lib/triggerCsvDownload";
 import { useColumnSelection } from "@/lib/useColumnSelection";
+import { API_URL } from "@/lib/config";
 import {
   ADVANCED_REPORT_LABELS,
+  FILTER_EXPORT_ROW_CAP,
   MARKET_FILTER_OPTIONS,
   TICKER_TYPE_FILTER_OPTIONS,
   type AdvancedReportName,
@@ -46,6 +49,12 @@ import {
   type TickerTypeFilter,
 } from "@/lib/types/advancedAnalytics";
 
+import { ActiveFilterChips } from "./ActiveFilterChips";
+import { FilterDropdown } from "./FilterDropdown";
+import {
+  FUND_FILTER_CATALOG,
+  TECH_FILTER_CATALOG,
+} from "./filterCatalogs";
 import {
   ALL_VALID_KEYS,
   COLUMN_MAP,
@@ -126,6 +135,36 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
 
+  const { tech, fund, setTech, setFund, resetAll } = useFilterParams();
+
+  const handleSetTech = useCallback(
+    (next: string[]) => {
+      setTech(next);
+      setPage(1);
+    },
+    [setTech],
+  );
+  const handleSetFund = useCallback(
+    (next: string[]) => {
+      setFund(next);
+      setPage(1);
+    },
+    [setFund],
+  );
+  const handleResetAll = useCallback(() => {
+    resetAll();
+    setPage(1);
+  }, [resetAll]);
+
+  const removeTech = useCallback(
+    (key: string) => handleSetTech(tech.filter((k) => k !== key)),
+    [handleSetTech, tech],
+  );
+  const removeFund = useCallback(
+    (key: string) => handleSetFund(fund.filter((k) => k !== key)),
+    [handleSetFund, fund],
+  );
+
   // Filters change the result set — reset pagination at the
   // setter site so a stale ?page=4 can't render an empty
   // body. (Avoids the eslint set-state-in-effect cascade.)
@@ -163,6 +202,8 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
     market,
     tickerType,
     search,
+    tech,
+    fund,
     initialData,
   );
 
@@ -199,15 +240,45 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
     [sortKey],
   );
 
-  const handleCsv = useCallback(() => {
-    if (!value || value.rows.length === 0) return;
-    const csvCols: CsvColumn<AdvancedRow>[] = visibleCols.map((c) => ({
-      key: c.key,
-      header: c.label,
-      format: (raw) => (c.format ? c.format(raw) : String(raw ?? "")),
-    }));
-    downloadCsv(value.rows, csvCols, `advanced-analytics-${report}`);
-  }, [value, visibleCols, report]);
+  const csvDisabled =
+    !value ||
+    value.rows.length === 0 ||
+    value.total > FILTER_EXPORT_ROW_CAP;
+  const csvTooltip =
+    value && value.total > FILTER_EXPORT_ROW_CAP
+      ? `Export exceeds ${FILTER_EXPORT_ROW_CAP.toLocaleString("en-IN")} rows; tighten filters`
+      : undefined;
+
+  const handleCsv = useCallback(async () => {
+    if (csvDisabled) return;
+    const params = new URLSearchParams({
+      sort_dir: sortDir,
+      market,
+      ticker_type: tickerType,
+    });
+    if (sortKey) params.set("sort_key", sortKey);
+    if (search) params.set("search", search);
+    if (tech.length > 0) params.set("tech", [...tech].sort().join(","));
+    if (fund.length > 0) params.set("fund", [...fund].sort().join(","));
+    params.set("columns", visibleCols.map((c) => c.key).join(","));
+    const url = `${API_URL}/advanced-analytics/${report}/export?${params.toString()}`;
+    try {
+      await triggerCsvDownload(url);
+    } catch (err) {
+      console.error("CSV export failed", err);
+    }
+  }, [
+    csvDisabled,
+    sortDir,
+    sortKey,
+    market,
+    tickerType,
+    search,
+    tech,
+    fund,
+    visibleCols,
+    report,
+  ]);
 
   const totalPages = value
     ? Math.max(1, Math.ceil(value.total / DEFAULT_PAGE_SIZE))
@@ -221,6 +292,11 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
       secondary: STALE_REASON_LABEL[s.reason] ?? s.reason,
     }));
   }, [value]);
+
+  const emptyMsg =
+    tech.length || fund.length
+      ? "No rows match your current filters. Try removing one or clicking 'Clear all'."
+      : "No rows match this report's filter today.";
 
   return (
     <div className="space-y-3">
@@ -282,6 +358,22 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
               </option>
             ))}
           </select>
+          <FilterDropdown
+            bundleId="tech"
+            bundleLabel="Technical"
+            catalog={TECH_FILTER_CATALOG}
+            selected={tech}
+            onChange={handleSetTech}
+            onReset={() => handleSetTech([])}
+          />
+          <FilterDropdown
+            bundleId="fund"
+            bundleLabel="Fundamentals"
+            catalog={FUND_FILTER_CATALOG}
+            selected={fund}
+            onChange={handleSetFund}
+            onReset={() => handleSetFund([])}
+          />
           <ColumnSelector
             catalog={catalog}
             selected={selected}
@@ -291,10 +383,19 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
           />
           <DownloadCsvButton
             onClick={handleCsv}
-            disabled={!value || value.rows.length === 0}
+            disabled={csvDisabled}
+            title={csvTooltip}
           />
         </div>
       </div>
+
+      <ActiveFilterChips
+        tech={tech}
+        fund={fund}
+        onRemoveTech={removeTech}
+        onRemoveFund={removeFund}
+        onClearAll={handleResetAll}
+      />
 
       {error && (
         <div
@@ -433,7 +534,7 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
                   colSpan={visibleCols.length}
                   className="px-3 py-8 text-center text-xs text-gray-500"
                 >
-                  No rows match this report&apos;s filter today.
+                  {emptyMsg}
                 </td>
               </tr>
             )}

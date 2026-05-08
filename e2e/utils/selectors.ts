@@ -232,4 +232,19 @@ export const FE = {
     `advanced-analytics-prev-${id}`,
   advancedAnalyticsNext: (id: string) =>
     `advanced-analytics-next-${id}`,
+
+  // ── Advanced Analytics filter bundles ────────────
+  aaFilterTechButton: "aa-filter-tech-button",
+  aaFilterTechPopover: "aa-filter-tech-popover",
+  aaFilterTechReset: "aa-filter-tech-reset",
+  aaFilterFundButton: "aa-filter-fund-button",
+  aaFilterFundPopover: "aa-filter-fund-popover",
+  aaFilterFundReset: "aa-filter-fund-reset",
+  aaFilterOption: (bundle: "tech" | "fund", key: string) =>
+    `aa-filter-${bundle}-option-${key}`,
+  aaActiveFilterChip: (key: string) =>
+    `aa-active-filter-chip-${key}`,
+  aaActiveFilterChipX: (key: string) =>
+    `aa-active-filter-chip-${key}-x`,
+  aaActiveFilterClearAll: "aa-active-filter-clear-all",
 } as const;
