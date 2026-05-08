@@ -46,18 +46,24 @@ from datetime import date
 from typing import Literal
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
-
+from advanced_analytics_filters import (
+    FUND_KEYS,
+    TECH_KEYS,
+    parse_filter_csv,
+    passes_bundle_filters,
+)
 from advanced_analytics_models import (
     AdvancedReportResponse,
     AdvancedRow,
     StaleTicker,
 )
-from auth.dependencies import pro_or_superuser
-from auth.models import UserContext
 from cache import TTL_STABLE, get_cache
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from insights_routes import _get_stock_repo, _scoped_tickers
 from market_utils import detect_market
+
+from auth.dependencies import pro_or_superuser
+from auth.models import UserContext
 
 _logger = logging.getLogger(__name__)
 
@@ -270,7 +276,8 @@ def _effective_trading_date() -> date:
 
 
 def _load_ohlcv_25d(
-    tickers: list[str], as_of: date,
+    tickers: list[str],
+    as_of: date,
 ) -> pd.DataFrame:
     """Last 25 trading days of OHLCV per ticker, ending
     on or before *as_of*.
@@ -298,7 +305,8 @@ def _load_ohlcv_25d(
 
 
 def _load_delivery_25d(
-    tickers: list[str], as_of: date,
+    tickers: list[str],
+    as_of: date,
 ) -> pd.DataFrame:
     """Last 25 trading days of NSE delivery per ticker,
     ending on or before *as_of*."""
@@ -404,9 +412,7 @@ def _load_indicators_latest(tickers: list[str]) -> pd.DataFrame:
                 }
             )
         except Exception as exc:
-            _logger.debug(
-                "indicator compute skipped for %s: %s", tkr, exc
-            )
+            _logger.debug("indicator compute skipped for %s: %s", tkr, exc)
 
     if not result_rows:
         return pd.DataFrame()
@@ -824,7 +830,8 @@ def _df_to_dict(df: pd.DataFrame) -> dict[str, dict]:
 
 
 def _build_all_rows(
-    tickers: list[str], as_of: date,
+    tickers: list[str],
+    as_of: date,
 ) -> list[AdvancedRow]:
     """Run all 8 batched DuckDB reads, then compose rows.
 
@@ -880,7 +887,8 @@ def _build_all_rows(
 
 
 async def _cached_full_rows(
-    user: UserContext, as_of: date,
+    user: UserContext,
+    as_of: date,
 ) -> list[AdvancedRow]:
     """Return the full row list for *user* on *as_of*, cached.
 
@@ -897,17 +905,11 @@ async def _cached_full_rows(
     import json
 
     cache = get_cache()
-    ck = (
-        f"cache:aa:rows:{user.user_id}"
-        f":dt{as_of.isoformat()}"
-    )
+    ck = f"cache:aa:rows:{user.user_id}" f":dt{as_of.isoformat()}"
     blob = cache.get(ck)
     if blob is not None:
         try:
-            return [
-                AdvancedRow(**d)
-                for d in json.loads(blob)
-            ]
+            return [AdvancedRow(**d) for d in json.loads(blob)]
         except Exception:  # pragma: no cover — defensive
             _logger.warning(
                 "advanced_analytics row-cache parse failed",
@@ -940,19 +942,21 @@ async def _compute_report(
     market: MarketFilter = "all",
     ticker_type: TickerTypeFilter = "all",
     search: str = "",
+    tech: str = "",
+    fund: str = "",
 ) -> Response:
     """Shared cache / scope / compute pipeline for all 7 endpoints.
 
     Two cache layers:
-      1. Inner — full response keyed on every parameter
-         (cheap dedup for repeated identical requests).
-      2. Outer — full row list keyed on ``(user, as_of)``
-         only, so filter / sort / page changes reuse the
-         expensive DuckDB compute and apply transforms
-         in-memory.
+      1. Outer (unchanged) — full row list keyed on
+         ``(user, as_of)``.
+      2. Inner — full response keyed on every parameter
+         including the (sorted, deduped) bundle filters.
     """
     cache = get_cache()
     needle = search.strip().upper()
+    tech_keys = parse_filter_csv(tech, TECH_KEYS, "tech")
+    fund_keys = parse_filter_csv(fund, FUND_KEYS, "fund")
     # Anchor the report to the most-recent NSE bhavcopy day
     # so every ticker's "today" describes the same trading
     # session (handles weekends / public holidays / long
@@ -961,6 +965,8 @@ async def _compute_report(
     inner_ck = (
         f"cache:advanced_analytics:{report}:{user.user_id}"
         f":m{market}:t{ticker_type}:q{needle}"
+        f":ftech{','.join(tech_keys)}"
+        f":ffund{','.join(fund_keys)}"
         f":dt{as_of.isoformat()}"
         f":p{page}:s{sort_key or 'default'}:{sort_dir}"
         f":ps{page_size}"
@@ -985,6 +991,10 @@ async def _compute_report(
     rows = [r for r in full_rows if r.ticker in keep]
     if needle:
         rows = [r for r in rows if needle in r.ticker.upper()]
+    if tech_keys or fund_keys:
+        rows = [
+            r for r in rows if passes_bundle_filters(r, tech_keys, fund_keys)
+        ]
 
     filtered = [r for r in rows if _passes_filter(r, report)]
     page_rows, total = _apply_sort_paginate(
@@ -1040,6 +1050,16 @@ def create_advanced_analytics_router() -> APIRouter:
             market: str = Query("all", pattern="^(all|india|us)$"),
             ticker_type: str = Query("all", pattern="^(all|stock|etf)$"),
             search: str = Query("", max_length=20),
+            tech: str = Query(
+                "",
+                max_length=200,
+                pattern="^[a-z0-9_,]*$",
+            ),
+            fund: str = Query(
+                "",
+                max_length=200,
+                pattern="^[a-z0-9_,]*$",
+            ),
         ) -> Response:
             try:
                 return await _compute_report(
@@ -1052,6 +1072,8 @@ def create_advanced_analytics_router() -> APIRouter:
                     market,  # type: ignore[arg-type]
                     ticker_type,  # type: ignore[arg-type]
                     search,
+                    tech,
+                    fund,
                 )
             except HTTPException:
                 raise

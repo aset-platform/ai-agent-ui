@@ -29,7 +29,6 @@ import backend.advanced_analytics_routes as aar
 from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
 
-
 # ---------------------------------------------------------------
 # Test universe + helpers
 # ---------------------------------------------------------------
@@ -128,6 +127,11 @@ def _stub_safe_query(*, ohlcv, delivery, company):
         if table == "stocks.ohlcv":
             return ohlcv
         if table == "stocks.nse_delivery":
+            # _effective_trading_date issues a MAX(date) AS d query;
+            # return the expected single-column aggregate shape so the
+            # date-anchor logic can proceed without KeyError.
+            if "AS d" in sql:
+                return pd.DataFrame({"d": [date(2026, 5, 2)]})
             return delivery
         if table == "stocks.company_info":
             return company
@@ -248,7 +252,13 @@ def test_cache_hit_short_circuits_compute(
     )
 
     class _HitCache:
-        def get(self, _k):
+        def get(self, k):
+            # Return a parseable date for the as-of key so
+            # _effective_trading_date returns early without
+            # calling _safe_query (which would register a
+            # spurious DuckDB call and break this assertion).
+            if k == aar._AS_OF_CACHE_KEY:
+                return "2026-05-02"
             return sentinel_body
 
         def set(self, _k, _v, ttl=None):
@@ -296,8 +306,7 @@ def test_search_filters_tickers_by_substring(
     """`?search=AAA` keeps only tickers containing AAA
     (case-insensitive). Seed universe is AAA / BBB / CCC.NS."""
     r = super_client.get(
-        "/v1/advanced-analytics/top-50-delivery-by-qty"
-        "?search=aaa"
+        "/v1/advanced-analytics/top-50-delivery-by-qty" "?search=aaa"
     )
     assert r.status_code == 200
     rows = r.json()["rows"]
@@ -308,8 +317,7 @@ def test_search_unknown_ticker_returns_empty(
     super_client: TestClient,
 ):
     r = super_client.get(
-        "/v1/advanced-analytics/top-50-delivery-by-qty"
-        "?search=ZZZZ"
+        "/v1/advanced-analytics/top-50-delivery-by-qty" "?search=ZZZZ"
     )
     assert r.status_code == 200
     body = r.json()
@@ -435,3 +443,72 @@ def test_load_indicators_latest_empty_tickers():
     """Empty ticker list returns empty DataFrame immediately."""
     df = aar._load_indicators_latest([])
     assert df.empty
+
+
+# ---------------------------------------------------------------
+# Bundle filter wiring (Sprint 9 follow-on)
+# ---------------------------------------------------------------
+
+
+def test_endpoint_rejects_unknown_tech_filter(
+    super_client: TestClient,
+):
+    r = super_client.get(
+        "/v1/advanced-analytics/current-day-upmove?tech=not_real"
+    )
+    assert r.status_code == 400
+    assert "not_real" in r.json()["detail"]
+
+
+def test_endpoint_rejects_unknown_fund_filter(
+    super_client: TestClient,
+):
+    r = super_client.get("/v1/advanced-analytics/current-day-upmove?fund=foo")
+    assert r.status_code == 400
+    assert "foo" in r.json()["detail"]
+
+
+def test_endpoint_accepts_known_tech_filter(
+    super_client: TestClient,
+):
+    r = super_client.get(
+        "/v1/advanced-analytics/current-day-upmove?tech=golden_recent"
+    )
+    assert r.status_code == 200
+
+
+def test_endpoint_accepts_both_bundles(
+    super_client: TestClient,
+):
+    r = super_client.get(
+        "/v1/advanced-analytics/current-day-upmove"
+        "?tech=golden_recent&fund=fscore_ge_7"
+    )
+    assert r.status_code == 200
+
+
+def test_bundle_filters_distinguish_cache_keys(
+    monkeypatch: pytest.MonkeyPatch,
+    super_client: TestClient,
+):
+    """Distinct filter combos must produce distinct inner cache keys."""
+    captured: list[str] = []
+
+    class _CapCache:
+        def get(self, _k):
+            return None
+
+        def set(self, k, _v, ttl=None):
+            captured.append(k)
+
+    monkeypatch.setattr(aar, "get_cache", lambda: _CapCache())
+
+    super_client.get(
+        "/v1/advanced-analytics/current-day-upmove?tech=golden_recent"
+    )
+    super_client.get(
+        "/v1/advanced-analytics/current-day-upmove?tech=price_gt_sma50"
+    )
+
+    assert any("ftechgolden_recent" in k for k in captured)
+    assert any("ftechprice_gt_sma50" in k for k in captured)
