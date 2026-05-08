@@ -64,6 +64,7 @@ def test_price_gt_sma_predicates():
         (30.0, "rsi_oversold", False),
         (30.0, "rsi_neutral", True),
         (70.0, "rsi_neutral", True),
+        (70.0, "rsi_overbought", False),
         (70.01, "rsi_overbought", True),
         (None, "rsi_neutral", False),
         (float("nan"), "rsi_oversold", False),

@@ -142,8 +142,8 @@ def parse_filter_csv(
 
 def passes_bundle_filters(
     row: AdvancedRow,
-    tech: list[str],
-    fund: list[str],
+    tech: list[TechKey] | list[str],
+    fund: list[FundKey] | list[str],
 ) -> bool:
     """AND across every selected predicate. NaN => row excluded."""
     for key in tech:
