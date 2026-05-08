@@ -283,4 +283,16 @@ export const FE = {
   algoPaperStartStrategySelect: "paper-start-strategy-select",
   algoPaperStartCapital: "paper-start-capital",
   algoPaperStartBtn: "paper-start-btn",
+
+  // ── Algo Trading — Performance + Replay (Slice 9 + 10) ─
+  algoPerformanceTab: "performance-tab",
+  algoPerformanceEmpty: "performance-empty",
+  algoPerformanceAggregatesTable: "performance-aggregates-table",
+  algoPerformanceRunsTable: "performance-runs-table",
+  algoReplayTab: "replay-tab",
+  algoReplayFilters: "replay-filters",
+  algoReplayModeSelect: "replay-mode-select",
+  algoReplayTypeSelect: "replay-type-select",
+  algoReplayTimeline: "replay-timeline",
+  algoReplayEmpty: "replay-empty",
 } as const;

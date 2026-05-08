@@ -22,6 +22,8 @@ import { BacktestTab } from "@/components/algo-trading/BacktestTab";
 import { ConnectBrokerTab } from "@/components/algo-trading/ConnectBrokerTab";
 import { InstrumentsTab } from "@/components/algo-trading/InstrumentsTab";
 import { PaperTab } from "@/components/algo-trading/PaperTab";
+import { PerformanceTab } from "@/components/algo-trading/PerformanceTab";
+import { ReplayTab } from "@/components/algo-trading/ReplayTab";
 import { SettingsTab } from "@/components/algo-trading/SettingsTab";
 import { StrategiesTab } from "@/components/algo-trading/StrategiesTab";
 
@@ -60,6 +62,10 @@ export default function AlgoTradingClient() {
         return <BacktestTab />;
       case "paper":
         return <PaperTab />;
+      case "performance":
+        return <PerformanceTab />;
+      case "replay":
+        return <ReplayTab />;
       case "settings":
         return <SettingsTab />;
       default:
