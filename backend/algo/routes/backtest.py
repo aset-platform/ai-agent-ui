@@ -1,36 +1,30 @@
-"""POST /v1/algo/backtest/run — synchronous v1.
+"""POST /v1/algo/backtest/run — async-job wrapper.
 
-v1 runs the backtest inline (small data, ~1-2s for 30 bars on
-~10 tickers) and returns the summary directly. Slice 7b adds an
-async-job wrapper that returns ``run_id`` immediately and lets
-the UI poll ``GET /runs/{id}``.
+POST /run creates a 'pending' run row, schedules a background
+task, and returns 202 with run_id immediately. The UI polls
+GET /runs/{id} until status ∈ {completed, failed}.
 
-GET /v1/algo/backtest/runs/{run_id} returns the persisted
-summary from algo.runs. v1 stores summaries in-memory keyed
-on run_id (a tiny module-level dict) — Slice 7b promotes to
-algo.runs persistence + MinIO artifact upload.
+GET /runs lists the user's recent runs (newest first, paginated).
 """
 from __future__ import annotations
 
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import (
+    APIRouter, BackgroundTasks, Depends, HTTPException, Query,
+)
+from fastapi.responses import JSONResponse
 
 from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
-from backend.algo.backtest.runner import run_backtest
+from backend.algo.backtest.job import run_backtest_job
+from backend.algo.backtest.runs_repo import BacktestRunsRepo
 from backend.algo.backtest.types import (
-    BacktestRequest,
-    BacktestSummary,
+    BacktestRequest, BacktestRun, BacktestSummary,
 )
-from backend.algo.strategy.repo import get_strategy
 
 _logger = logging.getLogger(__name__)
-
-# v1 in-memory store keyed on run_id. Slice 7b moves this to
-# algo.runs PG row + MinIO artifact bundle.
-_RUNS: dict[UUID, BacktestSummary] = {}
 
 
 def _get_session_factory():
@@ -41,44 +35,37 @@ def _get_session_factory():
 def create_backtest_router() -> APIRouter:
     router = APIRouter(prefix="/algo/backtest", tags=["algo-trading"])
 
-    @router.post("/run", response_model=BacktestSummary)
+    @router.post("/run", status_code=202)
     async def run_endpoint(
         body: BacktestRequest,
+        background: BackgroundTasks,
         user: UserContext = Depends(pro_or_superuser),
-    ) -> BacktestSummary:
+    ):
+        repo = BacktestRunsRepo()
         factory = _get_session_factory()
         async with factory() as session:
-            strategy = await get_strategy(
-                session, UUID(user.user_id), body.strategy_id,
-            )
-        if strategy is None:
-            raise HTTPException(
-                status_code=404, detail="Strategy not found",
-            )
-
-        # v1 universe = the strategy's stored universe.scope as
-        # an opaque list. Slice 7b resolves to the user's actual
-        # watchlist ∪ holdings via the existing _scoped_tickers
-        # helper from insights_routes.
-        universe: list[str] = []  # Resolved by caller in v2
-
-        try:
-            summary = run_backtest(
-                strategy=strategy,
-                request=body,
+            row = await repo.create_pending(
+                session,
                 user_id=UUID(user.user_id),
-                universe=universe,
+                strategy_id=body.strategy_id,
+                period_start=body.period_start,
+                period_end=body.period_end,
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        except Exception as exc:
-            _logger.exception("backtest run failed: %s", exc)
-            raise HTTPException(
-                status_code=500, detail="Backtest run failed",
-            )
+            await session.commit()
 
-        _RUNS[summary.run_id] = summary
-        return summary
+        background.add_task(
+            run_backtest_job,
+            run_id=row.run_id,
+            user_id=UUID(user.user_id),
+            request=body,
+        )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "run_id": str(row.run_id),
+                "status": "pending",
+            },
+        )
 
     @router.get(
         "/runs/{run_id}", response_model=BacktestSummary,
@@ -87,11 +74,33 @@ def create_backtest_router() -> APIRouter:
         run_id: UUID,
         user: UserContext = Depends(pro_or_superuser),
     ) -> BacktestSummary:
-        summary = _RUNS.get(run_id)
+        repo = BacktestRunsRepo()
+        factory = _get_session_factory()
+        async with factory() as session:
+            summary = await repo.get_by_id(
+                session,
+                user_id=UUID(user.user_id),
+                run_id=run_id,
+            )
         if summary is None:
             raise HTTPException(
                 status_code=404, detail="Run not found",
             )
         return summary
+
+    @router.get("/runs", response_model=list[BacktestRun])
+    async def list_runs(
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> list[BacktestRun]:
+        repo = BacktestRunsRepo()
+        factory = _get_session_factory()
+        async with factory() as session:
+            return await repo.list_by_user(
+                session,
+                user_id=UUID(user.user_id),
+                limit=limit, offset=offset,
+            )
 
     return router

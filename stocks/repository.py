@@ -1076,6 +1076,9 @@ class StockRepository:
             "cache:algo:performance:*",
             "cache:algo:replay:*",
         ],
+        "algo.runs": [
+            "cache:algo:runs:*",
+        ],
     }
 
     def _invalidate_cache(
