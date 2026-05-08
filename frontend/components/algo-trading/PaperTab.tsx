@@ -3,6 +3,7 @@
 import { useKillSwitch } from "@/hooks/useKillSwitch";
 import { usePaperEvents } from "@/hooks/usePaperEvents";
 
+import { ActiveRunsPanel } from "./ActiveRunsPanel";
 import { PaperEventsTimeline } from "./PaperEventsTimeline";
 
 export function PaperTab() {
@@ -17,9 +18,9 @@ export function PaperTab() {
             Paper trading
           </h2>
           <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-400">
-            Read-only view of recent paper signals + fills.
-            Multi-strategy supervisor + per-strategy run controls
-            land in a future slice.
+            Start replay-fixture runs against your stored
+            strategies. Live Kite WebSocket multiplexing lands
+            in v2 — see spec § 13 risk #6.
           </p>
         </div>
         {killState?.active && (
@@ -31,6 +32,8 @@ export function PaperTab() {
           </span>
         )}
       </div>
+
+      <ActiveRunsPanel />
 
       {error && (
         <div
