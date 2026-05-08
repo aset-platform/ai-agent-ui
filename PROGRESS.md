@@ -2,6 +2,28 @@
 
 ---
 
+## 2026-05-08 (later 4) — Algo Trading Session 4 plan handoff (Slice 7a backtest engine)
+
+**Branch:** `feature/algo-trading-session-4-backtest-engine` (built off Session 3's tip; pushed to origin, plan-only)
+**Epic:** Algo Trading Platform v1
+**Spec:** `docs/superpowers/specs/2026-05-08-algo-trading-platform-design.md`
+**Plan:** `docs/superpowers/plans/2026-05-08-algo-trading-session-4-backtest-engine.md`
+
+**Why this is a handoff, not a ship:** Session 4 implements Slice 7a (the backtest engine — the largest single slice in the epic at 13 SP). The plan was written, self-reviewed, committed, and pushed in this session, but implementation did not start because budget after three back-to-back delivered sessions (1, 2, 3) was insufficient to safely run the 8-task wave without mid-flight blockers. Resume from a fresh session.
+
+**To resume:**
+1. `git fetch --prune origin && git checkout feature/algo-trading-session-4-backtest-engine`
+2. Read `docs/superpowers/plans/2026-05-08-algo-trading-session-4-backtest-engine.md`
+3. Invoke `superpowers:subagent-driven-development` against the 8 tasks. Recommended waves are documented inline (see § Self-Review).
+
+**Session 4 scope (Slice 7a only, headless backend):** Pydantic types · DuckDB OHLCV window loader with look-ahead guard · `SimBroker` T+1 fee-aware fills · `PositionTracker` long-only with FIFO realised P&L · AST `Evaluator` per-bar dispatch · `runner.run_backtest()` end-to-end orchestrator · `algo.events` single-batch Iceberg writer · `POST /v1/algo/backtest/run` + `GET /runs/{id}` endpoints. ~35 new pytest cases.
+
+**Slice 7b (deferred to Session 5):** Backtest tab UI with equity-curve ECharts + trade table, PG-backed `algo.runs` persistence, MinIO artifact upload, universe resolution from `strategy.universe.scope`, async-job wrapper for the run endpoint.
+
+**Epic status:** ~50% shipped. Sessions 1-3 (Slices 0, 1, 2, 3, 4, 5) on origin as feature branches awaiting eventual PR; Session 4 plan-only; Sessions 5-8 spec'd but unplanned.
+
+---
+
 ## 2026-05-08 (later 3) — Algo Trading Slices 2 + 3: Kite OAuth + instrument master
 
 **Branch:** `feature/algo-trading-session-3-kite-instruments` (built off Session 2's tip)
