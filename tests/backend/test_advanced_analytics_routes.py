@@ -512,3 +512,44 @@ def test_bundle_filters_distinguish_cache_keys(
 
     assert any("ftechgolden_recent" in k for k in captured)
     assert any("ftechprice_gt_sma50" in k for k in captured)
+
+
+# ---------------------------------------------------------------
+# /{report}/export endpoint (Sprint 9 follow-on)
+# ---------------------------------------------------------------
+
+
+def test_export_returns_csv_for_known_filter(super_client):
+    r = super_client.get(
+        "/v1/advanced-analytics/current-day-upmove/export"
+        "?columns=ticker,today_ltp,sma_50"
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert "attachment" in r.headers["content-disposition"]
+    body = r.text.splitlines()
+    assert body[0] == "Ticker,Today LTP,SMA 50"
+
+
+def test_export_413_when_over_cap(monkeypatch, super_client):
+    """Patch _MAX_EXPORT_ROWS down to 0 to trigger the cap."""
+    monkeypatch.setattr(aar, "_MAX_EXPORT_ROWS", 0)
+    r = super_client.get("/v1/advanced-analytics/current-day-upmove/export")
+    assert r.status_code == 413
+    assert "tighten filters" in r.json()["detail"].lower()
+
+
+def test_export_default_columns_when_param_empty(super_client):
+    r = super_client.get("/v1/advanced-analytics/current-day-upmove/export")
+    assert r.status_code == 200
+    header = r.text.splitlines()[0]
+    assert header.startswith("Ticker,")
+
+
+def test_export_rejects_unknown_column(super_client):
+    r = super_client.get(
+        "/v1/advanced-analytics/current-day-upmove/export"
+        "?columns=ticker,not_a_column"
+    )
+    assert r.status_code == 400
+    assert "not_a_column" in r.json()["detail"]
