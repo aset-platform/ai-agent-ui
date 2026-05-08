@@ -10,14 +10,8 @@ vi.mock("swr", () => ({
   default: () => ({ data: { strategies: [] }, error: null, isLoading: false }),
   mutate: vi.fn(),
 }));
-
-vi.mock("@/lib/apiFetch", () => ({
-  apiFetch: vi.fn(),
-}));
-
-vi.mock("@/lib/config", () => ({
-  API_URL: "http://test/api",
-}));
+vi.mock("@/lib/apiFetch", () => ({ apiFetch: vi.fn() }));
+vi.mock("@/lib/config", () => ({ API_URL: "http://test/api" }));
 
 import { StrategiesTab } from "../StrategiesTab";
 
@@ -29,10 +23,16 @@ describe("StrategiesTab", () => {
     expect(screen.getByTestId("algo-strategies-empty")).toBeTruthy();
   });
 
-  it("calls onOpenBuilder(null) when New strategy clicked", () => {
-    const onOpen = vi.fn();
-    render(<StrategiesTab onOpenBuilder={onOpen} />);
+  it("opens builder mode when New strategy is clicked", () => {
+    render(<StrategiesTab />);
     fireEvent.click(screen.getByTestId("algo-strategies-new"));
-    expect(onOpen).toHaveBeenCalledWith(null);
+    expect(screen.getByTestId("algo-strategy-builder")).toBeTruthy();
+  });
+
+  it("returns to list when builder Cancel is clicked", () => {
+    render(<StrategiesTab />);
+    fireEvent.click(screen.getByTestId("algo-strategies-new"));
+    fireEvent.click(screen.getByTestId("algo-builder-cancel"));
+    expect(screen.getByTestId("algo-strategies-empty")).toBeTruthy();
   });
 });

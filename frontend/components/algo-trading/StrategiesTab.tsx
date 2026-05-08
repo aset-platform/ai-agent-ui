@@ -1,23 +1,53 @@
 "use client";
 /**
- * Algo Trading — Strategies tab. Slice 4 ships the list view +
- * archive action; Slice 5 wires the visual builder via the
- * "New strategy" / "Edit" buttons.
+ * Algo Trading — Strategies tab. Two-mode container:
+ *
+ * - list: shows saved strategies + "+ New strategy" / "Edit"
+ *   buttons that flip into builder mode.
+ * - builder: full StrategyBuilder; "Save" or "Cancel" returns
+ *   to list mode.
  */
 
 import { useCallback, useState } from "react";
+import useSWR from "swr";
 
+import { StrategyBuilder } from "@/components/algo-trading/builder/StrategyBuilder";
 import {
   archiveStrategy,
   useStrategies,
+  type StrategyAst,
   type StrategySummary,
 } from "@/hooks/useStrategies";
+import { apiFetch } from "@/lib/apiFetch";
+import { API_URL } from "@/lib/config";
 
-interface Props {
-  onOpenBuilder?: (id: string | null) => void;  // null = new
+type Mode =
+  | { kind: "list" }
+  | { kind: "builder"; id: string | null };
+
+async function fetchAst(id: string): Promise<StrategyAst> {
+  const r = await apiFetch(`${API_URL}/algo/strategies/${id}`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
 }
 
-export function StrategiesTab({ onOpenBuilder }: Props) {
+export function StrategiesTab() {
+  const [mode, setMode] = useState<Mode>({ kind: "list" });
+
+  if (mode.kind === "builder") {
+    return (
+      <BuilderMode
+        id={mode.id}
+        onDone={() => setMode({ kind: "list" })}
+      />
+    );
+  }
+  return <ListMode onOpenBuilder={(id) => setMode({ kind: "builder", id })} />;
+}
+
+function ListMode({
+  onOpenBuilder,
+}: { onOpenBuilder: (id: string | null) => void }) {
   const { strategies, loading, error } = useStrategies();
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -40,7 +70,7 @@ export function StrategiesTab({ onOpenBuilder }: Props) {
         </h2>
         <button
           type="button"
-          onClick={() => onOpenBuilder?.(null)}
+          onClick={() => onOpenBuilder(null)}
           data-testid="algo-strategies-new"
           className="rounded-md bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 text-xs"
         >
@@ -74,11 +104,11 @@ export function StrategiesTab({ onOpenBuilder }: Props) {
           <table className="min-w-full text-sm">
             <thead className="bg-gray-50 dark:bg-gray-800/50 text-xs">
               <tr>
-                <Th>Name</Th>
-                <Th>Mode</Th>
-                <Th>Status</Th>
-                <Th>Updated</Th>
-                <Th align="right">Actions</Th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300">Name</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300">Mode</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300">Status</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300">Updated</th>
+                <th className="px-3 py-2 text-right text-xs font-medium text-gray-600 dark:text-gray-300">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
@@ -87,7 +117,7 @@ export function StrategiesTab({ onOpenBuilder }: Props) {
                   key={s.id}
                   s={s}
                   busy={busyId === s.id}
-                  onEdit={() => onOpenBuilder?.(s.id)}
+                  onEdit={() => onOpenBuilder(s.id)}
                   onArchive={() => handleArchive(s.id)}
                 />
               ))}
@@ -96,19 +126,6 @@ export function StrategiesTab({ onOpenBuilder }: Props) {
         </div>
       )}
     </div>
-  );
-}
-
-function Th({
-  children, align = "left",
-}: { children: React.ReactNode; align?: "left" | "right" }) {
-  return (
-    <th
-      scope="col"
-      className={`px-3 py-2 text-${align} text-xs font-medium text-gray-600 dark:text-gray-300`}
-    >
-      {children}
-    </th>
   );
 }
 
@@ -151,5 +168,35 @@ function Row({
         </button>
       </td>
     </tr>
+  );
+}
+
+function BuilderMode({
+  id, onDone,
+}: { id: string | null; onDone: () => void }) {
+  const { data, error, isLoading } = useSWR<StrategyAst>(
+    id ? `${API_URL}/algo/strategies/${id}` : null,
+    () => (id ? fetchAst(id) : Promise.reject()),
+    { revalidateOnFocus: false },
+  );
+
+  if (id && isLoading) {
+    return <p className="text-sm text-gray-500">Loading…</p>;
+  }
+  if (error) {
+    return (
+      <div role="alert" className="text-xs text-red-600 dark:text-red-400">
+        {(error as Error).message}
+      </div>
+    );
+  }
+
+  return (
+    <StrategyBuilder
+      strategyId={id}
+      initial={data ?? null}
+      onSaved={onDone}
+      onCancel={onDone}
+    />
   );
 }
