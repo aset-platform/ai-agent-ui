@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-05-08 (later 9) — Algo Trading Slice 8a: paper runtime + risk engine + kill switch (backend)
+
+**Branch:** `feature/algo-trading-session-7-paper-runtime` (built off Session 6's tip)
+**Epic:** Algo Trading Platform v1
+**Spec:** `docs/superpowers/specs/2026-05-08-algo-trading-platform-design.md`
+**Plan:** `docs/superpowers/plans/2026-05-08-algo-trading-session-7-paper-runtime.md`
+
+**Shipped (Slice 8a — backend half of spec's Slice 8):**
+- `backend/algo/paper/types.py` — Signal, AccountState, RiskDecision, RejectReason enum, KillSwitchState.
+- `RiskEngine.gate()` — pure 3-tier check (per-trade / daily / portfolio). Concentration is hard reject; total exposure may scale qty down. SELL signals skip portfolio caps. Kill-switch short-circuits.
+- `RiskStateRepo` — algo.risk_state CRUD: get_or_create, update_pnl, append_breach, reset_for_day (idempotent ON CONFLICT for IST-midnight scheduler + restart-replay).
+- `KillSwitchRepo` — PG durability + (optional) async Redis mirror. is_active reads Redis only (sub-ms); fail-safe returns False on Redis error.
+- `PaperBroker.execute()` — at-tick fills (vs SimBroker's next-bar-open); fee version stamp.
+- `PaperRuntime` — tick → resampler → bar close → AST evaluator → RiskEngine → PaperBroker → PositionTracker → events. Single Iceberg commit at shutdown. v1 = one strategy per instance.
+- `/v1/algo/kill-switch` (GET / arm POST / disarm POST) — pro_or_superuser-guarded.
+
+**Adaptations during execution:**
+- 3 RiskEngine tests had to bump `max_qty` to 1000 in their risk config so portfolio/concentration paths weren't short-circuited by the per-trade gate. Documented in `_wide_max_qty_risk()` test helper.
+- Async Redis mirror for KillSwitchRepo deferred to 8b — the existing `auth.token_store.get_redis_client` is sync, and wiring an async client cleanly belongs with the supervisor that lives in 8b. v1 routes use PG-only, which is fine since kill-switch toggles are rare events.
+
+**Tests:** 8 risk-engine + 4 risk-state-repo + 5 kill-switch-repo + 3 paper-broker + 3 paper-runtime + 3 routes = **26 new pytest cases**. Total algo backend tests: **171 passing** (was 145).
+
+**Deferred to Session 8 (Slice 8b):**
+- Paper tab UI (active strategies list + signals + positions).
+- Settings kill-switch button UI + confirm dialog.
+- Multi-strategy fan-out service (one Kite WS per user → multiple PaperRuntime instances).
+- Async Redis mirror for KillSwitchRepo (sub-ms is_active() reads).
+- Reconciliation loop (paper position diff vs broker; spec § 7.4).
+- IST-midnight risk_state reset scheduler job wiring.
+- Restart-replay rebuilder (read today's order_filled events on startup, replay through PositionTracker, persist to risk_state).
+
+---
+
 ## 2026-05-08 (later 8) — Algo Trading Slice 6: tick stream + bar resampler
 
 **Branch:** `feature/algo-trading-session-6-tick-stream` (built off Session 5's tip)
