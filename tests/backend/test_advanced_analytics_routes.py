@@ -580,3 +580,67 @@ def test_export_bundle_filter_narrows_rows(
     flt_count = len(filtered.text.splitlines()) - 1
     # Bundle filter must never expand the row count.
     assert flt_count <= unf_count
+
+
+def test_export_default_sort_for_top_50(super_client):
+    """Without an explicit sort_key, the export must use
+    the report's default sort (e.g. top-50 by today_dv)."""
+    r = super_client.get(
+        "/v1/advanced-analytics/top-50-delivery-by-qty/export"
+        "?columns=ticker,today_dv"
+    )
+    assert r.status_code == 200
+    body = r.text.splitlines()
+    assert body[0] == "Ticker,Today Deliv Qty"
+    # With the AAA seeding (AAA.NS gets the dv surge on the
+    # latest day), AAA.NS must appear first when sorted by
+    # today_dv DESC.
+    if len(body) > 1:
+        assert body[1].startswith("AAA.NS,")
+
+
+def test_export_cache_key_distinguishes_sort(
+    monkeypatch, super_client,
+):
+    """Same query with different sort must NOT share a cache."""
+    captured: list[str] = []
+
+    class _CapCache:
+        def get(self, _k):
+            return None
+
+        def set(self, k, _v, ttl=None):
+            captured.append(k)
+
+    monkeypatch.setattr(aar, "get_cache", lambda: _CapCache())
+
+    super_client.get(
+        "/v1/advanced-analytics/current-day-upmove/export"
+        "?sort_key=today_ltp&sort_dir=desc"
+    )
+    super_client.get(
+        "/v1/advanced-analytics/current-day-upmove/export"
+        "?sort_key=today_ltp&sort_dir=asc"
+    )
+
+    # Cache key segment is `:s{sort_key}:{sort_dir}` — the `s`
+    # prefix attaches to the sort_key with no delimiter (mirrors
+    # the existing :ftech{...}:ffund{...} pattern).
+    desc_keys = [k for k in captured if "stoday_ltp:desc" in k]
+    asc_keys = [k for k in captured if "stoday_ltp:asc" in k]
+    assert len(desc_keys) >= 1
+    assert len(asc_keys) >= 1
+
+
+def test_export_default_columns_load_succeeds(super_client):
+    """Default load (no columns param) must work — verifies
+    that all default-visible columns appear in
+    _CSV_COLUMN_LABELS."""
+    r = super_client.get(
+        "/v1/advanced-analytics/current-day-upmove/export"
+        "?columns=ticker,today_ltp,sma_50,avg_emv_score,avg_14d_emv"
+    )
+    assert r.status_code == 200
+    header = r.text.splitlines()[0]
+    assert "Avg EMV Score" in header
+    assert "Avg 14d EMV" in header

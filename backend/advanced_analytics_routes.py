@@ -1052,7 +1052,9 @@ _CSV_COLUMN_LABELS: dict[str, str] = {
     "company_name": "Company",
     "sector": "Sector",
     "sub_sector": "Sub-sector",
-    "pscore": "F-Score",
+    "avg_emv_score": "Avg EMV Score",
+    "avg_14d_emv": "Avg 14d EMV",
+    "pscore": "P-Score",
     "rsi": "RSI",
     "sma_50": "SMA 50",
     "sma_200": "SMA 200",
@@ -1183,11 +1185,15 @@ async def _stream_export(
     fund_keys = parse_filter_csv(fund, FUND_KEYS, "fund")
     cols = _validate_columns(columns)
     as_of = _effective_trading_date()
+    # Cache key includes raw sort_key (before validation) so
+    # requests differing only in sort_key / sort_dir get distinct
+    # cache slots. Mirrors _compute_report key structure (§5.13).
     ck = (
         f"cache:advanced_analytics:{report}:{user.user_id}"
         f":m{market}:t{ticker_type}:q{needle}"
         f":ftech{','.join(tech_keys)}"
         f":ffund{','.join(fund_keys)}"
+        f":s{sort_key or 'default'}:{sort_dir}"
         f":dt{as_of.isoformat()}:export:{','.join(cols)}"
     )
     hit = cache.get(ck)
@@ -1211,18 +1217,23 @@ async def _stream_export(
         ]
     rows = [r for r in rows if _passes_filter(r, report)]
 
+    # Validate sort_key against the model; fall back to the
+    # report's default if missing. Mirrors _apply_sort_paginate
+    # so the export and paginated views share the same sort.
     if sort_key and sort_key not in AdvancedRow.model_fields:
         sort_key = None
-
+    use_key, use_dir = _DEFAULT_SORT[report]
     if sort_key:
-        reverse = sort_dir == "desc"
-        rows.sort(
-            key=lambda r: (
-                getattr(r, sort_key) is None,
-                getattr(r, sort_key) or 0,
-            ),
-            reverse=reverse,
-        )
+        use_key = sort_key
+        use_dir = sort_dir
+    reverse = use_dir == "desc"
+    rows.sort(
+        key=lambda r: (
+            getattr(r, use_key) is None,
+            getattr(r, use_key) or 0,
+        ),
+        reverse=reverse,
+    )
 
     if report == "top-50-delivery-by-qty":
         rows = rows[:50]

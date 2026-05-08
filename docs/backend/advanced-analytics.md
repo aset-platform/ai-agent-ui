@@ -32,6 +32,15 @@ ScreenQL, RecommendationHistory, Admin Users).
 | `market` | `"all" \| "india" \| "us"` | `"all"` (UI default `india`) | Pre-filter via `detect_market()` |
 | `ticker_type` | `"all" \| "stock" \| "etf"` | `"all"` (UI default `stock`) | Pre-filter via `stock_registry.ticker_type` |
 | `search` | `str` (≤ 20 chars) | `""` | Case-insensitive substring match on ticker. Debounced 300 ms client-side |
+| `tech` | `str` (≤ 200, regex `^[a-z0-9_,]*$`) | `""` | Comma-joined sorted CSV of **technical** filter keys (e.g. `golden_recent,price_gt_sma50`). Allowlist enforced server-side; unknown key → 400. AND within bundle (Sprint 9 follow-on) |
+| `fund` | `str` (≤ 200, regex `^[a-z0-9_,]*$`) | `""` | Comma-joined sorted CSV of **fundamentals** filter keys (e.g. `fscore_ge_7,debt_lt_0_5`). Same shape + validation as `tech`. AND across bundles |
+
+**Filter bundles** — the canonical allowlist + predicates live in
+`backend/advanced_analytics_filters.py` (9 technical + 8 fundamentals).
+Frontend mirror: `frontend/components/advanced-analytics/filterCatalogs.ts`.
+Drift between the two is caught by `tests/backend/test_filter_catalog_sync.py`
+(CI gate). NaN/None on a row's source field excludes that row from the result —
+the existing stale-chip surface explains *why* upstream data is missing.
 
 **`as_of` anchor** (commit `8e16144`): every report
 caps both OHLCV + delivery loads to `MAX(date) FROM
@@ -91,9 +100,36 @@ per system-overview).
 
 ## Caching
 
-- Key: `cache:advanced_analytics:<report>:{user_id}:p{page}:s{sort_key|default}:{sort_dir}:ps{page_size}` (per-user — Sprint 7 cross-user leak fix, §5.9).
+- Key (paginated): `cache:advanced_analytics:<report>:{user_id}:m{market}:t{ticker_type}:q{search}:ftech{tech_csv}:ffund{fund_csv}:dt{as_of}:p{page}:s{sort_key|default}:{sort_dir}:ps{page_size}` (per-user — Sprint 7 cross-user leak fix, §5.9).
+- Key (export): same prefix, no `:p`/`:ps`, plus `:export:{cols_csv}` suffix.
 - TTL: `TTL_STABLE` (300 s).
-- Invalidation: `_CACHE_INVALIDATION_MAP` glob `cache:advanced_analytics:*` is fired by every Iceberg write to `nse_delivery`, `promoter_holdings`, `corporate_events`, `fundamentals_snapshot`, `ohlcv`, `technical_indicators` (CLAUDE.md §5.13).
+- Invalidation: `_CACHE_INVALIDATION_MAP` glob `cache:advanced_analytics:*` is fired by every Iceberg write to `nse_delivery`, `promoter_holdings`, `corporate_events`, `fundamentals_snapshot`, `ohlcv`, `technical_indicators` (CLAUDE.md §5.13). Single glob covers both paginated and export cache slots.
+
+## Export endpoint
+
+`GET /v1/advanced-analytics/<report>/export` — streams the **full
+filtered set** as CSV. Reuses the same compute pipeline as the
+paginated endpoint minus pagination.
+
+| Param | Type | Notes |
+|---|---|---|
+| `sort_key`, `sort_dir`, `market`, `ticker_type`, `search`, `tech`, `fund` | — | Same shape as the paginated endpoint |
+| `columns` | `str` (≤ 2000, regex `^[a-z0-9_,]*$`) | Sorted CSV of column keys to project. Validated against `_CSV_COLUMN_LABELS`. Empty → safe defaults (`ticker, today_ltp, sma_50, sma_200, rsi`). `ticker` is always prepended if missing. |
+| `fmt` | `"csv"` | Reserved for future `json` / `xlsx` |
+
+- **Hard cap**: `_MAX_EXPORT_ROWS = 10_000`. Over-cap → `413` with
+  `detail` containing "tighten filters". Frontend mirrors the cap
+  via `FILTER_EXPORT_ROW_CAP` and disables the CSV button when
+  `total > cap`, surfacing the same hint as a tooltip.
+- **Sort**: defaults to `_DEFAULT_SORT[report]` when `sort_key`
+  is empty; mirrors the paginated path so the export and view
+  agree on row order.
+- **Streaming**: `text/csv; charset=utf-8` in 64 KB chunks via
+  `StreamingResponse`. Header row uses `_CSV_COLUMN_LABELS`.
+  `Content-Disposition: attachment; filename="advanced-analytics-{report}-{YYYYMMDD}.csv"`.
+- **`top-50-delivery-by-qty` cap** is honoured in the export
+  (matches the paginated semantic contract) — first 50 rows after
+  the default sort, not the first 50 rows in cache order.
 
 ## Stale-ticker transparency chip
 
