@@ -49,8 +49,10 @@ def _ensure_iceberg_tables() -> None:
         from stocks.create_tables import (
             create_tables as create_stock_tables,
         )
+        from backend.algo.iceberg_init import create_algo_tables
         create_auth_tables()
         create_stock_tables()
+        create_algo_tables()
         logger.info("Iceberg tables ensured.")
     except Exception:
         logger.warning(
