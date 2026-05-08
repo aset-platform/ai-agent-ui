@@ -137,13 +137,32 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
 
   const { tech, fund, setTech, setFund, resetAll } = useFilterParams();
 
+  const handleSetTech = useCallback(
+    (next: string[]) => {
+      setTech(next);
+      setPage(1);
+    },
+    [setTech],
+  );
+  const handleSetFund = useCallback(
+    (next: string[]) => {
+      setFund(next);
+      setPage(1);
+    },
+    [setFund],
+  );
+  const handleResetAll = useCallback(() => {
+    resetAll();
+    setPage(1);
+  }, [resetAll]);
+
   const removeTech = useCallback(
-    (key: string) => setTech(tech.filter((k) => k !== key)),
-    [setTech, tech],
+    (key: string) => handleSetTech(tech.filter((k) => k !== key)),
+    [handleSetTech, tech],
   );
   const removeFund = useCallback(
-    (key: string) => setFund(fund.filter((k) => k !== key)),
-    [setFund, fund],
+    (key: string) => handleSetFund(fund.filter((k) => k !== key)),
+    [handleSetFund, fund],
   );
 
   // Filters change the result set — reset pagination at the
@@ -221,8 +240,17 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
     [sortKey],
   );
 
+  const csvDisabled =
+    !value ||
+    value.rows.length === 0 ||
+    value.total > FILTER_EXPORT_ROW_CAP;
+  const csvTooltip =
+    value && value.total > FILTER_EXPORT_ROW_CAP
+      ? `Export exceeds ${FILTER_EXPORT_ROW_CAP.toLocaleString("en-IN")} rows; tighten filters`
+      : undefined;
+
   const handleCsv = useCallback(async () => {
-    if (!value || value.rows.length === 0) return;
+    if (csvDisabled) return;
     const params = new URLSearchParams({
       sort_dir: sortDir,
       market,
@@ -240,7 +268,7 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
       console.error("CSV export failed", err);
     }
   }, [
-    value,
+    csvDisabled,
     sortDir,
     sortKey,
     market,
@@ -251,15 +279,6 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
     visibleCols,
     report,
   ]);
-
-  const csvDisabled =
-    !value ||
-    value.rows.length === 0 ||
-    value.total > FILTER_EXPORT_ROW_CAP;
-  const csvTooltip =
-    value && value.total > FILTER_EXPORT_ROW_CAP
-      ? `Export exceeds ${FILTER_EXPORT_ROW_CAP.toLocaleString("en-IN")} rows; tighten filters`
-      : undefined;
 
   const totalPages = value
     ? Math.max(1, Math.ceil(value.total / DEFAULT_PAGE_SIZE))
@@ -344,16 +363,16 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
             bundleLabel="Technical"
             catalog={TECH_FILTER_CATALOG}
             selected={tech}
-            onChange={setTech}
-            onReset={() => setTech([])}
+            onChange={handleSetTech}
+            onReset={() => handleSetTech([])}
           />
           <FilterDropdown
             bundleId="fund"
             bundleLabel="Fundamentals"
             catalog={FUND_FILTER_CATALOG}
             selected={fund}
-            onChange={setFund}
-            onReset={() => setFund([])}
+            onChange={handleSetFund}
+            onReset={() => handleSetFund([])}
           />
           <ColumnSelector
             catalog={catalog}
@@ -375,7 +394,7 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
         fund={fund}
         onRemoveTech={removeTech}
         onRemoveFund={removeFund}
-        onClearAll={resetAll}
+        onClearAll={handleResetAll}
       />
 
       {error && (
