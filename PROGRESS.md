@@ -2,6 +2,33 @@
 
 ---
 
+## 2026-05-08 (later 12) — Algo Trading Slices 9 + 10: Performance + Replay tabs
+
+**Branch:** `feature/algo-trading-session-10-performance-replay` (built off Session 9's tip)
+**Epic:** Algo Trading Platform v1
+**Spec:** `docs/superpowers/specs/2026-05-08-algo-trading-platform-design.md`
+
+**Shipped (Slice 9 — Performance):**
+- `GET /v1/algo/performance/runs` — algo.runs rows for the caller (any mode), newest first, joined with algo.strategies for the name. summary_json fields decoded with null-safety for pending/failed runs.
+- `usePerformanceRuns` SWR hook (30s dedup).
+- `PerformanceTab` — strategy-vs-strategy aggregate table (avg PnL%, avg win-rate, total PnL ₹ tone-coded), sorted by total PnL. Recent-runs table below with mode/status/started_at columns. Empty state when no completed runs.
+
+**Shipped (Slice 10 — Replay):**
+- `GET /v1/algo/replay/events` — cross-mode event timeline reader with mode/type/strategy_id/ts_date/limit filters. Permissive validation (unknown values return [] rather than 400).
+- `useReplayEvents(filters)` SWR hook with the filter object as the cache key (each combo cached independently).
+- `ReplayTab` — Mode + Type dropdown filters drive the SWR call; timeline reuses the color-coded per-event-type styling from Slice 8b's PaperEventsTimeline plus a mode chip on each row. Event count next to filters. Empty state.
+
+**Wiring:**
+- `AlgoTradingClient` now routes `?tab=performance` and `?tab=replay` to the new tabs (no more `PlaceholderTab` for either — the only remaining placeholder is none, all tabs are live).
+- Selectors registry extended.
+- 2 Playwright smokes confirm both tabs render with their key controls.
+
+**Tests:** 3 performance-route + 5 replay-route = **8 new pytest cases**. Total algo backend tests: **199 passing** (was 191). + 2 new Playwright smokes.
+
+**Epic milestone:** All 11 slices (0, 1, 2, 3, 4, 5, 6, 7a, 7b, 8a, 8b, 8c, 9, 10) of the v1 epic are now shipped to feature branches. The remaining v2 deferrals are all explicitly out of v1 scope (live Kite WS multiplexing, reconciliation loop, walk-forward CV, MinIO artifacts).
+
+---
+
 ## 2026-05-08 (later 11) — Algo Trading Slice 8c: paper supervisor + run lifecycle endpoints
 
 **Branch:** `feature/algo-trading-session-9-paper-supervisor` (built off Session 8's tip)
