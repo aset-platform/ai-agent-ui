@@ -13,6 +13,7 @@ from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
 from pyiceberg.transforms import IdentityTransform
 from pyiceberg.types import (
+    DoubleType,
     LongType,
     NestedField,
     StringType,
@@ -25,6 +26,83 @@ _logger = logging.getLogger(__name__)
 
 _NAMESPACE = "algo"
 _EVENTS_TABLE = f"{_NAMESPACE}.events"
+_INTRADAY_BARS_TABLE = f"{_NAMESPACE}.intraday_bars"
+
+
+def _intraday_bars_schema() -> Schema:
+    """Schema for ``algo.intraday_bars`` — append-only resampled
+    OHLCV bars from the live tick stream.
+
+    Bar open is the start of the bar's interval (e.g. for a 1m
+    bar at 09:15:00, the bar holds ticks from
+    [09:15:00, 09:16:00)).
+    """
+    return Schema(
+        NestedField(
+            field_id=1, name="ticker",
+            field_type=StringType(), required=True,
+        ),
+        NestedField(
+            field_id=2, name="bar_date",
+            field_type=StringType(), required=True,
+        ),
+        NestedField(
+            field_id=3, name="interval_sec",
+            field_type=LongType(), required=True,
+        ),
+        NestedField(
+            field_id=4, name="bar_open_ts_ns",
+            field_type=LongType(), required=True,
+        ),
+        NestedField(
+            field_id=5, name="open",
+            field_type=DoubleType(), required=True,
+        ),
+        NestedField(
+            field_id=6, name="high",
+            field_type=DoubleType(), required=True,
+        ),
+        NestedField(
+            field_id=7, name="low",
+            field_type=DoubleType(), required=True,
+        ),
+        NestedField(
+            field_id=8, name="close",
+            field_type=DoubleType(), required=True,
+        ),
+        NestedField(
+            field_id=9, name="volume",
+            field_type=LongType(), required=True,
+        ),
+        NestedField(
+            field_id=10, name="written_at",
+            field_type=TimestampType(), required=True,
+        ),
+    )
+
+
+def _intraday_bars_partition_spec() -> PartitionSpec:
+    schema = _intraday_bars_schema()
+    ticker_field = next(
+        f for f in schema.fields if f.name == "ticker"
+    )
+    date_field = next(
+        f for f in schema.fields if f.name == "bar_date"
+    )
+    return PartitionSpec(
+        PartitionField(
+            source_id=ticker_field.field_id,
+            field_id=1000,
+            transform=IdentityTransform(),
+            name="ticker",
+        ),
+        PartitionField(
+            source_id=date_field.field_id,
+            field_id=1001,
+            transform=IdentityTransform(),
+            name="bar_date",
+        ),
+    )
 
 
 def _events_schema() -> Schema:
@@ -140,4 +218,10 @@ def create_algo_tables() -> None:
         _EVENTS_TABLE,
         _events_schema(),
         _events_partition_spec(),
+    )
+    _create_table(
+        catalog,
+        _INTRADAY_BARS_TABLE,
+        _intraday_bars_schema(),
+        _intraday_bars_partition_spec(),
     )
