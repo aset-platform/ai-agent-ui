@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-05-08 (later 5) — Algo Trading Slice 7a: backtest engine (headless)
+
+**Branch:** `feature/algo-trading-session-4-backtest-engine` (built off Session 3's tip)
+**Epic:** Algo Trading Platform v1
+**Spec:** `docs/superpowers/specs/2026-05-08-algo-trading-platform-design.md`
+**Plan:** `docs/superpowers/plans/2026-05-08-algo-trading-session-4-backtest-engine.md`
+
+**Shipped (Slice 7a — headless engine only):**
+- Pydantic types for the engine boundary (BacktestRequest / BarData / OrderIntent / Fill / Position / BacktestSummary).
+- `load_ohlcv_window()` over DuckDB via `query_iceberg_table` with look-ahead guard (period_end > today raises BackedFutureBarError).
+- `SimBroker` filling intents at NEXT bar's open (T+1) with full IndianFeeModel fee accounting + rates_version stamp.
+- `PositionTracker` long-only with weighted-avg cost basis + FIFO realised P&L + mark-to-market unrealised.
+- `Evaluator` per-bar AST dispatch (compare/and/or/not/if) with action passthrough.
+- `runner.run_backtest()` end-to-end orchestrator: bar walk → eval → SimBroker → positions → equity curve + drawdown + summary.
+- `algo.events` event_writer with single end-of-run Iceberg commit (no per-event hot loop).
+- `POST /v1/algo/backtest/run` + `GET /v1/algo/backtest/runs/{id}` endpoints.
+
+**Adaptations during execution:**
+- Plan referenced `stocks.repository._get_duckdb_connection`; actual helper is `backend.db.duckdb_engine.query_iceberg_table` — runner uses the dict-row interface returned by that helper.
+- Sim-broker test fixtures rebased from 2024 to 2026-04 dates because `fee_rates.yaml` only contains the 2026-04-01 effective row.
+
+**Tests:** 3 lookahead-guard + 6 sim-broker + 7 positions + 10 evaluator + 4 runner + 5 routes = **35 new tests, all green**. Total algo backend tests: **126 passing** (was 91).
+
+**Deferred to Session 5 (Slice 7b):**
+- Backtest tab UI with equity-curve ECharts + trade table + summary metric cards.
+- PG-backed `algo.runs` persistence (replaces in-memory _RUNS dict).
+- MinIO artifact upload (PNG equity curve + JSONL events bundle + CSV trade list).
+- Universe resolution from strategy.universe.scope via _scoped_tickers.
+- Async-job wrapper so /run returns run_id immediately and the UI polls /runs/{id}.
+
+**Deferred to v2:**
+- crossover / between / select_top_n / weighted node evaluation (currently no-op).
+- set_target_weight resolver (needs portfolio sizer).
+- Slippage modelling beyond next-open fills.
+- Walk-forward CV harness (current impl is single-period).
+
+---
+
 ## 2026-05-08 (later 4) — Algo Trading Session 4 plan handoff (Slice 7a backtest engine)
 
 **Branch:** `feature/algo-trading-session-4-backtest-engine` (built off Session 3's tip; pushed to origin, plan-only)
