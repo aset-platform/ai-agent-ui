@@ -3302,3 +3302,12 @@ def execute_promoter_holdings_quarterly(
         cancelled=False,
         started_at=_run_start,
     )
+
+
+@register_job("algo_kite_instruments_refresh")
+async def _job_algo_kite_instruments_refresh(
+    payload: dict | None = None,
+):
+    """Daily 07:00 IST refresh of algo.instruments from Kite."""
+    from backend.algo.jobs.instrument_refresh import run
+    return await run(payload)

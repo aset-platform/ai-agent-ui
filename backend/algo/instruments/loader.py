@@ -19,7 +19,7 @@ from sqlalchemy import text
 from backend.algo.broker.credentials_repo import BrokerCredentialsRepo
 from backend.algo.broker.kite_client import KiteClient
 from backend.algo.instruments.repo import InstrumentsRepo
-from backend.db.repository import get_session_factory
+from backend.db.engine import get_session_factory
 
 _logger = logging.getLogger(__name__)
 

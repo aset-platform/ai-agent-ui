@@ -3977,6 +3977,7 @@ def create_app(
     from backend.algo.routes import (
         create_broker_router,
         create_fees_router,
+        create_instruments_router,
         create_strategies_router,
     )
 
@@ -3986,6 +3987,10 @@ def create_app(
     )
     app.include_router(
         create_fees_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_instruments_router(),
         prefix="/v1",
     )
     app.include_router(
