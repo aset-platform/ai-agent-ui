@@ -3975,10 +3975,15 @@ def create_app(
 
     # Algo trading endpoints.
     from backend.algo.routes import (
+        create_broker_router,
         create_fees_router,
         create_strategies_router,
     )
 
+    app.include_router(
+        create_broker_router(),
+        prefix="/v1",
+    )
     app.include_router(
         create_fees_router(),
         prefix="/v1",
