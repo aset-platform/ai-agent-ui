@@ -18,6 +18,7 @@ import {
   type AlgoTabId,
 } from "@/lib/types/algoTrading";
 
+import { BacktestTab } from "@/components/algo-trading/BacktestTab";
 import { ConnectBrokerTab } from "@/components/algo-trading/ConnectBrokerTab";
 import { InstrumentsTab } from "@/components/algo-trading/InstrumentsTab";
 import { SettingsTab } from "@/components/algo-trading/SettingsTab";
@@ -54,6 +55,8 @@ export default function AlgoTradingClient() {
         return <InstrumentsTab />;
       case "strategies":
         return <StrategiesTab />;
+      case "backtest":
+        return <BacktestTab />;
       case "settings":
         return <SettingsTab />;
       default:
