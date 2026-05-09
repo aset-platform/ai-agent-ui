@@ -90,13 +90,15 @@ async def _check_gates(
     redis_client: Any,
 ) -> GatesStatus:
     """Evaluate all 4 live-mode gates from PG/Redis."""
-    from backend.algo.broker.credentials_repo import CredentialsRepo
+    from backend.algo.broker.credentials_repo import (
+        BrokerCredentialsRepo,
+    )
     from backend.algo.live.caps_repo import CapsRepo
     from backend.algo.live.drift_repo import DriftRepo
     from backend.algo.paper.kill_switch_repo import KillSwitchRepo
 
     # Gate 1: Kite connected (access_token present + not expired)
-    creds_repo = CredentialsRepo()
+    creds_repo = BrokerCredentialsRepo()
     creds = await creds_repo.get_credentials(user_id)
     kite_connected = bool(
         creds and creds.get("access_token_fernet"),

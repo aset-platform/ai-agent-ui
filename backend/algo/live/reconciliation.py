@@ -132,11 +132,13 @@ async def _fetch_broker_positions(user_id: UUID) -> dict[str, int]:
     Falls back to empty dict if credentials are missing / expired
     (logs a WARNING — the job handles absent credentials gracefully).
     """
-    from backend.algo.broker.credentials_repo import CredentialsRepo
+    from backend.algo.broker.credentials_repo import (
+        BrokerCredentialsRepo,
+    )
     from backend.algo.broker.kite_client import KiteClient
     from auth.encryption import decrypt_fernet
 
-    repo = CredentialsRepo()
+    repo = BrokerCredentialsRepo()
     creds = await repo.get_credentials(user_id)
     if not creds:
         _logger.warning(
