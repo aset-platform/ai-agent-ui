@@ -8,17 +8,25 @@ import pytest
 from cryptography.fernet import Fernet
 
 from backend.crypto import byo_secrets
+from backend.secret_loader import load_secret
 
 
 @pytest.fixture(autouse=True)
 def _reset_and_seed(monkeypatch):
-    """Reset singleton + inject a fresh master key per test."""
+    """Reset singleton + inject a fresh master key per test.
+
+    Also clears load_secret LRU cache so each test reads a fresh
+    value from env (needed after byo_secrets switched from
+    os.environ to load_secret).
+    """
+    load_secret.cache_clear()
     monkeypatch.setattr(byo_secrets, "_fernet", None)
     monkeypatch.setenv(
         "BYO_SECRET_KEY", Fernet.generate_key().decode(),
     )
     yield
     monkeypatch.setattr(byo_secrets, "_fernet", None)
+    load_secret.cache_clear()
 
 
 def test_round_trip_recovers_plaintext():
