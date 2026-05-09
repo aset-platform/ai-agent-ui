@@ -295,4 +295,19 @@ export const FE = {
   algoReplayTypeSelect: "replay-type-select",
   algoReplayTimeline: "replay-timeline",
   algoReplayEmpty: "replay-empty",
+
+  // ── Algo Trading — Strategy Levers ───────
+  algoStrategyLeversPanel: "strategy-levers-panel",
+  algoStrategyLeversToggle: "strategy-levers-toggle",
+  algoStrategyLeversBody: "strategy-levers-body",
+  algoLeverUniverseScope: "lever-universe-scope",
+  algoLeverUniverseMarket: "lever-universe-market",
+  algoLeverRebalanceMaxPositions:
+    "lever-rebalance-max-positions",
+  algoLeverRiskMaxExposurePct:
+    "lever-risk-max-exposure-pct",
+  algoLeverRiskMaxConcentrationPct:
+    "lever-risk-max-concentration-pct",
+  algoLeverRiskMaxQty: "lever-risk-max-qty",
+  algoLeverRiskMaxLossPct: "lever-risk-max-loss-pct",
 } as const;
