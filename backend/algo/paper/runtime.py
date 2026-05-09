@@ -93,11 +93,14 @@ class PaperRuntime:
                 compute_market_regime as _cmr,
                 compute_market_trend_strength as _cmts,
             )
-            today = _date.today()
+            # ``load_ohlcv_window`` validates against UTC today;
+            # using local IST time here would race past the UTC
+            # boundary and trip BackedFutureBarError. Match the
+            # validator's clock.
+            today = datetime.now(timezone.utc).date()
             window_start = today - timedelta(days=365 * 3)
-            window_end = today + timedelta(days=1)
-            self._market_regime = _cmr(window_start, window_end)
-            self._market_trend = _cmts(window_start, window_end)
+            self._market_regime = _cmr(window_start, today)
+            self._market_trend = _cmts(window_start, today)
             _logger.info(
                 "PaperRuntime: regime cache loaded — %d regime "
                 "days, %d trend days",
