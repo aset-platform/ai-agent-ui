@@ -128,6 +128,13 @@ def run_backtest(
     # the top of each bar_date.
     day_start_realised = Decimal("0")
     last_bar_date = None
+    # Per-ticker most-recent close at-or-before the current
+    # bar_date. Used to mark open positions to market for the
+    # unrealised-P&L contribution to the daily equity curve.
+    # Updated as we walk the inner loop; persists across days
+    # so a ticker that doesn't trade today (holiday / new
+    # listing gap) keeps its prior close as the mark.
+    last_close: dict[str, Decimal] = {}
 
     # Walk bars chronologically. We zip each ticker's series so
     # bar dates that are common across the universe step in lockstep.
@@ -153,6 +160,10 @@ def run_backtest(
             )
             if current is None:
                 continue
+            # Refresh the mark-to-market price for this ticker
+            # before any strategy logic runs on the bar — the
+            # end-of-day equity snapshot below uses last_close.
+            last_close[ticker] = current.close
             open_pos = pt.open_positions().get(ticker)
             ticker_features = indicators.get(ticker, {}).get(
                 bar_date,
@@ -304,12 +315,12 @@ def run_backtest(
                 },
             ))
 
-        # End-of-day equity snapshot.
-        marks = {
-            t: blist[-1].close
-            for t, blist in bars.items()
-            if blist and blist[-1].date <= bar_date
-        }
+        # End-of-day equity snapshot. last_close holds the
+        # most-recent close at-or-before today for each ticker
+        # we've seen, so unrealised P&L on open positions
+        # tracks the actual market path day-by-day instead of
+        # being suppressed until period_end.
+        marks = dict(last_close)
         equity = (
             request.initial_capital_inr
             + pt.total_realised_pnl_inr()

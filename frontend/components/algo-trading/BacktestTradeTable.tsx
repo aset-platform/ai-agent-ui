@@ -33,7 +33,9 @@ const DEFAULT_COLS = [
   "qty",
   "avg_price",
   "fill_price",
+  "opened_at",
   "closed_at",
+  "holding_days",
   "realised_pnl_inr",
   "return_pct",
 ];
