@@ -110,8 +110,67 @@ export function PaperTab() {
       {/* Reconciliation drift chip */}
       <ReconciliationDriftPanel />
 
-      {/* Paper runs */}
-      <ActiveRunsPanel />
+      {/* Controls row: Paper runs (left) + Live order placement (right).
+          Stacks vertically on narrow viewports, side-by-side on lg+. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Paper runs */}
+        <ActiveRunsPanel />
+
+        {/* ---- Live mode section ---- */}
+        <div
+          className="rounded-md border border-indigo-100
+            dark:border-indigo-900/50 p-3"
+          data-testid="live-mode-section"
+        >
+          <h3 className="text-sm font-semibold text-slate-900
+            dark:text-slate-100">
+            Live order placement (V2-5)
+          </h3>
+          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+            Select a strategy to configure and enable live order
+            placement via Zerodha Kite.
+          </p>
+
+          <label className="mt-2 flex flex-col gap-0.5">
+            <span className="text-[11px] text-slate-500">
+              Strategy
+            </span>
+            <select
+              className="rounded border border-slate-300
+                dark:border-slate-600 bg-white dark:bg-slate-800
+                px-2 py-1 text-sm w-64"
+              value={liveStrategyId}
+              onChange={(e) => setLiveStrategyId(e.target.value)}
+              data-testid="live-strategy-select"
+            >
+              <option value="">Select strategy…</option>
+              {strategies.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {liveStrategyId && selectedStrategy && (
+            <div className="mt-3">
+              <LiveSection
+                strategyId={liveStrategyId}
+                strategyName={selectedStrategy.name}
+              />
+            </div>
+          )}
+
+          {!liveStrategyId && (
+            <p
+              className="mt-3 text-xs text-slate-400"
+              data-testid="live-no-strategy-msg"
+            >
+              Pick a strategy above to see live trading controls.
+            </p>
+          )}
+        </div>
+      </div>
 
       {error && (
         <div
@@ -124,61 +183,6 @@ export function PaperTab() {
       )}
 
       <PaperEventsTimeline events={events} loading={loading} />
-
-      {/* ---- Live mode section ---- */}
-      <div
-        className="mt-4 rounded-md border border-indigo-100
-          dark:border-indigo-900/50 p-3"
-        data-testid="live-mode-section"
-      >
-        <h3 className="text-sm font-semibold text-slate-900
-          dark:text-slate-100">
-          Live order placement (V2-5)
-        </h3>
-        <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-          Select a strategy to configure and enable live order
-          placement via Zerodha Kite.
-        </p>
-
-        <label className="mt-2 flex flex-col gap-0.5">
-          <span className="text-[11px] text-slate-500">
-            Strategy
-          </span>
-          <select
-            className="rounded border border-slate-300
-              dark:border-slate-600 bg-white dark:bg-slate-800
-              px-2 py-1 text-sm w-64"
-            value={liveStrategyId}
-            onChange={(e) => setLiveStrategyId(e.target.value)}
-            data-testid="live-strategy-select"
-          >
-            <option value="">Select strategy…</option>
-            {strategies.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        {liveStrategyId && selectedStrategy && (
-          <div className="mt-3">
-            <LiveSection
-              strategyId={liveStrategyId}
-              strategyName={selectedStrategy.name}
-            />
-          </div>
-        )}
-
-        {!liveStrategyId && (
-          <p
-            className="mt-3 text-xs text-slate-400"
-            data-testid="live-no-strategy-msg"
-          >
-            Pick a strategy above to see live trading controls.
-          </p>
-        )}
-      </div>
     </div>
   );
 }
