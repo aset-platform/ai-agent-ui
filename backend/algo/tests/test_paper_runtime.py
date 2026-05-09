@@ -118,3 +118,44 @@ async def test_runtime_max_qty_rejection_emits_signal_rejected():
         if r["type"] == "signal_rejected"
     ]
     assert all(p["reason"] == "max_qty" for p in rejected)
+
+
+@pytest.mark.asyncio
+async def test_runtime_skips_bar_when_strategy_needs_missing_feature():
+    """Strategy referencing sma_50 against the 30-tick replay
+    fixture (only ~3 bars) should not crash — missing-feature
+    KeyError must be caught + bar skipped, same as backtest."""
+    payload = _strategy_payload()
+    payload["root"] = {
+        "type": "if",
+        "cond": {
+            "type": "compare",
+            "left": {"feature": "today_ltp"},
+            "op": ">",
+            "right": {"feature": "sma_50"},
+        },
+        "then": {"type": "buy", "qty": {"shares": 1}},
+        "else": {"type": "hold"},
+    }
+    strategy = parse_strategy(payload)
+    runtime = PaperRuntime(
+        strategy=strategy,
+        user_id=uuid4(),
+        initial_capital_inr=Decimal("100000"),
+        fee_as_of=date(2026, 4, 1),
+    )
+    with patch(
+        "backend.algo.paper.runtime.flush_events",
+    ) as flush:
+        fills = await runtime.run(
+            ReplayTickSource(_FIXTURE, pace="fast"),
+        )
+    # No crash, no fills (sma_50 never available in 3 bars).
+    assert fills == 0
+    # flush_events may not be called if the events list is
+    # empty (no fills, no rejections — every bar quietly skipped).
+    if flush.call_args is not None:
+        rows = flush.call_args.args[0]
+        # Specifically verify NO fills slipped through.
+        filled = [r for r in rows if r["type"] == "order_filled"]
+        assert len(filled) == 0

@@ -42,6 +42,10 @@ _logger = logging.getLogger(__name__)
 
 
 def _features_for_bar(bar) -> dict[str, Decimal]:  # noqa: ANN001
+    """Minimal fallback feature map. The runtime augments this
+    with rolling indicators (SMAs, golden_cross_days_ago) on
+    every bar close — see _on_bar_close. This stub is used only
+    when the indicator engine has zero history for a ticker."""
     return {
         "today_ltp": bar.close,
         "today_vol": Decimal(bar.volume),
@@ -69,6 +73,11 @@ class PaperRuntime:
         self._session_id = uuid4()
         self._events: list[dict[str, Any]] = []
         self._kill_switch_active = kill_switch_active
+        # Per-ticker rolling bar history for indicator computation.
+        # On every closed bar we re-run compute_indicators over the
+        # ticker's full series. SMA + golden_cross are O(N); paper
+        # sessions are bounded (~375 1m bars/day) so cost is fine.
+        self._bars_by_ticker: dict[str, list] = {}
 
     async def run(self, source: TickSource) -> int:
         """Drain the source. Returns the count of fills emitted."""
@@ -112,15 +121,53 @@ class PaperRuntime:
         bar_date_obj = datetime.fromtimestamp(
             bar.bar_open_ts_ns / 1_000_000_000, tz=timezone.utc,
         ).date()
+
+        # Append to per-ticker history + recompute indicators
+        # over the full series. The strategy AST may reference
+        # SMAs / golden_cross_days_ago that the minimal stub
+        # _features_for_bar can't provide.
+        # Stream.Bar uses float OHLCV; backtest indicators expect
+        # Decimal + a `.date` attr — adapt via a tiny shim.
+        from backend.algo.backtest.indicators import (
+            compute_indicators,
+        )
+        from backend.algo.backtest.types import (
+            BarData as _BackBar,
+        )
+        adapted = _BackBar(
+            ticker=bar.ticker,
+            date=bar_date_obj,
+            open=Decimal(str(bar.open)),
+            high=Decimal(str(bar.high)),
+            low=Decimal(str(bar.low)),
+            close=Decimal(str(bar.close)),
+            volume=int(bar.volume),
+        )
+        history = self._bars_by_ticker.setdefault(bar.ticker, [])
+        history.append(adapted)
+        ind_map = compute_indicators(history)
+        features = ind_map.get(
+            bar_date_obj, _features_for_bar(bar),
+        )
+
         ctx = EvalContext(
             ticker=bar.ticker,
             bar_date=bar_date_obj,
-            features=_features_for_bar(bar),
+            features=features,
             open_qty=existing_pos.qty if existing_pos else 0,
         )
-        action = self._evaluator.eval_node(
-            self._strategy.root.model_dump(by_alias=True), ctx,
-        )
+        try:
+            action = self._evaluator.eval_node(
+                self._strategy.root.model_dump(by_alias=True),
+                ctx,
+            )
+        except KeyError:
+            # Strategy referenced a feature we don't yet have
+            # (typical at session start before SMA windows
+            # accumulate). No-op for this bar; fires once
+            # history fills in. Same semantics as the backtest
+            # runner's KeyError guard.
+            return 0
         signal = self._action_to_signal(
             action,
             ticker=bar.ticker,
