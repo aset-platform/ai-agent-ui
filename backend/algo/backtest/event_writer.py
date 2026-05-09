@@ -43,12 +43,33 @@ def event_row(
     }
 
 
+# Explicit Arrow schema matching algo.events Iceberg schema —
+# every column nullable=False except strategy_id (which the Iceberg
+# spec defines as optional for system events). pa.Table.from_pylist
+# alone infers nullable=True everywhere, which PyIceberg rejects
+# at write time with a "Mismatch in fields" error.
+_EVENTS_ARROW_SCHEMA = pa.schema([
+    pa.field("event_id", pa.string(), nullable=False),
+    pa.field("ts_ns", pa.int64(), nullable=False),
+    pa.field("ts_date", pa.string(), nullable=False),
+    pa.field("session_id", pa.string(), nullable=False),
+    pa.field("user_id", pa.string(), nullable=False),
+    pa.field("strategy_id", pa.string(), nullable=True),
+    pa.field("mode", pa.string(), nullable=False),
+    pa.field("type", pa.string(), nullable=False),
+    pa.field("payload_json", pa.string(), nullable=False),
+    pa.field(
+        "written_at", pa.timestamp("us"), nullable=False,
+    ),
+])
+
+
 def flush_events(rows: list[dict[str, Any]]) -> None:
     """Single Iceberg commit. No-op on empty list."""
     if not rows:
         return
     repo = StockRepository()
-    arrow = pa.Table.from_pylist(rows)
+    arrow = pa.Table.from_pylist(rows, schema=_EVENTS_ARROW_SCHEMA)
     repo._retry_commit(  # noqa: SLF001 — internal-but-stable
         "algo.events", "append", arrow,
     )

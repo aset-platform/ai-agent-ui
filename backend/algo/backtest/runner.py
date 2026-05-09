@@ -153,14 +153,31 @@ def run_backtest(
                 features=ticker_features,
                 open_qty=open_pos.qty if open_pos else 0,
             )
-            action = evaluator.eval_node(
-                strategy.root.model_dump(by_alias=True),
-                ctx,
-            )
+            try:
+                action = evaluator.eval_node(
+                    strategy.root.model_dump(by_alias=True),
+                    ctx,
+                )
+            except KeyError:
+                # Strategy referenced a feature we couldn't
+                # compute for this (ticker, bar) — typically
+                # because the ticker has insufficient OHLCV
+                # history to yet form the rolling window
+                # (newly-listed stocks, recent additions to the
+                # registry, etc.). No-op for this bar; the
+                # strategy will start firing once history fills.
+                continue
 
+            current_equity = (
+                request.initial_capital_inr
+                + pt.total_realised_pnl_inr()
+                - total_fees
+            )
             intent = _action_to_intent(
                 action, ticker=ticker, bar_date=bar_date,
                 pt=pt,
+                last_price=current.close,
+                current_equity=current_equity,
             )
             if intent is None:
                 continue
@@ -280,8 +297,15 @@ def _action_to_intent(
     ticker: str,
     bar_date,  # noqa: ANN001
     pt: PositionTracker,
+    last_price: Decimal | None = None,
+    current_equity: Decimal | None = None,
 ) -> OrderIntent | None:
-    """Translate an evaluator action dict to an OrderIntent (or None)."""
+    """Translate an evaluator action dict to an OrderIntent (or None).
+
+    ``last_price`` + ``current_equity`` are required only for
+    ``set_target_weight`` resolution; all other action types
+    ignore them.
+    """
     t = action.get("type")
     if t == "buy":
         qty = action["qty"].get("shares") or 0
@@ -316,6 +340,36 @@ def _action_to_intent(
             ticker=ticker, side="SELL", qty=existing.qty,
             intent_emitted_at=bar_date,
         )
-    # set_target_weight + hold = no-op in 7a (weight resolution
-    # lands in 7b alongside the universe sizer).
+    if t == "set_target_weight":
+        # Resolve the weight against current equity at this bar.
+        # target_qty = floor(weight * equity / last_price)
+        # Diff vs existing position emits a BUY (under-weight)
+        # or SELL (over-weight). Equal weight is a no-op.
+        if last_price is None or last_price <= 0:
+            return None
+        if current_equity is None or current_equity <= 0:
+            return None
+        try:
+            weight = Decimal(str(action.get("weight", 0)))
+        except Exception:  # noqa: BLE001
+            return None
+        if weight <= 0:
+            return None
+        target_notional = current_equity * weight
+        target_qty = int(target_notional // last_price)
+        existing = pt.open_positions().get(ticker)
+        current_qty = existing.qty if existing else 0
+        diff = target_qty - current_qty
+        if diff > 0:
+            return OrderIntent(
+                ticker=ticker, side="BUY", qty=int(diff),
+                intent_emitted_at=bar_date,
+            )
+        if diff < 0:
+            return OrderIntent(
+                ticker=ticker, side="SELL", qty=int(-diff),
+                intent_emitted_at=bar_date,
+            )
+        return None
+    # `hold` is an explicit no-op.
     return None

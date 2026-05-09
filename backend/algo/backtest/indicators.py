@@ -26,9 +26,12 @@ from backend.algo.backtest.types import BarData
 
 _logger = logging.getLogger(__name__)
 
-# Default warmup so SMA200 is well-formed at period_start. Extra
-# days don't hurt — they only widen the OHLCV scan slightly.
-DEFAULT_WARMUP_BARS = 220
+# Default warmup so SMA200 is well-formed at period_start.
+# 200 trading days ≈ 280 calendar days (5/7 trading-day ratio
+# minus IST holidays). 400 calendar days gives a comfortable
+# buffer so SMA200 + golden_cross_days_ago are settled by the
+# user-requested period_start.
+DEFAULT_WARMUP_BARS = 400
 
 # Sentinel for "no crossover seen yet" — large enough that any
 # `<= N` comparison in a strategy condition fails.
