@@ -32,6 +32,7 @@ SERVICE="${ASET_KEYCHAIN_SERVICE:-aset-platform}"
 # mount it into the consuming service.
 SLUGS=(
   "algo_kite_api_secret"
+  "byo_secret_key"
 )
 
 usage() {
