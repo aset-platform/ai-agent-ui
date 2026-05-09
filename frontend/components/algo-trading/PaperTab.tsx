@@ -136,7 +136,7 @@ export function PaperTab() {
         >
           <h3 className="text-sm font-semibold text-slate-900
             dark:text-slate-100">
-            Live order placement (V2-5)
+            Live order placement
           </h3>
           <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
             Select a strategy to configure and enable live order
