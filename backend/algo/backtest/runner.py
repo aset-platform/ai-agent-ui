@@ -17,6 +17,10 @@ from uuid import UUID, uuid4
 from backend.algo.backtest.data_source import load_ohlcv_window
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 from backend.algo.backtest.event_writer import event_row, flush_events
+from backend.algo.backtest.indicators import (
+    DEFAULT_WARMUP_BARS,
+    compute_indicators_for_universe,
+)
 from backend.algo.backtest.positions import PositionTracker
 from backend.algo.backtest.sim_broker import (
     NoBarAvailableError,
@@ -32,16 +36,6 @@ from backend.algo.backtest.types import (
 from backend.algo.strategy.ast import Strategy
 
 _logger = logging.getLogger(__name__)
-
-
-def _features_for_bar(bar) -> dict[str, Decimal]:  # noqa: ANN001
-    """Minimal v1 feature map — runner currently only exposes
-    OHLCV-derived leaves. Slice 7b extends with technical /
-    fundamental joins."""
-    return {
-        "today_ltp": bar.close,
-        "today_vol": Decimal(bar.volume),
-    }
 
 
 def _trade_row(p, fill_price: Decimal) -> TradeRow:  # noqa: ANN001
@@ -104,11 +98,16 @@ def run_backtest(
         },
     ))
 
+    # Load with warmup history so SMA200 etc. are well-formed at
+    # period_start. Indicators are computed once over the FULL
+    # series; the bar walk below skips warmup-only dates.
     bars = load_ohlcv_window(
         tickers=universe,
         period_start=request.period_start,
         period_end=request.period_end,
+        warmup_days=DEFAULT_WARMUP_BARS,
     )
+    indicators = compute_indicators_for_universe(bars)
     sim = SimBroker(bars=bars, fee_as_of=request.period_start)
     evaluator = Evaluator()
     pt = PositionTracker()
@@ -126,6 +125,11 @@ def run_backtest(
     })
 
     for bar_date in all_dates:
+        # Warmup-only bars feed the indicator engine but never
+        # see strategy evaluation — the user asked to backtest
+        # period_start..period_end, not the warmup range.
+        if bar_date < request.period_start:
+            continue
         for ticker in universe:
             blist = bars.get(ticker)
             if not blist:
@@ -136,10 +140,17 @@ def run_backtest(
             if current is None:
                 continue
             open_pos = pt.open_positions().get(ticker)
+            ticker_features = indicators.get(ticker, {}).get(
+                bar_date,
+                {
+                    "today_ltp": current.close,
+                    "today_vol": Decimal(current.volume),
+                },
+            )
             ctx = EvalContext(
                 ticker=ticker,
                 bar_date=bar_date,
-                features=_features_for_bar(current),
+                features=ticker_features,
                 open_qty=open_pos.qty if open_pos else 0,
             )
             action = evaluator.eval_node(

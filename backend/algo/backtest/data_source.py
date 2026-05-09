@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -54,11 +54,17 @@ def load_ohlcv_window(
     tickers: list[str],
     period_start: date,
     period_end: date,
+    warmup_days: int = 0,
 ) -> dict[str, list[BarData]]:
     """Bulk-load OHLCV for *tickers* over the closed interval.
 
     Returns ``{ticker: [BarData, ...]}`` sorted by date ascending.
     Tickers with no rows in the period are absent from the dict.
+
+    ``warmup_days`` widens the read window backward by N calendar
+    days so callers (the indicator engine) have history for
+    rolling features (SMA200 needs ~200 prior bars). The look-ahead
+    guard still applies to ``period_end``.
 
     Raises:
         BackedFutureBarError: if ``period_end`` is past today UTC.
@@ -76,6 +82,13 @@ def load_ohlcv_window(
             f"period_start {period_start.isoformat()} is after "
             f"period_end {period_end.isoformat()}."
         )
+    if warmup_days < 0:
+        raise ValueError("warmup_days must be non-negative.")
+    effective_start = (
+        period_start - timedelta(days=warmup_days)
+        if warmup_days > 0
+        else period_start
+    )
     if not tickers:
         return {}
 
@@ -89,7 +102,7 @@ def load_ohlcv_window(
     )
 
     rows = query_iceberg_table(
-        "stocks.ohlcv", sql, [period_start, period_end],
+        "stocks.ohlcv", sql, [effective_start, period_end],
     )
 
     grouped: dict[str, list[BarData]] = {}
