@@ -124,19 +124,42 @@ class LiveRuntime:
         """Drain the tick source. Returns fill count."""
         fills = 0
         last_price_per_ticker: dict[str, Decimal] = {}
+        tick_count = 0
+        bar_count = 0
+        signal_count = 0
+        _logger.info(
+            "LiveRuntime: starting drain user=%s strat=%s "
+            "run_id=%s",
+            self._user_id, self._strategy.id, self._run_id,
+        )
         try:
             async for tick in source:
+                tick_count += 1
+                if tick_count == 1 or tick_count % 500 == 0:
+                    _logger.info(
+                        "LiveRuntime: tick #%d ticker=%s",
+                        tick_count, tick.ticker,
+                    )
                 last_price_per_ticker[tick.ticker] = (
                     Decimal(str(tick.ltp))
                 )
                 self._resampler.feed(tick)
                 for bar in self._resampler.pop_completed():
+                    bar_count += 1
                     lp = last_price_per_ticker.get(
                         bar.ticker, Decimal(str(bar.close)),
                     )
-                    fills += await self._on_bar_close(
+                    n = await self._on_bar_close(
                         bar=bar, last_price=lp,
                     )
+                    fills += n
+                    if n > 0:
+                        signal_count += n
+            _logger.info(
+                "LiveRuntime: drain complete ticks=%d bars=%d "
+                "fills=%d events_buffered=%d",
+                tick_count, bar_count, fills, len(self._events),
+            )
         finally:
             for bar in self._resampler.close_partial_bars():
                 lp = last_price_per_ticker.get(
@@ -146,6 +169,10 @@ class LiveRuntime:
                     bar=bar, last_price=lp,
                 )
             if self._events:
+                _logger.info(
+                    "LiveRuntime: flushing %d events to "
+                    "algo.events", len(self._events),
+                )
                 flush_events(self._events)
                 self._events = []
             if hasattr(source, "stop"):
