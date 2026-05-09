@@ -67,7 +67,6 @@ async def _build_live_ws_source(
     )
     from backend.algo.instruments.repo import InstrumentsRepo
     from backend.algo.stream.sources import LiveWsTickSource
-    from backend.db.pg_utils import _pg_session
 
     # --- 1. Credentials ------------------------------------------------
     creds_repo = BrokerCredentialsRepo()
