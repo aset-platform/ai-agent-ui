@@ -84,11 +84,11 @@ def create_performance_router() -> APIRouter:
                 ),
                 "total_pnl_inr": (
                     str(Decimal(str(sj["total_pnl_inr"])))
-                    if sj else None
+                    if sj and "total_pnl_inr" in sj else None
                 ),
                 "total_pnl_pct": (
                     str(Decimal(str(sj["total_pnl_pct"])))
-                    if sj else None
+                    if sj and "total_pnl_pct" in sj else None
                 ),
                 "total_trades": (
                     int(sj["total_trades"])
