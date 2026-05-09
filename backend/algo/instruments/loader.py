@@ -47,6 +47,35 @@ async def _pick_first_connected_user_creds() -> dict[str, Any] | None:
         return await creds_repo.load(session, row["user_id"])
 
 
+# Segments where our_ticker linkage makes sense — equity cash
+# market on NSE/BSE. Futures, options, currency, commodities use
+# Kite tradingsymbols that don't map to our `<symbol>.<suffix>`
+# convention; leave those rows with our_ticker=None.
+_LINKABLE_SEGMENTS = {"NSE", "BSE"}
+
+# Exchange → suffix per CLAUDE.md §4.3 #19 ("Indian stocks .NS
+# everywhere"). BSE equity uses .BO suffix in our codebase.
+_EXCHANGE_SUFFIX = {"NSE": ".NS", "BSE": ".BO"}
+
+
+def _derive_our_ticker(row: dict[str, Any]) -> str | None:
+    """Map a Kite instrument row to our internal ticker convention.
+
+    NSE/BSE equity → ``<tradingsymbol><suffix>``. Anything else
+    returns None (FNO, MCX, currency, etc.) so the link only
+    fires where the rest of the codebase actually expects it.
+    """
+    segment = str(row.get("segment") or "")
+    exchange = str(row.get("exchange") or "")
+    tradingsymbol = str(row.get("tradingsymbol") or "")
+    if segment not in _LINKABLE_SEGMENTS:
+        return None
+    suffix = _EXCHANGE_SUFFIX.get(exchange)
+    if not suffix or not tradingsymbol:
+        return None
+    return f"{tradingsymbol}{suffix}"
+
+
 async def run_instruments_refresh(
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -64,6 +93,15 @@ async def run_instruments_refresh(
         access_token=creds["access_token"],
     )
     instruments = client.instruments()
+    # Enrich each row with our internal ticker convention.
+    # Kite's dump never carries our_ticker — it's our internal
+    # link, derived from (segment, exchange, tradingsymbol).
+    linked = 0
+    for row in instruments:
+        derived = _derive_our_ticker(row)
+        row["our_ticker"] = derived
+        if derived is not None:
+            linked += 1
 
     factory = get_session_factory()
     instruments_repo = InstrumentsRepo()
@@ -72,6 +110,10 @@ async def run_instruments_refresh(
             session, instruments,
         )
     _logger.info(
-        "algo_kite_instruments_refresh: upserted %d rows", loaded,
+        "algo_kite_instruments_refresh: upserted %d rows "
+        "(%d linked to our_ticker)", loaded, linked,
     )
-    return {"instruments_loaded": loaded}
+    return {
+        "instruments_loaded": loaded,
+        "our_ticker_linked": linked,
+    }
