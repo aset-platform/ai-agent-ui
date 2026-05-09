@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -16,6 +15,7 @@ from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
 from backend.algo.broker.credentials_repo import BrokerCredentialsRepo
 from backend.algo.broker.kite_client import KiteClient
+from backend.secret_loader import load_secret
 
 _logger = logging.getLogger(__name__)
 _IST = ZoneInfo("Asia/Kolkata")
@@ -133,12 +133,20 @@ def create_broker_router() -> APIRouter:
         request_token: str = Query(..., min_length=4, max_length=128),
         user: UserContext = Depends(pro_or_superuser),
     ) -> CallbackResponse:
-        api_secret = os.environ.get("ALGO_KITE_API_SECRET", "").strip()
+        api_secret = (
+            load_secret("algo_kite_api_secret", default="") or ""
+        ).strip()
         if not api_secret:
             raise HTTPException(
                 status_code=503,
-                detail="Server is not configured for Kite OAuth — "
-                       "set ALGO_KITE_API_SECRET in env.",
+                detail=(
+                    "Server is not configured for Kite OAuth — "
+                    "store via "
+                    "`scripts/secrets/keychain.sh set "
+                    "algo_kite_api_secret` then "
+                    "`scripts/secrets/materialize.sh`, or set "
+                    "ALGO_KITE_API_SECRET in env as a fallback."
+                ),
             )
         factory = _get_session_factory()
         async with factory() as session:

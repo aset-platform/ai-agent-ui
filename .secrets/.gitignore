@@ -1,0 +1,5 @@
+# Materialised secrets — Keychain → docker-compose mount.
+# See scripts/secrets/materialize.sh and backend/secret_loader.py.
+*
+!.gitignore
+!README.md
