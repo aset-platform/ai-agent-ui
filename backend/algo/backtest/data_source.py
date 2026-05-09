@@ -8,13 +8,41 @@ layer (the evaluator further enforces T+1-fill semantics).
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from backend.algo.backtest.types import BarData
 from backend.db.duckdb_engine import query_iceberg_table
 
 _logger = logging.getLogger(__name__)
+
+# Per CLAUDE.md §6.1: yfinance + jugaad-data leak NaN/None
+# OHLCV cells. ``Decimal("None")`` raises ConversionSyntax;
+# ``Decimal("nan")`` parses but propagates as a poison value
+# downstream. Reject both at parse time.
+_DECIMAL_SENTINELS = frozenset({
+    "", "none", "null", "nan", "n/a", "na", "nat",
+})
+
+
+def _safe_decimal(val: Any) -> Decimal | None:
+    """Return ``Decimal(val)`` or None for NaN/sentinel values."""
+    if val is None:
+        return None
+    if isinstance(val, float) and math.isnan(val):
+        return None
+    s = str(val).strip()
+    if not s or s.lower() in _DECIMAL_SENTINELS:
+        return None
+    try:
+        d = Decimal(s)
+    except (InvalidOperation, ValueError):
+        return None
+    if d.is_nan():
+        return None
+    return d
 
 
 class BackedFutureBarError(ValueError):
@@ -65,8 +93,22 @@ def load_ohlcv_window(
     )
 
     grouped: dict[str, list[BarData]] = {}
+    skipped = 0
     for r in rows:
         ticker = str(r["ticker"])
+        open_d = _safe_decimal(r["open"])
+        high_d = _safe_decimal(r["high"])
+        low_d = _safe_decimal(r["low"])
+        close_d = _safe_decimal(r["close"])
+        if (
+            open_d is None or high_d is None
+            or low_d is None or close_d is None
+        ):
+            # Pre-market flat candles, dividend-only days, and
+            # yfinance gaps surface as NaN closes. Skip — the
+            # bar would corrupt every downstream calc.
+            skipped += 1
+            continue
         raw_date = r["date"]
         bar = BarData(
             ticker=ticker,
@@ -74,11 +116,16 @@ def load_ohlcv_window(
                 raw_date if isinstance(raw_date, date)
                 else date.fromisoformat(str(raw_date))
             ),
-            open=Decimal(str(r["open"])),
-            high=Decimal(str(r["high"])),
-            low=Decimal(str(r["low"])),
-            close=Decimal(str(r["close"])),
+            open=open_d,
+            high=high_d,
+            low=low_d,
+            close=close_d,
             volume=int(r["volume"] or 0),
         )
         grouped.setdefault(ticker, []).append(bar)
+    if skipped:
+        _logger.info(
+            "load_ohlcv_window: skipped %d bars with NaN/None "
+            "OHLCV cells (CLAUDE.md §6.1)", skipped,
+        )
     return grouped
