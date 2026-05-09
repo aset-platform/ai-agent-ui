@@ -356,6 +356,8 @@ class LiveRuntime:
             )
             return 0
 
+        is_dry = kite_order_id.startswith("DRY_")
+
         # Record in-flight
         in_flight_entry = {
             "kite_order_id": kite_order_id,
@@ -386,8 +388,24 @@ class LiveRuntime:
                 "qty": signal.qty,
                 "order_type": "MARKET",
                 "limit_price": None,
+                "dry_run": is_dry,
             },
         ))
+
+        # Dry-run: spawn synthetic fill after short delay
+        if is_dry:
+            asyncio.create_task(
+                self._synthetic_fill(
+                    kite_order_id=kite_order_id,
+                    internal_order_id=internal_order_id,
+                    symbol=symbol,
+                    side=side,
+                    qty=signal.qty,
+                    fill_price=last_price,
+                    in_flight_entry=in_flight_entry,
+                ),
+                name=f"dry_fill_{kite_order_id}",
+            )
 
         # Bump daily counters
         order_notional = Decimal(signal.qty) * last_price
@@ -403,6 +421,92 @@ class LiveRuntime:
             kite_order_id, internal_order_id,
         )
         return 1
+
+    # ----------------------------------------------------------
+    # Dry-run synthetic fill
+    # ----------------------------------------------------------
+
+    _DRY_FILL_DELAY_S: float = 0.1  # 100 ms — configurable in tests
+
+    async def _synthetic_fill(
+        self,
+        *,
+        kite_order_id: str,
+        internal_order_id: str,
+        symbol: str,
+        side: str,
+        qty: int,
+        fill_price: Decimal,
+        in_flight_entry: dict,
+    ) -> None:
+        """Simulate a Kite fill for dry-run mode.
+
+        Sleeps ``_DRY_FILL_DELAY_S`` then:
+        1. Computes fees via IndianFeeModel.
+        2. Applies the fill to PositionTracker.
+        3. Emits an ``order_filled_live`` event with
+           ``dry_run: true`` in the payload.
+        4. Marks the in-flight entry as filled.
+        """
+        await asyncio.sleep(self._DRY_FILL_DELAY_S)
+
+        from backend.algo.backtest.types import Fill
+        from backend.algo.fees import IndianFeeModel, Trade
+
+        today = datetime.now(UTC).date()
+        fee_model = IndianFeeModel(as_of=today)
+        product = "DELIVERY"
+        trade = Trade(
+            symbol=symbol,
+            exchange="NSE",
+            side=side,  # type: ignore[arg-type]
+            product=product,  # type: ignore[arg-type]
+            qty=qty,
+            price=fill_price,
+        )
+        fees = fee_model.compute(trade)
+
+        # Update position tracker using the proper Fill model
+        fill = Fill(
+            intent_id=uuid4(),
+            ticker=f"{symbol}.NS",
+            side=side,  # type: ignore[arg-type]
+            qty=qty,
+            fill_price=fill_price,
+            fill_date=today,
+            fees_inr=fees.total_inr,
+            fee_rates_version=fees.rates_version,
+        )
+        self._positions.apply_fill(fill)
+
+        # Mark in-flight entry filled
+        in_flight_entry["status"] = "filled"
+
+        # Emit fill event
+        self._events.append(event_row(
+            session_id=self._session_id,
+            user_id=self._user_id,
+            strategy_id=self._strategy.id,
+            mode="live",
+            type_="order_filled_live",
+            payload={
+                "internal_order_id": internal_order_id,
+                "kite_order_id": kite_order_id,
+                "symbol": symbol,
+                "side": side,
+                "qty": qty,
+                "price": str(fill_price),
+                "fees_inr": str(fees.total_inr),
+                "dry_run": True,
+            },
+        ))
+
+        _logger.info(
+            "[DRY_RUN] synthetic fill: symbol=%s side=%s qty=%d "
+            "price=%s fees=%s kite_order_id=%s",
+            symbol, side, qty, fill_price,
+            fees.total_inr, kite_order_id,
+        )
 
     # ----------------------------------------------------------
     # Kill-switch in-flight cancellation

@@ -71,6 +71,7 @@ class GatesStatus(BaseModel):
     drift_within_limit: bool
     all_pass: bool
     live_orders_enabled: bool
+    dry_run: bool = False
 
 
 class EnableRequest(BaseModel):
@@ -164,6 +165,11 @@ async def _check_gates(
         and drift_within_limit
     )
 
+    # Dry-run flag — reads ALGO_LIVE_DRY_RUN from env.
+    # Import here to avoid circular import with broker module.
+    from backend.algo.broker.kite_client import _read_dry_run_env
+    dry_run = _read_dry_run_env()
+
     return GatesStatus(
         kite_connected=kite_connected,
         caps_set=caps_set,
@@ -174,6 +180,7 @@ async def _check_gates(
         live_orders_enabled=bool(
             caps and caps.get("live_orders_enabled"),
         ),
+        dry_run=dry_run,
     )
 
 

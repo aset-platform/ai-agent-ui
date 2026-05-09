@@ -81,6 +81,7 @@ nav:
       - Backtest engine: algo-trading/backtest.md
       - Paper trading: algo-trading/paper-trading.md
       - Strategies & Levers: algo-trading/strategies.md
+      - Live Dry-Run: algo-trading/live-dry-run.md
       - Secrets (Keychain → CSI): algo-trading/secrets.md
       - Troubleshooting: algo-trading/troubleshooting.md
   - Dashboard:
