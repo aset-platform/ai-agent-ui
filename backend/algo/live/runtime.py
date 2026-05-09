@@ -104,6 +104,10 @@ class LiveRuntime:
         self._user_id = user_id
         self._initial = initial_capital_inr
         self._kite = kite
+        # Stamped on EVERY event payload below so the frontend can
+        # filter the events timeline into paper / dry-run / live
+        # segments without joining back to algo.runs.
+        self._dry_run: bool = bool(getattr(kite, "dry_run", False))
         self._caps = caps
         self._run_id = run_id
         self._caps_repo = caps_repo
@@ -252,6 +256,7 @@ class LiveRuntime:
             mode="live",
             type_="signal_generated",
             payload={
+                "dry_run": self._dry_run,
                 "ticker": signal.ticker,
                 "side": signal.side,
                 "qty": signal.qty,
@@ -300,6 +305,7 @@ class LiveRuntime:
                 mode="live",
                 type_="signal_rejected",
                 payload={
+                    "dry_run": self._dry_run,
                     "reason": reason_str,
                     "ticker": signal.ticker,
                     "side": signal.side,
@@ -368,6 +374,7 @@ class LiveRuntime:
                 mode="live",
                 type_="order_rejected_live",
                 payload={
+                    "dry_run": self._dry_run,
                     "internal_order_id": internal_order_id,
                     "symbol": symbol,
                     "side": side,
@@ -408,6 +415,7 @@ class LiveRuntime:
             mode="live",
             type_="order_submitted_live",
             payload={
+                "dry_run": self._dry_run,
                 "internal_order_id": internal_order_id,
                 "kite_order_id": kite_order_id,
                 "symbol": symbol,
@@ -517,6 +525,7 @@ class LiveRuntime:
             mode="live",
             type_="order_filled_live",
             payload={
+                "dry_run": self._dry_run,
                 "internal_order_id": internal_order_id,
                 "kite_order_id": kite_order_id,
                 "symbol": symbol,
@@ -572,6 +581,7 @@ class LiveRuntime:
                     mode="live",
                     type_="order_cancelled_live",
                     payload={
+                        "dry_run": self._dry_run,
                         "kite_order_id": kite_id,
                         "reason": "kill_switch_armed",
                     },
@@ -590,6 +600,7 @@ class LiveRuntime:
                     mode="live",
                     type_="order_cancel_failed",
                     payload={
+                        "dry_run": self._dry_run,
                         "kite_order_id": kite_id,
                         "error": str(exc),
                     },
