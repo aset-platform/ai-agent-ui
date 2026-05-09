@@ -280,6 +280,19 @@ export function PaperTab() {
         total={total}
         onPageChange={setEventsPage}
         onPageSizeChange={setEventsPageSize}
+        emptyMessage={
+          viewMode === "paper"
+            ? "No paper events yet. Start a paper run "
+              + "(replay fixture) to see signals + fills here."
+            : viewMode === "dryrun"
+              ? "No dry-run events yet. Start a run from the "
+                + "Active runs panel above. For markets-closed "
+                + "rehearsal use the Replay fixture source — "
+                + "Live Kite WS won't yield ticks on a weekend."
+              : "No live events yet. Start a run with Live "
+                + "Kite WS during market hours (09:15–15:30 "
+                + "IST) to see real fills here."
+        }
       />
     </div>
   );

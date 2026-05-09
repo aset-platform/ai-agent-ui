@@ -25,7 +25,20 @@ interface Props {
 }
 
 export function ActiveRunsPanel({ tradingMode = "paper" }: Props) {
-  const { runs, loading } = usePaperRuns();
+  const { runs: allRuns, loading } = usePaperRuns();
+  // Filter the active-runs list to only those that match the
+  // current trading view. Without this filter, a Live run
+  // started from the Live tab leaks into the Paper view's
+  // active list — confusing because that run won't emit
+  // mode='paper' events.
+  const runs = allRuns.filter((r) => {
+    if (tradingMode === "paper") return r.mode === "paper";
+    if (tradingMode === "live") {
+      return r.mode === "live" && !r.dry_run;
+    }
+    // dryrun
+    return r.mode === "live" && r.dry_run;
+  });
   const { strategies } = useStrategies();
   const { fixtures } = usePaperFixtures();
   const { value: brokerStatus } = useBrokerStatus();

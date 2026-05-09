@@ -11,6 +11,11 @@ export interface PaperRunRow {
   strategy_name: string;
   started_at: string;
   status: "running" | "completed";
+  /** 'paper' or 'live' — chosen by the start_run handler. */
+  mode: "paper" | "live";
+  /** Only meaningful when mode='live' — true if KiteAdapter
+   *  was initialized in dry-run mode (synthetic responses). */
+  dry_run: boolean;
 }
 
 const KEY = `${API_URL}/algo/paper/runs`;
