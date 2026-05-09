@@ -2,6 +2,68 @@
 
 ---
 
+## 2026-05-09 — Algo Trading v1 — end-to-end verification + integration branch
+
+**Branch:** `feature/algo-trading-v1-integration` (linear merge of all 10 algo session branches)
+
+**Goal:** verify the v1 algo trading platform end-to-end against real Kite + real Indian stock data; fix every gap surfaced during the walkthrough.
+
+### What shipped today
+
+User connected real Kite (Kite ID BV4121) and walked through every tab. 14 bugs surfaced, all fixed. Full bug catalogue lives in [docs/algo-trading/troubleshooting.md](docs/algo-trading/troubleshooting.md) and the Serena memory `shared/debugging/algo-bug-catalogue-2026-05-09`.
+
+**Backend fixes:**
+- `_get_session_factory` in broker + instruments routes imported `backend.db.repository` (doesn't exist). Module-not-found surfaced only when an authenticated request hit the route — tests mock the helper.
+- `_safe_decimal` helper for NaN/None/sentinel guards on OHLCV cells.
+- `fee_rates.yaml` backfilled with 2020-01-01 → 2026-03-31 row so historical backtests work.
+- Built `backend/algo/backtest/indicators.py` (on-the-fly SMA + golden_cross_days_ago via O(N) rolling sums). 400-calendar-day warmup so SMA200 is well-formed at `period_start`.
+- Wired `set_target_weight` action in BOTH backtest and paper runners (was no-op in both).
+- Equity curve mark-to-market now uses today's close via running `last_close` dict (was using period_end's close).
+- Explicit `_EVENTS_ARROW_SCHEMA` in event_writer to satisfy Iceberg's nullable=False expectations.
+- `resolve_universe` honours `strategy.universe.filter` (two-stage scope + filter pipeline).
+- RiskEngine wired into backtest runner (parity with paper).
+- PaperRuntime gets indicators + KeyError-safe eval + set_target_weight handling.
+- Instruments loader derives `our_ticker` from `tradingsymbol + exchange`.
+
+**Frontend additions:**
+- Kite OAuth bounce page at `/algo-trading/kite-callback` (browser redirect doesn't carry JWT → can't hit backend callback directly).
+- `StrategyLeversPanel` + `strategyTunables.walkTunables(root)` — non-technical edit surface for AST tunables. Tree view + JSON pane stay read-only by user preference.
+- Paper start-run form has a fixture dropdown driven by `GET /v1/algo/paper/fixtures`.
+
+**Infrastructure:**
+- Keychain → docker-compose secret-mount pattern (CSI-style locally). `backend/secret_loader.load_secret()` is the single API; `scripts/secrets/{keychain.sh,materialize.sh}` wrap macOS `security` CLI. Currently backs `algo_kite_api_secret`. Full walkthrough in [docs/algo-trading/secrets.md](docs/algo-trading/secrets.md).
+- Generated `ticks_indian_universe.jsonl` (3,015 ticks, 9 NSE blue chips) from real OHLCV so paper trading has enough data for SMA-based strategies.
+
+### Verified runs
+
+- **Backtest** (Golden Cross v1 over 800 NSE stocks, 16 months): 506 trades, -17.1% PnL, 26% max DD, ₹12k fees. RiskEngine active with 4810 rejections.
+- **Paper run** (Golden Cross v1 vs Indian universe fixture, kill_switch=OFF): 16 fills (8× WIPRO, 5× COALINDIA, 3× INFY).
+- **Paper run** (kill_switch=ARMED): 33 signal_generated → 33 signal_rejected → 0 fills. Kill-switch cleanly blocks every signal.
+
+### Knowledge persisted
+
+Auto-memory + Serena memory updated for future sessions:
+- `shared/architecture/algo-trading-system` (overview)
+- `shared/architecture/algo-keychain-csi-secrets` (secret pattern)
+- `shared/architecture/algo-strategy-levers-tunables` (UI edit pattern)
+- `shared/conventions/algo-backtest-fill-semantics` (T+1 open-to-open, locked)
+- `shared/debugging/algo-bug-catalogue-2026-05-09` (full bug list)
+- `session/2026-05-09-algo-v1-integration` (local checkpoint)
+
+CHANGELOG entry shipped as 0.16.0. Docs site got new `Algo Trading` section: overview, backtest, paper-trading, strategies, secrets, troubleshooting.
+
+### Pending for v2 (per spec § 12 + new TODOs)
+
+- Live order placement
+- Live Kite WS multiplexer (one WS per user → fan out)
+- Reconciliation loop (paper vs broker)
+- MinIO artifact upload
+- Walk-forward CV harness
+- Promote `BYO_SECRET_KEY` to Keychain → CSI flow
+- Auto-wire restart-replay rebuilder to backend startup
+
+---
+
 ## 2026-05-08 (later 12) — Algo Trading Slices 9 + 10: Performance + Replay tabs
 
 **Branch:** `feature/algo-trading-session-10-performance-replay` (built off Session 9's tip)

@@ -5,6 +5,78 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.16.0] — 2026-05-09: Algo Trading v1 — backtest + paper trading
+
+End-to-end platform for backtest + paper trading on Indian equities. Live order placement explicitly out of v1 scope per epic spec § 12 (`KiteAdapter.place_order` raises `NotImplementedError`). All 10 sessions of the epic merged into a single `feature/algo-trading-v1-integration` branch + 14-fix bug catalogue from the user-driven walkthrough.
+
+### Added
+
+- **`/algo-trading` route** — pro/superuser, gated `pro_or_superuser AND page_permissions.algo_trading`. 8 tabs: Connect Broker, Instruments, Strategies, Backtest, Paper Trading, Performance, Replay, Settings.
+- **Strategy AST** (`backend/algo/strategy/ast.py`) — Pydantic schema with universe scope/filter, schedule, rebalance, root tree, risk caps. Persisted as JSONB in `algo.strategies.ast_json`.
+- **Visual strategy builder** + **Levers panel** + **JSON pane**. Tree view + JSON are read-only by design ("fine to keep readonly and copy paste only" — user). The Levers panel exposes every tunable parameter as form controls. Auto-discovers inside-tree tunables (`set_target_weight.weight`, `buy/sell.qty.shares`, `compare.right.literal`) via `walkTunables(root)` so new node types get editing for free.
+- **Backtest engine** (`backend/algo/backtest/`) — single-bulk OHLCV read with 400-day warmup, on-the-fly SMA (20/50/200) + `golden_cross_days_ago` indicators (no separate Iceberg table), `SimBroker` filling at T+1 OPEN (look-ahead-free), `RiskEngine` 3-tier gate, async background job, persistence to `algo.runs` (PG) + `algo.events` (Iceberg). Equity curve marks-to-market daily using a running `last_close` dict. Trade table includes `opened_at`, `closed_at`, `holding_days`, weighted-avg cost basis on partial closes.
+- **Paper trading** (`backend/algo/paper/`) — tick-driven runtime that uses the same `Evaluator`/`PositionTracker`/`compute_indicators` as backtest. `PaperBroker` fills at-tick LTP. `PaperSupervisor` is a per-process registry of running asyncio tasks. v1 source = replay-fixture (.jsonl); live Kite WebSocket multiplexing deferred to v2.
+- **Replay fixtures** — `ticks_sample.jsonl` (30 ticks, FAKE.NS smoke) + `ticks_indian_universe.jsonl` (3,015 ticks, 9 NSE blue chips, daily closes 2025-01-01 → 2026-05-08 generated from `stocks.ohlcv`). Frontend dropdown lists fixtures via `GET /v1/algo/paper/fixtures`.
+- **Risk engine** — pure 3-tier `gate(signal, account, risk, last_price)`. Per-trade max_qty + stop_loss_pct, daily max_loss_pct + max_open_positions, portfolio max_exposure_pct (scaling allowed) + max_concentration_pct. Same code in backtest + paper.
+- **Kill switch** — `algo.kill_switch` PG row + Redis `algo:kill:{user_id}` flag for sub-ms reads on the runtime hot path. Settings tab toggle with confirm dialog.
+- **Indian Fee Model** (`backend/algo/fees.py`) — dated YAML rates with two rows: 2020-01-01 → 2026-03-31 (backfill, identical numbers) + 2026-04-01 → null. Every fill stamps `fee_rates_version` so re-runs after rate changes don't silently drift.
+- **Kite OAuth flow** — `KiteClient` wrapper (read-only paths only; `place_order` raises). Frontend bounce page at `/algo-trading/kite-callback` forwards `request_token` to backend via `apiFetch` (browser redirect doesn't carry JWT). Daily 05:30 IST `algo_kite_reauth_notify` job + 07:00 IST `algo_kite_instruments_refresh` job.
+- **Instruments master** (`algo.instruments`) — daily Kite `/instruments` pull, ~1.3M rows. Loader derives `our_ticker` from `tradingsymbol + exchange` (NSE → `.NS`, BSE → `.BO`); FNO/MCX/CDS/INDICES skip linkage. Frontend tab with search + exchange filter + manual refresh.
+- **Performance tab** — strategy-vs-strategy aggregate (avg PnL%, win rate, total PnL ₹, completed/total run counts) + recent runs table.
+- **Replay tab** — cross-mode event-log timeline with mode/type/strategy_id/ts_date filters. Reads `algo.events` via DuckDB; permissive validation (unknown filter values return [] rather than 400).
+- **Secret management** — `backend/secret_loader.load_secret(slug)` reads `/run/secrets/<slug>` first, falls back to `<SLUG_UPPER>` env. macOS users back the file mount via Keychain (`scripts/secrets/keychain.sh` + `scripts/secrets/materialize.sh`); production swaps file source for a real CSI Secrets-Store driver. Currently used for `algo_kite_api_secret`. Pattern documented in [docs/algo-trading/secrets.md](docs/algo-trading/secrets.md).
+- **Postgres tables** (Slice 0 migration) — `algo.broker_credentials`, `algo.instruments`, `algo.strategies`, `algo.runs` (with `summary_json` JSONB + `error_text` cols added in 7b), `algo.positions`, `algo.risk_state`, `algo.kill_switch`.
+- **Iceberg tables** — `algo.events` (append-only event log, partitioned by mode + ts_date) + `algo.intraday_bars` (1m + 5m resampled bars, partitioned by ticker + bar_date). Both auto-created on backend startup via `create_algo_tables()`.
+
+### Bug catalogue from the v1 walkthrough (2026-05-09)
+
+Documented for posterity in [docs/algo-trading/troubleshooting.md](docs/algo-trading/troubleshooting.md):
+
+- `_get_session_factory` in broker + instruments routes imported `backend.db.repository` (doesn't exist). Tests mock the helper so the bad import never executed. Fixed.
+- `Decimal(str(r["close"]))` crashed on NaN/None OHLCV cells. Added `_safe_decimal` helper rejecting NaN/None/sentinel-strings.
+- `fee_rates.yaml` had only 2026-04-01 row → backfilled 2020-01-01 → 2026-03-31 with identical rates.
+- v1 evaluator only emitted `today_ltp/today_vol`; strategies referencing SMAs crashed. Added `compute_indicators` (O(N) rolling sums) + KeyError-safe eval (graceful skip during warmup).
+- `set_target_weight` was a no-op in BOTH runners. Wired sizing logic in both.
+- Equity curve marks used `blist[-1].close` (always period_end). Fixed via running `last_close` dict.
+- `event_writer` built Arrow tables nullable; Iceberg schema rejected. Added explicit `_EVENTS_ARROW_SCHEMA`.
+- `resolve_universe` ignored `strategy.universe.filter`. Added two-stage scope + filter pipeline.
+- Backtest had no risk gating — only PaperRuntime did. Wired RiskEngine into backtest runner.
+- PaperRuntime didn't compute indicators OR handle `set_target_weight`. Both fixed; Stream.Bar adapted to Decimal-based BarData.
+- Instruments loader returned None for `our_ticker` on every row. Added `_derive_our_ticker(row)`.
+- Kite OAuth callback returned 401 (browser redirect doesn't carry Bearer token). Frontend bounce page at `/algo-trading/kite-callback`.
+- `KiteClient.__init__` didn't store `_access_token` instance attr; `LiveTickSource` needed it. Captured both `_api_key` and `_access_token`.
+- `alembic_version` had a duplicate row from Session 1's algo-schema re-parenting. One-time `DELETE FROM alembic_version WHERE version_num = 'a9c1b3d5e7f2'`.
+
+### Verified end-to-end
+
+User connected real Kite (Kite ID BV4121) and walked through:
+
+- **Backtest** (Golden Cross v1 over 800 NSE stocks, 16 months): 506 trades, -17.1% PnL, 26% max DD, ₹12k fees. RiskEngine active with 4810 rejections (4590× exposure_cap, 186× max_open_positions, 34× daily_loss_cap, 0× max_qty after lever bumped 100→1000).
+- **Paper run** (Golden Cross v1 against `ticks_indian_universe.jsonl`, kill_switch=OFF): 16 fills across WIPRO/COALINDIA/INFY in <1s.
+- **Paper run** (kill_switch=ARMED): 33 signal_generated → 33 signal_rejected (`reason: kill_switch`) → 0 fills.
+
+### Test coverage
+
+240+ algo backend pytest cases pass. New vitest suites for `StrategyLeversPanel` (5) + `strategyTunables` (8) + `BacktestEquityCurve` (2). Playwright smokes for backtest, paper, performance, replay tabs.
+
+### Branch state
+
+- `feature/algo-trading-v1-integration` — single linear merge of all 10 algo-trading session branches + every post-ship fix. **This is the working branch for any future algo work**; per-session branches are kept on origin as historical reference.
+- No PR raised yet — per user's standing instruction "push only, no PRs" between sessions. Likely batch-PR at production cutover.
+
+### v2 deferrals
+
+- Live order placement (any broker)
+- Live Kite WebSocket multiplexer (one WS per user → fan out to many strategies)
+- Reconciliation loop (paper position diff vs broker)
+- MinIO artifact upload for backtest runs
+- Walk-forward CV harness
+- F&O instruments, multi-broker support
+- Promote `BYO_SECRET_KEY` (Fernet master key for at-rest encryption) from `.env` plaintext to the same Keychain → CSI flow
+- Restart-replay rebuild auto-wired to backend startup (helper exists in `backend/algo/paper/replay_rebuilder.py` but not invoked yet)
+
+---
+
 ## [0.15.0] — 2026-05-04: Sprint 9 — Advanced Analytics + ScreenQL extensions
 
 Two phases:
