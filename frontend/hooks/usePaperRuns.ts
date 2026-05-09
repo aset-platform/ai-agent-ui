@@ -38,19 +38,26 @@ export function usePaperRuns() {
   };
 }
 
+export type PaperRunSource = "replay" | "live-ws";
+
 export async function startPaperRun(
   strategyId: string,
   fixturePath: string,
   initialCapitalInr: string,
+  source: PaperRunSource = "replay",
 ): Promise<void> {
+  const body: Record<string, string> = {
+    strategy_id: strategyId,
+    initial_capital_inr: initialCapitalInr,
+    source,
+  };
+  if (source === "replay") {
+    body.fixture_path = fixturePath;
+  }
   const r = await apiFetch(KEY, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      strategy_id: strategyId,
-      fixture_path: fixturePath,
-      initial_capital_inr: initialCapitalInr,
-    }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) {
     let detail = "";

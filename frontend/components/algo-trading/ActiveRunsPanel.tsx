@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 
+import { useBrokerStatus } from "@/hooks/useBrokerStatus";
 import {
+  type PaperRunSource,
   startPaperRun,
   stopPaperRun,
   usePaperFixtures,
@@ -14,11 +16,15 @@ export function ActiveRunsPanel() {
   const { runs, loading } = usePaperRuns();
   const { strategies } = useStrategies();
   const { fixtures } = usePaperFixtures();
+  const { value: brokerStatus } = useBrokerStatus();
   const [strategyId, setStrategyId] = useState<string>("");
   const [fixturePath, setFixturePath] = useState<string>("");
   const [capital, setCapital] = useState<string>("100000.00");
+  const [source, setSource] = useState<PaperRunSource>("replay");
   const [pending, setPending] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  const kiteConnected = brokerStatus?.status === "connected";
 
   // Default to the first available fixture once loaded — usually
   // the larger ticks_indian_universe.jsonl, which is what users
@@ -39,14 +45,14 @@ export function ActiveRunsPanel() {
       setErr("Pick a strategy");
       return;
     }
-    if (!fixturePath) {
+    if (source === "replay" && !fixturePath) {
       setErr("Pick a fixture");
       return;
     }
     setErr(null);
     setPending(strategyId);
     try {
-      await startPaperRun(strategyId, fixturePath, capital);
+      await startPaperRun(strategyId, fixturePath, capital, source);
     } catch (exc) {
       setErr(exc instanceof Error ? exc.message : "Failed");
     } finally {
@@ -75,15 +81,60 @@ export function ActiveRunsPanel() {
         <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
           Active runs
         </h3>
-        <span className="text-xs text-slate-500">
-          v1 = replay-fixture mode (live Kite WS in v2)
-        </span>
       </div>
 
       <div
         className="mt-2 flex flex-wrap items-end gap-2"
         data-testid="paper-start-run-form"
       >
+        {/* Source radio — above fixture dropdown */}
+        <fieldset
+          className="flex flex-col gap-0.5"
+          data-testid="paper-source-radio-group"
+        >
+          <legend className="text-[11px] text-slate-500">
+            Source
+          </legend>
+          <div className="flex gap-3">
+            <label className="flex items-center gap-1 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="paper-source"
+                value="replay"
+                checked={source === "replay"}
+                onChange={() => setSource("replay")}
+                data-testid="paper-source-replay"
+              />
+              Replay fixture
+            </label>
+            <label
+              className={`flex items-center gap-1 text-sm cursor-pointer ${
+                !kiteConnected
+                  ? "opacity-50 cursor-not-allowed"
+                  : ""
+              }`}
+              title={
+                !kiteConnected
+                  ? "Connect Zerodha to enable live WS"
+                  : undefined
+              }
+            >
+              <input
+                type="radio"
+                name="paper-source"
+                value="live-ws"
+                checked={source === "live-ws"}
+                onChange={() => {
+                  if (kiteConnected) setSource("live-ws");
+                }}
+                disabled={!kiteConnected}
+                data-testid="paper-source-live-ws"
+              />
+              Live Kite WS
+            </label>
+          </div>
+        </fieldset>
+
         <label className="flex flex-col gap-0.5">
           <span className="text-[11px] text-slate-500">
             Strategy
@@ -102,27 +153,45 @@ export function ActiveRunsPanel() {
             ))}
           </select>
         </label>
-        <label className="flex flex-col gap-0.5">
-          <span className="text-[11px] text-slate-500">
-            Replay fixture
-          </span>
-          <select
-            className="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1 text-sm"
-            value={fixturePath}
-            onChange={(e) => setFixturePath(e.target.value)}
-            data-testid="paper-start-fixture-select"
+
+        {/* Fixture dropdown — hidden when source=live-ws */}
+        {source === "replay" && (
+          <label className="flex flex-col gap-0.5">
+            <span className="text-[11px] text-slate-500">
+              Replay fixture
+            </span>
+            <select
+              className="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1 text-sm"
+              value={fixturePath}
+              onChange={(e) => setFixturePath(e.target.value)}
+              data-testid="paper-start-fixture-select"
+            >
+              {fixtures.length === 0 && (
+                <option value="">Loading fixtures…</option>
+              )}
+              {fixtures.map((f) => (
+                <option key={f.path} value={f.path}>
+                  {f.path} · {f.n_ticks} ticks · {f.distinct_tickers}{" "}
+                  ticker{f.distinct_tickers === 1 ? "" : "s"}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {source === "live-ws" && (
+          <div
+            className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400"
+            data-testid="paper-live-ws-indicator"
           >
-            {fixtures.length === 0 && (
-              <option value="">Loading fixtures…</option>
-            )}
-            {fixtures.map((f) => (
-              <option key={f.path} value={f.path}>
-                {f.path} · {f.n_ticks} ticks · {f.distinct_tickers}{" "}
-                ticker{f.distinct_tickers === 1 ? "" : "s"}
-              </option>
-            ))}
-          </select>
-        </label>
+            <span
+              className="inline-block w-2 h-2 rounded-full bg-emerald-500"
+              aria-hidden="true"
+            />
+            Streaming from Kite WS
+          </div>
+        )}
+
         <label className="flex flex-col gap-0.5">
           <span className="text-[11px] text-slate-500">
             Capital ₹
