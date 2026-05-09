@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useBrokerStatus } from "@/hooks/useBrokerStatus";
 import {
   type PaperRunSource,
+  type RunMode,
   startPaperRun,
   stopPaperRun,
   usePaperFixtures,
@@ -12,7 +13,18 @@ import {
 } from "@/hooks/usePaperRuns";
 import { useStrategies } from "@/hooks/useStrategies";
 
-export function ActiveRunsPanel() {
+interface Props {
+  /** Trading mode this panel is rendered under. Determines:
+   *  - Which sources are offered (Paper: replay only;
+   *    Dry run: replay or live-ws; Live: live-ws only)
+   *  - The mode= field sent to POST /v1/algo/paper/runs which
+   *    routes the runtime (paper → PaperRuntime; live →
+   *    LiveRuntime)
+   *  - The Start button label */
+  tradingMode?: "paper" | "dryrun" | "live";
+}
+
+export function ActiveRunsPanel({ tradingMode = "paper" }: Props) {
   const { runs, loading } = usePaperRuns();
   const { strategies } = useStrategies();
   const { fixtures } = usePaperFixtures();
@@ -20,7 +32,11 @@ export function ActiveRunsPanel() {
   const [strategyId, setStrategyId] = useState<string>("");
   const [fixturePath, setFixturePath] = useState<string>("");
   const [capital, setCapital] = useState<string>("100000.00");
-  const [source, setSource] = useState<PaperRunSource>("replay");
+  // Default source per trading mode. Live mode requires real
+  // ticks; paper mode is replay-only by design.
+  const initialSource: PaperRunSource =
+    tradingMode === "live" ? "live-ws" : "replay";
+  const [source, setSource] = useState<PaperRunSource>(initialSource);
   const [pending, setPending] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -52,7 +68,14 @@ export function ActiveRunsPanel() {
     setErr(null);
     setPending(strategyId);
     try {
-      await startPaperRun(strategyId, fixturePath, capital, source);
+      // Map UI tradingMode -> backend RunMode. Both 'dryrun'
+      // and 'live' route to LiveRuntime; ALGO_LIVE_DRY_RUN env
+      // controls whether KiteAdapter short-circuits.
+      const runMode: RunMode =
+        tradingMode === "paper" ? "paper" : "live";
+      await startPaperRun(
+        strategyId, fixturePath, capital, source, runMode,
+      );
     } catch (exc) {
       setErr(exc instanceof Error ? exc.message : "Failed");
     } finally {
@@ -87,65 +110,82 @@ export function ActiveRunsPanel() {
         className="mt-3 flex flex-col gap-3"
         data-testid="paper-start-run-form"
       >
-        {/* Row 1 — Source */}
-        <fieldset
-          className="flex flex-col gap-1"
-          data-testid="paper-source-radio-group"
-        >
-          <legend className="text-[11px] uppercase tracking-wide font-medium text-slate-500">
-            Source
-          </legend>
-          <div className="flex flex-wrap items-center gap-4">
-            <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-              <input
-                type="radio"
-                name="paper-source"
-                value="replay"
-                checked={source === "replay"}
-                onChange={() => setSource("replay")}
-                data-testid="paper-source-replay"
-              />
-              Replay fixture
-            </label>
-            <label
-              className={`flex items-center gap-1.5 text-sm cursor-pointer ${
-                !kiteConnected
-                  ? "opacity-50 cursor-not-allowed"
-                  : ""
-              }`}
-              title={
-                !kiteConnected
-                  ? "Connect Zerodha to enable live WS"
-                  : undefined
-              }
-            >
-              <input
-                type="radio"
-                name="paper-source"
-                value="live-ws"
-                checked={source === "live-ws"}
-                onChange={() => {
-                  if (kiteConnected) setSource("live-ws");
-                }}
-                disabled={!kiteConnected}
-                data-testid="paper-source-live-ws"
-              />
-              Live Kite WS
-            </label>
-            {source === "live-ws" && (
-              <span
-                className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400"
-                data-testid="paper-live-ws-indicator"
-              >
-                <span
-                  className="inline-block w-2 h-2 rounded-full bg-emerald-500"
-                  aria-hidden="true"
+        {/* Row 1 — Source.  Paper mode is replay-only by design;
+            Live mode is live-ws-only (real ticks for real money);
+            Dry run accepts both — replay for offline rehearsal,
+            live-ws for real-tick rehearsal during market hours. */}
+        {tradingMode !== "paper" && tradingMode !== "live" && (
+          <fieldset
+            className="flex flex-col gap-1"
+            data-testid="paper-source-radio-group"
+          >
+            <legend className="text-[11px] uppercase tracking-wide font-medium text-slate-500">
+              Source
+            </legend>
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="paper-source"
+                  value="replay"
+                  checked={source === "replay"}
+                  onChange={() => setSource("replay")}
+                  data-testid="paper-source-replay"
                 />
-                Streaming from Kite WS
-              </span>
-            )}
-          </div>
-        </fieldset>
+                Replay fixture
+              </label>
+              <label
+                className={`flex items-center gap-1.5 text-sm cursor-pointer ${
+                  !kiteConnected
+                    ? "opacity-50 cursor-not-allowed"
+                    : ""
+                }`}
+                title={
+                  !kiteConnected
+                    ? "Connect Zerodha to enable live WS"
+                    : undefined
+                }
+              >
+                <input
+                  type="radio"
+                  name="paper-source"
+                  value="live-ws"
+                  checked={source === "live-ws"}
+                  onChange={() => {
+                    if (kiteConnected) setSource("live-ws");
+                  }}
+                  disabled={!kiteConnected}
+                  data-testid="paper-source-live-ws"
+                />
+                Live Kite WS
+              </label>
+              {source === "live-ws" && (
+                <span
+                  className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400"
+                  data-testid="paper-live-ws-indicator"
+                >
+                  <span
+                    className="inline-block w-2 h-2 rounded-full bg-emerald-500"
+                    aria-hidden="true"
+                  />
+                  Streaming from Kite WS
+                </span>
+              )}
+            </div>
+          </fieldset>
+        )}
+        {tradingMode === "live" && source === "live-ws" && (
+          <span
+            className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400"
+            data-testid="paper-live-ws-indicator"
+          >
+            <span
+              className="inline-block w-2 h-2 rounded-full bg-emerald-500"
+              aria-hidden="true"
+            />
+            Streaming from Kite WS — real money, real fills
+          </span>
+        )}
 
         {/* Row 2 — Strategy + (when replay) Fixture */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -168,7 +208,7 @@ export function ActiveRunsPanel() {
             </select>
           </label>
 
-          {source === "replay" ? (
+          {source === "replay" && tradingMode !== "live" ? (
             <label className="flex flex-col gap-1">
               <span className="text-[11px] uppercase tracking-wide font-medium text-slate-500">
                 Replay fixture

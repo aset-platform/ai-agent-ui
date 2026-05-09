@@ -40,16 +40,24 @@ export function usePaperRuns() {
 
 export type PaperRunSource = "replay" | "live-ws";
 
+/** Trading mode the user is starting a run in. Backend uses this
+ *  to choose between PaperRuntime (mode=paper) and LiveRuntime
+ *  (mode=live). When mode=live, ALGO_LIVE_DRY_RUN env decides
+ *  whether KiteAdapter short-circuits to synthetic responses. */
+export type RunMode = "paper" | "live";
+
 export async function startPaperRun(
   strategyId: string,
   fixturePath: string,
   initialCapitalInr: string,
   source: PaperRunSource = "replay",
+  mode: RunMode = "paper",
 ): Promise<void> {
   const body: Record<string, string> = {
     strategy_id: strategyId,
     initial_capital_inr: initialCapitalInr,
     source,
+    mode,
   };
   if (source === "replay") {
     body.fixture_path = fixturePath;

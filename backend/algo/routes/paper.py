@@ -37,6 +37,12 @@ class StartRunRequest(BaseModel):
     source: Literal["replay", "live-ws"] = "replay"
     """Tick source: 'replay' uses a JSONL fixture; 'live-ws' streams
     from the user's connected Kite WebSocket multiplexer."""
+    mode: Literal["paper", "live"] = "paper"
+    """Runtime selector — 'paper' → PaperRuntime; 'live' →
+    LiveRuntime (requires algo.live_caps.live_orders_enabled
+    for the strategy). The ALGO_LIVE_DRY_RUN env variable then
+    decides whether KiteAdapter short-circuits to synthetic
+    responses (dry-run) or hits real Kite (real money)."""
     initial_capital_inr: Decimal = Field(
         default=Decimal("100000.00"), ge=Decimal("1000.00"),
     )
@@ -348,22 +354,29 @@ def create_paper_router() -> APIRouter:
 
         sv = get_supervisor()
 
-        # Branch on live_caps.live_orders_enabled — if the user
-        # has explicitly enabled live trading for this strategy
-        # (passed all 4 gates + retype confirm), route through
-        # LiveRuntime instead of PaperRuntime. KiteAdapter is
-        # responsible for dry-run vs real ordering, gated by
-        # ALGO_LIVE_DRY_RUN env.
+        # Route explicitly on the request's ``mode`` field. v2
+        # earlier sniffed live_caps.live_orders_enabled to decide,
+        # but that conflated UX intent with config state. Now the
+        # frontend sends mode=paper or mode=live based on which
+        # view the user is in (Paper / Dry run / Live segments).
         from backend.algo.live.caps_repo import CapsRepo
         from backend.algo.live.runtime import LiveNotEnabledError
 
-        caps_repo = CapsRepo()
-        caps = await caps_repo.get(user_id, body.strategy_id)
-        live_enabled = bool(
-            caps and caps.get("live_orders_enabled"),
-        )
-
-        if live_enabled:
+        if body.mode == "live":
+            caps_repo = CapsRepo()
+            caps = await caps_repo.get(user_id, body.strategy_id)
+            live_enabled = bool(
+                caps and caps.get("live_orders_enabled"),
+            )
+            if not live_enabled:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Live trading not enabled for this "
+                        "strategy. Configure caps + flip the "
+                        "Live mode toggle first."
+                    ),
+                )
             from datetime import date as _date
             from backend.algo.broker.credentials_repo import (
                 BrokerCredentialsRepo,
@@ -421,6 +434,11 @@ def create_paper_router() -> APIRouter:
 
             ks_for_runtime = KillSwitchRepo(
                 redis_client=get_async_redis(),
+            )
+            _logger.info(
+                "start_run: dispatching LiveRuntime user=%s "
+                "strat=%s source=%s",
+                user_id, body.strategy_id, body.source,
             )
             try:
                 row = await sv.start_live_run(
