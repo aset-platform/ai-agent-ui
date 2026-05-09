@@ -32,15 +32,21 @@ async function fetcher(url: string): Promise<PaperEvent[]> {
   return r.json();
 }
 
-export function usePaperEvents(limit = 100) {
-  const key = `${API_URL}/algo/paper/events?limit=${limit}`;
+export function usePaperEvents(limit = 100, offset = 0) {
+  const key =
+    `${API_URL}/algo/paper/events?limit=${limit}&offset=${offset}`;
   const { data, error, isLoading } = useSWR<PaperEvent[]>(
     key,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 5_000 },
   );
+  const events = data ?? [];
   return {
-    events: data ?? [],
+    events,
+    // ``hasMore`` is a heuristic: if we got back exactly ``limit``
+    // rows we don't know whether there are more — assume yes. If
+    // we got back fewer, the result set is exhausted at this offset.
+    hasMore: events.length >= limit,
     loading: isLoading,
     error: error
       ? error instanceof Error

@@ -5,6 +5,10 @@ import type { PaperEvent } from "@/hooks/usePaperEvents";
 interface Props {
   events: PaperEvent[];
   loading: boolean;
+  page?: number;
+  pageSize?: number;
+  hasMore?: boolean;
+  onPageChange?: (page: number) => void;
 }
 
 const EVENT_TONE: Record<string, string> = {
@@ -58,7 +62,14 @@ function summary(event: PaperEvent): string {
   }
 }
 
-export function PaperEventsTimeline({ events, loading }: Props) {
+export function PaperEventsTimeline({
+  events,
+  loading,
+  page = 1,
+  pageSize = 100,
+  hasMore = false,
+  onPageChange,
+}: Props) {
   if (loading) {
     return (
       <div
@@ -69,7 +80,7 @@ export function PaperEventsTimeline({ events, loading }: Props) {
       </div>
     );
   }
-  if (events.length === 0) {
+  if (events.length === 0 && page === 1) {
     return (
       <div
         className="rounded-md border border-slate-200 dark:border-slate-700 p-4 text-sm text-slate-500"
@@ -81,30 +92,69 @@ export function PaperEventsTimeline({ events, loading }: Props) {
     );
   }
 
+  const start = (page - 1) * pageSize + 1;
+  const end = start + events.length - 1;
+  const showControls = onPageChange != null;
+
   return (
-    <div className="space-y-1.5" data-testid="paper-events-timeline">
-      {events.map((e) => {
-        const tone =
-          EVENT_TONE[e.type]
-          ?? "border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900";
-        return (
-          <div
-            key={e.event_id}
-            className={`flex items-center justify-between rounded-md border px-3 py-1.5 text-sm ${tone}`}
-            data-testid={`paper-event-${e.type}`}
-          >
-            <span className="font-mono text-xs text-slate-600 dark:text-slate-400">
-              {fmtTime(e.ts_ns)}
-            </span>
-            <span className="flex-1 px-3 text-slate-900 dark:text-slate-100">
-              <span className="font-medium">{e.type}</span>
-              <span className="ml-2 text-slate-700 dark:text-slate-300">
-                {summary(e)}
-              </span>
-            </span>
+    <div className="space-y-2" data-testid="paper-events-timeline">
+      {showControls && (
+        <div
+          className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-400"
+          data-testid="paper-events-pager"
+        >
+          <span>
+            {events.length === 0
+              ? "No events on this page"
+              : `Showing ${start}–${end} (page ${page})`}
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={page <= 1}
+              onClick={() => onPageChange(page - 1)}
+              className="rounded border border-slate-300 dark:border-slate-600 px-2 py-1 disabled:opacity-40"
+              data-testid="paper-events-prev"
+            >
+              ← Newer
+            </button>
+            <button
+              type="button"
+              disabled={!hasMore}
+              onClick={() => onPageChange(page + 1)}
+              className="rounded border border-slate-300 dark:border-slate-600 px-2 py-1 disabled:opacity-40"
+              data-testid="paper-events-next"
+            >
+              Older →
+            </button>
           </div>
-        );
-      })}
+        </div>
+      )}
+
+      <div className="space-y-1.5">
+        {events.map((e) => {
+          const tone =
+            EVENT_TONE[e.type]
+            ?? "border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900";
+          return (
+            <div
+              key={e.event_id}
+              className={`flex items-center justify-between rounded-md border px-3 py-1.5 text-sm ${tone}`}
+              data-testid={`paper-event-${e.type}`}
+            >
+              <span className="font-mono text-xs text-slate-600 dark:text-slate-400">
+                {fmtTime(e.ts_ns)}
+              </span>
+              <span className="flex-1 px-3 text-slate-900 dark:text-slate-100">
+                <span className="font-medium">{e.type}</span>
+                <span className="ml-2 text-slate-700 dark:text-slate-300">
+                  {summary(e)}
+                </span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

@@ -170,6 +170,7 @@ def create_paper_router() -> APIRouter:
     @router.get("/events")
     async def list_events(
         limit: int = Query(100, ge=1, le=500),
+        offset: int = Query(0, ge=0),
         type: str | None = Query(
             None,
             description=(
@@ -194,10 +195,10 @@ def create_paper_router() -> APIRouter:
                 "FROM events "
                 "WHERE user_id = ? AND type = ? "
                 "ORDER BY ts_ns DESC "
-                "LIMIT ?"
+                "LIMIT ? OFFSET ?"
             )
             params: list = [
-                str(UUID(user.user_id)), type, limit,
+                str(UUID(user.user_id)), type, limit, offset,
             ]
         else:
             sql = (
@@ -206,9 +207,9 @@ def create_paper_router() -> APIRouter:
                 "FROM events "
                 "WHERE user_id = ? "
                 "ORDER BY ts_ns DESC "
-                "LIMIT ?"
+                "LIMIT ? OFFSET ?"
             )
-            params = [str(UUID(user.user_id)), limit]
+            params = [str(UUID(user.user_id)), limit, offset]
         try:
             rows = query_iceberg_table(
                 "algo.events", sql, params,
