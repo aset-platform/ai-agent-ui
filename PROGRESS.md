@@ -2,6 +2,84 @@
 
 ---
 
+## 2026-05-09 (later) — Algo Trading v2 — full sprint + integration
+
+**Branch:** `feature/algo-trading-v2-integration` (cut from `dev` at `27e98730` after v1 squash-merged via PR #141 earlier in the day)
+
+### What shipped today (one calendar day, parallel Sonnet subagents)
+
+The v2 spec was drafted, all 5 slices implemented + merged to the integration branch via PRs #142-#146, plus 8 post-merge fixes/features from real-world walkthrough validation. Total **14 commits ahead of `dev`**, 50 SP against `ASETPLTFRM-361 Algo Trading v2 — Live-trading-readiness vertical` (Sprint 10, all 5 slice tickets + epic transitioned to Done).
+
+### Spec + plans (`docs/superpowers/`)
+
+- `specs/2026-05-09-algo-trading-v2-design.md` (~700 lines)
+- `plans/2026-05-09-algo-trading-v2-slice-{0,1,2,3,5}-*.md` (V2-0 full TDD; V2-1/2/3/5 skeleton, expanded by each subagent)
+
+### Slice timeline
+
+| Slice | Squash | SP | PR | Subagent timing |
+|---|---|--:|---|---|
+| V2-0 Foundation (Keychain BYO_SECRET_KEY + replay rebuilder) | `3cf37d2` | 3 | #142 | sonnet, ~12 min |
+| V2-1 Live Kite WS multiplexer | `cf8719fb` | 13 | #144 | sonnet worktree, ~30 min, parallel with V2-2 |
+| V2-2 Walk-forward CV harness | `0b85a64` | 8 | #143 | sonnet worktree, ~22 min, parallel with V2-1 (commits dangled — recovered via `git update-ref`) |
+| V2-3 Reconciliation loop (alert-only) | `06d3c14d` | 5 | #145 | sonnet worktree, ~13 min |
+| V2-5 Live order placement (incl. V2-4 safety belts) | `55bd6848` | 21 | #146 | sonnet worktree, ~26 min |
+
+### Post-merge fixes/features (8 PRs)
+
+5 bug fixes + 3 enhancements caught during user-driven walkthrough — all live-money-relevant code paths exercised before the dev merge:
+
+- #147 walk-forward scorecard recomputes from selected windows (UX gap; legend toggle was decorative)
+- #148 drift route import path (`backend.auth.*` → `auth.*` — backend boot blocker)
+- #149 `nifty_above_sma200` regime feature (per-(ticker, bar) backend computation; ^NSEI > SMA200)
+- #150 register `nifty_above_sma200` in AST allowlist + frontend catalog mirror (createStrategy was 400'ing)
+- #151 `nifty_30d_return_pct` trend-strength feature (sibling to regime; for chop filtering)
+- #152 drop dead `from backend.db.pg_utils import _pg_session` (V2-1 left it; module doesn't exist; crashed live-ws POST)
+- #153 live-ws ticker resolution uses `_scoped_tickers` helper (V2-1 had bad raw SQL against `stocks.portfolio` / `stocks.watchlist`)
+- #154 performance route handles walk-forward summary shape (V2-2 walk-forward parents lack `total_pnl_inr`; KeyError 500'd)
+
+Pattern: V2-1 + V2-3 subagents wrong-prefixed `from backend.…` imports that compiled but crashed at runtime; V2-1 separately reinvented `_scoped_tickers` with bad SQL. Note added to subagent prompt template for future epics.
+
+### Live verification (markets-closed weekend session)
+
+- ✅ V2-0: backend boots clean; replay rebuilder fires once at startup
+- ✅ V2-2: 16 walk-forwards across 4 strategy variants × 2 periods, all completed
+- ✅ #147: scorecard responds live to legend toggle (toggling outlier window changes Avg PnL / Win Rate / Std)
+- ✅ #149 + #151: NIFTY regime + trend-strength features operational; values match reality (e.g. late-Dec 2024 OFF detected matching the actual NIFTY correction)
+- ✅ V2-1: live-ws run started against real Kite, "Streaming from Kite WS" indicator green, multiplexer subscribed
+- ✅ V2-3: drift table accessible, scheduler job registered (`market_hours_only=True` gate)
+- ✅ V2-5: 4-gate live-mode toggle correctly disabled across all 4 strategy variants (walk-forward + drift gate prevent live enablement under current data); 62/62 backend unit tests; default-OFF verified at three layers (schema default, runtime guard, UI re-validation)
+
+### What's NOT yet validated (deferred)
+
+- ⏳ Real tick flow + signal generation (markets closed; resumes Monday 09:15 IST)
+- ⏳ Reconciliation drift detection on real positions (needs live trading first)
+- ⏳ V2-5 end-to-end live order submission against real Kite (needs offline rehearsal first — see next section)
+
+### Strategy research thread (separate from v2 dev)
+
+User extensively used the new walk-forward CV during the day to validate Golden Cross v1 against real Indian equities. 4 strategy variants tested across 2 non-overlapping periods (2022-24 and 2024-26):
+
+| Variant | 2022-24 | 2024-26 |
+|---|---:|---:|
+| v1 raw (5%/10%) | +0.96% / 68.85% / Sharpe 0.27 | -1.15% / 59.17% / -0.62 |
+| v1 tightened (3%/5%) | +0.53% / 66.21% / 0.27 | -1.08% / 53.59% / -0.69 |
+| v2 NIFTY-gated | +1.56% / 76.64% / **0.56** | -0.89% / 46.57% / -0.79 |
+| v3 + days≤30 | **+2.26%** / 76.15% / **0.59** | -0.85% / 46.99% / -0.74 |
+| v4 + trend>2 | +1.36% / 52.49% / 0.43 | **-0.56%** / 27.52% / -0.54 |
+
+Conclusion: Golden Cross is **regime-conditional**, not parameter-tunable for the 2024-26 regime. v3 is the strongest version; live-mode toggle correctly stays disabled because the 2024-26 walk-forward fails the positive-aggregate gate. Strategy archived for now; will revisit when regime conditions return. Doc: `docs/algo-trading/live-ramp.md` (post-merge ramp procedure when conditions warrant).
+
+### Pending before dev merge
+
+1. Drafting this PROGRESS + CHANGELOG `[0.17.0]` entry (in flight)
+2. mkdocs build verification
+3. **Offline V2-5 rehearsal** — user-requested: simulate full live-order pipeline against mocked Kite REST before any real-money exposure
+4. Open final integration → `dev` PR (squash, ~14 commits → 1 commit on dev)
+5. Locked subagent worktrees cleanup (`.claude/worktrees/agent-*`)
+
+---
+
 ## 2026-05-09 — Algo Trading v2 — Slice V2-5: Live Order Placement
 
 **Branch:** `feature/algo-trading-session-4-backtest-engine`
