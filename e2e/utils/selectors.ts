@@ -247,4 +247,68 @@ export const FE = {
   aaActiveFilterChipX: (key: string) =>
     `aa-active-filter-chip-${key}-x`,
   aaActiveFilterClearAll: "aa-active-filter-clear-all",
+
+  // ── Algo Trading (Slice 0 of the epic) ──────────
+  algoTradingHeading: "algo-trading-heading",
+  algoTradingTabs: "algo-trading-tabs",
+  algoTradingTab: (id: string) => `algo-trading-tab-${id}`,
+  algoTradingPanel: (id: string) => `algo-trading-panel-${id}`,
+
+  // ── Algo Trading — Backtest tab (Slice 7b) ─────
+  algoBacktestTab: "backtest-tab",
+  algoBacktestRunForm: "backtest-run-form",
+  algoBacktestStrategySelect: "backtest-strategy-select",
+  algoBacktestSubmit: "backtest-submit",
+  algoBacktestSummaryCards: "backtest-summary-cards",
+  algoBacktestEquityCurve: "backtest-equity-curve",
+  algoBacktestEquityCurveEmpty: "backtest-equity-curve-empty",
+  algoBacktestTradeTable: "backtest-trade-table",
+  algoBacktestTradeTableEmpty: "backtest-trade-table-empty",
+
+  // ── Algo Trading — Paper + Kill switch (Slice 8b) ─
+  algoPaperTab: "paper-tab",
+  algoPaperEventsTimeline: "paper-events-timeline",
+  algoPaperEventsEmpty: "paper-events-empty",
+  algoKillSwitchToggle: "kill-switch-toggle",
+  algoKillSwitchArmBtn: "kill-switch-arm-btn",
+  algoKillSwitchDisarmBtn: "kill-switch-disarm-btn",
+  algoKillSwitchArmConfirm: "kill-switch-arm-confirm",
+  algoKillSwitchArmConfirmBtn: "kill-switch-arm-confirm-btn",
+  algoKillSwitchReasonInput: "kill-switch-reason-input",
+
+  // ── Algo Trading — Paper supervisor (Slice 8c) ─
+  algoPaperActiveRunsPanel: "paper-active-runs-panel",
+  algoPaperActiveRunsEmpty: "paper-active-runs-empty",
+  algoPaperStartRunForm: "paper-start-run-form",
+  algoPaperStartStrategySelect: "paper-start-strategy-select",
+  algoPaperStartFixtureSelect: "paper-start-fixture-select",
+  algoPaperStartCapital: "paper-start-capital",
+  algoPaperStartBtn: "paper-start-btn",
+
+  // ── Algo Trading — Performance + Replay (Slice 9 + 10) ─
+  algoPerformanceTab: "performance-tab",
+  algoPerformanceEmpty: "performance-empty",
+  algoPerformanceAggregatesTable: "performance-aggregates-table",
+  algoPerformanceRunsTable: "performance-runs-table",
+  algoReplayTab: "replay-tab",
+  algoReplayFilters: "replay-filters",
+  algoReplayModeSelect: "replay-mode-select",
+  algoReplayTypeSelect: "replay-type-select",
+  algoReplayTimeline: "replay-timeline",
+  algoReplayEmpty: "replay-empty",
+
+  // ── Algo Trading — Strategy Levers ───────
+  algoStrategyLeversPanel: "strategy-levers-panel",
+  algoStrategyLeversToggle: "strategy-levers-toggle",
+  algoStrategyLeversBody: "strategy-levers-body",
+  algoLeverUniverseScope: "lever-universe-scope",
+  algoLeverUniverseMarket: "lever-universe-market",
+  algoLeverRebalanceMaxPositions:
+    "lever-rebalance-max-positions",
+  algoLeverRiskMaxExposurePct:
+    "lever-risk-max-exposure-pct",
+  algoLeverRiskMaxConcentrationPct:
+    "lever-risk-max-concentration-pct",
+  algoLeverRiskMaxQty: "lever-risk-max-qty",
+  algoLeverRiskMaxLossPct: "lever-risk-max-loss-pct",
 } as const;

@@ -76,6 +76,13 @@ nav:
       - Advanced Analytics: backend/advanced-analytics.md
       - Advanced Analytics — Rollout SOP: backend/advanced-analytics-rollout.md
       - ScreenQL: backend/screenql.md
+  - Algo Trading:
+      - Overview: algo-trading/overview.md
+      - Backtest engine: algo-trading/backtest.md
+      - Paper trading: algo-trading/paper-trading.md
+      - Strategies & Levers: algo-trading/strategies.md
+      - Secrets (Keychain → CSI): algo-trading/secrets.md
+      - Troubleshooting: algo-trading/troubleshooting.md
   - Dashboard:
       - Overview: dashboard/overview.md
   - Frontend:

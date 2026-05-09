@@ -3302,3 +3302,30 @@ def execute_promoter_holdings_quarterly(
         cancelled=False,
         started_at=_run_start,
     )
+
+
+@register_job("algo_kite_reauth_notify")
+async def _job_algo_kite_reauth_notify(payload: dict | None = None):
+    """Daily 05:30 IST notify users with expired/expiring Kite tokens."""
+    from backend.algo.jobs.reauth_notify import run_reauth_notify_job
+    return await run_reauth_notify_job(payload)
+
+
+@register_job("algo_kite_instruments_refresh")
+async def _job_algo_kite_instruments_refresh(
+    payload: dict | None = None,
+):
+    """Daily 07:00 IST refresh of algo.instruments from Kite."""
+    from backend.algo.jobs.instrument_refresh import run
+    return await run(payload)
+
+
+@register_job("algo_risk_state_reset")
+async def _job_algo_risk_state_reset(
+    payload: dict | None = None,
+):
+    """Daily IST-midnight reset of algo.risk_state P&L counters."""
+    from backend.algo.jobs.risk_state_reset import (
+        run_risk_state_reset_job,
+    )
+    return await run_risk_state_reset_job(payload)

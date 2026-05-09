@@ -3973,6 +3973,56 @@ def create_app(
         prefix="/v1",
     )
 
+    # Algo trading endpoints.
+    from backend.algo.routes import (
+        create_backtest_router,
+        create_broker_router,
+        create_fees_router,
+        create_instruments_router,
+        create_kill_switch_router,
+        create_paper_router,
+        create_performance_router,
+        create_replay_router,
+        create_strategies_router,
+    )
+
+    app.include_router(
+        create_broker_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_fees_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_instruments_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_strategies_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_backtest_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_kill_switch_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_paper_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_performance_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_replay_router(),
+        prefix="/v1",
+    )
+
     # WebSocket streaming endpoint.
     from ws import register_ws_routes
 

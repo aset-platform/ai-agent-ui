@@ -14,6 +14,9 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 _logger = logging.getLogger(__name__)
 
@@ -79,5 +82,49 @@ async def persist_chat_turn(
     except Exception:
         _logger.debug(
             "Chat turn persistence failed",
+            exc_info=True,
+        )
+
+
+async def write_audit_event(
+    session: AsyncSession,
+    user_id: str,
+    event_type: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Write an audit event to the auth.audit_log table via Iceberg.
+
+    Used by background jobs and endpoints to record system events.
+
+    Args:
+        session: AsyncSession (used for transaction context).
+        user_id: UUID of the user affected by the event.
+        event_type: Event type string (e.g., ALGO_BROKER_REAUTH_REQUIRED).
+        metadata: Optional dict of extra context (serialised to JSON).
+    """
+    try:
+        from auth.repo.audit import append_audit_event
+
+        # Fetch the Iceberg catalog via the repository
+        # (mimics UserRepository._get_iceberg_catalog)
+        from auth.repo.repository import UserRepository
+
+        repo = UserRepository(session=session)
+        cat = repo._get_iceberg_catalog()
+
+        # Write to Iceberg via the sync append_audit_event
+        # (Iceberg catalog operations are sync)
+        append_audit_event(
+            cat,
+            event_type=event_type,
+            actor_user_id=user_id,  # The system acts on behalf of the user
+            target_user_id=user_id,
+            metadata=metadata,
+        )
+    except Exception:
+        _logger.warning(
+            "Audit event write failed: event_type=%s user_id=%s",
+            event_type,
+            user_id,
             exc_info=True,
         )

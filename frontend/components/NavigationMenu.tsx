@@ -34,6 +34,12 @@ function canSeeItem(item: typeof NAV_ITEMS[number], profile: UserProfile | null)
     if (profile.role === "superuser") return true;
     return profile.page_permissions?.insights === true;
   }
+  if (item.requiresAlgoTrading) {
+    if (!profile) return false;
+    if (profile.role === "superuser") return true;
+    if (profile.role !== "pro") return false;
+    return profile.page_permissions?.algo_trading === true;
+  }
   return true;
 }
 
