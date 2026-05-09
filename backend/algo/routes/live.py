@@ -196,10 +196,13 @@ async def _check_gates(
         and drift_within_limit
     )
 
-    # Dry-run flag — reads ALGO_LIVE_DRY_RUN from env.
-    # Import here to avoid circular import with broker module.
-    from backend.algo.broker.kite_client import _read_dry_run_env
-    dry_run = _read_dry_run_env()
+    # Dry-run flag: per-user Redis state (set via the
+    # /v1/algo/live/dry-run/{arm,disarm} endpoints when the
+    # frontend toggle flips). Falls back to the
+    # ALGO_LIVE_DRY_RUN env var if Redis state is absent so
+    # legacy deployments keep working.
+    from backend.algo.live.dry_run_flag import is_armed
+    dry_run = await is_armed(user_id, redis_client)
 
     return GatesStatus(
         kite_connected=kite_connected,
@@ -380,6 +383,36 @@ def create_live_router() -> APIRouter:
             k: row[k] for k in CapsResponse.model_fields
             if k in row
         })
+
+    # ----------------------------------------------------------
+    # Dry-run mode toggle (per-user, Redis-backed).
+    # ----------------------------------------------------------
+    @router.post("/dry-run/arm")
+    async def dry_run_arm(
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> dict[str, Any]:
+        from backend.algo.live.dry_run_flag import arm
+        uid = UUID(user.user_id)
+        new_state = await arm(uid, _redis())
+        return {"dry_run": new_state}
+
+    @router.post("/dry-run/disarm")
+    async def dry_run_disarm(
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> dict[str, Any]:
+        from backend.algo.live.dry_run_flag import disarm
+        uid = UUID(user.user_id)
+        new_state = await disarm(uid, _redis())
+        return {"dry_run": new_state}
+
+    @router.get("/dry-run")
+    async def dry_run_state(
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> dict[str, Any]:
+        from backend.algo.live.dry_run_flag import is_armed
+        uid = UUID(user.user_id)
+        state = await is_armed(uid, _redis())
+        return {"dry_run": state}
 
     # ----------------------------------------------------------
     @router.get("/orders/{strategy_id}")

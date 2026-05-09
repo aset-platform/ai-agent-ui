@@ -79,7 +79,7 @@ function LiveSection({ strategyId, strategyName }: {
 
 const DEFAULT_EVENTS_PAGE_SIZE: EventsPageSize = 100;
 
-type ViewMode = "paper" | "dryrun" | "live";
+type ViewMode = "live" | "paper" | "dryrun";
 
 interface ViewFilter {
   mode: EventsMode;
@@ -87,13 +87,44 @@ interface ViewFilter {
 }
 
 const VIEW_TO_FILTER: Record<ViewMode, ViewFilter> = {
+  live:   { mode: "live",  dryRun: false },
   paper:  { mode: "paper", dryRun: null },
   dryrun: { mode: "live",  dryRun: true },
-  live:   { mode: "live",  dryRun: false },
 };
 
+/** When the user clicks Dry run / Live, fire off the
+ *  arm / disarm endpoint so the per-user Redis flag is in
+ *  sync with their selection. Paper view doesn't touch the
+ *  flag — it's irrelevant to PaperRuntime. */
+async function setDryRunRedis(armed: boolean): Promise<void> {
+  const path = armed
+    ? "/algo/live/dry-run/arm"
+    : "/algo/live/dry-run/disarm";
+  try {
+    const { apiFetch } = await import("@/lib/apiFetch");
+    const { API_URL } = await import("@/lib/config");
+    await apiFetch(`${API_URL}${path}`, { method: "POST" });
+  } catch {
+    // Best-effort — UI state is still set; backend resolution
+    // falls back to env if the request failed.
+  }
+}
+
 export function PaperTab() {
-  const [viewMode, setViewMode] = useState<ViewMode>("paper");
+  // Live first per user request — the live trading is the
+  // primary purpose of the page. Paper / Dry run are secondary
+  // segments for development + rehearsal.
+  const [viewMode, setViewMode] = useState<ViewMode>("live");
+
+  const onChangeViewMode = (next: ViewMode) => {
+    setViewMode(next);
+    // Sync the per-user Redis dry-run flag with the segment.
+    if (next === "dryrun") {
+      void setDryRunRedis(true);
+    } else if (next === "live") {
+      void setDryRunRedis(false);
+    }
+  };
   const [eventsPage, setEventsPage] = useState(0);
   const [eventsPageSize, setEventsPageSize] = useState<EventsPageSize>(
     DEFAULT_EVENTS_PAGE_SIZE,
@@ -151,16 +182,16 @@ export function PaperTab() {
             data-testid="trading-mode-toggle"
           >
             {([
+              { id: "live", label: "Live", active: "bg-rose-600 text-white" },
               { id: "paper", label: "Paper", active: "bg-indigo-600 text-white" },
               { id: "dryrun", label: "Dry run", active: "bg-amber-500 text-white" },
-              { id: "live", label: "Live", active: "bg-rose-600 text-white" },
             ] as const).map((tab) => (
               <button
                 key={tab.id}
                 type="button"
                 role="tab"
                 aria-selected={viewMode === tab.id}
-                onClick={() => setViewMode(tab.id)}
+                onClick={() => onChangeViewMode(tab.id)}
                 className={
                   (viewMode === tab.id ? tab.active : (
                     "bg-white dark:bg-slate-800 text-slate-700 "
