@@ -120,6 +120,35 @@ class LiveRuntime:
         self._in_flight: list[dict[str, Any]] = []
         self._bars_by_ticker: dict[str, list] = {}
 
+        # Pre-load NIFTY regime + trend features so strategies
+        # gated on ``nifty_above_sma200`` / ``nifty_30d_return_pct``
+        # don't silent-fail every bar with a KeyError. Same
+        # pattern as PaperRuntime + the backtest runner.
+        self._market_regime: dict[Any, Decimal] = {}
+        self._market_trend: dict[Any, Decimal] = {}
+        try:
+            from datetime import date as _date, timedelta
+            from backend.algo.backtest.indicators import (
+                compute_market_regime as _cmr,
+                compute_market_trend_strength as _cmts,
+            )
+            today = _date.today()
+            window_start = today - timedelta(days=365 * 3)
+            window_end = today + timedelta(days=1)
+            self._market_regime = _cmr(window_start, window_end)
+            self._market_trend = _cmts(window_start, window_end)
+            _logger.info(
+                "LiveRuntime: regime cache loaded — %d regime "
+                "days, %d trend days",
+                len(self._market_regime),
+                len(self._market_trend),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "LiveRuntime: regime cache load failed: %s",
+                exc,
+            )
+
     # ----------------------------------------------------------
     # Main run loop
     # ----------------------------------------------------------
@@ -220,10 +249,21 @@ class LiveRuntime:
         history = self._bars_by_ticker.setdefault(bar.ticker, [])
         history.append(adapted)
         ind_map = compute_indicators(history)
-        features = ind_map.get(
-            bar_date_obj,
-            {"today_ltp": bar.close, "today_vol": Decimal(bar.volume)},
-        )
+        features = {
+            **ind_map.get(
+                bar_date_obj,
+                {
+                    "today_ltp": bar.close,
+                    "today_vol": Decimal(bar.volume),
+                },
+            ),
+            "nifty_above_sma200": self._market_regime.get(
+                bar_date_obj, Decimal("0"),
+            ),
+            "nifty_30d_return_pct": self._market_trend.get(
+                bar_date_obj, Decimal("0"),
+            ),
+        }
 
         existing_pos = self._positions.open_positions().get(bar.ticker)
         ctx = EvalContext(

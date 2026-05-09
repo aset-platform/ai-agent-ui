@@ -79,6 +79,39 @@ class PaperRuntime:
         # sessions are bounded (~375 1m bars/day) so cost is fine.
         self._bars_by_ticker: dict[str, list] = {}
 
+        # Top-level market regime features (NIFTY-derived) — same
+        # ones the backtest runner injects. Strategies referencing
+        # ``nifty_above_sma200`` or ``nifty_30d_return_pct`` would
+        # otherwise raise KeyError on every bar (silently caught,
+        # signal never fires). Pre-computed once at start over a
+        # wide date window so per-bar lookups are O(1).
+        self._market_regime: dict[Any, Decimal] = {}
+        self._market_trend: dict[Any, Decimal] = {}
+        try:
+            from datetime import date as _date, timedelta
+            from backend.algo.backtest.indicators import (
+                compute_market_regime as _cmr,
+                compute_market_trend_strength as _cmts,
+            )
+            today = _date.today()
+            window_start = today - timedelta(days=365 * 3)
+            window_end = today + timedelta(days=1)
+            self._market_regime = _cmr(window_start, window_end)
+            self._market_trend = _cmts(window_start, window_end)
+            _logger.info(
+                "PaperRuntime: regime cache loaded — %d regime "
+                "days, %d trend days",
+                len(self._market_regime),
+                len(self._market_trend),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "PaperRuntime: regime cache load failed: %s "
+                "(strategies referencing nifty_* features will "
+                "silent-skip every bar)",
+                exc,
+            )
+
     async def run(self, source: TickSource) -> int:
         """Drain the source. Returns the count of fills emitted.
 
@@ -160,9 +193,15 @@ class PaperRuntime:
         history = self._bars_by_ticker.setdefault(bar.ticker, [])
         history.append(adapted)
         ind_map = compute_indicators(history)
-        features = ind_map.get(
-            bar_date_obj, _features_for_bar(bar),
-        )
+        features = {
+            **ind_map.get(bar_date_obj, _features_for_bar(bar)),
+            "nifty_above_sma200": self._market_regime.get(
+                bar_date_obj, Decimal("0"),
+            ),
+            "nifty_30d_return_pct": self._market_trend.get(
+                bar_date_obj, Decimal("0"),
+            ),
+        }
 
         ctx = EvalContext(
             ticker=bar.ticker,
