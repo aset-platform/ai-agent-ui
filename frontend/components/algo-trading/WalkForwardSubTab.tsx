@@ -1,0 +1,392 @@
+"use client";
+
+import { useState } from "react";
+
+import {
+  startWalkForwardRun,
+  useWalkForwardRun,
+  useWalkForwardRuns,
+  type WalkForwardAggregate,
+} from "@/hooks/useWalkForwardRuns";
+import { useStrategies } from "@/hooks/useStrategies";
+
+import {
+  WalkForwardEquityCurves,
+  type WindowCurve,
+} from "./WalkForwardEquityCurves";
+
+function todayMinus(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+function fmtPct(v: string | null | undefined): string {
+  if (v == null) return "—";
+  return `${Number(v).toFixed(2)}%`;
+}
+
+function AggCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "good" | "bad";
+}) {
+  const cls =
+    tone === "good"
+      ? "text-emerald-600 dark:text-emerald-400"
+      : tone === "bad"
+        ? "text-rose-600 dark:text-rose-400"
+        : "text-slate-900 dark:text-slate-100";
+  return (
+    <div className="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2">
+      <div className="text-xs text-slate-500 dark:text-slate-400">
+        {label}
+      </div>
+      <div className={`text-lg font-semibold ${cls}`}>{value}</div>
+    </div>
+  );
+}
+
+function AggregateCards({ agg }: { agg: WalkForwardAggregate }) {
+  const pnlPositive = Number(agg.avg_pnl_pct) >= 0;
+  return (
+    <div
+      className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6"
+      data-testid="walkforward-aggregate-cards"
+    >
+      <AggCard
+        label="Avg PnL %"
+        value={fmtPct(agg.avg_pnl_pct)}
+        tone={pnlPositive ? "good" : "bad"}
+      />
+      <AggCard
+        label="Avg Win Rate"
+        value={fmtPct(agg.avg_win_rate_pct)}
+      />
+      <AggCard
+        label="Avg Max DD"
+        value={fmtPct(agg.avg_max_drawdown_pct)}
+        tone="bad"
+      />
+      <AggCard label="Std PnL %" value={fmtPct(agg.std_pnl_pct)} />
+      <AggCard
+        label="Windows"
+        value={String(agg.window_count)}
+      />
+      <AggCard
+        label="Completed"
+        value={`${agg.completed_count}/${agg.window_count}`}
+      />
+    </div>
+  );
+}
+
+function WindowTable({
+  summaries,
+}: {
+  summaries: ReturnType<
+    typeof useWalkForwardRun
+  >["run"]["window_summaries"];
+}) {
+  if (!summaries || summaries.length === 0) return null;
+  return (
+    <div
+      className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700"
+      data-testid="walkforward-window-table"
+    >
+      <table className="w-full text-xs">
+        <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+          <tr>
+            <th className="px-3 py-1.5 text-left">#</th>
+            <th className="px-3 py-1.5 text-left">Test period</th>
+            <th className="px-3 py-1.5 text-right">PnL %</th>
+            <th className="px-3 py-1.5 text-right">Win rate</th>
+            <th className="px-3 py-1.5 text-right">Max DD</th>
+            <th className="px-3 py-1.5 text-left">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {summaries.map((w) => (
+            <tr
+              key={w.window_index}
+              className="border-t border-slate-100 dark:border-slate-800"
+              data-testid={`walkforward-window-row-${w.window_index}`}
+            >
+              <td className="px-3 py-1">{w.window_index + 1}</td>
+              <td className="px-3 py-1">
+                {w.test_start} → {w.test_end}
+              </td>
+              <td
+                className={`px-3 py-1 text-right ${
+                  w.total_pnl_pct != null &&
+                  Number(w.total_pnl_pct) >= 0
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : "text-rose-600 dark:text-rose-400"
+                }`}
+              >
+                {fmtPct(w.total_pnl_pct)}
+              </td>
+              <td className="px-3 py-1 text-right">
+                {fmtPct(w.win_rate_pct)}
+              </td>
+              <td className="px-3 py-1 text-right text-rose-600 dark:text-rose-400">
+                {fmtPct(w.max_drawdown_pct)}
+              </td>
+              <td className="px-3 py-1 capitalize">{w.status}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="flex flex-col gap-1 text-xs text-slate-600 dark:text-slate-400">
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+const inputCls =
+  "rounded border border-slate-300 dark:border-slate-600 " +
+  "bg-white dark:bg-slate-800 px-2 py-1 text-sm";
+
+export function WalkForwardSubTab() {
+  const { strategies } = useStrategies();
+  const { rows: history } = useWalkForwardRuns();
+
+  const [strategyId, setStrategyId] = useState("");
+  const [periodStart, setPeriodStart] = useState(todayMinus(730));
+  const [periodEnd, setPeriodEnd] = useState(todayMinus(1));
+  const [trainDays, setTrainDays] = useState(180);
+  const [testDays, setTestDays] = useState(30);
+  const [stepDays, setStepDays] = useState(30);
+  const [capital, setCapital] = useState("100000.00");
+  const [submitting, setSubmitting] = useState(false);
+  const [formErr, setFormErr] = useState<string | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+
+  const effectiveRunId =
+    activeRunId ?? history[0]?.run_id ?? null;
+  const { run, error: runErr } = useWalkForwardRun(effectiveRunId);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!strategyId) {
+      setFormErr("Pick a strategy");
+      return;
+    }
+    setFormErr(null);
+    setSubmitting(true);
+    try {
+      const id = await startWalkForwardRun(
+        strategyId,
+        periodStart,
+        periodEnd,
+        trainDays,
+        testDays,
+        stepDays,
+        capital,
+      );
+      setActiveRunId(id);
+    } catch (exc) {
+      setFormErr(
+        exc instanceof Error ? exc.message : "Failed to submit",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const curves: WindowCurve[] =
+    run?.window_summaries?.map((w) => ({
+      windowIndex: w.window_index,
+      testStart: w.test_start,
+      testEnd: w.test_end,
+      status: w.status,
+      points: w.equity_curve,
+    })) ?? [];
+
+  return (
+    <div
+      className="space-y-4"
+      data-testid="walkforward-sub-tab"
+    >
+      {/* Config form */}
+      <form
+        onSubmit={handleSubmit}
+        className="flex flex-wrap items-end gap-3 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-3"
+        data-testid="walkforward-run-form"
+      >
+        <Field label="Strategy">
+          <select
+            className={inputCls}
+            value={strategyId}
+            onChange={(e) => setStrategyId(e.target.value)}
+            data-testid="walkforward-strategy-select"
+          >
+            <option value="">Select…</option>
+            {strategies.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Period from">
+          <input
+            type="date"
+            value={periodStart}
+            onChange={(e) => setPeriodStart(e.target.value)}
+            className={inputCls}
+            data-testid="walkforward-period-start"
+          />
+        </Field>
+        <Field label="Period to">
+          <input
+            type="date"
+            value={periodEnd}
+            onChange={(e) => setPeriodEnd(e.target.value)}
+            className={inputCls}
+            data-testid="walkforward-period-end"
+          />
+        </Field>
+        <Field label="Train days">
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={trainDays}
+            onChange={(e) => setTrainDays(Number(e.target.value))}
+            className={`${inputCls} w-20`}
+            data-testid="walkforward-train-days"
+          />
+        </Field>
+        <Field label="Test days">
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={testDays}
+            onChange={(e) => setTestDays(Number(e.target.value))}
+            className={`${inputCls} w-20`}
+            data-testid="walkforward-test-days"
+          />
+        </Field>
+        <Field label="Step days">
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={stepDays}
+            onChange={(e) => setStepDays(Number(e.target.value))}
+            className={`${inputCls} w-20`}
+            data-testid="walkforward-step-days"
+          />
+        </Field>
+        <Field label="Capital ₹">
+          <input
+            type="number"
+            min={1000}
+            step={1000}
+            value={capital}
+            onChange={(e) => setCapital(e.target.value)}
+            className={`${inputCls} w-28`}
+            data-testid="walkforward-capital"
+          />
+        </Field>
+        <button
+          type="submit"
+          disabled={submitting}
+          className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60"
+          data-testid="walkforward-submit"
+        >
+          {submitting ? "Starting…" : "Run walk-forward CV"}
+        </button>
+        {formErr && (
+          <span
+            className="text-sm text-rose-600"
+            data-testid="walkforward-form-error"
+          >
+            {formErr}
+          </span>
+        )}
+      </form>
+
+      {/* History strip */}
+      {history.length > 0 && (
+        <div className="flex flex-wrap gap-2 text-xs">
+          <span className="text-slate-500">Recent:</span>
+          {history.slice(0, 8).map((h) => (
+            <button
+              key={h.run_id}
+              onClick={() => setActiveRunId(h.run_id)}
+              className={`rounded px-2 py-0.5 border ${
+                h.run_id === effectiveRunId
+                  ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30"
+                  : "border-slate-200 dark:border-slate-700"
+              }`}
+              data-testid={`walkforward-history-${h.run_id}`}
+            >
+              {h.period_start}…{h.period_end} · {h.status}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Error banners */}
+      {runErr && (
+        <div
+          className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700"
+          data-testid="walkforward-load-error"
+        >
+          {runErr}
+        </div>
+      )}
+
+      {run && run.status === "failed" && (
+        <div
+          className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700"
+          data-testid="walkforward-run-error"
+        >
+          Run failed: {run.error_text ?? "unknown error"}
+        </div>
+      )}
+
+      {run &&
+        (run.status === "pending" || run.status === "running") && (
+          <div
+            className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800"
+            data-testid="walkforward-run-progress"
+          >
+            Walk-forward is {run.status}…
+          </div>
+        )}
+
+      {/* Results */}
+      {run && run.status === "completed" && (
+        <>
+          {run.aggregate && <AggregateCards agg={run.aggregate} />}
+          <WalkForwardEquityCurves
+            curves={curves}
+            initialCapitalInr={capital}
+          />
+          <WindowTable summaries={run.window_summaries} />
+        </>
+      )}
+    </div>
+  );
+}

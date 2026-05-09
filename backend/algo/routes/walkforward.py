@@ -29,12 +29,12 @@ from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
 from backend.algo.backtest.runs_repo import BacktestRunsRepo
 from backend.algo.backtest.types import BacktestRun
+from backend.algo.backtest.universe import resolve_universe
 from backend.algo.backtest.walkforward import (
     WalkForwardConfig,
     WalkForwardResult,
     run_walkforward_job,
 )
-from backend.algo.backtest.universe import resolve_universe
 from backend.algo.strategy.repo import get_strategy
 
 _logger = logging.getLogger(__name__)
@@ -113,38 +113,46 @@ def create_walkforward_router() -> APIRouter:
         user: UserContext = Depends(pro_or_superuser),
     ) -> WalkForwardResult:
         user_id = UUID(user.user_id)
-        repo = BacktestRunsRepo()
         factory = _get_session_factory()
         async with factory() as session:
-            summary = await repo.get_walkforward_by_id(
-                session, user_id=user_id, run_id=run_id,
+            result = await session.execute(
+                text(
+                    "SELECT id, strategy_id, status, period_start, "
+                    "period_end, started_at, completed_at, "
+                    "summary_json, error_text "
+                    "FROM algo.runs "
+                    "WHERE id = :id AND user_id = :uid "
+                    "  AND mode = 'walkforward'"
+                ),
+                {"id": run_id, "uid": user_id},
             )
-        if summary is None:
+            row = result.mappings().first()
+
+        if row is None:
             raise HTTPException(
                 status_code=404, detail="Walk-forward run not found",
             )
-        # If summary_json was the rich WalkForwardResult shape,
-        # decode it; otherwise return a minimal in-progress shape.
-        if hasattr(summary, "equity_curve"):
-            # Try to decode as WalkForwardResult
+
+        # Completed run: summary_json holds WalkForwardResult shape
+        if row["summary_json"] is not None:
             try:
-                raw = summary.model_dump(mode="json")
-                # Check if it has the walkforward-specific keys
-                if "window_summaries" in raw:
-                    return WalkForwardResult.model_validate(raw)
+                return WalkForwardResult.model_validate(
+                    row["summary_json"],
+                )
             except Exception:  # noqa: BLE001
                 pass
 
+        # Pending / running: return minimal in-progress shape
         return WalkForwardResult(
             walkforward_run_id=str(run_id),
-            strategy_id=str(summary.strategy_id),
-            status=summary.status,
-            period_start=summary.period_start,
-            period_end=summary.period_end,
+            strategy_id=str(row["strategy_id"]),
+            status=row["status"],
+            period_start=row["period_start"],
+            period_end=row["period_end"],
             train_days=0,
             test_days=0,
             step_days=0,
-            error_text=summary.error_text,
+            error_text=row["error_text"],
         )
 
     @router.get("/runs", response_model=list[BacktestRun])
