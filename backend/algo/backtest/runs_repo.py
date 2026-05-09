@@ -33,6 +33,10 @@ class BacktestRunsRepo:
         strategy_id: UUID,
         period_start: date,
         period_end: date,
+        mode: str = "backtest",
+        parent_walkforward_id: UUID | None = None,
+        window_start: date | None = None,
+        window_end: date | None = None,
     ) -> BacktestRun:
         run_id = uuid4()
         now = datetime.now(timezone.utc)
@@ -40,13 +44,20 @@ class BacktestRunsRepo:
             text(
                 "INSERT INTO algo.runs ("
                 "id, strategy_id, user_id, mode, status, "
-                "period_start, period_end, started_at) VALUES ("
-                ":id, :sid, :uid, 'backtest', 'pending', "
-                ":ps, :pe, :sa)"
+                "period_start, period_end, started_at, "
+                "parent_walkforward_id, window_start, window_end"
+                ") VALUES ("
+                ":id, :sid, :uid, :mode, 'pending', "
+                ":ps, :pe, :sa, "
+                ":pwf_id, :ws, :we)"
             ),
             {
                 "id": run_id, "sid": strategy_id, "uid": user_id,
+                "mode": mode,
                 "ps": period_start, "pe": period_end, "sa": now,
+                "pwf_id": parent_walkforward_id,
+                "ws": window_start,
+                "we": window_end,
             },
         )
         return BacktestRun(
@@ -199,3 +210,98 @@ class BacktestRunsRepo:
                 error_text=r["error_text"],
             ))
         return rows
+
+    async def list_children_by_walkforward(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: UUID,
+        walkforward_run_id: UUID,
+    ) -> list[BacktestRun]:
+        """Return child window runs for a walk-forward parent."""
+        result = await session.execute(
+            text(
+                "SELECT id, strategy_id, status, period_start, "
+                "period_end, started_at, completed_at, "
+                "summary_json, error_text, "
+                "window_start, window_end "
+                "FROM algo.runs "
+                "WHERE user_id = :uid "
+                "  AND parent_walkforward_id = :pwf_id "
+                "  AND mode = 'backtest' "
+                "ORDER BY window_start ASC NULLS LAST"
+            ),
+            {"uid": user_id, "pwf_id": walkforward_run_id},
+        )
+        rows: list[BacktestRun] = []
+        for r in result.mappings().all():
+            sj: dict[str, Any] | None = r["summary_json"]
+            rows.append(BacktestRun(
+                run_id=r["id"],
+                strategy_id=r["strategy_id"],
+                status=r["status"],
+                period_start=r["period_start"],
+                period_end=r["period_end"],
+                started_at=r["started_at"],
+                completed_at=r["completed_at"],
+                total_pnl_inr=(
+                    Decimal(str(sj["total_pnl_inr"]))
+                    if sj else None
+                ),
+                total_pnl_pct=(
+                    Decimal(str(sj["total_pnl_pct"]))
+                    if sj else None
+                ),
+                error_text=r["error_text"],
+            ))
+        return rows
+
+    async def get_walkforward_by_id(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: UUID,
+        run_id: UUID,
+    ) -> BacktestSummary | None:
+        """Fetch the parent walk-forward aggregate row."""
+        result = await session.execute(
+            text(
+                "SELECT id, strategy_id, status, period_start, "
+                "period_end, started_at, completed_at, "
+                "summary_json, error_text "
+                "FROM algo.runs "
+                "WHERE id = :id AND user_id = :uid "
+                "  AND mode = 'walkforward'"
+            ),
+            {"id": run_id, "uid": user_id},
+        )
+        row = result.mappings().first()
+        if row is None:
+            return None
+        if row["summary_json"] is not None:
+            return BacktestSummary.model_validate(
+                row["summary_json"],
+            )
+        return BacktestSummary(
+            run_id=row["id"],
+            strategy_id=row["strategy_id"],
+            status=row["status"],
+            period_start=row["period_start"],
+            period_end=row["period_end"],
+            initial_capital_inr=Decimal("0"),
+            final_equity_inr=Decimal("0"),
+            total_pnl_inr=Decimal("0"),
+            total_pnl_pct=Decimal("0"),
+            total_fees_inr=Decimal("0"),
+            total_trades=0, winning_trades=0, losing_trades=0,
+            win_rate_pct=Decimal("0"),
+            max_drawdown_pct=Decimal("0"),
+            started_at=row["started_at"],
+            completed_at=(
+                row["completed_at"] or row["started_at"]
+            ),
+            fee_rates_version="n/a",
+            equity_curve=[],
+            trade_list=[],
+            error_text=row["error_text"],
+        )
