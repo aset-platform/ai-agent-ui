@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from cryptography.fernet import Fernet
@@ -15,16 +17,21 @@ from backend.secret_loader import load_secret
 def _reset_and_seed(monkeypatch):
     """Reset singleton + inject a fresh master key per test.
 
-    Also clears load_secret LRU cache so each test reads a fresh
-    value from env (needed after byo_secrets switched from
-    os.environ to load_secret).
+    - Clears load_secret LRU cache (byo_secrets uses load_secret).
+    - Patches _SECRETS_DIR to a nonexistent path so file-based
+      resolution is bypassed; env var is the only source in tests.
+    - Sets a valid BYO_SECRET_KEY in env so non-error tests pass.
     """
     load_secret.cache_clear()
     monkeypatch.setattr(byo_secrets, "_fernet", None)
     monkeypatch.setenv(
         "BYO_SECRET_KEY", Fernet.generate_key().decode(),
     )
-    yield
+    with patch(
+        "backend.secret_loader._SECRETS_DIR",
+        Path("/nonexistent-test-secrets"),
+    ):
+        yield
     monkeypatch.setattr(byo_secrets, "_fernet", None)
     load_secret.cache_clear()
 
@@ -69,6 +76,7 @@ def test_mask_no_prefix_falls_back_to_last4():
 def test_missing_master_key_raises(monkeypatch):
     monkeypatch.setattr(byo_secrets, "_fernet", None)
     monkeypatch.delenv("BYO_SECRET_KEY", raising=False)
+    load_secret.cache_clear()
     with pytest.raises(RuntimeError, match="BYO_SECRET_KEY"):
         byo_secrets.get_fernet()
 
@@ -78,6 +86,7 @@ def test_invalid_master_key_raises(monkeypatch):
     monkeypatch.setenv(
         "BYO_SECRET_KEY", "not-a-valid-fernet-key",
     )
+    load_secret.cache_clear()
     with pytest.raises(RuntimeError, match="Fernet"):
         byo_secrets.get_fernet()
 
