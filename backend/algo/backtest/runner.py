@@ -21,6 +21,7 @@ from backend.algo.backtest.indicators import (
     DEFAULT_WARMUP_BARS,
     compute_indicators_for_universe,
     compute_market_regime,
+    compute_market_trend_strength,
 )
 from backend.algo.backtest.positions import PositionTracker
 from backend.algo.backtest.sim_broker import (
@@ -119,6 +120,10 @@ def run_backtest(
         period_start=request.period_start,
         period_end=request.period_end,
     )
+    market_trend = compute_market_trend_strength(
+        period_start=request.period_start,
+        period_end=request.period_end,
+    )
     sim = SimBroker(bars=bars, fee_as_of=request.period_start)
     evaluator = Evaluator()
     pt = PositionTracker()
@@ -183,6 +188,9 @@ def run_backtest(
                     },
                 ),
                 "nifty_above_sma200": market_regime.get(
+                    bar_date, Decimal("0"),
+                ),
+                "nifty_30d_return_pct": market_trend.get(
                     bar_date, Decimal("0"),
                 ),
             }

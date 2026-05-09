@@ -146,6 +146,50 @@ def compute_indicators_for_universe(
     return out
 
 
+# Per-bar percentage return of regime ticker over prior N bars.
+# Strategies reference ``{"feature": "nifty_30d_return_pct"}`` to
+# add trend-strength gating on top of the binary SMA200 regime
+# (e.g. ``> 0`` for "rising last 30d"; ``> 2`` to exclude chop).
+def compute_market_trend_strength(
+    period_start: object,
+    period_end: object,
+    regime_ticker: str = "^NSEI",
+    lookback_bars: int = 30,
+    warmup_days: int = DEFAULT_WARMUP_BARS,
+) -> dict[object, Decimal]:
+    """Returns ``{bar_date: Decimal(pct_return_over_N_bars)}``.
+
+    Empty for bars without sufficient lookback history. Callers
+    fall back to ``Decimal(0)`` for missing dates so a strategy
+    gated on ``> 0`` correctly treats unknown-trend bars as not
+    qualifying.
+    """
+    from backend.algo.backtest.data_source import load_ohlcv_window
+
+    bars_by_ticker = load_ohlcv_window(
+        tickers=[regime_ticker],
+        period_start=period_start,
+        period_end=period_end,
+        warmup_days=warmup_days,
+    )
+    blist = bars_by_ticker.get(regime_ticker) or []
+    if not blist:
+        return {}
+    sorted_bars = sorted(blist, key=lambda b: b.date)
+    closes = [b.close for b in sorted_bars]
+    out: dict[object, Decimal] = {}
+    for i, bar in enumerate(sorted_bars):
+        if i < lookback_bars:
+            continue
+        prior = closes[i - lookback_bars]
+        if prior == 0:
+            continue
+        out[bar.date] = (
+            (bar.close - prior) / prior * Decimal("100")
+        )
+    return out
+
+
 # Per-bar boolean (Decimal 1.0/0.0): regime ticker close > SMA(N).
 # Strategies reference ``{"feature": "nifty_above_sma200"}`` to
 # gate entries to bull-regime days only. Single index, one
