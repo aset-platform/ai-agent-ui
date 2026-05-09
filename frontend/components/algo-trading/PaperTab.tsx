@@ -5,6 +5,7 @@ import { usePaperEvents } from "@/hooks/usePaperEvents";
 
 import { ActiveRunsPanel } from "./ActiveRunsPanel";
 import { PaperEventsTimeline } from "./PaperEventsTimeline";
+import { ReconciliationDriftPanel } from "./ReconciliationDriftPanel";
 
 export function PaperTab() {
   const { events, loading, error } = usePaperEvents(100);
@@ -32,6 +33,9 @@ export function PaperTab() {
           </span>
         )}
       </div>
+
+      {/* Reconciliation drift chip — auto-clears when no drifts */}
+      <ReconciliationDriftPanel />
 
       <ActiveRunsPanel />
 

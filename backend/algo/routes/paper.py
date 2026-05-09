@@ -202,22 +202,48 @@ def create_paper_router() -> APIRouter:
     @router.get("/events")
     async def list_events(
         limit: int = Query(100, ge=1, le=500),
+        type: str | None = Query(
+            None,
+            description=(
+                "Filter by event type "
+                "(e.g. position_drift_detected)"
+            ),
+        ),
         user: UserContext = Depends(pro_or_superuser),
     ) -> list[dict[str, Any]]:
-        """Recent mode='paper' events for the caller (newest first)."""
+        """Recent algo events for the caller (newest first).
+
+        Returns both ``mode='paper'`` and ``mode='live'``
+        events so the reconciliation drift panel can poll
+        for ``type=position_drift_detected`` regardless of
+        which mode emitted them.
+        """
         from backend.db.duckdb_engine import query_iceberg_table
-        sql = (
-            "SELECT event_id, ts_ns, ts_date, "
-            "       strategy_id, type, payload_json "
-            "FROM events "
-            "WHERE user_id = ? AND mode = 'paper' "
-            "ORDER BY ts_ns DESC "
-            "LIMIT ?"
-        )
+        if type is not None:
+            sql = (
+                "SELECT event_id, ts_ns, ts_date, "
+                "       strategy_id, type, payload_json "
+                "FROM events "
+                "WHERE user_id = ? AND type = ? "
+                "ORDER BY ts_ns DESC "
+                "LIMIT ?"
+            )
+            params: list = [
+                str(UUID(user.user_id)), type, limit,
+            ]
+        else:
+            sql = (
+                "SELECT event_id, ts_ns, ts_date, "
+                "       strategy_id, type, payload_json "
+                "FROM events "
+                "WHERE user_id = ? "
+                "ORDER BY ts_ns DESC "
+                "LIMIT ?"
+            )
+            params = [str(UUID(user.user_id)), limit]
         try:
             rows = query_iceberg_table(
-                "algo.events", sql,
-                [str(UUID(user.user_id)), limit],
+                "algo.events", sql, params,
             )
         except FileNotFoundError:
             # No events yet — algo.events table empty.

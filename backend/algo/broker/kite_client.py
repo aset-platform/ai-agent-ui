@@ -117,6 +117,19 @@ class KiteClient:
         )
 
     def get_positions(self) -> list[dict]:
-        raise NotImplementedError(
-            "Live position polling lands in Slice 8 (paper).",
-        )
+        """Fetch the user's net positions from Kite.
+
+        Returns the ``net`` list from the broker response.  Each
+        element is a dict with at least ``tradingsymbol`` and
+        ``quantity``.  Only V2-3+ code paths call this; the method
+        is intentionally read-only.
+
+        Raises ``RuntimeError`` if no access_token is set.
+        """
+        if self._access_token is None:
+            raise RuntimeError(
+                "get_positions requires an access_token; "
+                "complete the OAuth handshake first.",
+            )
+        resp = self._kc.positions()
+        return resp.get("net", [])
