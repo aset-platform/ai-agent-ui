@@ -12,7 +12,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class RejectReason(str, Enum):
     """Why the risk engine blocked a signal. Surfaced via Replay
-    tab in Slice 10."""
+    tab in Slice 10.
+
+    v2 additions (live-only caps 2-4):
+    - LIVE_TICKER_NOT_ALLOWED — ticker not in the allow-list.
+    - LIVE_INR_CAP — daily ₹ cap would be exceeded.
+    - LIVE_ORDERS_PER_DAY_CAP — max_orders_per_day reached.
+    - LIVE_NOT_ENABLED — live_orders_enabled=False.
+    """
 
     DAILY_LOSS_CAP = "daily_loss_cap"
     EXPOSURE_CAP = "exposure_cap"
@@ -21,6 +28,11 @@ class RejectReason(str, Enum):
     MAX_QTY = "max_qty"
     KILL_SWITCH = "kill_switch"
     INSTRUMENT_BLACKLIST = "instrument_blacklist"
+    # v2 live-only reject reasons
+    LIVE_TICKER_NOT_ALLOWED = "live_ticker_not_allowed"
+    LIVE_INR_CAP = "live_inr_cap"
+    LIVE_ORDERS_PER_DAY_CAP = "live_orders_per_day_cap"
+    LIVE_NOT_ENABLED = "live_not_enabled"
 
 
 class Signal(BaseModel):
