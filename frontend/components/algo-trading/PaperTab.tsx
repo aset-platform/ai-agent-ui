@@ -71,8 +71,14 @@ function LiveSection({ strategyId, strategyName }: {
   );
 }
 
+const EVENTS_PAGE_SIZE = 100;
+
 export function PaperTab() {
-  const { events, loading, error } = usePaperEvents(100);
+  const [eventsPage, setEventsPage] = useState(1);
+  const { events, loading, error, hasMore } = usePaperEvents(
+    EVENTS_PAGE_SIZE,
+    (eventsPage - 1) * EVENTS_PAGE_SIZE,
+  );
   const { state: killState } = useKillSwitch();
   const { strategies } = useStrategies();
 
@@ -182,7 +188,14 @@ export function PaperTab() {
         </div>
       )}
 
-      <PaperEventsTimeline events={events} loading={loading} />
+      <PaperEventsTimeline
+        events={events}
+        loading={loading}
+        page={eventsPage}
+        pageSize={EVENTS_PAGE_SIZE}
+        hasMore={hasMore}
+        onPageChange={setEventsPage}
+      />
     </div>
   );
 }
