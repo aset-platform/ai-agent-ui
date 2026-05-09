@@ -43,7 +43,7 @@ def _get_session_factory():
 
 async def _build_live_ws_source(
     *,
-    user_id: UUID,
+    user: UserContext,
     strategy,  # Strategy AST
     session_factory,
 ) -> Any:
@@ -67,6 +67,8 @@ async def _build_live_ws_source(
     )
     from backend.algo.instruments.repo import InstrumentsRepo
     from backend.algo.stream.sources import LiveWsTickSource
+
+    user_id = UUID(user.user_id)
 
     # --- 1. Credentials ------------------------------------------------
     creds_repo = BrokerCredentialsRepo()
@@ -100,12 +102,13 @@ async def _build_live_ws_source(
         )
 
     # --- 2. Resolve tickers from user scope ---------------------------
-    # Use a simple heuristic: fetch up to 50 tickers from
-    # portfolio holdings + watchlist for the user.  A full
-    # universe resolution (scope=discovery) at live-WS latency
-    # would be impractical; the user is expected to hold a
-    # focused set of tickers in their portfolio for live paper runs.
-    tickers = await _resolve_live_tickers(user_id, session_factory)
+    # Reuse the v1 ``_scoped_tickers`` helper (same one Insights
+    # tabs use) — gives us watchlist ∪ holdings without the
+    # raw-SQL detour.  Even if the strategy AST asks for
+    # ``scope=discovery``, live-WS is capped at the user's curated
+    # set: subscribing to thousands of NSE tokens is impractical.
+    from backend.insights_routes import _scoped_tickers
+    tickers = await _scoped_tickers(user, "watchlist")
     if not tickers:
         raise HTTPException(
             status_code=400,
@@ -159,40 +162,6 @@ async def _build_live_ws_source(
     )
 
 
-async def _resolve_live_tickers(
-    user_id: UUID,
-    session_factory,
-    limit: int = 50,
-) -> list[str]:
-    """Fetch tickers from the user's PG portfolio holdings and watchlist.
-
-    Returns up to *limit* distinct tickers in NSE format.
-    Falls back to empty list on any DB error (fail-open).
-    """
-    from sqlalchemy import text as _text
-    try:
-        async with session_factory() as session:
-            rows = (
-                await session.execute(
-                    _text(
-                        "SELECT DISTINCT ticker FROM ("
-                        "  SELECT ticker FROM stocks.portfolio "
-                        "  WHERE user_id = :uid AND quantity > 0 "
-                        "  UNION "
-                        "  SELECT ticker FROM stocks.watchlist "
-                        "  WHERE user_id = :uid "
-                        ") t LIMIT :limit"
-                    ),
-                    {"uid": user_id, "limit": limit},
-                )
-            ).mappings().all()
-        return [r["ticker"] for r in rows]
-    except Exception:
-        _logger.warning(
-            "_resolve_live_tickers failed user=%s", user_id,
-            exc_info=True,
-        )
-        return []
 
 
 def create_paper_router() -> APIRouter:
@@ -297,7 +266,7 @@ def create_paper_router() -> APIRouter:
             # WS multiplexer.  The strategy universe tokens must
             # already be subscribed before starting the runtime.
             source = await _build_live_ws_source(
-                user_id=user_id,
+                user=user,
                 strategy=strategy,
                 session_factory=factory,
             )
