@@ -152,4 +152,19 @@ def create_paper_router() -> APIRouter:
         sv = get_supervisor()
         return sv.list_active(user_id=UUID(user.user_id))
 
+    @router.get("/fixtures")
+    async def list_fixtures(
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> list[dict[str, Any]]:
+        """Replay fixtures available to the start-run form.
+
+        Reads the same directory build_replay_source validates
+        against, so the dropdown can never offer a path that
+        the start-run endpoint would later reject.
+        """
+        from backend.algo.paper.supervisor import (
+            list_replay_fixtures,
+        )
+        return list_replay_fixtures()
+
     return router

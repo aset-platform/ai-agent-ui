@@ -177,3 +177,47 @@ def test_list_runs_empty(app):
         r = client.get("/v1/algo/paper/runs")
     assert r.status_code == 200
     assert r.json() == []
+
+
+def test_list_fixtures_returns_summary_rows(app):
+    sample = [
+        {
+            "path": "ticks_sample.jsonl",
+            "n_ticks": 30,
+            "distinct_tickers": 1,
+            "sample_tickers": ["FAKE.NS"],
+            "size_bytes": 2132,
+        },
+        {
+            "path": "ticks_indian_universe.jsonl",
+            "n_ticks": 3015,
+            "distinct_tickers": 9,
+            "sample_tickers": [
+                "COALINDIA.NS", "HDFCBANK.NS",
+                "ICICIBANK.NS", "INFY.NS", "ITC.NS",
+            ],
+            "size_bytes": 294070,
+        },
+    ]
+    with patch(
+        "backend.algo.paper.supervisor.list_replay_fixtures",
+        return_value=sample,
+    ):
+        client = TestClient(app)
+        r = client.get("/v1/algo/paper/fixtures")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 2
+    assert body[0]["path"] == "ticks_sample.jsonl"
+    assert body[1]["distinct_tickers"] == 9
+
+
+def test_list_fixtures_empty_when_dir_missing(app):
+    with patch(
+        "backend.algo.paper.supervisor.list_replay_fixtures",
+        return_value=[],
+    ):
+        client = TestClient(app)
+        r = client.get("/v1/algo/paper/fixtures")
+    assert r.status_code == 200
+    assert r.json() == []

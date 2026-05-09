@@ -281,6 +281,7 @@ export const FE = {
   algoPaperActiveRunsEmpty: "paper-active-runs-empty",
   algoPaperStartRunForm: "paper-start-run-form",
   algoPaperStartStrategySelect: "paper-start-strategy-select",
+  algoPaperStartFixtureSelect: "paper-start-fixture-select",
   algoPaperStartCapital: "paper-start-capital",
   algoPaperStartBtn: "paper-start-btn",
 

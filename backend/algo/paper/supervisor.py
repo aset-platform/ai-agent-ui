@@ -148,18 +148,64 @@ def get_supervisor() -> PaperSupervisor:
     return _singleton
 
 
+_FIXTURES_ROOT = Path(
+    "/app/backend/algo/tests/fixtures"
+).resolve()
+
+
 def build_replay_source(fixture_path: str) -> ReplayTickSource:
     """Helper for the routes layer — validates the path lives
     inside the algo tests fixtures dir (so users can't read
     arbitrary files via the API)."""
-    fixtures_root = Path(
-        "/app/backend/algo/tests/fixtures"
-    ).resolve()
-    candidate = (fixtures_root / fixture_path).resolve()
-    if not str(candidate).startswith(str(fixtures_root)):
+    candidate = (_FIXTURES_ROOT / fixture_path).resolve()
+    if not str(candidate).startswith(str(_FIXTURES_ROOT)):
         raise ValueError(
-            f"fixture_path must live under {fixtures_root}",
+            f"fixture_path must live under {_FIXTURES_ROOT}",
         )
     if not candidate.exists():
         raise FileNotFoundError(str(candidate))
     return ReplayTickSource(candidate, pace="fast")
+
+
+def list_replay_fixtures() -> list[dict[str, Any]]:
+    """Enumerate ``*.jsonl`` files in the fixtures dir with
+    summary stats (tick count, distinct tickers). Powers the
+    start-run form's fixture dropdown — same validation as
+    build_replay_source so the dropdown can't show a path the
+    POST /runs endpoint would reject.
+    """
+    import json
+
+    if not _FIXTURES_ROOT.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    for path in sorted(_FIXTURES_ROOT.glob("*.jsonl")):
+        n_ticks = 0
+        tickers: set[str] = set()
+        try:
+            with path.open(encoding="utf-8") as fh:
+                for line in fh:
+                    s = line.strip()
+                    if not s or s.startswith("#"):
+                        continue
+                    n_ticks += 1
+                    try:
+                        obj = json.loads(s)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    t = obj.get("ticker")
+                    if isinstance(t, str):
+                        tickers.add(t)
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "list_replay_fixtures: failed to read %s", path,
+            )
+            continue
+        out.append({
+            "path": path.name,
+            "n_ticks": n_ticks,
+            "distinct_tickers": len(tickers),
+            "sample_tickers": sorted(tickers)[:5],
+            "size_bytes": path.stat().st_size,
+        })
+    return out

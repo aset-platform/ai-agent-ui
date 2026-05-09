@@ -76,3 +76,36 @@ export async function stopPaperRun(strategyId: string): Promise<void> {
   }
   await mutate(KEY);
 }
+
+export interface PaperFixture {
+  path: string;
+  n_ticks: number;
+  distinct_tickers: number;
+  sample_tickers: string[];
+  size_bytes: number;
+}
+
+const FIXTURES_KEY = `${API_URL}/algo/paper/fixtures`;
+
+async function fixturesFetcher(url: string): Promise<PaperFixture[]> {
+  const r = await apiFetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+export function usePaperFixtures() {
+  const { data, error, isLoading } = useSWR<PaperFixture[]>(
+    FIXTURES_KEY,
+    fixturesFetcher,
+    { revalidateOnFocus: false, dedupingInterval: 60_000 },
+  );
+  return {
+    fixtures: data ?? [],
+    loading: isLoading,
+    error: error
+      ? error instanceof Error
+        ? error.message
+        : "Failed to load fixtures"
+      : null,
+  };
+}
