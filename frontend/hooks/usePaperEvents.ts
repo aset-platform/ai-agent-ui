@@ -26,27 +26,31 @@ export interface PaperEvent {
   payload: Record<string, unknown>;
 }
 
-async function fetcher(url: string): Promise<PaperEvent[]> {
+interface EventsPage {
+  events: PaperEvent[];
+  total: number;
+}
+
+async function fetcher(url: string): Promise<EventsPage> {
   const r = await apiFetch(url);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
+  const events: PaperEvent[] = await r.json();
+  const totalHeader = r.headers.get("X-Total-Count");
+  const total = totalHeader != null ? Number(totalHeader) : 0;
+  return { events, total };
 }
 
 export function usePaperEvents(limit = 100, offset = 0) {
   const key =
     `${API_URL}/algo/paper/events?limit=${limit}&offset=${offset}`;
-  const { data, error, isLoading } = useSWR<PaperEvent[]>(
+  const { data, error, isLoading } = useSWR<EventsPage>(
     key,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 5_000 },
   );
-  const events = data ?? [];
   return {
-    events,
-    // ``hasMore`` is a heuristic: if we got back exactly ``limit``
-    // rows we don't know whether there are more — assume yes. If
-    // we got back fewer, the result set is exhausted at this offset.
-    hasMore: events.length >= limit,
+    events: data?.events ?? [],
+    total: data?.total ?? 0,
     loading: isLoading,
     error: error
       ? error instanceof Error
