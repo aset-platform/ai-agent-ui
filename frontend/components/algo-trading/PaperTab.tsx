@@ -4,11 +4,13 @@ import { useState } from "react";
 
 import { useKillSwitch } from "@/hooks/useKillSwitch";
 import { useLiveCaps } from "@/hooks/useLiveCaps";
+import { useLiveStatus } from "@/hooks/useLiveStatus";
 import { usePaperEvents } from "@/hooks/usePaperEvents";
 import { useStrategies } from "@/hooks/useStrategies";
 
 import { ActiveRunsPanel } from "./ActiveRunsPanel";
 import { LiveCancelInFlightBanner } from "./LiveCancelInFlightBanner";
+import { LiveDryRunBanner } from "./LiveDryRunBanner";
 import { LiveLandedOrdersList } from "./LiveLandedOrdersList";
 import { LiveModeToggle } from "./LiveModeToggle";
 import { LiveSafetyBeltsForm } from "./LiveSafetyBeltsForm";
@@ -21,10 +23,14 @@ function LiveSection({ strategyId, strategyName }: {
   strategyName: string;
 }) {
   const { caps } = useLiveCaps(strategyId);
+  const { gates } = useLiveStatus(strategyId);
   const liveEnabled = caps?.live_orders_enabled ?? false;
 
   return (
     <div className="space-y-3" data-testid="live-section">
+      {/* Dry-run mode amber banner — shown at top of live section */}
+      <LiveDryRunBanner gates={gates} />
+
       {/* Kill-switch banner — only visible when live + kill armed */}
       <LiveCancelInFlightBanner liveEnabled={liveEnabled} />
 

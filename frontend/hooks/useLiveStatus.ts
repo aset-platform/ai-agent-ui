@@ -18,6 +18,8 @@ export interface GatesStatus {
   drift_within_limit: boolean;
   all_pass: boolean;
   live_orders_enabled: boolean;
+  /** True when ALGO_LIVE_DRY_RUN=true in backend env. */
+  dry_run: boolean;
 }
 
 function statusKey(strategyId: string): string {

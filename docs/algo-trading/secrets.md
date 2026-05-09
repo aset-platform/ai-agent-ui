@@ -8,6 +8,15 @@ pipeline:
 | `algo_kite_api_secret` | Kite Connect OAuth `api_secret` | `backend/algo/broker/kite_client.py` |
 | `byo_secret_key` | Fernet master key for BYOM API key + Kite credential at-rest encryption | `backend/crypto/byo_secrets.py` |
 
+## Feature flags (plain env vars — not secrets)
+
+These are **not** secrets and do not need Keychain/CSI handling.
+Set them directly in `.env` or as container environment variables.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ALGO_LIVE_DRY_RUN` | `false` | Short-circuit Kite write calls (place/cancel/modify) and emit synthetic fills. Set to `true` / `1` / `yes` to enable dry-run mode. See [Live Dry-Run](live-dry-run.md). |
+
 Storing these in plain text in `.env` works but is not how secrets
 are handled in production. The pattern below mirrors a Kubernetes
 Secrets-Store CSI driver locally on macOS:
