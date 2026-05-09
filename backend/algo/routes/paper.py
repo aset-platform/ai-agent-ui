@@ -14,6 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from typing import Literal
 
 from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
@@ -23,7 +24,13 @@ _logger = logging.getLogger(__name__)
 
 class StartRunRequest(BaseModel):
     strategy_id: UUID
-    fixture_path: str = Field(min_length=1, max_length=200)
+    fixture_path: str = Field(
+        default="", max_length=200,
+    )
+    """Replay fixture filename. Required when source='replay'."""
+    source: Literal["replay", "live-ws"] = "replay"
+    """Tick source: 'replay' uses a JSONL fixture; 'live-ws' streams
+    from the user's connected Kite WebSocket multiplexer."""
     initial_capital_inr: Decimal = Field(
         default=Decimal("100000.00"), ge=Decimal("1000.00"),
     )
@@ -32,6 +39,161 @@ class StartRunRequest(BaseModel):
 def _get_session_factory():
     from backend.db.engine import get_session_factory
     return get_session_factory()
+
+
+async def _build_live_ws_source(
+    *,
+    user_id: UUID,
+    strategy,  # Strategy AST
+    session_factory,
+) -> Any:
+    """Build a LiveWsTickSource for the user's Kite WS multiplexer.
+
+    Steps:
+    1. Load Kite credentials (api_key + access_token) from DB.
+    2. Verify the token is not expired.
+    3. Resolve tickers from the user's PG portfolio / watchlist.
+    4. Look up instrument tokens for those tickers.
+    5. Get-or-create the per-user KiteWsMultiplexer.
+    6. Subscribe the strategy; return a LiveWsTickSource.
+
+    Raises HTTPException(400/503) on any failure.
+    """
+    from backend.algo.broker.credentials_repo import (
+        BrokerCredentialsRepo,
+    )
+    from backend.algo.broker.ws_registry import (
+        get_or_create_multiplexer,
+    )
+    from backend.algo.instruments.repo import InstrumentsRepo
+    from backend.algo.stream.sources import LiveWsTickSource
+    from backend.db.pg_utils import _pg_session
+
+    # --- 1. Credentials ------------------------------------------------
+    creds_repo = BrokerCredentialsRepo()
+    async with session_factory() as session:
+        creds = await creds_repo.load(session, user_id)
+    if creds is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No Kite credentials found. "
+                "Please connect Zerodha first."
+            ),
+        )
+    if creds.get("access_token_expired"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Kite access token expired. "
+                "Please re-authenticate with Zerodha."
+            ),
+        )
+    api_key = creds["api_key"]
+    access_token = creds["access_token"]
+    if not access_token:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No Kite access token. "
+                "Please complete the OAuth handshake."
+            ),
+        )
+
+    # --- 2. Resolve tickers from user scope ---------------------------
+    # Use a simple heuristic: fetch up to 50 tickers from
+    # portfolio holdings + watchlist for the user.  A full
+    # universe resolution (scope=discovery) at live-WS latency
+    # would be impractical; the user is expected to hold a
+    # focused set of tickers in their portfolio for live paper runs.
+    tickers = await _resolve_live_tickers(user_id, session_factory)
+    if not tickers:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No instruments found for live-WS source. "
+                "Add tickers to your portfolio or watchlist."
+            ),
+        )
+
+    # --- 3. Token lookup ----------------------------------------------
+    instr_repo = InstrumentsRepo()
+    async with session_factory() as session:
+        token_to_ticker = await instr_repo.get_tokens_for_tickers(
+            session, tickers,
+        )
+    if not token_to_ticker:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No Kite instrument tokens found for your tickers. "
+                "Ensure the instruments master is loaded."
+            ),
+        )
+    tokens = list(token_to_ticker.keys())
+
+    # --- 4. Multiplexer -----------------------------------------------
+    try:
+        mux = await get_or_create_multiplexer(
+            user_id=user_id,
+            api_key=api_key,
+            access_token=access_token,
+        )
+    except Exception as exc:
+        _logger.exception(
+            "live-ws mux init failed user=%s", user_id,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to start live tick source: {exc}",
+        )
+
+    # --- 5. Subscribe strategy ----------------------------------------
+    queue = mux.subscribe(
+        strategy.id, tokens, token_to_ticker,
+    )
+    return LiveWsTickSource(
+        user_id=user_id,
+        strategy_id=strategy.id,
+        queue=queue,
+        mux=mux,
+    )
+
+
+async def _resolve_live_tickers(
+    user_id: UUID,
+    session_factory,
+    limit: int = 50,
+) -> list[str]:
+    """Fetch tickers from the user's PG portfolio holdings and watchlist.
+
+    Returns up to *limit* distinct tickers in NSE format.
+    Falls back to empty list on any DB error (fail-open).
+    """
+    from sqlalchemy import text as _text
+    try:
+        async with session_factory() as session:
+            rows = (
+                await session.execute(
+                    _text(
+                        "SELECT DISTINCT ticker FROM ("
+                        "  SELECT ticker FROM stocks.portfolio "
+                        "  WHERE user_id = :uid AND quantity > 0 "
+                        "  UNION "
+                        "  SELECT ticker FROM stocks.watchlist "
+                        "  WHERE user_id = :uid "
+                        ") t LIMIT :limit"
+                    ),
+                    {"uid": user_id, "limit": limit},
+                )
+            ).mappings().all()
+        return [r["ticker"] for r in rows]
+    except Exception:
+        _logger.warning(
+            "_resolve_live_tickers failed user=%s", user_id,
+            exc_info=True,
+        )
+        return []
 
 
 def create_paper_router() -> APIRouter:
@@ -102,16 +264,35 @@ def create_paper_router() -> APIRouter:
                 status_code=404, detail="Strategy not found",
             )
 
-        # Build the tick source (validates fixture path).
-        try:
-            source = build_replay_source(body.fixture_path)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-
         ks_repo = KillSwitchRepo(redis_client=get_async_redis())
         kill_active = await ks_repo.is_active(user_id)
+
+        if body.source == "live-ws":
+            # Resolve Kite credentials and get/create the user's
+            # WS multiplexer.  The strategy universe tokens must
+            # already be subscribed before starting the runtime.
+            source = await _build_live_ws_source(
+                user_id=user_id,
+                strategy=strategy,
+                session_factory=factory,
+            )
+        else:
+            # Replay fixture source (default / backward-compatible).
+            if not body.fixture_path:
+                raise HTTPException(
+                    status_code=400,
+                    detail="fixture_path required for source=replay",
+                )
+            try:
+                source = build_replay_source(body.fixture_path)
+            except FileNotFoundError as exc:
+                raise HTTPException(
+                    status_code=400, detail=str(exc),
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400, detail=str(exc),
+                )
 
         sv = get_supervisor()
         try:

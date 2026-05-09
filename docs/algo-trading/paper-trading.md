@@ -9,7 +9,8 @@ at the current tick's LTP via `PaperBroker`.
 
 ```
 TickSource          # ReplayTickSource (.jsonl fixture)
-                    # LiveTickSource (KiteTicker WS, lifecycle in v2)
+                    # LiveTickSource (v1 per-strategy KiteTicker)
+                    # LiveWsTickSource (v2 — reads from KiteWsMultiplexer)
    ↓ async iterator
 PaperRuntime        # one instance per (user, strategy) — process-local
    ├─ Resampler     # tick → 1m + 5m bars
@@ -140,15 +141,48 @@ End-to-end verification (Golden Cross v1 against
 
 All gated `pro_or_superuser`.
 
+## Available sources (v2)
+
+`POST /v1/algo/paper/runs` accepts a `source` field:
+
+| Value | Description |
+|---|---|
+| `"replay"` (default) | JSONL fixture; `fixture_path` required |
+| `"live-ws"` | Streams from the user's `KiteWsMultiplexer`; Kite must be connected |
+
+### live-ws mode
+
+When `source="live-ws"`:
+1. Kite credentials (api_key + access_token) are loaded from PG.
+2. Tickers are resolved from the user's portfolio holdings + watchlist.
+3. Instrument tokens are looked up from `algo.instruments`.
+4. `KiteWsMultiplexer` is get-or-created for the user (process-local).
+5. The strategy subscribes; a `LiveWsTickSource` adapter is returned
+   that reads from the strategy's per-queue and unsubscribes on stop.
+
+**Multiplexer lifecycle** (`backend/algo/broker/ws_multiplexer.py`):
+- One WS per user; multiple strategies share it via ref-counted tokens.
+- Exponential-backoff reconnect (1s → 60s cap).
+- Gap-fill on reconnect: pulls Kite historical 1m bars for windows
+  up to 1h (longer gaps emit `ws_gap_too_large` + abandon).
+- Bounded queues (1 000); overflow drops oldest + logs `ws_backpressure_drop`.
+- Process shutdown calls `ws_registry.shutdown_all()` via FastAPI lifespan.
+
+### WS event types
+
+New events emitted to `algo.events` with `mode="live-ws"`:
+
+| Type | Payload keys |
+|---|---|
+| `ws_connected` | `token_count` |
+| `ws_disconnected` | `code`, `reason` |
+| `ws_gap_filled` | `token`, `ticker`, `missing_s`, `ticks_replayed` |
+| `ws_gap_too_large` | `token`, `ticker`, `missing_s` |
+| `ws_backpressure_drop` | `strategy_id`, `token` |
+
 ## What's NOT in v1
 
-- Live Kite WebSocket multiplexing (one WS per user → fan out
-  to multiple strategy instances). Slice 6 ships the
-  `LiveTickSource` adapter; the supervisor v2 will pool WS
-  connections.
 - Reconciliation loop (paper positions vs broker positions).
   Spec § 7.4 calls this "scaffold-in-place" for v2 anyway.
-- Restart-replay rebuild of `algo.risk_state` from
-  `algo.events` — helper exists in
-  `backend/algo/paper/replay_rebuilder.py` but isn't auto-wired
-  to backend startup yet.
+- Live order placement (V2-5).
+- Walk-forward harness (V2-2).

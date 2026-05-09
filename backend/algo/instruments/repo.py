@@ -91,6 +91,34 @@ class InstrumentsRepo:
         ).mappings().first()
         return int(row["c"]) if row else 0
 
+    async def get_tokens_for_tickers(
+        self,
+        session: AsyncSession,
+        tickers: list[str],
+    ) -> dict[int, str]:
+        """Return {instrument_token: our_ticker} for the given tickers.
+
+        Looks up by ``our_ticker`` column (NSE-style e.g. ``RELIANCE.NS``).
+        Tickers not found in the instruments table are silently omitted.
+        """
+        if not tickers:
+            return {}
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT instrument_token, our_ticker "
+                    "FROM algo.instruments "
+                    "WHERE our_ticker = ANY(:tickers) "
+                    "AND our_ticker IS NOT NULL"
+                ),
+                {"tickers": tickers},
+            )
+        ).mappings().all()
+        return {
+            int(r["instrument_token"]): r["our_ticker"]
+            for r in rows
+        }
+
     async def bulk_upsert(
         self,
         session: AsyncSession,
