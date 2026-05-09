@@ -27,3 +27,34 @@
   dp_charges:
     delivery_sell_inr: 13.5
     delivery_sell_gst_pct: 0.18
+
+# FY2024-25 + FY2025-26 — Zerodha rate card was unchanged across
+# this window vs. the 2026-04-01 row above (STT intraday-sell was
+# reduced 2024-10-01 from 0.025% to 0.025% — same number; brokerage
+# / exchange / SEBI / stamp / GST / DP all identical). Backfilled
+# here so historical backtests can fee-aware compute without
+# raising "No fee rates configured for ...".
+- effective_from: "2020-01-01"
+  effective_to: "2026-03-31"
+  source: "Zerodha rate card pre-2026-04-01 (same numbers)"
+  brokerage:
+    delivery_pct: 0.0
+    intraday_pct: 0.0003
+    intraday_cap_inr: 20.0
+  stt:
+    delivery_buy_pct: 0.001
+    delivery_sell_pct: 0.001
+    intraday_sell_pct: 0.00025
+  exchange_txn:
+    nse_pct: 0.0000297
+    bse_pct: 0.0000375
+  sebi:
+    pct: 0.000001
+  stamp_duty:
+    delivery_buy_pct: 0.00015
+    intraday_buy_pct: 0.00003
+  gst:
+    pct: 0.18
+  dp_charges:
+    delivery_sell_inr: 13.5
+    delivery_sell_gst_pct: 0.18
