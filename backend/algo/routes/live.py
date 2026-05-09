@@ -97,11 +97,18 @@ async def _check_gates(
     from backend.algo.live.drift_repo import DriftRepo
     from backend.algo.paper.kill_switch_repo import KillSwitchRepo
 
-    # Gate 1: Kite connected (access_token present + not expired)
+    # Gate 1: Kite connected (access_token present + not expired).
+    # ``BrokerCredentialsRepo.load`` requires an AsyncSession and
+    # returns a dict with ``access_token`` (already-decrypted) +
+    # ``access_token_expired`` boolean; mirror v1's call shape from
+    # ``backend/algo/routes/paper.py::_build_live_ws_source``.
     creds_repo = BrokerCredentialsRepo()
-    creds = await creds_repo.get_credentials(user_id)
+    async with session_factory() as session:
+        creds = await creds_repo.load(session, user_id)
     kite_connected = bool(
-        creds and creds.get("access_token_fernet"),
+        creds
+        and creds.get("access_token")
+        and not creds.get("access_token_expired"),
     )
 
     # Gate 2: caps row exists with max_inr > 0
