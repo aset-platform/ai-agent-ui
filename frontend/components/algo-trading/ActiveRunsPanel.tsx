@@ -84,19 +84,19 @@ export function ActiveRunsPanel() {
       </div>
 
       <div
-        className="mt-2 flex flex-wrap items-end gap-2"
+        className="mt-3 flex flex-col gap-3"
         data-testid="paper-start-run-form"
       >
-        {/* Source radio — above fixture dropdown */}
+        {/* Row 1 — Source */}
         <fieldset
-          className="flex flex-col gap-0.5"
+          className="flex flex-col gap-1"
           data-testid="paper-source-radio-group"
         >
-          <legend className="text-[11px] text-slate-500">
+          <legend className="text-[11px] uppercase tracking-wide font-medium text-slate-500">
             Source
           </legend>
-          <div className="flex gap-3">
-            <label className="flex items-center gap-1 text-sm cursor-pointer">
+          <div className="flex flex-wrap items-center gap-4">
+            <label className="flex items-center gap-1.5 text-sm cursor-pointer">
               <input
                 type="radio"
                 name="paper-source"
@@ -108,7 +108,7 @@ export function ActiveRunsPanel() {
               Replay fixture
             </label>
             <label
-              className={`flex items-center gap-1 text-sm cursor-pointer ${
+              className={`flex items-center gap-1.5 text-sm cursor-pointer ${
                 !kiteConnected
                   ? "opacity-50 cursor-not-allowed"
                   : ""
@@ -132,89 +132,96 @@ export function ActiveRunsPanel() {
               />
               Live Kite WS
             </label>
+            {source === "live-ws" && (
+              <span
+                className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400"
+                data-testid="paper-live-ws-indicator"
+              >
+                <span
+                  className="inline-block w-2 h-2 rounded-full bg-emerald-500"
+                  aria-hidden="true"
+                />
+                Streaming from Kite WS
+              </span>
+            )}
           </div>
         </fieldset>
 
-        <label className="flex flex-col gap-0.5">
-          <span className="text-[11px] text-slate-500">
-            Strategy
-          </span>
-          <select
-            className="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1 text-sm"
-            value={strategyId}
-            onChange={(e) => setStrategyId(e.target.value)}
-            data-testid="paper-start-strategy-select"
-          >
-            <option value="">Select strategy…</option>
-            {strategies.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        {/* Fixture dropdown — hidden when source=live-ws */}
-        {source === "replay" && (
-          <label className="flex flex-col gap-0.5">
-            <span className="text-[11px] text-slate-500">
-              Replay fixture
+        {/* Row 2 — Strategy + (when replay) Fixture */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] uppercase tracking-wide font-medium text-slate-500">
+              Strategy
             </span>
             <select
-              className="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1 text-sm"
-              value={fixturePath}
-              onChange={(e) => setFixturePath(e.target.value)}
-              data-testid="paper-start-fixture-select"
+              className="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1.5 text-sm"
+              value={strategyId}
+              onChange={(e) => setStrategyId(e.target.value)}
+              data-testid="paper-start-strategy-select"
             >
-              {fixtures.length === 0 && (
-                <option value="">Loading fixtures…</option>
-              )}
-              {fixtures.map((f) => (
-                <option key={f.path} value={f.path}>
-                  {f.path} · {f.n_ticks} ticks · {f.distinct_tickers}{" "}
-                  ticker{f.distinct_tickers === 1 ? "" : "s"}
+              <option value="">Select strategy…</option>
+              {strategies.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
                 </option>
               ))}
             </select>
           </label>
-        )}
 
-        {source === "live-ws" && (
-          <div
-            className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400"
-            data-testid="paper-live-ws-indicator"
-          >
-            <span
-              className="inline-block w-2 h-2 rounded-full bg-emerald-500"
-              aria-hidden="true"
+          {source === "replay" ? (
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] uppercase tracking-wide font-medium text-slate-500">
+                Replay fixture
+              </span>
+              <select
+                className="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1.5 text-sm"
+                value={fixturePath}
+                onChange={(e) => setFixturePath(e.target.value)}
+                data-testid="paper-start-fixture-select"
+              >
+                {fixtures.length === 0 && (
+                  <option value="">Loading fixtures…</option>
+                )}
+                {fixtures.map((f) => (
+                  <option key={f.path} value={f.path}>
+                    {f.path} · {f.n_ticks} ticks ·{" "}
+                    {f.distinct_tickers}{" "}
+                    ticker{f.distinct_tickers === 1 ? "" : "s"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <div aria-hidden="true" />
+          )}
+        </div>
+
+        {/* Row 3 — Capital + Start */}
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] uppercase tracking-wide font-medium text-slate-500">
+              Capital ₹
+            </span>
+            <input
+              type="number"
+              min={1000}
+              step={1000}
+              value={capital}
+              onChange={(e) => setCapital(e.target.value)}
+              className="w-36 rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1.5 text-sm"
+              data-testid="paper-start-capital"
             />
-            Streaming from Kite WS
-          </div>
-        )}
-
-        <label className="flex flex-col gap-0.5">
-          <span className="text-[11px] text-slate-500">
-            Capital ₹
-          </span>
-          <input
-            type="number"
-            min={1000}
-            step={1000}
-            value={capital}
-            onChange={(e) => setCapital(e.target.value)}
-            className="w-28 rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1 text-sm"
-            data-testid="paper-start-capital"
-          />
-        </label>
-        <button
-          type="button"
-          onClick={handleStart}
-          disabled={pending === strategyId}
-          className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60"
-          data-testid="paper-start-btn"
-        >
-          {pending === strategyId ? "Starting…" : "Start run"}
-        </button>
+          </label>
+          <button
+            type="button"
+            onClick={handleStart}
+            disabled={pending === strategyId}
+            className="ml-auto rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed"
+            data-testid="paper-start-btn"
+          >
+            {pending === strategyId ? "Starting…" : "Start run"}
+          </button>
+        </div>
       </div>
 
       {err && (
