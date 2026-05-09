@@ -17,9 +17,15 @@
  * StrategyBuilder.
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import type { StrategyAst } from "@/hooks/useStrategies";
+
+import {
+  setByPath,
+  walkTunables,
+  type Tunable,
+} from "./strategyTunables";
 
 const SCOPES = ["discovery", "watchlist", "portfolio"] as const;
 const MARKETS = ["india", "us", "all"] as const;
@@ -83,9 +89,23 @@ export function StrategyLeversPanel({ ast, onChange }: Props) {
   const universe = asUniverse(ast.universe);
   const rebalance = asRebalance(ast.rebalance);
   const risk = asRisk(ast.risk);
+  const tunables: Tunable[] = useMemo(
+    () =>
+      walkTunables((ast.root ?? {}) as Record<string, unknown>),
+    [ast.root],
+  );
 
   function patch(partial: Partial<StrategyAst>) {
     onChange({ ...ast, ...partial });
+  }
+
+  function patchTunable(path: string, value: number) {
+    const nextRoot = setByPath(
+      (ast.root ?? {}) as Record<string, unknown>,
+      path,
+      value,
+    );
+    patch({ root: nextRoot } as Partial<StrategyAst>);
   }
 
   function patchUniverse(u: Partial<Universe>) {
@@ -133,6 +153,28 @@ export function StrategyLeversPanel({ ast, onChange }: Props) {
           className="space-y-4 border-t border-slate-200 dark:border-slate-700 px-3 py-3"
           data-testid="strategy-levers-body"
         >
+          {tunables.length > 0 && (
+            <Group title="Strategy logic">
+              {tunables.map((t) => (
+                <NumberField
+                  key={t.path}
+                  label={`${t.label}${
+                    t.kind === "weight" ? ` (now ${t.value})` : ""
+                  }`}
+                  value={t.value}
+                  min={t.min}
+                  max={t.max}
+                  step={t.step ?? 1}
+                  onChange={(v) => patchTunable(t.path, v)}
+                  testId={`lever-tunable-${t.path.replace(
+                    /[.[\]]/g,
+                    "_",
+                  )}`}
+                />
+              ))}
+            </Group>
+          )}
+
           <Group title="Universe">
             <Field label="Scope">
               <select
