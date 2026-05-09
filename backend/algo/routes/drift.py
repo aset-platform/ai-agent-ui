@@ -12,8 +12,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from backend.auth.dependencies import pro_or_superuser
-from backend.auth.models import UserContext
+from auth.dependencies import pro_or_superuser
+from auth.models import UserContext
 
 _logger = logging.getLogger(__name__)
 
