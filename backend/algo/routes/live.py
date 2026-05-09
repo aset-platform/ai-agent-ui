@@ -125,37 +125,59 @@ async def _check_gates(
     kill_active = await ks_repo.is_active(user_id)
     kill_switch_disarmed = not kill_active
 
-    # Gate 4: last walkforward run < 30 days old + positive
+    # Gate 4: most recent walkforward run for THIS strategy
+    # is < 30 days old AND has a positive aggregate PnL.
+    #
+    # We auto-discover the run instead of requiring caps to
+    # carry ``last_walkforward_run_id`` — saves the user from a
+    # separate "link walkforward" UX step. We always pick the
+    # latest by ``started_at`` for the (user, strategy) pair.
+    #
+    # V2-2 stores aggregate fields as ``avg_pnl_pct`` /
+    # ``avg_win_rate_pct`` on ``algo.runs.summary_json``.
+    # ``avg_pnl_pct > 0`` is the meaningful gate; raw win-rate
+    # alone is misleading (e.g. 60% win-rate can still bleed
+    # under 1:2 R:R).
     walkforward_recent = False
-    if caps and caps.get("last_walkforward_run_id"):
-        wf_run_id = caps["last_walkforward_run_id"]
-        async with session_factory() as session:
-            from sqlalchemy import text
-            row = (
-                await session.execute(
-                    text(
-                        "SELECT started_at, summary_json "
-                        "FROM algo.runs "
-                        "WHERE id = :rid "
-                        "  AND user_id = :uid"
-                    ),
-                    {"rid": wf_run_id, "uid": user_id},
-                )
-            ).mappings().one_or_none()
-        if row:
-            started_at = row["started_at"]
-            if started_at:
-                age = datetime.now(UTC) - started_at.replace(
-                    tzinfo=UTC,
-                )
-                if age < _30_DAYS:
-                    # Check positive win-rate in summary_json
-                    import json as _json
-                    summary = row.get("summary_json") or {}
-                    if isinstance(summary, str):
-                        summary = _json.loads(summary)
-                    win_rate = summary.get("aggregate_win_rate", 0)
-                    walkforward_recent = float(win_rate) > 0
+    async with session_factory() as session:
+        from sqlalchemy import text
+        row = (
+            await session.execute(
+                text(
+                    "SELECT started_at, summary_json "
+                    "FROM algo.runs "
+                    "WHERE user_id = :uid "
+                    "  AND strategy_id = :sid "
+                    "  AND parent_walkforward_id IS NULL "
+                    "  AND window_start IS NULL "
+                    "  AND status = 'completed' "
+                    "  AND summary_json IS NOT NULL "
+                    "  AND ((summary_json->'aggregate'->>"
+                    "        'window_count') IS NOT NULL) "
+                    "ORDER BY started_at DESC "
+                    "LIMIT 1"
+                ),
+                {"uid": user_id, "sid": strategy_id},
+            )
+        ).mappings().one_or_none()
+    if row:
+        started_at = row["started_at"]
+        if started_at:
+            age = datetime.now(UTC) - started_at.replace(
+                tzinfo=UTC,
+            )
+            if age < _30_DAYS:
+                import json as _json
+                summary = row.get("summary_json") or {}
+                if isinstance(summary, str):
+                    summary = _json.loads(summary)
+                # V2-2 stores fields nested under ``aggregate``,
+                # not at the top level. ``avg_pnl_pct > 0`` is
+                # the meaningful gate (raw win-rate alone can
+                # mislead under bad R:R).
+                aggregate = summary.get("aggregate") or {}
+                avg_pnl = aggregate.get("avg_pnl_pct", 0)
+                walkforward_recent = float(avg_pnl) > 0
 
     # Drift gate (bonus gate — spec §2.2 mentions drift > 3 runs)
     drift_within_limit = True
