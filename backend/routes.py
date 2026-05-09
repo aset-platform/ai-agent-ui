@@ -4001,6 +4001,7 @@ def create_app(
     from backend.algo.routes import (
         create_backtest_router,
         create_broker_router,
+        create_drift_router,
         create_fees_router,
         create_instruments_router,
         create_kill_switch_router,
@@ -4037,6 +4038,10 @@ def create_app(
     )
     app.include_router(
         create_paper_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_drift_router(),
         prefix="/v1",
     )
     app.include_router(

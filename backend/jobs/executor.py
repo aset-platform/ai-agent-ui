@@ -3329,3 +3329,14 @@ async def _job_algo_risk_state_reset(
         run_risk_state_reset_job,
     )
     return await run_risk_state_reset_job(payload)
+
+
+@register_job("algo_reconciliation")
+async def _job_algo_reconciliation(
+    payload: dict | None = None,
+):
+    """Every-5-min reconciliation of broker vs our positions."""
+    from backend.algo.jobs.algo_reconciliation import (
+        run_reconciliation_job,
+    )
+    return await run_reconciliation_job(payload)

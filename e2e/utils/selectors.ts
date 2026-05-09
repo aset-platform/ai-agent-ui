@@ -332,4 +332,13 @@ export const FE = {
     "lever-risk-max-concentration-pct",
   algoLeverRiskMaxQty: "lever-risk-max-qty",
   algoLeverRiskMaxLossPct: "lever-risk-max-loss-pct",
+
+  // ── Algo Trading — Reconciliation (V2-3) ─────
+  algoReconciliationPanel: "reconciliation-drift-panel",
+  algoReconciliationChip: "reconciliation-drift-chip",
+  algoReconciliationToggle: "reconciliation-drift-toggle",
+  algoReconciliationTable: "reconciliation-drift-table",
+  algoDriftThresholdWidget: "drift-threshold-widget",
+  algoDriftThresholdInput: "drift-threshold-input",
+  algoDriftThresholdSave: "drift-threshold-save",
 } as const;

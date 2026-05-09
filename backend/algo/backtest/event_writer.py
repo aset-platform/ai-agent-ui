@@ -18,7 +18,7 @@ Known event type registry (append-only — never remove):
     order_submitted_live / order_acknowledged_live
     order_filled_live / order_rejected_live / order_cancelled_live
     ws_connected / ws_disconnected / ws_gap_filled
-  Reconciliation (V2-3, future):
+  Reconciliation (V2-3):
     position_drift_detected / drift_resolved
 """
 from __future__ import annotations
