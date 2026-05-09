@@ -1,7 +1,10 @@
 """Fernet-backed encryption for user-supplied LLM provider keys.
 
-The master key lives in ``BYO_SECRET_KEY`` (URL-safe base64, 32 bytes).
-Generate one with::
+The master key is loaded via ``load_secret("byo_secret_key")``, which
+follows the Keychain → docker-compose secrets mount → env-var fallback
+resolution order (see ``docs/algo-trading/secrets.md``).
+
+Generate a new key with::
 
     python -c "from cryptography.fernet import Fernet; \
         print(Fernet.generate_key().decode())"
@@ -13,9 +16,10 @@ Groq / Anthropic API keys before persisting them in
 from __future__ import annotations
 
 import logging
-import os
 
 from cryptography.fernet import Fernet, InvalidToken
+
+from backend.secret_loader import load_secret
 
 _logger = logging.getLogger(__name__)
 
@@ -27,19 +31,18 @@ def get_fernet() -> Fernet:
     """Lazy-initialise the process-wide Fernet instance.
 
     Raises:
-        RuntimeError: If ``BYO_SECRET_KEY`` is missing or invalid.
+        RuntimeError: If ``byo_secret_key`` is missing or invalid.
     """
     global _fernet
     if _fernet is not None:
         return _fernet
 
-    raw = os.environ.get("BYO_SECRET_KEY", "").strip()
+    raw = load_secret("byo_secret_key") or ""
     if not raw:
         raise RuntimeError(
-            "BYO_SECRET_KEY is not set. Generate one via "
-            "`python -c \"from cryptography.fernet import Fernet; "
-            "print(Fernet.generate_key().decode())\"` and set it in "
-            ".env before enabling BYO keys."
+            "BYO_SECRET_KEY not configured. Set via Keychain "
+            "(preferred) or .env (legacy). "
+            "See docs/algo-trading/secrets.md."
         )
     try:
         _fernet = Fernet(raw.encode())

@@ -62,6 +62,31 @@ def _ensure_iceberg_tables() -> None:
         )
 
 
+async def _run_startup_hooks() -> None:
+    """Run async startup tasks after Iceberg tables are ready.
+
+    Currently:
+    - paper replay rebuilder: restores risk_state from today's
+      algo.events after an unexpected restart.
+
+    Failures are caught and logged as warnings so they never
+    prevent the backend from booting.
+    """
+    from backend.algo.paper.replay_rebuilder import (
+        rebuild_all as _rebuild_paper,
+    )
+    try:
+        result = await _rebuild_paper()
+        logger.info(
+            "Paper replay rebuilder: %s",
+            result,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Paper replay rebuilder failed at startup: %s", exc,
+        )
+
+
 class ChatServer:
     """Thin orchestrator that wires registries and the ASGI app.
 

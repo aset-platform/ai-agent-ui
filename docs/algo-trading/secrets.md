@@ -1,8 +1,14 @@
 # Algo Trading — Secret management
 
-The algo-trading module needs at least one external secret —
-the Kite Connect `api_secret` used during the OAuth handshake.
-Storing it in plain text in `.env` works but is not how secrets
+The algo-trading module manages two secrets through the Keychain
+pipeline:
+
+| Slug | Purpose | Consumer |
+|---|---|---|
+| `algo_kite_api_secret` | Kite Connect OAuth `api_secret` | `backend/algo/broker/kite_client.py` |
+| `byo_secret_key` | Fernet master key for BYOM API key + Kite credential at-rest encryption | `backend/crypto/byo_secrets.py` |
+
+Storing these in plain text in `.env` works but is not how secrets
 are handled in production. The pattern below mirrors a Kubernetes
 Secrets-Store CSI driver locally on macOS:
 
@@ -69,6 +75,29 @@ as missing and falls through to env var.
    pointing at `./.secrets/<slug>`.
 3. Add the slug under the consuming service's `secrets:` key.
 4. Read it from Python with `load_secret("<slug>")`.
+
+## Migrating an existing `.env`-based secret
+
+If you have a `BYO_SECRET_KEY=...` line in `.env` from before v2-0,
+run the one-shot migration helper to move it into Keychain:
+
+```bash
+# 1. Migrate (reads .env, stores in Keychain, materialises .secrets/)
+./scripts/migrate_byo_secret_to_keychain.sh
+
+# 2. Remove the plaintext line from .env manually (edit .env, delete
+#    the BYO_SECRET_KEY= line — leave the comment block in place).
+
+# 3. Recreate the backend container so it picks up the new secrets
+#    mount at /run/secrets/byo_secret_key
+docker compose up -d --force-recreate backend
+```
+
+The migration script is idempotent: re-running it with the same value
+is a no-op (Keychain returns "already set").
+
+The same pattern applies to `algo_kite_api_secret` if you ever need to
+rotate it — just use `keychain.sh set` directly.
 
 ## CI / Linux
 

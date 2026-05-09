@@ -37,6 +37,7 @@ services:
       # which falls back to ALGO_KITE_API_SECRET env when the
       # file mount is absent (CI / Linux dev).
       - algo_kite_api_secret
+      - byo_secret_key
     depends_on:
       postgres:
         condition: service_healthy
@@ -124,3 +125,5 @@ secrets:
   # unchanged because it always reads /run/secrets/<name>.
   algo_kite_api_secret:
     file: ./.secrets/algo_kite_api_secret
+  byo_secret_key:
+    file: ./.secrets/byo_secret_key
