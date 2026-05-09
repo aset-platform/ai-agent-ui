@@ -256,6 +256,9 @@ export const FE = {
 
   // ── Algo Trading — Backtest tab (Slice 7b) ─────
   algoBacktestTab: "backtest-tab",
+  algoBacktestSubTabStrip: "backtest-sub-tab-strip",
+  algoBacktestSubTabSingle: "backtest-sub-tab-single",
+  algoBacktestSubTabWalkforward: "backtest-sub-tab-walkforward",
   algoBacktestRunForm: "backtest-run-form",
   algoBacktestStrategySelect: "backtest-strategy-select",
   algoBacktestSubmit: "backtest-submit",
@@ -264,6 +267,24 @@ export const FE = {
   algoBacktestEquityCurveEmpty: "backtest-equity-curve-empty",
   algoBacktestTradeTable: "backtest-trade-table",
   algoBacktestTradeTableEmpty: "backtest-trade-table-empty",
+
+  // ── Algo Trading — Walk-forward CV (Slice V2-2) ─
+  algoWalkforwardSubTab: "walkforward-sub-tab",
+  algoWalkforwardRunForm: "walkforward-run-form",
+  algoWalkforwardStrategySelect: "walkforward-strategy-select",
+  algoWalkforwardPeriodStart: "walkforward-period-start",
+  algoWalkforwardPeriodEnd: "walkforward-period-end",
+  algoWalkforwardTrainDays: "walkforward-train-days",
+  algoWalkforwardTestDays: "walkforward-test-days",
+  algoWalkforwardStepDays: "walkforward-step-days",
+  algoWalkforwardCapital: "walkforward-capital",
+  algoWalkforwardSubmit: "walkforward-submit",
+  algoWalkforwardRunProgress: "walkforward-run-progress",
+  algoWalkforwardRunError: "walkforward-run-error",
+  algoWalkforwardAggCards: "walkforward-aggregate-cards",
+  algoWalkforwardCurves: "walkforward-curves",
+  algoWalkforwardCurvesEmpty: "walkforward-curves-empty",
+  algoWalkforwardWindowTable: "walkforward-window-table",
 
   // ── Algo Trading — Paper + Kill switch (Slice 8b) ─
   algoPaperTab: "paper-tab",

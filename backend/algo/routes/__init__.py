@@ -11,6 +11,9 @@ from backend.algo.routes.performance import (
 )
 from backend.algo.routes.replay import create_replay_router
 from backend.algo.routes.strategies import create_strategies_router
+from backend.algo.routes.walkforward import (
+    create_walkforward_router,
+)
 
 __all__ = [
     "create_backtest_router",
@@ -22,4 +25,5 @@ __all__ = [
     "create_performance_router",
     "create_replay_router",
     "create_strategies_router",
+    "create_walkforward_router",
 ]
