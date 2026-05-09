@@ -45,8 +45,13 @@ export function ActiveRunsPanel({ tradingMode = "paper" }: Props) {
   const [strategyId, setStrategyId] = useState<string>("");
   const [fixturePath, setFixturePath] = useState<string>("");
   const [capital, setCapital] = useState<string>("100000.00");
-  // Default source per trading mode. Live mode requires real
-  // ticks; paper mode is replay-only by design.
+  // Default source per trading mode:
+  //   Paper:   replay-fixture only (no live-ws by design)
+  //   Dry run: replay-fixture only — synthetic Kite responses
+  //            don't gain anything from real ticks; locking to
+  //            replay keeps rehearsal 100% offline-safe and
+  //            works on weekends.
+  //   Live:    live-ws only (real money needs real ticks)
   const initialSource: PaperRunSource =
     tradingMode === "live" ? "live-ws" : "replay";
   const [source, setSource] = useState<PaperRunSource>(initialSource);
@@ -123,11 +128,12 @@ export function ActiveRunsPanel({ tradingMode = "paper" }: Props) {
         className="mt-3 flex flex-col gap-3"
         data-testid="paper-start-run-form"
       >
-        {/* Row 1 — Source.  Paper mode is replay-only by design;
-            Live mode is live-ws-only (real ticks for real money);
-            Dry run accepts both — replay for offline rehearsal,
-            live-ws for real-tick rehearsal during market hours. */}
-        {tradingMode !== "paper" && tradingMode !== "live" && (
+        {/* Row 1 — Source.  Paper + Dry run: replay-only by
+            design (offline / weekend-safe rehearsal). Live:
+            live-ws only (real ticks for real money). The radio
+            group only renders if there's actually a choice — for
+            now there isn't (single forced source per view). */}
+        {false && (
           <fieldset
             className="flex flex-col gap-1"
             data-testid="paper-source-radio-group"
