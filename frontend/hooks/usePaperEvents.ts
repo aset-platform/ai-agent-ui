@@ -40,9 +40,22 @@ async function fetcher(url: string): Promise<EventsPage> {
   return { events, total };
 }
 
-export function usePaperEvents(limit = 100, offset = 0) {
-  const key =
-    `${API_URL}/algo/paper/events?limit=${limit}&offset=${offset}`;
+export type EventsMode = "paper" | "live" | "backtest" | null;
+export type EventsView = "paper" | "dryrun" | "live" | "all";
+
+export function usePaperEvents(
+  limit = 100,
+  offset = 0,
+  mode: EventsMode = null,
+  dryRun: boolean | null = null,
+) {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (mode != null) params.set("mode", mode);
+  if (dryRun != null) params.set("dry_run", String(dryRun));
+  const key = `${API_URL}/algo/paper/events?${params.toString()}`;
   const { data, error, isLoading } = useSWR<EventsPage>(
     key,
     fetcher,

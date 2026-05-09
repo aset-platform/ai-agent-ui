@@ -185,6 +185,22 @@ def create_paper_router() -> APIRouter:
                 "(e.g. position_drift_detected)"
             ),
         ),
+        mode: str | None = Query(
+            None,
+            description=(
+                "Filter by run mode: 'paper', 'live', "
+                "or 'backtest'. Combines with type."
+            ),
+        ),
+        dry_run: bool | None = Query(
+            None,
+            description=(
+                "Filter by payload.dry_run: pass true to see "
+                "only dry-run orders (LiveRuntime stamps the "
+                "flag on every event); false for real-money "
+                "live orders. Omit for both."
+            ),
+        ),
         user: UserContext = Depends(pro_or_superuser),
     ) -> list[dict[str, Any]]:
         """Recent algo events for the caller (newest first).
@@ -200,36 +216,38 @@ def create_paper_router() -> APIRouter:
         """
         from backend.db.duckdb_engine import query_iceberg_table
         user_id_str = str(UUID(user.user_id))
+
+        clauses = ["user_id = ?"]
+        base_params: list = [user_id_str]
         if type is not None:
-            sql = (
-                "SELECT event_id, ts_ns, ts_date, "
-                "       strategy_id, type, payload_json "
-                "FROM events "
-                "WHERE user_id = ? AND type = ? "
-                "ORDER BY ts_ns DESC "
-                "LIMIT ? OFFSET ?"
+            clauses.append("type = ?")
+            base_params.append(type)
+        if mode is not None:
+            clauses.append("mode = ?")
+            base_params.append(mode)
+        if dry_run is not None:
+            # ``payload_json`` is stored as text JSON; DuckDB's
+            # JSON funcs read string-typed members. LiveRuntime
+            # stamps ``dry_run`` as a JSON bool so we extract a
+            # string and compare against 'true'/'false'.
+            wanted = "true" if dry_run else "false"
+            clauses.append(
+                "json_extract_string(payload_json, "
+                "'$.dry_run') = ?"
             )
-            params: list = [user_id_str, type, limit, offset]
-            count_sql = (
-                "SELECT COUNT(*) AS n FROM events "
-                "WHERE user_id = ? AND type = ?"
-            )
-            count_params: list = [user_id_str, type]
-        else:
-            sql = (
-                "SELECT event_id, ts_ns, ts_date, "
-                "       strategy_id, type, payload_json "
-                "FROM events "
-                "WHERE user_id = ? "
-                "ORDER BY ts_ns DESC "
-                "LIMIT ? OFFSET ?"
-            )
-            params = [user_id_str, limit, offset]
-            count_sql = (
-                "SELECT COUNT(*) AS n FROM events "
-                "WHERE user_id = ?"
-            )
-            count_params = [user_id_str]
+            base_params.append(wanted)
+        where = " AND ".join(clauses)
+
+        sql = (
+            f"SELECT event_id, ts_ns, ts_date, "
+            f"       strategy_id, type, payload_json "
+            f"FROM events WHERE {where} "
+            f"ORDER BY ts_ns DESC "
+            f"LIMIT ? OFFSET ?"
+        )
+        params = base_params + [limit, offset]
+        count_sql = f"SELECT COUNT(*) AS n FROM events WHERE {where}"
+        count_params = base_params
 
         try:
             rows = query_iceberg_table(
