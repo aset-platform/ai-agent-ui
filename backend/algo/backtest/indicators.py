@@ -144,3 +144,48 @@ def compute_indicators_for_universe(
             sorted_bars, sma_windows=sma_windows,
         )
     return out
+
+
+# Per-bar boolean (Decimal 1.0/0.0): regime ticker close > SMA(N).
+# Strategies reference ``{"feature": "nifty_above_sma200"}`` to
+# gate entries to bull-regime days only. Single index, one
+# computation reused across every (ticker, bar) in the universe.
+def compute_market_regime(
+    period_start: object,
+    period_end: object,
+    regime_ticker: str = "^NSEI",
+    sma_window: int = 200,
+    warmup_days: int = DEFAULT_WARMUP_BARS,
+) -> dict[object, Decimal]:
+    """Returns ``{bar_date: Decimal(1) if close > SMA else Decimal(0)}``.
+
+    Empty dict if the regime ticker has no OHLCV in the window —
+    callers MUST treat missing dates as ``Decimal(0)`` so a
+    strategy gated on ``nifty_above_sma200 > 0`` falls through
+    to ``hold`` rather than firing without regime data.
+    """
+    # Local import avoids a circular dependency at module load
+    # time — data_source pulls from this module's bar shape.
+    from backend.algo.backtest.data_source import load_ohlcv_window
+
+    bars_by_ticker = load_ohlcv_window(
+        tickers=[regime_ticker],
+        period_start=period_start,
+        period_end=period_end,
+        warmup_days=warmup_days,
+    )
+    blist = bars_by_ticker.get(regime_ticker) or []
+    if not blist:
+        return {}
+    sorted_bars = sorted(blist, key=lambda b: b.date)
+    closes = [b.close for b in sorted_bars]
+    sma = _rolling_sma(closes, sma_window)
+    out: dict[object, Decimal] = {}
+    for i, bar in enumerate(sorted_bars):
+        s = sma[i]
+        if s is None:
+            continue
+        out[bar.date] = (
+            Decimal("1") if bar.close > s else Decimal("0")
+        )
+    return out
