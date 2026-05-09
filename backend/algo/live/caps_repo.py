@@ -146,13 +146,13 @@ class CapsRepo:
                     "  created_at, updated_at) "
                     "VALUES ("
                     "  :uid, :sid, :max_inr, :max_ord, "
-                    "  :tickers::jsonb, false, "
+                    "  CAST(:tickers AS jsonb), false, "
                     "  :wf_run_id, 0, 0, :now, :now) "
                     "ON CONFLICT (user_id, strategy_id) "
                     "DO UPDATE SET "
                     "  max_inr = :max_inr, "
                     "  max_orders_per_day = :max_ord, "
-                    "  allowed_tickers = :tickers::jsonb, "
+                    "  allowed_tickers = CAST(:tickers AS jsonb), "
                     "  last_walkforward_run_id = :wf_run_id, "
                     "  updated_at = :now"
                 ),
@@ -319,7 +319,8 @@ class CapsRepo:
             await session.execute(
                 text(
                     "UPDATE algo.runs "
-                    "SET live_orders_in_flight = :payload::jsonb "
+                    "SET live_orders_in_flight = "
+                    "  CAST(:payload AS jsonb) "
                     "WHERE id = :rid "
                     "  AND user_id = :uid"
                 ),
