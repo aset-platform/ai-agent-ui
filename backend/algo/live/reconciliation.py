@@ -136,10 +136,16 @@ async def _fetch_broker_positions(user_id: UUID) -> dict[str, int]:
         BrokerCredentialsRepo,
     )
     from backend.algo.broker.kite_client import KiteClient
-    from auth.encryption import decrypt_fernet
+    from backend.db.engine import get_session_factory
 
+    # ``BrokerCredentialsRepo.load`` requires an AsyncSession and
+    # returns a dict with already-decrypted ``api_key`` +
+    # ``access_token`` + an ``access_token_expired`` bool. No
+    # manual Fernet step needed — repo handles decryption itself.
     repo = BrokerCredentialsRepo()
-    creds = await repo.get_credentials(user_id)
+    factory = get_session_factory()
+    async with factory() as session:
+        creds = await repo.load(session, user_id)
     if not creds:
         _logger.warning(
             "reconcile: no broker credentials for user %s",
@@ -147,20 +153,11 @@ async def _fetch_broker_positions(user_id: UUID) -> dict[str, int]:
         )
         return {}
 
-    access_token_fernet = creds.get("access_token_fernet")
-    if not access_token_fernet:
+    access_token = creds.get("access_token")
+    if not access_token or creds.get("access_token_expired"):
         _logger.warning(
-            "reconcile: no access_token for user %s",
+            "reconcile: no/expired access_token for user %s",
             user_id,
-        )
-        return {}
-
-    try:
-        access_token = decrypt_fernet(access_token_fernet)
-    except Exception as exc:
-        _logger.warning(
-            "reconcile: could not decrypt token for user %s: %s",
-            user_id, exc,
         )
         return {}
 
