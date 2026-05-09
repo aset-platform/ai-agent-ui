@@ -33,6 +33,8 @@ from backend.algo.backtest.types import (
     OrderIntent,
     TradeRow,
 )
+from backend.algo.paper.risk_engine import RiskEngine
+from backend.algo.paper.types import AccountState, Signal
 from backend.algo.strategy.ast import Strategy
 
 _logger = logging.getLogger(__name__)
@@ -111,12 +113,21 @@ def run_backtest(
     sim = SimBroker(bars=bars, fee_as_of=request.period_start)
     evaluator = Evaluator()
     pt = PositionTracker()
+    risk = RiskEngine()
+    risk_payload = strategy.risk.model_dump()
 
     fee_rates_version = ""
     total_fees = Decimal("0")
     equity_points: list[EquityPoint] = []
     peak_equity = request.initial_capital_inr
     max_drawdown_pct = Decimal("0")
+    rejected_count = 0
+    scaled_count = 0
+    # Day-bucket realised P&L so RiskEngine.daily_loss_cap fires
+    # on intra-day drawdown, not cumulative-from-start. Reset at
+    # the top of each bar_date.
+    day_start_realised = Decimal("0")
+    last_bar_date = None
 
     # Walk bars chronologically. We zip each ticker's series so
     # bar dates that are common across the universe step in lockstep.
@@ -130,6 +141,9 @@ def run_backtest(
         # period_start..period_end, not the warmup range.
         if bar_date < request.period_start:
             continue
+        if bar_date != last_bar_date:
+            day_start_realised = pt.total_realised_pnl_inr()
+            last_bar_date = bar_date
         for ticker in universe:
             blist = bars.get(ticker)
             if not blist:
@@ -181,6 +195,87 @@ def run_backtest(
             )
             if intent is None:
                 continue
+
+            # 3-tier RiskEngine gate (per-trade / daily / portfolio)
+            # — same logic that PaperRuntime uses, so a strategy
+            # behaves identically across backtest and paper.
+            open_qty_map = {
+                t: p.qty
+                for t, p in pt.open_positions().items()
+            }
+            day_realised = (
+                pt.total_realised_pnl_inr() - day_start_realised
+            )
+            account_state = AccountState(
+                user_id=user_id,
+                day_date=bar_date,
+                initial_capital_inr=request.initial_capital_inr,
+                current_equity_inr=current_equity,
+                daily_realised_pnl_inr=day_realised,
+                daily_unrealised_pnl_inr=Decimal("0"),
+                open_positions=open_qty_map,
+                open_position_count=len(open_qty_map),
+                kill_switch_active=False,
+            )
+            signal = Signal(
+                strategy_id=strategy.id,
+                user_id=user_id,
+                ticker=intent.ticker,
+                side=intent.side,
+                qty=intent.qty,
+                emitted_at_ns=int(
+                    datetime(
+                        bar_date.year, bar_date.month, bar_date.day,
+                        tzinfo=timezone.utc,
+                    ).timestamp() * 1_000_000_000
+                ),
+            )
+            decision = risk.gate(
+                signal=signal,
+                account=account_state,
+                risk=risk_payload,
+                last_price=current.close,
+            )
+            if decision.outcome == "reject":
+                rejected_count += 1
+                events.append(event_row(
+                    session_id=session_id,
+                    user_id=user_id,
+                    strategy_id=strategy.id,
+                    mode="backtest",
+                    type_="signal_rejected",
+                    payload={
+                        "ticker": intent.ticker,
+                        "side": intent.side,
+                        "qty": intent.qty,
+                        "reason": (
+                            decision.reason.value
+                            if decision.reason else "unknown"
+                        ),
+                        "threshold": (
+                            str(decision.threshold)
+                            if decision.threshold is not None
+                            else None
+                        ),
+                        "observed_value": (
+                            str(decision.observed_value)
+                            if decision.observed_value is not None
+                            else None
+                        ),
+                    },
+                ))
+                continue
+            if (
+                decision.outcome == "scale"
+                and decision.adjusted_qty
+                and decision.adjusted_qty > 0
+                and decision.adjusted_qty < intent.qty
+            ):
+                scaled_count += 1
+                intent = intent.model_copy(
+                    update={"qty": decision.adjusted_qty},
+                )
+
             try:
                 fill = sim.execute(intent)
             except NoBarAvailableError:
@@ -255,6 +350,12 @@ def run_backtest(
             if p.qty > 0 else p.avg_price
         )
         trade_rows.append(_trade_row(p, implied_fill))
+
+    _logger.info(
+        "backtest run %s: closed=%d trades, "
+        "risk-rejected=%d signals, scaled=%d signals",
+        run_id, len(closed), rejected_count, scaled_count,
+    )
 
     summary = BacktestSummary(
         run_id=run_id,
