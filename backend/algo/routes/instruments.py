@@ -15,7 +15,7 @@ _logger = logging.getLogger(__name__)
 
 
 def _get_session_factory():
-    from backend.db.repository import get_session_factory
+    from backend.db.engine import get_session_factory
     return get_session_factory()
 
 

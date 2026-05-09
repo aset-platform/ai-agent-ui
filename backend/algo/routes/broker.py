@@ -23,7 +23,7 @@ _IST = ZoneInfo("Asia/Kolkata")
 
 def _get_session_factory():
     """Lazy import — mirrors the strategy-routes pattern."""
-    from backend.db.repository import get_session_factory
+    from backend.db.engine import get_session_factory
     return get_session_factory()
 
 
