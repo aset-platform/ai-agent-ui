@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AstTreeView } from "./AstTreeView";
 import { JsonPane } from "./JsonPane";
 import { NodePalette } from "./NodePalette";
+import { StrategyLeversPanel } from "./StrategyLeversPanel";
 import { TEMPLATES } from "./templates";
 import {
   createStrategy,
@@ -124,6 +125,7 @@ export function StrategyBuilder({
           className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-1.5 text-sm"
           placeholder="Strategy name"
         />
+        <StrategyLeversPanel ast={ast} onChange={setAst} />
         <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-white dark:bg-gray-900">
           <AstTreeView node={ast.root} />
         </div>
