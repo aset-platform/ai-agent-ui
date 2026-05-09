@@ -16,6 +16,10 @@ interface Props {
   total?: number;
   onPageChange?: (page: number) => void;
   onPageSizeChange?: (pageSize: EventsPageSize) => void;
+  /** Optional: text shown when ``events.length === 0 && page === 0``.
+   *  Lets the parent tailor the message per trading-mode view
+   *  ("No paper events…" vs "No dry-run events…" vs etc.). */
+  emptyMessage?: string;
 }
 
 const EVENT_TONE: Record<string, string> = {
@@ -77,6 +81,7 @@ export function PaperEventsTimeline({
   total = 0,
   onPageChange,
   onPageSizeChange,
+  emptyMessage,
 }: Props) {
   if (loading) {
     return (
@@ -94,8 +99,10 @@ export function PaperEventsTimeline({
         className="rounded-md border border-slate-200 dark:border-slate-700 p-4 text-sm text-slate-500"
         data-testid="paper-events-empty"
       >
-        No paper-trading events yet. Start a paper run for an
-        active strategy to see signals + fills here.
+        {emptyMessage ?? (
+          "No events yet. Start a run for an active strategy "
+          + "to see signals + fills here."
+        )}
       </div>
     );
   }

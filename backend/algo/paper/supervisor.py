@@ -79,6 +79,8 @@ class PaperSupervisor:
             "started_at": datetime.now(timezone.utc),
             "task": task,
             "runtime": runtime,
+            "mode": "paper",
+            "dry_run": False,
         }
         _logger.info(
             "PaperSupervisor: started run user=%s strat=%s",
@@ -131,6 +133,7 @@ class PaperSupervisor:
             "task": task,
             "runtime": runtime,
             "mode": "live",
+            "dry_run": bool(getattr(kite, "dry_run", False)),
         }
         _logger.info(
             "PaperSupervisor: started LIVE run user=%s strat=%s "
@@ -188,6 +191,8 @@ class PaperSupervisor:
             "strategy_name": entry["strategy_name"],
             "started_at": entry["started_at"].isoformat(),
             "status": "running" if not task.done() else "completed",
+            "mode": entry.get("mode", "paper"),
+            "dry_run": bool(entry.get("dry_run", False)),
         }
 
 
