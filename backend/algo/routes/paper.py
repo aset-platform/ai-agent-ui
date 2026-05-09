@@ -329,6 +329,101 @@ def create_paper_router() -> APIRouter:
                 )
 
         sv = get_supervisor()
+
+        # Branch on live_caps.live_orders_enabled — if the user
+        # has explicitly enabled live trading for this strategy
+        # (passed all 4 gates + retype confirm), route through
+        # LiveRuntime instead of PaperRuntime. KiteAdapter is
+        # responsible for dry-run vs real ordering, gated by
+        # ALGO_LIVE_DRY_RUN env.
+        from backend.algo.live.caps_repo import CapsRepo
+        from backend.algo.live.runtime import LiveNotEnabledError
+
+        caps_repo = CapsRepo()
+        caps = await caps_repo.get(user_id, body.strategy_id)
+        live_enabled = bool(
+            caps and caps.get("live_orders_enabled"),
+        )
+
+        if live_enabled:
+            from datetime import date as _date
+            from backend.algo.broker.credentials_repo import (
+                BrokerCredentialsRepo,
+            )
+            from backend.algo.broker.kite_client import KiteClient
+            from backend.algo.backtest.runs_repo import (
+                BacktestRunsRepo,
+            )
+            from backend.algo.paper.kill_switch_repo import (
+                KillSwitchRepo,
+            )
+
+            # Load Kite credentials.
+            creds_repo = BrokerCredentialsRepo()
+            async with factory() as session:
+                creds = await creds_repo.load(session, user_id)
+            if not creds or not creds.get("access_token") \
+                    or creds.get("access_token_expired"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Kite not connected or token expired. "
+                        "Reconnect Zerodha first."
+                    ),
+                )
+
+            # KiteClient picks up ALGO_LIVE_DRY_RUN automatically
+            # when no explicit dry_run is passed.
+            kite = KiteClient(
+                api_key=creds["api_key"],
+                access_token=creds["access_token"],
+            )
+
+            # Create algo.runs row up-front so LiveRuntime has
+            # a run_id for in-flight tracking. Live mode has no
+            # meaningful period boundaries — use today as a
+            # placeholder; meaningful values are populated as
+            # orders fire.
+            runs_repo = BacktestRunsRepo()
+            today = _date.today()
+            async with factory() as session:
+                run = await runs_repo.create_pending(
+                    session,
+                    user_id=user_id,
+                    strategy_id=body.strategy_id,
+                    period_start=today,
+                    period_end=today,
+                    mode="live",
+                )
+                await runs_repo.mark_running(
+                    session, run_id=run.run_id,
+                )
+                await session.commit()
+            run_id = run.run_id
+
+            ks_for_runtime = KillSwitchRepo(
+                redis_client=get_async_redis(),
+            )
+            try:
+                row = await sv.start_live_run(
+                    user_id=user_id,
+                    strategy=strategy,
+                    source=source,
+                    initial_capital_inr=body.initial_capital_inr,
+                    kite=kite,
+                    caps=caps,
+                    run_id=run_id,
+                    caps_repo=caps_repo,
+                    kill_switch_repo=ks_for_runtime,
+                )
+            except LiveNotEnabledError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            except RuntimeError as exc:
+                raise HTTPException(
+                    status_code=409, detail=str(exc),
+                )
+            return row
+
         try:
             row = await sv.start_run(
                 user_id=user_id,
