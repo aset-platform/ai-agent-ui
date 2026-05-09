@@ -80,7 +80,12 @@ class PaperRuntime:
         self._bars_by_ticker: dict[str, list] = {}
 
     async def run(self, source: TickSource) -> int:
-        """Drain the source. Returns the count of fills emitted."""
+        """Drain the source. Returns the count of fills emitted.
+
+        When the source is a ``LiveWsTickSource``, its ``stop()``
+        method is called in the finally block to unsubscribe from
+        the multiplexer.
+        """
         fills = 0
         last_price_per_ticker: dict[str, Decimal] = {}
         try:
@@ -107,6 +112,15 @@ class PaperRuntime:
             if self._events:
                 flush_events(self._events)
                 self._events = []
+            # For live-ws sources, unsubscribe from the multiplexer.
+            if hasattr(source, "stop"):
+                try:
+                    await source.stop()
+                except Exception:  # noqa: BLE001
+                    _logger.warning(
+                        "LiveWsTickSource.stop() raised",
+                        exc_info=True,
+                    )
         return fills
 
     def _on_bar_close(

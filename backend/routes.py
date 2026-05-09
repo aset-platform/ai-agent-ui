@@ -164,6 +164,18 @@ def create_app(
 
         yield
 
+        # Shutdown: close all live-WS multiplexers.
+        try:
+            from backend.algo.broker.ws_registry import (
+                shutdown_all as _ws_shutdown_all,
+            )
+            await _ws_shutdown_all()
+        except Exception:
+            _logger.warning(
+                "WS multiplexer shutdown skipped",
+                exc_info=True,
+            )
+
         # Shutdown: flush pending observability events
         # so no LLM usage data is lost on restart.
         if obs_collector is not None:
