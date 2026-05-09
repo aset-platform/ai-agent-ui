@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   startWalkForwardRun,
   useWalkForwardRun,
   useWalkForwardRuns,
   type WalkForwardAggregate,
+  type WindowSummary,
 } from "@/hooks/useWalkForwardRuns";
 import { useStrategies } from "@/hooks/useStrategies";
 
@@ -14,6 +15,41 @@ import {
   WalkForwardEquityCurves,
   type WindowCurve,
 } from "./WalkForwardEquityCurves";
+
+function computeAggregate(
+  rows: WindowSummary[],
+): WalkForwardAggregate | null {
+  if (rows.length === 0) return null;
+  const completed = rows.filter((r) => r.status === "completed");
+  const num = (s: string | null): number | null =>
+    s == null ? null : Number(s);
+  const pnl = completed
+    .map((r) => num(r.total_pnl_pct))
+    .filter((n): n is number => n != null);
+  const wr = completed
+    .map((r) => num(r.win_rate_pct))
+    .filter((n): n is number => n != null);
+  const dd = completed
+    .map((r) => num(r.max_drawdown_pct))
+    .filter((n): n is number => n != null);
+  const mean = (xs: number[]) =>
+    xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
+  const std = (xs: number[]) => {
+    if (xs.length < 2) return 0;
+    const m = mean(xs);
+    const v =
+      xs.reduce((a, b) => a + (b - m) ** 2, 0) / xs.length;
+    return Math.sqrt(v);
+  };
+  return {
+    avg_pnl_pct: mean(pnl).toFixed(2),
+    avg_win_rate_pct: mean(wr).toFixed(2),
+    avg_max_drawdown_pct: mean(dd).toFixed(2),
+    std_pnl_pct: std(pnl).toFixed(2),
+    window_count: rows.length,
+    completed_count: completed.length,
+  };
+}
 
 function todayMinus(days: number): string {
   const d = new Date();
@@ -182,6 +218,25 @@ export function WalkForwardSubTab() {
   const effectiveRunId =
     activeRunId ?? history[0]?.run_id ?? null;
   const { run, error: runErr } = useWalkForwardRun(effectiveRunId);
+
+  const [selectedIndices, setSelectedIndices] =
+    useState<Set<number> | null>(null);
+
+  // Reset selection when the run changes (new run = all windows on).
+  useEffect(() => {
+    setSelectedIndices(null);
+  }, [effectiveRunId]);
+
+  const filteredSummaries = useMemo(() => {
+    const all = run?.window_summaries ?? [];
+    if (selectedIndices == null) return all;
+    return all.filter((w) => selectedIndices.has(w.window_index));
+  }, [run, selectedIndices]);
+
+  const computedAgg = useMemo(
+    () => computeAggregate(filteredSummaries),
+    [filteredSummaries],
+  );
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -379,10 +434,12 @@ export function WalkForwardSubTab() {
       {/* Results */}
       {run && run.status === "completed" && (
         <>
-          {run.aggregate && <AggregateCards agg={run.aggregate} />}
+          {computedAgg && <AggregateCards agg={computedAgg} />}
           <WalkForwardEquityCurves
             curves={curves}
             initialCapitalInr={capital}
+            selectedIndices={selectedIndices ?? undefined}
+            onSelectionChange={setSelectedIndices}
           />
           <WindowTable summaries={run.window_summaries} />
         </>

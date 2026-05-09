@@ -38,6 +38,8 @@ export interface WindowCurve {
 interface Props {
   curves: WindowCurve[];
   initialCapitalInr: string;
+  selectedIndices?: Set<number>;
+  onSelectionChange?: (indices: Set<number>) => void;
 }
 
 /** Color palette for N stacked walk-forward window series.
@@ -50,9 +52,15 @@ function windowColor(index: number, total: number): string {
   return `hsl(${hue}, 70%, 55%)`;
 }
 
+function seriesName(c: WindowCurve): string {
+  return `Window ${c.windowIndex + 1} (${c.testStart}…${c.testEnd})`;
+}
+
 export function WalkForwardEquityCurves({
   curves,
   initialCapitalInr,
+  selectedIndices,
+  onSelectionChange,
 }: Props) {
   const isDark = useDarkMode();
   const total = curves.length;
@@ -60,7 +68,7 @@ export function WalkForwardEquityCurves({
   const option = useMemo(() => {
     const series = curves.map((c, i) => ({
       type: "line" as const,
-      name: `Window ${c.windowIndex + 1} (${c.testStart}…${c.testEnd})`,
+      name: seriesName(c),
       showSymbol: false,
       lineStyle: {
         width: 2,
@@ -70,6 +78,14 @@ export function WalkForwardEquityCurves({
       itemStyle: { color: windowColor(i, total) },
       data: c.points.map((p) => [p.bar_date, Number(p.equity_inr)]),
     }));
+
+    const legendSelected: { [name: string]: boolean } = {};
+    curves.forEach((c) => {
+      legendSelected[seriesName(c)] =
+        selectedIndices == null
+          ? true
+          : selectedIndices.has(c.windowIndex);
+    });
 
     return {
       grid: { left: 60, right: 12, top: 32, bottom: 56 },
@@ -102,6 +118,7 @@ export function WalkForwardEquityCurves({
         type: "scroll" as const,
         bottom: 0,
         textStyle: { fontSize: 11 },
+        selected: legendSelected,
       },
       dataZoom: [
         {
@@ -116,7 +133,23 @@ export function WalkForwardEquityCurves({
       ],
       series,
     };
-  }, [curves, total]);
+  }, [curves, total, selectedIndices]);
+
+  const events = useMemo(
+    () => ({
+      legendselectchanged: (params: unknown) => {
+        if (!onSelectionChange) return;
+        const sel = (params as { selected: { [k: string]: boolean } })
+          .selected;
+        const next = new Set<number>();
+        curves.forEach((c) => {
+          if (sel[seriesName(c)]) next.add(c.windowIndex);
+        });
+        onSelectionChange(next);
+      },
+    }),
+    [curves, onSelectionChange],
+  );
 
   if (curves.length === 0) {
     return (
@@ -129,14 +162,18 @@ export function WalkForwardEquityCurves({
     );
   }
 
+  const visibleCount =
+    selectedIndices == null ? total : selectedIndices.size;
+
   return (
     <div
       className="rounded-md border border-slate-200 dark:border-slate-700 p-2"
       data-testid="walkforward-curves"
     >
       <div className="mb-1 px-1 text-xs text-slate-500">
-        {total} window{total !== 1 ? "s" : ""} · click legend to
-        toggle · scroll/pinch to zoom
+        {visibleCount} of {total} window{total !== 1 ? "s" : ""}
+        {visibleCount !== total ? " selected" : ""} · click legend
+        to toggle · scroll/pinch to zoom
       </div>
       <ReactECharts
         option={option}
@@ -144,6 +181,7 @@ export function WalkForwardEquityCurves({
         key={isDark ? "d" : "l"}
         style={{ height: 320, width: "100%" }}
         opts={{ renderer: "canvas" }}
+        onEvents={events}
       />
     </div>
   );
