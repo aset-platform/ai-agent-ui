@@ -131,11 +131,12 @@ export function PaperTab() {
       <div className="flex items-center justify-between gap-4">
         <div>
           <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-            Paper & live trading
+            Trading
           </h2>
           <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-400">
             Paper: replay-fixture runs against a synthetic broker.
-            Live: real Kite orders with safety belts.
+            Dry run: live-mode rehearsal with synthetic Kite
+            responses. Live: real Kite orders with safety belts.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -193,63 +194,71 @@ export function PaperTab() {
 
       {viewMode === "paper" && (
         <div data-testid="trading-paper-view">
-          <ActiveRunsPanel />
+          <ActiveRunsPanel tradingMode="paper" />
         </div>
       )}
 
       {(viewMode === "live" || viewMode === "dryrun") && (
-        <div
-          className="rounded-md border border-indigo-100
-            dark:border-indigo-900/50 p-3"
-          data-testid="live-mode-section"
-        >
-          <h3 className="text-sm font-semibold text-slate-900
-            dark:text-slate-100">
-            Live order placement
-          </h3>
-          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-            Select a strategy to configure and enable live order
-            placement via Zerodha Kite.
-          </p>
-
-          <label className="mt-2 flex flex-col gap-0.5">
-            <span className="text-[11px] text-slate-500">
-              Strategy
-            </span>
-            <select
-              className="rounded border border-slate-300
-                dark:border-slate-600 bg-white dark:bg-slate-800
-                px-2 py-1 text-sm w-64"
-              value={liveStrategyId}
-              onChange={(e) => setLiveStrategyId(e.target.value)}
-              data-testid="live-strategy-select"
-            >
-              <option value="">Select strategy…</option>
-              {strategies.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {liveStrategyId && selectedStrategy && (
-            <div className="mt-3">
-              <LiveSection
-                strategyId={liveStrategyId}
-                strategyName={selectedStrategy.name}
-              />
-            </div>
-          )}
-
-          {!liveStrategyId && (
-            <p
-              className="mt-3 text-xs text-slate-400"
-              data-testid="live-no-strategy-msg"
-            >
-              Pick a strategy above to see live trading controls.
+        <div className="space-y-4" data-testid="trading-live-view">
+          <div
+            className="rounded-md border border-indigo-100
+              dark:border-indigo-900/50 p-3"
+            data-testid="live-mode-section"
+          >
+            <h3 className="text-sm font-semibold text-slate-900
+              dark:text-slate-100">
+              Live order placement
+            </h3>
+            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+              Select a strategy to configure and enable live order
+              placement via Zerodha Kite.
             </p>
-          )}
+
+            <label className="mt-2 flex flex-col gap-0.5">
+              <span className="text-[11px] text-slate-500">
+                Strategy
+              </span>
+              <select
+                className="rounded border border-slate-300
+                  dark:border-slate-600 bg-white dark:bg-slate-800
+                  px-2 py-1 text-sm w-64"
+                value={liveStrategyId}
+                onChange={(e) => setLiveStrategyId(e.target.value)}
+                data-testid="live-strategy-select"
+              >
+                <option value="">Select strategy…</option>
+                {strategies.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {liveStrategyId && selectedStrategy && (
+              <div className="mt-3">
+                <LiveSection
+                  strategyId={liveStrategyId}
+                  strategyName={selectedStrategy.name}
+                />
+              </div>
+            )}
+
+            {!liveStrategyId && (
+              <p
+                className="mt-3 text-xs text-slate-400"
+                data-testid="live-no-strategy-msg"
+              >
+                Pick a strategy above to see live trading controls.
+              </p>
+            )}
+          </div>
+
+          {/* Active runs starter — appears in BOTH dryrun and live
+              views so the user has a single entry point to start
+              the run. The panel adapts its source choices and
+              backend mode= based on tradingMode prop. */}
+          <ActiveRunsPanel tradingMode={viewMode} />
         </div>
       )}
 
