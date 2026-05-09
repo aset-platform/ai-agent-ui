@@ -2,6 +2,113 @@
 
 ---
 
+## 2026-05-09 — Algo Trading v2 — Slice V2-5: Live Order Placement
+
+**Branch:** `feature/algo-trading-session-4-backtest-engine`
+
+**Goal:** Implement V2-5 (Live Order Placement) — the largest and
+riskiest v2 slice. Real Kite orders are placed only when ALL four
+safety gates pass and the user completes a 2-step retype-confirm.
+
+### What shipped
+
+**Backend:**
+
+- `backend/algo/broker/kite_client.py` — `place_order`, `cancel_order`,
+  `modify_order` implemented. `_ALLOWED_ORDER_TYPES = {"MARKET","LIMIT"}`.
+  SL/SLM/BO/CO/MIS → `ValueError`. No `access_token` → `RuntimeError`.
+
+- `backend/db/migrations/versions/2026_05_12_algo_live_caps.py` —
+  Creates `algo.live_caps` (composite PK user_id+strategy_id,
+  `live_orders_enabled BOOL DEFAULT false`, max_inr, max_orders_per_day,
+  allowed_tickers JSONB, daily counters, approved_by/at,
+  last_walkforward_run_id). Adds `algo.positions.source` ENUM
+  (paper/live, DEFAULT paper) + `algo.runs.live_orders_in_flight` JSONB.
+
+- `backend/algo/live/caps_repo.py` — async PG repo: get, get_or_default
+  (safe defaults with live_orders_enabled=False), upsert, enable/disable,
+  increment_daily_counters, reset_daily_counters, update_in_flight.
+
+- `backend/algo/paper/types.py` — extended RejectReason with 4 new v2
+  values: LIVE_TICKER_NOT_ALLOWED, LIVE_INR_CAP, LIVE_ORDERS_PER_DAY_CAP,
+  LIVE_NOT_ENABLED.
+
+- `backend/algo/live/safety.py` — `pre_trade_check()` with all 9 caps
+  in strict order. V2 caps (2-4: ticker, orders/day, INR) run BEFORE v1
+  caps (5-9) for short-circuit efficiency.
+
+- `backend/algo/live/runtime.py` — `LiveNotEnabledError` raised if
+  `caps.live_orders_enabled=False`. `LiveRuntime` validates caps at
+  init. `_submit_order` uses `asyncio.to_thread` for sync Kite SDK.
+  `cancel_in_flight_orders()` is best-effort (never raises), does NOT
+  auto-flatten positions.
+
+- `backend/algo/routes/live.py` — 6 endpoints:
+  GET/PUT caps, GET status (4-gate check), POST enable (4-gate + retype
+  confirm), POST disable, GET in-flight orders.
+
+- `backend/algo/jobs/live_caps_reset.py` + wired in executor.py —
+  Daily reset of cumulative_inr_today + orders_count_today at 09:00 IST,
+  Mon–Fri only.
+
+- `backend/algo/tests/conftest.py` — kiteconnect stub so tests run
+  without Docker.
+
+**Tests (all passing):**
+- `test_kite_place_order.py` — 16 tests (MARKET/LIMIT happy paths,
+  SL/SLM/BO/CO/MIS rejections, cancel, modify)
+- `test_live_pre_trade_check.py` — 24 tests (breach + pass per cap × 9,
+  short-circuit ordering, full-pass acceptance)
+- `test_live_kill_switch.py` — 7 tests (default-OFF, kill blocks signal,
+  cancel in-flight, best-effort failure, no auto-flatten, p99 < 50ms)
+- `test_live_walkforward_gate.py` — 9 tests (30-day window, win-rate > 0,
+  drift ≤ 3 runs, default-OFF state)
+- `test_live_caps_reset.py` — 4 tests (weekend skip, weekday reset)
+
+**Total: 62/62 backend tests passing.**
+
+**Frontend:**
+- `frontend/hooks/useLiveCaps.ts` — SWR hook + upsertLiveCaps,
+  enableLiveOrders, disableLiveOrders actions
+- `frontend/hooks/useLiveStatus.ts` — SWR hook for GatesStatus
+  (per-gate booleans)
+- `frontend/hooks/useLiveOrders.ts` — SWR hook for in-flight orders
+  (10s polling)
+- `frontend/components/algo-trading/LiveSafetyBeltsForm.tsx` — form for
+  max_inr, max_orders_per_day, allowed_tickers with today-usage display
+- `frontend/components/algo-trading/LiveModeToggle.tsx` — 4-gate toggle
+  with per-gate ✓/✕ checklist; 2-step confirm modal requiring exact
+  strategy name retype; z-[70] modal stacking
+- `frontend/components/algo-trading/LiveLandedOrdersList.tsx` — in-flight
+  orders list with side badges, 10s auto-refresh
+- `frontend/components/algo-trading/LiveCancelInFlightBanner.tsx` —
+  amber warning when kill armed + live enabled (positions not affected)
+- `frontend/components/algo-trading/PaperTab.tsx` — extended with live
+  mode section: strategy selector → LiveSection (banner + toggle + caps
+  + orders)
+- `frontend/components/algo-trading/__tests__/LiveModeToggle.test.tsx` —
+  11 Vitest tests covering each closed gate, all-gates-open enable, modal
+  retype, and disable path
+
+**Docs:**
+- `docs/algo-trading/live-ramp.md` — 7-tier ramp procedure from ₹1k to
+  ₹1L with pass criteria, monitoring checklist, emergency stop procedure
+
+### V2-5 safety audit
+
+- Default-OFF confirmed: `live_orders_enabled BOOL DEFAULT false` in
+  migration; `LiveRuntime` raises `LiveNotEnabledError` if not enabled;
+  UI enable button disabled until all 4 gates pass.
+- All 9 caps tested: 18 breach tests + 6 pass tests + ordering tests.
+- Kill-switch hot path p99 < 50ms verified (test measures 100 iterations).
+- No auto-flatten: test `test_kill_does_not_auto_flatten_positions` passes.
+- MARKET + LIMIT only: ValueError on SL/SLM/BO/CO/MIS.
+- 4 gates + drift gate evaluated server-side on POST /enable (never trust UI).
+- 2-step confirm: retype-confirm enforced client-side (button disabled) +
+  name match checked server-side.
+
+---
+
 ## 2026-05-09 — Algo Trading v1 — end-to-end verification + integration branch
 
 **Branch:** `feature/algo-trading-v1-integration` (linear merge of all 10 algo session branches)

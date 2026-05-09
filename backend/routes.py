@@ -4005,6 +4005,7 @@ def create_app(
         create_fees_router,
         create_instruments_router,
         create_kill_switch_router,
+        create_live_router,
         create_paper_router,
         create_performance_router,
         create_replay_router,
@@ -4054,6 +4055,10 @@ def create_app(
     )
     app.include_router(
         create_walkforward_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_live_router(),
         prefix="/v1",
     )
 

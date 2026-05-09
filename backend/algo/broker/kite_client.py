@@ -104,17 +104,151 @@ class KiteClient:
         async for tick in src:
             yield tick
 
-    # ---- Write paths (BLOCKED in v1) -----------------------------
+    # ---- Write paths (V2-5) -------------------------------------
 
-    def place_order(self, intent) -> str:  # noqa: ANN001
-        raise NotImplementedError(
-            "Live trading is v2 — see epic spec § 1 non-goals.",
-        )
+    _ALLOWED_ORDER_TYPES = frozenset({"MARKET", "LIMIT"})
+    _ALLOWED_PRODUCTS = frozenset({"CNC"})
+    _ALLOWED_VARIETIES = frozenset({"regular"})
 
-    def cancel_order(self, order_id: str) -> None:
-        raise NotImplementedError(
-            "Live trading is v2 — see epic spec § 1 non-goals.",
+    def place_order(
+        self,
+        *,
+        tradingsymbol: str,
+        exchange: str,
+        transaction_type: str,
+        quantity: int,
+        order_type: str,
+        product: str = "CNC",
+        variety: str = "regular",
+        price: float = 0.0,
+        tag: str = "",
+    ) -> str:
+        """Place a live order on Kite.  Returns ``kite_order_id``.
+
+        Constraints (v2):
+        - order_type MUST be MARKET or LIMIT.  SL / SLM / BO / CO
+          are rejected at this layer with a clear ValueError —
+          the caller must never reach the SDK for unsupported types.
+        - product MUST be CNC (delivery equity).
+        - variety MUST be regular.
+
+        Raises:
+            ValueError: if an unsupported order_type / product /
+                variety is passed.
+            RuntimeError: if no access_token is set.
+        """
+        if self._access_token is None:
+            raise RuntimeError(
+                "place_order requires an access_token; "
+                "complete the OAuth handshake first.",
+            )
+        if order_type not in self._ALLOWED_ORDER_TYPES:
+            raise ValueError(
+                f"order_type={order_type!r} not supported in v2. "
+                f"Only {sorted(self._ALLOWED_ORDER_TYPES)} are "
+                f"allowed. SL/SLM/BO/CO are deferred to v3.",
+            )
+        if product not in self._ALLOWED_PRODUCTS:
+            raise ValueError(
+                f"product={product!r} not supported in v2. "
+                f"Only CNC (delivery equity) is allowed.",
+            )
+        if variety not in self._ALLOWED_VARIETIES:
+            raise ValueError(
+                f"variety={variety!r} not supported in v2. "
+                f"Only 'regular' is allowed.",
+            )
+        params: dict[str, Any] = {
+            "tradingsymbol": tradingsymbol,
+            "exchange": exchange,
+            "transaction_type": transaction_type,
+            "quantity": quantity,
+            "order_type": order_type,
+            "product": product,
+        }
+        if order_type == "LIMIT":
+            params["price"] = price
+        if tag:
+            params["tag"] = tag
+        resp = self._kc.place_order(variety=variety, **params)
+        # SDK returns {"order_id": "<id>"} or raises KiteException.
+        order_id: str = (
+            resp.get("order_id", "") if isinstance(resp, dict)
+            else str(resp)
         )
+        _logger.info(
+            "place_order: symbol=%s side=%s qty=%d "
+            "order_type=%s kite_order_id=%s",
+            tradingsymbol, transaction_type, quantity,
+            order_type, order_id,
+        )
+        return order_id
+
+    def cancel_order(
+        self,
+        order_id: str,
+        variety: str = "regular",
+    ) -> str:
+        """Cancel an open order on Kite.  Returns the order_id.
+
+        Raises ``RuntimeError`` if no access_token is set.
+        """
+        if self._access_token is None:
+            raise RuntimeError(
+                "cancel_order requires an access_token; "
+                "complete the OAuth handshake first.",
+            )
+        self._kc.cancel_order(variety=variety, order_id=order_id)
+        _logger.info(
+            "cancel_order: kite_order_id=%s variety=%s",
+            order_id, variety,
+        )
+        return order_id
+
+    def modify_order(
+        self,
+        order_id: str,
+        *,
+        variety: str = "regular",
+        order_type: str | None = None,
+        price: float | None = None,
+        quantity: int | None = None,
+    ) -> str:
+        """Modify price and/or quantity of a LIMIT order.
+
+        Only LIMIT orders can be modified (MARKET orders are
+        immediately sent to the exchange).  Returns the order_id.
+
+        Raises:
+            ValueError: if order_type is provided and is not LIMIT.
+            RuntimeError: if no access_token is set.
+        """
+        if self._access_token is None:
+            raise RuntimeError(
+                "modify_order requires an access_token; "
+                "complete the OAuth handshake first.",
+            )
+        if order_type is not None and order_type != "LIMIT":
+            raise ValueError(
+                f"modify_order only supports LIMIT orders; "
+                f"got order_type={order_type!r}.",
+            )
+        params: dict[str, Any] = {}
+        if price is not None:
+            params["price"] = price
+        if quantity is not None:
+            params["quantity"] = quantity
+        if order_type is not None:
+            params["order_type"] = order_type
+        self._kc.modify_order(
+            variety=variety, order_id=order_id, **params,
+        )
+        _logger.info(
+            "modify_order: kite_order_id=%s variety=%s "
+            "price=%s qty=%s",
+            order_id, variety, price, quantity,
+        )
+        return order_id
 
     def get_positions(self) -> list[dict]:
         """Fetch the user's net positions from Kite.

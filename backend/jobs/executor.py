@@ -3340,3 +3340,18 @@ async def _job_algo_reconciliation(
         run_reconciliation_job,
     )
     return await run_reconciliation_job(payload)
+
+
+@register_job("algo_live_caps_daily_reset")
+async def _job_algo_live_caps_daily_reset(
+    payload: dict | None = None,
+):
+    """Reset live_caps counters at market open (09:00 IST).
+
+    Resets cumulative_inr_today + orders_count_today on all
+    algo.live_caps rows. Day boundary aligns with Kite's.
+    """
+    from backend.algo.jobs.live_caps_reset import (
+        run_live_caps_daily_reset,
+    )
+    return await run_live_caps_daily_reset(payload)
