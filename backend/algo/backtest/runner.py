@@ -20,6 +20,7 @@ from backend.algo.backtest.event_writer import event_row, flush_events
 from backend.algo.backtest.indicators import (
     DEFAULT_WARMUP_BARS,
     compute_indicators_for_universe,
+    compute_market_regime,
 )
 from backend.algo.backtest.positions import PositionTracker
 from backend.algo.backtest.sim_broker import (
@@ -110,6 +111,14 @@ def run_backtest(
         warmup_days=DEFAULT_WARMUP_BARS,
     )
     indicators = compute_indicators_for_universe(bars)
+    # Top-level regime feature, injected into every (ticker, bar)
+    # feature dict below so strategies can gate entries on
+    # `{"feature": "nifty_above_sma200"}`. Empty dict if ^NSEI
+    # absent → callers fall back to Decimal("0") (regime off).
+    market_regime = compute_market_regime(
+        period_start=request.period_start,
+        period_end=request.period_end,
+    )
     sim = SimBroker(bars=bars, fee_as_of=request.period_start)
     evaluator = Evaluator()
     pt = PositionTracker()
@@ -165,13 +174,18 @@ def run_backtest(
             # end-of-day equity snapshot below uses last_close.
             last_close[ticker] = current.close
             open_pos = pt.open_positions().get(ticker)
-            ticker_features = indicators.get(ticker, {}).get(
-                bar_date,
-                {
-                    "today_ltp": current.close,
-                    "today_vol": Decimal(current.volume),
-                },
-            )
+            ticker_features = {
+                **indicators.get(ticker, {}).get(
+                    bar_date,
+                    {
+                        "today_ltp": current.close,
+                        "today_vol": Decimal(current.volume),
+                    },
+                ),
+                "nifty_above_sma200": market_regime.get(
+                    bar_date, Decimal("0"),
+                ),
+            }
             ctx = EvalContext(
                 ticker=ticker,
                 bar_date=bar_date,
