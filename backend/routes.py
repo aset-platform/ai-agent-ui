@@ -86,7 +86,19 @@ def create_app(
 
     @asynccontextmanager
     async def _lifespan(a):
-        """Startup: warm Redis cache."""
+        """Startup: run async startup hooks, warm Redis cache."""
+        # Paper replay rebuilder: restore intra-day risk_state from
+        # algo.events after an unexpected restart. Runs in the uvicorn
+        # event loop so the PG engine is on the correct loop.
+        # Failure is non-fatal — the backend still boots.
+        try:
+            from backend.main import _run_startup_hooks
+            await _run_startup_hooks()
+        except Exception:
+            _logger.warning(
+                "startup hooks skipped", exc_info=True,
+            )
+
         try:
             from cache_warmup import (
                 warm_frequent_users,
