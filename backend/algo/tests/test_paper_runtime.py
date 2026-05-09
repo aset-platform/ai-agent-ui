@@ -159,3 +159,40 @@ async def test_runtime_skips_bar_when_strategy_needs_missing_feature():
         # Specifically verify NO fills slipped through.
         filled = [r for r in rows if r["type"] == "order_filled"]
         assert len(filled) == 0
+
+
+@pytest.mark.asyncio
+async def test_runtime_set_target_weight_action_produces_signals():
+    """Strategies that use set_target_weight (instead of plain
+    buy/sell) should size positions via weight × equity / price
+    in paper mode — same as backtest. Without this support the
+    paper runtime silently drops every set_target_weight action,
+    yielding 0 fills."""
+    payload = _strategy_payload()
+    payload["root"] = {
+        "type": "set_target_weight",
+        "weight": 0.05,   # 0.05 × 100000 / ~100 = 50 shares,
+                          # under the per-trade max_qty=100 cap.
+    }
+    strategy = parse_strategy(payload)
+    runtime = PaperRuntime(
+        strategy=strategy,
+        user_id=uuid4(),
+        initial_capital_inr=Decimal("100000"),
+        fee_as_of=date(2026, 4, 1),
+    )
+    with patch(
+        "backend.algo.paper.runtime.flush_events",
+    ) as flush:
+        fills = await runtime.run(
+            ReplayTickSource(_FIXTURE, pace="fast"),
+        )
+    assert fills >= 1
+    rows = flush.call_args.args[0]
+    sigs = [r for r in rows if r["type"] == "signal_generated"]
+    fills_ev = [r for r in rows if r["type"] == "order_filled"]
+    # Every signal that survived risk gating should have BUY side
+    # (set_target_weight from 0 → target_qty is always BUY for
+    # the first bar in a cycle).
+    assert len(sigs) >= 1
+    assert len(fills_ev) >= 1

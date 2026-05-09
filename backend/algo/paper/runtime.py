@@ -172,6 +172,7 @@ class PaperRuntime:
             action,
             ticker=bar.ticker,
             bar_date_ns=bar.bar_open_ts_ns,
+            last_price=last_price,
         )
         if signal is None:
             return 0
@@ -256,6 +257,7 @@ class PaperRuntime:
         *,
         ticker: str,
         bar_date_ns: int,
+        last_price: Decimal | None = None,
     ) -> Signal | None:
         t = action.get("type")
         if t == "buy":
@@ -297,6 +299,46 @@ class PaperRuntime:
                 ticker=ticker, side="SELL", qty=existing.qty,
                 emitted_at_ns=bar_date_ns,
             )
+        if t == "set_target_weight":
+            # Mirror of the backtest runner's resolution:
+            # target_qty = floor(weight * current_equity / last_price)
+            # Diff vs existing position drives the signal direction.
+            if last_price is None or last_price <= 0:
+                return None
+            current_equity = (
+                self._initial
+                + self._positions.total_realised_pnl_inr()
+            )
+            if current_equity <= 0:
+                return None
+            try:
+                weight = Decimal(str(action.get("weight", 0)))
+            except Exception:  # noqa: BLE001
+                return None
+            if weight <= 0:
+                return None
+            target_qty = int(
+                (current_equity * weight) // last_price,
+            )
+            existing = self._positions.open_positions().get(ticker)
+            current_qty = existing.qty if existing else 0
+            diff = target_qty - current_qty
+            if diff > 0:
+                return Signal(
+                    strategy_id=self._strategy.id,
+                    user_id=self._user_id,
+                    ticker=ticker, side="BUY", qty=int(diff),
+                    emitted_at_ns=bar_date_ns,
+                )
+            if diff < 0:
+                return Signal(
+                    strategy_id=self._strategy.id,
+                    user_id=self._user_id,
+                    ticker=ticker, side="SELL",
+                    qty=int(-diff),
+                    emitted_at_ns=bar_date_ns,
+                )
+            return None
         return None
 
     def _account_snapshot(self) -> AccountState:
