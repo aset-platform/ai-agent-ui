@@ -132,11 +132,13 @@ class LiveRuntime:
                 compute_market_regime as _cmr,
                 compute_market_trend_strength as _cmts,
             )
-            today = _date.today()
+            # Match ``load_ohlcv_window``'s UTC clock — local IST
+            # racing past midnight UTC would trip
+            # BackedFutureBarError.
+            today = datetime.now(timezone.utc).date()
             window_start = today - timedelta(days=365 * 3)
-            window_end = today + timedelta(days=1)
-            self._market_regime = _cmr(window_start, window_end)
-            self._market_trend = _cmts(window_start, window_end)
+            self._market_regime = _cmr(window_start, today)
+            self._market_trend = _cmts(window_start, today)
             _logger.info(
                 "LiveRuntime: regime cache loaded — %d regime "
                 "days, %d trend days",
