@@ -85,6 +85,12 @@ FEATURES: list[Feature] = [
         source="technical",
     ),
     Feature(
+        key="nifty_30d_return_pct",
+        label="NIFTY 30-day return %",
+        type="float",
+        source="technical",
+    ),
+    Feature(
         key="today_dpc",
         label="Today delivery %",
         type="float",
