@@ -14,7 +14,10 @@ import { LiveDryRunBanner } from "./LiveDryRunBanner";
 import { LiveLandedOrdersList } from "./LiveLandedOrdersList";
 import { LiveModeToggle } from "./LiveModeToggle";
 import { LiveSafetyBeltsForm } from "./LiveSafetyBeltsForm";
-import { PaperEventsTimeline } from "./PaperEventsTimeline";
+import {
+  PaperEventsTimeline,
+  type EventsPageSize,
+} from "./PaperEventsTimeline";
 import { ReconciliationDriftPanel } from "./ReconciliationDriftPanel";
 
 /** Live section for a specific strategy. */
@@ -71,13 +74,16 @@ function LiveSection({ strategyId, strategyName }: {
   );
 }
 
-const EVENTS_PAGE_SIZE = 100;
+const DEFAULT_EVENTS_PAGE_SIZE: EventsPageSize = 100;
 
 export function PaperTab() {
-  const [eventsPage, setEventsPage] = useState(1);
-  const { events, loading, error, hasMore } = usePaperEvents(
-    EVENTS_PAGE_SIZE,
-    (eventsPage - 1) * EVENTS_PAGE_SIZE,
+  const [eventsPage, setEventsPage] = useState(0);
+  const [eventsPageSize, setEventsPageSize] = useState<EventsPageSize>(
+    DEFAULT_EVENTS_PAGE_SIZE,
+  );
+  const { events, loading, error, total } = usePaperEvents(
+    eventsPageSize,
+    eventsPage * eventsPageSize,
   );
   const { state: killState } = useKillSwitch();
   const { strategies } = useStrategies();
@@ -192,9 +198,10 @@ export function PaperTab() {
         events={events}
         loading={loading}
         page={eventsPage}
-        pageSize={EVENTS_PAGE_SIZE}
-        hasMore={hasMore}
+        pageSize={eventsPageSize}
+        total={total}
         onPageChange={setEventsPage}
+        onPageSizeChange={setEventsPageSize}
       />
     </div>
   );

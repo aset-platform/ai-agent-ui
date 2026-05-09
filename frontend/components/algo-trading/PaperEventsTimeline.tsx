@@ -2,13 +2,20 @@
 
 import type { PaperEvent } from "@/hooks/usePaperEvents";
 
+export const EVENTS_PAGE_SIZE_OPTIONS = [25, 50, 100, 200] as const;
+
+export type EventsPageSize =
+  (typeof EVENTS_PAGE_SIZE_OPTIONS)[number];
+
 interface Props {
   events: PaperEvent[];
   loading: boolean;
+  /** 0-indexed current page (matches Insights tabs convention). */
   page?: number;
-  pageSize?: number;
-  hasMore?: boolean;
+  pageSize?: EventsPageSize;
+  total?: number;
   onPageChange?: (page: number) => void;
+  onPageSizeChange?: (pageSize: EventsPageSize) => void;
 }
 
 const EVENT_TONE: Record<string, string> = {
@@ -65,10 +72,11 @@ function summary(event: PaperEvent): string {
 export function PaperEventsTimeline({
   events,
   loading,
-  page = 1,
+  page = 0,
   pageSize = 100,
-  hasMore = false,
+  total = 0,
   onPageChange,
+  onPageSizeChange,
 }: Props) {
   if (loading) {
     return (
@@ -80,7 +88,7 @@ export function PaperEventsTimeline({
       </div>
     );
   }
-  if (events.length === 0 && page === 1) {
+  if (events.length === 0 && page === 0) {
     return (
       <div
         className="rounded-md border border-slate-200 dark:border-slate-700 p-4 text-sm text-slate-500"
@@ -92,45 +100,12 @@ export function PaperEventsTimeline({
     );
   }
 
-  const start = (page - 1) * pageSize + 1;
-  const end = start + events.length - 1;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(0, page), totalPages - 1);
   const showControls = onPageChange != null;
 
   return (
     <div className="space-y-2" data-testid="paper-events-timeline">
-      {showControls && (
-        <div
-          className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-400"
-          data-testid="paper-events-pager"
-        >
-          <span>
-            {events.length === 0
-              ? "No events on this page"
-              : `Showing ${start}–${end} (page ${page})`}
-          </span>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              disabled={page <= 1}
-              onClick={() => onPageChange(page - 1)}
-              className="rounded border border-slate-300 dark:border-slate-600 px-2 py-1 disabled:opacity-40"
-              data-testid="paper-events-prev"
-            >
-              ← Newer
-            </button>
-            <button
-              type="button"
-              disabled={!hasMore}
-              onClick={() => onPageChange(page + 1)}
-              className="rounded border border-slate-300 dark:border-slate-600 px-2 py-1 disabled:opacity-40"
-              data-testid="paper-events-next"
-            >
-              Older →
-            </button>
-          </div>
-        </div>
-      )}
-
       <div className="space-y-1.5">
         {events.map((e) => {
           const tone =
@@ -155,6 +130,65 @@ export function PaperEventsTimeline({
           );
         })}
       </div>
+
+      {showControls && total > 0 && (
+        <div
+          className="flex flex-wrap items-center justify-between gap-3 pt-2 text-xs text-gray-600 dark:text-gray-400"
+          data-testid="paper-events-pager"
+        >
+          <div className="flex items-center gap-2">
+            <span>{total.toLocaleString()} events</span>
+            {onPageSizeChange != null && (
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  onPageSizeChange(
+                    Number(e.target.value) as EventsPageSize,
+                  );
+                  onPageChange(0);
+                }}
+                className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                data-testid="paper-events-page-size"
+              >
+                {EVENTS_PAGE_SIZE_OPTIONS.map((n) => (
+                  <option key={n} value={n}>
+                    {n}/page
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={safePage <= 0}
+              onClick={() =>
+                onPageChange(Math.max(0, safePage - 1))
+              }
+              className="rounded-md border border-gray-300 px-2 py-1 font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+              data-testid="paper-events-prev"
+            >
+              Prev
+            </button>
+            <span className="tabular-nums">
+              {safePage + 1} / {totalPages}
+            </span>
+            <button
+              type="button"
+              disabled={safePage >= totalPages - 1}
+              onClick={() =>
+                onPageChange(
+                  Math.min(totalPages - 1, safePage + 1),
+                )
+              }
+              className="rounded-md border border-gray-300 px-2 py-1 font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+              data-testid="paper-events-next"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

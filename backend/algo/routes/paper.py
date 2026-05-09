@@ -12,7 +12,13 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Response,
+)
 from pydantic import BaseModel, Field
 from typing import Literal
 
@@ -169,6 +175,7 @@ def create_paper_router() -> APIRouter:
 
     @router.get("/events")
     async def list_events(
+        response: Response,
         limit: int = Query(100, ge=1, le=500),
         offset: int = Query(0, ge=0),
         type: str | None = Query(
@@ -186,8 +193,13 @@ def create_paper_router() -> APIRouter:
         events so the reconciliation drift panel can poll
         for ``type=position_drift_detected`` regardless of
         which mode emitted them.
+
+        ``X-Total-Count`` response header carries the unfiltered-
+        by-pagination total so the frontend pager can render
+        ``Page N / M``.
         """
         from backend.db.duckdb_engine import query_iceberg_table
+        user_id_str = str(UUID(user.user_id))
         if type is not None:
             sql = (
                 "SELECT event_id, ts_ns, ts_date, "
@@ -197,9 +209,12 @@ def create_paper_router() -> APIRouter:
                 "ORDER BY ts_ns DESC "
                 "LIMIT ? OFFSET ?"
             )
-            params: list = [
-                str(UUID(user.user_id)), type, limit, offset,
-            ]
+            params: list = [user_id_str, type, limit, offset]
+            count_sql = (
+                "SELECT COUNT(*) AS n FROM events "
+                "WHERE user_id = ? AND type = ?"
+            )
+            count_params: list = [user_id_str, type]
         else:
             sql = (
                 "SELECT event_id, ts_ns, ts_date, "
@@ -209,14 +224,38 @@ def create_paper_router() -> APIRouter:
                 "ORDER BY ts_ns DESC "
                 "LIMIT ? OFFSET ?"
             )
-            params = [str(UUID(user.user_id)), limit, offset]
+            params = [user_id_str, limit, offset]
+            count_sql = (
+                "SELECT COUNT(*) AS n FROM events "
+                "WHERE user_id = ?"
+            )
+            count_params = [user_id_str]
+
         try:
             rows = query_iceberg_table(
                 "algo.events", sql, params,
             )
         except FileNotFoundError:
-            # No events yet — algo.events table empty.
+            response.headers["X-Total-Count"] = "0"
+            response.headers["Access-Control-Expose-Headers"] = (
+                "X-Total-Count"
+            )
             return []
+
+        # Total respects the type filter but ignores limit/offset
+        # so the pager can render Page N / M correctly.
+        try:
+            count_rows = query_iceberg_table(
+                "algo.events", count_sql, count_params,
+            )
+            total = int(count_rows[0]["n"]) if count_rows else 0
+        except Exception:  # noqa: BLE001
+            total = 0
+
+        response.headers["X-Total-Count"] = str(total)
+        response.headers["Access-Control-Expose-Headers"] = (
+            "X-Total-Count"
+        )
 
         out: list[dict[str, Any]] = []
         for r in rows:
