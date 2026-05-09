@@ -45,6 +45,9 @@ async def test_disconnect_triggers_reconnect():
         # Reconnect task should have been scheduled.
         assert mux._reconnect_task is not None
 
+        # Clean up: close the multiplexer to cancel reconnect task.
+        await mux.close()
+
 
 @pytest.mark.asyncio
 async def test_backoff_starts_at_min_and_doubles():
