@@ -10,6 +10,8 @@
 #   ./run.sh status            — show service health table
 #   ./run.sh logs              — tail service logs
 #   ./run.sh doctor            — run diagnostic checks
+#   ./run.sh ngrok {up|down|status} — manage ngrok tunnel
+#                                     (token from macOS Keychain)
 #
 # Services (all via Docker Compose):
 #   postgres   PostgreSQL 16 + pgvector  localhost:5432
@@ -38,6 +40,37 @@ mkdir -p "$LOG_DIR"
 # Run docker compose from the project directory
 _dc() { docker compose -f "${SCRIPT_DIR}/docker-compose.yml" \
     -f "${SCRIPT_DIR}/docker-compose.override.yml" "$@"; }
+
+# ── ngrok / Keychain helpers ─────────────────────────
+
+# Read the ngrok authtoken from the macOS Keychain.
+# Returns empty string if not present (caller decides whether that's OK).
+_ngrok_authtoken_from_keychain() {
+    security find-generic-password \
+        -a ngrok_authtoken -s ai-agent-ui -w 2>/dev/null || true
+}
+
+# Returns 0 if ngrok should be auto-included with --profile live:
+#   - NGROK_DOMAIN is set in .env
+#   - Keychain entry exists with non-empty value
+_ngrok_enabled() {
+    local env_file="${SCRIPT_DIR}/.env"
+    [[ -f "$env_file" ]] || return 1
+    grep -q "^NGROK_DOMAIN=." "$env_file" || return 1
+    [[ -n "$(_ngrok_authtoken_from_keychain)" ]] || return 1
+    return 0
+}
+
+# Run docker compose with --profile live + NGROK_AUTHTOKEN injected from
+# Keychain when ngrok is enabled; otherwise plain _dc.
+_dc_with_ngrok() {
+    if _ngrok_enabled; then
+        NGROK_AUTHTOKEN="$(_ngrok_authtoken_from_keychain)" \
+            _dc --profile live "$@"
+    else
+        _dc "$@"
+    fi
+}
 
 # Get container status for a service (Up, Exited, etc.)
 _dc_status() {
@@ -160,9 +193,13 @@ do_start() {
         exit 1
     fi
 
-    # Start all Docker services
+    # Start all Docker services. Auto-includes the `live` profile (and
+    # injects NGROK_AUTHTOKEN from Keychain) when ngrok is configured.
     echo "  Starting Docker services..."
-    _dc up -d --build 2>&1 | sed 's/^/    /'
+    if _ngrok_enabled; then
+        echo "    (ngrok detected — including --profile live)"
+    fi
+    _dc_with_ngrok up -d --build 2>&1 | sed 's/^/    /'
     echo ""
 
     # Wait for backend health
@@ -382,6 +419,77 @@ do_doctor() {
     echo ""
 }
 
+# ── ngrok subcommand ─────────────────────────────────
+
+do_ngrok() {
+    local action="${1:-status}"
+
+    case "$action" in
+        up)
+            local token
+            token="$(_ngrok_authtoken_from_keychain)"
+            if [[ -z "$token" ]]; then
+                echo -e "${R}ERROR:${N} no ngrok authtoken in Keychain."
+                echo "  Store it with:"
+                echo "    security add-generic-password -a ngrok_authtoken \\"
+                echo "      -s ai-agent-ui -w '<your-token>' -U"
+                exit 1
+            fi
+            local domain
+            domain=$(grep "^NGROK_DOMAIN=" "${SCRIPT_DIR}/.env" \
+                2>/dev/null | cut -d= -f2-)
+            if [[ -z "$domain" ]]; then
+                echo -e "${R}ERROR:${N} NGROK_DOMAIN not set in .env."
+                echo "  Add: NGROK_DOMAIN=<your-domain>.ngrok-free.dev"
+                exit 1
+            fi
+            echo -e "${B}Starting ngrok tunnel → ${domain}${N}"
+            NGROK_AUTHTOKEN="$token" \
+                _dc --profile live up -d ngrok 2>&1 | sed 's/^/  /'
+            sleep 3
+            local code
+            code=$(curl -s -o /dev/null -w "%{http_code}" \
+                --max-time 5 "https://${domain}/v1/health" 2>/dev/null)
+            if [[ "$code" == "200" ]]; then
+                echo -e "  ${G}Tunnel reachable: https://${domain}${N}"
+                echo -e "  ${C}Inspector: http://localhost:4040${N}"
+            else
+                echo -e "  ${Y}Tunnel started but health probe got HTTP ${code}.${N}"
+                echo -e "  ${Y}Backend may still be warming. Try in a few seconds.${N}"
+            fi
+            ;;
+        down)
+            echo -e "${B}Stopping ngrok...${N}"
+            _dc --profile live stop ngrok 2>&1 | sed 's/^/  /'
+            _dc --profile live rm -f ngrok 2>&1 | sed 's/^/  /'
+            ;;
+        status)
+            local row
+            row=$(_dc --profile live ps ngrok 2>/dev/null \
+                | tail -n +2)
+            if [[ -z "$row" ]]; then
+                echo -e "  ${Y}ngrok not running${N}"
+                _ngrok_enabled \
+                    && echo -e "  Run: ${C}./run.sh ngrok up${N}" \
+                    || echo -e "  Setup: store token in Keychain + set NGROK_DOMAIN in .env"
+                return
+            fi
+            echo "$row"
+            local domain
+            domain=$(grep "^NGROK_DOMAIN=" "${SCRIPT_DIR}/.env" \
+                2>/dev/null | cut -d= -f2-)
+            if [[ -n "$domain" ]]; then
+                echo -e "  ${C}URL:${N} https://${domain}"
+            fi
+            echo -e "  ${C}Inspector:${N} http://localhost:4040"
+            ;;
+        *)
+            echo "Usage: $(basename "$0") ngrok {up|down|status}"
+            exit 1
+            ;;
+    esac
+}
+
 # ── Entry point ──────────────────────────────────────
 
 case "${1:-help}" in
@@ -415,8 +523,9 @@ case "${1:-help}" in
         ;;
     logs)    do_logs "${2:-}" "${3:-}" ;;
     doctor)  do_doctor ;;
+    ngrok)   do_ngrok "${2:-status}" ;;
     *)
-        echo -e "${B}Usage:${N} $(basename "$0") {start|stop|restart|build|rebuild|status|logs|doctor} [service]"
+        echo -e "${B}Usage:${N} $(basename "$0") {start|stop|restart|build|rebuild|status|logs|doctor|ngrok} [service|action]"
         echo ""
         echo "  start   [service]  Start all or one service"
         echo "  stop    [service]  Stop all or one service"

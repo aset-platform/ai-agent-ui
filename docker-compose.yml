@@ -110,16 +110,20 @@ services:
     restart: unless-stopped
 
   # ── ngrok dev tunnel (live trading) ────────────────
+  # NGROK_AUTHTOKEN is sourced from the macOS Keychain via run.sh ngrok up
+  # (or any run.sh start when NGROK_DOMAIN is set in .env + a Keychain
+  # entry exists). The :- default suppresses the compose interpolation
+  # warning for invocations that don't need the tunnel.
   ngrok:
     image: ngrok/ngrok:latest
     restart: unless-stopped
     profiles: ["live"]
     command:
       - "http"
-      - "--domain=${NGROK_DOMAIN}"
+      - "--url=https://${NGROK_DOMAIN}"
       - "backend:8181"
     environment:
-      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
     ports:
       - "4040:4040"
     depends_on:
