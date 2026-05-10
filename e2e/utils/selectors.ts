@@ -344,4 +344,10 @@ export const FE = {
   algoDriftThresholdWidget: "drift-threshold-widget",
   algoDriftThresholdInput: "drift-threshold-input",
   algoDriftThresholdSave: "drift-threshold-save",
+
+  // ── Algo Trading — Kite Postback Panel (OBS-4) ──────
+  kitePostbackPanel: "kite-postback-panel",
+  kitePostbackRow: "kite-postback-row",
+  kitePostbackPayloadToggle: "kite-postback-payload-toggle",
+  kitePostbackEmptyState: "kite-postback-empty-state",
 } as const;
