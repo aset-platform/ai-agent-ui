@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -206,6 +207,21 @@ async def _check_gates(
                 aggregate = summary.get("aggregate") or {}
                 avg_pnl = aggregate.get("avg_pnl_pct", 0)
                 walkforward_recent = float(avg_pnl) > 0
+
+                # REGIME-5: when env flag is set, additionally
+                # require all 5 quality gates to pass. Default OFF
+                # — staged rollout per spec §7.1: existing live
+                # runs grandfathered; flip on at day 21 to enforce
+                # on new toggles.
+                if (
+                    walkforward_recent
+                    and os.environ.get(
+                        "ALGO_REGIME_5_GATES_REQUIRED",
+                    ) == "1"
+                ):
+                    gates = aggregate.get("gates_passed") or {}
+                    if not gates or not all(gates.values()):
+                        walkforward_recent = False
 
     # Drift gate (bonus gate — spec §2.2 mentions drift > 3 runs)
     drift_within_limit = True
