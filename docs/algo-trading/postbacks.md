@@ -4,6 +4,51 @@
 > **Audience:** Developers and traders setting up live order monitoring.  
 > **Last updated:** 2026-05-10
 
+> **TL;DR for repeat operators:** authtoken lives in macOS Keychain
+> (entry `ngrok_authtoken` / service `ai-agent-ui`). Bring up with
+> `./run.sh ngrok up`; check with `./run.sh ngrok status`; tear down
+> with `./run.sh ngrok down`. Same `https://${NGROK_DOMAIN}` serves
+> Kite + Razorpay + Stripe webhooks via path routing
+> (`/v1/webhooks/<provider>`).
+
+## 0. Recommended setup — macOS Keychain + run.sh
+
+This pattern matches the V2-0 `BYO_SECRET_KEY` flow — the authtoken
+never lands on disk in `.env`, only in Keychain.
+
+```bash
+# 1. Store the authtoken (one-time)
+security add-generic-password \
+  -a ngrok_authtoken \
+  -s ai-agent-ui \
+  -w '<your-authtoken>' \
+  -U
+
+# 2. Add domain to .env (NOT the authtoken)
+echo "NGROK_DOMAIN=<your-claimed-domain>.ngrok-free.dev" >> .env
+echo "KITE_POSTBACK_ENABLED=false" >> .env
+
+# 3. Bring up
+./run.sh ngrok up
+```
+
+Once both the Keychain entry exists AND `NGROK_DOMAIN` is set in `.env`,
+plain `./run.sh start` will auto-include the `live` profile and inject
+the token from Keychain — you don't need to remember `--profile live`.
+
+### Multi-provider single-URL strategy
+
+Same ngrok URL serves all webhook providers via path routing. Free-tier
+limits (20k req/month, 1 GB bandwidth) cover Kite (≤200/day) + Razorpay
+(~10/month) + Stripe (~30/month) with >3× headroom. No second tunnel
+needed.
+
+| Provider | Webhook URL |
+|---|---|
+| Kite | `https://${NGROK_DOMAIN}/v1/webhooks/kite/postback` |
+| Razorpay (when wired) | `https://${NGROK_DOMAIN}/v1/webhooks/razorpay` |
+| Stripe (when wired) | `https://${NGROK_DOMAIN}/v1/webhooks/stripe` |
+
 ---
 
 ## 1. Why ngrok? (Per-app Kite postback URL)
