@@ -50,7 +50,10 @@ class FeatureRef(BaseModel):
 
 class Literal_(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    literal: float | int
+    # REGIME-3: ``str`` widening so ``regime_label == "bull"`` style
+    # compares are first-class without a sugar AST node.  Evaluator
+    # dispatches to string-equality when both operands are str.
+    literal: float | int | str
 
 
 Operand = Union[FeatureRef, Literal_]
