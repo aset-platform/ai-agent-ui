@@ -361,4 +361,13 @@ export const FE = {
   regimeStressChip: "regime-stress-chip",
   regimeHistoryChart: "regime-history-chart",
   regimeHistoryEmpty: "regime-history-empty",
+  // REGIME-3 — strategy↔regime binding
+  regimeChangeBanner: "regime-change-banner",
+  regimeChangeBannerDismiss: "regime-change-banner-dismiss",
+  regimeApplicabilityChips: "regime-applicability-chips",
+  regimeApplicabilityChipBull: "regime-applicability-chip-bull",
+  regimeApplicabilityChipSideways: "regime-applicability-chip-sideways",
+  regimeApplicabilityChipBear: "regime-applicability-chip-bear",
+  regimeApplicabilityMismatchWarning:
+    "regime-applicability-mismatch-warning",
 } as const;

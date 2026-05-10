@@ -26,6 +26,7 @@ import { ReconciliationDriftPanel } from "./ReconciliationDriftPanel";
 import { KitePostbackPanel } from "./KitePostbackPanel";
 import { RegimeWidget } from "./RegimeWidget";
 import { RegimeHistoryChart } from "./RegimeHistoryChart";
+import { RegimeChangeBanner } from "./RegimeChangeBanner";
 
 /** Live section for a specific strategy. */
 function LiveSection({ strategyId, strategyName }: {
@@ -164,6 +165,7 @@ export function PaperTab() {
 
   return (
     <div className="space-y-4" data-testid="paper-tab">
+      <RegimeChangeBanner />
       <div className="flex items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
