@@ -1,19 +1,36 @@
 """Seed the India Regime Daily Pipeline.
 
-Chains the 4 daily India-only regime jobs into a single pipeline
-(matches the existing India Daily Pipeline pattern):
+Chains all India-only regime jobs into a single dependency-ordered
+pipeline (matches the existing India / USA Daily Pipeline pattern):
 
-  1. regime_classifier_daily      — produces regime_label + stress
-  2. regime_change_notifier       — emits banner event on flip
-  3. compute_daily_factors        — uses regime context for breadth
-  4. attribution_daily_brinson    — Brinson per active strategy
+  Daily steps (run mon-fri 23:30 IST):
+  1. Detect Market Regime          — regime_classifier_daily
+  2. Notify Regime Change          — regime_change_notifier
+  3. Compute Daily Factors         — compute_daily_factors
+  4. Daily Brinson Attribution     — attribution_daily_brinson
 
-Idempotency: each step's executor wrapper (see
-``backend.algo.regime.pipeline_steps``) skips if today's row
-already exists in the relevant Iceberg/PG table. Pipeline force=True
-re-runs every step with pre-delete.
+  Monthly steps (skip daily, fire on 1st of month only):
+  5. Refresh Top-200 Universe      — universe_snapshot_monthly
+  6. Run Factor Regression         — attribution_monthly_regression
 
-Schedule: 23:30 IST mon-fri (post-close + after the existing
+  Maintenance (every run):
+  7. Compact + Backup Iceberg      — iceberg_maintenance
+
+Idempotency:
+  - Each daily step's wrapper skips if today's row already exists
+    in the relevant table.
+  - Each monthly step skips when today != 1st of month, AND skips
+    when the month's row already exists.
+  - ``force=True`` pre-deletes today's (or this-month's) row(s)
+    before re-running.
+
+The maintenance step runs unconditionally — it compacts every
+hot Iceberg table including the new v3 ones (stocks.regime_history,
+stocks.daily_factors, stocks.universe_snapshot, stocks.regime_hmm_state)
+plus the existing stocks.ohlcv / sentiment / company_info /
+analysis_summary, and takes a backup before touching anything.
+
+Schedule: mon-fri 23:30 IST (post-close + after existing
 22:00 sentiment + 23:00 daily-factors-as-standalone).
 
 Idempotent — re-running this script updates the pipeline row +
@@ -41,25 +58,43 @@ PIPELINE_NAME = "India Regime Daily Pipeline"
 PIPELINE_ID = str(uuid.uuid5(_NS, PIPELINE_NAME))
 
 STEPS = [
+    # Daily ----------------------------------------------------
     {
         "step_order": 1,
         "job_type": "regime_classifier_daily",
-        "job_name": "Regime Classifier - India",
+        "job_name": "Detect Market Regime",
     },
     {
         "step_order": 2,
         "job_type": "regime_change_notifier",
-        "job_name": "Regime Change Notifier - India",
+        "job_name": "Notify Regime Change",
     },
     {
         "step_order": 3,
         "job_type": "compute_daily_factors",
-        "job_name": "Compute Daily Factors - India",
+        "job_name": "Compute Daily Factors",
     },
     {
         "step_order": 4,
         "job_type": "attribution_daily_brinson",
-        "job_name": "Attribution Daily Brinson - India",
+        "job_name": "Daily Brinson Attribution",
+    },
+    # Monthly (skip on non-1st days) ---------------------------
+    {
+        "step_order": 5,
+        "job_type": "universe_snapshot_monthly",
+        "job_name": "Refresh Top-200 Universe",
+    },
+    {
+        "step_order": 6,
+        "job_type": "attribution_monthly_regression",
+        "job_name": "Run Factor Regression",
+    },
+    # Maintenance ----------------------------------------------
+    {
+        "step_order": 7,
+        "job_type": "iceberg_maintenance",
+        "job_name": "Compact + Backup Iceberg",
     },
 ]
 

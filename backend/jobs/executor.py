@@ -2623,6 +2623,13 @@ _HOT_ICEBERG_TABLES = (
     "stocks.sentiment_scores",
     "stocks.company_info",
     "stocks.analysis_summary",
+    # Algo Trading v3 (regime engine + factor library + universe).
+    # Daily writes accumulate one parquet per upsert; compact to
+    # keep file counts bounded just like ohlcv.
+    "stocks.regime_history",
+    "stocks.daily_factors",
+    "stocks.universe_snapshot",
+    "stocks.regime_hmm_state",
 )
 
 
@@ -3456,45 +3463,43 @@ def _job_attribution_daily_brinson(
 
 @register_job("attribution_monthly_regression")
 def _job_attribution_monthly_regression(
-    payload: dict | None = None,
-):
-    """REGIME-6: monthly OLS factor regression per active strategy.
-
-    Reads the latest equity_curve from ``algo.runs.summary_json``
-    for each (user, strategy) pair active in the period,
-    computes daily returns, fits OLS against mock factor returns
-    (deterministic seed) and persists one row per pair to
-    ``algo.factor_regression`` with ``betas['__mock_data__']=1.0``
-    so the UI flags it. Real Fama-French wiring is v3.1.
-    """
-    from backend.algo.attribution.job import (
-        monthly_factor_regression_job,
+    scope: str = "india",
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+) -> dict:
+    """REGIME-6 — pipeline-step compatible. Skips on every day
+    that isn't the 1st of the month. Idempotency within the
+    month: skips if a row already exists in
+    ``algo.factor_regression`` for today's year/month;
+    ``force=True`` pre-deletes month rows + re-runs."""
+    from backend.algo.regime.pipeline_steps import (
+        run_attribution_regression_step,
     )
-
-    return monthly_factor_regression_job(payload or {})
+    return run_attribution_regression_step(
+        scope, run_id, repo,
+        cancel_event=cancel_event, force=force,
+    )
 
 
 @register_job("universe_snapshot_monthly")
 def _job_universe_snapshot_monthly(
-    payload: dict | None = None,
-):
-    """REGIME-7: monthly NSE universe snapshot rebuilder.
-
-    Filters active .NS tickers by 60d ADTV (>= 10cr) and market
-    cap (>= 500cr); top-200 by ADTV are flagged
-    ``included_in_top_200=True``. Remaining filtered candidates
-    persisted with ``False`` so liquidity ratings can read them
-    without re-running the job.
-
-    Payload shape: ``{"rebalance_date": "YYYY-MM-DD"}``. Defaults
-    to today (IST) if absent.
-    """
-    from datetime import date as _date
-
-    from backend.algo.universe.snapshot_job import (
-        rebuild_universe_snapshot,
+    scope: str = "india",
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+) -> dict:
+    """REGIME-7 — pipeline-step compatible. Skips on every day
+    that isn't the 1st of the month. Idempotency within the
+    month: skips if today's first-of-month rebalance row already
+    exists in ``stocks.universe_snapshot``; ``force=True``
+    pre-deletes the rebalance + re-runs."""
+    from backend.algo.regime.pipeline_steps import (
+        run_universe_snapshot_step,
     )
-
-    rd = (payload or {}).get("rebalance_date")
-    parsed = _date.fromisoformat(rd) if rd else _date.today()
-    return rebuild_universe_snapshot(parsed)
+    return run_universe_snapshot_step(
+        scope, run_id, repo,
+        cancel_event=cancel_event, force=force,
+    )

@@ -225,3 +225,133 @@ def test_attribution_force_pre_deletes_and_runs(
     assert called[0]["as_of"] == "2026-05-11"
     assert out["forced"] is True
     assert out["rows"] == 3
+
+
+# --- universe_snapshot_monthly (monthly-skip) ------------------
+
+def test_universe_snapshot_skips_on_non_first(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ps, "_today_ist", lambda: date(2026, 5, 11),
+    )
+    called: list = []
+    monkeypatch.setattr(
+        "backend.algo.universe.snapshot_job.rebuild_universe_snapshot",
+        lambda d: called.append(d) or {"x": 1},
+    )
+    out = ps.run_universe_snapshot_step(
+        scope="india", run_id="r", repo=None, force=False,
+    )
+    assert out["skipped"] is True
+    assert out["reason"] == "monthly_only_runs_on_first"
+    assert called == []
+
+
+def test_universe_snapshot_runs_on_first_when_not_done(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        ps, "_today_ist", lambda: date(2026, 6, 1),
+    )
+    monkeypatch.setattr(
+        ps, "_universe_snapshot_has_month", lambda d: False,
+    )
+    captured: list = []
+    monkeypatch.setattr(
+        "backend.algo.universe.snapshot_job.rebuild_universe_snapshot",
+        lambda d: captured.append(d) or {"included": 200},
+    )
+    out = ps.run_universe_snapshot_step(
+        scope="india", run_id="r", repo=None, force=False,
+    )
+    assert captured == [date(2026, 6, 1)]
+    assert out["included"] == 200
+    assert out.get("skipped") is None or out["skipped"] is False
+
+
+def test_universe_snapshot_skips_when_month_already_done(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        ps, "_today_ist", lambda: date(2026, 6, 1),
+    )
+    monkeypatch.setattr(
+        ps, "_universe_snapshot_has_month", lambda d: True,
+    )
+    called: list = []
+    monkeypatch.setattr(
+        "backend.algo.universe.snapshot_job.rebuild_universe_snapshot",
+        lambda d: called.append(d) or {"x": 1},
+    )
+    out = ps.run_universe_snapshot_step(
+        scope="india", run_id="r", repo=None, force=False,
+    )
+    assert out["skipped"] is True
+    assert out["reason"] == "already_ran_this_month"
+    assert called == []
+
+
+def test_universe_snapshot_force_on_first_pre_deletes(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        ps, "_today_ist", lambda: date(2026, 6, 1),
+    )
+    monkeypatch.setattr(
+        ps, "_universe_snapshot_has_month", lambda d: True,
+    )
+    deletes: list = []
+    monkeypatch.setattr(
+        ps, "_delete_iceberg_rows",
+        lambda table, pred: deletes.append(table),
+    )
+    captured: list = []
+    monkeypatch.setattr(
+        "backend.algo.universe.snapshot_job.rebuild_universe_snapshot",
+        lambda d: captured.append(d) or {"included": 200},
+    )
+    out = ps.run_universe_snapshot_step(
+        scope="india", run_id="r", repo=None, force=True,
+    )
+    assert deletes == ["stocks.universe_snapshot"]
+    assert captured == [date(2026, 6, 1)]
+    assert out["forced"] is True
+
+
+# --- attribution_monthly_regression (monthly-skip) -------------
+
+def test_factor_regression_skips_on_non_first(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ps, "_today_ist", lambda: date(2026, 5, 11),
+    )
+    called: list = []
+    monkeypatch.setattr(
+        "backend.algo.attribution.job.monthly_factor_regression_job",
+        lambda payload: called.append(payload) or {"x": 1},
+    )
+    out = ps.run_attribution_regression_step(
+        scope="india", run_id="r", repo=None, force=False,
+    )
+    assert out["skipped"] is True
+    assert out["reason"] == "monthly_only_runs_on_first"
+    assert called == []
+
+
+def test_factor_regression_runs_on_first_when_not_done(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        ps, "_today_ist", lambda: date(2026, 6, 1),
+    )
+    monkeypatch.setattr(
+        ps, "_factor_regression_has_month", lambda d: False,
+    )
+    captured: list = []
+    monkeypatch.setattr(
+        "backend.algo.attribution.job.monthly_factor_regression_job",
+        lambda payload: captured.append(payload) or {"strats": 5},
+    )
+    out = ps.run_attribution_regression_step(
+        scope="india", run_id="r", repo=None, force=False,
+    )
+    assert captured[0]["as_of"] == "2026-06-01"
+    assert out["strats"] == 5

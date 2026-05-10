@@ -265,6 +265,153 @@ def _attribution_daily_has_today(today: date) -> bool:
         return False
 
 
+# --------------------------------------------------------------
+# Step 5 — universe_snapshot_monthly (monthly-skip)
+# --------------------------------------------------------------
+
+def run_universe_snapshot_step(
+    scope: str,
+    run_id: str,
+    repo: Any,
+    cancel_event: threading.Event | None = None,
+    force: bool = False,
+) -> dict:
+    """Universe snapshot wrapper — runs only when today is the
+    1st of the month (matches the standalone monthly cron).
+    Skips on every other day so the daily pipeline stays clean.
+    Idempotency within the month: skips if the current month's
+    rebalance row already exists in stocks.universe_snapshot."""
+    if not _scope_supported(scope):
+        return {"skipped": True, "reason": "scope"}
+    today = _today_ist()
+    if today.day != 1 and not force:
+        return {
+            "skipped": True,
+            "reason": "monthly_only_runs_on_first",
+        }
+    if not force and _universe_snapshot_has_month(today):
+        _logger.info(
+            "universe_snapshot skipped: month %s-%02d done",
+            today.year, today.month,
+        )
+        return {
+            "skipped": True,
+            "reason": "already_ran_this_month",
+        }
+    if force and today.day == 1:
+        from pyiceberg.expressions import EqualTo
+        _delete_iceberg_rows(
+            "stocks.universe_snapshot",
+            EqualTo("rebalance_date", today),
+        )
+    from backend.algo.universe.snapshot_job import (
+        rebuild_universe_snapshot,
+    )
+    out = rebuild_universe_snapshot(today)
+    return {"forced": force, **(out or {})}
+
+
+def _universe_snapshot_has_month(today: date) -> bool:
+    from backend.db.duckdb_engine import query_iceberg_table
+    try:
+        rows = query_iceberg_table(
+            "stocks.universe_snapshot",
+            "SELECT 1 FROM universe_snapshot "
+            "WHERE rebalance_date = ? LIMIT 1",
+            [date(today.year, today.month, 1)],
+        )
+        return bool(rows)
+    except Exception:  # pragma: no cover
+        return False
+
+
+# --------------------------------------------------------------
+# Step 6 — attribution_monthly_regression (monthly-skip)
+# --------------------------------------------------------------
+
+def run_attribution_regression_step(
+    scope: str,
+    run_id: str,
+    repo: Any,
+    cancel_event: threading.Event | None = None,
+    force: bool = False,
+) -> dict:
+    """Monthly factor regression wrapper — runs only on 1st of
+    month. Idempotency: skips if a row exists in PG
+    algo.factor_regression with period_end == today's first-of-
+    month minus 1 day (i.e. last month's regression already
+    persisted)."""
+    if not _scope_supported(scope):
+        return {"skipped": True, "reason": "scope"}
+    today = _today_ist()
+    if today.day != 1 and not force:
+        return {
+            "skipped": True,
+            "reason": "monthly_only_runs_on_first",
+        }
+    if not force and _factor_regression_has_month(today):
+        _logger.info(
+            "factor_regression skipped: month %s-%02d done",
+            today.year, today.month,
+        )
+        return {
+            "skipped": True,
+            "reason": "already_ran_this_month",
+        }
+    if force and today.day == 1:
+        _delete_factor_regression_month(today)
+    from backend.algo.attribution.job import (
+        monthly_factor_regression_job,
+    )
+    out = monthly_factor_regression_job({"as_of": today.isoformat()})
+    return {"forced": force, **(out or {})}
+
+
+def _factor_regression_has_month(today: date) -> bool:
+    """Has *any* regression row been written for today's
+    rebalance month? Mirrors the attribution check via async."""
+    import asyncio
+
+    async def _check() -> bool:
+        from sqlalchemy import text
+        from db.engine import get_session_factory
+        async with get_session_factory()() as s:
+            row = (await s.execute(text(
+                "SELECT 1 FROM algo.factor_regression "
+                "WHERE EXTRACT(YEAR FROM period_end) = :y "
+                "  AND EXTRACT(MONTH FROM period_end) = :m "
+                "LIMIT 1"
+            ), {"y": today.year, "m": today.month})).first()
+            return row is not None
+
+    try:
+        return asyncio.run(_check())
+    except Exception:  # pragma: no cover
+        return False
+
+
+def _delete_factor_regression_month(today: date) -> None:
+    import asyncio
+
+    async def _delete() -> None:
+        from sqlalchemy import text
+        from db.engine import get_session_factory
+        async with get_session_factory()() as s:
+            await s.execute(text(
+                "DELETE FROM algo.factor_regression "
+                "WHERE EXTRACT(YEAR FROM period_end) = :y "
+                "  AND EXTRACT(MONTH FROM period_end) = :m"
+            ), {"y": today.year, "m": today.month})
+            await s.commit()
+
+    try:
+        asyncio.run(_delete())
+    except Exception as exc:  # pragma: no cover
+        _logger.debug(
+            "factor_regression pre-delete skipped: %s", exc,
+        )
+
+
 def _delete_attribution_today(today: date) -> None:
     import asyncio
 
