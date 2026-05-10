@@ -1,0 +1,692 @@
+# Algo Trading v2 — Slice OBS-3: ngrok Tunnel + Operator Runbook
+
+**Slice:** OBS-3  
+**Status:** EXPANDED PLAN  
+**Estimated SP:** 2  
+**Branch:** `feature/algo-v2-obs-3-ngrok` off `feature/algo-trading-v2-integration`  
+**Depends on:** none. Can run before or in parallel with OBS-2.
+
+---
+
+## Overview
+
+**Goal:** Run an `ngrok` container under a `live` docker-compose profile that exposes `backend:8181` at a stable `*.ngrok-free.dev` domain so the same Kite Postback URL can be registered ONCE in the Developer Console (it's per-app, not per-user, manual edit only). Documents the one-time operator setup.
+
+**Architecture:** docker-compose service in a new `live` profile (so it doesn't run on every dev start). Free tier ngrok with 1 dev domain — sufficient for ≤200 postbacks/day expected. Cloudflare Tunnel migration documented as the prod handoff path.
+
+**Tech Stack:** Docker Compose / ngrok image / `.env.example`.
+
+**Spec:** `docs/superpowers/specs/2026-05-10-algo-v2-observability-postback-design.md` — §3.3.
+
+**Research:** `docs/superpowers/research/2026-05-10-kite-postback-ngrok.md` — Part B (free tier, persistent domain, docker-compose pattern).
+
+---
+
+## File Structure
+
+**Modified:**
+- `docker-compose.yml` — add `ngrok` service under `profiles: ["live"]`.
+- `.env.example` — add `NGROK_AUTHTOKEN`, `NGROK_DOMAIN`, `KITE_POSTBACK_ENABLED` placeholders.
+- `README.md` env-vars table — add the three new vars (per CLAUDE.md §7 doc trigger).
+
+**New:**
+- `docs/algo-trading/postbacks.md` — operator runbook covering ngrok setup + Kite console config + verification flow + Cloudflare Tunnel migration path.
+
+---
+
+## Task 1: Add `ngrok` service to `docker-compose.yml`
+
+**Files:** `docker-compose.yml` (modified)
+
+**Step 1: Add ngrok service to docker-compose.yml**
+
+Open `docker-compose.yml` and add the following service after the `redis` service block (before the `volumes:` section at the end):
+
+```yaml
+  # ── ngrok dev tunnel (live trading) ────────────────
+  ngrok:
+    image: ngrok/ngrok:latest
+    restart: unless-stopped
+    profiles: ["live"]
+    command:
+      - "http"
+      - "--domain=${NGROK_DOMAIN}"
+      - "backend:8181"
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    ports:
+      - "4040:4040"
+    depends_on:
+      - backend
+```
+
+**Verify:** Run the following command and confirm no errors:
+
+```bash
+docker compose --profile live config > /dev/null && echo "✓ docker-compose.yml valid"
+```
+
+Expected output: `✓ docker-compose.yml valid`
+
+Also verify the default (non-live) profile still works:
+
+```bash
+docker compose config > /dev/null && echo "✓ default profile valid"
+```
+
+Expected output: `✓ default profile valid`
+
+Confirm ngrok service does NOT appear in the default profile:
+
+```bash
+docker compose config | grep -c "ngrok:" || echo "✓ ngrok not in default profile"
+```
+
+Expected output: `✓ ngrok not in default profile`
+
+**Commit:**
+
+```bash
+git add docker-compose.yml
+git commit -m "$(cat <<'EOF'
+feat(infra): add ngrok service under live profile
+
+- Exposes backend:8181 at ${NGROK_DOMAIN} for Kite postback tunnel
+- Only runs with --profile live flag; default `docker compose up -d` unaffected
+- Free tier 1 dev domain, auth via NGROK_AUTHTOKEN env var
+- Inspection UI on :4040
+
+Co-Authored-By: Abhay Kumar Singh <asequitytrading@gmail.com>
+EOF
+)"
+```
+
+---
+
+## Task 2: Update `.env.example` with new vars
+
+**Files:** `.env.example` (modified)
+
+**Step 1: Add ngrok and postback env vars to `.env.example`**
+
+Find the line `AI_AGENT_UI_ENV=dev` (near the end) and add the following lines before it:
+
+```
+# ── Kite postback receiver (live trading only) ─────
+# Setup: Sign up at https://ngrok.com, claim a free domain,
+# copy both values from https://dashboard.ngrok.com
+# See docs/algo-trading/postbacks.md for full setup guide.
+NGROK_AUTHTOKEN=                  # Your ngrok auth token
+NGROK_DOMAIN=                     # e.g. abhay-aiagent.ngrok-free.dev
+KITE_POSTBACK_ENABLED=false       # Enable after Kite console postback URL is registered
+
+```
+
+**Verify:** Check the file has proper syntax and the vars are in the right place:
+
+```bash
+grep -A3 "NGROK_AUTHTOKEN" .env.example
+```
+
+Expected output should show all three vars with comments.
+
+**Commit:**
+
+```bash
+git add .env.example
+git commit -m "$(cat <<'EOF'
+docs(env): add NGROK_AUTHTOKEN, NGROK_DOMAIN, KITE_POSTBACK_ENABLED
+
+New environment variables for Kite postback tunnel setup:
+- NGROK_AUTHTOKEN: from https://dashboard.ngrok.com
+- NGROK_DOMAIN: claimed free *.ngrok-free.dev domain (1 per account)
+- KITE_POSTBACK_ENABLED: defaults false; flip true after Kite console URL registered
+
+Co-Authored-By: Abhay Kumar Singh <asequitytrading@gmail.com>
+EOF
+)"
+```
+
+---
+
+## Task 3: Update `README.md` env-vars table
+
+**Files:** `README.md` (modified)
+
+**Step 1: Locate the env-vars section in README.md**
+
+Find the section in README that documents environment variables. It should be after the "Quick Start" section. Look for a table or section documenting env vars like `PG_PASSWORD`, `REDIS_URL`, etc.
+
+**Step 2: Add three new entries to the env-vars documentation**
+
+Add these lines to the env-vars table/section (maintain the same format as existing entries):
+
+```
+| NGROK_AUTHTOKEN | string | ngrok auth token from https://dashboard.ngrok.com (live trading only) |
+| NGROK_DOMAIN | string | Claimed free *.ngrok-free.dev domain for Kite postback tunnel (live trading only) |
+| KITE_POSTBACK_ENABLED | boolean | Set to `true` after Kite Developer Console postback URL is registered (default: `false`) |
+```
+
+**Verify:** Check the README renders the table correctly:
+
+```bash
+grep -B1 -A1 "NGROK_AUTHTOKEN" README.md
+```
+
+Expected output: the three new env vars visible in context.
+
+**Commit:**
+
+```bash
+git add README.md
+git commit -m "$(cat <<'EOF'
+docs(readme): document NGROK_* and KITE_POSTBACK_ENABLED env vars
+
+Per CLAUDE.md §7 doc trigger, add new env vars to README env-vars table:
+- NGROK_AUTHTOKEN: auth token from ngrok.com dashboard
+- NGROK_DOMAIN: free *.ngrok-free.dev domain claim
+- KITE_POSTBACK_ENABLED: flip true after Kite console setup
+
+Co-Authored-By: Abhay Kumar Singh <asequitytrading@gmail.com>
+EOF
+)"
+```
+
+---
+
+## Task 4: Write operator runbook — `docs/algo-trading/postbacks.md`
+
+**Files:** `docs/algo-trading/postbacks.md` (new)
+
+**Step 1: Create the new file at the path below**
+
+Create file: `/Users/abhay/Documents/projects/ai-agent-ui/docs/algo-trading/postbacks.md`
+
+Write the full content:
+
+```markdown
+# Kite Postback URL + ngrok Dev Tunnel Runbook
+
+> **For:** Algo Trading v2 live trading observability.  
+> **Audience:** Developers and traders setting up live order monitoring.  
+> **Last updated:** 2026-05-10
+
+---
+
+## 1. Why ngrok? (Per-app Kite postback URL)
+
+Zerodha's Kite Postback feature is designed to push order status updates (COMPLETE, REJECTED, CANCELLED, UPDATE) to your server immediately — no polling required.
+
+**Key constraints:**
+- **One URL per app** — the postback URL is registered in the Kite Developer Console and applies to ALL users authenticated against your app. It is **not per-user** and cannot be updated programmatically (manual console edit only).
+- **HTTPS required** — Kite validates the certificate chain; self-signed certs fail.
+- **Port 80 or 443 only** — no arbitrary ports.
+- **Must survive backend restarts** — the same URL must consistently reach your backend, even across container restarts and `docker compose up -d` cycles.
+
+**Traditional dev approach:** Restart your laptop's ngrok tunnel → manually update Kite console URL. Tedious and error-prone when testing.
+
+**This spec's approach:** Run ngrok as a long-lived docker-compose service on a claimed free domain (`*.ngrok-free.dev`). Register that domain ONCE in the Kite Developer Console and never touch it again. The domain persists across container restarts and backend code changes — only changes when you explicitly reclaim it or delete the ngrok account.
+
+Cost: $0 (free tier).
+
+---
+
+## 2. One-Time Setup (First Time Only)
+
+### 2.1 Sign up for ngrok
+
+1. Visit [ngrok.com](https://ngrok.com) and create a free account.
+2. Verify your email.
+3. Navigate to [https://dashboard.ngrok.com](https://dashboard.ngrok.com).
+
+### 2.2 Claim your free static domain
+
+1. In the ngrok Dashboard, click **Domains** (left sidebar).
+2. Click **Create Domain**.
+3. The system assigns you one free `*.ngrok-free.dev` domain (e.g., `abhay-aiagent.ngrok-free.dev`). Note it.
+4. Optionally customize the subdomain name to something memorable.
+
+### 2.3 Copy your auth token
+
+1. In the ngrok Dashboard, click **Your Authtoken** (left sidebar, under "Getting Started").
+2. Copy the token (hidden; click the eye icon to reveal).
+3. Paste it into your `.env` file:
+
+```
+NGROK_AUTHTOKEN=<paste-here>
+```
+
+### 2.4 Add your domain to `.env`
+
+```
+NGROK_DOMAIN=<your-claimed-domain>.ngrok-free.dev
+```
+
+Example:
+```
+NGROK_AUTHTOKEN=2_3nXk2K...abcd...
+NGROK_DOMAIN=abhay-aiagent.ngrok-free.dev
+KITE_POSTBACK_ENABLED=false
+```
+
+### 2.5 Verify `.env` is loaded (Docker Compose will read it)
+
+```bash
+grep NGROK .env
+# Should print both NGROK_AUTHTOKEN and NGROK_DOMAIN with values
+```
+
+---
+
+## 3. Bringing Up the Tunnel
+
+### 3.1 Start the ngrok service (once, per dev session)
+
+```bash
+docker compose --profile live up -d ngrok
+```
+
+You should see:
+```
+[+] Creating 1/1
+ ✔ Network ai-agent-ui_default  Created
+ ✔ Container ai-agent-ui-backend-1  Running
+ ✔ Container ai-agent-ui-ngrok-1    Started
+```
+
+### 3.2 Verify ngrok is running
+
+```bash
+docker compose ps
+```
+
+You should see a row with `ai-agent-ui-ngrok-1` status `Up`.
+
+### 3.3 Check ngrok's inspection UI
+
+Open [http://localhost:4040](http://localhost:4040) in your browser. You should see ngrok's Web Inspector with:
+- **Status:** "online"
+- **URL:** `https://<your-domain>.ngrok-free.dev`
+- Request log (empty until postbacks arrive)
+
+### 3.4 Test the tunnel
+
+```bash
+curl https://$(grep NGROK_DOMAIN .env | cut -d= -f2)/v1/health
+```
+
+You should get a 200 response with JSON like `{"status": "ok"}` (the existing backend health endpoint).
+
+---
+
+## 4. Registering the URL in Kite Developer Console
+
+### 4.1 Log in to Kite Developer Console
+
+Visit [https://developers.kite.trade](https://developers.kite.trade) and sign in with your Zerodha account.
+
+### 4.2 Select your app
+
+- Click **Apps** (left sidebar).
+- Select your trading app (e.g., "AI Agent UI").
+
+### 4.3 Configure the postback URL
+
+1. Scroll to the **Postback URL** section (or click **Settings** → **Webhooks**).
+2. Paste your full postback URL:
+
+```
+https://<your-domain>.ngrok-free.dev/v1/webhooks/kite/postback
+```
+
+Example:
+```
+https://abhay-aiagent.ngrok-free.dev/v1/webhooks/kite/postback
+```
+
+3. Click **Save** or **Update**.
+
+Kite will probe the URL with a test request. Wait for a "URL verified" or similar confirmation message. If it fails:
+   - Verify ngrok is running (`docker compose ps`).
+   - Test the URL manually in a terminal: `curl https://<domain>/v1/health` should return 200.
+   - Check the ngrok inspector at [http://localhost:4040](http://localhost:4040) for any inbound requests.
+
+### 4.4 Enable postbacks in your `.env`
+
+Once the Kite console confirms the URL:
+
+```
+KITE_POSTBACK_ENABLED=true
+```
+
+Restart the backend to load this config:
+
+```bash
+docker compose restart backend
+```
+
+---
+
+## 5. Verification Flow (Manual Smoke Test)
+
+### 5.1 Place a tiny test order in Dry-run mode
+
+1. Open the Live tab in the app's Algo Trading section.
+2. **In Dry-run mode** (NOT live), place a tiny order:
+   - Stock: any (e.g., `INFY.NS`)
+   - Quantity: 1
+   - Price: ₹1 (low, so it fills quickly)
+   - Duration: DAY
+
+3. Click **Place Order**.
+
+Wait 5–10 seconds for the order to fill (or reject).
+
+### 5.2 Check the postback event in the UI
+
+1. Scroll to the **Kite Postbacks** panel (below the live orders list).
+2. You should see a new row:
+   - **Timestamp:** seconds ago
+   - **Symbol:** `INFY` (or your test symbol)
+   - **Status:** `COMPLETE` or `REJECTED`
+   - **Filled Qty:** `1`
+   - **Avg Price:** ₹<price>
+
+If empty, check below.
+
+### 5.3 Inspect the postback in ngrok's Web Inspector
+
+1. Visit [http://localhost:4040](http://localhost:4040).
+2. Look for an inbound **POST** request to `/v1/webhooks/kite/postback`.
+3. Click the request to see:
+   - **Request body:** the full postback JSON (user_id, order_id, status, etc.)
+   - **Response:** 200 and `{"ok": true}` from the backend handler
+
+### 5.4 Verify the event landed in the database
+
+(Optional, for deep debugging)
+
+```bash
+# SSH into backend container
+docker compose exec backend bash
+
+# Query the events table
+python -c "
+from backend.stocks import get_iceberg_table
+import pyarrow as pa
+
+events = get_iceberg_table('algo.events')
+scan = events.scan(
+    filter=lambda t: (t['type_'] == 'kite_postback_received')
+).to_arrow()
+print(scan.select(['user_id', 'type_', 'payload']).to_pandas())
+"
+```
+
+You should see a recent row with `type_='kite_postback_received'` and payload containing your order_id.
+
+---
+
+## 6. Troubleshooting Checklist
+
+### Issue: ngrok container won't start
+
+**Symptom:** `docker compose --profile live up -d ngrok` fails.
+
+**Diagnosis:**
+```bash
+docker compose --profile live logs ngrok
+```
+
+Look for:
+- `Failed to read config` — `.env` not found or unparseable.
+- `Invalid domain` — `NGROK_DOMAIN` is not a valid ngrok free domain you claimed.
+- `Invalid authtoken` — `NGROK_AUTHTOKEN` is malformed or expired.
+
+**Fix:** Verify `.env` has both vars with no typos:
+```bash
+cat .env | grep NGROK
+```
+
+---
+
+### Issue: Kite console rejects the URL on save
+
+**Symptom:** "URL verification failed" in Kite Developer Console.
+
+**Diagnosis:**
+
+1. Verify ngrok is running:
+   ```bash
+   docker compose ps | grep ngrok
+   ```
+   Should show `Up`.
+
+2. Verify the tunnel is live:
+   ```bash
+   curl https://$(grep NGROK_DOMAIN .env | cut -d= -f2)/v1/health
+   ```
+   Should return 200 with JSON.
+
+3. Check ngrok's inspector for any failed requests:
+   ```
+   http://localhost:4040
+   ```
+   Look for requests to `/v1/health` or `/v1/webhooks/kite/postback`. Any 5xx responses?
+
+**Fix:** 
+- If `curl` hangs, backend or ngrok may be unresponsive. Restart:
+  ```bash
+  docker compose restart backend ngrok
+  ```
+- If 5xx in the inspector, check backend logs:
+  ```bash
+  docker compose logs backend | tail -20
+  ```
+
+---
+
+### Issue: 2-hour ngrok session timeout (auto-reconnect)
+
+**Symptom:** Postbacks stop arriving after ~2 hours, then resume.
+
+**Why:** Free tier ngrok sessions reconnect every 2 hours. During reconnect (~5 seconds), the tunnel is briefly unavailable.
+
+**Mitigation:**
+- The `restart: unless-stopped` policy in docker-compose automatically reconnects the container.
+- The **same domain persists** across reconnects — no URL change needed in Kite console.
+- If a postback lands during the 5-second gap, Kite does NOT retry (fire-and-forget semantics). The next reconciliation cron (every 5 min) will catch up.
+
+**You don't need to do anything** — it's automatic.
+
+If you want to monitor reconnects:
+```bash
+docker compose logs -f ngrok | grep -i reconnect
+```
+
+---
+
+### Issue: Postback arrives but no event in the UI / database
+
+**Symptom:** ngrok inspector shows 200 response, but the postback panel is empty.
+
+**Diagnosis:**
+
+1. Check backend logs for the postback handler:
+   ```bash
+   docker compose logs backend | grep -i "postback"
+   ```
+   Look for warnings about checksum failure, missing guid, or dedup.
+
+2. Verify `KITE_POSTBACK_ENABLED=true` in `.env`:
+   ```bash
+   grep KITE_POSTBACK_ENABLED .env
+   ```
+
+3. Verify backend was restarted after setting the flag:
+   ```bash
+   docker compose logs backend | grep -i "starting" | tail -1
+   # Check the timestamp is recent
+   ```
+
+**Fix:**
+- If checksum failed: verify the Kite API secret is correctly loaded. Check backend startup logs for `Secret loaded: algo_kite_api_secret`.
+- If guid is missing: the postback is malformed. Inspect the raw body in ngrok inspector (§5.3 step 3) — it should have a `guid` field.
+- If backend wasn't restarted: `docker compose restart backend`.
+
+---
+
+### Issue: Free tier domain expired
+
+**Symptom:** `curl https://<domain>/v1/health` returns connection refused after weeks of use.
+
+**Why:** Free tier domains are claimed for 14 days without activity. If the ngrok client stops calling home, the domain is recycled.
+
+**Prevention:** The docker-compose service (`restart: unless-stopped`) keeps the connection alive. Just ensure `docker compose --profile live up -d ngrok` is running continuously or restarted regularly.
+
+**Fix:** If domain is lost, claim a new one and update `.env`:
+```bash
+# Claim new domain in ngrok Dashboard
+# Update .env
+NGROK_DOMAIN=<new-domain>.ngrok-free.dev
+# Update Kite console postback URL
+# Restart ngrok
+docker compose restart ngrok
+```
+
+---
+
+## 7. Cloudflare Tunnel Migration Path (Prod Handoff)
+
+> **Out of scope for this dev runbook.** Documented for reference when graduating from dev to production.
+
+### When to migrate
+
+Once the app goes live and Kite postbacks must be reliable:
+- Free tier ngrok has a 20k req/month quota (sufficient for ~250/day); if you exceed it, postbacks are rate-limited.
+- 2-hour session reconnects add minor latency during the window.
+- For production, use a **Cloudflare Tunnel** on your real domain.
+
+### High-level path
+
+1. **Cloudflare Tunnel setup** — on your DNS provider, point a subdomain (e.g., `api.yourdomain.com`) to a Cloudflare Tunnel.
+2. **Local tunnel connector** — run `cloudflared tunnel` instead of ngrok (same docker-compose pattern, different image + command).
+3. **No bandwidth / request caps** — Cloudflare Tunnel is free and unlimited for 1 tunnel.
+4. **TLS already included** — Cloudflare handles cert renewal automatically.
+5. **One-time Kite console update** — point postback URL to your real domain:
+   ```
+   https://api.yourdomain.com/v1/webhooks/kite/postback
+   ```
+
+### References
+
+- [Cloudflare Tunnel quickstart](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+- [Cloudflare Tunnel with Docker](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/#docker)
+
+For now, stick with ngrok free tier during dev and testing. Migrate to Cloudflare when the app is live.
+
+---
+
+## Acceptance Criteria
+
+- [ ] `.env` contains `NGROK_AUTHTOKEN`, `NGROK_DOMAIN`, `KITE_POSTBACK_ENABLED` with no secrets committed.
+- [ ] `docker compose --profile live config` validates without errors.
+- [ ] `docker compose config` (default profile) does NOT include ngrok service.
+- [ ] `docker compose --profile live up -d ngrok` starts the container (check `docker compose ps`).
+- [ ] `http://localhost:4040` is reachable and shows "online" status.
+- [ ] `curl https://<NGROK_DOMAIN>/v1/health` returns 200 from backend.
+- [ ] `docs/algo-trading/postbacks.md` covers all 7 sections with exact setup steps.
+- [ ] `README.md` env-vars table includes NGROK_AUTHTOKEN, NGROK_DOMAIN, KITE_POSTBACK_ENABLED.
+- [ ] All commits have `Co-Authored-By: Abhay Kumar Singh <asequitytrading@gmail.com>`.
+- [ ] No `NGROK_AUTHTOKEN` or actual domain value committed (only `.env.example` has placeholders).
+
+---
+
+## Testing & Smoke (Manual, Deferred)
+
+**When authtoken + domain available:**
+
+1. Populate `.env` with real values.
+2. Run: `docker compose --profile live up -d ngrok`
+3. Verify tunnel is live: `curl https://<NGROK_DOMAIN>/v1/health`
+4. Manually place a tiny Dry-run order in the Live tab (once OBS-2 backend handler is merged).
+5. Verify postback event appears in the postbacks panel.
+6. Check ngrok inspector at [http://localhost:4040](http://localhost:4040) for inbound POST.
+
+---
+
+## Related Slices
+
+- **OBS-1:** WS health endpoint + status dot (independent).
+- **OBS-2:** Kite postback backend handler (depends on this — needs the tunnel to test).
+- **OBS-4:** Postback panel frontend (depends on OBS-2).
+
+---
+
+## Rollout
+
+1. Land OBS-3 (this slice) to `feature/algo-trading-v2-integration` via squash PR.
+2. Land OBS-2 backend handler (uses the ngrok tunnel for e2e testing).
+3. Land OBS-4 frontend postback panel.
+4. Land OBS-1 WS health endpoint.
+5. Merge final PR `feature/algo-trading-v2-integration` → `dev`.
+6. After merge, operator (you) configures ngrok + Kite console once. Then flip `KITE_POSTBACK_ENABLED=true` in `.env` on the production backend.
+```
+
+**Verify:** Check the file exists and has content:
+
+```bash
+wc -l docs/algo-trading/postbacks.md
+# Should be >400 lines
+head -20 docs/algo-trading/postbacks.md
+# Should show title and sections
+```
+
+**Commit:**
+
+```bash
+git add docs/algo-trading/postbacks.md
+git commit -m "$(cat <<'EOF'
+docs(algo-trading): operator runbook for ngrok dev tunnel + Kite postback setup
+
+New runbook at docs/algo-trading/postbacks.md covers:
+1. Why ngrok (per-app Kite postback URL constraint)
+2. One-time setup (ngrok signup, claim free domain, populate .env)
+3. Bringing up tunnel (docker compose --profile live up -d ngrok)
+4. Registering URL in Kite Developer Console (one-time)
+5. Verification flow (manual smoke test with tiny Dry-run order)
+6. Troubleshooting checklist (common issues + fixes)
+7. Cloudflare Tunnel migration path (prod handoff reference)
+
+Full sections with exact commands, ngrok inspector usage, and disaster recovery.
+
+Co-Authored-By: Abhay Kumar Singh <asequitytrading@gmail.com>
+EOF
+)"
+```
+
+---
+
+## Summary
+
+This plan delivers OBS-3 (ngrok service + operator runbook) as a complete, standalone task:
+
+1. **Task 1** — Add ngrok service to docker-compose.yml under `live` profile; verify it's gated correctly.
+2. **Task 2** — Update `.env.example` with NGROK_AUTHTOKEN, NGROK_DOMAIN, KITE_POSTBACK_ENABLED placeholders.
+3. **Task 3** — Add the three new env vars to README.md table (CLAUDE.md §7 doc trigger).
+4. **Task 4** — Write full operator runbook (docs/algo-trading/postbacks.md) with 7 sections covering setup, verification, troubleshooting, and prod migration.
+
+**All files:** zero secret values committed. `.env.example` placeholders only. Profile-gated so default `docker compose up -d` is unaffected.
+
+**Verification:** Manual curl + ngrok inspector when authtoken available (deferred smoke test). Compose lint + file existence checks complete now.
+
+**Acceptance:** All tasks include exact commands, expected output, and commit messages with co-author footer.
+
+---
+
+## Out of Scope for OBS-3
+
+- Backend handler code (OBS-2).
+- Frontend postback panel (OBS-4).
+- Cloudflare Tunnel actual migration (documented reference only).
+- Kite Developer Console API automation (no such API exists; manual console edit only).
