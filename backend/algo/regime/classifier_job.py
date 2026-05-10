@@ -43,7 +43,10 @@ BREADTH_UNIVERSE_LOOKBACK_DAYS = 200
 def _load_nifty_window(
     as_of: date, lookback_days: int,
 ) -> pd.DataFrame:
-    start = as_of - timedelta(days=lookback_days + 30)
+    # Bias the calendar window to ~1.7× lookback_days so that
+    # weekends + holidays still leave enough trading bars for the
+    # SMA200 (252 trading days ≈ 365 calendar days).
+    start = as_of - timedelta(days=lookback_days * 2)
     rows = query_iceberg_table(
         "stocks.ohlcv",
         "SELECT date AS bar_date, close FROM ohlcv "
