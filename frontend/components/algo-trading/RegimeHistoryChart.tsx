@@ -5,7 +5,9 @@
  * Renders the trailing 252 trading days as:
  * - A coloured ribbon (markArea) per contiguous regime run
  *   (BULL=emerald, SIDEWAYS=slate, BEAR=rose).
- * - A line series for `stress_prob` on a 0..1 axis.
+ * - A line series for HMM stress probability on a 0..1 axis,
+ *   with band labels (Calm / Transitional / Stressed) shown
+ *   in the tooltip alongside the rule-based regime label.
  *
  * Uses ECharts via a dynamic import so the bundle stays
  * client-side only (next/dynamic ssr=false). The local
@@ -53,6 +55,25 @@ const REGIME_COLORS: Record<string, string> = {
   BEAR: "rgba(244, 63, 94, 0.14)",       // rose
 };
 
+// HMM stress-probability bands. Cutoffs match the regime-widget
+// divergence chip thresholds — keep in sync if those move.
+function stressBand(p: number | null | undefined): string {
+  if (p === null || p === undefined || Number.isNaN(p)) return "—";
+  if (p < 0.3) return "Calm";
+  if (p < 0.6) return "Transitional";
+  if (p < 0.8) return "Stressed";
+  return "High stress";
+}
+
+function stressBandColor(p: number | null | undefined): string {
+  if (p === null || p === undefined || Number.isNaN(p)) {
+    return "#94a3b8"; // slate-400
+  }
+  if (p < 0.3) return "#10b981";   // emerald-500
+  if (p < 0.6) return "#f59e0b";   // amber-500
+  return "#f43f5e";                 // rose-500
+}
+
 interface Band {
   start: string;
   end: string;
@@ -89,6 +110,11 @@ export function RegimeHistoryChart() {
 
   const option = useMemo(() => {
     const bands = compressToBands(rows);
+    // Map bar_date → regime_label for the tooltip lookup.
+    const regimeByDate: Record<string, string> = {};
+    for (const r of rows) {
+      regimeByDate[r.bar_date] = r.regime_label;
+    }
     return {
       backgroundColor: "transparent",
       grid: { left: 40, right: 20, top: 16, bottom: 32 },
@@ -99,12 +125,44 @@ export function RegimeHistoryChart() {
       },
       yAxis: {
         type: "value",
-        name: "stress_prob",
+        // User-readable axis label. Title was "stress_prob" — too
+        // engineery for non-quants. Tooltip carries the full
+        // explanation.
+        name: "Market stress",
+        nameTextStyle: { fontSize: 11 },
         min: 0,
         max: 1,
         axisLabel: { fontSize: 10 },
       },
-      tooltip: { trigger: "axis" },
+      tooltip: {
+        trigger: "axis",
+        formatter: (params: unknown) => {
+          // ECharts passes an array of point payloads. We trigger
+          // on axis so params[0] carries the date + value for our
+          // single line series.
+          const p = Array.isArray(params) ? params[0] : params;
+          const item = p as {
+            axisValue?: string;
+            value?: number | null;
+            data?: number | null;
+          };
+          const date = item.axisValue ?? "";
+          const v = (item.value ?? item.data) as number | null;
+          const regime = regimeByDate[date] ?? "—";
+          const band = stressBand(v);
+          const colour = stressBandColor(v);
+          const vStr = v == null || Number.isNaN(v)
+            ? "—"
+            : v.toFixed(2);
+          return [
+            `<div style="font-weight:600;margin-bottom:4px;">${date}</div>`,
+            `<div>Regime: <strong>${regime}</strong></div>`,
+            `<div>Stress: <strong>${vStr}</strong>`,
+            ` <span style="color:${colour};font-weight:600;">`,
+            `(${band})</span></div>`,
+          ].join("");
+        },
+      },
       series: [
         {
           name: "Stress",
@@ -123,6 +181,39 @@ export function RegimeHistoryChart() {
               },
               { xAxis: b.end },
             ]),
+          },
+          // Reference lines for the band thresholds. Keeps the
+          // user oriented even before they hover.
+          markLine: {
+            silent: true,
+            symbol: "none",
+            lineStyle: {
+              type: "dashed",
+              opacity: 0.35,
+              width: 1,
+            },
+            data: [
+              {
+                yAxis: 0.3,
+                lineStyle: { color: "#f59e0b" },
+                label: {
+                  formatter: "Transitional",
+                  fontSize: 10,
+                  color: "#f59e0b",
+                  position: "insideEndTop",
+                },
+              },
+              {
+                yAxis: 0.6,
+                lineStyle: { color: "#f43f5e" },
+                label: {
+                  formatter: "Stressed",
+                  fontSize: 10,
+                  color: "#f43f5e",
+                  position: "insideEndTop",
+                },
+              },
+            ],
           },
         },
       ],
@@ -153,6 +244,25 @@ export function RegimeHistoryChart() {
         dark:border-slate-700 p-2"
       data-testid="regime-history-chart"
     >
+      <div className="mb-1 flex items-center justify-between gap-3 px-1">
+        <div className="text-[11px] font-medium text-slate-600 dark:text-slate-300">
+          Market stress (HMM advisory)
+        </div>
+        <div className="flex items-center gap-2 text-[10px] text-slate-500">
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+            Calm &lt; 0.3
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
+            Transitional 0.3–0.6
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-full bg-rose-500" />
+            Stressed &gt; 0.6
+          </span>
+        </div>
+      </div>
       <ReactECharts
         option={option}
         notMerge

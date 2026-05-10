@@ -148,19 +148,45 @@ export function RegimeWidget() {
               ? "rounded bg-amber-100 px-1.5 py-0.5 text-[11px] "
                 + "font-medium text-amber-800 "
                 + "dark:bg-amber-950/50 dark:text-amber-200"
-              : "rounded bg-slate-100 px-1.5 py-0.5 text-[11px] "
-                + "text-slate-600 dark:bg-slate-800 "
-                + "dark:text-slate-300"
+              : stressBandClass(current.stress_prob)
           }
           data-testid="regime-stress-chip"
           title={
             divergence
-            ?? `HMM stress ${current.stress_prob.toFixed(2)}`
+            ?? `Market stress: ${stressBandLabel(current.stress_prob)}`
+              + ` (HMM ${current.stress_prob.toFixed(2)})`
           }
         >
-          stress {current.stress_prob.toFixed(2)}
+          {stressBandLabel(current.stress_prob)}
         </span>
       )}
     </div>
   );
+}
+
+// HMM stress-prob → user-readable band. Same cutoffs as the
+// RegimeHistoryChart legend — keep in sync if either moves.
+function stressBandLabel(p: number): string {
+  if (p < 0.3) return "Calm";
+  if (p < 0.6) return "Transitional";
+  if (p < 0.8) return "Stressed";
+  return "High stress";
+}
+
+function stressBandClass(p: number): string {
+  const base =
+    "rounded px-1.5 py-0.5 text-[11px] font-medium";
+  if (p < 0.3) {
+    return base
+      + " bg-emerald-100 text-emerald-800"
+      + " dark:bg-emerald-950/50 dark:text-emerald-200";
+  }
+  if (p < 0.6) {
+    return base
+      + " bg-amber-100 text-amber-800"
+      + " dark:bg-amber-950/50 dark:text-amber-200";
+  }
+  return base
+    + " bg-rose-100 text-rose-800"
+    + " dark:bg-rose-950/50 dark:text-rose-200";
 }
