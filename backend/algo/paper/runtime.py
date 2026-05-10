@@ -31,6 +31,8 @@ from backend.algo.backtest.event_writer import (
 )
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 from backend.algo.backtest.positions import PositionTracker
+# REGIME-2a — pre-computed nightly factor library overlay.
+from backend.algo.factors.repo import get_factors_window
 from backend.algo.paper.broker import PaperBroker
 from backend.algo.paper.risk_engine import RiskEngine
 from backend.algo.paper.types import AccountState, Signal
@@ -115,6 +117,46 @@ class PaperRuntime:
                 exc,
             )
 
+        # REGIME-2a — per-ticker cached factor row for today.
+        # Lazily populated on first sight of a ticker in
+        # ``_on_bar_close`` (paper sessions don't know the
+        # universe upfront — the strategy's ``universe`` is a
+        # scope spec, not a ticker list — so eager loading would
+        # require resolving the scope here).
+        self._factor_cache: dict[
+            tuple[str, date], dict[str, Decimal]
+        ] = {}
+        self._factor_loaded_for_ticker: set[str] = set()
+
+    def _ensure_factor_cache(
+        self, ticker: str, bar_date_obj: date,
+    ) -> None:
+        """Lazy load factor rows for ``ticker`` over a wide
+        window so any historical bar in this paper session
+        resolves from the cache. Called once per ticker."""
+        if ticker in self._factor_loaded_for_ticker:
+            return
+        self._factor_loaded_for_ticker.add(ticker)
+        try:
+            from datetime import timedelta as _td
+            rows = get_factors_window(
+                [ticker],
+                bar_date_obj - _td(days=365),
+                bar_date_obj + _td(days=1),
+            )
+            for r in rows:
+                self._factor_cache[(r.ticker, r.bar_date)] = {
+                    k: Decimal(str(v))
+                    for k, v in r.values.items() if v is not None
+                }
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "PaperRuntime: factor cache load for %s failed: "
+                "%s — strategies referencing factor.* keys will "
+                "silent-skip until backfill catches up",
+                ticker, exc,
+            )
+
     async def run(self, source: TickSource) -> int:
         """Drain the source. Returns the count of fills emitted.
 
@@ -196,6 +238,9 @@ class PaperRuntime:
         history = self._bars_by_ticker.setdefault(bar.ticker, [])
         history.append(adapted)
         ind_map = compute_indicators(history)
+        # REGIME-2a — lazy-load cached factor rows for this
+        # ticker on first sight; subsequent bars are O(1).
+        self._ensure_factor_cache(bar.ticker, bar_date_obj)
         features = {
             **ind_map.get(bar_date_obj, _features_for_bar(bar)),
             "nifty_above_sma200": self._market_regime.get(
@@ -203,6 +248,11 @@ class PaperRuntime:
             ),
             "nifty_30d_return_pct": self._market_trend.get(
                 bar_date_obj, Decimal("0"),
+            ),
+            # REGIME-2a — cached factor row overlay (disjoint
+            # from indicator + regime keys by design).
+            **self._factor_cache.get(
+                (bar.ticker, bar_date_obj), {},
             ),
         }
 
