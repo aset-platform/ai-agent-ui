@@ -86,7 +86,19 @@ def create_app(
 
     @asynccontextmanager
     async def _lifespan(a):
-        """Startup: warm Redis cache."""
+        """Startup: run async startup hooks, warm Redis cache."""
+        # Paper replay rebuilder: restore intra-day risk_state from
+        # algo.events after an unexpected restart. Runs in the uvicorn
+        # event loop so the PG engine is on the correct loop.
+        # Failure is non-fatal — the backend still boots.
+        try:
+            from backend.main import _run_startup_hooks
+            await _run_startup_hooks()
+        except Exception:
+            _logger.warning(
+                "startup hooks skipped", exc_info=True,
+            )
+
         try:
             from cache_warmup import (
                 warm_frequent_users,
@@ -151,6 +163,18 @@ def create_app(
                 )
 
         yield
+
+        # Shutdown: close all live-WS multiplexers.
+        try:
+            from backend.algo.broker.ws_registry import (
+                shutdown_all as _ws_shutdown_all,
+            )
+            await _ws_shutdown_all()
+        except Exception:
+            _logger.warning(
+                "WS multiplexer shutdown skipped",
+                exc_info=True,
+            )
 
         # Shutdown: flush pending observability events
         # so no LLM usage data is lost on restart.
@@ -3977,13 +4001,17 @@ def create_app(
     from backend.algo.routes import (
         create_backtest_router,
         create_broker_router,
+        create_drift_router,
         create_fees_router,
         create_instruments_router,
         create_kill_switch_router,
+        create_live_router,
         create_paper_router,
         create_performance_router,
         create_replay_router,
         create_strategies_router,
+        create_walkforward_router,
+        create_webhooks_router,
     )
 
     app.include_router(
@@ -4015,11 +4043,27 @@ def create_app(
         prefix="/v1",
     )
     app.include_router(
+        create_drift_router(),
+        prefix="/v1",
+    )
+    app.include_router(
         create_performance_router(),
         prefix="/v1",
     )
     app.include_router(
         create_replay_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_walkforward_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_live_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_webhooks_router(),
         prefix="/v1",
     )
 

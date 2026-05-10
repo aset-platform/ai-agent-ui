@@ -1,6 +1,25 @@
 """Append-only writer for ``algo.events`` — used by the backtest
 runner to flush all events at the end of a run (single Iceberg
 commit instead of per-event writes per CLAUDE.md §4.1 #2).
+
+Known event type registry (append-only — never remove):
+  Backtest:
+    backtest_run_started       — runner.run_backtest()
+    backtest_run_completed     — runner.run_backtest()
+    signal_rejected            — risk engine gate
+    order_filled               — sim_broker.execute()
+  Walk-forward (V2-2):
+    walkforward_window_started   — walkforward.run_walkforward()
+    walkforward_window_completed — walkforward.run_walkforward()
+  Paper:
+    paper_run_started / paper_run_completed / paper_run_stopped
+    paper_order_filled / paper_signal_rejected
+  Live (V2-5, future):
+    order_submitted_live / order_acknowledged_live
+    order_filled_live / order_rejected_live / order_cancelled_live
+    ws_connected / ws_disconnected / ws_gap_filled
+  Reconciliation (V2-3):
+    position_drift_detected / drift_resolved
 """
 from __future__ import annotations
 

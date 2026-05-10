@@ -26,21 +26,44 @@ export interface PaperEvent {
   payload: Record<string, unknown>;
 }
 
-async function fetcher(url: string): Promise<PaperEvent[]> {
-  const r = await apiFetch(url);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
+interface EventsPage {
+  events: PaperEvent[];
+  total: number;
 }
 
-export function usePaperEvents(limit = 100) {
-  const key = `${API_URL}/algo/paper/events?limit=${limit}`;
-  const { data, error, isLoading } = useSWR<PaperEvent[]>(
+async function fetcher(url: string): Promise<EventsPage> {
+  const r = await apiFetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const events: PaperEvent[] = await r.json();
+  const totalHeader = r.headers.get("X-Total-Count");
+  const total = totalHeader != null ? Number(totalHeader) : 0;
+  return { events, total };
+}
+
+export type EventsMode = "paper" | "live" | "backtest" | null;
+export type EventsView = "paper" | "dryrun" | "live" | "all";
+
+export function usePaperEvents(
+  limit = 100,
+  offset = 0,
+  mode: EventsMode = null,
+  dryRun: boolean | null = null,
+) {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (mode != null) params.set("mode", mode);
+  if (dryRun != null) params.set("dry_run", String(dryRun));
+  const key = `${API_URL}/algo/paper/events?${params.toString()}`;
+  const { data, error, isLoading } = useSWR<EventsPage>(
     key,
     fetcher,
     { revalidateOnFocus: false, refreshInterval: 5_000 },
   );
   return {
-    events: data ?? [],
+    events: data?.events ?? [],
+    total: data?.total ?? 0,
     loading: isLoading,
     error: error
       ? error instanceof Error

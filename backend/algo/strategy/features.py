@@ -79,6 +79,18 @@ FEATURES: list[Feature] = [
     Feature(key="sma_200", label="SMA 200", type="float", source="technical"),
     Feature(key="rsi", label="RSI (14)", type="float", source="technical"),
     Feature(
+        key="nifty_above_sma200",
+        label="NIFTY > SMA200 regime (1/0)",
+        type="int",
+        source="technical",
+    ),
+    Feature(
+        key="nifty_30d_return_pct",
+        label="NIFTY 30-day return %",
+        type="float",
+        source="technical",
+    ),
+    Feature(
         key="today_dpc",
         label="Today delivery %",
         type="float",

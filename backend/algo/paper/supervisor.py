@@ -79,10 +79,67 @@ class PaperSupervisor:
             "started_at": datetime.now(timezone.utc),
             "task": task,
             "runtime": runtime,
+            "mode": "paper",
+            "dry_run": False,
         }
         _logger.info(
             "PaperSupervisor: started run user=%s strat=%s",
             user_id, strategy.id,
+        )
+        return self._public_row(self._runs[key])
+
+    async def start_live_run(
+        self,
+        *,
+        user_id: UUID,
+        strategy: Strategy,
+        source: TickSource,
+        initial_capital_inr: Decimal,
+        kite: Any,
+        caps: dict[str, Any],
+        run_id: UUID,
+        caps_repo: Any,
+        kill_switch_repo: Any,
+    ) -> dict[str, Any]:
+        """Spawn a LiveRuntime task. Same idempotency contract as
+        ``start_run``. ``LiveNotEnabledError`` from the runtime
+        constructor bubbles up to the caller.
+        """
+        from backend.algo.live.runtime import LiveRuntime
+
+        key = (user_id, strategy.id)
+        if key in self._runs:
+            raise RuntimeError(
+                f"Run already active for strategy {strategy.id}",
+            )
+
+        runtime = LiveRuntime(
+            strategy=strategy,
+            user_id=user_id,
+            initial_capital_inr=initial_capital_inr,
+            fee_as_of=date.today(),
+            kite=kite,
+            caps=caps,
+            run_id=run_id,
+            caps_repo=caps_repo,
+            kill_switch_repo=kill_switch_repo,
+        )
+        task = asyncio.create_task(runtime.run(source))
+        self._runs[key] = {
+            "user_id": user_id,
+            "strategy_id": strategy.id,
+            "strategy_name": strategy.name,
+            "started_at": datetime.now(timezone.utc),
+            "task": task,
+            "runtime": runtime,
+            "mode": "live",
+            "dry_run": bool(getattr(kite, "dry_run", False)),
+        }
+        _logger.info(
+            "PaperSupervisor: started LIVE run user=%s strat=%s "
+            "run_id=%s dry_run=%s",
+            user_id, strategy.id, run_id,
+            getattr(kite, "dry_run", False),
         )
         return self._public_row(self._runs[key])
 
@@ -134,6 +191,8 @@ class PaperSupervisor:
             "strategy_name": entry["strategy_name"],
             "started_at": entry["started_at"].isoformat(),
             "status": "running" if not task.done() else "completed",
+            "mode": entry.get("mode", "paper"),
+            "dry_run": bool(entry.get("dry_run", False)),
         }
 
 

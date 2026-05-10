@@ -256,6 +256,9 @@ export const FE = {
 
   // ── Algo Trading — Backtest tab (Slice 7b) ─────
   algoBacktestTab: "backtest-tab",
+  algoBacktestSubTabStrip: "backtest-sub-tab-strip",
+  algoBacktestSubTabSingle: "backtest-sub-tab-single",
+  algoBacktestSubTabWalkforward: "backtest-sub-tab-walkforward",
   algoBacktestRunForm: "backtest-run-form",
   algoBacktestStrategySelect: "backtest-strategy-select",
   algoBacktestSubmit: "backtest-submit",
@@ -264,6 +267,24 @@ export const FE = {
   algoBacktestEquityCurveEmpty: "backtest-equity-curve-empty",
   algoBacktestTradeTable: "backtest-trade-table",
   algoBacktestTradeTableEmpty: "backtest-trade-table-empty",
+
+  // ── Algo Trading — Walk-forward CV (Slice V2-2) ─
+  algoWalkforwardSubTab: "walkforward-sub-tab",
+  algoWalkforwardRunForm: "walkforward-run-form",
+  algoWalkforwardStrategySelect: "walkforward-strategy-select",
+  algoWalkforwardPeriodStart: "walkforward-period-start",
+  algoWalkforwardPeriodEnd: "walkforward-period-end",
+  algoWalkforwardTrainDays: "walkforward-train-days",
+  algoWalkforwardTestDays: "walkforward-test-days",
+  algoWalkforwardStepDays: "walkforward-step-days",
+  algoWalkforwardCapital: "walkforward-capital",
+  algoWalkforwardSubmit: "walkforward-submit",
+  algoWalkforwardRunProgress: "walkforward-run-progress",
+  algoWalkforwardRunError: "walkforward-run-error",
+  algoWalkforwardAggCards: "walkforward-aggregate-cards",
+  algoWalkforwardCurves: "walkforward-curves",
+  algoWalkforwardCurvesEmpty: "walkforward-curves-empty",
+  algoWalkforwardWindowTable: "walkforward-window-table",
 
   // ── Algo Trading — Paper + Kill switch (Slice 8b) ─
   algoPaperTab: "paper-tab",
@@ -311,4 +332,22 @@ export const FE = {
     "lever-risk-max-concentration-pct",
   algoLeverRiskMaxQty: "lever-risk-max-qty",
   algoLeverRiskMaxLossPct: "lever-risk-max-loss-pct",
+
+  // ── Algo Trading — Live WS health dot (OBS-1) ─
+  algoLiveWsHealthDot: "live-ws-health-dot",
+
+  // ── Algo Trading — Reconciliation (V2-3) ─────
+  algoReconciliationPanel: "reconciliation-drift-panel",
+  algoReconciliationChip: "reconciliation-drift-chip",
+  algoReconciliationToggle: "reconciliation-drift-toggle",
+  algoReconciliationTable: "reconciliation-drift-table",
+  algoDriftThresholdWidget: "drift-threshold-widget",
+  algoDriftThresholdInput: "drift-threshold-input",
+  algoDriftThresholdSave: "drift-threshold-save",
+
+  // ── Algo Trading — Kite Postback Panel (OBS-4) ──────
+  kitePostbackPanel: "kite-postback-panel",
+  kitePostbackRow: "kite-postback-row",
+  kitePostbackPayloadToggle: "kite-postback-payload-toggle",
+  kitePostbackEmptyState: "kite-postback-empty-state",
 } as const;

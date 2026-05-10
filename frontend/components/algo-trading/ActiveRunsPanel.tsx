@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from "react";
 
+import { useBrokerStatus } from "@/hooks/useBrokerStatus";
 import {
+  type PaperRunSource,
+  type RunMode,
   startPaperRun,
   stopPaperRun,
   usePaperFixtures,
@@ -10,15 +13,52 @@ import {
 } from "@/hooks/usePaperRuns";
 import { useStrategies } from "@/hooks/useStrategies";
 
-export function ActiveRunsPanel() {
-  const { runs, loading } = usePaperRuns();
+interface Props {
+  /** Trading mode this panel is rendered under. Determines:
+   *  - Which sources are offered (Paper: replay only;
+   *    Dry run: replay or live-ws; Live: live-ws only)
+   *  - The mode= field sent to POST /v1/algo/paper/runs which
+   *    routes the runtime (paper → PaperRuntime; live →
+   *    LiveRuntime)
+   *  - The Start button label */
+  tradingMode?: "paper" | "dryrun" | "live";
+}
+
+export function ActiveRunsPanel({ tradingMode = "paper" }: Props) {
+  const { runs: allRuns, loading } = usePaperRuns();
+  // Filter the active-runs list to only those that match the
+  // current trading view. Without this filter, a Live run
+  // started from the Live tab leaks into the Paper view's
+  // active list — confusing because that run won't emit
+  // mode='paper' events.
+  const runs = allRuns.filter((r) => {
+    if (tradingMode === "paper") return r.mode === "paper";
+    if (tradingMode === "live") {
+      return r.mode === "live" && !r.dry_run;
+    }
+    // dryrun
+    return r.mode === "live" && r.dry_run;
+  });
   const { strategies } = useStrategies();
   const { fixtures } = usePaperFixtures();
+  const { value: brokerStatus } = useBrokerStatus();
   const [strategyId, setStrategyId] = useState<string>("");
   const [fixturePath, setFixturePath] = useState<string>("");
   const [capital, setCapital] = useState<string>("100000.00");
+  // Default source per trading mode:
+  //   Paper:   replay-fixture only (no live-ws by design)
+  //   Dry run: replay-fixture only — synthetic Kite responses
+  //            don't gain anything from real ticks; locking to
+  //            replay keeps rehearsal 100% offline-safe and
+  //            works on weekends.
+  //   Live:    live-ws only (real money needs real ticks)
+  const initialSource: PaperRunSource =
+    tradingMode === "live" ? "live-ws" : "replay";
+  const [source, setSource] = useState<PaperRunSource>(initialSource);
   const [pending, setPending] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  const kiteConnected = brokerStatus?.status === "connected";
 
   // Default to the first available fixture once loaded — usually
   // the larger ticks_indian_universe.jsonl, which is what users
@@ -39,14 +79,21 @@ export function ActiveRunsPanel() {
       setErr("Pick a strategy");
       return;
     }
-    if (!fixturePath) {
+    if (source === "replay" && !fixturePath) {
       setErr("Pick a fixture");
       return;
     }
     setErr(null);
     setPending(strategyId);
     try {
-      await startPaperRun(strategyId, fixturePath, capital);
+      // Map UI tradingMode -> backend RunMode. Both 'dryrun'
+      // and 'live' route to LiveRuntime; ALGO_LIVE_DRY_RUN env
+      // controls whether KiteAdapter short-circuits.
+      const runMode: RunMode =
+        tradingMode === "paper" ? "paper" : "live";
+      await startPaperRun(
+        strategyId, fixturePath, capital, source, runMode,
+      );
     } catch (exc) {
       setErr(exc instanceof Error ? exc.message : "Failed");
     } finally {
@@ -75,77 +122,165 @@ export function ActiveRunsPanel() {
         <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
           Active runs
         </h3>
-        <span className="text-xs text-slate-500">
-          v1 = replay-fixture mode (live Kite WS in v2)
-        </span>
       </div>
 
       <div
-        className="mt-2 flex flex-wrap items-end gap-2"
+        className="mt-3 flex flex-col gap-3"
         data-testid="paper-start-run-form"
       >
-        <label className="flex flex-col gap-0.5">
-          <span className="text-[11px] text-slate-500">
-            Strategy
-          </span>
-          <select
-            className="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1 text-sm"
-            value={strategyId}
-            onChange={(e) => setStrategyId(e.target.value)}
-            data-testid="paper-start-strategy-select"
+        {/* Row 1 — Source.  Paper + Dry run: replay-only by
+            design (offline / weekend-safe rehearsal). Live:
+            live-ws only (real ticks for real money). The radio
+            group only renders if there's actually a choice — for
+            now there isn't (single forced source per view). */}
+        {false && (
+          <fieldset
+            className="flex flex-col gap-1"
+            data-testid="paper-source-radio-group"
           >
-            <option value="">Select strategy…</option>
-            {strategies.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-0.5">
-          <span className="text-[11px] text-slate-500">
-            Replay fixture
-          </span>
-          <select
-            className="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1 text-sm"
-            value={fixturePath}
-            onChange={(e) => setFixturePath(e.target.value)}
-            data-testid="paper-start-fixture-select"
+            <legend className="text-[11px] uppercase tracking-wide font-medium text-slate-500">
+              Source
+            </legend>
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="paper-source"
+                  value="replay"
+                  checked={source === "replay"}
+                  onChange={() => setSource("replay")}
+                  data-testid="paper-source-replay"
+                />
+                Replay fixture
+              </label>
+              <label
+                className={`flex items-center gap-1.5 text-sm cursor-pointer ${
+                  !kiteConnected
+                    ? "opacity-50 cursor-not-allowed"
+                    : ""
+                }`}
+                title={
+                  !kiteConnected
+                    ? "Connect Zerodha to enable live WS"
+                    : undefined
+                }
+              >
+                <input
+                  type="radio"
+                  name="paper-source"
+                  value="live-ws"
+                  checked={source === "live-ws"}
+                  onChange={() => {
+                    if (kiteConnected) setSource("live-ws");
+                  }}
+                  disabled={!kiteConnected}
+                  data-testid="paper-source-live-ws"
+                />
+                Live Kite WS
+              </label>
+              {source === "live-ws" && (
+                <span
+                  className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400"
+                  data-testid="paper-live-ws-indicator"
+                >
+                  <span
+                    className="inline-block w-2 h-2 rounded-full bg-emerald-500"
+                    aria-hidden="true"
+                  />
+                  Streaming from Kite WS
+                </span>
+              )}
+            </div>
+          </fieldset>
+        )}
+        {tradingMode === "live" && source === "live-ws" && (
+          <span
+            className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400"
+            data-testid="paper-live-ws-indicator"
           >
-            {fixtures.length === 0 && (
-              <option value="">Loading fixtures…</option>
-            )}
-            {fixtures.map((f) => (
-              <option key={f.path} value={f.path}>
-                {f.path} · {f.n_ticks} ticks · {f.distinct_tickers}{" "}
-                ticker{f.distinct_tickers === 1 ? "" : "s"}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-0.5">
-          <span className="text-[11px] text-slate-500">
-            Capital ₹
+            <span
+              className="inline-block w-2 h-2 rounded-full bg-emerald-500"
+              aria-hidden="true"
+            />
+            Streaming from Kite WS — real money, real fills
           </span>
-          <input
-            type="number"
-            min={1000}
-            step={1000}
-            value={capital}
-            onChange={(e) => setCapital(e.target.value)}
-            className="w-28 rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1 text-sm"
-            data-testid="paper-start-capital"
-          />
-        </label>
-        <button
-          type="button"
-          onClick={handleStart}
-          disabled={pending === strategyId}
-          className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60"
-          data-testid="paper-start-btn"
-        >
-          {pending === strategyId ? "Starting…" : "Start run"}
-        </button>
+        )}
+
+        {/* Row 2 — Strategy + (when replay) Fixture */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] uppercase tracking-wide font-medium text-slate-500">
+              Strategy
+            </span>
+            <select
+              className="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1.5 text-sm"
+              value={strategyId}
+              onChange={(e) => setStrategyId(e.target.value)}
+              data-testid="paper-start-strategy-select"
+            >
+              <option value="">Select strategy…</option>
+              {strategies.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {source === "replay" && tradingMode !== "live" ? (
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] uppercase tracking-wide font-medium text-slate-500">
+                Replay fixture
+              </span>
+              <select
+                className="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1.5 text-sm"
+                value={fixturePath}
+                onChange={(e) => setFixturePath(e.target.value)}
+                data-testid="paper-start-fixture-select"
+              >
+                {fixtures.length === 0 && (
+                  <option value="">Loading fixtures…</option>
+                )}
+                {fixtures.map((f) => (
+                  <option key={f.path} value={f.path}>
+                    {f.path} · {f.n_ticks} ticks ·{" "}
+                    {f.distinct_tickers}{" "}
+                    ticker{f.distinct_tickers === 1 ? "" : "s"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <div aria-hidden="true" />
+          )}
+        </div>
+
+        {/* Row 3 — Capital + Start */}
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] uppercase tracking-wide font-medium text-slate-500">
+              Capital ₹
+            </span>
+            <input
+              type="number"
+              min={1000}
+              step={1000}
+              value={capital}
+              onChange={(e) => setCapital(e.target.value)}
+              className="w-36 rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1.5 text-sm"
+              data-testid="paper-start-capital"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={handleStart}
+            disabled={pending === strategyId}
+            className="ml-auto rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed"
+            data-testid="paper-start-btn"
+          >
+            {pending === strategyId ? "Starting…" : "Start run"}
+          </button>
+        </div>
       </div>
 
       {err && (

@@ -5,6 +5,107 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.17.0] — 2026-05-09: Algo Trading v2 — Live-trading-readiness vertical
+
+5-slice vertical that promotes v1's research-only platform into a single-user, single-strategy live trader on Zerodha Kite, with safety belts that make it materially harder to lose money to a bug than to lose money to a bad strategy. Code ships **default-OFF** at three layers (schema default, runtime guard, UI 4-gate disable) — every user including superuser must explicitly opt in per-strategy via cap form + 2-step retype-confirm modal.
+
+50 SP across 5 slices + 8 post-merge fixes/features from real-world walkthrough, all delivered same day via parallel Sonnet subagents on `feature/algo-trading-v2-integration`.
+
+### Added — V2 slices
+
+- **V2-0 Foundation** (PR #142, squash `3cf37d2`)
+  - `BYO_SECRET_KEY` (Fernet master key for at-rest credential encryption) promoted from `.env` plaintext to Keychain → docker-compose `secrets:` mount → `load_secret()` flow that already backed `algo_kite_api_secret` in v1. New slug `byo_secret_key` registered in `scripts/secrets/keychain.sh`.
+  - One-shot migration script `scripts/migrate_byo_secret_to_keychain.sh` (idempotent).
+  - Auto-wire `backend/algo/paper/replay_rebuilder.rebuild_all()` into backend startup via `routes.py` `_lifespan` (helper existed in v1 but was orphaned). Discovers users via `algo.kill_switch UNION algo.risk_state`, idempotent rebuild.
+
+- **V2-1 Live Kite WebSocket multiplexer** (PR #144, squash `cf8719fb`)
+  - `backend/algo/broker/ws_multiplexer.py` — per-user persistent `KiteWsMultiplexer`. Subscribe/unsubscribe ref-counted across strategies sharing tokens. Exponential-backoff reconnect (1s → cap 60s). Bounded queues with drop-oldest backpressure (warning log + observability counter; never silent).
+  - `backend/algo/broker/ws_registry.py` — process-local user → multiplexer map; `shutdown_all()` wired into FastAPI lifespan.
+  - `backend/algo/broker/ws_gap_fill.py` — on reconnect, fetches missed window via `KiteConnect.historical_data` 1m bars and replays through per-strategy resampler. Caps at 1 hour to avoid abusing Kite historical limits.
+  - `paper/runtime.py` accepts `source: Literal["replay", "live-ws"]`. `routes/paper.py` `_build_live_ws_source()` resolves credentials, tickers, instrument tokens, then subscribes the strategy via `mux.subscribe(strategy_id, tokens, token_to_ticker)`.
+  - New event types in `algo.events`: `ws_connected`, `ws_disconnected`, `ws_gap_filled` with `subscriptions[]`, `retry_count`, `missing_seconds`, `ticks_replayed` payloads.
+  - Frontend: `ActiveRunsPanel` source radio (`Replay fixture` | `Live Kite WS`); live-ws option disabled with tooltip when Kite not connected; fixture dropdown hidden in live-ws mode. Mock Kite WS server fixture for CI (no real Kite calls).
+
+- **V2-2 Walk-forward CV harness** (PR #143, squash `0b85a64`)
+  - `backend/algo/backtest/walkforward.py` — pure-function `walk_windows(start, end, train_days, test_days, step_days)` iterator + `run_walkforward(strategy, config, user)` orchestrator. Composes the v1 `run_backtest()` once per window without modifying the runner.
+  - Migration `2026_05_10_algo_runs_walkforward_columns.py` adds `parent_walkforward_id UUID NULL`, `window_start DATE NULL`, `window_end DATE NULL` to `algo.runs` (additive, nullable, defaults preserve v1 rows).
+  - `algo.events` event types: `walkforward_window_started/_completed`.
+  - `routes/walkforward.py` — `POST /v1/algo/walkforward/run` (async-job, 202), `GET /v1/algo/walkforward/runs/{id}`, `GET /v1/algo/walkforward/runs?limit=N`.
+  - Frontend: new sub-tab strip on the Backtest tab (Single run | Walk-forward CV). `WalkForwardEquityCurves` renders N stacked equity curves on a single ECharts via blue→green gradient palette per window. Aggregate cards show Avg PnL %, Avg Win Rate, Avg Max DD, Std PnL %, Windows count, Completed.
+
+- **V2-3 Reconciliation loop (alert-only)** (PR #145, squash `06d3c14d`)
+  - `backend/algo/live/reconciliation.py` — pure `compute_drift(our, broker, threshold)` + `reconcile_user(user_id)` orchestrator.
+  - Migration `2026_05_11_algo_drift_state.py` creates `algo.live_drift_state` (composite PK `(user_id, symbol)`, `consecutive_runs`, `last_diff jsonb`, `first_seen_at`, `resolved_at`).
+  - Scheduler job `algo_reconciliation` registered in `executor.py` — every 5 minutes during 09:15–15:30 IST market hours, reconciles all users with active live strategies.
+  - Dedup: first-time drift → exactly one `position_drift_detected` event; subsequent identical runs bump counter only; clear → exactly one `drift_resolved` event.
+  - `routes/drift.py` — `GET /v1/algo/drift`, `GET/PATCH /v1/algo/drift/threshold` (per-user shares-tolerance setting).
+  - Frontend: `ReconciliationDriftPanel` mounted on Paper tab (auto-clears when empty). `DriftThresholdInput` lever on Settings tab.
+  - V2 is **alert-only** — never silently overwrites our positions with broker values.
+
+- **V2-5 Live order placement (incl. V2-4 safety belts)** (PR #146, squash `55bd6848`)
+  - `KiteAdapter.place_order` / `cancel_order` / `modify_order` finally implemented (was `NotImplementedError` in v1). `_ALLOWED_ORDER_TYPES = frozenset({"MARKET", "LIMIT"})` — SL/SLM/BO/CO/MIS → `ValueError`. `regular` variety + `CNC` product only.
+  - Migration `2026_05_12_algo_live_caps.py` creates `algo.live_caps` (composite PK `(user_id, strategy_id)`, `live_orders_enabled BOOL NOT NULL DEFAULT FALSE`, `max_inr`, `max_orders_per_day`, `allowed_tickers JSONB`, daily counters, `approved_by`, `approved_at`, `last_walkforward_run_id`). Adds `algo.positions.source` (`paper`|`live`) + `algo.runs.live_orders_in_flight JSONB`.
+  - `backend/algo/live/safety.py` — `pre_trade_check(signal, caps, day_state, last_price)` runs **9 caps in strict priority order**: kill_switch → live_not_enabled → ticker_allow_list → orders_per_day_cap → INR cap → per-trade max_qty → daily_loss_cap → daily max_open_positions → portfolio max_concentration → portfolio max_exposure (scale-down allowed).
+  - `backend/algo/live/runtime.py` — `LiveNotEnabledError` raised at construction if caps disabled (third default-OFF layer). `_submit_order` uses `asyncio.to_thread` for sync Kite SDK. `cancel_in_flight_orders()` is best-effort (never raises) — does NOT auto-flatten held positions per spec §5.2.
+  - New event types: `order_submitted_live`, `order_acknowledged_live`, `order_filled_live`, `order_rejected_live`, `order_cancelled_live` (all with `kite_order_id`, mapped Kite rejection reasons, `fee_rates_version` stamp).
+  - Daily reset job `algo_live_caps_reset` at 09:00 IST Mon–Fri.
+  - Frontend: `LiveSafetyBeltsForm`, `LiveModeToggle` with **4-gate disable** (Kite connected + caps set + kill disarmed + walk-forward < 30 days with positive aggregate + drift ≤ 3 runs) and **2-step confirm modal** at `z-[70]` requiring exact strategy-name retype. `LiveLandedOrdersList` (10s polling). `LiveCancelInFlightBanner` (amber when kill armed + live enabled).
+  - `docs/algo-trading/live-ramp.md` — 7-tier manual ramp ₹1,000 → user-set across 7 days; reset to Day 0 on any drift event or kill activation.
+  - **Default state on merge: `live_orders_enabled=false` for ALL users** at the database level. The 4-gate UI + retype modal + server-side re-validation on `POST /algo/live/enable` keep flips intentional.
+
+### Added — Post-merge enhancements (5 PRs)
+
+- **Walk-forward scorecard responds to legend toggle** (PR #147) — toggling a window off in the chart now recomputes Avg PnL / Win Rate / Max DD / Std / Windows count from the selected subset on the frontend. Subtitle shows "X of N selected" when partial. Lets a trader strip outliers and ask "is the edge robust without the lucky/unlucky months?" — was impossible before.
+
+- **NIFTY regime + trend-strength features** (PRs #149 + #151)
+  - `nifty_above_sma200` (Decimal 1/0): `^NSEI` close > `^NSEI` SMA200 on each bar. Per-(ticker, bar) injection so strategies can gate entries on broad-market regime via `{"feature": "nifty_above_sma200"}`.
+  - `nifty_30d_return_pct` (Decimal): `^NSEI` percentage return over prior 30 trading days. Layers on top of the SMA200 binary to filter chop (e.g. `> 2` excludes barely-above-flat noise).
+  - Both registered in `FEATURES` allowlist + frontend `STRATEGY_FEATURES` mirror catalog. Sourced via `compute_market_regime` and `compute_market_trend_strength` in `indicators.py` — single computation per backtest, reused across the universe.
+
+### Fixed — Real-world walkthrough catalogue
+
+Eight bugs surfaced and patched during user-driven validation, all caught before reaching `dev`:
+
+- **PR #148** — V2-3's `drift.py` imported `from backend.auth.dependencies import …` instead of `from auth.dependencies import …` (every other algo route uses the latter). Crashed backend startup with `ModuleNotFoundError` on first integration-branch checkout.
+- **PR #150** — `nifty_above_sma200` runtime computation wasn't on the AST validator's `FEATURE_KEYS` allowlist; createStrategy POST returned HTTP 400 "Unknown feature" for any AST referencing it. Added to backend `FEATURES` list + frontend `STRATEGY_FEATURES` mirror.
+- **PR #152** — V2-1 left `from backend.db.pg_utils import _pg_session` inside `_build_live_ws_source` — module doesn't exist; symbol unused. Sat dormant until first live-ws POST, then 500 / browser NetworkError.
+- **PR #153** — V2-1's `_resolve_live_tickers` ran raw SQL against `stocks.portfolio` and `stocks.watchlist` — neither table exists in this schema. Silent fail-open returned `[]`, tripping "No instruments found" 400 every time. Replaced with v1's existing `_scoped_tickers(user, "watchlist")` helper.
+- **PR #154** — Performance route's `list_runs` crashed with `KeyError: 'total_pnl_inr'` when iterating walk-forward parent rows (V2-2 walk-forward summaries don't include `total_pnl_inr`; they have `avg_pnl_pct` etc.). Added the missing `"key" in sj` guard matching the existing pattern in the same function.
+
+Pattern observation: V2-1 and V2-3 subagents introduced wrong-prefix `from backend.…` imports that compiled cleanly but crashed only when the runtime path executed. Filed for the next subagent prompt template: every new module that needs user-portfolio data MUST go through `_scoped_tickers` (not raw SQL); imports MUST be grep-verified against actual module locations.
+
+### Verified end-to-end (real Kite, market-closed weekend session)
+
+- ✅ Backend boots clean on integration branch (after #148 import fix)
+- ✅ Walk-forward CV ran across 4 strategy variants × 2 periods (16 walk-forwards, 18-19 windows each, all completed)
+- ✅ Walk-forward scorecard live-recomputes on legend toggle (#147 fix verified)
+- ✅ Strategy create/save flow: bare-paste validation rejected as expected (missing `id`); accepted with fresh UUID + new feature
+- ✅ NIFTY regime gate empirically validated: 222 / 11 ON-OFF days for May-Dec 2024; gates fire on real bar dates matching reality (late-Dec correction below SMA200 detected)
+- ✅ NIFTY trend strength distribution sane: 78% / 50% / 23% of days above 0% / 2% / 5% over the verification window
+- ✅ Live-WS multiplexer: subscribe via real Kite credentials, "Streaming from Kite WS" indicator green, run started + visible in active-runs list. (Tick flow itself blocked until Monday 09:15 IST.)
+- ✅ Performance tab lists walk-forward + single-run rows after #154 fix
+- ⏳ Live order placement, reconciliation drift, in-flight cancel-on-kill — DEFERRED to live verification next market open. Code paths unit-tested (62/62 backend pytest cases for V2-5 alone).
+
+### Branch state
+
+- All work lives on `feature/algo-trading-v2-integration` — 14 commits ahead of `dev` (5 V2 slices + 5 fixes + 2 features + 2 docs commits).
+- Final integration → `dev` PR pending. Squash-merge per CLAUDE.md §4.4 #26.
+
+### v3 deferrals (still future work)
+
+- Live order placement on real money (after manual ramp completes 7 clean days at progressive caps)
+- Live Kite WS proven against Monday market hours
+- F&O instruments + multi-broker support
+- MinIO artifact upload for backtest runs
+- Auto-flatten on kill (currently held positions stay open by design — spec §5.2)
+- Auto-heal reconciliation drift (currently alert-only)
+- Order types beyond MARKET/LIMIT — SL, SLM, BO, CO
+- Multi-strategy live for a single user (schema accommodates; API gate stays)
+- Cross-strategy capital allocator
+- Python-strategy SDK with sandboxed runtime
+
+---
+
 ## [0.16.0] — 2026-05-09: Algo Trading v1 — backtest + paper trading
 
 End-to-end platform for backtest + paper trading on Indian equities. Live order placement explicitly out of v1 scope per epic spec § 12 (`KiteAdapter.place_order` raises `NotImplementedError`). All 10 sessions of the epic merged into a single `feature/algo-trading-v1-integration` branch + 14-fix bug catalogue from the user-driven walkthrough.

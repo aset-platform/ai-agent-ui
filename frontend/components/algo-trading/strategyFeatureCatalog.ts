@@ -31,6 +31,8 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "sma_50", label: "SMA 50", type: "float", source: "technical" },
   { key: "sma_200", label: "SMA 200", type: "float", source: "technical" },
   { key: "rsi", label: "RSI (14)", type: "float", source: "technical" },
+  { key: "nifty_above_sma200", label: "NIFTY > SMA200 regime (1/0)", type: "int", source: "technical" },
+  { key: "nifty_30d_return_pct", label: "NIFTY 30-day return %", type: "float", source: "technical" },
   { key: "today_dpc", label: "Today delivery %", type: "float", source: "technical" },
   // Fundamentals
   { key: "pscore", label: "P-Score (Piotroski)", type: "int", source: "fundamentals" },

@@ -19,7 +19,7 @@ export const ALGO_TAB_LABELS: Record<AlgoTabId, string> = {
   instruments: "Instruments",
   strategies: "Strategies",
   backtest: "Backtest",
-  paper: "Paper Trading",
+  paper: "Trading",
   performance: "Performance",
   replay: "Replay",
   settings: "Settings",

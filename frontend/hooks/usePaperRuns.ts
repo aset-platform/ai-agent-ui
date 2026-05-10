@@ -11,6 +11,11 @@ export interface PaperRunRow {
   strategy_name: string;
   started_at: string;
   status: "running" | "completed";
+  /** 'paper' or 'live' — chosen by the start_run handler. */
+  mode: "paper" | "live";
+  /** Only meaningful when mode='live' — true if KiteAdapter
+   *  was initialized in dry-run mode (synthetic responses). */
+  dry_run: boolean;
 }
 
 const KEY = `${API_URL}/algo/paper/runs`;
@@ -38,19 +43,34 @@ export function usePaperRuns() {
   };
 }
 
+export type PaperRunSource = "replay" | "live-ws";
+
+/** Trading mode the user is starting a run in. Backend uses this
+ *  to choose between PaperRuntime (mode=paper) and LiveRuntime
+ *  (mode=live). When mode=live, ALGO_LIVE_DRY_RUN env decides
+ *  whether KiteAdapter short-circuits to synthetic responses. */
+export type RunMode = "paper" | "live";
+
 export async function startPaperRun(
   strategyId: string,
   fixturePath: string,
   initialCapitalInr: string,
+  source: PaperRunSource = "replay",
+  mode: RunMode = "paper",
 ): Promise<void> {
+  const body: Record<string, string> = {
+    strategy_id: strategyId,
+    initial_capital_inr: initialCapitalInr,
+    source,
+    mode,
+  };
+  if (source === "replay") {
+    body.fixture_path = fixturePath;
+  }
   const r = await apiFetch(KEY, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      strategy_id: strategyId,
-      fixture_path: fixturePath,
-      initial_capital_inr: initialCapitalInr,
-    }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) {
     let detail = "";

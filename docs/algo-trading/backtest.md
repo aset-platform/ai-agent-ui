@@ -155,3 +155,117 @@ class BacktestRequest(BaseModel):
 | GET | `/v1/algo/backtest/runs?limit=50&offset=0` | List runs newest-first |
 
 All gated `pro_or_superuser`.
+
+---
+
+## Walk-forward CV harness (V2-2)
+
+The walk-forward harness validates a strategy across N rolling
+(train, test) windows before promoting it to live trading.
+
+### What "train" and "test" mean here
+
+In a traditional ML walk-forward, the train window fits model
+parameters. This harness has no trainable model — strategies are
+fixed JSON ASTs. The train/test split still serves two purposes:
+
+1. **Clarity**: it separates "data the strategy author saw" from
+   "out-of-sample evaluation bars".
+2. **Future compatibility**: a future slice can use the train
+   window for indicator warm-up or regime pre-computation.
+
+**Currently, only the test window is run through the backtest
+runner.** The train window is noted in the event payload but not
+executed — no wasted CPU computing an equity curve that isn't
+evaluated.
+
+### Window semantics
+
+```
+window i:
+  train_start = period_start + i * step_days
+  train_end   = train_start + train_days − 1
+  test_start  = train_end + 1
+  test_end    = test_start + test_days − 1
+
+window included iff test_end <= period_end
+```
+
+Trailing partial windows (test_end > period_end) are **dropped**,
+not truncated — this keeps per-window metrics comparable.
+
+### Aggregate metrics
+
+Computed across all **completed** test-window runs:
+
+| Metric | Formula |
+|---|---|
+| `avg_win_rate_pct` | mean of per-window `win_rate_pct` |
+| `avg_pnl_pct` | mean of per-window `total_pnl_pct` |
+| `avg_max_drawdown_pct` | mean of per-window `max_drawdown_pct` |
+| `std_pnl_pct` | sample std-dev of per-window `total_pnl_pct` |
+
+`std_pnl_pct = 0` when only one window completes.
+
+### Partial failure behaviour
+
+If one or more windows fail (data source error, risk engine
+exception, etc.), the parent walk-forward run still **completes**
+rather than failing outright. Failed windows contribute to
+`window_count` but not `completed_count`. The aggregate is
+computed over the completed subset only.
+
+### Schema additions
+
+The `algo.runs` table gains three nullable columns
+(migration `c4d6e8f0a2b5`):
+
+| Column | Type | Meaning |
+|---|---|---|
+| `parent_walkforward_id` | `UUID` | FK to the parent row where `mode='walkforward'` |
+| `window_start` | `DATE` | First day of the test sub-window |
+| `window_end` | `DATE` | Last day of the test sub-window |
+
+Existing single-run rows have all three as NULL.
+
+### Event types
+
+Emitted to `algo.events` (mode = `walkforward`):
+
+- `walkforward_window_started` — payload: `walkforward_run_id`,
+  `window_index`, `child_run_id`, `train_start`, `train_end`,
+  `test_start`, `test_end`.
+- `walkforward_window_completed` — payload: adds `total_pnl_pct`,
+  `win_rate_pct`, `max_drawdown_pct`.
+
+### Walk-forward endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/v1/algo/walkforward/run` | Start a walk-forward (returns 202 + walkforward_run_id) |
+| GET | `/v1/algo/walkforward/runs/{id}` | Full result (aggregate + per-window curves) |
+| GET | `/v1/algo/walkforward/runs` | List walk-forward runs newest-first |
+
+The GET response is a `WalkForwardResult` (full Pydantic model) with
+`window_summaries[].equity_curve` per window — ready for the stacked
+ECharts component.
+
+### Frontend
+
+`BacktestTab.tsx` has a **sub-tab strip** ("Single run" /
+"Walk-forward CV"). The existing single-run flow is unchanged.
+
+`WalkForwardSubTab.tsx` renders:
+1. Config form (strategy, period, train/test/step days, capital).
+2. Aggregate summary cards once completed.
+3. `WalkForwardEquityCurves.tsx` — N ECharts line series, one per
+   window, color-graded blue→teal across windows; `dataZoom` for
+   pan/zoom; legend for per-series toggle.
+4. Window table — one row per test window with PnL %, win rate,
+   max DD, status.
+
+### Live-mode gate
+
+A walk-forward report newer than 30 days with positive
+`avg_win_rate_pct` is one of the four gates that must pass before
+the live-mode toggle can be enabled on a strategy (V2-5).

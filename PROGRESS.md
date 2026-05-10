@@ -2,6 +2,319 @@
 
 ---
 
+## 2026-05-10 — v2 epic CLOSED + verified end-to-end + v3 regime epic planned
+
+**Branch:** `feature/algo-trading-v2-integration` (continued; now **46 commits ahead of `dev`**, was 34 yesterday). v2 epic is functionally complete and end-to-end verified — ready for the integration → `dev` PR.
+
+### What shipped today (12 PRs)
+
+| # | PR | What | Squash | Type |
+|---|---|---|---|---|
+| 1 | #174 | OBS-1 — WS health endpoint + status dot | `7adc906` | feat |
+| 2 | #175 | Planning docs (2 specs + 3 research + 12 plans) | `3da7ec2` | docs |
+| 3 | #176 | OBS-3 — ngrok dev tunnel + operator runbook | `48a6963` | feat |
+| 4 | #177 | OBS-1→OBS-4 manual test plan | `7b47843` | docs |
+| 5 | #178 | OBS-2 — Kite postback backend (verify_checksum + idempotency) | `fa829fe` | feat |
+| 6 | #179 | OBS-4 — Kite postback observability panel | `b11f574` | feat |
+| 7 | #180 | PROGRESS.md afternoon log | `6c4ee49` | docs |
+| 8 | #181 | ngrok via macOS Keychain + `run.sh ngrok` subcommand | `04d6c52` | feat |
+| 9 | #182 | hotfix: postback handler reads `algo_kite_api_secret` slug | `48287a2` | fix |
+| 10 | #183 | hotfix: postback Iceberg query uses `query_iceberg_table` helper | `0a01f4b` | fix |
+| 11 | #184 | hotfix: postback `_resolve_kite_user` uses sync cache API | `bde98fe` | fix |
+| 12 | #185 | UX: move Kite postback panel below Active runs | `6f05aaa` | chore |
+
+**Total v2 obs+postback work: 13 SP across 4 slices + 4 hotfix PRs surfaced during real-stack verification + ngrok Keychain integration.** The v2 epic (50 SP slices yesterday + 30 post-merge fixes yesterday + 13 SP today + integration polish) is FUNCTIONALLY COMPLETE.
+
+### Spec + plans + research (all committed via PR #175)
+
+- `specs/2026-05-10-algo-v2-observability-postback-design.md` — small spec for OBS-1→OBS-4
+- `specs/2026-05-10-algo-regime-aware-multifactor-design.md` — 89 SP / 8 slice v3 epic spec
+- `research/2026-05-10-codebase-regime-factor-inventory.md` — gap analysis
+- `research/2026-05-10-kite-postback-ngrok.md` — payload schema + tunnel options
+- `research/2026-05-10-regime-aware-multifactor-research.md` — NSE-specific multi-factor synthesis (~1500 lines, with citations)
+- `plans/2026-05-10-algo-v2-obs-{1,2,3,4}-*.md` — full TDD for OBS-2/3/4 (1844-2915 lines), skeleton for OBS-1 (shipped first)
+- `plans/2026-05-10-algo-regime-slice-{1,2a,2b,3,4,5,6,7}-*.md` — 8 regime slice skeletons (100-326 lines each)
+
+### v3 epic — Regime-Aware Multi-Factor System (planned, ready to implement)
+
+89 SP across 8 slices. User-confirmed design choices baked in:
+- **Strategy↔regime binding:** metadata field `applicable_regimes: [...]` + optional in-AST `regime_eq()` predicate
+- **Regime flip behavior:** surface as recommendation, manual pause/resume (auto-pause = v4)
+- **Regime classifier:** rule-based primary + 2-state Gaussian HMM advisory overlay (NOT decision-driver)
+- **REGIME-2 split:** 2a (factor library backend, 13 SP) + 2b (Factor Scores frontend, 8 SP, deferrable)
+
+Research-backed thresholds: India VIX bands (calm <16 / normal 16-25 / stressed >25), backtest start floor 2007-01-01 (mandatory anti-pattern guard for survivorship bias — 4.94pp/yr inflation per NIFTY Smallcap 250 SSRN), drawdown throttle ladder (5/10/15/20% DD → 0.75/0.5/0.25/0× sizing), DSR ≥ 0.95 + PBO ≤ 0.3 as walk-forward gates.
+
+### Parallel subagent execution at scale
+
+Heavy use of background worktree-isolated subagents — 17 dispatches today:
+
+| Wave | Subagents | Time | Output |
+|---|---|---|---|
+| Research | 3 (Explore + 2 sonnet web research) | parallel | 3 research files |
+| OBS-1 implementation | 1 sonnet/worktree | ~18 min | 8 commits, PR #174 |
+| Plan expansion (obs+postback) | 3 (sonnet × 2 + haiku × 1) | parallel ~6 min | OBS-2/3/4 full TDD plans |
+| Regime slice skeletons | 7 haiku (format-following) | parallel ~1 min | REGIME-1 through 7 skeletons |
+| OBS-2/3/4 implementation | 3 sonnet/worktree | parallel | OBS-2 #178, OBS-3 #176, OBS-4 #179 |
+
+### Discipline lessons from today
+
+- **Two of three parallel subagents (OBS-2, OBS-4) escaped their isolation worktrees** and ran git operations in the parent worktree, bouncing HEAD between branches via cherry-picks and resets. Lost an in-progress PROGRESS.md edit + the test plan file (re-created in a separate clean worktree). Mitigation: OBS-3 worked correctly in its own worktree and was a clean reference.
+- **Both OBS-2 and OBS-4 branched from a STALE integration tip** — their diffs against the merged-forward integration branch showed catastrophic deletions (would erase OBS-3 work + test plan). Recovered by creating fresh worktrees off latest integration and cherry-picking each subagent's commits onto the new clean branch — no data loss.
+- **OBS-4 inadvertently cherry-picked 2 OBS-2 commits** during the contention; the rebuild script explicitly skipped them so they only landed via OBS-2's own PR.
+- **Pipefail + `grep -q` SIGPIPE footgun** — `git ls-tree | grep -q "name"` exits 141 (SIGPIPE on git's side after grep -q closes the pipe early). With `set -euo pipefail`, the pipe propagates as failure. Fix: assign git output to a variable first, then `echo "$VAR" | grep -q ...`.
+- **Reusable rebuild script** at `.claude/scripts/rebuild-obs4.sh` codifies the "rebuild stale branch via cherry-pick + idempotent docs append + auto-PR-merge" pattern. Generalizable to future parallel-subagent-contention scenarios.
+
+### Manual test plan + multi-provider ngrok strategy
+
+Shipped `docs/algo-trading/obs-test-plan.md` — Sections A through G, 358 lines. Covers ngrok signup + .env + each OBS slice's smoke + a multi-provider section confirming **same ngrok URL serves Kite + Razorpay + Stripe webhooks** via `/v1/webhooks/<provider>` path convention. ngrok free tier headroom (>3× under cap for our combined traffic).
+
+### End-to-end verification — DONE
+
+User completed the full ngrok + Kite Developer Console + IP whitelist setup. Verified:
+
+- **OBS-1**: `/v1/algo/live/ws-health` returns correct snapshot; status dot mounts in Live segment header (green during active multiplexer, red when none — verified per Image #4).
+- **OBS-2**: All 5 fail-closed gates fire correctly (503/503/401/400/400). Self-signed valid postback POST → HTTP 200 → event landed in `algo.events` Iceberg with `user_id` correctly resolved from Kite client_id `BV4121`. Idempotency verified (same `guid` resend → `{"ok":true,"deduplicated":true}`, only 1 row created). Cache invalidation verified (`cache:algo:postbacks:*` empty after writes). Companion `GET /postbacks?limit=N` returns rows.
+- **OBS-3**: Profile gating (default profile excludes ngrok; `--profile live` includes it). Tunnel survives backend restart. Inspector reachable at :4040.
+- **OBS-4**: Panel renders all 4 status badges with correct colors (COMPLETE green / REJECTED red / CANCELLED grey / UPDATE blue — verified per Image #5). ▸ payload toggle expand/collapse works. Hidden in Paper / Dry-run segments.
+
+All 5 events in `algo.events` after testing: 2× COMPLETE, 1× UPDATE, 1× REJECTED, 1× CANCELLED. Total kite_postback_received rows = 5.
+
+### ngrok setup — production-quality
+
+- **Reserved domain**: `older-nonblasphemous-thora.ngrok-free.dev` (free tier, persistent forever).
+- **Authtoken in macOS Keychain**: account `ngrok_authtoken`, service `ai-agent-ui`. Never lands on disk.
+- **`./run.sh ngrok {up|down|status}` subcommand** auto-extracts from Keychain; `./run.sh start` auto-includes `--profile live` whenever both Keychain entry exists AND `NGROK_DOMAIN` is set in `.env`.
+- **Multi-provider strategy validated**: same URL serves Kite + Razorpay + Stripe via `/v1/webhooks/<provider>` path convention. Free-tier headroom 20k req/month covers all 3 with >3× margin.
+
+### Bugs caught during real-stack verification (fixed via #182-#184)
+
+1. **Slug mismatch**: OBS-2 used `kite_api_secret` but existing Kite OAuth uses `algo_kite_api_secret`. Webhook returned 503 against an existing `/run/secrets/algo_kite_api_secret` mount.
+2. **`StockRepository._iceberg_table_path` doesn't exist** — both `_query_postback_events` and `_is_duplicate` called this missing method. Read endpoint surfaced as 500 → frontend rendered as `NetworkError when attempting to fetch resource`. Dedup failed silently. Fixed by switching to canonical `query_iceberg_table` helper.
+3. **`backend.cache` API is sync, not async** — `await cache.get/set` raised `TypeError: object NoneType can't be used in 'await' expression`. Every postback POST returned 500. Fixed by removing the awaits.
+4. **Response shape mismatch** — backend returned `{events, total}` wrapper but frontend `useKitePostbacks` expected bare `KitePostback[]`. Also added `event_ts` (ISO 8601 UTC) field. Fixed in #183.
+
+### Discipline lessons
+
+- **Two of three parallel subagents (OBS-2, OBS-4) escaped their isolation worktrees** and ran git operations in the parent worktree, bouncing HEAD between branches via cherry-picks and resets. Lost an in-progress PROGRESS.md edit + the test plan file (re-created in a separate clean worktree). Mitigation: OBS-3 worked correctly in its own worktree and was a clean reference.
+- **Both OBS-2 and OBS-4 branched from a STALE integration tip** — their diffs against the merged-forward integration branch showed catastrophic deletions (would erase OBS-3 work + test plan). Recovered by creating fresh worktrees off latest integration and cherry-picking each subagent's commits onto the new clean branch — no data loss.
+- **OBS-4 inadvertently cherry-picked 2 OBS-2 commits** during the contention; the rebuild script explicitly skipped them so they only landed via OBS-2's own PR.
+- **Pipefail + `grep -q` SIGPIPE footgun** — `git ls-tree | grep -q "name"` exits 141 (SIGPIPE on git's side after grep -q closes the pipe early). With `set -euo pipefail`, the pipe propagates as failure. Fix: assign git output to a variable first, then `echo "$VAR" | grep -q ...`.
+- **Reusable rebuild script** at `.claude/scripts/rebuild-obs4.sh` codifies the "rebuild stale branch via cherry-pick + idempotent docs append + auto-PR-merge" pattern. Generalizable to future parallel-subagent-contention scenarios.
+
+### Parallel subagent execution at scale
+
+Heavy use of background worktree-isolated subagents — 17 dispatches today:
+
+| Wave | Subagents | Time | Output |
+|---|---|---|---|
+| Research | 3 (Explore + 2 sonnet web research) | parallel | 3 research files |
+| OBS-1 implementation | 1 sonnet/worktree | ~18 min | 8 commits, PR #174 |
+| Plan expansion (obs+postback) | 3 (sonnet × 2 + haiku × 1) | parallel ~6 min | OBS-2/3/4 full TDD plans |
+| Regime slice skeletons | 7 haiku (format-following) | parallel ~1 min | REGIME-1 through 7 skeletons |
+| OBS-2/3/4 implementation | 3 sonnet/worktree | parallel | OBS-2 #178, OBS-3 #176, OBS-4 #179 |
+
+### Manual test plan + multi-provider ngrok strategy
+
+Shipped `docs/algo-trading/obs-test-plan.md` — Sections A through G, 358 lines. Covers ngrok signup + .env + each OBS slice's smoke + a multi-provider section confirming **same ngrok URL serves Kite + Razorpay + Stripe webhooks** via `/v1/webhooks/<provider>` path convention. ngrok free tier headroom (>3× under cap for our combined traffic).
+
+### What's pending for next session
+
+1. **Open integration → `dev` PR** (squash; ~46 commits → 1 commit on `dev`). Closes the v2 epic.
+2. **CHANGELOG `[0.17.0]` extension** to cover today's PRs.
+3. **Monday market-hours real-Kite soak** — actual `place_order → real postback` round-trip during 09:15-15:30 IST. Today's self-signed test verified our handler; Monday will verify Kite's actual delivery semantics.
+
+### Then: REGIME-1 (regime engine) starts
+
+89 SP / 8 slice v3 epic ready to implement. REGIME-1 is the user-prioritized "most important next module": rule-based regime classifier + 2-state Gaussian HMM advisory overlay + `^INDIAVIX` + sector indices ingest + `stocks.regime_history` Iceberg + Trading tab regime widget.
+
+---
+
+## 2026-05-09 (later) — Algo Trading v2 — full sprint + integration
+
+**Branch:** `feature/algo-trading-v2-integration` (cut from `dev` at `27e98730` after v1 squash-merged via PR #141 earlier in the day)
+
+### What shipped today (one calendar day, parallel Sonnet subagents)
+
+The v2 spec was drafted, all 5 slices implemented + merged to the integration branch via PRs #142-#146, plus 8 post-merge fixes/features from real-world walkthrough validation. Total **14 commits ahead of `dev`**, 50 SP against `ASETPLTFRM-361 Algo Trading v2 — Live-trading-readiness vertical` (Sprint 10, all 5 slice tickets + epic transitioned to Done).
+
+### Spec + plans (`docs/superpowers/`)
+
+- `specs/2026-05-09-algo-trading-v2-design.md` (~700 lines)
+- `plans/2026-05-09-algo-trading-v2-slice-{0,1,2,3,5}-*.md` (V2-0 full TDD; V2-1/2/3/5 skeleton, expanded by each subagent)
+
+### Slice timeline
+
+| Slice | Squash | SP | PR | Subagent timing |
+|---|---|--:|---|---|
+| V2-0 Foundation (Keychain BYO_SECRET_KEY + replay rebuilder) | `3cf37d2` | 3 | #142 | sonnet, ~12 min |
+| V2-1 Live Kite WS multiplexer | `cf8719fb` | 13 | #144 | sonnet worktree, ~30 min, parallel with V2-2 |
+| V2-2 Walk-forward CV harness | `0b85a64` | 8 | #143 | sonnet worktree, ~22 min, parallel with V2-1 (commits dangled — recovered via `git update-ref`) |
+| V2-3 Reconciliation loop (alert-only) | `06d3c14d` | 5 | #145 | sonnet worktree, ~13 min |
+| V2-5 Live order placement (incl. V2-4 safety belts) | `55bd6848` | 21 | #146 | sonnet worktree, ~26 min |
+
+### Post-merge fixes/features (8 PRs)
+
+5 bug fixes + 3 enhancements caught during user-driven walkthrough — all live-money-relevant code paths exercised before the dev merge:
+
+- #147 walk-forward scorecard recomputes from selected windows (UX gap; legend toggle was decorative)
+- #148 drift route import path (`backend.auth.*` → `auth.*` — backend boot blocker)
+- #149 `nifty_above_sma200` regime feature (per-(ticker, bar) backend computation; ^NSEI > SMA200)
+- #150 register `nifty_above_sma200` in AST allowlist + frontend catalog mirror (createStrategy was 400'ing)
+- #151 `nifty_30d_return_pct` trend-strength feature (sibling to regime; for chop filtering)
+- #152 drop dead `from backend.db.pg_utils import _pg_session` (V2-1 left it; module doesn't exist; crashed live-ws POST)
+- #153 live-ws ticker resolution uses `_scoped_tickers` helper (V2-1 had bad raw SQL against `stocks.portfolio` / `stocks.watchlist`)
+- #154 performance route handles walk-forward summary shape (V2-2 walk-forward parents lack `total_pnl_inr`; KeyError 500'd)
+
+Pattern: V2-1 + V2-3 subagents wrong-prefixed `from backend.…` imports that compiled but crashed at runtime; V2-1 separately reinvented `_scoped_tickers` with bad SQL. Note added to subagent prompt template for future epics.
+
+### Live verification (markets-closed weekend session)
+
+- ✅ V2-0: backend boots clean; replay rebuilder fires once at startup
+- ✅ V2-2: 16 walk-forwards across 4 strategy variants × 2 periods, all completed
+- ✅ #147: scorecard responds live to legend toggle (toggling outlier window changes Avg PnL / Win Rate / Std)
+- ✅ #149 + #151: NIFTY regime + trend-strength features operational; values match reality (e.g. late-Dec 2024 OFF detected matching the actual NIFTY correction)
+- ✅ V2-1: live-ws run started against real Kite, "Streaming from Kite WS" indicator green, multiplexer subscribed
+- ✅ V2-3: drift table accessible, scheduler job registered (`market_hours_only=True` gate)
+- ✅ V2-5: 4-gate live-mode toggle correctly disabled across all 4 strategy variants (walk-forward + drift gate prevent live enablement under current data); 62/62 backend unit tests; default-OFF verified at three layers (schema default, runtime guard, UI re-validation)
+
+### What's NOT yet validated (deferred)
+
+- ⏳ Real tick flow + signal generation (markets closed; resumes Monday 09:15 IST)
+- ⏳ Reconciliation drift detection on real positions (needs live trading first)
+- ⏳ V2-5 end-to-end live order submission against real Kite (needs offline rehearsal first — see next section)
+
+### Strategy research thread (separate from v2 dev)
+
+User extensively used the new walk-forward CV during the day to validate Golden Cross v1 against real Indian equities. 4 strategy variants tested across 2 non-overlapping periods (2022-24 and 2024-26):
+
+| Variant | 2022-24 | 2024-26 |
+|---|---:|---:|
+| v1 raw (5%/10%) | +0.96% / 68.85% / Sharpe 0.27 | -1.15% / 59.17% / -0.62 |
+| v1 tightened (3%/5%) | +0.53% / 66.21% / 0.27 | -1.08% / 53.59% / -0.69 |
+| v2 NIFTY-gated | +1.56% / 76.64% / **0.56** | -0.89% / 46.57% / -0.79 |
+| v3 + days≤30 | **+2.26%** / 76.15% / **0.59** | -0.85% / 46.99% / -0.74 |
+| v4 + trend>2 | +1.36% / 52.49% / 0.43 | **-0.56%** / 27.52% / -0.54 |
+
+Conclusion: Golden Cross is **regime-conditional**, not parameter-tunable for the 2024-26 regime. v3 is the strongest version; live-mode toggle correctly stays disabled because the 2024-26 walk-forward fails the positive-aggregate gate. Strategy archived for now; will revisit when regime conditions return. Doc: `docs/algo-trading/live-ramp.md` (post-merge ramp procedure when conditions warrant).
+
+### Pending before dev merge
+
+1. Drafting this PROGRESS + CHANGELOG `[0.17.0]` entry (in flight)
+2. mkdocs build verification
+3. **Offline V2-5 rehearsal** — user-requested: simulate full live-order pipeline against mocked Kite REST before any real-money exposure
+4. Open final integration → `dev` PR (squash, ~14 commits → 1 commit on dev)
+5. Locked subagent worktrees cleanup (`.claude/worktrees/agent-*`)
+
+---
+
+## 2026-05-09 — Algo Trading v2 — Slice V2-5: Live Order Placement
+
+**Branch:** `feature/algo-trading-session-4-backtest-engine`
+
+**Goal:** Implement V2-5 (Live Order Placement) — the largest and
+riskiest v2 slice. Real Kite orders are placed only when ALL four
+safety gates pass and the user completes a 2-step retype-confirm.
+
+### What shipped
+
+**Backend:**
+
+- `backend/algo/broker/kite_client.py` — `place_order`, `cancel_order`,
+  `modify_order` implemented. `_ALLOWED_ORDER_TYPES = {"MARKET","LIMIT"}`.
+  SL/SLM/BO/CO/MIS → `ValueError`. No `access_token` → `RuntimeError`.
+
+- `backend/db/migrations/versions/2026_05_12_algo_live_caps.py` —
+  Creates `algo.live_caps` (composite PK user_id+strategy_id,
+  `live_orders_enabled BOOL DEFAULT false`, max_inr, max_orders_per_day,
+  allowed_tickers JSONB, daily counters, approved_by/at,
+  last_walkforward_run_id). Adds `algo.positions.source` ENUM
+  (paper/live, DEFAULT paper) + `algo.runs.live_orders_in_flight` JSONB.
+
+- `backend/algo/live/caps_repo.py` — async PG repo: get, get_or_default
+  (safe defaults with live_orders_enabled=False), upsert, enable/disable,
+  increment_daily_counters, reset_daily_counters, update_in_flight.
+
+- `backend/algo/paper/types.py` — extended RejectReason with 4 new v2
+  values: LIVE_TICKER_NOT_ALLOWED, LIVE_INR_CAP, LIVE_ORDERS_PER_DAY_CAP,
+  LIVE_NOT_ENABLED.
+
+- `backend/algo/live/safety.py` — `pre_trade_check()` with all 9 caps
+  in strict order. V2 caps (2-4: ticker, orders/day, INR) run BEFORE v1
+  caps (5-9) for short-circuit efficiency.
+
+- `backend/algo/live/runtime.py` — `LiveNotEnabledError` raised if
+  `caps.live_orders_enabled=False`. `LiveRuntime` validates caps at
+  init. `_submit_order` uses `asyncio.to_thread` for sync Kite SDK.
+  `cancel_in_flight_orders()` is best-effort (never raises), does NOT
+  auto-flatten positions.
+
+- `backend/algo/routes/live.py` — 6 endpoints:
+  GET/PUT caps, GET status (4-gate check), POST enable (4-gate + retype
+  confirm), POST disable, GET in-flight orders.
+
+- `backend/algo/jobs/live_caps_reset.py` + wired in executor.py —
+  Daily reset of cumulative_inr_today + orders_count_today at 09:00 IST,
+  Mon–Fri only.
+
+- `backend/algo/tests/conftest.py` — kiteconnect stub so tests run
+  without Docker.
+
+**Tests (all passing):**
+- `test_kite_place_order.py` — 16 tests (MARKET/LIMIT happy paths,
+  SL/SLM/BO/CO/MIS rejections, cancel, modify)
+- `test_live_pre_trade_check.py` — 24 tests (breach + pass per cap × 9,
+  short-circuit ordering, full-pass acceptance)
+- `test_live_kill_switch.py` — 7 tests (default-OFF, kill blocks signal,
+  cancel in-flight, best-effort failure, no auto-flatten, p99 < 50ms)
+- `test_live_walkforward_gate.py` — 9 tests (30-day window, win-rate > 0,
+  drift ≤ 3 runs, default-OFF state)
+- `test_live_caps_reset.py` — 4 tests (weekend skip, weekday reset)
+
+**Total: 62/62 backend tests passing.**
+
+**Frontend:**
+- `frontend/hooks/useLiveCaps.ts` — SWR hook + upsertLiveCaps,
+  enableLiveOrders, disableLiveOrders actions
+- `frontend/hooks/useLiveStatus.ts` — SWR hook for GatesStatus
+  (per-gate booleans)
+- `frontend/hooks/useLiveOrders.ts` — SWR hook for in-flight orders
+  (10s polling)
+- `frontend/components/algo-trading/LiveSafetyBeltsForm.tsx` — form for
+  max_inr, max_orders_per_day, allowed_tickers with today-usage display
+- `frontend/components/algo-trading/LiveModeToggle.tsx` — 4-gate toggle
+  with per-gate ✓/✕ checklist; 2-step confirm modal requiring exact
+  strategy name retype; z-[70] modal stacking
+- `frontend/components/algo-trading/LiveLandedOrdersList.tsx` — in-flight
+  orders list with side badges, 10s auto-refresh
+- `frontend/components/algo-trading/LiveCancelInFlightBanner.tsx` —
+  amber warning when kill armed + live enabled (positions not affected)
+- `frontend/components/algo-trading/PaperTab.tsx` — extended with live
+  mode section: strategy selector → LiveSection (banner + toggle + caps
+  + orders)
+- `frontend/components/algo-trading/__tests__/LiveModeToggle.test.tsx` —
+  11 Vitest tests covering each closed gate, all-gates-open enable, modal
+  retype, and disable path
+
+**Docs:**
+- `docs/algo-trading/live-ramp.md` — 7-tier ramp procedure from ₹1k to
+  ₹1L with pass criteria, monitoring checklist, emergency stop procedure
+
+### V2-5 safety audit
+
+- Default-OFF confirmed: `live_orders_enabled BOOL DEFAULT false` in
+  migration; `LiveRuntime` raises `LiveNotEnabledError` if not enabled;
+  UI enable button disabled until all 4 gates pass.
+- All 9 caps tested: 18 breach tests + 6 pass tests + ordering tests.
+- Kill-switch hot path p99 < 50ms verified (test measures 100 iterations).
+- No auto-flatten: test `test_kill_does_not_auto_flatten_positions` passes.
+- MARKET + LIMIT only: ValueError on SL/SLM/BO/CO/MIS.
+- 4 gates + drift gate evaluated server-side on POST /enable (never trust UI).
+- 2-step confirm: retype-confirm enforced client-side (button disabled) +
+  name match checked server-side.
+
+---
+
 ## 2026-05-09 — Algo Trading v1 — end-to-end verification + integration branch
 
 **Branch:** `feature/algo-trading-v1-integration` (linear merge of all 10 algo session branches)

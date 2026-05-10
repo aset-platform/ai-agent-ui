@@ -3329,3 +3329,44 @@ async def _job_algo_risk_state_reset(
         run_risk_state_reset_job,
     )
     return await run_risk_state_reset_job(payload)
+
+
+@register_job("algo_reconciliation")
+async def _job_algo_reconciliation(
+    payload: dict | None = None,
+):
+    """Every-5-min reconciliation of broker vs our positions."""
+    from backend.algo.jobs.algo_reconciliation import (
+        run_reconciliation_job,
+    )
+    return await run_reconciliation_job(payload)
+
+
+@register_job("algo_live_caps_daily_reset")
+async def _job_algo_live_caps_daily_reset(
+    payload: dict | None = None,
+):
+    """Reset live_caps counters at market open (09:00 IST).
+
+    Resets cumulative_inr_today + orders_count_today on all
+    algo.live_caps rows. Day boundary aligns with Kite's.
+    """
+    from backend.algo.jobs.live_caps_reset import (
+        run_live_caps_daily_reset,
+    )
+    return await run_live_caps_daily_reset(payload)
+
+
+@register_job("algo_ws_tick_count_reset")
+async def _job_algo_ws_tick_count_reset(
+    payload: dict | None = None,
+):
+    """Daily 00:00 IST reset of WS multiplexer tick_count_today.
+
+    OBS-1: walks the process-local WS registry and zeros the
+    per-day counter on every active multiplexer. Idempotent.
+    """
+    from backend.algo.jobs.reset_tick_count import (
+        run_reset_tick_count_job,
+    )
+    return await run_reset_tick_count_job(payload)

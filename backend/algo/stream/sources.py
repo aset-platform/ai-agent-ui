@@ -1,7 +1,13 @@
-"""Tick sources — Replay (CI fixture) and Live (KiteTicker, Task 7).
+"""Tick sources — Replay (CI fixture) and Live (KiteTicker / WS mux).
 
 A TickSource is an async iterator yielding Tick. Implementations
 encapsulate where ticks come from; the resampler doesn't care.
+
+Available sources:
+  - ReplayTickSource  — streams from a JSONL fixture (CI / backtests)
+  - LiveTickSource    — per-strategy KiteTicker (v1, kept for compat)
+  - LiveWsTickSource  — reads from a KiteWsMultiplexer subscriber queue
+                        (v2; many strategies share one WS connection)
 """
 from __future__ import annotations
 
@@ -142,3 +148,44 @@ class LiveTickSource:
                 self._kt.close()
             except Exception:  # noqa: BLE001
                 _logger.exception("KiteTicker close failed")
+
+
+class LiveWsTickSource:
+    """Adapts a KiteWsMultiplexer subscriber queue to TickSource.
+
+    This is the v2 live tick source. One multiplexer per user; each
+    strategy gets its own asyncio.Queue via ``mux.subscribe()``.
+    On stop, ``stop()`` must be called to unsubscribe from the mux.
+
+    Unlike ``LiveTickSource``, this source does NOT own the WS
+    connection — the multiplexer is shared across strategies.
+    """
+
+    def __init__(
+        self,
+        *,
+        user_id,  # UUID — kept as Any to avoid circular import
+        strategy_id,  # UUID
+        queue,  # asyncio.Queue[Tick | None]
+        mux,  # KiteWsMultiplexer reference for unsubscribe
+    ) -> None:
+        self._user_id = user_id
+        self._strategy_id = strategy_id
+        self._queue = queue
+        self._mux = mux
+        self._stopped = False
+
+    async def __aiter__(self) -> "AsyncIterator[Tick]":
+        while not self._stopped:
+            tick = await self._queue.get()
+            if tick is None:
+                # EOF sentinel — multiplexer closed or strategy
+                # unsubscribed.
+                return
+            yield tick
+
+    async def stop(self) -> None:
+        """Unsubscribe from the multiplexer; drains queue EOF."""
+        if not self._stopped:
+            self._stopped = True
+            await self._mux.unsubscribe(self._strategy_id)
