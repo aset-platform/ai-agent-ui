@@ -644,3 +644,106 @@ class TestKitePostbackEventPersistence:
         assert p["guid"] == payload["guid"]
         assert p["order_id"] == payload["order_id"]
         assert "raw" in p  # full payload for forensics
+
+
+class TestKitePostbackCacheInvalidation:
+    """cache.invalidate called after successful persist."""
+
+    def test_invalidates_correct_key_on_success(self):
+        """Correct cache key invalidated after persist."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from backend.algo.routes.webhooks import router
+
+        app = FastAPI()
+        app.include_router(router)
+        payload = _valid_payload_with_checksum()
+        mock_cache = MagicMock()
+
+        with (
+            patch.dict(
+                os.environ,
+                {"KITE_POSTBACK_ENABLED": "true"},
+            ),
+            patch(
+                "backend.algo.routes.webhooks.load_secret",
+                return_value=_SECRET,
+            ),
+            patch(
+                "backend.algo.routes.webhooks._is_duplicate",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "backend.algo.routes.webhooks."
+                "_resolve_kite_user",
+                new_callable=AsyncMock,
+                return_value=_OUR_USER_ID,
+            ),
+            patch(
+                "asyncio.to_thread",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "backend.algo.routes.webhooks._get_cache",
+                return_value=mock_cache,
+            ),
+        ):
+            client = TestClient(app)
+            client.post(
+                "/webhooks/kite/postback",
+                content=json.dumps(payload),
+                headers={
+                    "Content-Type": "application/json"
+                },
+            )
+
+        expected_key = (
+            f"cache:algo:postbacks:{_OUR_USER_ID}"
+        )
+        mock_cache.invalidate.assert_called_once_with(
+            expected_key
+        )
+
+    def test_no_cache_invalidation_when_deduplicated(self):
+        """Duplicate guid → 200 ok, cache NOT invalidated."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from backend.algo.routes.webhooks import router
+
+        app = FastAPI()
+        app.include_router(router)
+        payload = _valid_payload_with_checksum()
+        mock_cache = MagicMock()
+
+        with (
+            patch.dict(
+                os.environ,
+                {"KITE_POSTBACK_ENABLED": "true"},
+            ),
+            patch(
+                "backend.algo.routes.webhooks.load_secret",
+                return_value=_SECRET,
+            ),
+            patch(
+                "backend.algo.routes.webhooks._is_duplicate",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "backend.algo.routes.webhooks._get_cache",
+                return_value=mock_cache,
+            ),
+        ):
+            client = TestClient(app)
+            resp = client.post(
+                "/webhooks/kite/postback",
+                content=json.dumps(payload),
+                headers={
+                    "Content-Type": "application/json"
+                },
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["deduplicated"] is True
+        mock_cache.invalidate.assert_not_called()
