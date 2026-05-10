@@ -46,7 +46,9 @@ def test_buy_fills_at_next_bar_open(bars):
     fill = sb.execute(intent)
     assert fill is not None
     assert fill.fill_date == date(2026, 4, 2)
-    assert fill.fill_price == Decimal("2925")
+    # REGIME-7: BUY pays 5bps over the bar open (no adtv_lookup
+    # → minimum slippage applies). 2925 * 1.0005 = 2926.4625.
+    assert fill.fill_price == Decimal("2925") * Decimal("1.0005")
     assert fill.qty == 10
 
 
@@ -58,7 +60,10 @@ def test_sell_fills_at_next_bar_open(bars):
     )
     fill = sb.execute(intent)
     assert fill.fill_date == date(2026, 4, 3)
-    assert fill.fill_price == Decimal("2940")
+    # REGIME-7: SELL receives 5bps below the bar open (no
+    # adtv_lookup → minimum slippage applies). 2940 * 0.9995 =
+    # 2938.5300.
+    assert fill.fill_price == Decimal("2940") * Decimal("0.9995")
 
 
 def test_no_next_bar_returns_none(bars):

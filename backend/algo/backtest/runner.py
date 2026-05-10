@@ -15,6 +15,8 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from backend.algo.backtest.data_source import load_ohlcv_window
+# REGIME-7 — pre-load 60d ADTV per ticker for slippage model.
+from backend.db.duckdb_engine import query_iceberg_table
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 from backend.algo.backtest.event_writer import event_row, flush_events
 from backend.algo.backtest.indicators import (
@@ -144,7 +146,43 @@ def run_backtest(
             k: Decimal(str(v)) for k, v in r.values.items()
             if v is not None
         }
-    sim = SimBroker(bars=bars, fee_as_of=request.period_start)
+    # REGIME-7 — pre-compute 60d ADTV per ticker so SimBroker can
+    # apply ``max(5, 50 * order_value / ADTV) bps`` slippage.
+    # Empty universe → empty lookup → SimBroker falls back to the
+    # 5bps minimum on every leg.
+    adtv_lookup: dict[str, Decimal] = {}
+    if universe:
+        from datetime import timedelta as _td
+        adtv_start = request.period_start - _td(days=90)
+        try:
+            adtv_rows = query_iceberg_table(
+                "stocks.ohlcv",
+                "SELECT ticker, AVG(close * volume) AS adtv "
+                "FROM ohlcv "
+                "WHERE ticker IN ({}) "
+                "  AND date BETWEEN ? AND ? "
+                "GROUP BY ticker".format(
+                    ",".join(["?"] * len(universe))
+                ),
+                [*universe, adtv_start, request.period_start],
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "ADTV lookup failed (%s) — falling back to 5bps "
+                "minimum slippage on every leg",
+                exc,
+            )
+            adtv_rows = []
+        for r in adtv_rows:
+            adtv_lookup[r["ticker"]] = Decimal(
+                str(r["adtv"] or 0)
+            )
+
+    sim = SimBroker(
+        bars=bars,
+        fee_as_of=request.period_start,
+        adtv_lookup=adtv_lookup,
+    )
     evaluator = Evaluator()
     pt = PositionTracker()
     risk = RiskEngine()
