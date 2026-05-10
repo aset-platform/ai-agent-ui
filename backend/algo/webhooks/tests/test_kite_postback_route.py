@@ -318,3 +318,138 @@ class TestKitePostbackRouteHappyPath:
         mock_cache.invalidate.assert_called_once_with(
             f"cache:algo:postbacks:{_OUR_USER_ID}"
         )
+
+
+class TestKitePostbackRouteFailClosed:
+    """Table-driven fail-closed branches."""
+
+    def _app_client(self):
+        """Create test client with router."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from backend.algo.routes.webhooks import router
+        app = FastAPI()
+        app.include_router(router)
+        return TestClient(
+            app, raise_server_exceptions=False
+        )
+
+    def test_503_when_feature_flag_off(self):
+        """KITE_POSTBACK_ENABLED=false → 503."""
+        client = self._app_client()
+        with patch.dict(
+            os.environ,
+            {"KITE_POSTBACK_ENABLED": "false"},
+        ):
+            resp = client.post(
+                "/webhooks/kite/postback",
+                content=json.dumps(
+                    _valid_payload_with_checksum()
+                ),
+                headers={
+                    "Content-Type": "application/json"
+                },
+            )
+        assert resp.status_code == 503
+
+    def test_503_when_api_secret_missing(self):
+        """No kite_api_secret configured → 503."""
+        client = self._app_client()
+        with (
+            patch.dict(
+                os.environ,
+                {"KITE_POSTBACK_ENABLED": "true"},
+            ),
+            patch(
+                "backend.algo.routes.webhooks.load_secret",
+                return_value=None,
+            ),
+        ):
+            resp = client.post(
+                "/webhooks/kite/postback",
+                content=json.dumps(
+                    _valid_payload_with_checksum()
+                ),
+                headers={
+                    "Content-Type": "application/json"
+                },
+            )
+        assert resp.status_code == 503
+
+    def test_401_on_bad_checksum(self):
+        """Wrong checksum → 401, nothing written."""
+        client = self._app_client()
+        payload = _valid_payload_with_checksum()
+        payload["checksum"] = "000000000000bad"
+
+        with (
+            patch.dict(
+                os.environ,
+                {"KITE_POSTBACK_ENABLED": "true"},
+            ),
+            patch(
+                "backend.algo.routes.webhooks.load_secret",
+                return_value=_SECRET,
+            ),
+            patch(
+                "asyncio.to_thread",
+                new_callable=AsyncMock,
+            ) as mock_thread,
+        ):
+            resp = client.post(
+                "/webhooks/kite/postback",
+                content=json.dumps(payload),
+                headers={
+                    "Content-Type": "application/json"
+                },
+            )
+        assert resp.status_code == 401
+        # flush_events must NOT have been called
+        mock_thread.assert_not_called()
+
+    def test_400_on_missing_guid(self):
+        """Payload missing guid field → 400."""
+        client = self._app_client()
+        payload = _valid_payload_with_checksum()
+        del payload["guid"]
+        payload["checksum"] = _make_checksum(
+            payload["order_id"],
+            payload["order_timestamp"],
+            _SECRET,
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {"KITE_POSTBACK_ENABLED": "true"},
+            ),
+            patch(
+                "backend.algo.routes.webhooks.load_secret",
+                return_value=_SECRET,
+            ),
+        ):
+            resp = client.post(
+                "/webhooks/kite/postback",
+                content=json.dumps(payload),
+                headers={
+                    "Content-Type": "application/json"
+                },
+            )
+        assert resp.status_code == 400
+        assert "guid" in resp.json()["detail"]
+
+    def test_400_on_invalid_json(self):
+        """Non-JSON body → 400."""
+        client = self._app_client()
+        with patch.dict(
+            os.environ,
+            {"KITE_POSTBACK_ENABLED": "true"},
+        ):
+            resp = client.post(
+                "/webhooks/kite/postback",
+                content=b"not { valid } json >>>",
+                headers={
+                    "Content-Type": "application/json"
+                },
+            )
+        assert resp.status_code == 400
+        assert "json" in resp.json()["detail"].lower()
