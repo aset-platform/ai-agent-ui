@@ -9,6 +9,7 @@ Environment:
         Route returns 503 when false — checked before
         any crypto or I/O.
 """
+
 from __future__ import annotations
 
 import json
@@ -32,9 +33,11 @@ router = APIRouter()
 # Cache helpers
 # ---------------------------------------------------------------
 
+
 def _get_cache():
     """Lazy import to avoid circular deps at module load."""
     from backend.cache import get_cache as _gc
+
     return _gc()
 
 
@@ -44,6 +47,7 @@ _KITE_USER_TTL = 300  # 5 min; mapping is static per user
 # ---------------------------------------------------------------
 # PG lookup helper (thin wrapper for mocking in tests)
 # ---------------------------------------------------------------
+
 
 async def _pg_lookup_kite_user(
     kite_user_id: str,
@@ -60,20 +64,26 @@ async def _pg_lookup_kite_user(
         Our internal UUID or None if not found.
     """
     from backend.db.engine import get_session_factory
+
     factory = get_session_factory()
     from sqlalchemy import text
+
     async with factory() as session:
         row = (
-            await session.execute(
-                text(
-                    "SELECT user_id "
-                    "FROM algo.broker_credentials "
-                    "WHERE kite_user_id = :kite_uid "
-                    "LIMIT 1"
-                ),
-                {"kite_uid": kite_user_id},
+            (
+                await session.execute(
+                    text(
+                        "SELECT user_id "
+                        "FROM algo.broker_credentials "
+                        "WHERE kite_user_id = :kite_uid "
+                        "LIMIT 1"
+                    ),
+                    {"kite_uid": kite_user_id},
+                )
             )
-        ).mappings().first()
+            .mappings()
+            .first()
+        )
         if row is None:
             return None
         return row["user_id"]
@@ -82,6 +92,7 @@ async def _pg_lookup_kite_user(
 # ---------------------------------------------------------------
 # _resolve_kite_user — Redis-cached PG lookup
 # ---------------------------------------------------------------
+
 
 async def _resolve_kite_user(
     kite_user_id: str,
@@ -115,15 +126,14 @@ async def _resolve_kite_user(
         )
         return None
 
-    await cache.set(
-        cache_key, str(our_id), ttl=_KITE_USER_TTL
-    )
+    await cache.set(cache_key, str(our_id), ttl=_KITE_USER_TTL)
     return our_id
 
 
 # ---------------------------------------------------------------
 # _is_duplicate — guid idempotency via DuckDB algo.events
 # ---------------------------------------------------------------
+
 
 async def _is_duplicate(guid: str) -> bool:
     """Check if a postback with this guid was already seen.
@@ -141,16 +151,14 @@ async def _is_duplicate(guid: str) -> bool:
 
     def _check() -> bool:
         import duckdb
+
         from stocks.repository import StockRepository
+
         repo = StockRepository()
-        path = repo._iceberg_table_path(  # noqa: SLF001
-            "algo.events"
-        )
+        path = repo._iceberg_table_path("algo.events")  # noqa: SLF001
         try:
             con = duckdb.connect()
-            con.execute(
-                "INSTALL iceberg; LOAD iceberg;"
-            )
+            con.execute("INSTALL iceberg; LOAD iceberg;")
             rows = con.execute(
                 "SELECT 1 FROM iceberg_scan(?) "
                 "WHERE json_extract_string("
@@ -210,8 +218,7 @@ async def kite_postback(request: Request) -> dict:
     api_secret = load_secret("kite_api_secret")
     if not api_secret:
         _logger.error(
-            "kite postback: kite_api_secret not "
-            "configured — returning 503"
+            "kite postback: kite_api_secret not " "configured — returning 503"
         )
         raise HTTPException(
             503,
@@ -221,8 +228,7 @@ async def kite_postback(request: Request) -> dict:
     # Gate 4: checksum verification (constant-time).
     if not verify_checksum(payload, api_secret):
         _logger.warning(
-            "kite postback checksum failed for "
-            "order_id=%s",
+            "kite postback checksum failed for " "order_id=%s",
             payload.get("order_id", "UNKNOWN"),
         )
         raise HTTPException(401, "bad checksum")
@@ -235,23 +241,22 @@ async def kite_postback(request: Request) -> dict:
     # Idempotency: second delivery of same guid → 200 ok.
     if await _is_duplicate(guid):
         _logger.info(
-            "kite postback: duplicate guid=%s, "
-            "skipping persist",
+            "kite postback: duplicate guid=%s, " "skipping persist",
             guid,
         )
         return {"ok": True, "deduplicated": True}
 
     # Resolve Kite user → our internal user.id.
-    our_user_id = await _resolve_kite_user(
-        payload.get("user_id", "")
-    )
+    our_user_id = await _resolve_kite_user(payload.get("user_id", ""))
 
     # Persist into algo.events (same schema as live fills).
     import asyncio
+
     from backend.algo.backtest.event_writer import (
         event_row,
         flush_events,
     )
+
     row = event_row(
         session_id=_NULL_UUID,
         user_id=our_user_id or _NULL_UUID,
@@ -262,19 +267,10 @@ async def kite_postback(request: Request) -> dict:
             "guid": guid,
             "order_id": payload.get("order_id", ""),
             "status": payload.get("status", ""),
-            "filled_quantity": payload.get(
-                "filled_quantity", 0
-            ),
-            "average_price": payload.get(
-                "average_price", 0.0
-            ),
-            "tradingsymbol": payload.get(
-                "tradingsymbol", ""
-            ),
-            "our_user_id": (
-                str(our_user_id)
-                if our_user_id else None
-            ),
+            "filled_quantity": payload.get("filled_quantity", 0),
+            "average_price": payload.get("average_price", 0.0),
+            "tradingsymbol": payload.get("tradingsymbol", ""),
+            "our_user_id": (str(our_user_id) if our_user_id else None),
             "raw": payload,  # full payload for forensics
         },
     )
@@ -283,9 +279,7 @@ async def kite_postback(request: Request) -> dict:
     # Cache invalidation per CLAUDE.md §5.13.
     cache = _get_cache()
     if our_user_id:
-        cache.invalidate(
-            f"cache:algo:postbacks:{our_user_id}"
-        )
+        cache.invalidate(f"cache:algo:postbacks:{our_user_id}")
 
     return {"ok": True}
 
@@ -294,14 +288,10 @@ async def kite_postback(request: Request) -> dict:
 # Helpers
 # ---------------------------------------------------------------
 
+
 def _postback_enabled() -> bool:
     """Read KITE_POSTBACK_ENABLED env var."""
-    return (
-        os.environ.get(
-            "KITE_POSTBACK_ENABLED", "false"
-        ).lower()
-        == "true"
-    )
+    return os.environ.get("KITE_POSTBACK_ENABLED", "false").lower() == "true"
 
 
 def create_webhooks_router() -> APIRouter:

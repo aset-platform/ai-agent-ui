@@ -4,6 +4,7 @@ Reference: Kite Connect v3 postback docs.
 Checksum formula: SHA-256(order_id + order_timestamp +
     api_secret).hexdigest() — NOT HMAC.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -66,9 +67,7 @@ def verify_checksum(
     order_id = payload.get("order_id", "")
     order_ts = payload.get("order_timestamp", "")
     expected = hashlib.sha256(
-        f"{order_id}{order_ts}{api_secret}".encode(
-            "utf-8"
-        )
+        f"{order_id}{order_ts}{api_secret}".encode("utf-8")
     ).hexdigest()
     received = (payload.get("checksum") or "").lower()
     return hmac.compare_digest(expected, received)
