@@ -87,6 +87,124 @@ function AggCard({
   );
 }
 
+// REGIME-5 ─ 5-gate traffic-light strip
+const GATE_KEYS = [
+  { key: "max_dd_ok", label: "Max DD" },
+  { key: "recovery_ok", label: "Recovery" },
+  { key: "per_regime_non_neg", label: "Per-regime ≥0" },
+  { key: "dsr_ok", label: "DSR ≥ 0.95" },
+  { key: "pbo_ok", label: "PBO ≤ 0.30" },
+] as const;
+
+function GateLight({
+  k, label, passed, title,
+}: {
+  k: string;
+  label: string;
+  passed: boolean | undefined;
+  title: string;
+}) {
+  const cls = passed === undefined
+    ? "bg-slate-300 dark:bg-slate-600"
+    : passed
+      ? "bg-emerald-500"
+      : "bg-rose-500";
+  const text = passed === undefined
+    ? "text-slate-400"
+    : passed
+      ? "text-emerald-700 dark:text-emerald-300"
+      : "text-rose-700 dark:text-rose-300";
+  return (
+    <div
+      className="flex items-center gap-1.5"
+      data-testid={`walkforward-gate-light-${k}`}
+      title={title}
+    >
+      <span className={`inline-block h-2.5 w-2.5 rounded-full ${cls}`} />
+      <span className={`text-[11px] font-medium ${text}`}>
+        {label}
+      </span>
+    </div>
+  );
+}
+
+function GateStrip({ aggregate }: { aggregate: WalkForwardAggregate }) {
+  const gates = aggregate.gates_passed || {};
+  const dsr = aggregate.dsr ?? "—";
+  const pbo = aggregate.pbo ?? "—";
+  const recoveryMo = aggregate.recovery_months ?? 0;
+  const maxDd = aggregate.avg_max_drawdown_pct;
+  const titles: Record<string, string> = {
+    max_dd_ok: `Max DD: ${maxDd}%`,
+    recovery_ok: `Recovery: ${recoveryMo}mo`,
+    per_regime_non_neg: "All regimes non-negative",
+    dsr_ok: `DSR: ${dsr}`,
+    pbo_ok: `PBO: ${pbo}`,
+  };
+  return (
+    <div
+      className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/40"
+      data-testid="walkforward-gates-strip"
+    >
+      <span className="text-[11px] font-semibold uppercase text-slate-500">
+        Quality gates
+      </span>
+      {GATE_KEYS.map(({ key, label }) => (
+        <GateLight
+          key={key}
+          k={key}
+          label={label}
+          passed={gates[key]}
+          title={titles[key]}
+        />
+      ))}
+    </div>
+  );
+}
+
+function PerRegimeGrid({ rows }: {
+  rows: NonNullable<WalkForwardAggregate["per_regime"]>;
+}) {
+  return (
+    <div
+      className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700"
+      data-testid="walkforward-per-regime-grid"
+    >
+      <table className="min-w-full text-xs">
+        <thead className="bg-slate-100 dark:bg-slate-800">
+          <tr>
+            {[
+              "Regime", "Days", "Return %", "Sharpe",
+              "Sortino", "Max DD %", "Hit %",
+            ].map((h) => (
+              <th
+                key={h}
+                className="px-2 py-1.5 text-left font-medium text-slate-600 dark:text-slate-300"
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.regime} className="border-t border-slate-200 dark:border-slate-700">
+              <td className="px-2 py-1.5 font-semibold">{r.regime}</td>
+              <td className="px-2 py-1.5">{r.n_days}</td>
+              <td className="px-2 py-1.5">{r.cum_return_pct}</td>
+              <td className="px-2 py-1.5">{r.sharpe}</td>
+              <td className="px-2 py-1.5">{r.sortino}</td>
+              <td className="px-2 py-1.5">{r.max_dd_pct}</td>
+              <td className="px-2 py-1.5">{r.hit_rate}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+
 function AggregateCards({ agg }: { agg: WalkForwardAggregate }) {
   const pnlPositive = Number(agg.avg_pnl_pct) >= 0;
   return (
@@ -435,6 +553,13 @@ export function WalkForwardSubTab() {
       {run && run.status === "completed" && (
         <>
           {computedAgg && <AggregateCards agg={computedAgg} />}
+          {run.aggregate && (
+            <GateStrip aggregate={run.aggregate} />
+          )}
+          {run.aggregate?.per_regime
+            && run.aggregate.per_regime.length > 0 && (
+            <PerRegimeGrid rows={run.aggregate.per_regime} />
+          )}
           <WalkForwardEquityCurves
             curves={curves}
             initialCapitalInr={capital}

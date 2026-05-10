@@ -370,4 +370,14 @@ export const FE = {
   regimeApplicabilityChipBear: "regime-applicability-chip-bear",
   regimeApplicabilityMismatchWarning:
     "regime-applicability-mismatch-warning",
+
+  // REGIME-5 — walkforward 5-gate strip + per-regime grid
+  walkForwardGatesStrip: "walkforward-gates-strip",
+  walkForwardGateLightMaxDd: "walkforward-gate-light-max_dd_ok",
+  walkForwardGateLightRecovery: "walkforward-gate-light-recovery_ok",
+  walkForwardGateLightPerRegime:
+    "walkforward-gate-light-per_regime_non_neg",
+  walkForwardGateLightDsr: "walkforward-gate-light-dsr_ok",
+  walkForwardGateLightPbo: "walkforward-gate-light-pbo_ok",
+  walkForwardPerRegimeGrid: "walkforward-per-regime-grid",
 } as const;
