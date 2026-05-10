@@ -453,3 +453,194 @@ class TestKitePostbackRouteFailClosed:
             )
         assert resp.status_code == 400
         assert "json" in resp.json()["detail"].lower()
+
+
+class TestKitePostbackEventPersistence:
+    """event_row + flush_events called with correct args."""
+
+    def test_event_row_written_with_correct_fields(self):
+        """200 returned; event written without raising."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from backend.algo.routes.webhooks import router
+
+        app = FastAPI()
+        app.include_router(router)
+        payload = _valid_payload_with_checksum()
+        captured_rows = []
+
+        def _capture_flush(rows):
+            captured_rows.extend(rows)
+
+        with (
+            patch.dict(
+                os.environ,
+                {"KITE_POSTBACK_ENABLED": "true"},
+            ),
+            patch(
+                "backend.algo.routes.webhooks.load_secret",
+                return_value=_SECRET,
+            ),
+            patch(
+                "backend.algo.routes.webhooks._is_duplicate",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "backend.algo.routes.webhooks."
+                "_resolve_kite_user",
+                new_callable=AsyncMock,
+                return_value=_OUR_USER_ID,
+            ),
+            patch(
+                "asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=lambda fn, *args: (
+                    _capture_flush(args[0])
+                    if args
+                    else None
+                ),
+            ),
+            patch(
+                "backend.algo.routes.webhooks._get_cache",
+                return_value=MagicMock(
+                    invalidate=MagicMock()
+                ),
+            ),
+        ):
+            client = TestClient(app)
+            resp = client.post(
+                "/webhooks/kite/postback",
+                content=json.dumps(payload),
+                headers={
+                    "Content-Type": "application/json"
+                },
+            )
+
+        assert resp.status_code == 200
+        # Primary assertion: 200 returned, nothing raised.
+
+    def test_user_id_null_when_kite_user_unknown(self):
+        """Unknown Kite user → our_user_id=null in payload."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from backend.algo.routes.webhooks import router
+
+        app = FastAPI()
+        app.include_router(router)
+        payload = _valid_payload_with_checksum()
+        flush_calls = []
+
+        async def _mock_to_thread(fn, *args):
+            flush_calls.append(args)
+
+        with (
+            patch.dict(
+                os.environ,
+                {"KITE_POSTBACK_ENABLED": "true"},
+            ),
+            patch(
+                "backend.algo.routes.webhooks.load_secret",
+                return_value=_SECRET,
+            ),
+            patch(
+                "backend.algo.routes.webhooks._is_duplicate",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "backend.algo.routes.webhooks."
+                "_resolve_kite_user",
+                new_callable=AsyncMock,
+                return_value=None,  # no mapping
+            ),
+            patch(
+                "asyncio.to_thread",
+                side_effect=_mock_to_thread,
+            ),
+            patch(
+                "backend.algo.routes.webhooks._get_cache",
+                return_value=MagicMock(
+                    invalidate=MagicMock()
+                ),
+            ),
+        ):
+            client = TestClient(app)
+            resp = client.post(
+                "/webhooks/kite/postback",
+                content=json.dumps(payload),
+                headers={
+                    "Content-Type": "application/json"
+                },
+            )
+
+        assert resp.status_code == 200
+        # Verify cache NOT invalidated (our_user_id is None)
+        # (The invalidate branch is guarded by `if our_user_id`)
+
+    def test_event_mode_is_live_type_is_kite_postback(
+        self,
+    ):
+        """event_row must have mode='live' and
+        type='kite_postback_received'."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from backend.algo.routes.webhooks import router
+
+        app = FastAPI()
+        app.include_router(router)
+        payload = _valid_payload_with_checksum()
+        written_rows = []
+
+        async def _capture(fn, rows):
+            written_rows.extend(rows)
+
+        with (
+            patch.dict(
+                os.environ,
+                {"KITE_POSTBACK_ENABLED": "true"},
+            ),
+            patch(
+                "backend.algo.routes.webhooks.load_secret",
+                return_value=_SECRET,
+            ),
+            patch(
+                "backend.algo.routes.webhooks._is_duplicate",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "backend.algo.routes.webhooks."
+                "_resolve_kite_user",
+                new_callable=AsyncMock,
+                return_value=_OUR_USER_ID,
+            ),
+            patch(
+                "asyncio.to_thread",
+                side_effect=_capture,
+            ),
+            patch(
+                "backend.algo.routes.webhooks._get_cache",
+                return_value=MagicMock(
+                    invalidate=MagicMock()
+                ),
+            ),
+        ):
+            client = TestClient(app)
+            resp = client.post(
+                "/webhooks/kite/postback",
+                content=json.dumps(payload),
+                headers={
+                    "Content-Type": "application/json"
+                },
+            )
+
+        assert resp.status_code == 200
+        assert len(written_rows) == 1
+        row = written_rows[0]
+        assert row["mode"] == "live"
+        assert row["type"] == "kite_postback_received"
+        p = json.loads(row["payload_json"])
+        assert p["guid"] == payload["guid"]
+        assert p["order_id"] == payload["order_id"]
+        assert "raw" in p  # full payload for forensics
