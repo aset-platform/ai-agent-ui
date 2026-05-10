@@ -3370,3 +3370,122 @@ async def _job_algo_ws_tick_count_reset(
         run_reset_tick_count_job,
     )
     return await run_reset_tick_count_job(payload)
+
+
+@register_job("regime_classifier_daily")
+def _job_regime_classifier_daily(payload: dict | None = None):
+    """REGIME-1: daily 22:30 IST regime classification.
+
+    Reads NIFTY + India VIX + universe breadth from
+    ``stocks.ohlcv``, persists one row to
+    ``stocks.regime_history`` with a ``BULL/SIDEWAYS/BEAR`` label
+    plus an HMM stress posterior. Sync — runs inside the
+    scheduler thread (no async DB calls).
+    """
+    from backend.algo.regime.classifier_job import (
+        run_classifier_job,
+    )
+    return run_classifier_job(payload or {})
+
+
+@register_job("compute_daily_factors")
+def _job_compute_daily_factors(payload: dict | None = None):
+    """REGIME-2a: nightly factor library compute.
+
+    Iterates the active universe, computes 7 factor families per
+    ticker, and bulk-upserts to ``stocks.daily_factors`` via the
+    NaN-replaceable upsert in the repo. Sync.
+    """
+    from datetime import date as _date
+
+    from backend.algo.factors.compute_job import run_compute_job
+
+    payload = payload or {}
+    as_of = payload.get("as_of")
+    parsed = _date.fromisoformat(as_of) if as_of else None
+    days = int(payload.get("days", 1))
+    n = run_compute_job(as_of=parsed, days=days)
+    return {"rows_written": n}
+
+
+@register_job("regime_change_notifier")
+def _job_regime_change_notifier(payload: dict | None = None):
+    """REGIME-3: daily 22:35 IST regime-change notifier.
+
+    Diffs today's vs yesterday's regime label in
+    ``stocks.regime_history``; on flip emits exactly one
+    ``regime_changed`` event into ``algo.events``.  Frontend
+    ``RegimeChangeBanner`` polls and surfaces the amber banner
+    via localStorage diff.
+    """
+    from datetime import date as _date
+
+    from backend.algo.jobs.regime_change_notifier import run_notifier
+
+    payload = payload or {}
+    as_of = payload.get("as_of")
+    parsed = _date.fromisoformat(as_of) if as_of else None
+    out = run_notifier(as_of=parsed)
+    return {"emitted": out is not None, "payload": out}
+
+
+@register_job("attribution_daily_brinson")
+def _job_attribution_daily_brinson(payload: dict | None = None):
+    """REGIME-6: daily Brinson decomposition per active strategy.
+
+    Pulls today's order_filled events from ``algo.events``,
+    aggregates per-sector portfolio weights, looks up sector
+    mapping from ``stocks.piotroski_scores``, and persists one
+    row per (user, strategy) to ``algo.attribution_daily``.
+    Equal-weight NIFTY 50 baseline for v3 (real index weights
+    wired in v3.1).
+    """
+    from backend.algo.attribution.job import daily_brinson_job
+
+    return daily_brinson_job(payload or {})
+
+
+@register_job("attribution_monthly_regression")
+def _job_attribution_monthly_regression(
+    payload: dict | None = None,
+):
+    """REGIME-6: monthly OLS factor regression per active strategy.
+
+    Reads the latest equity_curve from ``algo.runs.summary_json``
+    for each (user, strategy) pair active in the period,
+    computes daily returns, fits OLS against mock factor returns
+    (deterministic seed) and persists one row per pair to
+    ``algo.factor_regression`` with ``betas['__mock_data__']=1.0``
+    so the UI flags it. Real Fama-French wiring is v3.1.
+    """
+    from backend.algo.attribution.job import (
+        monthly_factor_regression_job,
+    )
+
+    return monthly_factor_regression_job(payload or {})
+
+
+@register_job("universe_snapshot_monthly")
+def _job_universe_snapshot_monthly(
+    payload: dict | None = None,
+):
+    """REGIME-7: monthly NSE universe snapshot rebuilder.
+
+    Filters active .NS tickers by 60d ADTV (>= 10cr) and market
+    cap (>= 500cr); top-200 by ADTV are flagged
+    ``included_in_top_200=True``. Remaining filtered candidates
+    persisted with ``False`` so liquidity ratings can read them
+    without re-running the job.
+
+    Payload shape: ``{"rebalance_date": "YYYY-MM-DD"}``. Defaults
+    to today (IST) if absent.
+    """
+    from datetime import date as _date
+
+    from backend.algo.universe.snapshot_job import (
+        rebuild_universe_snapshot,
+    )
+
+    rd = (payload or {}).get("rebalance_date")
+    parsed = _date.fromisoformat(rd) if rd else _date.today()
+    return rebuild_universe_snapshot(parsed)

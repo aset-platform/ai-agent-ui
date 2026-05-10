@@ -28,7 +28,22 @@ type Mode =
 async function fetchAst(id: string): Promise<StrategyAst> {
   const r = await apiFetch(`${API_URL}/algo/strategies/${id}`);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
+  // REGIME-3: GET response is now wrapped — { strategy,
+  // applicable_regimes }.  StrategiesTab only renders the AST so
+  // it pulls .strategy out of the wrapper here.  Tolerates the
+  // legacy bare-AST shape during rolling deploys.
+  const body = (await r.json()) as
+    | StrategyAst
+    | { strategy: StrategyAst; applicable_regimes?: string[] };
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    "strategy" in body &&
+    body.strategy
+  ) {
+    return body.strategy;
+  }
+  return body as StrategyAst;
 }
 
 export function StrategiesTab() {

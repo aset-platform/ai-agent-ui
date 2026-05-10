@@ -31,19 +31,26 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
+from backend.algo.attribution.payload import (
+    attribution_payload_extension as _attribution_payload_extension,
+)
 from backend.algo.backtest.event_writer import event_row, flush_events
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 from backend.algo.backtest.positions import PositionTracker
 from backend.algo.broker.kite_client import KiteClient
+# REGIME-2a — pre-computed nightly factor library overlay.
+from backend.algo.factors.repo import get_factors_window
 from backend.algo.live.safety import (
     LiveRejectReason, pre_trade_check,
 )
 from backend.algo.paper.types import AccountState, Signal
+# REGIME-4 — vol-target / Kelly sizer (legacy modes bypass).
+from backend.algo.sizing.composer import SizingContext, compose_qty
 from backend.algo.stream.resampler import Resampler
 from backend.algo.stream.sources import TickSource
 from backend.algo.strategy.ast import Strategy
@@ -151,6 +158,43 @@ class LiveRuntime:
                 exc,
             )
 
+        # REGIME-2a — per-ticker cached factor row, lazy-loaded
+        # on first sight of a ticker (same rationale as
+        # PaperRuntime: ``strategy.universe`` is a scope spec,
+        # not a ticker list).
+        self._factor_cache: dict[
+            tuple[str, date], dict[str, Decimal]
+        ] = {}
+        self._factor_loaded_for_ticker: set[str] = set()
+
+    def _ensure_factor_cache(
+        self, ticker: str, bar_date_obj: date,
+    ) -> None:
+        """Lazy load factor rows for ``ticker``. Called once per
+        ticker."""
+        if ticker in self._factor_loaded_for_ticker:
+            return
+        self._factor_loaded_for_ticker.add(ticker)
+        try:
+            from datetime import timedelta as _td
+            rows = get_factors_window(
+                [ticker],
+                bar_date_obj - _td(days=365),
+                bar_date_obj + _td(days=1),
+            )
+            for r in rows:
+                self._factor_cache[(r.ticker, r.bar_date)] = {
+                    k: Decimal(str(v))
+                    for k, v in r.values.items() if v is not None
+                }
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "LiveRuntime: factor cache load for %s failed: "
+                "%s — strategies referencing factor.* keys will "
+                "silent-skip until backfill catches up",
+                ticker, exc,
+            )
+
     # ----------------------------------------------------------
     # Main run loop
     # ----------------------------------------------------------
@@ -251,6 +295,9 @@ class LiveRuntime:
         history = self._bars_by_ticker.setdefault(bar.ticker, [])
         history.append(adapted)
         ind_map = compute_indicators(history)
+        # REGIME-2a — lazy-load cached factor rows for this
+        # ticker on first sight; subsequent bars are O(1).
+        self._ensure_factor_cache(bar.ticker, bar_date_obj)
         features = {
             **ind_map.get(
                 bar_date_obj,
@@ -264,6 +311,11 @@ class LiveRuntime:
             ),
             "nifty_30d_return_pct": self._market_trend.get(
                 bar_date_obj, Decimal("0"),
+            ),
+            # REGIME-2a — cached factor row overlay (disjoint
+            # from indicator + regime keys by design).
+            **self._factor_cache.get(
+                (bar.ticker, bar_date_obj), {},
             ),
         }
 
@@ -302,6 +354,8 @@ class LiveRuntime:
                 "ticker": signal.ticker,
                 "side": signal.side,
                 "qty": signal.qty,
+                # REGIME-6 — attribution context (additive).
+                **_attribution_payload_extension(features),
             },
         ))
 
@@ -688,6 +742,43 @@ class LiveRuntime:
             kill_switch_active=kill_switch_active,
         )
 
+    def _size_via_composer(
+        self,
+        *,
+        qty_spec: dict,
+        ticker: str,
+        bar_date_ns: int,
+        last_price: Decimal | None,
+    ) -> int:
+        """REGIME-4 — mirror of PaperRuntime._size_via_composer."""
+        if last_price is None or last_price <= 0:
+            return 0
+        bar_date_obj = datetime.fromtimestamp(
+            bar_date_ns / 1_000_000_000, tz=timezone.utc,
+        ).date()
+        nav = (
+            self._initial
+            + self._positions.total_realised_pnl_inr()
+        )
+        factor_row = self._factor_cache.get(
+            (ticker, bar_date_obj), {},
+        )
+        realized_vol = factor_row.get(
+            "realized_vol_60d", Decimal("NaN"),
+        )
+        ctx = SizingContext(
+            ticker=ticker,
+            bar_date=bar_date_obj,
+            nav=nav,
+            cash=nav,
+            stock_price=last_price,
+            realized_vol_annual=realized_vol,
+            sector=None,
+            sector_exposure=Decimal("0"),
+            equity_curve=[],
+        )
+        return compose_qty(qty_spec, ctx)
+
     def _action_to_signal(
         self,
         action: dict,
@@ -699,7 +790,20 @@ class LiveRuntime:
         """Identical to PaperRuntime._action_to_signal."""
         t = action.get("type")
         if t == "buy":
-            qty = int(action["qty"].get("shares") or 0)
+            qty_spec = action["qty"]
+            # REGIME-4 — vol-target / Kelly route through composer.
+            if (
+                "vol_target_pct" in qty_spec
+                or "kelly_fraction" in qty_spec
+            ):
+                qty = self._size_via_composer(
+                    qty_spec=qty_spec,
+                    ticker=ticker,
+                    bar_date_ns=bar_date_ns,
+                    last_price=last_price,
+                )
+            else:
+                qty = int(qty_spec.get("shares") or 0)
             if qty <= 0:
                 return None
             return Signal(

@@ -350,4 +350,51 @@ export const FE = {
   kitePostbackRow: "kite-postback-row",
   kitePostbackPayloadToggle: "kite-postback-payload-toggle",
   kitePostbackEmptyState: "kite-postback-empty-state",
+
+  // ── Algo Trading — Regime widget (REGIME-1) ──────────
+  regimeWidget: "regime-widget",
+  regimeWidgetLoading: "regime-widget-loading",
+  regimeWidgetEmpty: "regime-widget-empty",
+  regimeBadge: "regime-badge",
+  regimeVixGauge: "regime-vix-gauge",
+  regimeBreadthBar: "regime-breadth-bar",
+  regimeStressChip: "regime-stress-chip",
+  regimeHistoryChart: "regime-history-chart",
+  regimeHistoryEmpty: "regime-history-empty",
+  // REGIME-3 — strategy↔regime binding
+  regimeChangeBanner: "regime-change-banner",
+  regimeChangeBannerDismiss: "regime-change-banner-dismiss",
+  regimeApplicabilityChips: "regime-applicability-chips",
+  regimeApplicabilityChipBull: "regime-applicability-chip-bull",
+  regimeApplicabilityChipSideways: "regime-applicability-chip-sideways",
+  regimeApplicabilityChipBear: "regime-applicability-chip-bear",
+  regimeApplicabilityMismatchWarning:
+    "regime-applicability-mismatch-warning",
+
+  // REGIME-5 — walkforward 5-gate strip + per-regime grid
+  walkForwardGatesStrip: "walkforward-gates-strip",
+  walkForwardGateLightMaxDd: "walkforward-gate-light-max_dd_ok",
+  walkForwardGateLightRecovery: "walkforward-gate-light-recovery_ok",
+  walkForwardGateLightPerRegime:
+    "walkforward-gate-light-per_regime_non_neg",
+  walkForwardGateLightDsr: "walkforward-gate-light-dsr_ok",
+  walkForwardGateLightPbo: "walkforward-gate-light-pbo_ok",
+  walkForwardPerRegimeGrid: "walkforward-per-regime-grid",
+
+  // REGIME-2b — Factor Scores Insights tab
+  factorScoresTab: "factor-scores-tab",
+  factorScoresTable: "factor-scores-table",
+  factorScoresEmpty: "factor-scores-empty",
+  factorScoresLoading: "factor-scores-loading",
+
+  // REGIME-6 — Attribution panel (Daily Brinson + Trade Reasons)
+  attributionPanel: "attribution-panel",
+  attributionSubtabStrip: "attribution-subtab-strip",
+  attributionTabBrinson: "attribution-subtab-brinson",
+  attributionTabTrades: "attribution-subtab-trades",
+  attributionBrinsonTable: "attribution-brinson-table",
+  attributionTradesTable: "attribution-trades-table",
+  attributionEmpty: "attribution-empty",
+  attributionLoading: "attribution-loading",
+  attributionMockChip: "attribution-mock-chip",
 } as const;

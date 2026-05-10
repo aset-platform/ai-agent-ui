@@ -18,9 +18,11 @@ import {
   GridComponent,
   TooltipComponent,
   LegendComponent,
+  MarkAreaComponent,
   type GridComponentOption,
   type TooltipComponentOption,
   type LegendComponentOption,
+  type MarkAreaComponentOption,
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 
@@ -31,6 +33,7 @@ echarts.use([
   GridComponent,
   TooltipComponent,
   LegendComponent,
+  MarkAreaComponent,
   CanvasRenderer,
 ]);
 
@@ -41,6 +44,7 @@ export type EChartsOption = echarts.ComposeOption<
   | GridComponentOption
   | TooltipComponentOption
   | LegendComponentOption
+  | MarkAreaComponentOption
 >;
 
 export { echarts };

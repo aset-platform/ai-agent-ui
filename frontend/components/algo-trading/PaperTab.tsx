@@ -24,6 +24,10 @@ import {
 } from "./PaperEventsTimeline";
 import { ReconciliationDriftPanel } from "./ReconciliationDriftPanel";
 import { KitePostbackPanel } from "./KitePostbackPanel";
+import { AttributionPanel } from "./AttributionPanel";
+import { RegimeWidget } from "./RegimeWidget";
+import { RegimeHistoryChart } from "./RegimeHistoryChart";
+import { RegimeChangeBanner } from "./RegimeChangeBanner";
 
 /** Live section for a specific strategy. */
 function LiveSection({ strategyId, strategyName }: {
@@ -162,11 +166,15 @@ export function PaperTab() {
 
   return (
     <div className="space-y-4" data-testid="paper-tab">
+      <RegimeChangeBanner />
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-            Trading
-          </h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+              Trading
+            </h2>
+            <RegimeWidget />
+          </div>
           <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-400">
             Paper: replay-fixture runs against a synthetic broker.
             Dry run: live-mode rehearsal with synthetic Kite
@@ -311,6 +319,22 @@ export function PaperTab() {
               <KitePostbackPanel />
             </div>
           )}
+
+          {/* REGIME-6 — Attribution panel. Live segment only;
+              the daily Brinson + trade reasons are scoped to the
+              live trading flow. Renders even without a strategy
+              selection (shows a guidance empty-state). */}
+          {viewMode === "live" && (
+            <AttributionPanel
+              strategyId={liveStrategyId || null}
+            />
+          )}
+
+          {/* Regime history chart — surfaces the rolling 252d
+              regime ribbon + HMM stress line. Live + Dry-run only;
+              paper mode is replay-fixture so historical regime
+              context is less relevant there. */}
+          <RegimeHistoryChart />
         </div>
       )}
 

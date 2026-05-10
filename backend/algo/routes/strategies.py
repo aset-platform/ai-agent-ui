@@ -12,6 +12,11 @@ from pydantic import BaseModel, Field, ValidationError
 from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
 from backend.algo.strategy.ast import Strategy, parse_strategy
+from backend.algo.strategy.metadata_repo import (
+    StrategyMetadata,
+    get_metadata,
+    upsert_metadata,
+)
 from backend.algo.strategy.repo import (
     archive_strategy,
     create_strategy,
@@ -20,6 +25,9 @@ from backend.algo.strategy.repo import (
     list_strategies,
     update_strategy,
 )
+
+# REGIME-3: default = regime-agnostic (all 3).
+_DEFAULT_REGIMES: list[str] = ["bull", "sideways", "bear"]
 
 _logger = logging.getLogger(__name__)
 
@@ -62,10 +70,29 @@ class StrategyListResponse(BaseModel):
 
 class StrategyCreateRequest(BaseModel):
     payload: dict = Field(..., description="Full AST payload")
+    # REGIME-3: optional binding.  ``None`` means "use default
+    # all-3-regimes" — kept distinct from an explicit empty list so
+    # the API can later add stricter semantics if needed.
+    applicable_regimes: list[str] | None = Field(
+        default=None,
+        description="Regimes the strategy is designed for; "
+        "default = ['bull','sideways','bear'] (regime-agnostic).",
+    )
 
 
 class StrategyCreateResponse(BaseModel):
     id: UUID
+
+
+class StrategyResponse(BaseModel):
+    """REGIME-3 GET wrapper.
+
+    The bare AST (``Strategy``) has ``extra='forbid'`` so we cannot
+    splice ``applicable_regimes`` onto it directly.  This wrapper
+    nests the AST and exposes the metadata as a sibling field.
+    """
+    strategy: Strategy
+    applicable_regimes: list[str]
 
 
 def create_strategies_router() -> APIRouter:
@@ -88,21 +115,27 @@ def create_strategies_router() -> APIRouter:
             strategies=[StrategySummary(**r) for r in rows],
         )
 
-    @router.get("/{strategy_id}", response_model=Strategy)
+    @router.get("/{strategy_id}", response_model=StrategyResponse)
     async def get_(
         strategy_id: UUID,
         user: UserContext = Depends(pro_or_superuser),
-    ) -> Strategy:
+    ) -> StrategyResponse:
         factory = _get_session_factory()
         async with factory() as session:
             s = await get_strategy(
                 session, UUID(user.user_id), strategy_id,
             )
-        if s is None:
-            raise HTTPException(
-                status_code=404, detail="Strategy not found",
-            )
-        return s
+            if s is None:
+                raise HTTPException(
+                    status_code=404, detail="Strategy not found",
+                )
+            md = await get_metadata(session, strategy_id)
+        regimes = (
+            list(md.applicable_regimes)
+            if md is not None and md.applicable_regimes
+            else list(_DEFAULT_REGIMES)
+        )
+        return StrategyResponse(strategy=s, applicable_regimes=regimes)
 
     @router.post(
         "",
@@ -121,10 +154,20 @@ def create_strategies_router() -> APIRouter:
                 detail=_serialize_validation_errors(exc),
             )
         factory = _get_session_factory()
+        regimes = (
+            list(body.applicable_regimes)
+            if body.applicable_regimes is not None
+            else list(_DEFAULT_REGIMES)
+        )
         async with factory() as session:
             new_id = await create_strategy(
                 session, UUID(user.user_id), strategy,
             )
+            await upsert_metadata(
+                session, new_id,
+                StrategyMetadata(applicable_regimes=regimes),
+            )
+            await session.commit()
         return StrategyCreateResponse(id=new_id)
 
     @router.put(
@@ -148,10 +191,22 @@ def create_strategies_router() -> APIRouter:
             ok = await update_strategy(
                 session, UUID(user.user_id), strategy_id, strategy,
             )
-        if not ok:
-            raise HTTPException(
-                status_code=404, detail="Strategy not found",
+            if not ok:
+                raise HTTPException(
+                    status_code=404, detail="Strategy not found",
+                )
+            # REGIME-3: PUT also upserts metadata.  Pass-through
+            # default = all 3 when client omits applicable_regimes.
+            regimes = (
+                list(body.applicable_regimes)
+                if body.applicable_regimes is not None
+                else list(_DEFAULT_REGIMES)
             )
+            await upsert_metadata(
+                session, strategy_id,
+                StrategyMetadata(applicable_regimes=regimes),
+            )
+            await session.commit()
 
     @router.delete(
         "/{strategy_id}",

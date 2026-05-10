@@ -20,6 +20,16 @@ export interface WindowSummary {
   error_text: string | null;
 }
 
+export interface PerRegimeRow {
+  regime: string;       // BULL | SIDEWAYS | BEAR
+  n_days: number;
+  cum_return_pct: string;
+  sharpe: string;
+  sortino: string;
+  max_dd_pct: string;
+  hit_rate: string;
+}
+
 export interface WalkForwardAggregate {
   avg_win_rate_pct: string;
   avg_pnl_pct: string;
@@ -27,6 +37,13 @@ export interface WalkForwardAggregate {
   std_pnl_pct: string;
   window_count: number;
   completed_count: number;
+  // REGIME-5 additions — all default-empty so v2 summaries deserialise
+  per_regime?: PerRegimeRow[];
+  dsr?: string;
+  pbo?: string | null;
+  recovery_months?: number;
+  gates_passed?: Record<string, boolean>;
+  regime_stratified?: boolean;
 }
 
 export interface WalkForwardResult {

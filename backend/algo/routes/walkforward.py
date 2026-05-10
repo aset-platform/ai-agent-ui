@@ -155,6 +155,80 @@ def create_walkforward_router() -> APIRouter:
             error_text=row["error_text"],
         )
 
+    @router.get("/runs/{run_id}/gates")
+    async def get_gates(
+        run_id: UUID,
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> dict:
+        """Return the 5 quality gate booleans + recommendations.
+
+        Empty `gates_passed` (e.g. legacy V2-2 walkforward predating
+        REGIME-5) → all gates considered NOT passed and a single
+        recommendation surfaces explaining the upgrade path.
+        """
+        user_id = UUID(user.user_id)
+        factory = _get_session_factory()
+        async with factory() as session:
+            result = await session.execute(
+                text(
+                    "SELECT summary_json FROM algo.runs "
+                    "WHERE id = :id AND user_id = :uid "
+                    "  AND mode = 'walkforward'"
+                ),
+                {"id": run_id, "uid": user_id},
+            )
+            row = result.mappings().first()
+
+        if row is None:
+            raise HTTPException(404, "Walk-forward run not found")
+
+        summary = row["summary_json"] or {}
+        agg = (summary.get("aggregate") or {}) if summary else {}
+        gates = agg.get("gates_passed") or {}
+        overall_pass = bool(gates) and all(gates.values())
+
+        recs: list[str] = []
+        gate_recs = {
+            "max_dd_ok": (
+                "Max DD exceeded 25%. Tighten stop loss "
+                "or reduce position sizing."
+            ),
+            "recovery_ok": (
+                "Recovery > 18 months. Strategy may not "
+                "survive prolonged drawdowns."
+            ),
+            "per_regime_non_neg": (
+                "Negative return in at least one regime. "
+                "Add applicable_regimes filter or regime-specific "
+                "entry conditions."
+            ),
+            "dsr_ok": (
+                "DSR < 0.95 — observed Sharpe likely inflated by "
+                "multiple-comparison bias. Reduce hyperparameter "
+                "search."
+            ),
+            "pbo_ok": (
+                "PBO > 0.30 — high overfit probability. "
+                "Lengthen test window or use simpler model."
+            ),
+        }
+        if not gates:
+            recs.append(
+                "This walk-forward run predates the 5-gate "
+                "validation. Re-run to obtain DSR/PBO/per-regime "
+                "metrics and gate status."
+            )
+        else:
+            for key, passed in gates.items():
+                if not passed and key in gate_recs:
+                    recs.append(gate_recs[key])
+
+        return {
+            "gates_passed": gates,
+            "overall_pass": overall_pass,
+            "recommendations": recs,
+        }
+
     @router.get("/runs", response_model=list[BacktestRun])
     async def list_runs(
         limit: int = Query(50, ge=1, le=200),

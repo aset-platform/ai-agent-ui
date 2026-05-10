@@ -9,12 +9,14 @@ commit at the end (not per-event), no per-ticker hot loops.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
 from backend.algo.backtest.data_source import load_ohlcv_window
+# REGIME-7 — pre-load 60d ADTV per ticker for slippage model.
+from backend.db.duckdb_engine import query_iceberg_table
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 from backend.algo.backtest.event_writer import event_row, flush_events
 from backend.algo.backtest.indicators import (
@@ -28,6 +30,8 @@ from backend.algo.backtest.sim_broker import (
     NoBarAvailableError,
     SimBroker,
 )
+# REGIME-2a — pre-computed nightly factor library overlay.
+from backend.algo.factors.repo import get_factors_window
 from backend.algo.backtest.types import (
     BacktestRequest,
     BacktestSummary,
@@ -37,6 +41,8 @@ from backend.algo.backtest.types import (
 )
 from backend.algo.paper.risk_engine import RiskEngine
 from backend.algo.paper.types import AccountState, Signal
+# REGIME-4 — 3-stage sizer (vol-target / Kelly → caps → DD throttle).
+from backend.algo.sizing.composer import SizingContext, compose_qty
 from backend.algo.strategy.ast import Strategy
 
 _logger = logging.getLogger(__name__)
@@ -124,7 +130,59 @@ def run_backtest(
         period_start=request.period_start,
         period_end=request.period_end,
     )
-    sim = SimBroker(bars=bars, fee_as_of=request.period_start)
+    # REGIME-2a — pre-load cached daily factor rows for the
+    # period. Disjoint from indicator keys by design; overlaid
+    # AFTER the indicator dict in the per-bar features assembly
+    # below. Empty dict if backfill hasn't run yet — strategies
+    # that don't reference factor keys are unaffected.
+    factor_rows = get_factors_window(
+        tickers=universe,
+        start=request.period_start,
+        end=request.period_end,
+    )
+    factors_by_key: dict[tuple[str, date], dict[str, Decimal]] = {}
+    for r in factor_rows:
+        factors_by_key[(r.ticker, r.bar_date)] = {
+            k: Decimal(str(v)) for k, v in r.values.items()
+            if v is not None
+        }
+    # REGIME-7 — pre-compute 60d ADTV per ticker so SimBroker can
+    # apply ``max(5, 50 * order_value / ADTV) bps`` slippage.
+    # Empty universe → empty lookup → SimBroker falls back to the
+    # 5bps minimum on every leg.
+    adtv_lookup: dict[str, Decimal] = {}
+    if universe:
+        from datetime import timedelta as _td
+        adtv_start = request.period_start - _td(days=90)
+        try:
+            adtv_rows = query_iceberg_table(
+                "stocks.ohlcv",
+                "SELECT ticker, AVG(close * volume) AS adtv "
+                "FROM ohlcv "
+                "WHERE ticker IN ({}) "
+                "  AND date BETWEEN ? AND ? "
+                "GROUP BY ticker".format(
+                    ",".join(["?"] * len(universe))
+                ),
+                [*universe, adtv_start, request.period_start],
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "ADTV lookup failed (%s) — falling back to 5bps "
+                "minimum slippage on every leg",
+                exc,
+            )
+            adtv_rows = []
+        for r in adtv_rows:
+            adtv_lookup[r["ticker"]] = Decimal(
+                str(r["adtv"] or 0)
+            )
+
+    sim = SimBroker(
+        bars=bars,
+        fee_as_of=request.period_start,
+        adtv_lookup=adtv_lookup,
+    )
     evaluator = Evaluator()
     pt = PositionTracker()
     risk = RiskEngine()
@@ -193,6 +251,9 @@ def run_backtest(
                 "nifty_30d_return_pct": market_trend.get(
                     bar_date, Decimal("0"),
                 ),
+                # REGIME-2a — cached factor row overlay (disjoint
+                # from indicator keys by design).
+                **factors_by_key.get((ticker, bar_date), {}),
             }
             ctx = EvalContext(
                 ticker=ticker,
@@ -220,11 +281,32 @@ def run_backtest(
                 + pt.total_realised_pnl_inr()
                 - total_fees
             )
+            # REGIME-4 — assemble sizing context for new modes.
+            # Legacy {shares}/{notional_inr} bypass this block.
+            factor_row = factors_by_key.get((ticker, bar_date), {})
+            realized_vol = factor_row.get(
+                "realized_vol_60d", Decimal("NaN"),
+            )
+            sizing_ctx = SizingContext(
+                ticker=ticker,
+                bar_date=bar_date,
+                nav=current_equity,
+                cash=current_equity,
+                stock_price=current.close,
+                realized_vol_annual=realized_vol,
+                sector=None,
+                sector_exposure=Decimal("0"),
+                equity_curve=[
+                    (p.bar_date, p.equity_inr)
+                    for p in equity_points
+                ],
+            )
             intent = _action_to_intent(
                 action, ticker=ticker, bar_date=bar_date,
                 pt=pt,
                 last_price=current.close,
                 current_equity=current_equity,
+                sizing_ctx=sizing_ctx,
             )
             if intent is None:
                 continue
@@ -425,6 +507,9 @@ def run_backtest(
     return summary
 
 
+_NEW_SIZING_KEYS = ("vol_target_pct", "kelly_fraction")
+
+
 def _action_to_intent(
     action: dict,
     *,
@@ -433,16 +518,27 @@ def _action_to_intent(
     pt: PositionTracker,
     last_price: Decimal | None = None,
     current_equity: Decimal | None = None,
+    sizing_ctx: SizingContext | None = None,
 ) -> OrderIntent | None:
     """Translate an evaluator action dict to an OrderIntent (or None).
 
     ``last_price`` + ``current_equity`` are required only for
-    ``set_target_weight`` resolution; all other action types
-    ignore them.
+    ``set_target_weight`` resolution.  ``sizing_ctx`` is required
+    only when the buy action uses the REGIME-4 sizing modes
+    (``vol_target_pct`` / ``kelly_fraction``); legacy modes
+    (``shares`` / ``notional_inr``) bypass the composer entirely
+    for byte-for-byte backward compatibility.
     """
     t = action.get("type")
     if t == "buy":
-        qty = action["qty"].get("shares") or 0
+        qty_spec = action["qty"]
+        if (
+            sizing_ctx is not None
+            and any(k in qty_spec for k in _NEW_SIZING_KEYS)
+        ):
+            qty = compose_qty(qty_spec, sizing_ctx)
+        else:
+            qty = qty_spec.get("shares") or 0
         if qty <= 0:
             return None
         return OrderIntent(

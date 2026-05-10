@@ -6,16 +6,48 @@ engine.
 Per epic spec § 6: every fill stamps the IndianFeeModel
 ``fee_rates_version`` so re-runs after a YAML rate change
 don't silently drift.
+
+REGIME-7: ADTV-scaled slippage is applied to the next-bar open
+BEFORE fee computation, so the booked fees reflect the actual
+fill price (not the mid). When ``adtv_lookup`` is empty the
+slippage falls back to the 5bps minimum on every leg.
 """
 from __future__ import annotations
 
 import logging
 from datetime import date
+from decimal import Decimal
 
 from backend.algo.backtest.types import BarData, Fill, OrderIntent
 from backend.algo.fees import IndianFeeModel, Trade
 
 _logger = logging.getLogger(__name__)
+
+
+# REGIME-7 — slippage model constants. Per research §10:
+# ``max(5, 50 * order_value / ADTV) bps``. Below the floor every
+# trade still pays at least 5bps; above the floor slippage scales
+# linearly with order participation in the 60d ADTV.
+SLIPPAGE_MIN_BPS = Decimal("5")
+SLIPPAGE_IMPACT_BPS = Decimal("50")
+
+
+def estimate_slippage_bps(
+    order_value_inr: Decimal,
+    ticker_adtv_inr: Decimal,
+) -> Decimal:
+    """Compute slippage in bps for a single executed leg.
+
+    ``ticker_adtv_inr`` is the 60d average daily traded value in
+    rupees. Missing / zero / NaN ADTV degrades safely to the 5bps
+    minimum so we never raise on ingestion gaps.
+    """
+    if ticker_adtv_inr.is_nan() or ticker_adtv_inr <= 0:
+        return SLIPPAGE_MIN_BPS
+    impact = SLIPPAGE_IMPACT_BPS * (
+        order_value_inr / ticker_adtv_inr
+    )
+    return max(SLIPPAGE_MIN_BPS, impact)
 
 
 class NoBarAvailableError(KeyError):
@@ -25,6 +57,9 @@ class NoBarAvailableError(KeyError):
 class SimBroker:
     """Stateless executor of OrderIntents against a pre-loaded
     bar dict. Construct once per backtest run.
+
+    ``adtv_lookup`` (REGIME-7, optional): ticker → 60d ADTV in INR.
+    Missing tickers fall back to the 5bps slippage minimum.
     """
 
     def __init__(
@@ -32,9 +67,11 @@ class SimBroker:
         *,
         bars: dict[str, list[BarData]],
         fee_as_of: date,
+        adtv_lookup: dict[str, Decimal] | None = None,
     ) -> None:
         self._bars = bars
         self._fees = IndianFeeModel(as_of=fee_as_of)
+        self._adtv: dict[str, Decimal] = adtv_lookup or {}
         # Pre-compute date -> index lookup per ticker for O(1)
         # T+1 resolution.
         self._index: dict[str, dict[date, int]] = {
@@ -48,6 +85,9 @@ class SimBroker:
         Raises NoBarAvailableError if the ticker isn't in the
         loaded window (a real-world ingestion gap; runner should
         log + skip).
+
+        REGIME-7: applies ADTV-scaled slippage to the next-bar
+        open BEFORE fees are computed.
         """
         if intent.ticker not in self._bars:
             raise NoBarAvailableError(intent.ticker)
@@ -69,7 +109,20 @@ class SimBroker:
                 return None
 
         next_bar = self._bars[intent.ticker][next_idx]
-        # Compute fees on the executed leg.
+
+        # REGIME-7 slippage — adjust the open price by bps before
+        # fees so the booked fees reflect the actual fill price.
+        adtv = self._adtv.get(intent.ticker, Decimal("NaN"))
+        order_value = Decimal(intent.qty) * next_bar.open
+        bps = estimate_slippage_bps(order_value, adtv)
+        slip_factor = bps / Decimal("10000")
+        if intent.side == "BUY":
+            fill_price = next_bar.open * (Decimal("1") + slip_factor)
+        else:
+            fill_price = next_bar.open * (Decimal("1") - slip_factor)
+
+        # Compute fees on the executed leg (uses fill_price, not
+        # the bar open).
         product = "DELIVERY"  # v1 only
         exchange = "NSE"      # v1 only
         breakdown = self._fees.compute(
@@ -79,7 +132,7 @@ class SimBroker:
                 side=intent.side,
                 product=product,
                 qty=intent.qty,
-                price=next_bar.open,
+                price=fill_price,
             ),
         )
         return Fill(
@@ -87,7 +140,7 @@ class SimBroker:
             ticker=intent.ticker,
             side=intent.side,
             qty=intent.qty,
-            fill_price=next_bar.open,
+            fill_price=fill_price,
             fill_date=next_bar.date,
             fees_inr=breakdown.total_inr,
             fee_rates_version=breakdown.rates_version,

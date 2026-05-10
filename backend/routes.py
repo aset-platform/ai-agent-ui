@@ -4008,6 +4008,7 @@ def create_app(
         create_live_router,
         create_paper_router,
         create_performance_router,
+        create_regime_router,
         create_replay_router,
         create_strategies_router,
         create_walkforward_router,
@@ -4064,6 +4065,22 @@ def create_app(
     )
     app.include_router(
         create_webhooks_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_regime_router(),
+        prefix="/v1",
+    )
+    from backend.algo.routes import create_factors_router
+    app.include_router(
+        create_factors_router(),
+        prefix="/v1",
+    )
+    # REGIME-6 — attribution (Brinson + trade reasons + factor
+    # regression). Pro-or-superuser only.
+    from backend.algo.routes import create_attribution_router
+    app.include_router(
+        create_attribution_router(),
         prefix="/v1",
     )
 
