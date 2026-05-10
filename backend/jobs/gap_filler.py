@@ -199,6 +199,19 @@ def refresh_market_indices() -> int:
             "^INDIAVIX",
             "^GSPC",
             "^NSEI",
+            # NIFTY sector indices (REGIME-1: required for breadth +
+            # relative strength + sector rotation downstream)
+            "^NSEBANK",
+            "^CNXIT",
+            "^CNXAUTO",
+            "^CNXPHARMA",
+            "^CNXFMCG",
+            "^CNXMETAL",
+            "^CNXENERGY",
+            "^CNXREALTY",
+            "^CNXPSUBANK",
+            "^CNXFINANCE",
+            "^NIFMDCP150",
             # Macro indicators (Phase 3)
             "^TNX",  # 10-Year Treasury Yield
             "^IRX",  # 13-Week T-Bill Rate
