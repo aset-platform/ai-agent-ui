@@ -28,6 +28,19 @@ def get_multiplexer(user_id: UUID) -> KiteWsMultiplexer | None:
     return _registry.get(user_id)
 
 
+def get_multiplexer_if_exists(
+    user_id: UUID,
+) -> KiteWsMultiplexer | None:
+    """Non-creating lookup — used by GET /v1/algo/live/ws-health.
+
+    Distinct from ``get_multiplexer`` only by intent: this name
+    makes the read-only / no-side-effect contract explicit at
+    call sites that must never spin up a Kite WS connection
+    just to answer a poll.
+    """
+    return _registry.get(user_id)
+
+
 async def get_or_create_multiplexer(
     *,
     user_id: UUID,
