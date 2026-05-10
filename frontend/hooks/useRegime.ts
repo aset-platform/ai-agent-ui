@@ -77,6 +77,39 @@ export function useRegimeHistory(days = 252) {
   };
 }
 
+export interface PeriodSummary {
+  period_start: string;
+  period_end: string;
+  total_days: number;
+  counts: Record<string, number>;
+  pct: Record<string, number>;
+  dominant: string | null;
+  recommended_template: string | null;
+  avg_stress_prob: number | null;
+}
+
+export function useRegimePeriodSummary(
+  start: string | null,
+  end: string | null,
+) {
+  const key = start && end
+    ? `${API_URL}/algo/regime/period-summary`
+      + `?start=${start}&end=${end}`
+    : null;
+  const { data, error, isLoading } = useSWR<PeriodSummary>(
+    key, fetcher,
+    {
+      revalidateOnFocus: false,
+      dedupingInterval: 5 * 60_000,
+    },
+  );
+  return {
+    summary: data,
+    error: error as Error | undefined,
+    loading: isLoading,
+  };
+}
+
 export function useClassifierHealth() {
   const { data, error, isLoading } = useSWR<ClassifierHealth>(
     `${API_URL}/algo/regime/classifier-health`,

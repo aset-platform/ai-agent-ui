@@ -135,3 +135,106 @@ def test_classifier_health_reports_hmm_age(
     assert "hmm_trained_through" in body
     assert "hmm_age_days" in body
     assert body["hmm_age_days"] >= 0
+
+
+# ── /period-summary ───────────────────────────────────────────
+
+
+def _seed_history(rows_spec: list[tuple[date, str, float | None]]):
+    """Helper — convert list of (bar_date, label, stress) into
+    list[RegimeRow]."""
+    from backend.algo.regime.repo import RegimeRow
+    return [
+        RegimeRow(
+            bar_date=d, regime_label=label,
+            stress_prob=s, rule_inputs={},
+            classifier_version="v1.0",
+        )
+        for d, label, s in rows_spec
+    ]
+
+
+def test_period_summary_dominant_bull_recommends_bull_template(
+    monkeypatch, client: TestClient,
+) -> None:
+    from backend.algo.routes import regime as routes_mod
+    rows = _seed_history(
+        [(date(2026, 5, i + 1), "BULL", 0.2) for i in range(20)]
+        + [(date(2026, 5, 21 + i), "SIDEWAYS", 0.3) for i in range(5)]
+        + [(date(2026, 5, 26 + i), "BEAR", 0.7) for i in range(5)],
+    )
+    monkeypatch.setattr(
+        routes_mod, "get_regime_history",
+        lambda **_: rows,
+    )
+    r = client.get(
+        "/v1/algo/regime/period-summary"
+        "?start=2026-05-01&end=2026-05-30"
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total_days"] == 30
+    assert body["counts"]["BULL"] == 20
+    assert body["counts"]["SIDEWAYS"] == 5
+    assert body["counts"]["BEAR"] == 5
+    assert body["pct"]["BULL"] == pytest.approx(66.7, abs=0.5)
+    assert body["dominant"] == "BULL"
+    assert body["recommended_template"] == "regime_bull_momentum"
+    assert body["avg_stress_prob"] is not None
+
+
+def test_period_summary_mixed_no_recommendation(
+    monkeypatch, client: TestClient,
+) -> None:
+    """No regime ≥ 50% → no template recommended."""
+    from backend.algo.routes import regime as routes_mod
+    from cache import get_cache
+    get_cache().invalidate("cache:regime:period_summary:*")
+    rows = _seed_history(
+        [(date(2026, 6, i + 1), "BULL", 0.2) for i in range(10)]
+        + [(date(2026, 6, 11 + i), "SIDEWAYS", 0.3) for i in range(10)]
+        + [(date(2026, 6, 21 + i), "BEAR", 0.7) for i in range(10)],
+    )
+    monkeypatch.setattr(
+        routes_mod, "get_regime_history", lambda **_: rows,
+    )
+    r = client.get(
+        "/v1/algo/regime/period-summary"
+        "?start=2026-06-01&end=2026-06-30"
+    )
+    body = r.json()
+    assert body["dominant"] in {"BULL", "SIDEWAYS", "BEAR"}
+    assert body["recommended_template"] is None
+
+
+def test_period_summary_empty_history(
+    monkeypatch, client: TestClient,
+) -> None:
+    from backend.algo.routes import regime as routes_mod
+    monkeypatch.setattr(
+        routes_mod, "get_regime_history", lambda **_: [],
+    )
+    r = client.get(
+        "/v1/algo/regime/period-summary"
+        "?start=2026-05-01&end=2026-05-10"
+    )
+    body = r.json()
+    assert body["total_days"] == 0
+    assert body["dominant"] is None
+    assert body["recommended_template"] is None
+    assert body["avg_stress_prob"] is None
+
+
+def test_period_summary_400_when_end_before_start(
+    monkeypatch, client: TestClient,
+) -> None:
+    from backend.algo.routes import regime as routes_mod
+    monkeypatch.setattr(
+        routes_mod, "get_regime_history", lambda **_: [],
+    )
+    # Bypass cache for this test (different start/end)
+    r = client.get(
+        "/v1/algo/regime/period-summary"
+        "?start=2026-05-30&end=2026-05-01"
+    )
+    assert r.status_code == 400

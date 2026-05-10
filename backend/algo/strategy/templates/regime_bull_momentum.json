@@ -1,0 +1,76 @@
+{
+  "id": "00000000-0000-0000-0000-000000000010",
+  "name": "BULL — Momentum + Trend Confirmation",
+  "universe": {
+    "type": "scope",
+    "scope": "discovery",
+    "filter": {
+      "ticker_type": ["stock"],
+      "market": "india"
+    }
+  },
+  "schedule": {
+    "type": "bar_close",
+    "interval": "1d",
+    "time": "15:25 IST"
+  },
+  "rebalance": {
+    "type": "daily",
+    "max_positions": 10
+  },
+  "root": {
+    "type": "and",
+    "operands": [
+      {
+        "type": "compare",
+        "left": {"feature": "regime_label"},
+        "op": "==",
+        "right": {"literal": "BULL"}
+      },
+      {
+        "type": "compare",
+        "left": {"feature": "mom_12_1"},
+        "op": ">",
+        "right": {"literal": 0.10}
+      },
+      {
+        "type": "compare",
+        "left": {"feature": "adx_14"},
+        "op": ">",
+        "right": {"literal": 25}
+      },
+      {
+        "type": "compare",
+        "left": {"feature": "distance_from_sma200"},
+        "op": ">",
+        "right": {"literal": 0.0}
+      },
+      {
+        "type": "compare",
+        "left": {"feature": "volume_x_avg_20"},
+        "op": ">",
+        "right": {"literal": 1.0}
+      },
+      {
+        "type": "compare",
+        "left": {"feature": "f_score"},
+        "op": ">=",
+        "right": {"literal": 6}
+      }
+    ]
+  },
+  "risk": {
+    "per_trade": {
+      "stop_loss_pct": 8.0,
+      "max_qty": 1000
+    },
+    "portfolio": {
+      "max_exposure_pct": 80.0,
+      "max_concentration_pct": 12.0
+    },
+    "daily": {
+      "max_loss_pct": 5.0,
+      "max_open_positions": 10
+    }
+  }
+}
