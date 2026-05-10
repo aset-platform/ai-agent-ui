@@ -818,3 +818,81 @@ class TestKitePostbackMountAndNoAuth:
         router = create_webhooks_router()
         routes = [r.path for r in router.routes]
         assert "/webhooks/kite/postback" in routes
+
+
+class TestKitePostbackIdempotency:
+    """Same guid posted twice → first persists, second dedup."""
+
+    def test_second_post_returns_deduplicated_true(self):
+        """First POST persists; second returns deduplicated."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from backend.algo.routes.webhooks import router
+
+        app = FastAPI()
+        app.include_router(router)
+        payload = _valid_payload_with_checksum()
+
+        # First call: _is_duplicate=False → persist
+        # Second call: _is_duplicate=True → dedup
+        dup_flag = {"count": 0}
+
+        async def _dup_side_effect(guid):
+            dup_flag["count"] += 1
+            return dup_flag["count"] > 1
+
+        with (
+            patch.dict(
+                os.environ,
+                {"KITE_POSTBACK_ENABLED": "true"},
+            ),
+            patch(
+                "backend.algo.routes.webhooks.load_secret",
+                return_value=_SECRET,
+            ),
+            patch(
+                "backend.algo.routes.webhooks._is_duplicate",
+                side_effect=_dup_side_effect,
+            ),
+            patch(
+                "backend.algo.routes.webhooks."
+                "_resolve_kite_user",
+                new_callable=AsyncMock,
+                return_value=_OUR_USER_ID,
+            ),
+            patch(
+                "asyncio.to_thread",
+                new_callable=AsyncMock,
+            ) as mock_thread,
+            patch(
+                "backend.algo.routes.webhooks._get_cache",
+                return_value=MagicMock(
+                    invalidate=MagicMock()
+                ),
+            ),
+        ):
+            client = TestClient(app)
+            resp1 = client.post(
+                "/webhooks/kite/postback",
+                content=json.dumps(payload),
+                headers={
+                    "Content-Type": "application/json"
+                },
+            )
+            resp2 = client.post(
+                "/webhooks/kite/postback",
+                content=json.dumps(payload),
+                headers={
+                    "Content-Type": "application/json"
+                },
+            )
+
+        assert resp1.status_code == 200
+        assert resp1.json() == {"ok": True}
+        assert resp2.status_code == 200
+        assert resp2.json() == {
+            "ok": True,
+            "deduplicated": True,
+        }
+        # flush_events only called once (first delivery)
+        assert mock_thread.call_count == 1
