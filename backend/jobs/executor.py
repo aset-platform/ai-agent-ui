@@ -3406,3 +3406,24 @@ def _job_compute_daily_factors(payload: dict | None = None):
     days = int(payload.get("days", 1))
     n = run_compute_job(as_of=parsed, days=days)
     return {"rows_written": n}
+
+
+@register_job("regime_change_notifier")
+def _job_regime_change_notifier(payload: dict | None = None):
+    """REGIME-3: daily 22:35 IST regime-change notifier.
+
+    Diffs today's vs yesterday's regime label in
+    ``stocks.regime_history``; on flip emits exactly one
+    ``regime_changed`` event into ``algo.events``.  Frontend
+    ``RegimeChangeBanner`` polls and surfaces the amber banner
+    via localStorage diff.
+    """
+    from datetime import date as _date
+
+    from backend.algo.jobs.regime_change_notifier import run_notifier
+
+    payload = payload or {}
+    as_of = payload.get("as_of")
+    parsed = _date.fromisoformat(as_of) if as_of else None
+    out = run_notifier(as_of=parsed)
+    return {"emitted": out is not None, "payload": out}

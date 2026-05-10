@@ -47,15 +47,62 @@ def _resolve_operand(op: dict, ctx: EvalContext) -> Decimal:
     )
 
 
+def _resolve_operand_raw(op: dict, ctx: EvalContext):  # noqa: ANN201
+    """REGIME-3 string-aware resolver.
+
+    Returns the operand's underlying type without coercing to Decimal.
+    String features (``regime_label``) and string literals come back
+    as ``str``; everything else goes through the existing Decimal
+    path of ``_resolve_operand``.
+    """
+    if "literal" in op:
+        v = op["literal"]
+        if isinstance(v, str):
+            return v
+        return Decimal(str(v))
+    if "feature" in op:
+        feature = op["feature"]
+        if feature not in ctx.features:
+            raise KeyError(f"Feature not in context: {feature}")
+        v = ctx.features[feature]
+        if isinstance(v, str):
+            return v
+        return v  # already Decimal-ish
+    raise ValueError(
+        f"Operand has neither feature nor literal: {op}"
+    )
+
+
 class Evaluator:
     """Stateless dispatcher. Construct once per backtest run."""
 
     def eval_node(self, node: dict, ctx: EvalContext):  # noqa: ANN201
         t = node.get("type")
         if t == "compare":
-            left = _resolve_operand(node["left"], ctx)
-            right = _resolve_operand(node["right"], ctx)
-            return _OPS[node["op"]](left, right)
+            # REGIME-3: string-aware fast-path for ``regime_label ==
+            # "bull"`` style compares.  Both operands must be strings;
+            # mixed types raise loudly to surface upstream typos.
+            left_raw = _resolve_operand_raw(node["left"], ctx)
+            right_raw = _resolve_operand_raw(node["right"], ctx)
+            left_is_str = isinstance(left_raw, str)
+            right_is_str = isinstance(right_raw, str)
+            if left_is_str or right_is_str:
+                if not (left_is_str and right_is_str):
+                    raise ValueError(
+                        "Mixed string/numeric compare: "
+                        f"{type(left_raw).__name__} {node['op']} "
+                        f"{type(right_raw).__name__}"
+                    )
+                op = node["op"]
+                if op == "==":
+                    return left_raw == right_raw
+                if op == "!=":
+                    return left_raw != right_raw
+                raise ValueError(
+                    f"String operands only support ==/!=, got {op}"
+                )
+            # Numeric path — unchanged.
+            return _OPS[node["op"]](left_raw, right_raw)
         if t == "and":
             return all(
                 bool(self.eval_node(c, ctx))
