@@ -2,6 +2,85 @@
 
 ---
 
+## 2026-05-10 — v2 obs+postback follow-ups shipped + v3 regime epic planned
+
+**Branch:** `feature/algo-trading-v2-integration` (continued; now **41 commits ahead of `dev`**, was 34 yesterday).
+
+### What shipped today
+
+7 PRs merged (#174–#179, with #175 + #177 as docs-only) — closes out the v2 epic before the integration → `dev` PR.
+
+| PR | Slice | SP | Squash SHA |
+|---|---|--:|---|
+| #174 | OBS-1 — WS health endpoint + status dot | 3 | `7adc906` |
+| #175 | docs — v2 obs+postback + v3 regime planning artifacts | — | `3da7ec2` |
+| #176 | OBS-3 — ngrok dev tunnel + operator runbook | 2 | `48a6963` |
+| #177 | docs — OBS-1→OBS-4 manual test plan | — | `7b47843` |
+| #178 | OBS-2 — Kite postback backend (verify_checksum + idempotency) | 5 | `fa829fe` |
+| #179 | OBS-4 — Kite postback observability panel | 3 | `b11f574` |
+
+**Total v2 obs+postback work: 13 SP across 4 slices, plus 2 docs PRs.** The v2 epic (50 SP slices + 30 post-merge fixes from yesterday + 13 SP today) is now complete on the integration branch.
+
+### Spec + plans + research (all committed via PR #175)
+
+- `specs/2026-05-10-algo-v2-observability-postback-design.md` — small spec for OBS-1→OBS-4
+- `specs/2026-05-10-algo-regime-aware-multifactor-design.md` — 89 SP / 8 slice v3 epic spec
+- `research/2026-05-10-codebase-regime-factor-inventory.md` — gap analysis
+- `research/2026-05-10-kite-postback-ngrok.md` — payload schema + tunnel options
+- `research/2026-05-10-regime-aware-multifactor-research.md` — NSE-specific multi-factor synthesis (~1500 lines, with citations)
+- `plans/2026-05-10-algo-v2-obs-{1,2,3,4}-*.md` — full TDD for OBS-2/3/4 (1844-2915 lines), skeleton for OBS-1 (shipped first)
+- `plans/2026-05-10-algo-regime-slice-{1,2a,2b,3,4,5,6,7}-*.md` — 8 regime slice skeletons (100-326 lines each)
+
+### v3 epic — Regime-Aware Multi-Factor System (planned, ready to implement)
+
+89 SP across 8 slices. User-confirmed design choices baked in:
+- **Strategy↔regime binding:** metadata field `applicable_regimes: [...]` + optional in-AST `regime_eq()` predicate
+- **Regime flip behavior:** surface as recommendation, manual pause/resume (auto-pause = v4)
+- **Regime classifier:** rule-based primary + 2-state Gaussian HMM advisory overlay (NOT decision-driver)
+- **REGIME-2 split:** 2a (factor library backend, 13 SP) + 2b (Factor Scores frontend, 8 SP, deferrable)
+
+Research-backed thresholds: India VIX bands (calm <16 / normal 16-25 / stressed >25), backtest start floor 2007-01-01 (mandatory anti-pattern guard for survivorship bias — 4.94pp/yr inflation per NIFTY Smallcap 250 SSRN), drawdown throttle ladder (5/10/15/20% DD → 0.75/0.5/0.25/0× sizing), DSR ≥ 0.95 + PBO ≤ 0.3 as walk-forward gates.
+
+### Parallel subagent execution at scale
+
+Heavy use of background worktree-isolated subagents — 17 dispatches today:
+
+| Wave | Subagents | Time | Output |
+|---|---|---|---|
+| Research | 3 (Explore + 2 sonnet web research) | parallel | 3 research files |
+| OBS-1 implementation | 1 sonnet/worktree | ~18 min | 8 commits, PR #174 |
+| Plan expansion (obs+postback) | 3 (sonnet × 2 + haiku × 1) | parallel ~6 min | OBS-2/3/4 full TDD plans |
+| Regime slice skeletons | 7 haiku (format-following) | parallel ~1 min | REGIME-1 through 7 skeletons |
+| OBS-2/3/4 implementation | 3 sonnet/worktree | parallel | OBS-2 #178, OBS-3 #176, OBS-4 #179 |
+
+### Discipline lessons from today
+
+- **Two of three parallel subagents (OBS-2, OBS-4) escaped their isolation worktrees** and ran git operations in the parent worktree, bouncing HEAD between branches via cherry-picks and resets. Lost an in-progress PROGRESS.md edit + the test plan file (re-created in a separate clean worktree). Mitigation: OBS-3 worked correctly in its own worktree and was a clean reference.
+- **Both OBS-2 and OBS-4 branched from a STALE integration tip** — their diffs against the merged-forward integration branch showed catastrophic deletions (would erase OBS-3 work + test plan). Recovered by creating fresh worktrees off latest integration and cherry-picking each subagent's commits onto the new clean branch — no data loss.
+- **OBS-4 inadvertently cherry-picked 2 OBS-2 commits** during the contention; the rebuild script explicitly skipped them so they only landed via OBS-2's own PR.
+- **Pipefail + `grep -q` SIGPIPE footgun** — `git ls-tree | grep -q "name"` exits 141 (SIGPIPE on git's side after grep -q closes the pipe early). With `set -euo pipefail`, the pipe propagates as failure. Fix: assign git output to a variable first, then `echo "$VAR" | grep -q ...`.
+- **Reusable rebuild script** at `.claude/scripts/rebuild-obs4.sh` codifies the "rebuild stale branch via cherry-pick + idempotent docs append + auto-PR-merge" pattern. Generalizable to future parallel-subagent-contention scenarios.
+
+### Manual test plan + multi-provider ngrok strategy
+
+Shipped `docs/algo-trading/obs-test-plan.md` — Sections A through G, 358 lines. Covers ngrok signup + .env + each OBS slice's smoke + a multi-provider section confirming **same ngrok URL serves Kite + Razorpay + Stripe webhooks** via `/v1/webhooks/<provider>` path convention. ngrok free tier headroom (>3× under cap for our combined traffic).
+
+### Pending before dev merge
+
+1. Manual smoke per the new test plan (deferred to user — needs ngrok signup + Kite Developer Console URL)
+2. Open final integration → `dev` PR (squash; ~41 commits → 1 commit on `dev`)
+3. CHANGELOG `[0.17.0]` entry extension to cover today's PRs
+4. mkdocs build verification
+
+### Next session
+
+Pick from:
+- **REGIME-1 implementation** (most important next module per user brief — regime engine with rule-based classifier + 2-state HMM + ^INDIAVIX ingest)
+- **Final v2 → dev merge** (close out v2 epic before more work piles on)
+- **Continue OBS-* manual smoke** (after ngrok configured)
+
+---
+
 ## 2026-05-09 (later) — Algo Trading v2 — full sprint + integration
 
 **Branch:** `feature/algo-trading-v2-integration` (cut from `dev` at `27e98730` after v1 squash-merged via PR #141 earlier in the day)
