@@ -239,3 +239,104 @@ describe("KitePostbackPanel — status badge colours", () => {
     });
   });
 });
+
+
+// ── Task 7 ──────────────────────────────────────────────────
+describe("KitePostbackPanel — payload toggle", () => {
+  const TWO = [
+    {
+      event_ts: "2026-05-10T09:30:00Z",
+      tradingsymbol: "RELIANCE.NS",
+      status: "COMPLETE",
+      filled_quantity: 5,
+      average_price: 2950.75,
+      raw: { order_id: "111", guid: "aaa" },
+    },
+    {
+      event_ts: "2026-05-10T09:25:00Z",
+      tradingsymbol: "INFY.NS",
+      status: "COMPLETE",
+      filled_quantity: 3,
+      average_price: 1500.5,
+      raw: { order_id: "222", guid: "bbb" },
+    },
+  ];
+
+  it("payload is hidden before any toggle click", () => {
+    mockHook.mockReturnValue({
+      postbacks: TWO,
+      isLoading: false,
+      error: null,
+      mutate: vi.fn(),
+    });
+
+    render(<KitePostbackPanel />);
+
+    // "111" is only in the raw JSON — should not be visible initially.
+    expect(screen.queryByText(/"111"/)).toBeNull();
+  });
+
+  it("clicking arrow expands the raw JSON payload", () => {
+    mockHook.mockReturnValue({
+      postbacks: TWO,
+      isLoading: false,
+      error: null,
+      mutate: vi.fn(),
+    });
+
+    render(<KitePostbackPanel />);
+
+    const toggles = screen.getAllByTestId(
+      "kite-postback-payload-toggle",
+    );
+    fireEvent.click(toggles[0]);
+
+    // The raw JSON for row 0 should now be visible.
+    expect(screen.getByText(/"111"/)).toBeTruthy();
+  });
+
+  it("clicking toggle twice collapses the payload", () => {
+    mockHook.mockReturnValue({
+      postbacks: TWO,
+      isLoading: false,
+      error: null,
+      mutate: vi.fn(),
+    });
+
+    render(<KitePostbackPanel />);
+
+    const toggles = screen.getAllByTestId(
+      "kite-postback-payload-toggle",
+    );
+    fireEvent.click(toggles[0]);
+    expect(screen.getByText(/"111"/)).toBeTruthy();
+
+    fireEvent.click(toggles[0]);
+    expect(screen.queryByText(/"111"/)).toBeNull();
+  });
+
+  it("expanding row 1 collapses row 0 (single-row-at-a-time)", () => {
+    mockHook.mockReturnValue({
+      postbacks: TWO,
+      isLoading: false,
+      error: null,
+      mutate: vi.fn(),
+    });
+
+    render(<KitePostbackPanel />);
+
+    const toggles = screen.getAllByTestId(
+      "kite-postback-payload-toggle",
+    );
+
+    // Expand row 0.
+    fireEvent.click(toggles[0]);
+    expect(screen.getByText(/"111"/)).toBeTruthy();
+    expect(screen.queryByText(/"222"/)).toBeNull();
+
+    // Expand row 1 — row 0 should collapse.
+    fireEvent.click(toggles[1]);
+    expect(screen.queryByText(/"111"/)).toBeNull();
+    expect(screen.getByText(/"222"/)).toBeTruthy();
+  });
+});
