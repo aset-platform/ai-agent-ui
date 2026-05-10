@@ -59,3 +59,26 @@ export const AST_NODE_LABEL: Record<AstNodeType, string> = {
   select_top_n: "Select top N",
   weighted: "Weighted",
 };
+
+// REGIME-3 — strategy↔regime binding metadata.
+export type RegimeLabel = "bull" | "sideways" | "bear";
+
+export const REGIME_LABELS: RegimeLabel[] = [
+  "bull",
+  "sideways",
+  "bear",
+];
+
+/**
+ * Backend GET /v1/algo/strategies/:id response shape (REGIME-3).
+ * Wraps the AST in a sibling object so optional metadata can ride
+ * alongside without breaking the strict ``Strategy`` AST schema.
+ */
+export interface StrategyResponse {
+  strategy: {
+    id: string;
+    name: string;
+    [key: string]: unknown;
+  };
+  applicable_regimes: RegimeLabel[];
+}
