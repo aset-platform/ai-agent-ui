@@ -46,9 +46,9 @@ def _load_nifty_window(
     start = as_of - timedelta(days=lookback_days + 30)
     rows = query_iceberg_table(
         "stocks.ohlcv",
-        "SELECT bar_date, close FROM ohlcv "
-        "WHERE ticker = ? AND bar_date BETWEEN ? AND ? "
-        "ORDER BY bar_date ASC",
+        "SELECT date AS bar_date, close FROM ohlcv "
+        "WHERE ticker = ? AND date BETWEEN ? AND ? "
+        "ORDER BY date ASC",
         [NIFTY_TICKER, start, as_of],
     )
     return pd.DataFrame(rows)
@@ -58,9 +58,9 @@ def _load_vix_latest(as_of: date) -> pd.DataFrame:
     start = as_of - timedelta(days=10)
     rows = query_iceberg_table(
         "stocks.ohlcv",
-        "SELECT bar_date, close FROM ohlcv "
-        "WHERE ticker = ? AND bar_date BETWEEN ? AND ? "
-        "ORDER BY bar_date DESC LIMIT 1",
+        "SELECT date AS bar_date, close FROM ohlcv "
+        "WHERE ticker = ? AND date BETWEEN ? AND ? "
+        "ORDER BY date DESC LIMIT 1",
         [VIX_TICKER, start, as_of],
     )
     return pd.DataFrame(rows)
@@ -74,13 +74,13 @@ def _compute_breadth_pct_50sma(as_of: date) -> Decimal:
         rows = query_iceberg_table(
             "stocks.ohlcv",
             "WITH w AS ("
-            "  SELECT ticker, bar_date, close, "
+            "  SELECT ticker, date AS bar_date, close, "
             "         AVG(close) OVER ("
-            "             PARTITION BY ticker ORDER BY bar_date "
+            "             PARTITION BY ticker ORDER BY date "
             "             ROWS BETWEEN 49 PRECEDING "
             "             AND CURRENT ROW"
             "         ) AS sma50 "
-            "  FROM ohlcv WHERE bar_date BETWEEN ? AND ? "
+            "  FROM ohlcv WHERE date BETWEEN ? AND ? "
             ") "
             "SELECT COUNT(*) FILTER (WHERE close > sma50) AS above, "
             "       COUNT(*) AS total "
