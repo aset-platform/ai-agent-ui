@@ -130,6 +130,20 @@ class BuyQtyNotional(BaseModel):
     notional_inr: float = Field(gt=0)
 
 
+class BuyQtyVolTarget(BaseModel):
+    """REGIME-4: target % portfolio vol per position. Sized at
+    runtime by the composer using realized_vol_60d + NAV."""
+    model_config = ConfigDict(extra="forbid")
+    vol_target_pct: float = Field(gt=0)
+
+
+class BuyQtyKelly(BaseModel):
+    """REGIME-4: Kelly-fraction sizing. Requires expected_edge in
+    strategy metadata; composer returns 0 + warns if missing."""
+    model_config = ConfigDict(extra="forbid")
+    kelly_fraction: float = Field(gt=0, le=1)
+
+
 class SellQtyShares(BaseModel):
     model_config = ConfigDict(extra="forbid")
     shares: int = Field(ge=1)
@@ -143,7 +157,9 @@ class SellQtyAll(BaseModel):
 class BuyNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["buy"] = "buy"
-    qty: Union[BuyQtyShares, BuyQtyNotional]
+    qty: Union[
+        BuyQtyShares, BuyQtyNotional, BuyQtyVolTarget, BuyQtyKelly,
+    ]
 
 
 class SellNode(BaseModel):
