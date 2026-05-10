@@ -19,6 +19,7 @@ Notes
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -231,6 +232,87 @@ async def _check_gates(
         ),
         dry_run=dry_run,
     )
+
+
+# ---------------------------------------------------------------
+# Postback read models (OBS-2 companion)
+# ---------------------------------------------------------------
+
+
+class PostbackEvent(BaseModel):
+    """Single postback event row for the frontend panel."""
+
+    event_id: str
+    ts_ns: int
+    ts_date: str
+    guid: str
+    order_id: str
+    status: str
+    tradingsymbol: str
+    filled_quantity: int
+    average_price: float
+    our_user_id: str | None = None
+    raw: dict = Field(default_factory=dict)
+
+
+class PostbacksResponse(BaseModel):
+    """Response for GET /algo/live/postbacks."""
+
+    events: list[PostbackEvent] = Field(
+        default_factory=list
+    )
+    total: int = 0
+
+
+def _query_postback_events(
+    user_id: str,
+    limit: int,
+) -> list[dict]:
+    """Query algo.events for kite_postback_received rows.
+
+    Args:
+        user_id: Our internal user UUID string.
+        limit: Max rows to return (default 50).
+
+    Returns:
+        List of raw event dicts ordered by ts_ns DESC.
+    """
+    import duckdb
+    from stocks.repository import StockRepository
+
+    repo = StockRepository()
+    path = repo._iceberg_table_path(  # noqa: SLF001
+        "algo.events"
+    )
+    try:
+        con = duckdb.connect()
+        con.execute("INSTALL iceberg; LOAD iceberg;")
+        rows = con.execute(
+            "SELECT event_id, ts_ns, ts_date, "
+            "payload_json "
+            "FROM iceberg_scan(?) "
+            "WHERE user_id = ? "
+            "  AND type = 'kite_postback_received' "
+            "ORDER BY ts_ns DESC "
+            "LIMIT ?",
+            [path, user_id, limit],
+        ).fetchall()
+        return [
+            {
+                "event_id": r[0],
+                "ts_ns": r[1],
+                "ts_date": r[2],
+                "payload_json": r[3],
+            }
+            for r in rows
+        ]
+    except Exception:
+        _logger.warning(
+            "postback query failed for user=%s",
+            user_id,
+            exc_info=True,
+        )
+        return []
 
 
 # ---------------------------------------------------------------
@@ -500,5 +582,63 @@ def create_live_router() -> APIRouter:
             import json
             in_flight = json.loads(in_flight)
         return in_flight
+
+    # ---------------------------------------------------------------
+    # Postback read endpoint (OBS-2 companion)
+    # ---------------------------------------------------------------
+
+    @router.get(
+        "/postbacks",
+        response_model=PostbacksResponse,
+    )
+    async def get_live_postbacks(
+        limit: int = 50,
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> PostbacksResponse:
+        """Return last N Kite postback events for the user.
+
+        Args:
+            limit: Max rows (capped at 200, default 50).
+
+        Returns:
+            PostbacksResponse with events newest first.
+        """
+        import asyncio as _asyncio
+        cap = min(limit, 200)
+        raw_rows = await _asyncio.to_thread(
+            _query_postback_events, user.user_id, cap
+        )
+
+        events: list[PostbackEvent] = []
+        for r in raw_rows:
+            try:
+                p = json.loads(r["payload_json"])
+            except Exception:
+                continue
+            events.append(
+                PostbackEvent(
+                    event_id=r["event_id"],
+                    ts_ns=r["ts_ns"],
+                    ts_date=r["ts_date"],
+                    guid=p.get("guid", ""),
+                    order_id=p.get("order_id", ""),
+                    status=p.get("status", ""),
+                    tradingsymbol=p.get(
+                        "tradingsymbol", ""
+                    ),
+                    filled_quantity=int(
+                        p.get("filled_quantity", 0)
+                    ),
+                    average_price=float(
+                        p.get("average_price", 0.0)
+                    ),
+                    our_user_id=p.get("our_user_id"),
+                    raw=p.get("raw", {}),
+                )
+            )
+
+        return PostbacksResponse(
+            events=events, total=len(events)
+        )
 
     return router
