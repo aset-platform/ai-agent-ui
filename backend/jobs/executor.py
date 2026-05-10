@@ -3370,3 +3370,19 @@ async def _job_algo_ws_tick_count_reset(
         run_reset_tick_count_job,
     )
     return await run_reset_tick_count_job(payload)
+
+
+@register_job("regime_classifier_daily")
+def _job_regime_classifier_daily(payload: dict | None = None):
+    """REGIME-1: daily 22:30 IST regime classification.
+
+    Reads NIFTY + India VIX + universe breadth from
+    ``stocks.ohlcv``, persists one row to
+    ``stocks.regime_history`` with a ``BULL/SIDEWAYS/BEAR`` label
+    plus an HMM stress posterior. Sync — runs inside the
+    scheduler thread (no async DB calls).
+    """
+    from backend.algo.regime.classifier_job import (
+        run_classifier_job,
+    )
+    return run_classifier_job(payload or {})

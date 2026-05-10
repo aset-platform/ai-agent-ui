@@ -10,13 +10,14 @@
 export interface StrategyFeature {
   key: string;
   label: string;
-  type: "int" | "float";
+  type: "int" | "float" | "string";
   source:
     | "ohlcv"
     | "technical"
     | "fundamentals"
     | "recommendation"
-    | "forecast";
+    | "forecast"
+    | "regime";
 }
 
 export const STRATEGY_FEATURES: StrategyFeature[] = [
@@ -45,6 +46,14 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   // Forecast
   { key: "forecast_30d_pct_change", label: "Forecast 30d % change", type: "float", source: "forecast" },
   { key: "forecast_confidence", label: "Forecast confidence", type: "float", source: "forecast" },
+  // Regime + breadth + VIX (REGIME-1)
+  { key: "regime_label", label: "Regime label (BULL/SIDEWAYS/BEAR)", type: "string", source: "regime" },
+  { key: "stress_prob", label: "HMM stress probability", type: "float", source: "regime" },
+  { key: "pct_above_50sma", label: "% above 50d SMA (breadth)", type: "float", source: "regime" },
+  { key: "pct_above_200sma", label: "% above 200d SMA (breadth)", type: "float", source: "regime" },
+  { key: "midcap_largecap_ratio", label: "Midcap / Largecap ratio", type: "float", source: "regime" },
+  { key: "vix_close", label: "India VIX close", type: "float", source: "regime" },
+  { key: "vix_sma_20", label: "India VIX 20-day SMA", type: "float", source: "regime" },
 ];
 
 export const STRATEGY_FEATURE_KEY_SET: Set<string> = new Set(

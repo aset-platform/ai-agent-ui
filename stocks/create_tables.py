@@ -2064,6 +2064,13 @@ def create_tables() -> None:
         empty_spec,
     )
 
+    # Regime engine — REGIME-1 (stocks.regime_history +
+    # stocks.regime_hmm_state). Idempotent.
+    from backend.algo.regime.iceberg_init import (
+        register_tables as _regime_register,
+    )
+    _regime_register()
+
     _logger.info("Stocks Iceberg table initialisation complete.")
 
 
