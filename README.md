@@ -416,6 +416,27 @@ cd e2e && npm test                      # 257 E2E tests (needs live services)
 
 ---
 
+## Environment Variables
+
+Copy `.env.example` to `.env` and populate the values. Key variables:
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `PG_PASSWORD` | string | PostgreSQL password (default: `devpass123`) |
+| `GROQ_API_KEY` | string | Groq LLM API key |
+| `ANTHROPIC_API_KEY` | string | Anthropic LLM API key (paid cascade fallback) |
+| `JWT_SECRET_KEY` | string | JWT signing secret (generate with `secrets.token_hex(32)`) |
+| `BYO_SECRET_KEY` | string | Fernet key for encrypting user-provided LLM keys |
+| `RAZORPAY_KEY_ID` | string | Razorpay test key (INR subscriptions) |
+| `STRIPE_SECRET_KEY` | string | Stripe test key (USD subscriptions) |
+| `NGROK_AUTHTOKEN` | string | ngrok auth token from https://dashboard.ngrok.com (live trading only) |
+| `NGROK_DOMAIN` | string | Claimed free `*.ngrok-free.dev` domain for Kite postback tunnel (live trading only) |
+| `KITE_POSTBACK_ENABLED` | boolean | Set to `true` after Kite Developer Console postback URL is registered (default: `false`) |
+
+Full setup guide for ngrok + Kite postback: [docs/algo-trading/postbacks.md](docs/algo-trading/postbacks.md).
+
+---
+
 ## Development
 
 ```bash
