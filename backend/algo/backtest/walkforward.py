@@ -56,6 +56,14 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.algo.backtest.event_writer import event_row, flush_events
+from backend.algo.backtest.gates import GateThresholds, evaluate_5_gates
+from backend.algo.backtest.metrics import (
+    PerRegimeMetrics,
+    deflated_sharpe_ratio,
+    per_regime_breakdown,
+    probability_of_backtest_overfitting,
+    recovery_months_from_dd,
+)
 from backend.algo.backtest.runner import run_backtest
 from backend.algo.backtest.runs_repo import BacktestRunsRepo
 from backend.algo.backtest.types import BacktestRequest, BacktestSummary
@@ -80,6 +88,15 @@ class WalkForwardConfig(BaseModel):
     initial_capital_inr: Decimal = Field(
         default=Decimal("100000.00"), ge=Decimal("1000.00"),
     )
+    # REGIME-5: regime-stratified windows + 5-gate thresholds.
+    # All optional with safe defaults so existing V2-2 callers
+    # keep working unchanged.
+    regime_stratified: bool = True
+    require_per_regime_non_negative: bool = True
+    require_dsr_min: Decimal = Decimal("0.95")
+    require_pbo_max: Decimal = Decimal("0.30")
+    require_max_dd_pct: Decimal = Decimal("25")
+    require_recovery_months_max: int = 18
 
 
 @dataclass(frozen=True)
@@ -115,6 +132,19 @@ class WindowSummary(BaseModel):
     error_text: str | None = None
 
 
+class PerRegimeRow(BaseModel):
+    """Per-regime metrics serialised for the API + persistence."""
+    model_config = ConfigDict(extra="forbid")
+
+    regime: str
+    n_days: int
+    cum_return_pct: Decimal
+    sharpe: Decimal
+    sortino: Decimal
+    max_dd_pct: Decimal
+    hit_rate: Decimal
+
+
 class WalkForwardAggregate(BaseModel):
     """Aggregate metrics across all test windows."""
     model_config = ConfigDict(extra="forbid")
@@ -125,6 +155,14 @@ class WalkForwardAggregate(BaseModel):
     std_pnl_pct: Decimal  # std-dev of per-window PnL%
     window_count: int
     completed_count: int
+    # REGIME-5 additions. All default-empty so any older
+    # summary_json blob deserialises cleanly.
+    per_regime: list[PerRegimeRow] = Field(default_factory=list)
+    dsr: Decimal = Decimal("0")
+    pbo: Decimal | None = None
+    recovery_months: int = 0
+    gates_passed: dict[str, bool] = Field(default_factory=dict)
+    regime_stratified: bool = False
 
 
 class WalkForwardResult(BaseModel):
@@ -156,11 +194,18 @@ def walk_windows(
     train_days: int,
     test_days: int,
     step_days: int,
+    regime_labels: dict[date, str] | None = None,
 ) -> list[Window]:
     """Return the list of (train, test) windows for the period.
 
     Trailing partial windows (where test_end > end) are dropped,
     not truncated, to keep per-window metrics comparable.
+
+    REGIME-5: pass ``regime_labels`` (a date → regime mapping
+    covering ``[start, end]``) to enforce regime-stratified
+    splits. A window is kept only if its TRAIN slice contains at
+    least one day of every regime present in the FULL period.
+    Pass ``None`` (the default) for the V2-2 behaviour.
 
     Raises ValueError if:
     - train_days < 1, test_days < 1, or step_days < 1
@@ -191,16 +236,66 @@ def walk_windows(
             test_end=test_end,
         ))
         i += 1
+
+    if regime_labels:
+        # Universe of regimes seen anywhere in the full period.
+        full_period_regimes = {
+            lab for d, lab in regime_labels.items()
+            if start <= d <= end
+        }
+        if not full_period_regimes:
+            return windows
+
+        def _train_covers_all(w: Window) -> bool:
+            seen: set[str] = set()
+            cur = w.train_start
+            while cur <= w.train_end:
+                lab = regime_labels.get(cur)
+                if lab is not None:
+                    seen.add(lab)
+                cur += timedelta(days=1)
+            return full_period_regimes.issubset(seen)
+
+        windows = [w for w in windows if _train_covers_all(w)]
+
     return windows
 
 
 # ── Aggregate helper ───────────────────────────────────────────
 
 
+def _q2(x: Decimal | float) -> Decimal:
+    """Quantize to 2dp (no NaN propagation)."""
+    if isinstance(x, float):
+        if x != x or x in (float("inf"), float("-inf")):
+            return Decimal("0")
+        x = Decimal(str(x))
+    return x.quantize(Decimal("0.01"))
+
+
 def _aggregate_windows(
     summaries: list[BacktestSummary],
+    *,
+    regime_labels: dict[Any, str] | None = None,
+    n_trials: int = 1,
+    thresholds: GateThresholds | None = None,
+    regime_stratified: bool = False,
 ) -> WalkForwardAggregate:
-    """Compute aggregate metrics from completed window summaries."""
+    """Compute aggregate metrics from completed window summaries.
+
+    REGIME-5 extensions (all kwarg-optional, default no-op):
+      regime_labels - day → regime label for the union of all
+          test windows. If provided, populates per_regime + the
+          per_regime gate.
+      n_trials - n strategy variants tried (V2-2 = 1 → DSR
+          without multi-comparison deflation, PBO undefined).
+      thresholds - GateThresholds override; None → defaults from
+          spec §6.1.
+      regime_stratified - whether the window iterator was run
+          with regime stratification. Stored on the aggregate so
+          downstream consumers can show "stratified vs not" in
+          the UI.
+    """
     completed = [s for s in summaries if s.status == "completed"]
     if not completed:
         return WalkForwardAggregate(
@@ -210,6 +305,7 @@ def _aggregate_windows(
             std_pnl_pct=Decimal("0"),
             window_count=len(summaries),
             completed_count=0,
+            regime_stratified=regime_stratified,
         )
 
     pnl_pcts = [s.total_pnl_pct for s in completed]
@@ -229,6 +325,95 @@ def _aggregate_windows(
     else:
         std_pnl = Decimal("0")
 
+    # ─── REGIME-5 metrics ─────────────────────────────────────
+    # Concat per-window equity curves into a single aggregated
+    # curve for per-regime + recovery + DSR/PBO calc.
+    full_curve: list[dict[str, Any]] = []
+    for s in completed:
+        for ep in (s.equity_curve or []):
+            full_curve.append({
+                "bar_date": ep.bar_date,
+                "equity_inr": float(ep.equity_inr),
+            })
+
+    # Per-regime breakdown
+    per_regime_rows: list[PerRegimeRow] = []
+    if regime_labels and full_curve:
+        # Normalise label keys to ISO-date strings.
+        norm_labels: dict[str, str] = {}
+        for k, v in regime_labels.items():
+            key = (
+                k.isoformat()
+                if hasattr(k, "isoformat") else str(k)
+            )
+            norm_labels[key] = v
+        per_regime_metrics: list[PerRegimeMetrics] = (
+            per_regime_breakdown(full_curve, norm_labels)
+        )
+        for m in per_regime_metrics:
+            per_regime_rows.append(PerRegimeRow(
+                regime=m.regime,
+                n_days=m.n_days,
+                cum_return_pct=_q2(m.cum_return_pct),
+                sharpe=_q2(m.sharpe),
+                sortino=_q2(m.sortino),
+                max_dd_pct=_q2(m.max_dd_pct),
+                hit_rate=_q2(m.hit_rate),
+            ))
+
+    # Recovery months (on aggregated equity curve)
+    rec_months = recovery_months_from_dd(full_curve)
+
+    # DSR (single-strategy if n_trials=1)
+    obs_sharpe = 0.0
+    sample_len = max(len(full_curve) - 1, 0)
+    if sample_len > 1:
+        rets = []
+        prev = full_curve[0]["equity_inr"]
+        for ep in full_curve[1:]:
+            cur = ep["equity_inr"]
+            if prev and prev > 0:
+                rets.append(cur / prev - 1.0)
+            prev = cur
+        if rets:
+            import math as _math
+            mu = sum(rets) / len(rets)
+            var = sum((r - mu) ** 2 for r in rets) / len(rets)
+            sd = _math.sqrt(var) if var > 0 else 0.0
+            if sd > 1e-12:
+                obs_sharpe = mu / sd * _math.sqrt(252)
+    dsr_val = deflated_sharpe_ratio(
+        obs_sharpe=obs_sharpe,
+        n_trials=max(n_trials, 1),
+        sample_length=sample_len,
+    )
+
+    # PBO undefined for single-strategy walkforward. None signals
+    # "skip PBO gate" per evaluate_5_gates contract.
+    pbo_val: Decimal | None = None
+
+    # 5-gate evaluation
+    th = thresholds or GateThresholds()
+    gates = evaluate_5_gates(
+        aggregate_max_dd_pct=float(avg_dd),
+        recovery_months=rec_months,
+        per_regime=[
+            PerRegimeMetrics(
+                regime=r.regime,
+                n_days=r.n_days,
+                cum_return_pct=float(r.cum_return_pct),
+                sharpe=float(r.sharpe),
+                sortino=float(r.sortino),
+                max_dd_pct=float(r.max_dd_pct),
+                hit_rate=float(r.hit_rate),
+            )
+            for r in per_regime_rows
+        ],
+        dsr=dsr_val,
+        pbo=None,
+        thresholds=th,
+    )
+
     return WalkForwardAggregate(
         avg_win_rate_pct=avg_wr.quantize(Decimal("0.01")),
         avg_pnl_pct=avg_pnl.quantize(Decimal("0.01")),
@@ -236,6 +421,12 @@ def _aggregate_windows(
         std_pnl_pct=std_pnl,
         window_count=len(summaries),
         completed_count=len(completed),
+        per_regime=per_regime_rows,
+        dsr=_q2(dsr_val),
+        pbo=pbo_val,
+        recovery_months=rec_months,
+        gates_passed=gates,
+        regime_stratified=regime_stratified,
     )
 
 
@@ -277,20 +468,58 @@ async def run_walkforward_job(
             )
             await session.commit()
 
+        # REGIME-5: optionally fetch regime_history once for the
+        # full period and use it for both stratified window
+        # selection AND per-regime breakdown later. Falls through
+        # silently to non-stratified mode when regime_history
+        # has no rows for the period (e.g. backtest start 2007
+        # but regime_history only goes back 30 days).
+        regime_labels: dict[date, str] = {}
+        regime_stratified_active = False
+        if config.regime_stratified:
+            try:
+                from backend.algo.regime.repo import (
+                    get_regime_history,
+                )
+                rows = get_regime_history(
+                    config.period_start, config.period_end,
+                )
+                regime_labels = {r.bar_date: r.regime_label for r in rows}
+                if regime_labels:
+                    regime_stratified_active = True
+                else:
+                    _logger.warning(
+                        "walk-forward %s: regime_history empty for "
+                        "%s..%s — falling back to non-stratified",
+                        walkforward_run_id,
+                        config.period_start, config.period_end,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning(
+                    "walk-forward %s: regime_history lookup "
+                    "failed (%s) — non-stratified fallback",
+                    walkforward_run_id, exc,
+                )
+
         windows = walk_windows(
             config.period_start,
             config.period_end,
             train_days=config.train_days,
             test_days=config.test_days,
             step_days=config.step_days,
+            regime_labels=(
+                regime_labels if regime_stratified_active else None
+            ),
         )
 
         _logger.info(
-            "walk-forward %s: %d windows over %s → %s",
+            "walk-forward %s: %d windows over %s → %s "
+            "(stratified=%s)",
             walkforward_run_id,
             len(windows),
             config.period_start,
             config.period_end,
+            regime_stratified_active,
         )
 
         for win in windows:
@@ -428,7 +657,26 @@ async def run_walkforward_job(
         flush_events(events)
         events = []
 
-        aggregate = _aggregate_windows(window_summaries)
+        thresholds = GateThresholds(
+            max_dd_pct=float(config.require_max_dd_pct),
+            recovery_months_max=int(
+                config.require_recovery_months_max,
+            ),
+            require_per_regime_non_negative=(
+                config.require_per_regime_non_negative
+            ),
+            dsr_min=float(config.require_dsr_min),
+            pbo_max=float(config.require_pbo_max),
+        )
+        aggregate = _aggregate_windows(
+            window_summaries,
+            regime_labels=(
+                regime_labels if regime_stratified_active else None
+            ),
+            n_trials=1,
+            thresholds=thresholds,
+            regime_stratified=regime_stratified_active,
+        )
         window_rows = [
             WindowSummary(
                 window_index=win.index,
