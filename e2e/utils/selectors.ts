@@ -380,4 +380,10 @@ export const FE = {
   walkForwardGateLightDsr: "walkforward-gate-light-dsr_ok",
   walkForwardGateLightPbo: "walkforward-gate-light-pbo_ok",
   walkForwardPerRegimeGrid: "walkforward-per-regime-grid",
+
+  // REGIME-2b — Factor Scores Insights tab
+  factorScoresTab: "factor-scores-tab",
+  factorScoresTable: "factor-scores-table",
+  factorScoresEmpty: "factor-scores-empty",
+  factorScoresLoading: "factor-scores-loading",
 } as const;
