@@ -40,6 +40,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
+UTC = timezone.utc
+
 from backend.algo.stream.types import Tick
 
 _logger = logging.getLogger(__name__)
@@ -92,6 +94,15 @@ class KiteWsMultiplexer:
         from uuid import uuid4
         self._session_id: UUID = uuid4()
         self._ws_events: list[dict[str, Any]] = []
+
+        # Health observability — OBS-1.
+        # ``last_tick_at`` tracks the wall-clock time of the most
+        # recent tick across all subscribed tokens (tz-naive UTC,
+        # Iceberg convention per CLAUDE.md §5.1). ``tick_count_today``
+        # is a process-local counter zeroed daily at IST midnight by
+        # the ``algo_ws_tick_count_reset`` job.
+        self.last_tick_at: datetime | None = None
+        self.tick_count_today: int = 0
 
     # ------------------------------------------------------------------
     # Public interface
@@ -212,6 +223,34 @@ class KiteWsMultiplexer:
     def subscriber_count(self) -> int:
         return len(self._queues)
 
+    @property
+    def subscribed_tokens(self) -> int:
+        """Total distinct instrument tokens currently subscribed."""
+        return len(self._token_subs)
+
+    def health_snapshot(self) -> dict[str, Any]:
+        """Return a JSON-serialisable health view (OBS-1).
+
+        ``last_tick_at`` is left as a ``datetime | None`` — the
+        endpoint serialiser converts to ISO 8601 UTC ``Z``.
+        """
+        return {
+            "connected": self._connected,
+            "subscriber_count": len(self._queues),
+            "subscribed_tokens": len(self._token_subs),
+            "last_tick_at": self.last_tick_at,
+            "tick_count_today": self.tick_count_today,
+        }
+
+    def reset_tick_count(self) -> None:
+        """Zero the per-day counter (called by the IST-midnight job).
+
+        ``last_tick_at`` is intentionally preserved so the endpoint
+        keeps reporting the most recent tick wall-clock even after
+        the day rollover.
+        """
+        self.tick_count_today = 0
+
     # ------------------------------------------------------------------
     # Internal connection management
     # ------------------------------------------------------------------
@@ -246,6 +285,14 @@ class KiteWsMultiplexer:
 
         def on_ticks(_ws, ticks):
             now_ns = int(time.time() * 1_000_000_000)
+            # Health: stamp arrival of any tick batch and increment
+            # the per-day counter regardless of whether we have a
+            # ticker mapping for it. Tz-naive UTC (Iceberg convention).
+            if ticks:
+                self.last_tick_at = datetime.now(UTC).replace(
+                    tzinfo=None,
+                )
+                self.tick_count_today += len(ticks)
             for raw in ticks:
                 tok = raw.get("instrument_token")
                 if tok is None:
