@@ -3386,3 +3386,23 @@ def _job_regime_classifier_daily(payload: dict | None = None):
         run_classifier_job,
     )
     return run_classifier_job(payload or {})
+
+
+@register_job("compute_daily_factors")
+def _job_compute_daily_factors(payload: dict | None = None):
+    """REGIME-2a: nightly factor library compute.
+
+    Iterates the active universe, computes 7 factor families per
+    ticker, and bulk-upserts to ``stocks.daily_factors`` via the
+    NaN-replaceable upsert in the repo. Sync.
+    """
+    from datetime import date as _date
+
+    from backend.algo.factors.compute_job import run_compute_job
+
+    payload = payload or {}
+    as_of = payload.get("as_of")
+    parsed = _date.fromisoformat(as_of) if as_of else None
+    days = int(payload.get("days", 1))
+    n = run_compute_job(as_of=parsed, days=days)
+    return {"rows_written": n}
