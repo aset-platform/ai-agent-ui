@@ -36,6 +36,8 @@ from backend.algo.factors.repo import get_factors_window
 from backend.algo.paper.broker import PaperBroker
 from backend.algo.paper.risk_engine import RiskEngine
 from backend.algo.paper.types import AccountState, Signal
+# REGIME-4 — vol-target / Kelly sizer (legacy modes bypass).
+from backend.algo.sizing.composer import SizingContext, compose_qty
 from backend.algo.stream.resampler import Resampler
 from backend.algo.stream.sources import TickSource
 from backend.algo.strategy.ast import Strategy
@@ -367,7 +369,22 @@ class PaperRuntime:
     ) -> Signal | None:
         t = action.get("type")
         if t == "buy":
-            qty = int(action["qty"].get("shares") or 0)
+            qty_spec = action["qty"]
+            # REGIME-4 — vol-target / Kelly route through composer
+            # using paper-runtime NAV + factor cache. Legacy
+            # {shares} bypasses for byte-for-byte compat.
+            if (
+                "vol_target_pct" in qty_spec
+                or "kelly_fraction" in qty_spec
+            ):
+                qty = self._size_via_composer(
+                    qty_spec=qty_spec,
+                    ticker=ticker,
+                    bar_date_ns=bar_date_ns,
+                    last_price=last_price,
+                )
+            else:
+                qty = int(qty_spec.get("shares") or 0)
             if qty <= 0:
                 return None
             return Signal(
@@ -446,6 +463,46 @@ class PaperRuntime:
                 )
             return None
         return None
+
+    def _size_via_composer(
+        self,
+        *,
+        qty_spec: dict,
+        ticker: str,
+        bar_date_ns: int,
+        last_price: Decimal | None,
+    ) -> int:
+        """REGIME-4 — assemble SizingContext from runtime state and
+        delegate to compose_qty.  Returns 0 on missing inputs (e.g.
+        no realized_vol_60d for the ticker) — caller treats as
+        "skip"."""
+        if last_price is None or last_price <= 0:
+            return 0
+        bar_date_obj = datetime.fromtimestamp(
+            bar_date_ns / 1_000_000_000, tz=timezone.utc,
+        ).date()
+        nav = (
+            self._initial
+            + self._positions.total_realised_pnl_inr()
+        )
+        factor_row = self._factor_cache.get(
+            (ticker, bar_date_obj), {},
+        )
+        realized_vol = factor_row.get(
+            "realized_vol_60d", Decimal("NaN"),
+        )
+        ctx = SizingContext(
+            ticker=ticker,
+            bar_date=bar_date_obj,
+            nav=nav,
+            cash=nav,
+            stock_price=last_price,
+            realized_vol_annual=realized_vol,
+            sector=None,
+            sector_exposure=Decimal("0"),
+            equity_curve=[],
+        )
+        return compose_qty(qty_spec, ctx)
 
     def _account_snapshot(self) -> AccountState:
         open_qty = {

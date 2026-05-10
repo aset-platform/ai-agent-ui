@@ -39,6 +39,8 @@ from backend.algo.backtest.types import (
 )
 from backend.algo.paper.risk_engine import RiskEngine
 from backend.algo.paper.types import AccountState, Signal
+# REGIME-4 — 3-stage sizer (vol-target / Kelly → caps → DD throttle).
+from backend.algo.sizing.composer import SizingContext, compose_qty
 from backend.algo.strategy.ast import Strategy
 
 _logger = logging.getLogger(__name__)
@@ -241,11 +243,32 @@ def run_backtest(
                 + pt.total_realised_pnl_inr()
                 - total_fees
             )
+            # REGIME-4 — assemble sizing context for new modes.
+            # Legacy {shares}/{notional_inr} bypass this block.
+            factor_row = factors_by_key.get((ticker, bar_date), {})
+            realized_vol = factor_row.get(
+                "realized_vol_60d", Decimal("NaN"),
+            )
+            sizing_ctx = SizingContext(
+                ticker=ticker,
+                bar_date=bar_date,
+                nav=current_equity,
+                cash=current_equity,
+                stock_price=current.close,
+                realized_vol_annual=realized_vol,
+                sector=None,
+                sector_exposure=Decimal("0"),
+                equity_curve=[
+                    (p.bar_date, p.equity_inr)
+                    for p in equity_points
+                ],
+            )
             intent = _action_to_intent(
                 action, ticker=ticker, bar_date=bar_date,
                 pt=pt,
                 last_price=current.close,
                 current_equity=current_equity,
+                sizing_ctx=sizing_ctx,
             )
             if intent is None:
                 continue
@@ -446,6 +469,9 @@ def run_backtest(
     return summary
 
 
+_NEW_SIZING_KEYS = ("vol_target_pct", "kelly_fraction")
+
+
 def _action_to_intent(
     action: dict,
     *,
@@ -454,16 +480,27 @@ def _action_to_intent(
     pt: PositionTracker,
     last_price: Decimal | None = None,
     current_equity: Decimal | None = None,
+    sizing_ctx: SizingContext | None = None,
 ) -> OrderIntent | None:
     """Translate an evaluator action dict to an OrderIntent (or None).
 
     ``last_price`` + ``current_equity`` are required only for
-    ``set_target_weight`` resolution; all other action types
-    ignore them.
+    ``set_target_weight`` resolution.  ``sizing_ctx`` is required
+    only when the buy action uses the REGIME-4 sizing modes
+    (``vol_target_pct`` / ``kelly_fraction``); legacy modes
+    (``shares`` / ``notional_inr``) bypass the composer entirely
+    for byte-for-byte backward compatibility.
     """
     t = action.get("type")
     if t == "buy":
-        qty = action["qty"].get("shares") or 0
+        qty_spec = action["qty"]
+        if (
+            sizing_ctx is not None
+            and any(k in qty_spec for k in _NEW_SIZING_KEYS)
+        ):
+            qty = compose_qty(qty_spec, sizing_ctx)
+        else:
+            qty = qty_spec.get("shares") or 0
         if qty <= 0:
             return None
         return OrderIntent(
