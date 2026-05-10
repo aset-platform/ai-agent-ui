@@ -9,7 +9,7 @@ commit at the end (not per-event), no per-ticker hot loops.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -28,6 +28,8 @@ from backend.algo.backtest.sim_broker import (
     NoBarAvailableError,
     SimBroker,
 )
+# REGIME-2a — pre-computed nightly factor library overlay.
+from backend.algo.factors.repo import get_factors_window
 from backend.algo.backtest.types import (
     BacktestRequest,
     BacktestSummary,
@@ -124,6 +126,22 @@ def run_backtest(
         period_start=request.period_start,
         period_end=request.period_end,
     )
+    # REGIME-2a — pre-load cached daily factor rows for the
+    # period. Disjoint from indicator keys by design; overlaid
+    # AFTER the indicator dict in the per-bar features assembly
+    # below. Empty dict if backfill hasn't run yet — strategies
+    # that don't reference factor keys are unaffected.
+    factor_rows = get_factors_window(
+        tickers=universe,
+        start=request.period_start,
+        end=request.period_end,
+    )
+    factors_by_key: dict[tuple[str, date], dict[str, Decimal]] = {}
+    for r in factor_rows:
+        factors_by_key[(r.ticker, r.bar_date)] = {
+            k: Decimal(str(v)) for k, v in r.values.items()
+            if v is not None
+        }
     sim = SimBroker(bars=bars, fee_as_of=request.period_start)
     evaluator = Evaluator()
     pt = PositionTracker()
@@ -193,6 +211,9 @@ def run_backtest(
                 "nifty_30d_return_pct": market_trend.get(
                     bar_date, Decimal("0"),
                 ),
+                # REGIME-2a — cached factor row overlay (disjoint
+                # from indicator keys by design).
+                **factors_by_key.get((ticker, bar_date), {}),
             }
             ctx = EvalContext(
                 ticker=ticker,

@@ -29,6 +29,7 @@ FeatureSource = Literal[
     "recommendation",
     "forecast",
     "regime",             # REGIME-1: regime_label, stress_prob, etc.
+    "factor",             # REGIME-2a: cached factor library
 ]
 
 
@@ -185,6 +186,105 @@ FEATURES: list[Feature] = [
         label="India VIX 20-day SMA",
         type="float",
         source="regime",
+    ),
+    # Factor library (REGIME-2a) — pre-computed nightly to
+    # ``stocks.daily_factors`` and overlaid into the per-bar
+    # features dict by all 3 runtimes.
+    Feature(
+        key="mom_12_1",
+        label="Momentum 12-1 (skip-month)",
+        type="float",
+        source="factor",
+    ),
+    Feature(
+        key="mom_6_1",
+        label="Momentum 6-1 (skip-month)",
+        type="float",
+        source="factor",
+    ),
+    Feature(
+        key="mom_3_1",
+        label="Momentum 3-1 (skip-month)",
+        type="float",
+        source="factor",
+    ),
+    Feature(
+        key="prox_52w",
+        label="Proximity to 52w high",
+        type="float",
+        source="factor",
+    ),
+    Feature(
+        key="f_score",
+        label="Piotroski F-Score (factor)",
+        type="float",
+        source="factor",
+    ),
+    Feature(
+        key="realized_vol_60d",
+        label="Realized vol 60d (annualised)",
+        type="float",
+        source="factor",
+    ),
+    Feature(
+        key="beta_to_nifty",
+        label="Beta vs NIFTY (252d)",
+        type="float",
+        source="factor",
+    ),
+    Feature(
+        key="adx_14",
+        label="ADX(14)",
+        type="float",
+        source="factor",
+    ),
+    Feature(
+        key="sma200_slope",
+        label="SMA200 slope (21d)",
+        type="float",
+        source="factor",
+    ),
+    Feature(
+        key="distance_from_sma200",
+        label="Distance from SMA200",
+        type="float",
+        source="factor",
+    ),
+    Feature(
+        key="obv",
+        label="On-Balance Volume",
+        type="float",
+        source="factor",
+    ),
+    Feature(
+        key="volume_x_avg_20",
+        label="Volume x 20d avg",
+        type="float",
+        source="factor",
+    ),
+    Feature(
+        key="up_down_vol_ratio_20",
+        label="Up/Down vol ratio (20d)",
+        type="float",
+        source="factor",
+    ),
+    Feature(
+        key="rs_vs_nifty_3m",
+        label="Rel strength vs NIFTY 3m",
+        type="float",
+        source="factor",
+    ),
+    Feature(
+        key="rs_vs_nifty_6m",
+        label="Rel strength vs NIFTY 6m",
+        type="float",
+        source="factor",
+    ),
+    Feature(
+        key="rs_vs_sector_3m",
+        label="Rel strength vs sector 3m",
+        type="float",
+        source="factor",
     ),
 ]
 

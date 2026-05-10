@@ -17,7 +17,8 @@ export interface StrategyFeature {
     | "fundamentals"
     | "recommendation"
     | "forecast"
-    | "regime";
+    | "regime"
+    | "factor";
 }
 
 export const STRATEGY_FEATURES: StrategyFeature[] = [
@@ -54,6 +55,23 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "midcap_largecap_ratio", label: "Midcap / Largecap ratio", type: "float", source: "regime" },
   { key: "vix_close", label: "India VIX close", type: "float", source: "regime" },
   { key: "vix_sma_20", label: "India VIX 20-day SMA", type: "float", source: "regime" },
+  // Factor library (REGIME-2a)
+  { key: "mom_12_1", label: "Momentum 12-1 (skip-month)", type: "float", source: "factor" },
+  { key: "mom_6_1", label: "Momentum 6-1 (skip-month)", type: "float", source: "factor" },
+  { key: "mom_3_1", label: "Momentum 3-1 (skip-month)", type: "float", source: "factor" },
+  { key: "prox_52w", label: "Proximity to 52w high", type: "float", source: "factor" },
+  { key: "f_score", label: "Piotroski F-Score (factor)", type: "float", source: "factor" },
+  { key: "realized_vol_60d", label: "Realized vol 60d (annualised)", type: "float", source: "factor" },
+  { key: "beta_to_nifty", label: "Beta vs NIFTY (252d)", type: "float", source: "factor" },
+  { key: "adx_14", label: "ADX(14)", type: "float", source: "factor" },
+  { key: "sma200_slope", label: "SMA200 slope (21d)", type: "float", source: "factor" },
+  { key: "distance_from_sma200", label: "Distance from SMA200", type: "float", source: "factor" },
+  { key: "obv", label: "On-Balance Volume", type: "float", source: "factor" },
+  { key: "volume_x_avg_20", label: "Volume x 20d avg", type: "float", source: "factor" },
+  { key: "up_down_vol_ratio_20", label: "Up/Down vol ratio (20d)", type: "float", source: "factor" },
+  { key: "rs_vs_nifty_3m", label: "Rel strength vs NIFTY 3m", type: "float", source: "factor" },
+  { key: "rs_vs_nifty_6m", label: "Rel strength vs NIFTY 6m", type: "float", source: "factor" },
+  { key: "rs_vs_sector_3m", label: "Rel strength vs sector 3m", type: "float", source: "factor" },
 ];
 
 export const STRATEGY_FEATURE_KEY_SET: Set<string> = new Set(
