@@ -2,24 +2,28 @@
 
 ---
 
-## 2026-05-10 — v2 obs+postback follow-ups shipped + v3 regime epic planned
+## 2026-05-10 — v2 epic CLOSED + verified end-to-end + v3 regime epic planned
 
-**Branch:** `feature/algo-trading-v2-integration` (continued; now **41 commits ahead of `dev`**, was 34 yesterday).
+**Branch:** `feature/algo-trading-v2-integration` (continued; now **46 commits ahead of `dev`**, was 34 yesterday). v2 epic is functionally complete and end-to-end verified — ready for the integration → `dev` PR.
 
-### What shipped today
+### What shipped today (12 PRs)
 
-7 PRs merged (#174–#179, with #175 + #177 as docs-only) — closes out the v2 epic before the integration → `dev` PR.
+| # | PR | What | Squash | Type |
+|---|---|---|---|---|
+| 1 | #174 | OBS-1 — WS health endpoint + status dot | `7adc906` | feat |
+| 2 | #175 | Planning docs (2 specs + 3 research + 12 plans) | `3da7ec2` | docs |
+| 3 | #176 | OBS-3 — ngrok dev tunnel + operator runbook | `48a6963` | feat |
+| 4 | #177 | OBS-1→OBS-4 manual test plan | `7b47843` | docs |
+| 5 | #178 | OBS-2 — Kite postback backend (verify_checksum + idempotency) | `fa829fe` | feat |
+| 6 | #179 | OBS-4 — Kite postback observability panel | `b11f574` | feat |
+| 7 | #180 | PROGRESS.md afternoon log | `6c4ee49` | docs |
+| 8 | #181 | ngrok via macOS Keychain + `run.sh ngrok` subcommand | `04d6c52` | feat |
+| 9 | #182 | hotfix: postback handler reads `algo_kite_api_secret` slug | `48287a2` | fix |
+| 10 | #183 | hotfix: postback Iceberg query uses `query_iceberg_table` helper | `0a01f4b` | fix |
+| 11 | #184 | hotfix: postback `_resolve_kite_user` uses sync cache API | `bde98fe` | fix |
+| 12 | #185 | UX: move Kite postback panel below Active runs | `6f05aaa` | chore |
 
-| PR | Slice | SP | Squash SHA |
-|---|---|--:|---|
-| #174 | OBS-1 — WS health endpoint + status dot | 3 | `7adc906` |
-| #175 | docs — v2 obs+postback + v3 regime planning artifacts | — | `3da7ec2` |
-| #176 | OBS-3 — ngrok dev tunnel + operator runbook | 2 | `48a6963` |
-| #177 | docs — OBS-1→OBS-4 manual test plan | — | `7b47843` |
-| #178 | OBS-2 — Kite postback backend (verify_checksum + idempotency) | 5 | `fa829fe` |
-| #179 | OBS-4 — Kite postback observability panel | 3 | `b11f574` |
-
-**Total v2 obs+postback work: 13 SP across 4 slices, plus 2 docs PRs.** The v2 epic (50 SP slices + 30 post-merge fixes from yesterday + 13 SP today) is now complete on the integration branch.
+**Total v2 obs+postback work: 13 SP across 4 slices + 4 hotfix PRs surfaced during real-stack verification + ngrok Keychain integration.** The v2 epic (50 SP slices yesterday + 30 post-merge fixes yesterday + 13 SP today + integration polish) is FUNCTIONALLY COMPLETE.
 
 ### Spec + plans + research (all committed via PR #175)
 
@@ -65,19 +69,64 @@ Heavy use of background worktree-isolated subagents — 17 dispatches today:
 
 Shipped `docs/algo-trading/obs-test-plan.md` — Sections A through G, 358 lines. Covers ngrok signup + .env + each OBS slice's smoke + a multi-provider section confirming **same ngrok URL serves Kite + Razorpay + Stripe webhooks** via `/v1/webhooks/<provider>` path convention. ngrok free tier headroom (>3× under cap for our combined traffic).
 
-### Pending before dev merge
+### End-to-end verification — DONE
 
-1. Manual smoke per the new test plan (deferred to user — needs ngrok signup + Kite Developer Console URL)
-2. Open final integration → `dev` PR (squash; ~41 commits → 1 commit on `dev`)
-3. CHANGELOG `[0.17.0]` entry extension to cover today's PRs
-4. mkdocs build verification
+User completed the full ngrok + Kite Developer Console + IP whitelist setup. Verified:
 
-### Next session
+- **OBS-1**: `/v1/algo/live/ws-health` returns correct snapshot; status dot mounts in Live segment header (green during active multiplexer, red when none — verified per Image #4).
+- **OBS-2**: All 5 fail-closed gates fire correctly (503/503/401/400/400). Self-signed valid postback POST → HTTP 200 → event landed in `algo.events` Iceberg with `user_id` correctly resolved from Kite client_id `BV4121`. Idempotency verified (same `guid` resend → `{"ok":true,"deduplicated":true}`, only 1 row created). Cache invalidation verified (`cache:algo:postbacks:*` empty after writes). Companion `GET /postbacks?limit=N` returns rows.
+- **OBS-3**: Profile gating (default profile excludes ngrok; `--profile live` includes it). Tunnel survives backend restart. Inspector reachable at :4040.
+- **OBS-4**: Panel renders all 4 status badges with correct colors (COMPLETE green / REJECTED red / CANCELLED grey / UPDATE blue — verified per Image #5). ▸ payload toggle expand/collapse works. Hidden in Paper / Dry-run segments.
 
-Pick from:
-- **REGIME-1 implementation** (most important next module per user brief — regime engine with rule-based classifier + 2-state HMM + ^INDIAVIX ingest)
-- **Final v2 → dev merge** (close out v2 epic before more work piles on)
-- **Continue OBS-* manual smoke** (after ngrok configured)
+All 5 events in `algo.events` after testing: 2× COMPLETE, 1× UPDATE, 1× REJECTED, 1× CANCELLED. Total kite_postback_received rows = 5.
+
+### ngrok setup — production-quality
+
+- **Reserved domain**: `older-nonblasphemous-thora.ngrok-free.dev` (free tier, persistent forever).
+- **Authtoken in macOS Keychain**: account `ngrok_authtoken`, service `ai-agent-ui`. Never lands on disk.
+- **`./run.sh ngrok {up|down|status}` subcommand** auto-extracts from Keychain; `./run.sh start` auto-includes `--profile live` whenever both Keychain entry exists AND `NGROK_DOMAIN` is set in `.env`.
+- **Multi-provider strategy validated**: same URL serves Kite + Razorpay + Stripe via `/v1/webhooks/<provider>` path convention. Free-tier headroom 20k req/month covers all 3 with >3× margin.
+
+### Bugs caught during real-stack verification (fixed via #182-#184)
+
+1. **Slug mismatch**: OBS-2 used `kite_api_secret` but existing Kite OAuth uses `algo_kite_api_secret`. Webhook returned 503 against an existing `/run/secrets/algo_kite_api_secret` mount.
+2. **`StockRepository._iceberg_table_path` doesn't exist** — both `_query_postback_events` and `_is_duplicate` called this missing method. Read endpoint surfaced as 500 → frontend rendered as `NetworkError when attempting to fetch resource`. Dedup failed silently. Fixed by switching to canonical `query_iceberg_table` helper.
+3. **`backend.cache` API is sync, not async** — `await cache.get/set` raised `TypeError: object NoneType can't be used in 'await' expression`. Every postback POST returned 500. Fixed by removing the awaits.
+4. **Response shape mismatch** — backend returned `{events, total}` wrapper but frontend `useKitePostbacks` expected bare `KitePostback[]`. Also added `event_ts` (ISO 8601 UTC) field. Fixed in #183.
+
+### Discipline lessons
+
+- **Two of three parallel subagents (OBS-2, OBS-4) escaped their isolation worktrees** and ran git operations in the parent worktree, bouncing HEAD between branches via cherry-picks and resets. Lost an in-progress PROGRESS.md edit + the test plan file (re-created in a separate clean worktree). Mitigation: OBS-3 worked correctly in its own worktree and was a clean reference.
+- **Both OBS-2 and OBS-4 branched from a STALE integration tip** — their diffs against the merged-forward integration branch showed catastrophic deletions (would erase OBS-3 work + test plan). Recovered by creating fresh worktrees off latest integration and cherry-picking each subagent's commits onto the new clean branch — no data loss.
+- **OBS-4 inadvertently cherry-picked 2 OBS-2 commits** during the contention; the rebuild script explicitly skipped them so they only landed via OBS-2's own PR.
+- **Pipefail + `grep -q` SIGPIPE footgun** — `git ls-tree | grep -q "name"` exits 141 (SIGPIPE on git's side after grep -q closes the pipe early). With `set -euo pipefail`, the pipe propagates as failure. Fix: assign git output to a variable first, then `echo "$VAR" | grep -q ...`.
+- **Reusable rebuild script** at `.claude/scripts/rebuild-obs4.sh` codifies the "rebuild stale branch via cherry-pick + idempotent docs append + auto-PR-merge" pattern. Generalizable to future parallel-subagent-contention scenarios.
+
+### Parallel subagent execution at scale
+
+Heavy use of background worktree-isolated subagents — 17 dispatches today:
+
+| Wave | Subagents | Time | Output |
+|---|---|---|---|
+| Research | 3 (Explore + 2 sonnet web research) | parallel | 3 research files |
+| OBS-1 implementation | 1 sonnet/worktree | ~18 min | 8 commits, PR #174 |
+| Plan expansion (obs+postback) | 3 (sonnet × 2 + haiku × 1) | parallel ~6 min | OBS-2/3/4 full TDD plans |
+| Regime slice skeletons | 7 haiku (format-following) | parallel ~1 min | REGIME-1 through 7 skeletons |
+| OBS-2/3/4 implementation | 3 sonnet/worktree | parallel | OBS-2 #178, OBS-3 #176, OBS-4 #179 |
+
+### Manual test plan + multi-provider ngrok strategy
+
+Shipped `docs/algo-trading/obs-test-plan.md` — Sections A through G, 358 lines. Covers ngrok signup + .env + each OBS slice's smoke + a multi-provider section confirming **same ngrok URL serves Kite + Razorpay + Stripe webhooks** via `/v1/webhooks/<provider>` path convention. ngrok free tier headroom (>3× under cap for our combined traffic).
+
+### What's pending for next session
+
+1. **Open integration → `dev` PR** (squash; ~46 commits → 1 commit on `dev`). Closes the v2 epic.
+2. **CHANGELOG `[0.17.0]` extension** to cover today's PRs.
+3. **Monday market-hours real-Kite soak** — actual `place_order → real postback` round-trip during 09:15-15:30 IST. Today's self-signed test verified our handler; Monday will verify Kite's actual delivery semantics.
+
+### Then: REGIME-1 (regime engine) starts
+
+89 SP / 8 slice v3 epic ready to implement. REGIME-1 is the user-prioritized "most important next module": rule-based regime classifier + 2-state Gaussian HMM advisory overlay + `^INDIAVIX` + sector indices ingest + `stocks.regime_history` Iceberg + Trading tab regime widget.
 
 ---
 
