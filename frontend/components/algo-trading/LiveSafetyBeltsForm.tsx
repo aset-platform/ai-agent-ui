@@ -127,7 +127,7 @@ export function LiveSafetyBeltsForm({ strategyId }: Props) {
         {/* Today counters (read-only) */}
         <div className="flex flex-col gap-0.5">
           <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
-            Today's usage (read-only)
+            Today&apos;s usage (read-only)
           </span>
           <div className="rounded border border-slate-200 px-2 py-1 text-sm
             dark:border-slate-700 dark:text-slate-300">
