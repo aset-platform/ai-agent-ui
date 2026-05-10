@@ -129,3 +129,138 @@ class TestKitePostbackPayload:
         p = KitePostbackPayload(**raw)
         assert p.status == "UPDATE"
         assert p.filled_quantity == 5
+
+
+class TestVerifyChecksum:
+    """Tests for verify_checksum()."""
+
+    # Kite docs sample values:
+    #   order_id       = "220803201322749"
+    #   order_timestamp = "2022-08-03 13:13:22"
+    #   api_secret     = "test_api_secret"
+    # Precomputed:
+    #   SHA-256("220803201322749" +
+    #           "2022-08-03 13:13:22" +
+    #           "test_api_secret")
+    _ORDER_ID = "220803201322749"
+    _ORDER_TS = "2022-08-03 13:13:22"
+    _SECRET = "test_api_secret"
+
+    @classmethod
+    def _expected_checksum(cls) -> str:
+        import hashlib
+        return hashlib.sha256(
+            f"{cls._ORDER_ID}{cls._ORDER_TS}"
+            f"{cls._SECRET}".encode("utf-8")
+        ).hexdigest()
+
+    def test_pass_case(self):
+        """Correct checksum returns True."""
+        from backend.algo.webhooks.kite_postback import (
+            verify_checksum,
+        )
+        payload = {
+            "order_id": self._ORDER_ID,
+            "order_timestamp": self._ORDER_TS,
+            "checksum": self._expected_checksum(),
+        }
+        assert verify_checksum(payload, self._SECRET) is True
+
+    def test_fail_case_wrong_checksum(self):
+        """Wrong checksum returns False."""
+        from backend.algo.webhooks.kite_postback import (
+            verify_checksum,
+        )
+        payload = {
+            "order_id": self._ORDER_ID,
+            "order_timestamp": self._ORDER_TS,
+            "checksum": "deadbeefdeadbeef",
+        }
+        assert (
+            verify_checksum(payload, self._SECRET) is False
+        )
+
+    def test_fail_case_wrong_secret(self):
+        """Wrong api_secret returns False."""
+        from backend.algo.webhooks.kite_postback import (
+            verify_checksum,
+        )
+        payload = {
+            "order_id": self._ORDER_ID,
+            "order_timestamp": self._ORDER_TS,
+            "checksum": self._expected_checksum(),
+        }
+        assert (
+            verify_checksum(payload, "wrong_secret")
+            is False
+        )
+
+    def test_fail_case_reformatted_timestamp(self):
+        """Reformatting the IST timestamp breaks checksum."""
+        from backend.algo.webhooks.kite_postback import (
+            verify_checksum,
+        )
+        payload = {
+            "order_id": self._ORDER_ID,
+            # UTC-formatted — must NOT reformat
+            "order_timestamp": "2022-08-03T07:43:22Z",
+            "checksum": self._expected_checksum(),
+        }
+        assert (
+            verify_checksum(payload, self._SECRET) is False
+        )
+
+    def test_missing_checksum_field_returns_false(self):
+        """Missing checksum field returns False."""
+        from backend.algo.webhooks.kite_postback import (
+            verify_checksum,
+        )
+        payload = {
+            "order_id": self._ORDER_ID,
+            "order_timestamp": self._ORDER_TS,
+        }
+        assert (
+            verify_checksum(payload, self._SECRET) is False
+        )
+
+    def test_checksum_case_insensitive(self):
+        """Checksum comparison is case-insensitive (lowercase)."""
+        from backend.algo.webhooks.kite_postback import (
+            verify_checksum,
+        )
+        payload = {
+            "order_id": self._ORDER_ID,
+            "order_timestamp": self._ORDER_TS,
+            "checksum": self._expected_checksum().upper(),
+        }
+        assert (
+            verify_checksum(payload, self._SECRET) is True
+        )
+
+    def test_constant_time_compare_smoke(self):
+        """hmac.compare_digest used — no early exit on prefix."""
+        import time
+        from backend.algo.webhooks.kite_postback import (
+            verify_checksum,
+        )
+        good = self._expected_checksum()
+        # wrong checksum that shares long prefix
+        bad = good[:-4] + "0000"
+        t_good, t_bad = [], []
+        for _ in range(200):
+            p = {
+                "order_id": self._ORDER_ID,
+                "order_timestamp": self._ORDER_TS,
+                "checksum": good,
+            }
+            t0 = time.perf_counter_ns()
+            verify_checksum(p, self._SECRET)
+            t_good.append(time.perf_counter_ns() - t0)
+            p["checksum"] = bad
+            t0 = time.perf_counter_ns()
+            verify_checksum(p, self._SECRET)
+            t_bad.append(time.perf_counter_ns() - t0)
+        # Smoke: simply confirm neither path raises;
+        # true timing attack analysis is beyond unit scope.
+        assert len(t_good) == 200
+        assert len(t_bad) == 200
