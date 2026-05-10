@@ -26,10 +26,9 @@ import { ReconciliationDriftPanel } from "./ReconciliationDriftPanel";
 import { KitePostbackPanel } from "./KitePostbackPanel";
 
 /** Live section for a specific strategy. */
-function LiveSection({ strategyId, strategyName, showPostbacks }: {
+function LiveSection({ strategyId, strategyName }: {
   strategyId: string;
   strategyName: string;
-  showPostbacks: boolean;
 }) {
   const { caps } = useLiveCaps(strategyId);
   const { gates } = useLiveStatus(strategyId);
@@ -77,18 +76,6 @@ function LiveSection({ strategyId, strategyName, showPostbacks }: {
         </div>
       )}
 
-      {/* Kite postback events — OBS-4. Always visible in Live
-          segment; shows empty-state troubleshooting when nothing
-          arrived (KITE_POSTBACK_ENABLED off, ngrok down, etc.). */}
-      {showPostbacks && (
-        <div
-          className="rounded-md border border-slate-200
-            dark:border-slate-700"
-          data-testid="live-postback-section"
-        >
-          <KitePostbackPanel />
-        </div>
-      )}
     </div>
   );
 }
@@ -292,7 +279,6 @@ export function PaperTab() {
                 <LiveSection
                   strategyId={liveStrategyId}
                   strategyName={selectedStrategy.name}
-                  showPostbacks={viewMode === "live"}
                 />
               </div>
             )}
@@ -312,6 +298,19 @@ export function PaperTab() {
               the run. The panel adapts its source choices and
               backend mode= based on tradingMode prop. */}
           <ActiveRunsPanel tradingMode={viewMode} />
+
+          {/* Kite postbacks — Live segment only, mounted AFTER
+              ActiveRunsPanel so the active runs starter stays in
+              view above the fold even as the postback list grows. */}
+          {viewMode === "live" && (
+            <div
+              className="rounded-md border border-slate-200
+                dark:border-slate-700"
+              data-testid="live-postback-section"
+            >
+              <KitePostbackPanel />
+            </div>
+          )}
         </div>
       )}
 
