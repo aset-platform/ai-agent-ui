@@ -12,7 +12,23 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# REGIME-7 — backtest start floor. 2007-01-01 is mandatory so
+# every backtest spans at least one bear-market regime (the 2008
+# global financial crisis), which the regime-stratified gates
+# in REGIME-5 require to detect overfitting.
+BACKTEST_START_FLOOR = date(2007, 1, 1)
+
+
+def _enforce_backtest_start_floor(v: date) -> date:
+    if v < BACKTEST_START_FLOOR:
+        raise ValueError(
+            "Backtest start floor is 2007-01-01 (mandatory to "
+            "include the 2008 bear market for survivorship + "
+            "regime validation)."
+        )
+    return v
 
 
 class BacktestRequest(BaseModel):
@@ -25,6 +41,11 @@ class BacktestRequest(BaseModel):
     initial_capital_inr: Decimal = Field(
         default=Decimal("100000.00"), ge=Decimal("1000.00"),
     )
+
+    @field_validator("period_start")
+    @classmethod
+    def _start_floor(cls, v: date) -> date:
+        return _enforce_backtest_start_floor(v)
 
 
 class BarData(BaseModel):
