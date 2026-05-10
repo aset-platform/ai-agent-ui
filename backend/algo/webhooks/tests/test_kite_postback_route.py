@@ -747,3 +747,74 @@ class TestKitePostbackCacheInvalidation:
         assert resp.status_code == 200
         assert resp.json()["deduplicated"] is True
         mock_cache.invalidate.assert_not_called()
+
+
+class TestKitePostbackMountAndNoAuth:
+    """Route reachable via full app; no JWT required."""
+
+    def test_anonymous_request_with_valid_checksum_200(
+        self,
+    ):
+        """No Authorization header → still 200 with valid
+        checksum (auth IS the checksum)."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from backend.algo.routes.webhooks import router
+
+        app = FastAPI()
+        app.include_router(router)
+        payload = _valid_payload_with_checksum()
+
+        with (
+            patch.dict(
+                os.environ,
+                {"KITE_POSTBACK_ENABLED": "true"},
+            ),
+            patch(
+                "backend.algo.routes.webhooks.load_secret",
+                return_value=_SECRET,
+            ),
+            patch(
+                "backend.algo.routes.webhooks._is_duplicate",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "backend.algo.routes.webhooks."
+                "_resolve_kite_user",
+                new_callable=AsyncMock,
+                return_value=_OUR_USER_ID,
+            ),
+            patch(
+                "asyncio.to_thread",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "backend.algo.routes.webhooks._get_cache",
+                return_value=MagicMock(
+                    invalidate=MagicMock()
+                ),
+            ),
+        ):
+            # No Authorization header — intentional
+            client = TestClient(app)
+            resp = client.post(
+                "/webhooks/kite/postback",
+                content=json.dumps(payload),
+                headers={
+                    "Content-Type": "application/json"
+                },
+            )
+
+        # Must NOT be 401/403 from missing JWT
+        assert resp.status_code == 200
+
+    def test_route_registered_in_main_routes(self):
+        """create_webhooks_router is importable from
+        backend.algo.routes."""
+        from backend.algo.routes import (
+            create_webhooks_router,
+        )
+        router = create_webhooks_router()
+        routes = [r.path for r in router.routes]
+        assert "/webhooks/kite/postback" in routes

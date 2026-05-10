@@ -4011,6 +4011,7 @@ def create_app(
         create_replay_router,
         create_strategies_router,
         create_walkforward_router,
+        create_webhooks_router,
     )
 
     app.include_router(
@@ -4059,6 +4060,10 @@ def create_app(
     )
     app.include_router(
         create_live_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_webhooks_router(),
         prefix="/v1",
     )
 
