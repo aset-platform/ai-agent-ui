@@ -215,10 +215,14 @@ async def kite_postback(request: Request) -> dict:
 
     # Gate 3: api_secret must be configured (fail-closed
     # per CLAUDE.md §5.11 — 503, not 401).
-    api_secret = load_secret("kite_api_secret")
+    # Slug matches the existing Kite OAuth flow (broker.py uses
+    # ``algo_kite_api_secret``) so a single Keychain / docker-secret
+    # entry serves both signature verification paths.
+    api_secret = load_secret("algo_kite_api_secret")
     if not api_secret:
         _logger.error(
-            "kite postback: kite_api_secret not " "configured — returning 503"
+            "kite postback: algo_kite_api_secret not "
+            "configured — returning 503"
         )
         raise HTTPException(
             503,
