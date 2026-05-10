@@ -2071,6 +2071,12 @@ def create_tables() -> None:
     )
     _regime_register()
 
+    # Factor library — REGIME-2a (stocks.daily_factors). Idempotent.
+    from backend.algo.factors.iceberg_init import (
+        register_tables as _factors_register,
+    )
+    _factors_register()
+
     _logger.info("Stocks Iceberg table initialisation complete.")
 
 
