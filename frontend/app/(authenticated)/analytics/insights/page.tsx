@@ -44,6 +44,7 @@ import {
   type CsvColumn,
 } from "@/lib/downloadCsv";
 import { getRoleFromToken } from "@/lib/auth";
+import { FactorScoresTab } from "@/components/algo-trading/FactorScoresTab";
 import dynamic from "next/dynamic";
 import type { BarSeries } from "@/components/charts/SimpleBarChart";
 import { PiotroskiBadge } from "@/components/insights/PiotroskiBadge";
@@ -95,7 +96,8 @@ type TabId =
   | "correlation"
   | "quarterly"
   | "piotroski"
-  | "screenql";
+  | "screenql"
+  | "factors";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "screener", label: "Screener" },
@@ -107,6 +109,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "quarterly", label: "Quarterly" },
   { id: "piotroski", label: "Piotroski F-Score" },
   { id: "screenql", label: "ScreenQL" },
+  { id: "factors", label: "Factor Scores" },
 ];
 
 // ---------------------------------------------------------------
@@ -3468,6 +3471,8 @@ function InsightsPageInner() {
         return <PiotroskiTab />;
       case "screenql":
         return <ScreenQLTab />;
+      case "factors":
+        return <FactorScoresTab />;
     }
   }, [activeTab]);
 

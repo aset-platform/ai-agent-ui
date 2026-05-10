@@ -4071,6 +4071,11 @@ def create_app(
         create_regime_router(),
         prefix="/v1",
     )
+    from backend.algo.routes import create_factors_router
+    app.include_router(
+        create_factors_router(),
+        prefix="/v1",
+    )
 
     # WebSocket streaming endpoint.
     from ws import register_ws_routes
