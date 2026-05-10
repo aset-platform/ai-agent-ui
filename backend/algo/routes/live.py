@@ -253,9 +253,15 @@ async def _check_gates(
 
 
 class PostbackEvent(BaseModel):
-    """Single postback event row for the frontend panel."""
+    """Single postback event row for the frontend panel.
+
+    ``event_ts`` (ISO 8601 UTC, with Z suffix) is what the frontend
+    KitePostback type consumes; ``ts_ns`` and ``ts_date`` are kept
+    for backend forensics.
+    """
 
     event_id: str
+    event_ts: str
     ts_ns: int
     ts_date: str
     guid: str
@@ -266,13 +272,6 @@ class PostbackEvent(BaseModel):
     average_price: float
     our_user_id: str | None = None
     raw: dict = Field(default_factory=dict)
-
-
-class PostbacksResponse(BaseModel):
-    """Response for GET /algo/live/postbacks."""
-
-    events: list[PostbackEvent] = Field(default_factory=list)
-    total: int = 0
 
 
 def _query_postback_events(
@@ -288,34 +287,26 @@ def _query_postback_events(
     Returns:
         List of raw event dicts ordered by ts_ns DESC.
     """
-    import duckdb
+    # Use the canonical query_iceberg_table helper which auto-creates
+    # a DuckDB view from the Iceberg metadata. The previous direct
+    # call to ``StockRepository._iceberg_table_path`` referenced a
+    # method that doesn't exist on the repo class — the AttributeError
+    # turned every browser poll of /postbacks into a 500 that the
+    # frontend rendered as "NetworkError".
+    from backend.db.duckdb_engine import query_iceberg_table
 
-    from stocks.repository import StockRepository
-
-    repo = StockRepository()
-    path = repo._iceberg_table_path("algo.events")  # noqa: SLF001
     try:
-        con = duckdb.connect()
-        con.execute("INSTALL iceberg; LOAD iceberg;")
-        rows = con.execute(
-            "SELECT event_id, ts_ns, ts_date, "
-            "payload_json "
-            "FROM iceberg_scan(?) "
+        rows = query_iceberg_table(
+            "algo.events",
+            "SELECT event_id, ts_ns, ts_date, payload_json "
+            "FROM events "
             "WHERE user_id = ? "
             "  AND type = 'kite_postback_received' "
             "ORDER BY ts_ns DESC "
             "LIMIT ?",
-            [path, user_id, limit],
-        ).fetchall()
-        return [
-            {
-                "event_id": r[0],
-                "ts_ns": r[1],
-                "ts_date": r[2],
-                "payload_json": r[3],
-            }
-            for r in rows
-        ]
+            [user_id, limit],
+        )
+        return rows
     except Exception:
         _logger.warning(
             "postback query failed for user=%s",
@@ -618,21 +609,23 @@ def create_live_router() -> APIRouter:
 
     @router.get(
         "/postbacks",
-        response_model=PostbacksResponse,
+        response_model=list[PostbackEvent],
     )
     async def get_live_postbacks(
         limit: int = 50,
         user: UserContext = Depends(pro_or_superuser),
-    ) -> PostbacksResponse:
+    ) -> list[PostbackEvent]:
         """Return last N Kite postback events for the user.
 
         Args:
             limit: Max rows (capped at 200, default 50).
 
         Returns:
-            PostbacksResponse with events newest first.
+            Bare list, newest first. Frontend KitePostback type
+            consumes ``event_ts`` as ISO 8601 UTC.
         """
         import asyncio as _asyncio
+        from datetime import datetime, timezone
 
         cap = min(limit, 200)
         raw_rows = await _asyncio.to_thread(
@@ -645,11 +638,16 @@ def create_live_router() -> APIRouter:
                 p = json.loads(r["payload_json"])
             except Exception:
                 continue
+            ts_ns = int(r["ts_ns"])
+            event_ts = datetime.fromtimestamp(
+                ts_ns / 1_000_000_000, tz=timezone.utc,
+            ).isoformat().replace("+00:00", "Z")
             events.append(
                 PostbackEvent(
                     event_id=r["event_id"],
-                    ts_ns=r["ts_ns"],
-                    ts_date=r["ts_date"],
+                    event_ts=event_ts,
+                    ts_ns=ts_ns,
+                    ts_date=str(r["ts_date"]),
                     guid=p.get("guid", ""),
                     order_id=p.get("order_id", ""),
                     status=p.get("status", ""),
@@ -661,6 +659,6 @@ def create_live_router() -> APIRouter:
                 )
             )
 
-        return PostbacksResponse(events=events, total=len(events))
+        return events
 
     return router

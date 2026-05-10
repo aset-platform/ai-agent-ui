@@ -150,22 +150,22 @@ async def _is_duplicate(guid: str) -> bool:
     import asyncio
 
     def _check() -> bool:
-        import duckdb
+        # Same fix as live.py::_query_postback_events — the original
+        # ``StockRepository._iceberg_table_path`` method doesn't exist;
+        # use the canonical query_iceberg_table helper instead. Until
+        # this fix landed every postback was treated as new (False
+        # branch in the except), which is safe but not deduplicated.
+        from backend.db.duckdb_engine import query_iceberg_table
 
-        from stocks.repository import StockRepository
-
-        repo = StockRepository()
-        path = repo._iceberg_table_path("algo.events")  # noqa: SLF001
         try:
-            con = duckdb.connect()
-            con.execute("INSTALL iceberg; LOAD iceberg;")
-            rows = con.execute(
-                "SELECT 1 FROM iceberg_scan(?) "
+            rows = query_iceberg_table(
+                "algo.events",
+                "SELECT 1 FROM events "
                 "WHERE json_extract_string("
                 "payload_json, '$.guid') = ? "
                 "LIMIT 1",
-                [path, guid],
-            ).fetchall()
+                [guid],
+            )
             return len(rows) > 0
         except Exception:
             _logger.warning(
