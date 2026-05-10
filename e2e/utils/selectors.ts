@@ -350,4 +350,15 @@ export const FE = {
   kitePostbackRow: "kite-postback-row",
   kitePostbackPayloadToggle: "kite-postback-payload-toggle",
   kitePostbackEmptyState: "kite-postback-empty-state",
+
+  // ── Algo Trading — Regime widget (REGIME-1) ──────────
+  regimeWidget: "regime-widget",
+  regimeWidgetLoading: "regime-widget-loading",
+  regimeWidgetEmpty: "regime-widget-empty",
+  regimeBadge: "regime-badge",
+  regimeVixGauge: "regime-vix-gauge",
+  regimeBreadthBar: "regime-breadth-bar",
+  regimeStressChip: "regime-stress-chip",
+  regimeHistoryChart: "regime-history-chart",
+  regimeHistoryEmpty: "regime-history-empty",
 } as const;
