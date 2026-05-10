@@ -56,6 +56,14 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.algo.backtest.event_writer import event_row, flush_events
+from backend.algo.backtest.gates import GateThresholds, evaluate_5_gates
+from backend.algo.backtest.metrics import (
+    PerRegimeMetrics,
+    deflated_sharpe_ratio,
+    per_regime_breakdown,
+    probability_of_backtest_overfitting,
+    recovery_months_from_dd,
+)
 from backend.algo.backtest.runner import run_backtest
 from backend.algo.backtest.runs_repo import BacktestRunsRepo
 from backend.algo.backtest.types import BacktestRequest, BacktestSummary
@@ -80,6 +88,15 @@ class WalkForwardConfig(BaseModel):
     initial_capital_inr: Decimal = Field(
         default=Decimal("100000.00"), ge=Decimal("1000.00"),
     )
+    # REGIME-5: regime-stratified windows + 5-gate thresholds.
+    # All optional with safe defaults so existing V2-2 callers
+    # keep working unchanged.
+    regime_stratified: bool = True
+    require_per_regime_non_negative: bool = True
+    require_dsr_min: Decimal = Decimal("0.95")
+    require_pbo_max: Decimal = Decimal("0.30")
+    require_max_dd_pct: Decimal = Decimal("25")
+    require_recovery_months_max: int = 18
 
 
 @dataclass(frozen=True)
@@ -115,6 +132,19 @@ class WindowSummary(BaseModel):
     error_text: str | None = None
 
 
+class PerRegimeRow(BaseModel):
+    """Per-regime metrics serialised for the API + persistence."""
+    model_config = ConfigDict(extra="forbid")
+
+    regime: str
+    n_days: int
+    cum_return_pct: Decimal
+    sharpe: Decimal
+    sortino: Decimal
+    max_dd_pct: Decimal
+    hit_rate: Decimal
+
+
 class WalkForwardAggregate(BaseModel):
     """Aggregate metrics across all test windows."""
     model_config = ConfigDict(extra="forbid")
@@ -125,6 +155,14 @@ class WalkForwardAggregate(BaseModel):
     std_pnl_pct: Decimal  # std-dev of per-window PnL%
     window_count: int
     completed_count: int
+    # REGIME-5 additions. All default-empty so any older
+    # summary_json blob deserialises cleanly.
+    per_regime: list[PerRegimeRow] = Field(default_factory=list)
+    dsr: Decimal = Decimal("0")
+    pbo: Decimal | None = None
+    recovery_months: int = 0
+    gates_passed: dict[str, bool] = Field(default_factory=dict)
+    regime_stratified: bool = False
 
 
 class WalkForwardResult(BaseModel):
@@ -156,11 +194,18 @@ def walk_windows(
     train_days: int,
     test_days: int,
     step_days: int,
+    regime_labels: dict[date, str] | None = None,
 ) -> list[Window]:
     """Return the list of (train, test) windows for the period.
 
     Trailing partial windows (where test_end > end) are dropped,
     not truncated, to keep per-window metrics comparable.
+
+    REGIME-5: pass ``regime_labels`` (a date → regime mapping
+    covering ``[start, end]``) to enforce regime-stratified
+    splits. A window is kept only if its TRAIN slice contains at
+    least one day of every regime present in the FULL period.
+    Pass ``None`` (the default) for the V2-2 behaviour.
 
     Raises ValueError if:
     - train_days < 1, test_days < 1, or step_days < 1
@@ -191,6 +236,28 @@ def walk_windows(
             test_end=test_end,
         ))
         i += 1
+
+    if regime_labels:
+        # Universe of regimes seen anywhere in the full period.
+        full_period_regimes = {
+            lab for d, lab in regime_labels.items()
+            if start <= d <= end
+        }
+        if not full_period_regimes:
+            return windows
+
+        def _train_covers_all(w: Window) -> bool:
+            seen: set[str] = set()
+            cur = w.train_start
+            while cur <= w.train_end:
+                lab = regime_labels.get(cur)
+                if lab is not None:
+                    seen.add(lab)
+                cur += timedelta(days=1)
+            return full_period_regimes.issubset(seen)
+
+        windows = [w for w in windows if _train_covers_all(w)]
+
     return windows
 
 
