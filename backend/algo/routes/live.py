@@ -79,6 +79,21 @@ class EnableRequest(BaseModel):
     confirmed_strategy_name: str
 
 
+class WsHealth(BaseModel):
+    """OBS-1 — KiteWsMultiplexer health view for the dashboard dot.
+
+    Read-only snapshot served by GET /v1/algo/live/ws-health. All
+    fields default to their disconnected values when no
+    multiplexer is registered for the user.
+    """
+    connected: bool = False
+    subscriber_count: int = 0
+    subscribed_tokens: int = 0
+    last_tick_at: str | None = None
+    tick_age_seconds: int | None = None
+    tick_count_today: int = 0
+
+
 # ---------------------------------------------------------------
 # Helper: 4-gate validation
 # ---------------------------------------------------------------
@@ -413,6 +428,44 @@ def create_live_router() -> APIRouter:
         uid = UUID(user.user_id)
         state = await is_armed(uid, _redis())
         return {"dry_run": state}
+
+    # ----------------------------------------------------------
+    # OBS-1 — Kite WS health snapshot for the dashboard dot.
+    # Always 200; returns disconnected zeros when no multiplexer
+    # is registered for the user. MUST NOT spin up a multiplexer
+    # as a side-effect of polling.
+    # ----------------------------------------------------------
+    @router.get("/ws-health", response_model=WsHealth)
+    async def get_ws_health(
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> WsHealth:
+        from backend.algo.broker.ws_registry import (
+            get_multiplexer_if_exists,
+        )
+        from backend.routes import _iso_utc
+
+        uid = UUID(user.user_id)
+        mux = get_multiplexer_if_exists(uid)
+        if mux is None:
+            return WsHealth()
+
+        snap = mux.health_snapshot()
+        last = snap.get("last_tick_at")
+        age: int | None = None
+        if last is not None:
+            now = datetime.now(UTC).replace(tzinfo=None)
+            try:
+                age = int((now - last).total_seconds())
+            except (TypeError, ValueError):
+                age = None
+        return WsHealth(
+            connected=bool(snap.get("connected")),
+            subscriber_count=int(snap.get("subscriber_count", 0)),
+            subscribed_tokens=int(snap.get("subscribed_tokens", 0)),
+            last_tick_at=_iso_utc(last),
+            tick_age_seconds=age,
+            tick_count_today=int(snap.get("tick_count_today", 0)),
+        )
 
     # ----------------------------------------------------------
     @router.get("/orders/{strategy_id}")

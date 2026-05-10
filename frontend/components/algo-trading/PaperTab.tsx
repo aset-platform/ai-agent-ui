@@ -17,6 +17,7 @@ import { LiveDryRunBanner } from "./LiveDryRunBanner";
 import { LiveLandedOrdersList } from "./LiveLandedOrdersList";
 import { LiveModeToggle } from "./LiveModeToggle";
 import { LiveSafetyBeltsForm } from "./LiveSafetyBeltsForm";
+import { LiveWsHealthDot } from "./LiveWsHealthDot";
 import {
   PaperEventsTimeline,
   type EventsPageSize,
@@ -236,10 +237,15 @@ export function PaperTab() {
               dark:border-indigo-900/50 p-3"
             data-testid="live-mode-section"
           >
-            <h3 className="text-sm font-semibold text-slate-900
-              dark:text-slate-100">
-              Live order placement
-            </h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-slate-900
+                dark:text-slate-100">
+                Live order placement
+              </h3>
+              {/* OBS-1 — Kite WS health dot. Polls /ws-health
+                  every 10s; tooltip shows tick count + age. */}
+              <LiveWsHealthDot />
+            </div>
             <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
               Select a strategy to configure and enable live order
               placement via Zerodha Kite.

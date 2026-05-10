@@ -67,5 +67,37 @@ class _StubKiteConnect:
         return []
 
 
+class _StubKiteTicker:
+    """Minimal KiteTicker stub — tests that exercise the WS path
+    monkey-patch ``kiteconnect.KiteTicker`` with their own shim
+    (``mock_kite_ws_server.KiteTickerShim``). The class only needs
+    to be a real attribute on the stub module so ``unittest.mock.
+    patch("kiteconnect.KiteTicker", ...)`` can resolve it."""
+
+    MODE_LTP = "ltp"
+    MODE_QUOTE = "quote"
+    MODE_FULL = "full"
+
+    def __init__(self, api_key: str = "", access_token: str = "") -> None:
+        self.api_key = api_key
+        self.access_token = access_token
+
+    def connect(self, threaded: bool = True) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def subscribe(self, tokens) -> None:
+        pass
+
+    def unsubscribe(self, tokens) -> None:
+        pass
+
+    def set_mode(self, mode, tokens) -> None:
+        pass
+
+
 _kc_stub.KiteConnect = _StubKiteConnect  # type: ignore[attr-defined]
+_kc_stub.KiteTicker = _StubKiteTicker  # type: ignore[attr-defined]
 sys.modules.setdefault("kiteconnect", _kc_stub)

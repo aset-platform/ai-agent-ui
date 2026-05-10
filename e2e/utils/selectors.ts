@@ -333,6 +333,9 @@ export const FE = {
   algoLeverRiskMaxQty: "lever-risk-max-qty",
   algoLeverRiskMaxLossPct: "lever-risk-max-loss-pct",
 
+  // ── Algo Trading — Live WS health dot (OBS-1) ─
+  algoLiveWsHealthDot: "live-ws-health-dot",
+
   // ── Algo Trading — Reconciliation (V2-3) ─────
   algoReconciliationPanel: "reconciliation-drift-panel",
   algoReconciliationChip: "reconciliation-drift-chip",
