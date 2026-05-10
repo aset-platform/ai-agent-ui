@@ -17,8 +17,10 @@ Notes
 - ``disable`` is always allowed (no gate restriction).
 - Gate validation is stateless: reads PG every time (no cache).
 """
+
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -40,6 +42,7 @@ _30_DAYS = timedelta(days=30)
 # ---------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------
+
 
 class UpsertCapsRequest(BaseModel):
     max_inr: Decimal = Field(ge=Decimal("0"))
@@ -64,6 +67,7 @@ class CapsResponse(BaseModel):
 
 class GatesStatus(BaseModel):
     """Frontend uses this to show per-gate tooltips on the toggle."""
+
     kite_connected: bool
     caps_set: bool
     kill_switch_disarmed: bool
@@ -76,6 +80,7 @@ class GatesStatus(BaseModel):
 
 class EnableRequest(BaseModel):
     """Must include strategy_name for the retype-confirm check."""
+
     confirmed_strategy_name: str
 
 
@@ -86,6 +91,7 @@ class WsHealth(BaseModel):
     fields default to their disconnected values when no
     multiplexer is registered for the user.
     """
+
     connected: bool = False
     subscriber_count: int = 0
     subscribed_tokens: int = 0
@@ -97,6 +103,7 @@ class WsHealth(BaseModel):
 # ---------------------------------------------------------------
 # Helper: 4-gate validation
 # ---------------------------------------------------------------
+
 
 async def _check_gates(
     user_id: UUID,
@@ -156,25 +163,30 @@ async def _check_gates(
     walkforward_recent = False
     async with session_factory() as session:
         from sqlalchemy import text
+
         row = (
-            await session.execute(
-                text(
-                    "SELECT started_at, summary_json "
-                    "FROM algo.runs "
-                    "WHERE user_id = :uid "
-                    "  AND strategy_id = :sid "
-                    "  AND parent_walkforward_id IS NULL "
-                    "  AND window_start IS NULL "
-                    "  AND status = 'completed' "
-                    "  AND summary_json IS NOT NULL "
-                    "  AND ((summary_json->'aggregate'->>"
-                    "        'window_count') IS NOT NULL) "
-                    "ORDER BY started_at DESC "
-                    "LIMIT 1"
-                ),
-                {"uid": user_id, "sid": strategy_id},
+            (
+                await session.execute(
+                    text(
+                        "SELECT started_at, summary_json "
+                        "FROM algo.runs "
+                        "WHERE user_id = :uid "
+                        "  AND strategy_id = :sid "
+                        "  AND parent_walkforward_id IS NULL "
+                        "  AND window_start IS NULL "
+                        "  AND status = 'completed' "
+                        "  AND summary_json IS NOT NULL "
+                        "  AND ((summary_json->'aggregate'->>"
+                        "        'window_count') IS NOT NULL) "
+                        "ORDER BY started_at DESC "
+                        "LIMIT 1"
+                    ),
+                    {"uid": user_id, "sid": strategy_id},
+                )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
     if row:
         started_at = row["started_at"]
         if started_at:
@@ -183,6 +195,7 @@ async def _check_gates(
             )
             if age < _30_DAYS:
                 import json as _json
+
                 summary = row.get("summary_json") or {}
                 if isinstance(summary, str):
                     summary = _json.loads(summary)
@@ -217,6 +230,7 @@ async def _check_gates(
     # ALGO_LIVE_DRY_RUN env var if Redis state is absent so
     # legacy deployments keep working.
     from backend.algo.live.dry_run_flag import is_armed
+
     dry_run = await is_armed(user_id, redis_client)
 
     return GatesStatus(
@@ -234,18 +248,99 @@ async def _check_gates(
 
 
 # ---------------------------------------------------------------
+# Postback read models (OBS-2 companion)
+# ---------------------------------------------------------------
+
+
+class PostbackEvent(BaseModel):
+    """Single postback event row for the frontend panel."""
+
+    event_id: str
+    ts_ns: int
+    ts_date: str
+    guid: str
+    order_id: str
+    status: str
+    tradingsymbol: str
+    filled_quantity: int
+    average_price: float
+    our_user_id: str | None = None
+    raw: dict = Field(default_factory=dict)
+
+
+class PostbacksResponse(BaseModel):
+    """Response for GET /algo/live/postbacks."""
+
+    events: list[PostbackEvent] = Field(default_factory=list)
+    total: int = 0
+
+
+def _query_postback_events(
+    user_id: str,
+    limit: int,
+) -> list[dict]:
+    """Query algo.events for kite_postback_received rows.
+
+    Args:
+        user_id: Our internal user UUID string.
+        limit: Max rows to return (default 50).
+
+    Returns:
+        List of raw event dicts ordered by ts_ns DESC.
+    """
+    import duckdb
+
+    from stocks.repository import StockRepository
+
+    repo = StockRepository()
+    path = repo._iceberg_table_path("algo.events")  # noqa: SLF001
+    try:
+        con = duckdb.connect()
+        con.execute("INSTALL iceberg; LOAD iceberg;")
+        rows = con.execute(
+            "SELECT event_id, ts_ns, ts_date, "
+            "payload_json "
+            "FROM iceberg_scan(?) "
+            "WHERE user_id = ? "
+            "  AND type = 'kite_postback_received' "
+            "ORDER BY ts_ns DESC "
+            "LIMIT ?",
+            [path, user_id, limit],
+        ).fetchall()
+        return [
+            {
+                "event_id": r[0],
+                "ts_ns": r[1],
+                "ts_date": r[2],
+                "payload_json": r[3],
+            }
+            for r in rows
+        ]
+    except Exception:
+        _logger.warning(
+            "postback query failed for user=%s",
+            user_id,
+            exc_info=True,
+        )
+        return []
+
+
+# ---------------------------------------------------------------
 # Router factory
 # ---------------------------------------------------------------
+
 
 def create_live_router() -> APIRouter:
     router = APIRouter(prefix="/algo/live", tags=["algo-live"])
 
     def _sf():
         from backend.db.engine import get_session_factory
+
         return get_session_factory()
 
     def _redis():
         from backend.algo.redis_async import get_async_redis
+
         return get_async_redis()
 
     # ----------------------------------------------------------
@@ -258,14 +353,15 @@ def create_live_router() -> APIRouter:
         user: UserContext = Depends(pro_or_superuser),
     ) -> CapsResponse:
         from backend.algo.live.caps_repo import CapsRepo
+
         repo = CapsRepo()
         row = await repo.get_or_default(
-            UUID(user.user_id), strategy_id,
+            UUID(user.user_id),
+            strategy_id,
         )
-        return CapsResponse(**{
-            k: row[k] for k in CapsResponse.model_fields
-            if k in row
-        })
+        return CapsResponse(
+            **{k: row[k] for k in CapsResponse.model_fields if k in row}
+        )
 
     # ----------------------------------------------------------
     @router.put(
@@ -278,6 +374,7 @@ def create_live_router() -> APIRouter:
         user: UserContext = Depends(pro_or_superuser),
     ) -> CapsResponse:
         from backend.algo.live.caps_repo import CapsRepo
+
         repo = CapsRepo()
         row = await repo.upsert(
             UUID(user.user_id),
@@ -287,10 +384,9 @@ def create_live_router() -> APIRouter:
             allowed_tickers=body.allowed_tickers,
             last_walkforward_run_id=body.last_walkforward_run_id,
         )
-        return CapsResponse(**{
-            k: row[k] for k in CapsResponse.model_fields
-            if k in row
-        })
+        return CapsResponse(
+            **{k: row[k] for k in CapsResponse.model_fields if k in row}
+        )
 
     # ----------------------------------------------------------
     @router.get(
@@ -350,17 +446,22 @@ def create_live_router() -> APIRouter:
 
         # Server-side 4-gate check
         gates = await _check_gates(
-            uid, strategy_id, _sf(), _redis(),
+            uid,
+            strategy_id,
+            _sf(),
+            _redis(),
         )
         if not gates.all_pass:
             closed = [
-                f for f, v in {
+                f
+                for f, v in {
                     "kite_connected": gates.kite_connected,
                     "caps_set": gates.caps_set,
                     "kill_switch_disarmed": gates.kill_switch_disarmed,
                     "walkforward_recent": gates.walkforward_recent,
                     "drift_within_limit": gates.drift_within_limit,
-                }.items() if not v
+                }.items()
+                if not v
             ]
             raise HTTPException(
                 status_code=400,
@@ -372,13 +473,14 @@ def create_live_router() -> APIRouter:
 
         repo = CapsRepo()
         await repo.enable_live_orders(
-            uid, strategy_id, approved_by=uid,
+            uid,
+            strategy_id,
+            approved_by=uid,
         )
         row = await repo.get_or_default(uid, strategy_id)
-        return CapsResponse(**{
-            k: row[k] for k in CapsResponse.model_fields
-            if k in row
-        })
+        return CapsResponse(
+            **{k: row[k] for k in CapsResponse.model_fields if k in row}
+        )
 
     # ----------------------------------------------------------
     @router.post(
@@ -390,14 +492,14 @@ def create_live_router() -> APIRouter:
         user: UserContext = Depends(pro_or_superuser),
     ) -> CapsResponse:
         from backend.algo.live.caps_repo import CapsRepo
+
         uid = UUID(user.user_id)
         repo = CapsRepo()
         await repo.disable_live_orders(uid, strategy_id)
         row = await repo.get_or_default(uid, strategy_id)
-        return CapsResponse(**{
-            k: row[k] for k in CapsResponse.model_fields
-            if k in row
-        })
+        return CapsResponse(
+            **{k: row[k] for k in CapsResponse.model_fields if k in row}
+        )
 
     # ----------------------------------------------------------
     # Dry-run mode toggle (per-user, Redis-backed).
@@ -407,6 +509,7 @@ def create_live_router() -> APIRouter:
         user: UserContext = Depends(pro_or_superuser),
     ) -> dict[str, Any]:
         from backend.algo.live.dry_run_flag import arm
+
         uid = UUID(user.user_id)
         new_state = await arm(uid, _redis())
         return {"dry_run": new_state}
@@ -416,6 +519,7 @@ def create_live_router() -> APIRouter:
         user: UserContext = Depends(pro_or_superuser),
     ) -> dict[str, Any]:
         from backend.algo.live.dry_run_flag import disarm
+
         uid = UUID(user.user_id)
         new_state = await disarm(uid, _redis())
         return {"dry_run": new_state}
@@ -425,6 +529,7 @@ def create_live_router() -> APIRouter:
         user: UserContext = Depends(pro_or_superuser),
     ) -> dict[str, Any]:
         from backend.algo.live.dry_run_flag import is_armed
+
         uid = UUID(user.user_id)
         state = await is_armed(uid, _redis())
         return {"dry_run": state}
@@ -474,31 +579,88 @@ def create_live_router() -> APIRouter:
         user: UserContext = Depends(pro_or_superuser),
     ) -> list[dict]:
         """Return in-flight orders for the most recent live run."""
-        from backend.algo.live.caps_repo import CapsRepo
         from sqlalchemy import text
+
+        from backend.algo.live.caps_repo import CapsRepo  # noqa: F401
 
         uid = UUID(user.user_id)
         # Find latest live run for this strategy
         factory = _sf()
         async with factory() as session:
             row = (
-                await session.execute(
-                    text(
-                        "SELECT id, live_orders_in_flight "
-                        "FROM algo.runs "
-                        "WHERE user_id = :uid "
-                        "  AND strategy_id = :sid "
-                        "ORDER BY started_at DESC LIMIT 1"
-                    ),
-                    {"uid": uid, "sid": strategy_id},
+                (
+                    await session.execute(
+                        text(
+                            "SELECT id, live_orders_in_flight "
+                            "FROM algo.runs "
+                            "WHERE user_id = :uid "
+                            "  AND strategy_id = :sid "
+                            "ORDER BY started_at DESC LIMIT 1"
+                        ),
+                        {"uid": uid, "sid": strategy_id},
+                    )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
         if row is None:
             return []
         in_flight = row.get("live_orders_in_flight") or []
         if isinstance(in_flight, str):
             import json
+
             in_flight = json.loads(in_flight)
         return in_flight
+
+    # ---------------------------------------------------------------
+    # Postback read endpoint (OBS-2 companion)
+    # ---------------------------------------------------------------
+
+    @router.get(
+        "/postbacks",
+        response_model=PostbacksResponse,
+    )
+    async def get_live_postbacks(
+        limit: int = 50,
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> PostbacksResponse:
+        """Return last N Kite postback events for the user.
+
+        Args:
+            limit: Max rows (capped at 200, default 50).
+
+        Returns:
+            PostbacksResponse with events newest first.
+        """
+        import asyncio as _asyncio
+
+        cap = min(limit, 200)
+        raw_rows = await _asyncio.to_thread(
+            _query_postback_events, user.user_id, cap
+        )
+
+        events: list[PostbackEvent] = []
+        for r in raw_rows:
+            try:
+                p = json.loads(r["payload_json"])
+            except Exception:
+                continue
+            events.append(
+                PostbackEvent(
+                    event_id=r["event_id"],
+                    ts_ns=r["ts_ns"],
+                    ts_date=r["ts_date"],
+                    guid=p.get("guid", ""),
+                    order_id=p.get("order_id", ""),
+                    status=p.get("status", ""),
+                    tradingsymbol=p.get("tradingsymbol", ""),
+                    filled_quantity=int(p.get("filled_quantity", 0)),
+                    average_price=float(p.get("average_price", 0.0)),
+                    our_user_id=p.get("our_user_id"),
+                    raw=p.get("raw", {}),
+                )
+            )
+
+        return PostbacksResponse(events=events, total=len(events))
 
     return router

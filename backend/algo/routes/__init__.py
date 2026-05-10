@@ -22,6 +22,9 @@ from backend.algo.routes.strategies import (
 from backend.algo.routes.walkforward import (
     create_walkforward_router,
 )
+from backend.algo.routes.webhooks import (
+    create_webhooks_router,
+)
 
 __all__ = [
     "create_backtest_router",
@@ -36,4 +39,5 @@ __all__ = [
     "create_replay_router",
     "create_strategies_router",
     "create_walkforward_router",
+    "create_webhooks_router",
 ]
