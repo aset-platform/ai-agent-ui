@@ -110,9 +110,13 @@ async def _resolve_kite_user(
     Returns:
         Our UUID or None if mapping unknown.
     """
+    # backend.cache.get_cache() returns a synchronous interface
+    # (matches the rest of the cache call sites — see CLAUDE.md
+    # §5.13). OBS-2 originally `await`ed both .get and .set which
+    # raised "object NoneType can't be used in 'await' expression".
     cache = _get_cache()
     cache_key = f"kite_user:{kite_user_id}"
-    cached = await cache.get(cache_key)
+    cached = cache.get(cache_key)
     if cached is not None:
         return UUID(cached)
 
@@ -126,7 +130,7 @@ async def _resolve_kite_user(
         )
         return None
 
-    await cache.set(cache_key, str(our_id), ttl=_KITE_USER_TTL)
+    cache.set(cache_key, str(our_id), ttl=_KITE_USER_TTL)
     return our_id
 
 
