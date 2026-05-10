@@ -2077,6 +2077,13 @@ def create_tables() -> None:
     )
     _factors_register()
 
+    # Universe snapshot — REGIME-7 (stocks.universe_snapshot).
+    # Idempotent.
+    from backend.algo.universe.iceberg_init import (
+        register_tables as _universe_register,
+    )
+    _universe_register()
+
     _logger.info("Stocks Iceberg table initialisation complete.")
 
 

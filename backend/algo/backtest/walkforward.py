@@ -53,7 +53,7 @@ from statistics import stdev
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.algo.backtest.event_writer import event_row, flush_events
 from backend.algo.backtest.gates import GateThresholds, evaluate_5_gates
@@ -66,7 +66,11 @@ from backend.algo.backtest.metrics import (
 )
 from backend.algo.backtest.runner import run_backtest
 from backend.algo.backtest.runs_repo import BacktestRunsRepo
-from backend.algo.backtest.types import BacktestRequest, BacktestSummary
+from backend.algo.backtest.types import (
+    BacktestRequest,
+    BacktestSummary,
+    _enforce_backtest_start_floor,
+)
 from backend.algo.strategy.ast import Strategy
 
 _logger = logging.getLogger(__name__)
@@ -97,6 +101,14 @@ class WalkForwardConfig(BaseModel):
     require_pbo_max: Decimal = Decimal("0.30")
     require_max_dd_pct: Decimal = Decimal("25")
     require_recovery_months_max: int = 18
+
+    # REGIME-7 — same 2007-01-01 floor as BacktestRequest. Kept
+    # in sync via the shared ``_enforce_backtest_start_floor``
+    # helper.
+    @field_validator("period_start")
+    @classmethod
+    def _start_floor(cls, v: date) -> date:
+        return _enforce_backtest_start_floor(v)
 
 
 @dataclass(frozen=True)

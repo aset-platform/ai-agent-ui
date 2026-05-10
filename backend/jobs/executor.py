@@ -3463,3 +3463,29 @@ def _job_attribution_monthly_regression(
     )
 
     return monthly_factor_regression_job(payload or {})
+
+
+@register_job("universe_snapshot_monthly")
+def _job_universe_snapshot_monthly(
+    payload: dict | None = None,
+):
+    """REGIME-7: monthly NSE universe snapshot rebuilder.
+
+    Filters active .NS tickers by 60d ADTV (>= 10cr) and market
+    cap (>= 500cr); top-200 by ADTV are flagged
+    ``included_in_top_200=True``. Remaining filtered candidates
+    persisted with ``False`` so liquidity ratings can read them
+    without re-running the job.
+
+    Payload shape: ``{"rebalance_date": "YYYY-MM-DD"}``. Defaults
+    to today (IST) if absent.
+    """
+    from datetime import date as _date
+
+    from backend.algo.universe.snapshot_job import (
+        rebuild_universe_snapshot,
+    )
+
+    rd = (payload or {}).get("rebalance_date")
+    parsed = _date.fromisoformat(rd) if rd else _date.today()
+    return rebuild_universe_snapshot(parsed)

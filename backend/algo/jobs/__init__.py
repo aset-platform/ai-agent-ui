@@ -23,3 +23,9 @@ from backend.algo.jobs import regime_change_notifier  # noqa: F401
 # live in ``backend/jobs/executor.py``; importing here keeps the
 # algo job inventory cohesive.
 from backend.algo.attribution import job as attribution_job  # noqa: F401, E501
+
+# REGIME-7 — monthly universe snapshot (1st Sunday 03:00 IST). The
+# ``@register_job("universe_snapshot_monthly")`` wrapper itself
+# lives in ``backend/jobs/executor.py``; importing here keeps the
+# algo job inventory cohesive.
+from backend.algo.universe import snapshot_job as universe_snapshot_job  # noqa: F401, E501
