@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { startBacktestRun } from "@/hooks/useBacktestRuns";
 import { useStrategies } from "@/hooks/useStrategies";
+import { RegimePeriodMix } from "./RegimePeriodMix";
 
 interface Props {
   onSubmitted: (runId: string) => void;
@@ -50,6 +51,7 @@ export function BacktestRunForm({ onSubmitted }: Props) {
   }
 
   return (
+    <div className="space-y-3">
     <form
       onSubmit={handleSubmit}
       className="flex flex-wrap items-end gap-3 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-3"
@@ -116,6 +118,8 @@ export function BacktestRunForm({ onSubmitted }: Props) {
         </span>
       )}
     </form>
+    <RegimePeriodMix start={periodStart} end={periodEnd} />
+    </div>
   );
 }
 

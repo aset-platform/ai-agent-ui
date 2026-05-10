@@ -72,6 +72,13 @@ const JOB_LABELS: Record<string, string> = {
   corporate_events_daily: "Corporate Events",
   fundamentals_snapshot_daily: "Fundamentals Snapshot",
   promoter_holdings_quarterly: "Promoter Holdings",
+  // Algo Trading v3 — regime / factors / attribution / universe
+  regime_classifier_daily: "Detect Market Regime",
+  regime_change_notifier: "Notify Regime Change",
+  compute_daily_factors: "Compute Daily Factors",
+  attribution_daily_brinson: "Daily Brinson Attribution",
+  universe_snapshot_monthly: "Refresh Top-200 Universe",
+  attribution_monthly_regression: "Run Factor Regression",
 };
 
 // ---------------------------------------------------------------

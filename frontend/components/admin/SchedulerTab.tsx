@@ -908,6 +908,14 @@ function NewScheduleForm({
         corporate_events_daily: "Corporate Events",
         fundamentals_snapshot_daily: "Fundamentals Snapshot",
         promoter_holdings_quarterly: "Promoter Holdings",
+        // Algo Trading v3 (regime / factors / attribution / universe)
+        regime_classifier_daily: "Regime Classifier",
+        regime_change_notifier: "Regime Change Notifier",
+        compute_daily_factors: "Compute Daily Factors",
+        attribution_daily_brinson: "Attribution Daily (Brinson)",
+        attribution_monthly_regression:
+          "Attribution Monthly (Factor Regression)",
+        universe_snapshot_monthly: "Universe Snapshot Monthly",
       };
       const typeLabel = typeLabelMap[jobType]
         || "Data Refresh";
@@ -1246,6 +1254,70 @@ function NewScheduleForm({
                 </p>
               </div>
             </button>
+
+            {/* Algo Trading v3 — regime / factors / attribution / universe */}
+            {[
+              {
+                jt: "regime_classifier_daily",
+                title: "Regime Classifier",
+                hint: "Daily rule + HMM",
+              },
+              {
+                jt: "regime_change_notifier",
+                title: "Regime Change Notifier",
+                hint: "Diff + emit event",
+              },
+              {
+                jt: "compute_daily_factors",
+                title: "Daily Factors",
+                hint: "Momentum / vol / trend",
+              },
+              {
+                jt: "attribution_daily_brinson",
+                title: "Attribution (Daily)",
+                hint: "Brinson decomposition",
+              },
+              {
+                jt: "attribution_monthly_regression",
+                title: "Attribution (Monthly)",
+                hint: "OLS factor regression",
+              },
+              {
+                jt: "universe_snapshot_monthly",
+                title: "Universe Snapshot",
+                hint: "Top-200 by ADTV",
+              },
+            ].map(({ jt, title, hint }) => (
+              <button
+                key={jt}
+                onClick={() => setJobType(jt)}
+                className={`flex items-center gap-2.5
+                  rounded-xl border p-3 text-left
+                  transition-all ${
+                    jobType === jt
+                      ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-500/12"
+                      : "border-gray-200 dark:border-gray-700"
+                  }`}
+              >
+                <div
+                  className="flex h-9 w-9 items-center
+                    justify-center rounded-[10px]
+                    bg-emerald-100 text-emerald-700
+                    dark:bg-emerald-500/15
+                    dark:text-emerald-400"
+                >
+                  <ZapIcon />
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-gray-900 dark:text-gray-100">
+                    {title}
+                  </p>
+                  <p className="text-[10px] text-gray-400 dark:text-gray-500">
+                    {hint}
+                  </p>
+                </div>
+              </button>
+            ))}
           </div>
         </div>
 

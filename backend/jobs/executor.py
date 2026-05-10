@@ -2623,6 +2623,13 @@ _HOT_ICEBERG_TABLES = (
     "stocks.sentiment_scores",
     "stocks.company_info",
     "stocks.analysis_summary",
+    # Algo Trading v3 (regime engine + factor library + universe).
+    # Daily writes accumulate one parquet per upsert; compact to
+    # keep file counts bounded just like ohlcv.
+    "stocks.regime_history",
+    "stocks.daily_factors",
+    "stocks.universe_snapshot",
+    "stocks.regime_hmm_state",
 )
 
 
@@ -3373,119 +3380,126 @@ async def _job_algo_ws_tick_count_reset(
 
 
 @register_job("regime_classifier_daily")
-def _job_regime_classifier_daily(payload: dict | None = None):
-    """REGIME-1: daily 22:30 IST regime classification.
-
-    Reads NIFTY + India VIX + universe breadth from
-    ``stocks.ohlcv``, persists one row to
-    ``stocks.regime_history`` with a ``BULL/SIDEWAYS/BEAR`` label
-    plus an HMM stress posterior. Sync — runs inside the
-    scheduler thread (no async DB calls).
-    """
-    from backend.algo.regime.classifier_job import (
-        run_classifier_job,
+def _job_regime_classifier_daily(
+    scope: str = "india",
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+) -> dict:
+    """REGIME-1 — pipeline-step compatible (scope, run_id, repo,
+    cancel_event, force). Idempotency: skips if today's row in
+    ``stocks.regime_history`` already exists; ``force=True``
+    pre-deletes today's row before re-running."""
+    from backend.algo.regime.pipeline_steps import (
+        run_regime_classifier_step,
     )
-    return run_classifier_job(payload or {})
+    return run_regime_classifier_step(
+        scope, run_id, repo,
+        cancel_event=cancel_event, force=force,
+    )
 
 
 @register_job("compute_daily_factors")
-def _job_compute_daily_factors(payload: dict | None = None):
-    """REGIME-2a: nightly factor library compute.
-
-    Iterates the active universe, computes 7 factor families per
-    ticker, and bulk-upserts to ``stocks.daily_factors`` via the
-    NaN-replaceable upsert in the repo. Sync.
-    """
-    from datetime import date as _date
-
-    from backend.algo.factors.compute_job import run_compute_job
-
-    payload = payload or {}
-    as_of = payload.get("as_of")
-    parsed = _date.fromisoformat(as_of) if as_of else None
-    days = int(payload.get("days", 1))
-    n = run_compute_job(as_of=parsed, days=days)
-    return {"rows_written": n}
+def _job_compute_daily_factors(
+    scope: str = "india",
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+) -> dict:
+    """REGIME-2a — pipeline-step compatible. Idempotency: skips
+    if today's date appears in ``stocks.daily_factors``;
+    ``force=True`` pre-deletes today's rows."""
+    from backend.algo.regime.pipeline_steps import (
+        run_factors_compute_step,
+    )
+    return run_factors_compute_step(
+        scope, run_id, repo,
+        cancel_event=cancel_event, force=force,
+    )
 
 
 @register_job("regime_change_notifier")
-def _job_regime_change_notifier(payload: dict | None = None):
-    """REGIME-3: daily 22:35 IST regime-change notifier.
-
-    Diffs today's vs yesterday's regime label in
-    ``stocks.regime_history``; on flip emits exactly one
-    ``regime_changed`` event into ``algo.events``.  Frontend
-    ``RegimeChangeBanner`` polls and surfaces the amber banner
-    via localStorage diff.
-    """
-    from datetime import date as _date
-
-    from backend.algo.jobs.regime_change_notifier import run_notifier
-
-    payload = payload or {}
-    as_of = payload.get("as_of")
-    parsed = _date.fromisoformat(as_of) if as_of else None
-    out = run_notifier(as_of=parsed)
-    return {"emitted": out is not None, "payload": out}
+def _job_regime_change_notifier(
+    scope: str = "india",
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+) -> dict:
+    """REGIME-3 — pipeline-step compatible. Idempotency: skips
+    if a ``regime_changed`` event already exists in
+    ``algo.events`` for today (prevents duplicate banner spam);
+    ``force=True`` re-emits."""
+    from backend.algo.regime.pipeline_steps import (
+        run_regime_notifier_step,
+    )
+    return run_regime_notifier_step(
+        scope, run_id, repo,
+        cancel_event=cancel_event, force=force,
+    )
 
 
 @register_job("attribution_daily_brinson")
-def _job_attribution_daily_brinson(payload: dict | None = None):
-    """REGIME-6: daily Brinson decomposition per active strategy.
-
-    Pulls today's order_filled events from ``algo.events``,
-    aggregates per-sector portfolio weights, looks up sector
-    mapping from ``stocks.piotroski_scores``, and persists one
-    row per (user, strategy) to ``algo.attribution_daily``.
-    Equal-weight NIFTY 50 baseline for v3 (real index weights
-    wired in v3.1).
-    """
-    from backend.algo.attribution.job import daily_brinson_job
-
-    return daily_brinson_job(payload or {})
+def _job_attribution_daily_brinson(
+    scope: str = "india",
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+) -> dict:
+    """REGIME-6 — pipeline-step compatible. Idempotency: skips
+    if today's row exists in PG ``algo.attribution_daily``;
+    ``force=True`` pre-deletes today's rows."""
+    from backend.algo.regime.pipeline_steps import (
+        run_attribution_brinson_step,
+    )
+    return run_attribution_brinson_step(
+        scope, run_id, repo,
+        cancel_event=cancel_event, force=force,
+    )
 
 
 @register_job("attribution_monthly_regression")
 def _job_attribution_monthly_regression(
-    payload: dict | None = None,
-):
-    """REGIME-6: monthly OLS factor regression per active strategy.
-
-    Reads the latest equity_curve from ``algo.runs.summary_json``
-    for each (user, strategy) pair active in the period,
-    computes daily returns, fits OLS against mock factor returns
-    (deterministic seed) and persists one row per pair to
-    ``algo.factor_regression`` with ``betas['__mock_data__']=1.0``
-    so the UI flags it. Real Fama-French wiring is v3.1.
-    """
-    from backend.algo.attribution.job import (
-        monthly_factor_regression_job,
+    scope: str = "india",
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+) -> dict:
+    """REGIME-6 — pipeline-step compatible. Skips on every day
+    that isn't the 1st of the month. Idempotency within the
+    month: skips if a row already exists in
+    ``algo.factor_regression`` for today's year/month;
+    ``force=True`` pre-deletes month rows + re-runs."""
+    from backend.algo.regime.pipeline_steps import (
+        run_attribution_regression_step,
     )
-
-    return monthly_factor_regression_job(payload or {})
+    return run_attribution_regression_step(
+        scope, run_id, repo,
+        cancel_event=cancel_event, force=force,
+    )
 
 
 @register_job("universe_snapshot_monthly")
 def _job_universe_snapshot_monthly(
-    payload: dict | None = None,
-):
-    """REGIME-7: monthly NSE universe snapshot rebuilder.
-
-    Filters active .NS tickers by 60d ADTV (>= 10cr) and market
-    cap (>= 500cr); top-200 by ADTV are flagged
-    ``included_in_top_200=True``. Remaining filtered candidates
-    persisted with ``False`` so liquidity ratings can read them
-    without re-running the job.
-
-    Payload shape: ``{"rebalance_date": "YYYY-MM-DD"}``. Defaults
-    to today (IST) if absent.
-    """
-    from datetime import date as _date
-
-    from backend.algo.universe.snapshot_job import (
-        rebuild_universe_snapshot,
+    scope: str = "india",
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+) -> dict:
+    """REGIME-7 — pipeline-step compatible. Skips on every day
+    that isn't the 1st of the month. Idempotency within the
+    month: skips if today's first-of-month rebalance row already
+    exists in ``stocks.universe_snapshot``; ``force=True``
+    pre-deletes the rebalance + re-runs."""
+    from backend.algo.regime.pipeline_steps import (
+        run_universe_snapshot_step,
     )
-
-    rd = (payload or {}).get("rebalance_date")
-    parsed = _date.fromisoformat(rd) if rd else _date.today()
-    return rebuild_universe_snapshot(parsed)
+    return run_universe_snapshot_step(
+        scope, run_id, repo,
+        cancel_event=cancel_event, force=force,
+    )

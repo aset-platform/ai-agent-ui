@@ -57,6 +57,33 @@ class ClassifierHealthResponse(BaseModel):
     last_regime_age_days: int | None
 
 
+class PeriodSummaryResponse(BaseModel):
+    """Regime distribution for a backtest period.
+
+    ``counts`` and ``pct`` always carry keys for ``BULL``,
+    ``SIDEWAYS``, ``BEAR`` even when the count is 0 — frontend
+    rendering is simpler. ``dominant`` is the regime with the
+    highest count (None when ``total_days == 0``).
+    ``recommended_template`` is the matching template name when
+    a regime is ≥ 50% of the period; None for mixed periods.
+    """
+    period_start: date
+    period_end: date
+    total_days: int
+    counts: dict[str, int]
+    pct: dict[str, float]
+    dominant: str | None
+    recommended_template: str | None
+    avg_stress_prob: float | None
+
+
+_TEMPLATE_FOR_REGIME = {
+    "BULL": "regime_bull_momentum",
+    "SIDEWAYS": "regime_sideways_meanrev_quality",
+    "BEAR": "regime_bear_defensive_lowvol",
+}
+
+
 # ----------------------------------------------------------------
 # Cache helpers — module-level so tests can monkeypatch them
 # without having to stub the Redis client itself.
@@ -127,6 +154,63 @@ def create_regime_router() -> APIRouter:
             )
             for r in rows
         ])
+        _cache_set(key, resp.model_dump_json(), ttl=TTL_STABLE)
+        return resp
+
+    @router.get(
+        "/period-summary",
+        response_model=PeriodSummaryResponse,
+    )
+    def period_summary(
+        start: date = Query(...),
+        end: date = Query(...),
+        _user: UserContext = Depends(get_current_user),
+    ) -> PeriodSummaryResponse:
+        """Regime distribution + recommended template for a backtest
+        period. Cache: TTL_STABLE keyed on (start, end)."""
+        if end < start:
+            raise HTTPException(
+                400, "end must be on or after start",
+            )
+        key = f"cache:regime:period_summary:{start}:{end}"
+        cached = _cache_get(key)
+        if cached:
+            return PeriodSummaryResponse(**json.loads(cached))
+
+        rows = get_regime_history(start=start, end=end)
+        counts = {"BULL": 0, "SIDEWAYS": 0, "BEAR": 0}
+        stress_vals: list[float] = []
+        for r in rows:
+            label = (r.regime_label or "").upper()
+            if label in counts:
+                counts[label] += 1
+            if r.stress_prob is not None:
+                stress_vals.append(float(r.stress_prob))
+        total = sum(counts.values())
+        pct = {
+            k: round(v / total * 100.0, 1) if total else 0.0
+            for k, v in counts.items()
+        }
+        dominant: str | None = None
+        recommended: str | None = None
+        if total > 0:
+            dominant = max(counts, key=counts.get)
+            if pct[dominant] >= 50.0:
+                recommended = _TEMPLATE_FOR_REGIME[dominant]
+        avg_stress = (
+            sum(stress_vals) / len(stress_vals)
+            if stress_vals else None
+        )
+        resp = PeriodSummaryResponse(
+            period_start=start,
+            period_end=end,
+            total_days=total,
+            counts=counts,
+            pct=pct,
+            dominant=dominant,
+            recommended_template=recommended,
+            avg_stress_prob=avg_stress,
+        )
         _cache_set(key, resp.model_dump_json(), ttl=TTL_STABLE)
         return resp
 

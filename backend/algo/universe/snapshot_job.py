@@ -83,15 +83,8 @@ def _upsert_snapshot(
     key, then append the new rows in a single Iceberg commit."""
     if not rows:
         return
+    from backend.algo._iceberg_retry import retry_iceberg_op
     from stocks.create_tables import _get_catalog
-    catalog = _get_catalog()
-    tbl = catalog.load_table(UNIVERSE_SNAPSHOT_TABLE)
-    try:
-        tbl.delete(EqualTo("rebalance_date", rebalance_date))
-    except Exception as exc:  # noqa: BLE001
-        _logger.debug(
-            "snapshot pre-delete skipped: %s", exc,
-        )
 
     schema = pa.schema([
         pa.field("rebalance_date", pa.date32(), nullable=False),
@@ -117,7 +110,21 @@ def _upsert_snapshot(
         },
         schema=schema,
     )
-    tbl.append(arrow_tbl)
+
+    def _do_upsert() -> None:
+        catalog = _get_catalog()
+        tbl = catalog.load_table(UNIVERSE_SNAPSHOT_TABLE)
+        try:
+            tbl.delete(
+                EqualTo("rebalance_date", rebalance_date),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug(
+                "snapshot pre-delete skipped: %s", exc,
+            )
+        tbl.append(arrow_tbl)
+
+    retry_iceberg_op(UNIVERSE_SNAPSHOT_TABLE, _do_upsert)
     invalidate_metadata(UNIVERSE_SNAPSHOT_TABLE)
     try:
         get_cache().invalidate("cache:universe:*")

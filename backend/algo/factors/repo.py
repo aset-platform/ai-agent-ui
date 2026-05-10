@@ -73,19 +73,15 @@ def upsert_factors(rows: list[FactorRow]) -> int:
 
     Pre-deletes the cross-product of incoming tickers × bar_dates,
     then appends the batch. The scoped delete prevents accidental
-    cross-ticker overwrite (CLAUDE §4.3 #18).
+    cross-ticker overwrite (CLAUDE §4.3 #18). Wrapped in
+    ``retry_iceberg_op`` to survive concurrent committers.
     """
     if not rows:
         return 0
-    cat = _catalog()
-    tbl = cat.load_table(DAILY_FACTORS_TABLE)
+    from backend.algo._iceberg_retry import retry_iceberg_op
+
     tickers = sorted({r.ticker for r in rows})
     dates = sorted({r.bar_date for r in rows})
-    try:
-        tbl.delete(And(In("ticker", tickers), In("bar_date", dates)))
-    except Exception as exc:  # first run on empty table is fine
-        _logger.debug("daily_factors pre-delete skipped: %s", exc)
-
     cols: dict[str, list] = {
         "ticker": [r.ticker for r in rows],
         "bar_date": [r.bar_date for r in rows],
@@ -94,7 +90,21 @@ def upsert_factors(rows: list[FactorRow]) -> int:
     for k in ALL_FACTOR_KEYS:
         cols[k] = [r.values.get(k, float("nan")) for r in rows]
     arrow_tbl = pa.table(cols, schema=_arrow_schema())
-    tbl.append(arrow_tbl)
+
+    def _do_upsert() -> None:
+        cat = _catalog()
+        tbl = cat.load_table(DAILY_FACTORS_TABLE)
+        try:
+            tbl.delete(
+                And(In("ticker", tickers), In("bar_date", dates)),
+            )
+        except Exception as exc:  # first run on empty table is fine
+            _logger.debug(
+                "daily_factors pre-delete skipped: %s", exc,
+            )
+        tbl.append(arrow_tbl)
+
+    retry_iceberg_op(DAILY_FACTORS_TABLE, _do_upsert)
     invalidate_metadata(DAILY_FACTORS_TABLE)
     _invalidate_factors_cache()
     return len(rows)

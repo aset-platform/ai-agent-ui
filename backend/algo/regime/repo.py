@@ -66,19 +66,16 @@ def _invalidate_regime_cache() -> None:
 def upsert_regime_history(rows: list[RegimeRow]) -> int:
     """NaN-replaceable upsert. Pre-deletes any existing rows for
     the incoming bar_dates; appends the new batch. Invalidates
-    ``cache:regime:*`` on success."""
+    ``cache:regime:*`` on success.
+
+    Wrapped in ``retry_iceberg_op`` so concurrent writers (e.g.
+    the backfill running while the daily pipeline fires) don't
+    crash with ``CommitFailedException``."""
     if not rows:
         return 0
-    cat = _catalog()
-    tbl = cat.load_table(REGIME_HISTORY_TABLE)
-    incoming_dates = [r.bar_date for r in rows]
-    try:
-        tbl.delete(In("bar_date", incoming_dates))
-    except Exception as exc:  # first run on empty table
-        _logger.debug(
-            "regime_history pre-delete skipped: %s", exc,
-        )
+    from backend.algo._iceberg_retry import retry_iceberg_op
 
+    incoming_dates = [r.bar_date for r in rows]
     arrow_schema = pa.schema([
         pa.field("bar_date", pa.date32(), nullable=False),
         pa.field("regime_label", pa.string(), nullable=False),
@@ -100,21 +97,27 @@ def upsert_regime_history(rows: list[RegimeRow]) -> int:
         },
         schema=arrow_schema,
     )
-    tbl.append(arrow_tbl)
+
+    def _do_upsert() -> None:
+        cat = _catalog()
+        tbl = cat.load_table(REGIME_HISTORY_TABLE)
+        try:
+            tbl.delete(In("bar_date", incoming_dates))
+        except Exception as exc:  # first run on empty table
+            _logger.debug(
+                "regime_history pre-delete skipped: %s", exc,
+            )
+        tbl.append(arrow_tbl)
+
+    retry_iceberg_op(REGIME_HISTORY_TABLE, _do_upsert)
     invalidate_metadata(REGIME_HISTORY_TABLE)
     _invalidate_regime_cache()
     return len(rows)
 
 
 def upsert_hmm_state(row: HmmStateRow) -> None:
-    cat = _catalog()
-    tbl = cat.load_table(REGIME_HMM_STATE_TABLE)
-    try:
-        tbl.delete(EqualTo("trained_through", row.trained_through))
-    except Exception as exc:
-        _logger.debug(
-            "regime_hmm_state pre-delete skipped: %s", exc,
-        )
+    from backend.algo._iceberg_retry import retry_iceberg_op
+
     arrow_schema = pa.schema([
         pa.field("trained_through", pa.date32(), nullable=False),
         pa.field("transmat_json", pa.string(), nullable=False),
@@ -132,7 +135,21 @@ def upsert_hmm_state(row: HmmStateRow) -> None:
         },
         schema=arrow_schema,
     )
-    tbl.append(arrow_tbl)
+
+    def _do_upsert() -> None:
+        cat = _catalog()
+        tbl = cat.load_table(REGIME_HMM_STATE_TABLE)
+        try:
+            tbl.delete(
+                EqualTo("trained_through", row.trained_through),
+            )
+        except Exception as exc:
+            _logger.debug(
+                "regime_hmm_state pre-delete skipped: %s", exc,
+            )
+        tbl.append(arrow_tbl)
+
+    retry_iceberg_op(REGIME_HMM_STATE_TABLE, _do_upsert)
     invalidate_metadata(REGIME_HMM_STATE_TABLE)
     _invalidate_regime_cache()
 
