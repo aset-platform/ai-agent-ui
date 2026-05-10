@@ -20,7 +20,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-FeatureType = Literal["int", "float"]
+FeatureType = Literal["int", "float", "string"]
 FeatureSource = Literal[
     "ohlcv",
     # rsi, sma_50, sma_200, golden_cross_days_ago
@@ -28,6 +28,7 @@ FeatureSource = Literal[
     "fundamentals",       # pscore, debt_to_eq, roce, sales/profit
     "recommendation",
     "forecast",
+    "regime",             # REGIME-1: regime_label, stress_prob, etc.
 ]
 
 
@@ -141,6 +142,49 @@ FEATURES: list[Feature] = [
         label="Forecast confidence",
         type="float",
         source="forecast",
+    ),
+    # Regime + breadth + VIX (REGIME-1)
+    Feature(
+        key="regime_label",
+        label="Regime label (BULL/SIDEWAYS/BEAR)",
+        type="string",
+        source="regime",
+    ),
+    Feature(
+        key="stress_prob",
+        label="HMM stress probability",
+        type="float",
+        source="regime",
+    ),
+    Feature(
+        key="pct_above_50sma",
+        label="% above 50d SMA (breadth)",
+        type="float",
+        source="regime",
+    ),
+    Feature(
+        key="pct_above_200sma",
+        label="% above 200d SMA (breadth)",
+        type="float",
+        source="regime",
+    ),
+    Feature(
+        key="midcap_largecap_ratio",
+        label="Midcap / Largecap ratio",
+        type="float",
+        source="regime",
+    ),
+    Feature(
+        key="vix_close",
+        label="India VIX close",
+        type="float",
+        source="regime",
+    ),
+    Feature(
+        key="vix_sma_20",
+        label="India VIX 20-day SMA",
+        type="float",
+        source="regime",
     ),
 ]
 
