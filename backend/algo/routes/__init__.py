@@ -1,5 +1,8 @@
 """HTTP routers for the algo trading module."""
 
+from backend.algo.routes.attribution import (
+    create_attribution_router,
+)
 from backend.algo.routes.backtest import create_backtest_router
 from backend.algo.routes.broker import create_broker_router
 from backend.algo.routes.drift import create_drift_router
@@ -29,6 +32,7 @@ from backend.algo.routes.webhooks import (
 )
 
 __all__ = [
+    "create_attribution_router",
     "create_backtest_router",
     "create_broker_router",
     "create_drift_router",

@@ -24,6 +24,7 @@ import {
 } from "./PaperEventsTimeline";
 import { ReconciliationDriftPanel } from "./ReconciliationDriftPanel";
 import { KitePostbackPanel } from "./KitePostbackPanel";
+import { AttributionPanel } from "./AttributionPanel";
 import { RegimeWidget } from "./RegimeWidget";
 import { RegimeHistoryChart } from "./RegimeHistoryChart";
 import { RegimeChangeBanner } from "./RegimeChangeBanner";
@@ -317,6 +318,16 @@ export function PaperTab() {
             >
               <KitePostbackPanel />
             </div>
+          )}
+
+          {/* REGIME-6 — Attribution panel. Live segment only;
+              the daily Brinson + trade reasons are scoped to the
+              live trading flow. Renders even without a strategy
+              selection (shows a guidance empty-state). */}
+          {viewMode === "live" && (
+            <AttributionPanel
+              strategyId={liveStrategyId || null}
+            />
           )}
 
           {/* Regime history chart — surfaces the rolling 252d

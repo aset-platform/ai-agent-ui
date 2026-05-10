@@ -36,6 +36,9 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
+from backend.algo.attribution.payload import (
+    attribution_payload_extension as _attribution_payload_extension,
+)
 from backend.algo.backtest.event_writer import event_row, flush_events
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 from backend.algo.backtest.positions import PositionTracker
@@ -351,6 +354,8 @@ class LiveRuntime:
                 "ticker": signal.ticker,
                 "side": signal.side,
                 "qty": signal.qty,
+                # REGIME-6 — attribution context (additive).
+                **_attribution_payload_extension(features),
             },
         ))
 

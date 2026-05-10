@@ -3427,3 +3427,39 @@ def _job_regime_change_notifier(payload: dict | None = None):
     parsed = _date.fromisoformat(as_of) if as_of else None
     out = run_notifier(as_of=parsed)
     return {"emitted": out is not None, "payload": out}
+
+
+@register_job("attribution_daily_brinson")
+def _job_attribution_daily_brinson(payload: dict | None = None):
+    """REGIME-6: daily Brinson decomposition per active strategy.
+
+    Pulls today's order_filled events from ``algo.events``,
+    aggregates per-sector portfolio weights, looks up sector
+    mapping from ``stocks.piotroski_scores``, and persists one
+    row per (user, strategy) to ``algo.attribution_daily``.
+    Equal-weight NIFTY 50 baseline for v3 (real index weights
+    wired in v3.1).
+    """
+    from backend.algo.attribution.job import daily_brinson_job
+
+    return daily_brinson_job(payload or {})
+
+
+@register_job("attribution_monthly_regression")
+def _job_attribution_monthly_regression(
+    payload: dict | None = None,
+):
+    """REGIME-6: monthly OLS factor regression per active strategy.
+
+    Reads the latest equity_curve from ``algo.runs.summary_json``
+    for each (user, strategy) pair active in the period,
+    computes daily returns, fits OLS against mock factor returns
+    (deterministic seed) and persists one row per pair to
+    ``algo.factor_regression`` with ``betas['__mock_data__']=1.0``
+    so the UI flags it. Real Fama-French wiring is v3.1.
+    """
+    from backend.algo.attribution.job import (
+        monthly_factor_regression_job,
+    )
+
+    return monthly_factor_regression_job(payload or {})

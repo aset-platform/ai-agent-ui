@@ -386,4 +386,15 @@ export const FE = {
   factorScoresTable: "factor-scores-table",
   factorScoresEmpty: "factor-scores-empty",
   factorScoresLoading: "factor-scores-loading",
+
+  // REGIME-6 — Attribution panel (Daily Brinson + Trade Reasons)
+  attributionPanel: "attribution-panel",
+  attributionSubtabStrip: "attribution-subtab-strip",
+  attributionTabBrinson: "attribution-subtab-brinson",
+  attributionTabTrades: "attribution-subtab-trades",
+  attributionBrinsonTable: "attribution-brinson-table",
+  attributionTradesTable: "attribution-trades-table",
+  attributionEmpty: "attribution-empty",
+  attributionLoading: "attribution-loading",
+  attributionMockChip: "attribution-mock-chip",
 } as const;

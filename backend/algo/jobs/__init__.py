@@ -17,3 +17,9 @@ from backend.algo.factors import compute_job  # noqa: F401
 # ``backend/jobs/executor.py``; importing here keeps the algo
 # job inventory cohesive.
 from backend.algo.jobs import regime_change_notifier  # noqa: F401
+
+# REGIME-6 — daily Brinson + monthly factor regression
+# orchestrators.  The ``@register_job(...)`` wrappers themselves
+# live in ``backend/jobs/executor.py``; importing here keeps the
+# algo job inventory cohesive.
+from backend.algo.attribution import job as attribution_job  # noqa: F401, E501

@@ -4076,6 +4076,13 @@ def create_app(
         create_factors_router(),
         prefix="/v1",
     )
+    # REGIME-6 — attribution (Brinson + trade reasons + factor
+    # regression). Pro-or-superuser only.
+    from backend.algo.routes import create_attribution_router
+    app.include_router(
+        create_attribution_router(),
+        prefix="/v1",
+    )
 
     # WebSocket streaming endpoint.
     from ws import register_ws_routes
