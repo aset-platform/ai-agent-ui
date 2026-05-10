@@ -149,7 +149,7 @@ def probability_of_backtest_overfitting(
 
 
 # ---------------------------------------------------------------
-# Per-regime breakdown + recovery time (placeholders for Task 3)
+# Per-regime breakdown + recovery time
 # ---------------------------------------------------------------
 
 
@@ -164,3 +164,209 @@ class PerRegimeMetrics:
     sortino: float
     max_dd_pct: float
     hit_rate: float    # fraction of days with positive return
+
+
+def _max_drawdown_pct(equity: np.ndarray) -> float:
+    """Max drawdown of an equity series, in percent of HWM."""
+    if equity.size == 0:
+        return 0.0
+    hwm = np.maximum.accumulate(equity)
+    safe_hwm = np.where(hwm > 1e-12, hwm, np.nan)
+    dd = (equity - hwm) / safe_hwm
+    worst = float(np.nanmin(dd)) if dd.size else 0.0
+    if math.isnan(worst):
+        return 0.0
+    return abs(worst) * 100.0
+
+
+def _annualised_sharpe(returns: np.ndarray) -> float:
+    """Sharpe = mean / std * sqrt(252). Returns 0 when std ~ 0."""
+    if returns.size == 0:
+        return 0.0
+    mu = float(returns.mean())
+    sigma = float(returns.std(ddof=0))
+    if sigma <= 1e-12:
+        return 0.0
+    return mu / sigma * math.sqrt(252)
+
+
+def _annualised_sortino(returns: np.ndarray) -> float:
+    """Sortino = mean / downside_std * sqrt(252)."""
+    if returns.size == 0:
+        return 0.0
+    mu = float(returns.mean())
+    downside = returns[returns < 0]
+    if downside.size == 0:
+        # No losses - return Sharpe-equivalent upper bound (large
+        # but finite) so the metric stays JSON-serialisable.
+        return 0.0 if mu <= 0 else float("inf")
+    sigma_d = float(downside.std(ddof=0))
+    if sigma_d <= 1e-12:
+        return 0.0
+    return mu / sigma_d * math.sqrt(252)
+
+
+def per_regime_breakdown(
+    equity_curve: list[dict[str, Any]],
+    regime_labels: dict[Any, str],
+) -> list[PerRegimeMetrics]:
+    """Group an equity curve by regime label and emit one
+    PerRegimeMetrics row per regime present.
+
+    Args:
+      equity_curve: list of dicts with keys ``bar_date`` (str
+          ISO date or date) and ``equity_inr`` (str/Decimal/float).
+      regime_labels: mapping of bar_date (ISO str) → regime label
+          (BULL / SIDEWAYS / BEAR). Days missing from the map
+          are dropped from the breakdown silently.
+
+    Returns:
+      Sorted list of PerRegimeMetrics, one per regime that has
+      at least one day. Empty list when the input is empty.
+    """
+    if not equity_curve:
+        return []
+
+    # Normalise to (date_key: str, equity: float) pairs.
+    pts: list[tuple[str, float]] = []
+    for ep in equity_curve:
+        bd = ep.get("bar_date")
+        if bd is None:
+            continue
+        key = bd.isoformat() if hasattr(bd, "isoformat") else str(bd)
+        eq_raw = ep.get("equity_inr")
+        if eq_raw is None:
+            continue
+        try:
+            eq = float(eq_raw)
+        except (TypeError, ValueError):
+            continue
+        pts.append((key, eq))
+
+    if not pts:
+        return []
+
+    # Bucket by regime, preserving order so daily-return diffs
+    # respect calendar sequence within each regime.
+    buckets: dict[str, list[tuple[str, float]]] = {}
+    for key, eq in pts:
+        label = regime_labels.get(key)
+        if label is None:
+            continue
+        buckets.setdefault(label, []).append((key, eq))
+
+    out: list[PerRegimeMetrics] = []
+    for regime, rows in sorted(buckets.items()):
+        if len(rows) < 2:
+            # Need at least 2 days to compute returns.
+            equity_arr = np.array([r[1] for r in rows])
+            cum = 0.0
+            if len(rows) >= 1 and rows[0][1] > 0:
+                cum = (rows[-1][1] / rows[0][1] - 1.0) * 100.0
+            out.append(PerRegimeMetrics(
+                regime=regime,
+                n_days=len(rows),
+                cum_return_pct=cum,
+                sharpe=0.0,
+                sortino=0.0,
+                max_dd_pct=_max_drawdown_pct(equity_arr),
+                hit_rate=0.0,
+            ))
+            continue
+
+        equity_arr = np.array([r[1] for r in rows])
+        # Daily returns within this regime (sequential days only).
+        rets = np.diff(equity_arr) / equity_arr[:-1]
+        rets = rets[np.isfinite(rets)]
+
+        cum = 0.0
+        if equity_arr[0] > 0:
+            cum = (equity_arr[-1] / equity_arr[0] - 1.0) * 100.0
+
+        hit = 0.0
+        if rets.size > 0:
+            hit = float((rets > 0).sum()) / float(rets.size)
+
+        out.append(PerRegimeMetrics(
+            regime=regime,
+            n_days=len(rows),
+            cum_return_pct=cum,
+            sharpe=_annualised_sharpe(rets),
+            sortino=_annualised_sortino(rets),
+            max_dd_pct=_max_drawdown_pct(equity_arr),
+            hit_rate=hit,
+        ))
+    return out
+
+
+def recovery_months_from_dd(
+    equity_curve: list[dict[str, Any]],
+) -> int:
+    """Months from the global max-DD trough until equity recovers
+    to or exceeds the pre-DD HWM.
+
+    Returns 0 when there is no drawdown. Returns the total window
+    length in months (rounded up) when the equity never recovers
+    within the curve.
+    """
+    if not equity_curve:
+        return 0
+
+    pts: list[tuple[str, float]] = []
+    for ep in equity_curve:
+        bd = ep.get("bar_date")
+        if bd is None:
+            continue
+        key = bd.isoformat() if hasattr(bd, "isoformat") else str(bd)
+        eq_raw = ep.get("equity_inr")
+        if eq_raw is None:
+            continue
+        try:
+            eq = float(eq_raw)
+        except (TypeError, ValueError):
+            continue
+        pts.append((key, eq))
+
+    if len(pts) < 2:
+        return 0
+
+    equity = np.array([p[1] for p in pts])
+    dates = [p[0] for p in pts]
+
+    hwm = np.maximum.accumulate(equity)
+    safe_hwm = np.where(hwm > 1e-12, hwm, np.nan)
+    dd = (equity - hwm) / safe_hwm
+    if not np.any(dd < 0):
+        return 0
+
+    trough_idx = int(np.nanargmin(dd))
+    pre_dd_hwm = float(hwm[trough_idx])
+
+    recovered_idx: int | None = None
+    for j in range(trough_idx + 1, len(equity)):
+        if equity[j] >= pre_dd_hwm:
+            recovered_idx = j
+            break
+
+    from datetime import date as _date
+
+    def _parse(s: str) -> _date:
+        try:
+            return _date.fromisoformat(s)
+        except ValueError:
+            # Fallback to first 10 chars (YYYY-MM-DD).
+            return _date.fromisoformat(s[:10])
+
+    if recovered_idx is None:
+        # Never recovered within window → return total window
+        # months (ceil).
+        d0 = _parse(dates[trough_idx])
+        d1 = _parse(dates[-1])
+    else:
+        d0 = _parse(dates[trough_idx])
+        d1 = _parse(dates[recovered_idx])
+
+    days = max((d1 - d0).days, 0)
+    # Convert to whole months, rounding up.
+    months = (days + 29) // 30
+    return int(months)
