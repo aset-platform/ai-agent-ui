@@ -17,11 +17,20 @@ import { JsonPane } from "./JsonPane";
 import { NodePalette } from "./NodePalette";
 import { StrategyLeversPanel } from "./StrategyLeversPanel";
 import { TEMPLATES } from "./templates";
+import { RegimeApplicabilityChips } from "../RegimeApplicabilityChips";
+import { useRegimeCurrent } from "@/hooks/useRegime";
 import {
   createStrategy,
-  updateStrategy,
   type StrategyAst,
 } from "@/hooks/useStrategies";
+import {
+  upsertStrategyMetadata,
+  useStrategyMetadata,
+} from "@/hooks/useStrategyMetadata";
+import {
+  REGIME_LABELS,
+  type RegimeLabel,
+} from "@/lib/types/algoStrategy";
 
 interface Props {
   initial?: StrategyAst | null;
@@ -42,6 +51,23 @@ export function StrategyBuilder({
   const [name, setName] = useState(ast.name);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // REGIME-3 — applicable_regimes lives outside the AST (Strategy
+  // Pydantic model has extra="forbid").  Default = all 3 regimes.
+  const [applicableRegimes, setApplicableRegimes] = useState<
+    RegimeLabel[]
+  >(REGIME_LABELS);
+  const { applicableRegimes: loadedRegimes } =
+    useStrategyMetadata(strategyId ?? null);
+  useEffect(() => {
+    if (strategyId && loadedRegimes) {
+      setApplicableRegimes(loadedRegimes);
+    }
+  }, [strategyId, loadedRegimes]);
+  const { current: regimeCurrent } = useRegimeCurrent();
+  const currentRegimeLower = regimeCurrent
+    ? (regimeCurrent.regime_label.toLowerCase() as RegimeLabel)
+    : undefined;
 
   useEffect(() => {
     setAst((cur) => ({ ...cur, name }));
@@ -76,10 +102,38 @@ export function StrategyBuilder({
     setError(null);
     try {
       if (strategyId) {
-        await updateStrategy(strategyId, ast);
+        // REGIME-3: pipe applicableRegimes through the same PUT
+        // route — backend upserts metadata in the same session.
+        await upsertStrategyMetadata(
+          strategyId,
+          applicableRegimes,
+          ast as unknown as Record<string, unknown>,
+        );
         onSaved?.(strategyId);
       } else {
+        // Create flow: useStrategies.createStrategy() doesn't yet
+        // accept metadata, so save AST first then PUT regimes if
+        // they diverge from the default.
         const id = await createStrategy(ast);
+        const isDefault =
+          applicableRegimes.length === REGIME_LABELS.length &&
+          REGIME_LABELS.every((r) => applicableRegimes.includes(r));
+        if (!isDefault) {
+          try {
+            await upsertStrategyMetadata(
+              id,
+              applicableRegimes,
+              ast as unknown as Record<string, unknown>,
+            );
+          } catch (metaErr) {
+            // Metadata persistence failure is non-fatal — strategy
+            // already exists with default (all-3) regimes.
+            console.warn(
+              "Strategy created but metadata upsert failed:",
+              metaErr,
+            );
+          }
+        }
         onSaved?.(id);
       }
     } catch (e) {
@@ -87,7 +141,7 @@ export function StrategyBuilder({
     } finally {
       setSaving(false);
     }
-  }, [ast, strategyId, onSaved]);
+  }, [ast, strategyId, onSaved, applicableRegimes]);
 
   return (
     <div
@@ -124,6 +178,11 @@ export function StrategyBuilder({
           data-testid="algo-builder-name"
           className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-1.5 text-sm"
           placeholder="Strategy name"
+        />
+        <RegimeApplicabilityChips
+          selected={applicableRegimes}
+          onChange={setApplicableRegimes}
+          currentRegime={currentRegimeLower}
         />
         <StrategyLeversPanel ast={ast} onChange={setAst} />
         <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-white dark:bg-gray-900">
