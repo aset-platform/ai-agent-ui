@@ -94,3 +94,109 @@ describe("KitePostbackPanel — empty state", () => {
     ).toBeNull();
   });
 });
+
+// ── Task 5 ──────────────────────────────────────────────────
+const TWO_POSTBACKS = [
+  {
+    event_ts: "2026-05-10T09:30:00Z",
+    tradingsymbol: "RELIANCE.NS",
+    status: "COMPLETE",
+    filled_quantity: 5,
+    average_price: 2950.75,
+    raw: { order_id: "111", guid: "a" },
+  },
+  {
+    event_ts: "2026-05-10T09:25:00Z",
+    tradingsymbol: "INFY.NS",
+    status: "REJECTED",
+    filled_quantity: 0,
+    average_price: 0,
+    raw: { order_id: "222", guid: "b" },
+  },
+];
+
+describe("KitePostbackPanel — populated state", () => {
+  it("renders one row per postback", () => {
+    mockHook.mockReturnValue({
+      postbacks: TWO_POSTBACKS,
+      isLoading: false,
+      error: null,
+      mutate: vi.fn(),
+    });
+
+    render(<KitePostbackPanel />);
+
+    const rows = screen.getAllByTestId("kite-postback-row");
+    expect(rows).toHaveLength(2);
+  });
+
+  it("renders the symbol in the first row", () => {
+    mockHook.mockReturnValue({
+      postbacks: TWO_POSTBACKS,
+      isLoading: false,
+      error: null,
+      mutate: vi.fn(),
+    });
+
+    render(<KitePostbackPanel />);
+
+    expect(screen.getByText("RELIANCE.NS")).toBeTruthy();
+    expect(screen.getByText("INFY.NS")).toBeTruthy();
+  });
+
+  it("renders avg price formatted with ₹ symbol", () => {
+    mockHook.mockReturnValue({
+      postbacks: TWO_POSTBACKS,
+      isLoading: false,
+      error: null,
+      mutate: vi.fn(),
+    });
+
+    render(<KitePostbackPanel />);
+
+    expect(screen.getByText("₹2950.75")).toBeTruthy();
+  });
+
+  it("shows — for avg price when average_price is 0", () => {
+    mockHook.mockReturnValue({
+      postbacks: TWO_POSTBACKS,
+      isLoading: false,
+      error: null,
+      mutate: vi.fn(),
+    });
+
+    render(<KitePostbackPanel />);
+
+    expect(screen.getByText("—")).toBeTruthy();
+  });
+
+  it("does not render empty state when postbacks present", () => {
+    mockHook.mockReturnValue({
+      postbacks: TWO_POSTBACKS,
+      isLoading: false,
+      error: null,
+      mutate: vi.fn(),
+    });
+
+    render(<KitePostbackPanel />);
+
+    expect(
+      screen.queryByTestId("kite-postback-empty-state"),
+    ).toBeNull();
+  });
+
+  it("shows postback count in the panel header", () => {
+    mockHook.mockReturnValue({
+      postbacks: TWO_POSTBACKS,
+      isLoading: false,
+      error: null,
+      mutate: vi.fn(),
+    });
+
+    render(<KitePostbackPanel />);
+
+    // Header should contain "(2)" count.
+    const panel = screen.getByTestId("kite-postback-panel");
+    expect(panel.textContent).toContain("(2)");
+  });
+});
