@@ -1,4 +1,14 @@
-"""Seed scheduled_jobs rows for the v3 epic jobs.
+"""Seed missing scheduled_jobs rows.
+
+Covers:
+  * The 6 Algo Trading v3 epic jobs whose @register_job handlers
+    were registered in REGIME-1..7 but never had matching PG cron
+    rows (regime classifier / change notifier / daily factors /
+    attribution daily + monthly / universe snapshot).
+  * The legacy `recommendation_outcomes` job — its @register_job
+    handler shipped with v2 of the recommendation engine but the
+    schedule row was never inserted, so the 4-horizon outcomes
+    table self-heals only on manual triggers.
 
 Idempotent — uses ON CONFLICT (name) DO UPDATE so re-running adjusts
 the schedule but doesn't duplicate. UUID job_ids are deterministic
@@ -68,6 +78,18 @@ V3_JOBS = [
         "cron_days": None,
         "cron_time": "03:00",
         "cron_dates": "1",
+        "scope": None,
+    },
+    # Legacy v2 — handler registered but never scheduled.
+    # Self-healing 4-horizon outcomes for recommendations
+    # (7d / 30d / 60d / 90d). Daily 04:00 IST sits after the
+    # 03:00 IST recommendation_cleanup job, before market open.
+    {
+        "name": "Recommendation Outcomes Tracker",
+        "job_type": "recommendation_outcomes",
+        "cron_days": "mon,tue,wed,thu,fri,sat,sun",
+        "cron_time": "04:00",
+        "cron_dates": None,
         "scope": None,
     },
 ]
