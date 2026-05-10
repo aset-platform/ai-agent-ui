@@ -102,3 +102,52 @@ class TestResolveKiteUser:
 
         assert result is None
         assert "UNKNOWN_USER" in caplog.text
+
+
+class TestIsDuplicate:
+    """Tests for _is_duplicate() DuckDB dedup helper."""
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_guid_exists(self):
+        """Existing guid → True (suppress re-persist)."""
+        from backend.algo.routes.webhooks import (
+            _is_duplicate,
+        )
+        # Patch asyncio.to_thread to avoid real DuckDB/Iceberg
+        with patch(
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            result = await _is_duplicate("existing-guid")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_guid_absent(self):
+        """New guid → False (proceed with persist)."""
+        from backend.algo.routes.webhooks import (
+            _is_duplicate,
+        )
+        with patch(
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            result = await _is_duplicate("new-guid-xyz")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_duckdb_error_treated_as_not_duplicate(
+        self,
+    ):
+        """DuckDB failure → False (fail-open on dedup)."""
+        from backend.algo.routes.webhooks import (
+            _is_duplicate,
+        )
+        with patch(
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=False,  # error path returns False
+        ):
+            result = await _is_duplicate("any-guid")
+        assert result is False
