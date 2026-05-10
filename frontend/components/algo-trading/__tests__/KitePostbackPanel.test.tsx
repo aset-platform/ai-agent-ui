@@ -200,3 +200,42 @@ describe("KitePostbackPanel — populated state", () => {
     expect(panel.textContent).toContain("(2)");
   });
 });
+
+// ── Task 6 ──────────────────────────────────────────────────
+describe("KitePostbackPanel — status badge colours", () => {
+  const statusCases: Array<{
+    status: string;
+    cls: string;
+    label: string;
+  }> = [
+    { status: "COMPLETE", cls: "bg-emerald-100", label: "green for COMPLETE" },
+    { status: "REJECTED", cls: "bg-rose-100", label: "red for REJECTED" },
+    { status: "CANCELLED", cls: "bg-slate-100", label: "gray for CANCELLED" },
+    { status: "UPDATE", cls: "bg-blue-100", label: "blue for UPDATE" },
+  ];
+
+  statusCases.forEach(({ status, cls, label }) => {
+    it(`applies ${label}`, () => {
+      mockHook.mockReturnValue({
+        postbacks: [
+          {
+            event_ts: "2026-05-10T09:30:00Z",
+            tradingsymbol: "TEST.NS",
+            status,
+            filled_quantity: 1,
+            average_price: 100,
+            raw: { order_id: "x" },
+          },
+        ],
+        isLoading: false,
+        error: null,
+        mutate: vi.fn(),
+      });
+
+      render(<KitePostbackPanel />);
+
+      const badge = screen.getByText(status);
+      expect(badge.className).toContain(cls);
+    });
+  });
+});
