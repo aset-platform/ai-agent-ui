@@ -44,3 +44,53 @@ describe("KitePostbackPanel — loading state", () => {
     expect(screen.getByText(/loading postbacks/i)).toBeTruthy();
   });
 });
+
+// ── Task 4 ──────────────────────────────────────────────────
+describe("KitePostbackPanel — empty state", () => {
+  it("renders amber troubleshooting card when postbacks list is empty", () => {
+    mockHook.mockReturnValue({
+      postbacks: [],
+      isLoading: false,
+      error: null,
+      mutate: vi.fn(),
+    });
+
+    render(<KitePostbackPanel />);
+
+    const card = screen.getByTestId("kite-postback-empty-state");
+    expect(card).toBeTruthy();
+    // Verbatim text per spec §3.6.
+    expect(card.textContent).toContain("No postbacks received");
+    expect(card.textContent).toContain("KITE_POSTBACK_ENABLED");
+    expect(card.textContent).toContain("http://localhost:4040");
+  });
+
+  it("empty state card has amber border class", () => {
+    mockHook.mockReturnValue({
+      postbacks: [],
+      isLoading: false,
+      error: null,
+      mutate: vi.fn(),
+    });
+
+    render(<KitePostbackPanel />);
+
+    const card = screen.getByTestId("kite-postback-empty-state");
+    expect(card.className).toContain("border-amber-300");
+  });
+
+  it("does NOT render empty state while still loading", () => {
+    mockHook.mockReturnValue({
+      postbacks: [],
+      isLoading: true,
+      error: null,
+      mutate: vi.fn(),
+    });
+
+    render(<KitePostbackPanel />);
+
+    expect(
+      screen.queryByTestId("kite-postback-empty-state"),
+    ).toBeNull();
+  });
+});
