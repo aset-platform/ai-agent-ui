@@ -392,3 +392,42 @@ For now, stick with ngrok free tier during dev and testing. Migrate to Cloudflar
 - [ ] `README.md` env-vars table includes NGROK_AUTHTOKEN, NGROK_DOMAIN, KITE_POSTBACK_ENABLED.
 - [ ] All commits have `Co-Authored-By: Abhay Kumar Singh <asequitytrading@gmail.com>`.
 - [ ] No `NGROK_AUTHTOKEN` or actual domain value committed (only `.env.example` has placeholders).
+
+---
+
+## Verifying postbacks in the UI (OBS-4)
+
+Once the ngrok tunnel is up and the Kite Developer Console postback URL
+is configured (see sections above), place a small test order in Dry-run
+mode and watch the **Kite postbacks** panel in the Trading tab.
+
+### Panel location
+
+1. Open **Algo Trading → Trading tab**.
+2. Ensure the **Live** mode button is selected (top-right toggle).
+3. Select any strategy from the "Strategy" dropdown.
+4. The **Kite postbacks** panel appears below the "In-flight orders" panel.
+
+### What you should see
+
+| State | Panel appearance |
+|---|---|
+| No postbacks received today | Amber card with the troubleshooting hint (see §C1 of `obs-test-plan.md`) |
+| Postbacks flowing | Table rows: timestamp · symbol · status badge · filled qty · avg price · ▸ |
+| Status `COMPLETE` | Green badge |
+| Status `REJECTED` | Red badge |
+| Status `CANCELLED` | Grey badge |
+| Status `UPDATE` | Blue badge |
+
+### Expanding the raw payload
+
+Click the ▸ at the end of any row to expand the raw Kite postback JSON.
+Only one row is expanded at a time — clicking another row collapses the
+previous one. Useful for diagnosing checksum failures or unexpected
+field values.
+
+### SWR refresh cadence
+
+The panel refreshes every **30 seconds**. To force an immediate refresh,
+reload the page (Cmd+R). A postback typically appears in the panel
+within ≤ 30 s of being received (network round-trip + SWR next tick).
