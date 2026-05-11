@@ -126,8 +126,21 @@ def pre_trade_check(
     # Allow-list is NOT a block-list. Empty list = reject all
     # (no tickers configured). The UX forces the user to set
     # at least one ticker before enabling live trading.
+    #
+    # Suffix-tolerant compare: the safety belts UI lets users
+    # type bare symbols (`JUBLFOOD`) but signals carry the
+    # market-suffixed form (`JUBLFOOD.NS`). Strip the .NS / .BO
+    # suffix from BOTH sides so both spellings pass.
+    def _bare(t: str) -> str:
+        for suf in (".NS", ".BO", ".NSI"):
+            if t.endswith(suf):
+                return t[: -len(suf)]
+        return t
+
     allowed = caps.get("allowed_tickers", [])
-    if not allowed or signal.ticker not in allowed:
+    allowed_bare = {_bare(t).upper() for t in (allowed or [])}
+    signal_bare = _bare(signal.ticker).upper()
+    if not allowed_bare or signal_bare not in allowed_bare:
         _logger.debug(
             "pre_trade_check: REJECT ticker=%s not in allow-list=%s",
             signal.ticker, allowed,
