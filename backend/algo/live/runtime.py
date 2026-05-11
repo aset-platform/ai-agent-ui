@@ -515,6 +515,43 @@ class LiveRuntime:
         symbol = signal.ticker.replace(".NS", "")
         side = "BUY" if signal.side == "BUY" else "SELL"
 
+        # Use LIMIT orders priced at the bar-close LTP plus a
+        # small marketable buffer (0.3% buy higher / sell lower)
+        # so the order is aggressive enough to fill on the
+        # opposite side of the spread but capped against runaway
+        # slippage. Switching from MARKET solves three problems:
+        #   1. Kite Connect refuses naked MARKET orders without
+        #      market_protection — see commit 13001fb.
+        #   2. The strategy was evaluated at `last_price` so we
+        #      have a known reference; sending MARKET makes the
+        #      fill price drift unpredictably and breaks the
+        #      P&L summary's last_fill mark logic.
+        #   3. Aggressive LIMIT mirrors how a manual day trader
+        #      places intraday entries on big-cap NSE stocks.
+        # Falls back to MARKET (with market_protection) only if
+        # last_price is missing/zero — defensive.
+        SPREAD_BPS = Decimal("30")  # 0.3%
+        BPS_DENOM = Decimal("10000")
+        if last_price and last_price > 0:
+            buffer = last_price * SPREAD_BPS / BPS_DENOM
+            limit_price = (
+                last_price + buffer if side == "BUY"
+                else last_price - buffer
+            )
+            # NSE tick size — round to 0.05 to satisfy Kite's
+            # tick rule, which rejects price not divisible by tick.
+            tick = Decimal("0.05")
+            limit_price = (
+                (limit_price / tick).quantize(Decimal("1"))
+                * tick
+            )
+            order_kwargs = {
+                "order_type": "LIMIT",
+                "price": float(limit_price),
+            }
+        else:
+            order_kwargs = {"order_type": "MARKET"}
+
         try:
             kite_order_id = await asyncio.to_thread(
                 self._kite.place_order,
@@ -522,7 +559,7 @@ class LiveRuntime:
                 exchange=exchange,
                 transaction_type=side,
                 quantity=signal.qty,
-                order_type="MARKET",
+                **order_kwargs,
                 product="CNC",
                 variety="regular",
                 tag=f"algo-{str(self._strategy.id)[:8]}",
@@ -586,8 +623,10 @@ class LiveRuntime:
                 "symbol": symbol,
                 "side": side,
                 "qty": signal.qty,
-                "order_type": "MARKET",
-                "limit_price": None,
+                "order_type": order_kwargs.get("order_type"),
+                "limit_price": order_kwargs.get("price"),
+                "ref_last_price": str(last_price)
+                if last_price else None,
             },
         ))
         self._flush_events_now()
