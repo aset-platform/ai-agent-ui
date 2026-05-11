@@ -10,7 +10,6 @@ import { useStrategies } from "@/hooks/useStrategies";
 
 import { ActiveRunsPanel } from "../ActiveRunsPanel";
 import { AttributionPanel } from "../AttributionPanel";
-import { KitePostbackPanel } from "../KitePostbackPanel";
 import { LiveWsHealthDot } from "../LiveWsHealthDot";
 import {
   PaperEventsTimeline,
@@ -103,9 +102,18 @@ export function DryRunTab() {
 
       <ActiveRunsPanel tradingMode="dryrun" />
 
-      <KitePostbackPanel />
+      {/* Kite postbacks intentionally not shown on Dry Run.
+          Real Kite postbacks come from the exchange via webhook
+          and only ever exist for real-money orders; synthetic
+          dry-run fills are stamped directly into algo.events and
+          never produce postbacks. Postbacks live on the Live
+          page (?tab=postbacks). */}
 
-      <AttributionPanel strategyId={strategies[0]?.id ?? null} />
+      <AttributionPanel
+        strategyId={strategies[0]?.id ?? null}
+        mode="live"
+        dryRun={true}
+      />
 
       <RegimeHistoryChart />
 

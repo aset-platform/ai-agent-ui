@@ -121,19 +121,35 @@ export function useAttributionDaily(
  * order_filled events. Backend caches for 5 min so the client-
  * side dedup can match.
  */
+export interface AttributionTradesScope {
+  /** "live" → real Kite fills only (order_filled_live).
+   *  "paper" / "backtest" → order_filled events with matching
+   *  events.mode. Omit (or pass null) for all modes. */
+  mode?: "live" | "paper" | "backtest" | null;
+  /** true → synthetic Kite (dry-run) only.
+   *  false → real-money fills only.
+   *  null/undefined → both. Only meaningful with mode="live". */
+  dryRun?: boolean | null;
+}
+
 export function useAttributionTrades(
   strategyId: string | null | undefined,
   // `days` reserved for the future when the route accepts a
   // window; today the backend builds the log for `as_of` only,
   // so this argument is currently a stable cache-key salt.
   days: number = 1,
+  scope: AttributionTradesScope = {},
 ) {
   const sid = strategyId || null;
+  const params = new URLSearchParams();
+  if (sid) params.set("strategy_id", sid);
+  params.set("days", String(days));
+  if (scope.mode) params.set("mode", scope.mode);
+  if (scope.dryRun !== undefined && scope.dryRun !== null) {
+    params.set("dry_run", String(scope.dryRun));
+  }
   const key = sid
-    ? (
-      `${API_URL}/algo/attribution/trades?strategy_id=${sid}` +
-      `&days=${days}`
-    )
+    ? `${API_URL}/algo/attribution/trades?${params.toString()}`
     : null;
   const { data, error, isLoading, mutate } = useSWR<
     RowsEnvelope<AttributionTradeRow>

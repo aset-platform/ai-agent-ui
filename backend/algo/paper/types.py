@@ -46,6 +46,13 @@ class Signal(BaseModel):
     side: Literal["BUY", "SELL"]
     qty: int = Field(ge=1)
     emitted_at_ns: int = Field(ge=0)
+    # Human-readable trigger label (the action type emitted by the
+    # strategy AST: "buy" / "sell" / "exit" / "set_target_weight").
+    # Threaded through to the order_filled_live event payload so
+    # the Positions tab Reason column has something to display.
+    # Optional + default None for backwards compat with callers
+    # that don't populate it yet.
+    reason: str | None = None
 
 
 class AccountState(BaseModel):

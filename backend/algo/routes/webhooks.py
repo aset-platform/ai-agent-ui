@@ -427,6 +427,14 @@ async def _reconcile_fill_with_in_flight(
                             "price": str(avg_price),
                             "fees_inr": "0",
                             "source": "kite_postback",
+                            # Carry from in-flight entry so the
+                            # Positions tab Reason column + the
+                            # (symbol, product) attribution join
+                            # both populate. Both nullable for
+                            # entries written before the runtime
+                            # started stamping reason/product.
+                            "reason": entry.get("reason"),
+                            "product": entry.get("product"),
                         },
                     ))
                     break
