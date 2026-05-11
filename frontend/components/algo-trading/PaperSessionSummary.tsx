@@ -93,6 +93,31 @@ function OpenPositionsTable({ rows }: { rows: OpenPosition[] }) {
                 {r.last_price !== null
                   ? r.last_price.toFixed(2)
                   : "—"}
+                {r.mark_source && r.mark_source !== "unknown" && (
+                  <span
+                    className={
+                      "ml-1 rounded px-1 text-[9px] uppercase "
+                      + (r.mark_source === "live_ltp"
+                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                        : r.mark_source === "last_fill"
+                          ? "bg-sky-100 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300"
+                          : "bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400")
+                    }
+                    title={
+                      r.mark_source === "live_ltp"
+                        ? "Live tick from WS (Redis cache, <60s)"
+                        : r.mark_source === "last_fill"
+                          ? "Last order_filled price (no live tick)"
+                          : "End-of-day OHLCV close fallback"
+                    }
+                  >
+                    {r.mark_source === "live_ltp"
+                      ? "live"
+                      : r.mark_source === "last_fill"
+                        ? "fill"
+                        : "eod"}
+                  </span>
+                )}
               </td>
               <td
                 className={

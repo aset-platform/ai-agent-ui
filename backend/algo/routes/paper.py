@@ -628,6 +628,58 @@ def create_paper_router() -> APIRouter:
                             buys[ticker].popleft()
                             n_closed_trades[ticker] += 1
 
+        # Track each ticker's last seen fill price so paper-replay
+        # sessions (no live ticks) can mark open positions to the
+        # most recent fixture print.
+        last_fill_price: dict[str, float] = {}
+        for r in rows:
+            if r["type"] != "order_filled":
+                continue
+            try:
+                p = json.loads(r["payload_json"])
+            except Exception:  # noqa: BLE001
+                continue
+            t = str(p.get("ticker") or "")
+            fp = float(p.get("fill_price") or 0.0)
+            if t and fp > 0:
+                last_fill_price[t] = fp
+
+        # Live-LTP cache (Redis, written by WS multiplexer +
+        # PaperRuntime/LiveRuntime on every bar close, 60s TTL).
+        # Reading is best-effort — None on cache miss / no Redis.
+        try:
+            from backend.cache import get_cache
+            _cache = get_cache()
+        except Exception:  # noqa: BLE001
+            _cache = None
+
+        def _resolve_mark(ticker: str) -> tuple[float | None, str]:
+            """Return (price, source) for the open-position mark.
+            Source ∈ {'live_ltp', 'last_fill', 'ohlcv_close'}.
+            """
+            if _cache is not None:
+                try:
+                    raw = _cache.get(f"cache:ltp:{ticker}")
+                    if raw is not None:
+                        return float(raw), "live_ltp"
+                except Exception:  # noqa: BLE001
+                    pass
+            if ticker in last_fill_price:
+                return last_fill_price[ticker], "last_fill"
+            try:
+                mk = query_iceberg_table(
+                    "stocks.ohlcv",
+                    "SELECT close FROM ohlcv "
+                    "WHERE ticker = ? "
+                    "ORDER BY date DESC LIMIT 1",
+                    [ticker],
+                )
+                if mk:
+                    return float(mk[0]["close"]), "ohlcv_close"
+            except Exception:  # noqa: BLE001
+                pass
+            return None, "unknown"
+
         # Open positions = sum of remaining BUY lots per ticker.
         open_positions: list[dict[str, Any]] = []
         for ticker, lots in buys.items():
@@ -638,20 +690,7 @@ def create_paper_router() -> APIRouter:
                 continue
             cost = sum(l[0] * l[1] for l in lots)
             avg_price = cost / qty if qty > 0 else 0.0
-            # Mark-to-market — latest close from stocks.ohlcv.
-            try:
-                mk = query_iceberg_table(
-                    "stocks.ohlcv",
-                    "SELECT close FROM ohlcv "
-                    "WHERE ticker = ? "
-                    "ORDER BY date DESC LIMIT 1",
-                    [ticker],
-                )
-                last_price = (
-                    float(mk[0]["close"]) if mk else None
-                )
-            except Exception:  # noqa: BLE001
-                last_price = None
+            last_price, mark_source = _resolve_mark(ticker)
             unrealised = (
                 (last_price - avg_price) * qty
                 if last_price is not None else 0.0
@@ -666,6 +705,7 @@ def create_paper_router() -> APIRouter:
                 "qty": qty,
                 "avg_price": avg_price,
                 "last_price": last_price,
+                "mark_source": mark_source,
                 "unrealised_pnl_inr": unrealised,
                 "unrealised_pnl_pct": unrealised_pct,
             })

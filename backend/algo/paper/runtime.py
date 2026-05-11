@@ -245,6 +245,20 @@ class PaperRuntime:
     ) -> int:
         """Evaluate the strategy on this bar; route accepted
         signals to the broker. Returns the count of fills."""
+        # Best-effort: publish the bar close as the live LTP for
+        # this ticker so the paper P&L summary endpoint can mark
+        # open positions to the latest fixture/live tick price.
+        # 60s TTL — replay sessions that have moved on past a
+        # ticker leave stale marks for at most a minute, after
+        # which the summary endpoint falls back to OHLCV close.
+        try:
+            from backend.cache import get_cache
+            get_cache().set(
+                f"cache:ltp:{bar.ticker}", str(float(bar.close)),
+                ttl=60,
+            )
+        except Exception:  # noqa: BLE001
+            pass
         existing_pos = self._positions.open_positions().get(bar.ticker)
         bar_date_obj = datetime.fromtimestamp(
             bar.bar_open_ts_ns / 1_000_000_000, tz=timezone.utc,

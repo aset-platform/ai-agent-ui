@@ -283,6 +283,18 @@ class KiteWsMultiplexer:
         kt = KiteTicker(self._api_key, self._access_token)
         loop = self._loop
 
+        # Per-process LTP cache writer — lazy-imported so the
+        # multiplexer test doubles (which don't load backend.cache)
+        # keep working. Writes to Redis under `cache:ltp:{ticker}`
+        # with a 60s TTL so the paper P&L summary endpoint can
+        # mark open positions to live ticks instead of yesterday's
+        # OHLCV close. Best-effort — never blocks the tick path.
+        try:
+            from backend.cache import get_cache
+            _ltp_cache = get_cache()
+        except Exception:  # noqa: BLE001
+            _ltp_cache = None
+
         def on_ticks(_ws, ticks):
             now_ns = int(time.time() * 1_000_000_000)
             # Health: stamp arrival of any tick batch and increment
@@ -300,14 +312,27 @@ class KiteWsMultiplexer:
                 ticker = self._token_to_ticker.get(tok)
                 if not ticker:
                     continue
+                ltp_val = float(raw.get("last_price", 0) or 0)
                 tick = Tick(
                     ticker=ticker,
                     ts_ns=now_ns,
-                    ltp=float(raw.get("last_price", 0) or 0),
+                    ltp=ltp_val,
                     volume=int(
                         raw.get("last_traded_quantity", 0) or 0,
                     ),
                 )
+                # Best-effort live-LTP cache write. 60s TTL covers
+                # market gaps; reads return None outside that window
+                # and the summary endpoint falls back to OHLCV.
+                if _ltp_cache is not None and ltp_val > 0:
+                    try:
+                        _ltp_cache.set(
+                            f"cache:ltp:{ticker}",
+                            str(ltp_val),
+                            ttl=60,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 self._last_tick_ns[tok] = now_ns
                 subs = self._token_subs.get(tok, set())
                 for sid in subs:

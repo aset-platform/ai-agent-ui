@@ -21,6 +21,11 @@ export interface OpenPosition {
   qty: number;
   avg_price: number;
   last_price: number | null;
+  /** Where `last_price` came from. `live_ltp` = Redis tick cache
+   * (sub-minute fresh from WS multiplexer or runtime bar close);
+   * `last_fill` = most recent order_filled event price;
+   * `ohlcv_close` = end-of-day fallback from stocks.ohlcv. */
+  mark_source?: "live_ltp" | "last_fill" | "ohlcv_close" | "unknown";
   unrealised_pnl_inr: number;
   unrealised_pnl_pct: number;
 }
@@ -62,9 +67,13 @@ export function usePaperSessionSummary(
     : null;
   const { data, error, isLoading, mutate } =
     useSWR<PaperSessionSummary>(key, fetcher, {
-      refreshInterval: 10_000,
+      // 5s polling keeps the live-LTP mark within ~5s of fresh
+      // ticks. The backend WS multiplexer caches LTP in Redis on
+      // every tick, so reads are sub-ms and the perceived
+      // refresh rate is bounded by this interval, not the data.
+      refreshInterval: 5_000,
       revalidateOnFocus: true,
-      dedupingInterval: 5_000,
+      dedupingInterval: 2_000,
     });
   return {
     summary: data,

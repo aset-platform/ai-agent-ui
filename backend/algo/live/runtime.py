@@ -306,6 +306,18 @@ class LiveRuntime:
         last_price: Decimal,
     ) -> int:
         """Evaluate → gate → submit to Kite. Returns 1 if filled."""
+        # Best-effort: publish bar close as live LTP so the paper
+        # P&L summary endpoint marks open positions to live ticks.
+        # WS multiplexer also writes per-tick — bar-close is a
+        # belt-and-braces fallback for tickers that go quiet.
+        try:
+            from backend.cache import get_cache
+            get_cache().set(
+                f"cache:ltp:{bar.ticker}", str(float(bar.close)),
+                ttl=60,
+            )
+        except Exception:  # noqa: BLE001
+            pass
         from backend.algo.backtest.indicators import compute_indicators
         from backend.algo.backtest.types import BarData as _BackBar
         from datetime import datetime, timezone
