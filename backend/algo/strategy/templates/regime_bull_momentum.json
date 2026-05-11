@@ -78,10 +78,8 @@
       ]
     },
     "then": {
-      "type": "buy",
-      "qty": {
-        "notional_inr": 100000
-      }
+      "type": "set_target_weight",
+      "weight": 0.08
     },
     "else": {
       "type": "exit",
