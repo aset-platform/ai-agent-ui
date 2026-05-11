@@ -22,6 +22,7 @@ import {
   PaperEventsTimeline,
   type EventsPageSize,
 } from "./PaperEventsTimeline";
+import { PaperSessionSummary } from "./PaperSessionSummary";
 import { ReconciliationDriftPanel } from "./ReconciliationDriftPanel";
 import { KitePostbackPanel } from "./KitePostbackPanel";
 import { AttributionPanel } from "./AttributionPanel";
@@ -235,8 +236,9 @@ export function PaperTab() {
       )}
 
       {viewMode === "paper" && (
-        <div data-testid="trading-paper-view">
+        <div className="space-y-4" data-testid="trading-paper-view">
           <ActiveRunsPanel tradingMode="paper" />
+          <PaperSessionSummary />
         </div>
       )}
 

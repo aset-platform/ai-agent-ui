@@ -520,4 +520,184 @@ def create_paper_router() -> APIRouter:
         )
         return list_replay_fixtures()
 
+    @router.get("/strategies/{strategy_id}/summary")
+    async def paper_session_summary(
+        strategy_id: UUID,
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> dict[str, Any]:
+        """Aggregate paper-mode events for a strategy into a
+        P&L summary.
+
+        Walks every ``order_filled`` event for the (user,
+        strategy, mode='paper') tuple in chronological order,
+        tracks per-ticker FIFO position state, and returns:
+
+        - open positions with mark-to-market unrealised P&L
+          (using the latest close from stocks.ohlcv as the mark)
+        - closed positions with aggregated realised P&L
+        - totals + signal/rejection counts
+
+        This is the read-side fix for the PaperTab gap: paper
+        runs emit events but do not write a row to algo.runs,
+        so the Performance tab can't show them. This endpoint
+        synthesises the summary from events directly.
+        """
+        from backend.db.duckdb_engine import query_iceberg_table
+
+        user_id_str = str(UUID(user.user_id))
+        sid_str = str(strategy_id)
+
+        try:
+            rows = query_iceberg_table(
+                "algo.events",
+                "SELECT type, payload_json, ts_ns "
+                "FROM events "
+                "WHERE user_id = ? AND strategy_id = ? "
+                "  AND mode = 'paper' "
+                "ORDER BY ts_ns ASC",
+                [user_id_str, sid_str],
+            )
+        except FileNotFoundError:
+            rows = []
+
+        # Per-ticker FIFO buys + realised pnl from sells.
+        from collections import defaultdict, deque
+
+        buys: dict[str, deque] = defaultdict(deque)
+        realised: dict[str, float] = defaultdict(float)
+        n_closed_trades: dict[str, int] = defaultdict(int)
+        n_signals = 0
+        n_rejected = 0
+        n_fills = 0
+        first_ts: int | None = None
+        last_ts: int | None = None
+        rejection_reasons: dict[str, int] = defaultdict(int)
+
+        for r in rows:
+            t = r["type"]
+            try:
+                p = json.loads(r["payload_json"])
+            except Exception:  # noqa: BLE001
+                p = {}
+            ts = int(r["ts_ns"])
+            if first_ts is None:
+                first_ts = ts
+            last_ts = ts
+
+            if t == "signal_generated":
+                n_signals += 1
+            elif t == "signal_rejected":
+                n_rejected += 1
+                reason = str(p.get("reason") or "unknown")
+                rejection_reasons[reason] += 1
+            elif t == "order_filled":
+                n_fills += 1
+                ticker = str(p.get("ticker") or "")
+                side = str(p.get("side") or "")
+                qty = int(p.get("qty") or 0)
+                price = float(p.get("fill_price") or 0.0)
+                fee = float(p.get("fee_inr") or 0.0)
+                if not ticker or qty <= 0 or price <= 0:
+                    continue
+                if side == "BUY":
+                    buys[ticker].append([qty, price, fee])
+                elif side == "SELL":
+                    rem = qty
+                    while rem > 0 and buys[ticker]:
+                        lot = buys[ticker][0]
+                        take = min(rem, lot[0])
+                        # FIFO match — gain = (sell - buy) * qty
+                        # minus the proportional buy fee + the
+                        # proportional sell fee. Sell fees are
+                        # charged on this side of the round trip.
+                        proportional_buy_fee = (
+                            lot[2] * take / qty
+                            if qty > 0 else 0.0
+                        )
+                        proportional_sell_fee = (
+                            fee * take / qty if qty > 0 else 0.0
+                        )
+                        realised[ticker] += (
+                            (price - lot[1]) * take
+                            - proportional_buy_fee
+                            - proportional_sell_fee
+                        )
+                        lot[0] -= take
+                        rem -= take
+                        if lot[0] <= 0:
+                            buys[ticker].popleft()
+                            n_closed_trades[ticker] += 1
+
+        # Open positions = sum of remaining BUY lots per ticker.
+        open_positions: list[dict[str, Any]] = []
+        for ticker, lots in buys.items():
+            if not lots:
+                continue
+            qty = sum(l[0] for l in lots)
+            if qty <= 0:
+                continue
+            cost = sum(l[0] * l[1] for l in lots)
+            avg_price = cost / qty if qty > 0 else 0.0
+            # Mark-to-market — latest close from stocks.ohlcv.
+            try:
+                mk = query_iceberg_table(
+                    "stocks.ohlcv",
+                    "SELECT close FROM ohlcv "
+                    "WHERE ticker = ? "
+                    "ORDER BY date DESC LIMIT 1",
+                    [ticker],
+                )
+                last_price = (
+                    float(mk[0]["close"]) if mk else None
+                )
+            except Exception:  # noqa: BLE001
+                last_price = None
+            unrealised = (
+                (last_price - avg_price) * qty
+                if last_price is not None else 0.0
+            )
+            unrealised_pct = (
+                (last_price / avg_price - 1.0) * 100.0
+                if last_price is not None and avg_price > 0
+                else 0.0
+            )
+            open_positions.append({
+                "ticker": ticker,
+                "qty": qty,
+                "avg_price": avg_price,
+                "last_price": last_price,
+                "unrealised_pnl_inr": unrealised,
+                "unrealised_pnl_pct": unrealised_pct,
+            })
+
+        closed_positions = [
+            {
+                "ticker": ticker,
+                "realised_pnl_inr": realised[ticker],
+                "round_trips": n_closed_trades[ticker],
+            }
+            for ticker in sorted(realised.keys())
+            if n_closed_trades[ticker] > 0
+        ]
+
+        total_realised = sum(realised.values())
+        total_unrealised = sum(
+            p["unrealised_pnl_inr"] for p in open_positions
+        )
+
+        return {
+            "strategy_id": sid_str,
+            "first_event_ts_ns": first_ts,
+            "last_event_ts_ns": last_ts,
+            "n_signals_generated": n_signals,
+            "n_signals_rejected": n_rejected,
+            "n_fills": n_fills,
+            "rejection_reasons": dict(rejection_reasons),
+            "open_positions": open_positions,
+            "closed_positions": closed_positions,
+            "total_realised_pnl_inr": total_realised,
+            "total_unrealised_pnl_inr": total_unrealised,
+            "total_pnl_inr": total_realised + total_unrealised,
+        }
+
     return router
