@@ -219,6 +219,16 @@ class KiteClient:
         }
         if order_type == "LIMIT":
             params["price"] = price
+        elif order_type == "MARKET":
+            # Kite Connect API rejects naked MARKET orders:
+            # 'Market orders without market protection are not
+            # allowed via API. Please set market protection or
+            # use a Limit order.' market_protection caps slippage
+            # at this percent of LTP — 5% is generous enough that
+            # liquid NSE stocks always fill but sketchy stocks
+            # with wide spreads get rejected rather than cratering
+            # the user.
+            params["market_protection"] = 5
         if tag:
             params["tag"] = tag
         resp = self._kc.place_order(variety=variety, **params)
