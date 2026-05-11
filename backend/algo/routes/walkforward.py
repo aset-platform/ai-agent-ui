@@ -258,7 +258,21 @@ def create_walkforward_router() -> APIRouter:
             from decimal import Decimal as _D
             rows: list[BacktestRun] = []
             for r in result.mappings().all():
-                sj = r["summary_json"]
+                sj = r["summary_json"] or {}
+                # Use .get() — backtest summary_json shape evolved
+                # (no top-level total_pnl_inr/total_pnl_pct on new
+                # walkforward runs). Fall back to nested aggregate
+                # fields when present so the runs list can render
+                # without crashing on a missing key.
+                agg = sj.get("aggregate") or {}
+                pnl_inr = (
+                    sj.get("total_pnl_inr")
+                    or agg.get("avg_pnl_inr")
+                )
+                pnl_pct = (
+                    sj.get("total_pnl_pct")
+                    or agg.get("avg_pnl_pct")
+                )
                 rows.append(BacktestRun(
                     run_id=r["id"],
                     strategy_id=r["strategy_id"],
@@ -268,12 +282,12 @@ def create_walkforward_router() -> APIRouter:
                     started_at=r["started_at"],
                     completed_at=r["completed_at"],
                     total_pnl_inr=(
-                        _D(str(sj["total_pnl_inr"]))
-                        if sj else None
+                        _D(str(pnl_inr)) if pnl_inr is not None
+                        else None
                     ),
                     total_pnl_pct=(
-                        _D(str(sj["total_pnl_pct"]))
-                        if sj else None
+                        _D(str(pnl_pct)) if pnl_pct is not None
+                        else None
                     ),
                     error_text=r["error_text"],
                 ))
