@@ -251,7 +251,12 @@ function TradeReasonsTab({ strategyId }: { strategyId: string | null }) {
         <tbody>
           {rows.map((row: AttributionTradeRow, idx: number) => (
             <tr
-              key={`${row.ticker}-${row.closed_at ?? idx}`}
+              // idx is always part of the key because a single
+              // (ticker, closed_at) pair can have multiple trades
+              // on the same day (partial fills, two round-trips
+              // in one session). Without idx, React collapses
+              // them and warns about duplicate keys.
+              key={`${row.ticker}-${row.closed_at ?? "open"}-${idx}`}
               className="border-b border-slate-100 hover:bg-slate-50
                 dark:border-slate-800 dark:hover:bg-slate-800/50"
             >
