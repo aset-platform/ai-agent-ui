@@ -96,7 +96,7 @@ export function RegimePeriodMix({ start, end }: Props) {
           Regime mix for {start} → {end}
         </span>
         <span className="text-[10px] text-slate-500">
-          {summary.total_days} trading days
+          {summary.total_days} regime-classified days
         </span>
       </div>
 
