@@ -210,12 +210,34 @@ async def kite_postback(request: Request) -> dict:
             "kite postback not enabled on this instance",
         )
 
-    # Gate 2: read raw body (Kite sends raw JSON).
+    # Gate 2: read body. Kite sends application/x-www-form-
+    # urlencoded with the order fields as form values (not JSON
+    # despite some old docs). Try form-decode first, fall back
+    # to JSON for any test-harness senders that POST as JSON.
     raw = await request.body()
+    content_type = (
+        request.headers.get("content-type") or ""
+    ).lower()
+    payload: dict
     try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        raise HTTPException(400, "invalid json")
+        if "application/json" in content_type:
+            payload = json.loads(raw)
+        else:
+            # form-urlencoded — convert to plain dict; values
+            # come back as strings, the downstream verifier +
+            # consumers stringify-compare so that's fine.
+            from urllib.parse import parse_qs
+            parsed = parse_qs(raw.decode("utf-8"))
+            payload = {
+                k: (v[0] if len(v) == 1 else v)
+                for k, v in parsed.items()
+            }
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        _logger.warning(
+            "kite postback: body parse failed (ct=%s): %s",
+            content_type, exc,
+        )
+        raise HTTPException(400, "invalid body")
 
     # Gate 3: api_secret must be configured (fail-closed
     # per CLAUDE.md §5.11 — 503, not 401).
@@ -265,7 +287,7 @@ async def kite_postback(request: Request) -> dict:
         flush_events,
     )
 
-    row = event_row(
+    rows_to_persist: list[dict] = [event_row(
         session_id=_NULL_UUID,
         user_id=our_user_id or _NULL_UUID,
         strategy_id=None,
@@ -281,8 +303,37 @@ async def kite_postback(request: Request) -> dict:
             "our_user_id": (str(our_user_id) if our_user_id else None),
             "raw": payload,  # full payload for forensics
         },
-    )
-    await asyncio.to_thread(flush_events, [row])
+    )]
+
+    # COMPLETE/PARTIAL postbacks → reconcile against the
+    # in-flight order list and emit `order_filled_live` so the
+    # P&L summary card and in-flight panel update. Without this
+    # the user sees "0 fills" forever even after Kite confirms
+    # execution.
+    status = str(payload.get("status", "")).upper()
+    if status == "COMPLETE" and our_user_id is not None:
+        try:
+            await _reconcile_fill_with_in_flight(
+                user_id=our_user_id,
+                kite_order_id=str(payload.get("order_id", "")),
+                tradingsymbol=str(
+                    payload.get("tradingsymbol", ""),
+                ),
+                side=str(payload.get("transaction_type", "")),
+                qty=int(payload.get("filled_quantity", 0) or 0),
+                avg_price=float(
+                    payload.get("average_price", 0) or 0,
+                ),
+                rows_to_persist=rows_to_persist,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "kite postback: in-flight reconcile failed for "
+                "order_id=%s: %s",
+                payload.get("order_id", ""), exc, exc_info=True,
+            )
+
+    await asyncio.to_thread(flush_events, rows_to_persist)
 
     # Cache invalidation per CLAUDE.md §5.13.
     cache = _get_cache()
@@ -300,6 +351,102 @@ async def kite_postback(request: Request) -> dict:
 def _postback_enabled() -> bool:
     """Read KITE_POSTBACK_ENABLED env var."""
     return os.environ.get("KITE_POSTBACK_ENABLED", "false").lower() == "true"
+
+
+async def _reconcile_fill_with_in_flight(
+    *,
+    user_id: UUID,
+    kite_order_id: str,
+    tradingsymbol: str,
+    side: str,
+    qty: int,
+    avg_price: float,
+    rows_to_persist: list[dict],
+) -> None:
+    """Find the matching in-flight order across this user's
+    live runs, mark it `filled`, and append an
+    `order_filled_live` event to ``rows_to_persist`` (caller
+    flushes once at the end of the request).
+
+    Match is by (user_id, kite_order_id) — Kite IDs are unique
+    per user. We scan recent live runs (up to 5 most-recent) so
+    a postback that lands after the run row was created but
+    before the runtime drained still hits the right entry.
+    """
+    if not kite_order_id or not user_id:
+        return
+    from sqlalchemy import text
+    from sqlalchemy.dialects.postgresql import JSONB
+    from sqlalchemy import bindparam
+    from backend.db.engine import get_session_factory
+    from backend.algo.backtest.event_writer import event_row
+    from datetime import datetime as _dt, UTC
+
+    factory = get_session_factory()
+    async with factory() as session:
+        runs = (await session.execute(text("""
+            SELECT id, live_orders_in_flight
+            FROM algo.runs
+            WHERE user_id = :uid AND mode = 'live'
+              AND live_orders_in_flight IS NOT NULL
+              AND jsonb_array_length(live_orders_in_flight) > 0
+            ORDER BY started_at DESC LIMIT 5
+        """), {"uid": user_id})).mappings().all()
+
+        for run in runs:
+            in_flight = run["live_orders_in_flight"]
+            if isinstance(in_flight, str):
+                in_flight = json.loads(in_flight)
+            matched = False
+            for entry in in_flight:
+                if entry.get("kite_order_id") == kite_order_id:
+                    entry["status"] = "filled"
+                    entry["fill_price"] = str(avg_price)
+                    entry["fill_qty"] = qty
+                    entry["filled_at"] = _dt.now(
+                        UTC,
+                    ).isoformat()
+                    matched = True
+                    # Emit order_filled_live so the summary card
+                    # and events panel pick it up.
+                    rows_to_persist.append(event_row(
+                        session_id=_NULL_UUID,
+                        user_id=user_id,
+                        strategy_id=None,  # postback is run-agnostic
+                        mode="live",
+                        type_="order_filled_live",
+                        payload={
+                            "dry_run": False,
+                            "kite_order_id": kite_order_id,
+                            "internal_order_id": entry.get(
+                                "internal_order_id",
+                            ),
+                            "symbol": tradingsymbol,
+                            "side": side or entry.get("side", ""),
+                            "qty": qty,
+                            "price": str(avg_price),
+                            "fees_inr": "0",
+                            "source": "kite_postback",
+                        },
+                    ))
+                    break
+            if matched:
+                stmt = text("""
+                    UPDATE algo.runs
+                    SET live_orders_in_flight = :payload
+                    WHERE id = :rid
+                """).bindparams(bindparam("payload", type_=JSONB))
+                await session.execute(stmt, {
+                    "payload": in_flight, "rid": run["id"],
+                })
+                await session.commit()
+                _logger.info(
+                    "kite postback reconciled: order_id=%s "
+                    "run_id=%s sym=%s qty=%d @₹%.2f",
+                    kite_order_id, run["id"],
+                    tradingsymbol, qty, avg_price,
+                )
+                return  # stop after first match
 
 
 def create_webhooks_router() -> APIRouter:
