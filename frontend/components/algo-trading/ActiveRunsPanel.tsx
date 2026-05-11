@@ -128,12 +128,13 @@ export function ActiveRunsPanel({ tradingMode = "paper" }: Props) {
         className="mt-3 flex flex-col gap-3"
         data-testid="paper-start-run-form"
       >
-        {/* Row 1 — Source.  Paper + Dry run: replay-only by
-            design (offline / weekend-safe rehearsal). Live:
-            live-ws only (real ticks for real money). The radio
-            group only renders if there's actually a choice — for
-            now there isn't (single forced source per view). */}
-        {false && (
+        {/* Row 1 — Source.  Paper + Live: single forced source.
+            Dry run: user choice between Replay fixture
+            (deterministic, market-closed-safe) and Live Kite WS
+            (live ticks, synthetic Kite responses) so rehearsal
+            can match either pre-market validation or true
+            market-open intraday rehearsal. */}
+        {tradingMode === "dryrun" && (
           <fieldset
             className="flex flex-col gap-1"
             data-testid="paper-source-radio-group"
@@ -187,7 +188,7 @@ export function ActiveRunsPanel({ tradingMode = "paper" }: Props) {
                     className="inline-block w-2 h-2 rounded-full bg-emerald-500"
                     aria-hidden="true"
                   />
-                  Streaming from Kite WS
+                  Streaming from Kite WS · synthetic fills
                 </span>
               )}
             </div>
