@@ -132,6 +132,37 @@ class PaperRuntime:
             tuple[str, date], dict[str, Decimal]
         ] = {}
         self._factor_loaded_for_ticker: set[str] = set()
+        # REGIME-1 — regime_label + stress_prob lookup, loaded
+        # lazily on first bar so paper sessions resolve regime
+        # features identically to backtest.
+        self._regime_by_date: dict[date, dict[str, Any]] = {}
+        self._regime_loaded: bool = False
+
+    def _ensure_regime_cache(self, bar_date_obj: date) -> None:
+        if self._regime_loaded:
+            return
+        self._regime_loaded = True
+        try:
+            from datetime import timedelta as _td
+            from backend.algo.regime.repo import get_regime_history
+            rh_rows = get_regime_history(
+                bar_date_obj - _td(days=365),
+                bar_date_obj + _td(days=1),
+            )
+            for rh in rh_rows:
+                entry: dict[str, Any] = {
+                    "regime_label": rh.regime_label,
+                }
+                if rh.stress_prob is not None:
+                    entry["stress_prob"] = Decimal(
+                        str(rh.stress_prob),
+                    )
+                self._regime_by_date[rh.bar_date] = entry
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "PaperRuntime: regime_history load failed: %s — "
+                "regime-aware templates will silent-skip", exc,
+            )
 
     def _ensure_factor_cache(
         self, ticker: str, bar_date_obj: date,
@@ -246,6 +277,7 @@ class PaperRuntime:
         # REGIME-2a — lazy-load cached factor rows for this
         # ticker on first sight; subsequent bars are O(1).
         self._ensure_factor_cache(bar.ticker, bar_date_obj)
+        self._ensure_regime_cache(bar_date_obj)
         features = {
             **ind_map.get(bar_date_obj, _features_for_bar(bar)),
             "nifty_above_sma200": self._market_regime.get(
@@ -259,6 +291,8 @@ class PaperRuntime:
             **self._factor_cache.get(
                 (bar.ticker, bar_date_obj), {},
             ),
+            # REGIME-1 — regime_label + stress_prob overlay.
+            **self._regime_by_date.get(bar_date_obj, {}),
         }
 
         ctx = EvalContext(

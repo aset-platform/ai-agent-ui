@@ -1,11 +1,13 @@
 {
   "id": "00000000-0000-0000-0000-000000000010",
-  "name": "BULL — Momentum + Trend Confirmation",
+  "name": "BULL \u2014 Momentum + Trend Confirmation",
   "universe": {
     "type": "scope",
     "scope": "discovery",
     "filter": {
-      "ticker_type": ["stock"],
+      "ticker_type": [
+        "stock"
+      ],
       "market": "india"
     }
   },
@@ -19,45 +21,72 @@
     "max_positions": 10
   },
   "root": {
-    "type": "and",
-    "operands": [
-      {
-        "type": "compare",
-        "left": {"feature": "regime_label"},
-        "op": "==",
-        "right": {"literal": "BULL"}
-      },
-      {
-        "type": "compare",
-        "left": {"feature": "mom_12_1"},
-        "op": ">",
-        "right": {"literal": 0.10}
-      },
-      {
-        "type": "compare",
-        "left": {"feature": "adx_14"},
-        "op": ">",
-        "right": {"literal": 25}
-      },
-      {
-        "type": "compare",
-        "left": {"feature": "distance_from_sma200"},
-        "op": ">",
-        "right": {"literal": 0.0}
-      },
-      {
-        "type": "compare",
-        "left": {"feature": "volume_x_avg_20"},
-        "op": ">",
-        "right": {"literal": 1.0}
-      },
-      {
-        "type": "compare",
-        "left": {"feature": "f_score"},
-        "op": ">=",
-        "right": {"literal": 6}
+    "type": "if",
+    "cond": {
+      "type": "and",
+      "operands": [
+        {
+          "type": "compare",
+          "left": {
+            "feature": "regime_label"
+          },
+          "op": "==",
+          "right": {
+            "literal": "BULL"
+          }
+        },
+        {
+          "type": "compare",
+          "left": {
+            "feature": "mom_12_1"
+          },
+          "op": ">",
+          "right": {
+            "literal": 0.1
+          }
+        },
+        {
+          "type": "compare",
+          "left": {
+            "feature": "adx_14"
+          },
+          "op": ">",
+          "right": {
+            "literal": 25
+          }
+        },
+        {
+          "type": "compare",
+          "left": {
+            "feature": "distance_from_sma200"
+          },
+          "op": ">",
+          "right": {
+            "literal": 0.0
+          }
+        },
+        {
+          "type": "compare",
+          "left": {
+            "feature": "volume_x_avg_20"
+          },
+          "op": ">",
+          "right": {
+            "literal": 1.0
+          }
+        }
+      ]
+    },
+    "then": {
+      "type": "buy",
+      "qty": {
+        "notional_inr": 100000
       }
-    ]
+    },
+    "else": {
+      "type": "exit",
+      "scope": "this_symbol"
+    }
   },
   "risk": {
     "per_trade": {

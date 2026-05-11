@@ -1,11 +1,13 @@
 {
   "id": "00000000-0000-0000-0000-000000000012",
-  "name": "BEAR — Defensive Low-Vol Quality",
+  "name": "BEAR \u2014 Defensive Low-Vol Quality",
   "universe": {
     "type": "scope",
     "scope": "discovery",
     "filter": {
-      "ticker_type": ["stock"],
+      "ticker_type": [
+        "stock"
+      ],
       "market": "india"
     }
   },
@@ -19,45 +21,72 @@
     "max_positions": 5
   },
   "root": {
-    "type": "and",
-    "operands": [
-      {
-        "type": "compare",
-        "left": {"feature": "regime_label"},
-        "op": "==",
-        "right": {"literal": "BEAR"}
-      },
-      {
-        "type": "compare",
-        "left": {"feature": "stress_prob"},
-        "op": "<",
-        "right": {"literal": 0.5}
-      },
-      {
-        "type": "compare",
-        "left": {"feature": "f_score"},
-        "op": ">=",
-        "right": {"literal": 8}
-      },
-      {
-        "type": "compare",
-        "left": {"feature": "beta_to_nifty"},
-        "op": "<",
-        "right": {"literal": 0.7}
-      },
-      {
-        "type": "compare",
-        "left": {"feature": "realized_vol_60d"},
-        "op": "<",
-        "right": {"literal": 0.20}
-      },
-      {
-        "type": "compare",
-        "left": {"feature": "rs_vs_nifty_3m"},
-        "op": ">",
-        "right": {"literal": 1.0}
+    "type": "if",
+    "cond": {
+      "type": "and",
+      "operands": [
+        {
+          "type": "compare",
+          "left": {
+            "feature": "regime_label"
+          },
+          "op": "==",
+          "right": {
+            "literal": "BEAR"
+          }
+        },
+        {
+          "type": "compare",
+          "left": {
+            "feature": "stress_prob"
+          },
+          "op": "<",
+          "right": {
+            "literal": 0.5
+          }
+        },
+        {
+          "type": "compare",
+          "left": {
+            "feature": "beta_to_nifty"
+          },
+          "op": "<",
+          "right": {
+            "literal": 0.7
+          }
+        },
+        {
+          "type": "compare",
+          "left": {
+            "feature": "realized_vol_60d"
+          },
+          "op": "<",
+          "right": {
+            "literal": 0.2
+          }
+        },
+        {
+          "type": "compare",
+          "left": {
+            "feature": "rs_vs_nifty_3m"
+          },
+          "op": ">",
+          "right": {
+            "literal": 1.0
+          }
+        }
+      ]
+    },
+    "then": {
+      "type": "buy",
+      "qty": {
+        "notional_inr": 80000
       }
-    ]
+    },
+    "else": {
+      "type": "exit",
+      "scope": "this_symbol"
+    }
   },
   "risk": {
     "per_trade": {

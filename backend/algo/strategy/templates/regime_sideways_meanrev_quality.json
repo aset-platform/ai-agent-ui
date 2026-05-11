@@ -1,11 +1,13 @@
 {
   "id": "00000000-0000-0000-0000-000000000011",
-  "name": "SIDEWAYS — Mean Reversion + Quality",
+  "name": "SIDEWAYS \u2014 Mean Reversion + Quality",
   "universe": {
     "type": "scope",
     "scope": "discovery",
     "filter": {
-      "ticker_type": ["stock"],
+      "ticker_type": [
+        "stock"
+      ],
       "market": "india"
     }
   },
@@ -19,44 +21,71 @@
     "max_positions": 8
   },
   "root": {
-    "type": "and",
-    "operands": [
-      {
-        "type": "compare",
-        "left": {"feature": "regime_label"},
-        "op": "==",
-        "right": {"literal": "SIDEWAYS"}
-      },
-      {
-        "type": "compare",
-        "left": {"feature": "f_score"},
-        "op": ">=",
-        "right": {"literal": 7}
-      },
-      {
-        "type": "compare",
-        "left": {"feature": "realized_vol_60d"},
-        "op": "<",
-        "right": {"literal": 0.30}
-      },
-      {
-        "type": "between",
-        "value": {"feature": "rsi"},
-        "low": {"literal": 30},
-        "high": {"literal": 50}
-      },
-      {
-        "type": "between",
-        "value": {"feature": "distance_from_sma200"},
-        "low": {"literal": -0.05},
-        "high": {"literal": 0.10}
+    "type": "if",
+    "cond": {
+      "type": "and",
+      "operands": [
+        {
+          "type": "compare",
+          "left": {
+            "feature": "regime_label"
+          },
+          "op": "==",
+          "right": {
+            "literal": "SIDEWAYS"
+          }
+        },
+        {
+          "type": "compare",
+          "left": {
+            "feature": "realized_vol_60d"
+          },
+          "op": "<",
+          "right": {
+            "literal": 0.3
+          }
+        },
+        {
+          "type": "between",
+          "value": {
+            "feature": "rsi"
+          },
+          "low": {
+            "literal": 30
+          },
+          "high": {
+            "literal": 50
+          }
+        },
+        {
+          "type": "between",
+          "value": {
+            "feature": "distance_from_sma200"
+          },
+          "low": {
+            "literal": -0.05
+          },
+          "high": {
+            "literal": 0.1
+          }
+        }
+      ]
+    },
+    "then": {
+      "type": "buy",
+      "qty": {
+        "notional_inr": 50000
       }
-    ]
+    },
+    "else": {
+      "type": "exit",
+      "scope": "this_symbol"
+    }
   },
   "risk": {
     "per_trade": {
       "stop_loss_pct": 5.0,
-      "max_qty": 800
+      "max_qty": 5000
     },
     "portfolio": {
       "max_exposure_pct": 60.0,

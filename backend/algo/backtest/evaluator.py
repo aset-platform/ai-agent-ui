@@ -122,13 +122,18 @@ class Evaluator:
                 else node.get("else", {"type": "hold"})
             )
             return self.eval_node(branch, ctx)
+        if t == "between":
+            # Inclusive numeric range check used by regime templates.
+            value = _resolve_operand(node["value"], ctx)
+            low = _resolve_operand(node["low"], ctx)
+            high = _resolve_operand(node["high"], ctx)
+            return low <= value <= high
         # Action nodes pass through verbatim — runner translates
         # to OrderIntents.
         if t in {
             "buy", "sell", "exit", "hold", "set_target_weight",
         }:
             return dict(node)
-        # crossover / between / select_top_n / weighted are v2.
-        # In v1 the evaluator returns "hold" so the runner
-        # gracefully no-ops.
+        # crossover / select_top_n / weighted are v2. In v1 the
+        # evaluator returns "hold" so the runner gracefully no-ops.
         return {"type": "hold"}
