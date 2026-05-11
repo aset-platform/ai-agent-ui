@@ -690,17 +690,29 @@ def create_paper_router() -> APIRouter:
 
         # Track each ticker's last seen fill price so paper-replay
         # sessions (no live ticks) can mark open positions to the
-        # most recent fixture print.
+        # most recent fixture print. Accept both runtime variants:
+        # PaperRuntime emits `order_filled` with `ticker` +
+        # `fill_price`; LiveRuntime emits `order_filled_live`
+        # with `symbol` + `price` (and re-suffixes `.NS` so
+        # the OHLCV mark fallback still hits).
         last_fill_price: dict[str, float] = {}
         for r in rows:
-            if r["type"] != "order_filled":
+            if r["type"] not in ("order_filled", "order_filled_live"):
                 continue
             try:
                 p = json.loads(r["payload_json"])
             except Exception:  # noqa: BLE001
                 continue
-            t = str(p.get("ticker") or "")
-            fp = float(p.get("fill_price") or 0.0)
+            t = str(
+                p.get("ticker")
+                or (
+                    f"{p.get('symbol')}.NS"
+                    if p.get("symbol") else ""
+                )
+            )
+            fp = float(
+                p.get("fill_price") or p.get("price") or 0.0,
+            )
             if t and fp > 0:
                 last_fill_price[t] = fp
 
@@ -713,10 +725,29 @@ def create_paper_router() -> APIRouter:
         except Exception:  # noqa: BLE001
             _cache = None
 
+        # For dry-run synthetic sessions (rehearsal against a
+        # replay fixture or live-ws-with-synthetic-fills), the
+        # `last_fill` price IS the most reliable mark because:
+        # - Replay fixtures emit historic ticks for the ticker
+        #   that wouldn't match the current real-world price.
+        # - The Redis cache:ltp:{ticker} key gets overwritten
+        #   by live Kite WS ticks regardless of which session
+        #   wrote the bar close — so a fixture session's marks
+        #   get clobbered by real-world prices and the user
+        #   sees nonsensical P&L like a 26% drawdown that's
+        #   really just (live_now - fixture_then).
+        # Real-money live sessions (mode=live + dry_run=false)
+        # want the live tick — keep that path.
+        prefer_last_fill = (
+            mode_norm == "live" and dry_run is True
+        )
+
         def _resolve_mark(ticker: str) -> tuple[float | None, str]:
             """Return (price, source) for the open-position mark.
             Source ∈ {'live_ltp', 'last_fill', 'ohlcv_close'}.
             """
+            if prefer_last_fill and ticker in last_fill_price:
+                return last_fill_price[ticker], "last_fill"
             if _cache is not None:
                 try:
                     raw = _cache.get(f"cache:ltp:{ticker}")
