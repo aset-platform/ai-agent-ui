@@ -42,12 +42,18 @@ export const STRATEGIES_TAB_ORDER: StrategiesTabId[] = [
 ];
 
 /** Live-page tab IDs. URL-synced via ?tab=. */
-export type LiveTabId = "live" | "positions" | "holdings" | "settings";
+export type LiveTabId =
+  | "live"
+  | "positions"
+  | "holdings"
+  | "postbacks"
+  | "settings";
 
 export const LIVE_TAB_LABELS: Record<LiveTabId, string> = {
   live: "Live",
   positions: "Positions",
   holdings: "Holdings",
+  postbacks: "Postbacks",
   settings: "Settings",
 };
 
@@ -55,5 +61,6 @@ export const LIVE_TAB_ORDER: LiveTabId[] = [
   "live",
   "positions",
   "holdings",
+  "postbacks",
   "settings",
 ];

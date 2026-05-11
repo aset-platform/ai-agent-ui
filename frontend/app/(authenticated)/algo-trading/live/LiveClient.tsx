@@ -8,6 +8,7 @@ import { LiveDashboard } from "@/components/algo-trading/live/LiveDashboard";
 import { LiveHeaderStrip } from "@/components/algo-trading/live/LiveHeaderStrip";
 import { LiveSettingsTab } from "@/components/algo-trading/live/LiveSettingsTab";
 import { PositionsTab } from "@/components/algo-trading/live/PositionsTab";
+import { KitePostbackPanel } from "@/components/algo-trading/KitePostbackPanel";
 import {
   LIVE_TAB_LABELS,
   LIVE_TAB_ORDER,
@@ -48,6 +49,8 @@ export default function LiveClient() {
         return <PositionsTab />;
       case "holdings":
         return <HoldingsTab />;
+      case "postbacks":
+        return <KitePostbackPanel />;
       case "settings":
         return <LiveSettingsTab />;
     }
