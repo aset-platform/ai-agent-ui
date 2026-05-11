@@ -4,8 +4,10 @@ import { useState } from "react";
 
 import { useKillSwitch } from "@/hooks/useKillSwitch";
 import { usePaperEvents } from "@/hooks/usePaperEvents";
+import { useStrategies } from "@/hooks/useStrategies";
 
 import { ActiveRunsPanel } from "./ActiveRunsPanel";
+import { AttributionPanel } from "./AttributionPanel";
 import {
   PaperEventsTimeline,
   type EventsPageSize,
@@ -27,6 +29,7 @@ export function PaperTab() {
   );
 
   const { state: killState } = useKillSwitch();
+  const { strategies } = useStrategies();
 
   return (
     <div className="space-y-4" data-testid="paper-tab">
@@ -55,6 +58,16 @@ export function PaperTab() {
 
       <ActiveRunsPanel tradingMode="paper" />
       <PaperSessionSummary />
+
+      {/* Attribution scoped to paper-runtime fills only. Same
+          component as Live/Dry-run; the mode="paper" filter on
+          /algo/attribution/trades restricts to events.mode='paper'
+          and type='order_filled', so dry-run + live + backtest
+          fills don't bleed in. */}
+      <AttributionPanel
+        strategyId={strategies[0]?.id ?? null}
+        mode="paper"
+      />
 
       {error && (
         <div
