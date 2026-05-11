@@ -34,6 +34,11 @@ def test_run_compute_writes_rows(monkeypatch) -> None:
         compute_job, "_load_ohlcv_for_ticker",
         lambda t, s, e: _ohlcv(closes),
     )
+    # Bulk loader added 2026-05-11 — return per-ticker dict.
+    monkeypatch.setattr(
+        compute_job, "_load_ohlcv_bulk",
+        lambda tickers, s, e: {t: _ohlcv(closes) for t in tickers},
+    )
     monkeypatch.setattr(
         compute_job, "_load_nifty_history",
         lambda s, e: _ohlcv(closes),

@@ -81,6 +81,39 @@ def _load_ohlcv_for_ticker(
     return pd.DataFrame(rows)
 
 
+def _load_ohlcv_bulk(
+    tickers: list[str], start: date, end: date,
+) -> dict[str, pd.DataFrame]:
+    """Single DuckDB read for the whole universe — splits the
+    result into a per-ticker dict in memory.
+
+    Per CLAUDE.md §4.1 #1: 'Batch reads — single DuckDB
+    WHERE ticker IN (...) → pre-load dict. Never N individual
+    Iceberg reads.' The original
+    ``_load_ohlcv_for_ticker(t)`` loop did N=810 individual
+    reads per backfill day, dominating wall time.
+    """
+    if not tickers:
+        return {}
+    placeholders = ",".join(["?"] * len(tickers))
+    rows = query_iceberg_table(
+        "stocks.ohlcv",
+        f"SELECT ticker, date AS bar_date, open, high, low, "
+        f"close, volume FROM ohlcv "
+        f"WHERE ticker IN ({placeholders}) "
+        f"AND date BETWEEN ? AND ? "
+        f"ORDER BY ticker ASC, date ASC",
+        [*tickers, start, end],
+    )
+    if not rows:
+        return {t: pd.DataFrame() for t in tickers}
+    df = pd.DataFrame(rows)
+    return {
+        t: g.drop(columns=["ticker"]).reset_index(drop=True)
+        for t, g in df.groupby("ticker", sort=False)
+    }
+
+
 def _load_nifty_history(start: date, end: date) -> pd.DataFrame:
     return _load_ohlcv_for_ticker(NIFTY_TICKER, start, end)
 
@@ -143,14 +176,25 @@ def run_compute_job(
         )
     }
 
-    # Per CLAUDE.md §4.1 #2 — accumulate all rows in memory and
-    # write in a SINGLE Iceberg commit at the end. The previous
-    # implementation did one upsert per ticker → N+1 commits →
-    # ~1.5 commits/sec on a 800-ticker universe = ~27hr backfill
-    # for 180 days. Bulk-commit drops that to ~1 commit/day.
+    # Per CLAUDE.md §4.1 #1 + #2 — bulk read + bulk commit.
+    # Old: 810 single-ticker DuckDB reads per backfill day +
+    # 810 Iceberg commits per day. Now: 1 bulk DuckDB read for
+    # the full ticker × date matrix + 1 Iceberg commit at the
+    # end. Backfill ETA dropped from ~27 hours (per-ticker
+    # commit) → ~10 hours (bulk-commit) → ~10–30 minutes
+    # (bulk-read + bulk-commit on a 180-day window).
+    _logger.info(
+        "compute_daily_factors: bulk-loading OHLCV for %d "
+        "tickers (%s → %s)…",
+        len(universe), load_start, as_of,
+    )
+    history_by_ticker = _load_ohlcv_bulk(
+        universe, load_start, as_of,
+    )
+
     all_rows: list[FactorRow] = []
     for ticker in universe:
-        history = _load_ohlcv_for_ticker(ticker, load_start, as_of)
+        history = history_by_ticker.get(ticker, pd.DataFrame())
         if history.empty or len(history) < 30:
             continue
         sector = sector_lookup.get(ticker)
