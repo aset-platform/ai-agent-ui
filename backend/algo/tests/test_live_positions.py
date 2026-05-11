@@ -69,7 +69,7 @@ class TestPositions:
             },
         ])
         attr.return_value = {
-            ("ITC", "MIS"): {
+            "ITC": {
                 "strategy_id": "abc-123",
                 "strategy_name": "V3 Multi",
                 "entry_ts_utc": "2026-05-11T04:19:54+00:00",

@@ -475,10 +475,10 @@ async def _strategy_name_lookup(
 
 async def _fetch_strategy_attribution(
     user_id: UUID,
-    keys: list[tuple[str, str]],
-) -> dict[tuple[str, str], dict[str, Any]]:
-    """For each (symbol, product), find today's first live BUY fill
-    in ``algo.events`` and return the originating strategy + the
+    symbols: list[str],
+) -> dict[str, dict[str, Any]]:
+    """For each symbol, find today's first live BUY fill in
+    ``algo.events`` and return the originating strategy + the
     entry reason carried in the event payload.
 
     ``algo.events`` has no top-level ``tradingsymbol`` / ``side`` /
@@ -487,10 +487,14 @@ async def _fetch_strategy_attribution(
     filter + extract in Python. Returns an empty dict on Iceberg
     read failure (drift logic still works via the cheap ledger
     check downstream).
+
+    Join is symbol-only (not ``(symbol, product)``): the runtime
+    currently emits ``payload.product = None`` on every fill, so
+    a (sym, product) key would never match a Kite CNC position.
     """
-    if not keys:
+    if not symbols:
         return {}
-    wanted_symbols = {sym for sym, _ in keys}
+    wanted_symbols = set(symbols)
     today_ist = _ist_midnight_str()
     try:
         rows = await asyncio.to_thread(
@@ -513,8 +517,17 @@ async def _fetch_strategy_attribution(
         )
         return {}
 
-    # First BUY per (symbol, product) wins.
-    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    # First BUY per symbol wins. We intentionally drop the
+    # ``product`` dimension from the join key: the live-runtime
+    # currently emits ``payload.product = None`` (see
+    # backend/algo/live/runtime.py order_filled_live payload), so a
+    # ``(symbol, product)`` key defaulted to ``MIS`` here would
+    # never match a Kite ``CNC`` position. Until the runtime
+    # starts stamping ``product`` on every fill, the symbol-only
+    # join is the only attribution that actually works. Caveat:
+    # a user with simultaneous MIS + CNC positions on the same
+    # symbol shares one strategy/entry attribution row.
+    by_key: dict[str, dict[str, Any]] = {}
     strategy_ids: set[str] = set()
     for row in rows:
         try:
@@ -527,9 +540,7 @@ async def _fetch_strategy_attribution(
         if side.upper() != "BUY":
             continue
         sym = payload.get("symbol") or ""
-        product = payload.get("product") or "MIS"
-        key = (sym, product)
-        if sym not in wanted_symbols or key in by_key:
+        if not sym or sym not in wanted_symbols or sym in by_key:
             continue
         sid = row.get("strategy_id")
         if sid:
@@ -542,7 +553,7 @@ async def _fetch_strategy_attribution(
             if ts_ns
             else None
         )
-        by_key[key] = {
+        by_key[sym] = {
             "strategy_id": str(sid) if sid else None,
             "strategy_name": None,
             "entry_ts_utc": (
@@ -1096,18 +1107,12 @@ def create_live_router() -> APIRouter:
 
         attr = await _fetch_strategy_attribution(
             uid,
-            [
-                (r["tradingsymbol"], r.get("product") or "MIS")
-                for r in open_rows
-            ],
+            [r["tradingsymbol"] for r in open_rows],
         )
 
         out_rows: list[PositionRow] = []
         for r in open_rows:
-            key = (
-                r["tradingsymbol"], r.get("product") or "MIS",
-            )
-            ctx = attr.get(key, {})
+            ctx = attr.get(r["tradingsymbol"], {})
             qty = int(r.get("quantity", 0))
             avg = Decimal(str(r.get("average_price", 0) or 0))
             ltp = Decimal(str(r.get("last_price", 0) or 0))
