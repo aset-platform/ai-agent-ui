@@ -82,6 +82,13 @@ class KiteWsMultiplexer:
         self._token_to_ticker: dict[int, str] = {}
         # last tick ns per token (gap-fill tracking)
         self._last_tick_ns: dict[int, int] = {}
+        # Universe tokens — subscribed at connect time to feed the
+        # global cache:ltp:{ticker} Redis cache for portfolio /
+        # dashboard widgets. Membership here protects the token
+        # from unsubscribe cleanup when a strategy that *also*
+        # used it is torn down (the strategy can come and go but
+        # the universe subscription is sticky for the WS lifetime).
+        self._universe_tokens: set[int] = set()
 
         self._kt = None          # KiteTicker instance
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -155,6 +162,50 @@ class KiteWsMultiplexer:
                 )
         return self._queues[strategy_id]
 
+    def subscribe_universe(
+        self,
+        token_to_ticker: dict[int, str],
+    ) -> int:
+        """Subscribe a sticky universe of tokens for the global
+        LTP Redis cache. Idempotent — only new tokens are sent
+        to Kite. No per-strategy queue fanout: ticks for these
+        tokens land in ``on_ticks`` only for the
+        ``cache:ltp:{ticker}`` write side-effect.
+
+        Returns the count of NEW tokens registered (excluding
+        those already known).
+        """
+        new_tokens: list[int] = []
+        for tok, ticker in token_to_ticker.items():
+            if tok in self._universe_tokens:
+                continue
+            self._universe_tokens.add(tok)
+            self._token_to_ticker[tok] = ticker
+            new_tokens.append(tok)
+
+        if new_tokens and self._kt is not None and self._connected:
+            try:
+                self._kt.subscribe(new_tokens)
+                self._kt.set_mode(
+                    self._kt.MODE_LTP, new_tokens,
+                )
+            except Exception:
+                _logger.warning(
+                    "subscribe_universe failed for %d tokens",
+                    len(new_tokens),
+                    exc_info=True,
+                )
+                # Best-effort: leave them registered locally so
+                # a subsequent reconnect's resubscribe picks them
+                # up via the on_connect handler.
+        _logger.info(
+            "ws_multiplexer: universe subscribed %d new tokens "
+            "(%d total) user=%s",
+            len(new_tokens), len(self._universe_tokens),
+            self._user_id,
+        )
+        return len(new_tokens)
+
     async def unsubscribe(self, strategy_id: UUID) -> None:
         """Deregister a strategy and decrement token ref-counts.
 
@@ -170,6 +221,12 @@ class KiteWsMultiplexer:
             subs = self._token_subs.get(tok, set())
             subs.discard(strategy_id)
             if not subs:
+                # Universe-level subscription pins the token so
+                # the global LTP cache keeps refreshing even when
+                # no strategy is using it.
+                if tok in self._universe_tokens:
+                    self._token_subs.pop(tok, None)
+                    continue
                 dead_tokens.append(tok)
                 self._token_subs.pop(tok, None)
                 self._token_to_ticker.pop(tok, None)
@@ -365,8 +422,13 @@ class KiteWsMultiplexer:
                 "KiteWsMultiplexer: connected user=%s",
                 self._user_id,
             )
-            # Re-subscribe all known tokens.
-            all_tokens = list(self._token_subs.keys())
+            # Re-subscribe all known tokens — strategy
+            # subscriptions PLUS the universe subscription so the
+            # global LTP cache rebuilds after a reconnect.
+            all_tokens = sorted(
+                set(self._token_subs.keys())
+                | self._universe_tokens
+            )
             if all_tokens:
                 ws.subscribe(all_tokens)
                 ws.set_mode(ws.MODE_LTP, all_tokens)
@@ -374,7 +436,10 @@ class KiteWsMultiplexer:
             loop.call_soon_threadsafe(
                 self._emit_ws_event,
                 "ws_connected",
-                {"token_count": len(all_tokens)},
+                {
+                    "token_count": len(all_tokens),
+                    "universe_count": len(self._universe_tokens),
+                },
             )
             # Kick off gap-fill in the event loop.
             loop.call_soon_threadsafe(

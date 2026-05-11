@@ -4006,6 +4006,7 @@ def create_app(
         create_instruments_router,
         create_kill_switch_router,
         create_live_router,
+        create_ltp_router,
         create_paper_router,
         create_performance_router,
         create_regime_router,
@@ -4017,6 +4018,10 @@ def create_app(
 
     app.include_router(
         create_broker_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_ltp_router(),
         prefix="/v1",
     )
     app.include_router(

@@ -182,6 +182,30 @@ def create_broker_router() -> APIRouter:
                 _next_token_expiry_ist(),
                 kite_user_id,
             )
+        # Eagerly start the WS multiplexer + subscribe the full
+        # NSE universe so live LTPs flow into Redis as soon as
+        # the user lands back on the dashboard. Fire-and-forget
+        # to keep the callback latency in the <100ms range; the
+        # universe-seed task completes in 1-2s and we don't make
+        # the HTTP response wait on it.
+        try:
+            from backend.algo.broker.ws_registry import (
+                get_or_create_multiplexer,
+            )
+            from backend.algo.broker.universe_seeder import (
+                seed_full_nse_universe_background,
+            )
+            mux = await get_or_create_multiplexer(
+                user_id=UUID(user.user_id),
+                api_key=api_key,
+                access_token=access_token,
+            )
+            seed_full_nse_universe_background(mux, factory)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "eager universe seed failed (callback will "
+                "still return success): %s", exc,
+            )
         return CallbackResponse(
             status="connected", kite_user_id=kite_user_id,
         )
