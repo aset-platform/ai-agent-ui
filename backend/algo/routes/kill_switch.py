@@ -205,8 +205,10 @@ def create_kill_switch_router() -> APIRouter:
                 "orders_submitted": 0,
                 "errors": ["Kite token expired"],
             }
-        kite = KiteClient(api_key=creds["api_key"])
-        kite.set_access_token(creds["access_token"])
+        kite = KiteClient(
+            api_key=creds["api_key"],
+            access_token=creds["access_token"],
+        )
 
         # 4. Pull current Kite positions + holdings to find open
         # quantities. Holdings = T+1 settled (CNC); positions =
