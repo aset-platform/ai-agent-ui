@@ -403,10 +403,11 @@ def create_paper_router() -> APIRouter:
                     ),
                 )
 
-            # Resolve per-user dry-run state from Redis (the
-            # Dry run / Live tab toggle in the UI flips this).
-            # Falls back to ALGO_LIVE_DRY_RUN env if Redis is
-            # silent so legacy deployments keep working.
+            # KiteClient now resolves dry_run from the per-user
+            # Redis flag automatically when user_id is passed
+            # (see resolve_dry_run_for_user). The async is_armed
+            # call here is kept only to log the resolved state
+            # for the caller's audit trail.
             from backend.algo.live.dry_run_flag import is_armed
             dry_run_user = await is_armed(
                 user_id, get_async_redis(),
@@ -414,7 +415,7 @@ def create_paper_router() -> APIRouter:
             kite = KiteClient(
                 api_key=creds["api_key"],
                 access_token=creds["access_token"],
-                dry_run=dry_run_user,
+                user_id=user_id,
             )
 
             # Create algo.runs row up-front so LiveRuntime has

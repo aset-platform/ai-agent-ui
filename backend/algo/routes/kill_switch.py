@@ -263,32 +263,54 @@ def create_kill_switch_router() -> APIRouter:
                 # Either no position, or short — skip (we don't
                 # auto-cover shorts; user must do that manually).
                 continue
-            # Resolve LIMIT price from Redis tick cache.
+            # Resolve LIMIT price with three-tier fallback:
+            # 1. Redis tick cache (sub-60s fresh)
+            # 2. Latest stocks.ohlcv close (always available
+            #    for any traded ticker)
+            # 3. Skip the SELL with an error (don't send naked
+            #    MARKET — kiteconnect SDK rejects it anyway and
+            #    we don't want unbounded slippage on a panic
+            #    flatten).
             cache_key = f"cache:ltp:{sym}.NS"
+            ltp = Decimal("0")
             try:
                 raw = cache.get(cache_key)
-                ltp = (
-                    Decimal(str(raw)) if raw is not None
-                    else Decimal("0")
-                )
+                if raw is not None:
+                    ltp = Decimal(str(raw))
             except Exception:  # noqa: BLE001
-                ltp = Decimal("0")
-            # SELL LIMIT 30 bps below LTP for marketability.
-            order_kwargs: dict
-            if ltp > 0:
-                buf = ltp * Decimal("30") / Decimal("10000")
-                limit_price = ltp - buf
-                tick = Decimal("0.05")
-                limit_price = (
-                    (limit_price / tick).quantize(Decimal("1"))
-                    * tick
+                pass
+            if ltp <= 0:
+                try:
+                    eod = query_iceberg_table(
+                        "stocks.ohlcv",
+                        "SELECT close FROM ohlcv "
+                        "WHERE ticker = ? "
+                        "ORDER BY date DESC LIMIT 1",
+                        [f"{sym}.NS"],
+                    )
+                    if eod and eod[0].get("close") is not None:
+                        ltp = Decimal(str(eod[0]["close"]))
+                except Exception:  # noqa: BLE001
+                    pass
+            if ltp <= 0:
+                errors.append(
+                    f"{sym}: no price available (Redis + "
+                    f"OHLCV both empty) — refusing to send "
+                    f"naked MARKET",
                 )
-                order_kwargs = {
-                    "order_type": "LIMIT",
-                    "price": float(limit_price),
-                }
-            else:
-                order_kwargs = {"order_type": "MARKET"}
+                continue
+            # SELL LIMIT 30 bps below mark for marketability.
+            buf = ltp * Decimal("30") / Decimal("10000")
+            limit_price = ltp - buf
+            tick = Decimal("0.05")
+            limit_price = (
+                (limit_price / tick).quantize(Decimal("1"))
+                * tick
+            )
+            order_kwargs = {
+                "order_type": "LIMIT",
+                "price": float(limit_price),
+            }
 
             try:
                 kite_order_id = await asyncio.to_thread(

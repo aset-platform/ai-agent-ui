@@ -28,10 +28,60 @@ _logger = logging.getLogger(__name__)
 
 
 def _read_dry_run_env() -> bool:
-    """Read ALGO_LIVE_DRY_RUN from env.  Default False."""
+    """Read ALGO_LIVE_DRY_RUN from env.  Default False.
+
+    DEPRECATED for trading callsites — prefer the per-user
+    Redis flag via ``resolve_dry_run_for_user(user_id)``. Env
+    is now only the last-resort fallback when no user context
+    is available (e.g. read-only OAuth / instrument loader).
+    """
     return os.environ.get(
         "ALGO_LIVE_DRY_RUN", "false",
     ).lower() in ("true", "1", "yes")
+
+
+def resolve_dry_run_for_user(
+    user_id: object | None,
+) -> bool:
+    """Single source of truth for dry-run resolution. Order:
+
+    1. Per-user Redis flag (`algo:dry_run:{user_id}`) — set by
+       the Dry-run / Live segment toggle in the UI. THIS IS THE
+       AUTHORITATIVE SOURCE for any trading-path callsite.
+    2. ``ALGO_LIVE_DRY_RUN`` env var — fallback when user_id is
+       None (admin tools, instrument loader, OAuth) OR Redis is
+       unavailable.
+
+    Sync wrapper around the async ``dry_run_flag.is_armed`` —
+    uses the sync redis client so this can be called from
+    KiteClient.__init__ without an event loop. Failures fall
+    through to env so the system stays operational under Redis
+    outages.
+    """
+    if user_id is None:
+        return _read_dry_run_env()
+    try:
+        from auth.token_store import get_redis_client
+        redis_url = os.environ.get("REDIS_URL", "").strip()
+        if not redis_url:
+            return _read_dry_run_env()
+        client = get_redis_client(redis_url)
+        if client is None:
+            return _read_dry_run_env()
+        raw = client.get(f"algo:dry_run:{user_id}")
+        if raw is None:
+            return _read_dry_run_env()
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="ignore")
+        return str(raw).strip().lower() in (
+            "1", "true", "yes",
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            "resolve_dry_run_for_user: redis read failed "
+            "user=%s: %s — falling back to env", user_id, exc,
+        )
+        return _read_dry_run_env()
 
 
 class KiteClient:
@@ -57,17 +107,27 @@ class KiteClient:
         access_token: str | None = None,
         *,
         dry_run: bool | None = None,
+        user_id: object | None = None,
     ) -> None:
         self._api_key = api_key
         self._access_token = access_token
         self._kc = KiteConnect(api_key=api_key)
         if access_token:
             self._kc.set_access_token(access_token)
-        # Explicit kwarg wins; fall back to env var.
-        self._dry_run: bool = (
-            dry_run if dry_run is not None
-            else _read_dry_run_env()
-        )
+        # Resolution priority for dry_run:
+        #   1. Explicit kwarg (highest — used by panic-close +
+        #      tests that need to lock in real or synthetic).
+        #   2. Per-user Redis flag if user_id provided — the
+        #      authoritative source for trading-path callsites.
+        #      Single source of truth across the codebase.
+        #   3. ALGO_LIVE_DRY_RUN env var (read-only callsites
+        #      with no user context: OAuth, instrument loader).
+        if dry_run is not None:
+            self._dry_run = dry_run
+        elif user_id is not None:
+            self._dry_run = resolve_dry_run_for_user(user_id)
+        else:
+            self._dry_run = _read_dry_run_env()
         if self._dry_run:
             _logger.info(
                 "KiteClient initialised in DRY_RUN mode — "
@@ -219,16 +279,14 @@ class KiteClient:
         }
         if order_type == "LIMIT":
             params["price"] = price
-        elif order_type == "MARKET":
-            # Kite Connect API rejects naked MARKET orders:
-            # 'Market orders without market protection are not
-            # allowed via API. Please set market protection or
-            # use a Limit order.' market_protection caps slippage
-            # at this percent of LTP — 5% is generous enough that
-            # liquid NSE stocks always fill but sketchy stocks
-            # with wide spreads get rejected rather than cratering
-            # the user.
-            params["market_protection"] = 5
+        # NOTE: kiteconnect-python SDK does not accept
+        # market_protection as a kwarg in this version. MARKET
+        # orders without market_protection are rejected by Kite
+        # at the REST layer (see commit 13001fb). The fix is to
+        # ALWAYS use LIMIT orders — every callsite must compute
+        # a price (LTP / bar close / OHLCV close) and pass
+        # order_type='LIMIT' + price=<float>. This file no longer
+        # tries to inject market_protection.
         if tag:
             params["tag"] = tag
         resp = self._kc.place_order(variety=variety, **params)
