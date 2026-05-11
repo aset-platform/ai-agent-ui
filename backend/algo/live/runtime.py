@@ -591,7 +591,12 @@ class LiveRuntime:
 
         is_dry = kite_order_id.startswith("DRY_")
 
-        # Record in-flight
+        # Record in-flight. ``reason`` + ``product`` carried here
+        # so synthetic_fill (dry-run) and the Kite postback
+        # reconciliation can both stamp the same context onto the
+        # final order_filled_live event payload — that's what the
+        # Positions tab Reason column and the (symbol, product)
+        # attribution join read.
         in_flight_entry = {
             "kite_order_id": kite_order_id,
             "internal_order_id": internal_order_id,
@@ -600,6 +605,8 @@ class LiveRuntime:
             "qty": signal.qty,
             "submitted_at": now_iso,
             "status": "submitted",
+            "reason": signal.reason,
+            "product": "CNC",
         }
         self._in_flight.append(in_flight_entry)
         await self._caps_repo.update_in_flight(
@@ -627,6 +634,8 @@ class LiveRuntime:
                 "limit_price": order_kwargs.get("price"),
                 "ref_last_price": str(last_price)
                 if last_price else None,
+                "reason": signal.reason,
+                "product": "CNC",
             },
         ))
         self._flush_events_now()
@@ -758,6 +767,13 @@ class LiveRuntime:
                 "qty": qty,
                 "price": str(fill_price),
                 "fees_inr": str(fees.total_inr),
+                # Carry forward from in_flight_entry so the
+                # Positions tab Reason column has the action
+                # type and the attribution join can key on
+                # product. Both nullable for legacy entries
+                # written before this change.
+                "reason": in_flight_entry.get("reason"),
+                "product": in_flight_entry.get("product"),
             },
         ))
         self._flush_events_now()
@@ -940,6 +956,7 @@ class LiveRuntime:
                 user_id=self._user_id,
                 ticker=ticker, side="BUY", qty=qty,
                 emitted_at_ns=bar_date_ns,
+                reason=t,
             )
         if t == "sell":
             qty_spec = action["qty"]
@@ -959,6 +976,7 @@ class LiveRuntime:
                 user_id=self._user_id,
                 ticker=ticker, side="SELL", qty=qty,
                 emitted_at_ns=bar_date_ns,
+                reason=t,
             )
         if t == "exit":
             existing = self._positions.open_positions().get(ticker)
@@ -970,6 +988,7 @@ class LiveRuntime:
                 ticker=ticker, side="SELL",
                 qty=existing.qty,
                 emitted_at_ns=bar_date_ns,
+                reason=t,
             )
         if t == "set_target_weight":
             if last_price is None or last_price <= 0:
@@ -999,6 +1018,7 @@ class LiveRuntime:
                     ticker=ticker, side="BUY",
                     qty=int(diff),
                     emitted_at_ns=bar_date_ns,
+                    reason=t,
                 )
             if diff < 0:
                 return Signal(
@@ -1007,6 +1027,7 @@ class LiveRuntime:
                     ticker=ticker, side="SELL",
                     qty=int(-diff),
                     emitted_at_ns=bar_date_ns,
+                    reason=t,
                 )
             return None
         return None
