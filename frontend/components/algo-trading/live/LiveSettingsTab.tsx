@@ -44,6 +44,7 @@ function DriftThresholdInput() {
   const [value, setValue] = useState<number>(0);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (data !== undefined) {
@@ -54,17 +55,20 @@ function DriftThresholdInput() {
   async function handleSave() {
     setSaving(true);
     setSaved(false);
+    setSaveError(null);
     try {
-      const r = await apiFetch(`${API_URL}/algo/drift/threshold`, {
+      const r = await apiFetch(THRESHOLD_KEY, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ threshold_shares: value }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      await mutate({ threshold_shares: value }, false);
+      await mutate({ threshold_shares: value }, { revalidate: false });
       setSaved(true);
-    } catch {
-      // no-op; user retries
+    } catch (e) {
+      setSaveError(
+        e instanceof Error ? e.message : "Save failed",
+      );
     } finally {
       setSaving(false);
     }
@@ -97,7 +101,7 @@ function DriftThresholdInput() {
         <button
           type="button"
           onClick={handleSave}
-          disabled={saving}
+          disabled={saving || data === undefined}
           className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           data-testid="drift-threshold-save"
         >
@@ -108,6 +112,14 @@ function DriftThresholdInput() {
             Saved
           </span>
         )}
+        {saveError && (
+          <span
+            className="text-xs text-red-600 dark:text-red-400"
+            data-testid="drift-threshold-error"
+          >
+            {saveError}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -116,6 +128,9 @@ function DriftThresholdInput() {
 export function LiveSettingsTab() {
   const { strategies } = useStrategies();
   const [strategyId, setStrategyId] = useState<string>("");
+  // If a strategy is archived elsewhere while open, `selected` becomes
+  // undefined and the per-strategy card silently hides. Acceptable for
+  // now; revisit if multi-tab strategy lifecycle becomes a UX issue.
   const selected = strategies.find((s) => s.id === strategyId);
 
   return (
