@@ -205,9 +205,16 @@ def create_kill_switch_router() -> APIRouter:
                 "orders_submitted": 0,
                 "errors": ["Kite token expired"],
             }
+        # IMPORTANT — panic close ALWAYS hits real Kite, never
+        # synthetic. The user has real positions on the exchange;
+        # synthetic SELLs do nothing. Override the env-default
+        # ALGO_LIVE_DRY_RUN even if the per-user Redis flag is
+        # armed — when someone hits "Yes, close all", they mean
+        # close the real money exposure, full stop.
         kite = KiteClient(
             api_key=creds["api_key"],
             access_token=creds["access_token"],
+            dry_run=False,
         )
 
         # 4. Pull current Kite positions + holdings to find open
