@@ -17,8 +17,22 @@ test.use({ storageState: ".auth/superuser.json" });
 
 test.describe("Algo Trading sidebar group", () => {
   test("expands and lands on each child", async ({ page }) => {
+    // LayoutProvider defaults to sidebar_collapsed=true. In
+    // collapsed mode the nav group's children render via
+    // hover-flyout (testid `sidebar-flyout-*`) — but we want to
+    // exercise the inline path (`sidebar-child-*`). Click the
+    // collapse-toggle once to expand the sidebar, conditional on
+    // the toggle's title attribute so an already-expanded sidebar
+    // (from a prior test mutation) isn't collapsed again.
     await page.goto("/dashboard");
-    await page.getByTestId(FE.algoSidebarGroup).click();
+    const toggle = page.getByTestId("sidebar-collapse-toggle");
+    await expect(toggle).toBeVisible();
+    if ((await toggle.getAttribute("title")) === "Expand sidebar") {
+      await toggle.click();
+    }
+    await expect(
+      page.getByTestId(FE.algoSidebarGroup),
+    ).toBeVisible();
     await expect(
       page.getByTestId(FE.algoBrokerLink),
     ).toBeVisible();

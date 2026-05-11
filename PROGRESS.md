@@ -28,7 +28,7 @@ existing links keep working.
 
 Slice 6 (this session): added five Playwright specs
 (`algo-sidebar-group`, `algo-broker-page`,
-`algo-strategies-tabs`, `algo-live-dashboard`,
+`algo-strategies-tabs`, `algo-live-page`,
 `algo-live-positions`), shared testid constants in
 `e2e/utils/selectors.ts`, and `docs/algo-trading/page-structure.md`.
 
