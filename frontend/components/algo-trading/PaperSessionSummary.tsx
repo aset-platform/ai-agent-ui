@@ -16,8 +16,23 @@ import { useState } from "react";
 import {
   usePaperSessionSummary,
   type OpenPosition,
+  type SessionSummaryMode,
 } from "@/hooks/usePaperSessionSummary";
 import { useStrategies } from "@/hooks/useStrategies";
+
+interface PaperSessionSummaryProps {
+  /** Which event mode to aggregate. Paper segment passes
+   *  'paper' (PaperRuntime fills); Live + Dry-run segments
+   *  pass 'live' (LiveRuntime fills, with optional dry_run
+   *  filter to separate synthetic from real-money). */
+  mode?: SessionSummaryMode;
+  /** When mode='live', filter by dry_run flag. true = only
+   *  synthetic, false = only real-money, null = both. */
+  dryRun?: boolean | null;
+  /** Heading override so each segment can label the card
+   *  appropriately ("Paper P&L", "Dry-run P&L", "Live P&L"). */
+  heading?: string;
+}
 
 function fmtINR(v: number): string {
   const sign = v < 0 ? "-" : "";
@@ -215,11 +230,24 @@ function ClosedPositionsTable({
   );
 }
 
-export function PaperSessionSummary() {
+export function PaperSessionSummary({
+  mode = "paper",
+  dryRun = null,
+  heading,
+}: PaperSessionSummaryProps = {}) {
   const { strategies } = useStrategies();
   const [strategyId, setStrategyId] = useState<string>("");
   const { summary, loading, error } =
-    usePaperSessionSummary(strategyId);
+    usePaperSessionSummary(strategyId, mode, dryRun);
+  const titleText = heading ?? (
+    mode === "live"
+      ? (dryRun === true
+        ? "Dry-run P&L by strategy"
+        : dryRun === false
+          ? "Live P&L by strategy"
+          : "Live + Dry-run P&L by strategy")
+      : "Paper P&L by strategy"
+  );
 
   return (
     <div
@@ -230,7 +258,7 @@ export function PaperSessionSummary() {
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-sm font-semibold text-slate-900
           dark:text-slate-100">
-          Paper P&L by strategy
+          {titleText}
         </h3>
         <select
           className="rounded border border-slate-300

@@ -523,13 +523,30 @@ def create_paper_router() -> APIRouter:
     @router.get("/strategies/{strategy_id}/summary")
     async def paper_session_summary(
         strategy_id: UUID,
+        mode: str = Query(
+            "paper",
+            description=(
+                "Event mode to aggregate: 'paper' (PaperRuntime), "
+                "'live' (LiveRuntime — both real-money and "
+                "dry-run synthetic). Default 'paper' for "
+                "backwards compatibility."
+            ),
+        ),
+        dry_run: bool | None = Query(
+            None,
+            description=(
+                "When mode='live', filter to only dry-run "
+                "synthetic fills (true) or only real-money "
+                "fills (false). Omit for both. Ignored when "
+                "mode='paper'."
+            ),
+        ),
         user: UserContext = Depends(pro_or_superuser),
     ) -> dict[str, Any]:
-        """Aggregate paper-mode events for a strategy into a
-        P&L summary.
+        """Aggregate fills for a strategy into a P&L summary.
 
-        Walks every ``order_filled`` event for the (user,
-        strategy, mode='paper') tuple in chronological order,
+        Walks every ``order_filled*`` event for the
+        (user, strategy, mode) tuple in chronological order,
         tracks per-ticker FIFO position state, and returns:
 
         - open positions with mark-to-market unrealised P&L
@@ -537,15 +554,41 @@ def create_paper_router() -> APIRouter:
         - closed positions with aggregated realised P&L
         - totals + signal/rejection counts
 
-        This is the read-side fix for the PaperTab gap: paper
-        runs emit events but do not write a row to algo.runs,
-        so the Performance tab can't show them. This endpoint
-        synthesises the summary from events directly.
+        Read-side replacement for the missing algo.runs row
+        on paper sessions, AND a unified view across both
+        Paper and Live (incl. dry-run) so the Trading tab
+        shows P&L regardless of which segment a user runs in.
         """
         from backend.db.duckdb_engine import query_iceberg_table
 
         user_id_str = str(UUID(user.user_id))
         sid_str = str(strategy_id)
+        # Normalise mode — accept either 'paper' or 'live'.
+        # Anything else returns an empty summary so the frontend
+        # never crashes on a typo.
+        mode_norm = "live" if mode == "live" else "paper"
+
+        # Event type names diverge by runtime: PaperRuntime emits
+        # `order_filled`, LiveRuntime emits `order_filled_live`
+        # (both real-money and synthetic dry-run carry the same
+        # type with `dry_run` payload bool to differentiate).
+        fill_type = (
+            "order_filled_live" if mode_norm == "live"
+            else "order_filled"
+        )
+
+        # Optional dry_run filter only applies to live-mode rows.
+        # `payload_json` is text, so we extract via DuckDB JSON
+        # functions and string-compare against 'true' / 'false'.
+        extra_clauses = ""
+        params: list = [user_id_str, sid_str, mode_norm]
+        if mode_norm == "live" and dry_run is not None:
+            wanted = "true" if dry_run else "false"
+            extra_clauses = (
+                " AND json_extract_string(payload_json, "
+                "'$.dry_run') = ?"
+            )
+            params.append(wanted)
 
         try:
             rows = query_iceberg_table(
@@ -553,9 +596,10 @@ def create_paper_router() -> APIRouter:
                 "SELECT type, payload_json, ts_ns "
                 "FROM events "
                 "WHERE user_id = ? AND strategy_id = ? "
-                "  AND mode = 'paper' "
+                "  AND mode = ?"
+                + extra_clauses + " "
                 "ORDER BY ts_ns ASC",
-                [user_id_str, sid_str],
+                params,
             )
         except FileNotFoundError:
             rows = []
@@ -590,13 +634,29 @@ def create_paper_router() -> APIRouter:
                 n_rejected += 1
                 reason = str(p.get("reason") or "unknown")
                 rejection_reasons[reason] += 1
-            elif t == "order_filled":
+            elif t in ("order_filled", "order_filled_live"):
+                # Field names diverge across runtimes:
+                # - PaperRuntime  : ticker (`SBIN.NS`),  fill_price, fee_inr
+                # - LiveRuntime   : symbol (`SBIN`),     price,      fees_inr
+                # Normalise here so the FIFO loop below stays
+                # one path. Live also tags `.NS` back on so the
+                # OHLCV mark lookup hits.
                 n_fills += 1
-                ticker = str(p.get("ticker") or "")
+                ticker = str(
+                    p.get("ticker")
+                    or (
+                        f"{p.get('symbol')}.NS"
+                        if p.get("symbol") else ""
+                    )
+                )
                 side = str(p.get("side") or "")
                 qty = int(p.get("qty") or 0)
-                price = float(p.get("fill_price") or 0.0)
-                fee = float(p.get("fee_inr") or 0.0)
+                price = float(
+                    p.get("fill_price") or p.get("price") or 0.0,
+                )
+                fee = float(
+                    p.get("fee_inr") or p.get("fees_inr") or 0.0,
+                )
                 if not ticker or qty <= 0 or price <= 0:
                     continue
                 if side == "BUY":

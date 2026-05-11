@@ -59,11 +59,23 @@ async function fetcher(url: string): Promise<PaperSessionSummary> {
   return res.json();
 }
 
+export type SessionSummaryMode = "paper" | "live";
+
 export function usePaperSessionSummary(
   strategyId: string | null | undefined,
+  mode: SessionSummaryMode = "paper",
+  dryRun: boolean | null = null,
 ) {
+  // Build the query string deterministically so SWR keys stay
+  // stable. mode is always passed; dry_run only when relevant
+  // (live mode + explicit true/false).
+  const qs: string[] = [`mode=${mode}`];
+  if (mode === "live" && dryRun !== null) {
+    qs.push(`dry_run=${dryRun ? "true" : "false"}`);
+  }
   const key = strategyId
     ? `${API_URL}/algo/paper/strategies/${strategyId}/summary`
+      + `?${qs.join("&")}`
     : null;
   const { data, error, isLoading, mutate } =
     useSWR<PaperSessionSummary>(key, fetcher, {

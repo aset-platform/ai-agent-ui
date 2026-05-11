@@ -337,6 +337,16 @@ export function PaperTab() {
               paper mode is replay-fixture so historical regime
               context is less relevant there. */}
           <RegimeHistoryChart />
+
+          {/* P&L summary card — same component as Paper segment
+              but pointed at mode='live' events. Dry-run filters
+              to dry_run=true (synthetic only); Live filters to
+              dry_run=false (real-money only) so traders never
+              see synthetic + real intermingled. */}
+          <PaperSessionSummary
+            mode="live"
+            dryRun={viewMode === "dryrun" ? true : false}
+          />
         </div>
       )}
 
