@@ -38,6 +38,96 @@ DEFAULT_WARMUP_BARS = 400
 NO_CROSS_SENTINEL = Decimal("999")
 
 
+def _vwap_intraday(
+    bars: list[BarData],
+) -> list[Decimal | None]:
+    """Intraday Volume-Weighted Average Price.
+
+    VWAP[i] = Σ(typical_price × volume) / Σ(volume), accumulated
+    from the first bar of the calendar day up to and including
+    bars[i]. Resets at each calendar-date boundary so the value
+    matches the standard NSE intraday session definition (the
+    cumulative reset happens implicitly when bars[i].date changes).
+
+    typical_price = (high + low + close) / 3 — the standard
+    Bollinger / VWAP inputs definition. Falls back to None when
+    cumulative volume is zero (a fresh-day bar with vol=0, e.g.
+    pre-market or a halted ticker).
+
+    Notes per runtime:
+    - Live + paper (minute bars): proper intraday running mean.
+      Useful as a `today_ltp < vwap` mean-reversion check.
+    - Backtest (daily bars): degenerates to typical_price
+      (single observation per date). Strategies that gate on
+      VWAP behave differently in backtest vs live; document this
+      when surfacing the feature in the catalog.
+    """
+    out: list[Decimal | None] = [None] * len(bars)
+    if not bars:
+        return out
+    cum_pv = Decimal("0")
+    cum_v = Decimal("0")
+    last_date = None
+    three = Decimal("3")
+    for i, bar in enumerate(bars):
+        if bar.date != last_date:
+            cum_pv = Decimal("0")
+            cum_v = Decimal("0")
+            last_date = bar.date
+        typical = (bar.high + bar.low + bar.close) / three
+        vol = Decimal(bar.volume)
+        cum_pv += typical * vol
+        cum_v += vol
+        if cum_v > 0:
+            out[i] = cum_pv / cum_v
+    return out
+
+
+def _wilder_rsi(
+    closes: list[Decimal], window: int = 14,
+) -> list[Decimal | None]:
+    """Wilder's RSI. Output[i] is None for the first ``window``
+    bars; subsequent bars use the smoothed average gain/loss with
+    Wilder's exponential smoothing (alpha = 1/window).
+    """
+    n = len(closes)
+    out: list[Decimal | None] = [None] * n
+    if n <= window:
+        return out
+    gains = Decimal("0")
+    losses = Decimal("0")
+    for i in range(1, window + 1):
+        diff = closes[i] - closes[i - 1]
+        if diff >= 0:
+            gains += diff
+        else:
+            losses += -diff
+    avg_gain = gains / Decimal(window)
+    avg_loss = losses / Decimal(window)
+    if avg_loss == 0:
+        out[window] = Decimal("100")
+    else:
+        rs = avg_gain / avg_loss
+        out[window] = Decimal("100") - Decimal("100") / (
+            Decimal("1") + rs
+        )
+    w = Decimal(window)
+    for i in range(window + 1, n):
+        diff = closes[i] - closes[i - 1]
+        gain = diff if diff > 0 else Decimal("0")
+        loss = -diff if diff < 0 else Decimal("0")
+        avg_gain = (avg_gain * (w - 1) + gain) / w
+        avg_loss = (avg_loss * (w - 1) + loss) / w
+        if avg_loss == 0:
+            out[i] = Decimal("100")
+        else:
+            rs = avg_gain / avg_loss
+            out[i] = Decimal("100") - Decimal("100") / (
+                Decimal("1") + rs
+            )
+    return out
+
+
 def _rolling_sma(
     closes: list[Decimal], window: int,
 ) -> list[Decimal | None]:
@@ -77,6 +167,8 @@ def compute_indicators(
     sma_series: dict[int, list[Decimal | None]] = {
         w: _rolling_sma(closes, w) for w in sma_windows
     }
+    rsi_series = _wilder_rsi(closes, 14)
+    vwap_series = _vwap_intraday(bars)
 
     # golden_cross_days_ago tracking — distance since the most
     # recent SMA50 crossing ABOVE SMA200. Reset on cross-down
@@ -96,6 +188,13 @@ def compute_indicators(
             v = sma_series[w][i]
             if v is not None:
                 feats[f"sma_{w}"] = v
+        rsi_v = rsi_series[i]
+        if rsi_v is not None:
+            feats["rsi"] = rsi_v
+            feats["rsi_14"] = rsi_v
+        vwap_v = vwap_series[i]
+        if vwap_v is not None:
+            feats["vwap"] = vwap_v
 
         if s50 is not None and s200 is not None and i > 0:
             cur_50 = s50[i]

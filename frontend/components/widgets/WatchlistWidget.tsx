@@ -6,6 +6,7 @@ import { API_URL } from "@/lib/config";
 import type { DashboardData } from "@/hooks/useDashboardData";
 import type { WatchlistResponse } from "@/lib/types";
 import type { PortfolioHolding } from "@/hooks/usePortfolio";
+import { useLtpBatch } from "@/hooks/useLtpBatch";
 import { WidgetSkeleton } from "./WidgetSkeleton";
 import { WidgetError } from "./WidgetError";
 
@@ -189,6 +190,20 @@ export function WatchlistWidget({
     [tickers, page],
   );
 
+  // Live LTP overlay — same hook used by Hero + holdings table.
+  // We pull only the visible page so the batch stays small and
+  // pagination naturally subscribes the user to whichever page
+  // they're looking at.
+  const { map: ltpMap } = useLtpBatch(
+    paginated.map((t) => t.ticker),
+  );
+  // Separate batch for the portfolio sub-tab so the two lists
+  // stay independent — portfolio holdings are usually a small
+  // fixed set, watchlist is paginated.
+  const { map: portfolioLtpMap } = useLtpBatch(
+    (portfolio ?? []).map((h) => h.ticker),
+  );
+
   if (data.loading) {
     return <WidgetSkeleton className="h-72" />;
   }
@@ -299,8 +314,23 @@ export function WatchlistWidget({
           <div className="divide-y divide-gray-100 dark:divide-gray-800">
             {portfolio.map((h) => {
               const sym = currencySymbol(h.currency);
-              const gain = h.gain_loss_pct ?? 0;
-              const positive = gain >= 0;
+              // Live overlay: recompute current_value + gain
+              // from the LTP when available; fall back to the
+              // server-computed values from /portfolio (which
+              // are populated from the daily refresh pipeline).
+              const liveEntry = portfolioLtpMap[h.ticker];
+              const isLive =
+                liveEntry?.source === "live_ltp";
+              const liveValue =
+                liveEntry?.price != null
+                  ? liveEntry.price * h.quantity
+                  : h.current_value ?? 0;
+              const liveGain =
+                liveEntry?.price != null && h.avg_price > 0
+                  ? ((liveEntry.price - h.avg_price)
+                      / h.avg_price) * 100
+                  : h.gain_loss_pct ?? 0;
+              const positive = liveGain >= 0;
               return (
                 <div
                   key={h.ticker}
@@ -316,7 +346,13 @@ export function WatchlistWidget({
                 >
                   <span className={`h-2 w-2 shrink-0 rounded-full ${positive ? "bg-emerald-500" : "bg-red-500"}`} />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white truncate inline-flex items-center gap-1">
+                      {isLive && (
+                        <span
+                          className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"
+                          title="Live LTP from Kite WS (≤60s old)"
+                        />
+                      )}
                       {h.ticker}
                     </p>
                     <p className="text-xs text-gray-500 dark:text-gray-400">
@@ -325,14 +361,14 @@ export function WatchlistWidget({
                   </div>
                   <div className="text-right">
                     <p className="text-sm font-medium text-gray-900 dark:text-white font-mono">
-                      {sym}{(h.current_value ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {sym}{liveValue.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
                     <p className="text-xs text-gray-500 dark:text-gray-400 font-mono">
                       Inv: {sym}{h.invested.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
                   </div>
                   <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${positive ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"}`}>
-                    {positive ? "+" : ""}{gain.toFixed(2)}%
+                    {positive ? "+" : ""}{liveGain.toFixed(2)}%
                   </span>
                   {/* Refresh / Edit / Delete actions */}
                   <div className="flex items-center gap-0.5 shrink-0">
@@ -458,7 +494,15 @@ export function WatchlistWidget({
         <>
         <div className="divide-y divide-gray-100 dark:divide-gray-800">
           {paginated.map((t, idx) => {
-            const price = t.current_price ?? 0;
+            // Prefer live LTP, fall back to the watchlist row's
+            // last-known close. We don't recompute change/changePct
+            // from LTP — daily change requires the previous day's
+            // close which the LTP endpoint doesn't carry. The
+            // dot colour stays driven by the static daily change.
+            const liveEntry = ltpMap[t.ticker];
+            const price =
+              liveEntry?.price ?? t.current_price ?? 0;
+            const isLive = liveEntry?.source === "live_ltp";
             const change = t.change ?? 0;
             const changePct = t.change_pct ?? 0;
             const positive = change >= 0;
@@ -508,14 +552,21 @@ export function WatchlistWidget({
                   )}
                 </div>
 
-                {/* Current price with currency */}
+                {/* Current price with currency + live dot */}
                 <span
-                  className="text-sm font-medium text-gray-900 dark:text-white tabular-nums"
+                  className="text-sm font-medium text-gray-900 dark:text-white tabular-nums inline-flex items-center gap-1"
                   style={{
                     fontFamily:
                       "'IBM Plex Mono', monospace",
                   }}
                 >
+                  {isLive && (
+                    <span
+                      data-testid={`watchlist-live-dot-${t.ticker}`}
+                      className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"
+                      title="Live LTP from Kite WS (≤60s old)"
+                    />
+                  )}
                   {sym}
                   {price.toLocaleString(
                     "en-US",

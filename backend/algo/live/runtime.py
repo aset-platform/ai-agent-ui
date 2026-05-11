@@ -166,6 +166,55 @@ class LiveRuntime:
             tuple[str, date], dict[str, Decimal]
         ] = {}
         self._factor_loaded_for_ticker: set[str] = set()
+        # REGIME-1 — regime_label + stress_prob lookup, loaded
+        # lazily on first bar so live sessions resolve regime
+        # features identically to backtest + paper.
+        self._regime_by_date: dict[date, dict[str, Any]] = {}
+        self._regime_loaded: bool = False
+
+    def _flush_events_now(self) -> None:
+        """Flush buffered events to algo.events immediately so
+        the events panel sees signals + orders in real time.
+        Without this the buffer only flushes at session end and
+        the user-facing panel looks frozen during long live-ws
+        sessions. Cheap (single Iceberg commit per call); the
+        runtime emits ~1-10 events/minute typically."""
+        if not self._events:
+            return
+        try:
+            flush_events(self._events)
+            self._events = []
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "in-session flush failed — events will land at "
+                "session end", exc_info=True,
+            )
+
+    def _ensure_regime_cache(self, bar_date_obj: date) -> None:
+        if self._regime_loaded:
+            return
+        self._regime_loaded = True
+        try:
+            from datetime import timedelta as _td
+            from backend.algo.regime.repo import get_regime_history
+            rh_rows = get_regime_history(
+                bar_date_obj - _td(days=365),
+                bar_date_obj + _td(days=1),
+            )
+            for rh in rh_rows:
+                entry: dict[str, Any] = {
+                    "regime_label": rh.regime_label,
+                }
+                if rh.stress_prob is not None:
+                    entry["stress_prob"] = Decimal(
+                        str(rh.stress_prob),
+                    )
+                self._regime_by_date[rh.bar_date] = entry
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "LiveRuntime: regime_history load failed: %s — "
+                "regime-aware templates will silent-skip", exc,
+            )
 
     def _ensure_factor_cache(
         self, ticker: str, bar_date_obj: date,
@@ -275,6 +324,18 @@ class LiveRuntime:
         last_price: Decimal,
     ) -> int:
         """Evaluate → gate → submit to Kite. Returns 1 if filled."""
+        # Best-effort: publish bar close as live LTP so the paper
+        # P&L summary endpoint marks open positions to live ticks.
+        # WS multiplexer also writes per-tick — bar-close is a
+        # belt-and-braces fallback for tickers that go quiet.
+        try:
+            from backend.cache import get_cache
+            get_cache().set(
+                f"cache:ltp:{bar.ticker}", str(float(bar.close)),
+                ttl=60,
+            )
+        except Exception:  # noqa: BLE001
+            pass
         from backend.algo.backtest.indicators import compute_indicators
         from backend.algo.backtest.types import BarData as _BackBar
         from datetime import datetime, timezone
@@ -298,6 +359,7 @@ class LiveRuntime:
         # REGIME-2a — lazy-load cached factor rows for this
         # ticker on first sight; subsequent bars are O(1).
         self._ensure_factor_cache(bar.ticker, bar_date_obj)
+        self._ensure_regime_cache(bar_date_obj)
         features = {
             **ind_map.get(
                 bar_date_obj,
@@ -317,6 +379,8 @@ class LiveRuntime:
             **self._factor_cache.get(
                 (bar.ticker, bar_date_obj), {},
             ),
+            # REGIME-1 — regime_label + stress_prob overlay.
+            **self._regime_by_date.get(bar_date_obj, {}),
         }
 
         existing_pos = self._positions.open_positions().get(bar.ticker)
@@ -358,6 +422,7 @@ class LiveRuntime:
                 **_attribution_payload_extension(features),
             },
         ))
+        self._flush_events_now()
 
         # Fresh caps read — do NOT trust stale constructor copy
         # for daily counters; read atomically.
@@ -417,6 +482,7 @@ class LiveRuntime:
                     ),
                 },
             ))
+            self._flush_events_now()
             return 0
 
         effective_qty = (
@@ -449,6 +515,43 @@ class LiveRuntime:
         symbol = signal.ticker.replace(".NS", "")
         side = "BUY" if signal.side == "BUY" else "SELL"
 
+        # Use LIMIT orders priced at the bar-close LTP plus a
+        # small marketable buffer (0.3% buy higher / sell lower)
+        # so the order is aggressive enough to fill on the
+        # opposite side of the spread but capped against runaway
+        # slippage. Switching from MARKET solves three problems:
+        #   1. Kite Connect refuses naked MARKET orders without
+        #      market_protection — see commit 13001fb.
+        #   2. The strategy was evaluated at `last_price` so we
+        #      have a known reference; sending MARKET makes the
+        #      fill price drift unpredictably and breaks the
+        #      P&L summary's last_fill mark logic.
+        #   3. Aggressive LIMIT mirrors how a manual day trader
+        #      places intraday entries on big-cap NSE stocks.
+        # Falls back to MARKET (with market_protection) only if
+        # last_price is missing/zero — defensive.
+        SPREAD_BPS = Decimal("30")  # 0.3%
+        BPS_DENOM = Decimal("10000")
+        if last_price and last_price > 0:
+            buffer = last_price * SPREAD_BPS / BPS_DENOM
+            limit_price = (
+                last_price + buffer if side == "BUY"
+                else last_price - buffer
+            )
+            # NSE tick size — round to 0.05 to satisfy Kite's
+            # tick rule, which rejects price not divisible by tick.
+            tick = Decimal("0.05")
+            limit_price = (
+                (limit_price / tick).quantize(Decimal("1"))
+                * tick
+            )
+            order_kwargs = {
+                "order_type": "LIMIT",
+                "price": float(limit_price),
+            }
+        else:
+            order_kwargs = {"order_type": "MARKET"}
+
         try:
             kite_order_id = await asyncio.to_thread(
                 self._kite.place_order,
@@ -456,7 +559,7 @@ class LiveRuntime:
                 exchange=exchange,
                 transaction_type=side,
                 quantity=signal.qty,
-                order_type="MARKET",
+                **order_kwargs,
                 product="CNC",
                 variety="regular",
                 tag=f"algo-{str(self._strategy.id)[:8]}",
@@ -503,7 +606,10 @@ class LiveRuntime:
             self._user_id, self._run_id, self._in_flight,
         )
 
-        # Persist order_submitted_live event
+        # Persist order_submitted_live event + flush so the
+        # events panel sees the submit within the next SWR poll
+        # cycle (was buffered until session end, made the panel
+        # look frozen during long live-ws sessions).
         self._events.append(event_row(
             session_id=self._session_id,
             user_id=self._user_id,
@@ -517,11 +623,13 @@ class LiveRuntime:
                 "symbol": symbol,
                 "side": side,
                 "qty": signal.qty,
-                "order_type": "MARKET",
-                "limit_price": None,
-                "dry_run": is_dry,
+                "order_type": order_kwargs.get("order_type"),
+                "limit_price": order_kwargs.get("price"),
+                "ref_last_price": str(last_price)
+                if last_price else None,
             },
         ))
+        self._flush_events_now()
 
         # Dry-run: spawn synthetic fill after short delay
         if is_dry:
@@ -610,10 +718,31 @@ class LiveRuntime:
         )
         self._positions.apply_fill(fill)
 
-        # Mark in-flight entry filled
+        # Mark in-flight entry filled — flip in memory AND
+        # persist so the in-flight orders panel (which polls
+        # algo.runs.live_orders_in_flight) sees the transition.
+        # Without the persist call the panel kept showing every
+        # synthetic fill stuck at status='submitted' forever.
         in_flight_entry["status"] = "filled"
+        in_flight_entry["fill_price"] = str(fill_price)
+        in_flight_entry["fees_inr"] = str(fees.total_inr)
+        try:
+            await self._caps_repo.update_in_flight(
+                self._user_id, self._run_id, self._in_flight,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "synthetic_fill: in-flight persist failed for "
+                "kite_order_id=%s — panel will lag until next "
+                "successful update", kite_order_id,
+                exc_info=True,
+            )
 
-        # Emit fill event
+        # Emit fill event + flush immediately. Default behaviour
+        # batches events to the end-of-drain flush; for in-session
+        # fills we want them visible in the events panel within
+        # the next SWR poll cycle (~5s) so users can verify their
+        # dry-run trades end-to-end without stopping the session.
         self._events.append(event_row(
             session_id=self._session_id,
             user_id=self._user_id,
@@ -629,9 +758,9 @@ class LiveRuntime:
                 "qty": qty,
                 "price": str(fill_price),
                 "fees_inr": str(fees.total_inr),
-                "dry_run": True,
             },
         ))
+        self._flush_events_now()
 
         _logger.info(
             "[DRY_RUN] synthetic fill: symbol=%s side=%s qty=%d "

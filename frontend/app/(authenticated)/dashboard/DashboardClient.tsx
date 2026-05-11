@@ -24,6 +24,7 @@ import type {
   DashboardHomeResponse,
 } from "@/lib/types";
 import { usePortfolio } from "@/hooks/usePortfolio";
+import { useLivePortfolioTotals } from "@/hooks/useLivePortfolioTotals";
 import { useRegistry } from "@/hooks/useDashboardData";
 import {
   useDashboardHome,
@@ -209,6 +210,16 @@ export default function DashboardClient({
     [portfolioData.holdings, marketFilter],
   );
 
+  // Live LTP overlay for the Hero card portfolio value + PnL.
+  // Polls /v1/algo/ltp/batch every 5s during market hours, 60s
+  // otherwise. During off-hours the totals fall back to OHLCV
+  // close so the Hero never blanks. The chip beneath the value
+  // is rendered from `live.meta` so the user can tell live from
+  // EOD at a glance.
+  const livePortfolio = useLivePortfolioTotals(
+    portfolioData.holdings, portfolioData.totals,
+  );
+
   // Auto-select first PORTFOLIO ticker on load.
   // Portfolio is the default tab, so its top ticker
   // should drive signals + forecast widgets. Defer
@@ -281,7 +292,7 @@ export default function DashboardClient({
             marketFilter: f,
           });
         }}
-        portfolioTotals={portfolioData.totals}
+        portfolioTotals={livePortfolio.totals}
         portfolioInvestedTotals={useMemo(() => {
           const inv: Record<string, number> = {};
           for (const h of portfolioData.holdings) {
@@ -293,6 +304,7 @@ export default function DashboardClient({
         portfolioHoldingsCount={
           filteredPortfolio.length
         }
+        liveMeta={livePortfolio.meta}
       />
 
       {/* ── Portfolio Analytics Grid (Sprint 6) ────── */}
@@ -301,10 +313,20 @@ export default function DashboardClient({
           data={sectorAllocation}
         />
         <AssetPerformanceWidget
-          holdings={filteredPortfolio.map((h) => ({
-            ticker: h.ticker,
-            gain_loss_pct: h.gain_loss_pct ?? 0,
-          }))}
+          holdings={filteredPortfolio.map((h) => {
+            // Recompute gain_loss_pct using the live LTP if
+            // the overlay has it; falls back to whatever the
+            // backend returned (already populated from the
+            // daily refresh pipeline).
+            const live = livePortfolio.liveByTicker[h.ticker];
+            const livePct = live && h.avg_price > 0
+              ? ((live.price - h.avg_price) / h.avg_price) * 100
+              : null;
+            return {
+              ticker: h.ticker,
+              gain_loss_pct: livePct ?? h.gain_loss_pct ?? 0,
+            };
+          })}
           loading={portfolioData.loading}
           error={null}
         />

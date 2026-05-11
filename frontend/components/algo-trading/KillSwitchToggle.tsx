@@ -5,6 +5,8 @@ import { useState } from "react";
 import {
   armKillSwitch,
   disarmKillSwitch,
+  panicCloseAll,
+  type PanicCloseResult,
   useKillSwitch,
 } from "@/hooks/useKillSwitch";
 
@@ -13,6 +15,9 @@ export function KillSwitchToggle() {
   const [pending, setPending] = useState(false);
   const [showArmConfirm, setShowArmConfirm] = useState(false);
   const [showDisarmConfirm, setShowDisarmConfirm] = useState(false);
+  const [showPanicConfirm, setShowPanicConfirm] = useState(false);
+  const [panicResult, setPanicResult] =
+    useState<PanicCloseResult | null>(null);
   const [reason, setReason] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -60,6 +65,25 @@ export function KillSwitchToggle() {
     }
   }
 
+  async function handlePanicClose() {
+    setPending(true);
+    setActionError(null);
+    setPanicResult(null);
+    try {
+      const result = await panicCloseAll();
+      setPanicResult(result);
+      setShowPanicConfirm(false);
+    } catch (exc) {
+      setActionError(
+        exc instanceof Error
+          ? exc.message
+          : "Panic close failed",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+
   return (
     <div
       className={`rounded-md border p-3 ${
@@ -88,27 +112,43 @@ export function KillSwitchToggle() {
             </p>
           )}
         </div>
-        {isArmed ? (
+        <div className="flex items-center gap-2 shrink-0">
+          {isArmed ? (
+            <button
+              type="button"
+              onClick={() => setShowDisarmConfirm(true)}
+              disabled={pending}
+              className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+              data-testid="kill-switch-disarm-btn"
+            >
+              Disarm
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowArmConfirm(true)}
+              disabled={pending}
+              className="rounded bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-60"
+              data-testid="kill-switch-arm-btn"
+            >
+              Arm kill switch
+            </button>
+          )}
+          {/* Panic close — destructive. Submits SELL orders for
+              every algo-opened position via Kite, then arms the
+              kill switch so no new BUYs sneak in. Always available
+              regardless of arm state. */}
           <button
             type="button"
-            onClick={() => setShowDisarmConfirm(true)}
+            onClick={() => setShowPanicConfirm(true)}
             disabled={pending}
-            className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-            data-testid="kill-switch-disarm-btn"
+            className="rounded border border-rose-700 bg-rose-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-800 disabled:opacity-60"
+            data-testid="kill-switch-panic-btn"
+            title="Submit SELL orders for every algo-opened position + arm kill switch"
           >
-            Disarm
+            Panic close all
           </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setShowArmConfirm(true)}
-            disabled={pending}
-            className="rounded bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-60"
-            data-testid="kill-switch-arm-btn"
-          >
-            Arm kill switch
-          </button>
-        )}
+        </div>
       </div>
 
       {error && (
@@ -199,6 +239,103 @@ export function KillSwitchToggle() {
               Cancel
             </button>
           </div>
+        </div>
+      )}
+
+      {showPanicConfirm && (
+        <div
+          className="mt-3 rounded border-2 border-rose-500 bg-rose-50 p-3 dark:bg-rose-950/40"
+          data-testid="kill-switch-panic-confirm"
+        >
+          <p className="text-sm font-semibold text-rose-900 dark:text-rose-200">
+            ⚠ PANIC CLOSE ALL — REAL MONEY ACTION
+          </p>
+          <ul className="mt-2 text-xs text-rose-800 dark:text-rose-300 space-y-1 list-disc list-inside">
+            <li>Submits SELL orders to Kite for every position the algo opened</li>
+            <li>Uses LIMIT at LTP −30bps for marketability</li>
+            <li>Arms the kill switch immediately so no new BUYs can fire</li>
+            <li>Does NOT touch positions you opened manually outside the algo</li>
+            <li>Does NOT cancel orders Kite has already filled</li>
+          </ul>
+          <p className="mt-2 text-xs text-rose-800 dark:text-rose-300">
+            Type{" "}
+            <code className="rounded bg-rose-100 dark:bg-rose-900/50 px-1 font-mono">
+              CLOSE
+            </code>{" "}
+            to confirm:
+          </p>
+          <input
+            type="text"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="CLOSE"
+            className="mt-1 w-full rounded border border-rose-400 bg-white dark:bg-slate-800 px-2 py-1 text-sm font-mono"
+            data-testid="kill-switch-panic-confirm-input"
+          />
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={handlePanicClose}
+              disabled={pending || reason !== "CLOSE"}
+              className="rounded bg-rose-700 px-3 py-1 text-sm font-medium text-white hover:bg-rose-800 disabled:opacity-60"
+              data-testid="kill-switch-panic-confirm-btn"
+            >
+              {pending ? "Closing…" : "Yes, close all"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowPanicConfirm(false);
+                setReason("");
+              }}
+              disabled={pending}
+              className="rounded border border-slate-300 px-3 py-1 text-sm dark:border-slate-600"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {panicResult && (
+        <div
+          className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-950/30"
+          data-testid="kill-switch-panic-result"
+        >
+          <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+            Panic close result
+          </p>
+          <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">
+            <span className="font-semibold">
+              {panicResult.orders_submitted}
+            </span>{" "}
+            SELL order{panicResult.orders_submitted === 1 ? "" : "s"}{" "}
+            submitted for: {panicResult.tickers_closed.join(", ") || "(none)"}
+          </p>
+          {panicResult.note && (
+            <p className="mt-1 text-xs text-amber-800 dark:text-amber-300 italic">
+              {panicResult.note}
+            </p>
+          )}
+          {panicResult.errors.length > 0 && (
+            <div className="mt-1 text-xs text-rose-700 dark:text-rose-300">
+              <span className="font-semibold">
+                Errors ({panicResult.errors.length}):
+              </span>
+              <ul className="list-disc list-inside">
+                {panicResult.errors.map((e, i) => (
+                  <li key={i}>{e}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setPanicResult(null)}
+            className="mt-2 text-xs text-amber-700 dark:text-amber-400 underline"
+          >
+            Dismiss
+          </button>
         </div>
       )}
     </div>

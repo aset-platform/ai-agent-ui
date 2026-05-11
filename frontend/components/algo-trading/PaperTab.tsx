@@ -22,6 +22,7 @@ import {
   PaperEventsTimeline,
   type EventsPageSize,
 } from "./PaperEventsTimeline";
+import { PaperSessionSummary } from "./PaperSessionSummary";
 import { ReconciliationDriftPanel } from "./ReconciliationDriftPanel";
 import { KitePostbackPanel } from "./KitePostbackPanel";
 import { AttributionPanel } from "./AttributionPanel";
@@ -235,8 +236,9 @@ export function PaperTab() {
       )}
 
       {viewMode === "paper" && (
-        <div data-testid="trading-paper-view">
+        <div className="space-y-4" data-testid="trading-paper-view">
           <ActiveRunsPanel tradingMode="paper" />
+          <PaperSessionSummary />
         </div>
       )}
 
@@ -335,6 +337,16 @@ export function PaperTab() {
               paper mode is replay-fixture so historical regime
               context is less relevant there. */}
           <RegimeHistoryChart />
+
+          {/* P&L summary card — same component as Paper segment
+              but pointed at mode='live' events. Dry-run filters
+              to dry_run=true (synthetic only); Live filters to
+              dry_run=false (real-money only) so traders never
+              see synthetic + real intermingled. */}
+          <PaperSessionSummary
+            mode="live"
+            dryRun={viewMode === "dryrun" ? true : false}
+          />
         </div>
       )}
 

@@ -99,8 +99,11 @@ export function useRegimePeriodSummary(
   const { data, error, isLoading } = useSWR<PeriodSummary>(
     key, fetcher,
     {
-      revalidateOnFocus: false,
-      dedupingInterval: 5 * 60_000,
+      // 60s dedup matches the backend cache TTL_VOLATILE band
+      // and means a backfill landing mid-session refreshes the
+      // chip within a minute of the next state change.
+      revalidateOnFocus: true,
+      dedupingInterval: 60_000,
     },
   );
   return {

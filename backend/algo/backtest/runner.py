@@ -146,6 +146,28 @@ def run_backtest(
             k: Decimal(str(v)) for k, v in r.values.items()
             if v is not None
         }
+    # REGIME-1 — pre-load regime_label + stress_prob for the
+    # period so per-bar features can resolve regime-aware
+    # templates (`{"feature": "regime_label"}`,
+    # `{"feature": "stress_prob"}`). Empty dict if
+    # regime_history is empty for this window — strategies that
+    # don't reference regime keys are unaffected.
+    regime_by_date: dict[date, dict[str, Any]] = {}
+    try:
+        from backend.algo.regime.repo import get_regime_history
+        rh_rows = get_regime_history(
+            request.period_start, request.period_end,
+        )
+        for rh in rh_rows:
+            entry: dict[str, Any] = {"regime_label": rh.regime_label}
+            if rh.stress_prob is not None:
+                entry["stress_prob"] = Decimal(str(rh.stress_prob))
+            regime_by_date[rh.bar_date] = entry
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            "regime_history lookup failed (%s) — regime-aware "
+            "templates will silently no-op for this run", exc,
+        )
     # REGIME-7 — pre-compute 60d ADTV per ticker so SimBroker can
     # apply ``max(5, 50 * order_value / ADTV) bps`` slippage.
     # Empty universe → empty lookup → SimBroker falls back to the
@@ -195,6 +217,11 @@ def run_backtest(
     max_drawdown_pct = Decimal("0")
     rejected_count = 0
     scaled_count = 0
+    # Per-feature KeyError counter — surfaces the most-frequently
+    # missing strategy feature so users can spot wrong/typo'd
+    # references vs genuinely-not-yet-computed factors. Logged in
+    # the run summary line, capped at top 5.
+    _key_err_counts: dict[str, int] = {}
     # Day-bucket realised P&L so RiskEngine.daily_loss_cap fires
     # on intra-day drawdown, not cumulative-from-start. Reset at
     # the top of each bar_date.
@@ -254,6 +281,8 @@ def run_backtest(
                 # REGIME-2a — cached factor row overlay (disjoint
                 # from indicator keys by design).
                 **factors_by_key.get((ticker, bar_date), {}),
+                # REGIME-1 — regime_label + stress_prob overlay.
+                **regime_by_date.get(bar_date, {}),
             }
             ctx = EvalContext(
                 ticker=ticker,
@@ -266,16 +295,34 @@ def run_backtest(
                     strategy.root.model_dump(by_alias=True),
                     ctx,
                 )
-            except KeyError:
-                # Strategy referenced a feature we couldn't
-                # compute for this (ticker, bar) — typically
-                # because the ticker has insufficient OHLCV
-                # history to yet form the rolling window
-                # (newly-listed stocks, recent additions to the
-                # registry, etc.). No-op for this bar; the
-                # strategy will start firing once history fills.
+            except KeyError as _ke:
+                _key_err_counts[str(_ke)] = (
+                    _key_err_counts.get(str(_ke), 0) + 1
+                )
                 continue
-
+            except Exception:  # pragma: no cover
+                # Defensive — anything else (typos, bad literals)
+                # gets reported as a feature-key-error so the user
+                # can see it on the run summary line.
+                _key_err_counts["eval-exception"] = (
+                    _key_err_counts.get("eval-exception", 0) + 1
+                )
+                continue
+            else:
+                # Strategies whose root is a bare condition (`and`,
+                # `or`, `compare`) return a bool. There's no buy
+                # action attached — treat as no-op rather than
+                # crashing in `_action_to_intent`. Surface in the
+                # run summary as a configuration warning.
+                if not isinstance(action, dict):
+                    _key_err_counts[
+                        "bool-root-no-buy-action"
+                    ] = (
+                        _key_err_counts.get(
+                            "bool-root-no-buy-action", 0,
+                        ) + 1
+                    )
+                    continue
             current_equity = (
                 request.initial_capital_inr
                 + pt.total_realised_pnl_inr()
@@ -468,8 +515,12 @@ def run_backtest(
 
     _logger.info(
         "backtest run %s: closed=%d trades, "
-        "risk-rejected=%d signals, scaled=%d signals",
+        "risk-rejected=%d signals, scaled=%d signals, "
+        "feature-key-errors=%s",
         run_id, len(closed), rejected_count, scaled_count,
+        sorted(
+            _key_err_counts.items(), key=lambda x: -x[1],
+        )[:5] or "none",
     )
 
     summary = BacktestSummary(
@@ -537,6 +588,16 @@ def _action_to_intent(
             and any(k in qty_spec for k in _NEW_SIZING_KEYS)
         ):
             qty = compose_qty(qty_spec, sizing_ctx)
+        elif "notional_inr" in qty_spec:
+            # Legacy notional sizing: qty = floor(notional / price).
+            # Requires last_price; falls back to no-op if missing.
+            if last_price is None or last_price <= 0:
+                qty = 0
+            else:
+                qty = int(
+                    Decimal(str(qty_spec["notional_inr"]))
+                    // last_price
+                )
         else:
             qty = qty_spec.get("shares") or 0
         if qty <= 0:

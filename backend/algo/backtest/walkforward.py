@@ -689,12 +689,18 @@ async def run_walkforward_job(
             thresholds=thresholds,
             regime_stratified=regime_stratified_active,
         )
+        # `win` already carries train_start / train_end on the
+        # Window dataclass — read them directly. The previous
+        # `windows[win.index]` lookup broke under regime-strat
+        # filtering: surviving windows keep their ORIGINAL index
+        # (e.g. 5) while the filtered list is shorter (e.g. len=1)
+        # → IndexError on every regime-stratified walk-forward.
         window_rows = [
             WindowSummary(
                 window_index=win.index,
                 run_id=str(s.run_id),
-                train_start=windows[win.index].train_start,
-                train_end=windows[win.index].train_end,
+                train_start=win.train_start,
+                train_end=win.train_end,
                 test_start=win.test_start,
                 test_end=win.test_end,
                 status=s.status,

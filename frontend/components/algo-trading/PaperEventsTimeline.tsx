@@ -29,8 +29,14 @@ const EVENT_TONE: Record<string, string> = {
     "border-rose-300 bg-rose-50 dark:border-rose-700 dark:bg-rose-950/30",
   order_filled:
     "border-emerald-300 bg-emerald-50 dark:border-emerald-700 dark:bg-emerald-950/30",
+  order_filled_live:
+    "border-emerald-300 bg-emerald-50 dark:border-emerald-700 dark:bg-emerald-950/30",
   order_submitted:
     "border-slate-300 bg-slate-50 dark:border-slate-700 dark:bg-slate-900",
+  order_submitted_live:
+    "border-sky-300 bg-sky-50 dark:border-sky-700 dark:bg-sky-950/30",
+  order_rejected_live:
+    "border-rose-400 bg-rose-100 dark:border-rose-600 dark:bg-rose-950/50",
   order_cancelled:
     "border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/30",
   position_opened:
@@ -57,6 +63,10 @@ function summary(event: PaperEvent): string {
   const ticker = (p["ticker"] as string) ?? "?";
   const side = (p["side"] as string) ?? "";
   const qty = (p["qty"] as number) ?? "";
+  // LiveRuntime payloads use `symbol` (no `.NS`) + `price`; map to
+  // the same display format as PaperRuntime so the events panel
+  // doesn't show `?` for any live-mode order event.
+  const sym = (p["symbol"] as string) ?? ticker;
   switch (event.type) {
     case "signal_generated":
       return `${side} ${qty} ${ticker}`;
@@ -68,8 +78,26 @@ function summary(event: PaperEvent): string {
       const price = (p["fill_price"] as string) ?? "?";
       return `${side} ${qty} ${ticker} @ ₹${price}`;
     }
+    case "order_submitted_live": {
+      const oid = (p["kite_order_id"] as string) ?? "";
+      const dryFlag = p["dry_run"] === true ? " [dry]" : "";
+      return `${side} ${qty} ${sym} → ${oid}${dryFlag}`;
+    }
+    case "order_filled_live": {
+      const price = (p["price"] as string) ?? "?";
+      const fee = (p["fees_inr"] as string) ?? "0";
+      const dryFlag = p["dry_run"] === true ? " [dry]" : "";
+      return `${side} ${qty} ${sym} @ ₹${price} fee=₹${fee}${dryFlag}`;
+    }
+    case "order_rejected_live": {
+      const reason =
+        (p["rejection_reason"] as string)
+        ?? (p["reason"] as string)
+        ?? "unknown";
+      return `${side} ${qty} ${sym} — Kite rejected: ${reason}`;
+    }
     default:
-      return `${ticker}`;
+      return `${ticker || sym}`;
   }
 }
 

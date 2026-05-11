@@ -403,10 +403,11 @@ def create_paper_router() -> APIRouter:
                     ),
                 )
 
-            # Resolve per-user dry-run state from Redis (the
-            # Dry run / Live tab toggle in the UI flips this).
-            # Falls back to ALGO_LIVE_DRY_RUN env if Redis is
-            # silent so legacy deployments keep working.
+            # KiteClient now resolves dry_run from the per-user
+            # Redis flag automatically when user_id is passed
+            # (see resolve_dry_run_for_user). The async is_armed
+            # call here is kept only to log the resolved state
+            # for the caller's audit trail.
             from backend.algo.live.dry_run_flag import is_armed
             dry_run_user = await is_armed(
                 user_id, get_async_redis(),
@@ -414,7 +415,7 @@ def create_paper_router() -> APIRouter:
             kite = KiteClient(
                 api_key=creds["api_key"],
                 access_token=creds["access_token"],
-                dry_run=dry_run_user,
+                user_id=user_id,
             )
 
             # Create algo.runs row up-front so LiveRuntime has
@@ -519,5 +520,316 @@ def create_paper_router() -> APIRouter:
             list_replay_fixtures,
         )
         return list_replay_fixtures()
+
+    @router.get("/strategies/{strategy_id}/summary")
+    async def paper_session_summary(
+        strategy_id: UUID,
+        mode: str = Query(
+            "paper",
+            description=(
+                "Event mode to aggregate: 'paper' (PaperRuntime), "
+                "'live' (LiveRuntime — both real-money and "
+                "dry-run synthetic). Default 'paper' for "
+                "backwards compatibility."
+            ),
+        ),
+        dry_run: bool | None = Query(
+            None,
+            description=(
+                "When mode='live', filter to only dry-run "
+                "synthetic fills (true) or only real-money "
+                "fills (false). Omit for both. Ignored when "
+                "mode='paper'."
+            ),
+        ),
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> dict[str, Any]:
+        """Aggregate fills for a strategy into a P&L summary.
+
+        Walks every ``order_filled*`` event for the
+        (user, strategy, mode) tuple in chronological order,
+        tracks per-ticker FIFO position state, and returns:
+
+        - open positions with mark-to-market unrealised P&L
+          (using the latest close from stocks.ohlcv as the mark)
+        - closed positions with aggregated realised P&L
+        - totals + signal/rejection counts
+
+        Read-side replacement for the missing algo.runs row
+        on paper sessions, AND a unified view across both
+        Paper and Live (incl. dry-run) so the Trading tab
+        shows P&L regardless of which segment a user runs in.
+        """
+        from backend.db.duckdb_engine import query_iceberg_table
+
+        user_id_str = str(UUID(user.user_id))
+        sid_str = str(strategy_id)
+        # Normalise mode — accept either 'paper' or 'live'.
+        # Anything else returns an empty summary so the frontend
+        # never crashes on a typo.
+        mode_norm = "live" if mode == "live" else "paper"
+
+        # Event type names diverge by runtime: PaperRuntime emits
+        # `order_filled`, LiveRuntime emits `order_filled_live`
+        # (both real-money and synthetic dry-run carry the same
+        # type with `dry_run` payload bool to differentiate).
+        fill_type = (
+            "order_filled_live" if mode_norm == "live"
+            else "order_filled"
+        )
+
+        # Optional dry_run filter only applies to live-mode rows.
+        # `payload_json` is text, so we extract via DuckDB JSON
+        # functions and string-compare against 'true' / 'false'.
+        extra_clauses = ""
+        params: list = [user_id_str, sid_str, mode_norm]
+        if mode_norm == "live" and dry_run is not None:
+            wanted = "true" if dry_run else "false"
+            extra_clauses = (
+                " AND json_extract_string(payload_json, "
+                "'$.dry_run') = ?"
+            )
+            params.append(wanted)
+
+        try:
+            rows = query_iceberg_table(
+                "algo.events",
+                "SELECT type, payload_json, ts_ns "
+                "FROM events "
+                "WHERE user_id = ? AND strategy_id = ? "
+                "  AND mode = ?"
+                + extra_clauses + " "
+                "ORDER BY ts_ns ASC",
+                params,
+            )
+        except FileNotFoundError:
+            rows = []
+
+        # Per-ticker FIFO buys + realised pnl from sells.
+        from collections import defaultdict, deque
+
+        buys: dict[str, deque] = defaultdict(deque)
+        realised: dict[str, float] = defaultdict(float)
+        n_closed_trades: dict[str, int] = defaultdict(int)
+        n_signals = 0
+        n_rejected = 0
+        n_fills = 0
+        first_ts: int | None = None
+        last_ts: int | None = None
+        rejection_reasons: dict[str, int] = defaultdict(int)
+
+        for r in rows:
+            t = r["type"]
+            try:
+                p = json.loads(r["payload_json"])
+            except Exception:  # noqa: BLE001
+                p = {}
+            ts = int(r["ts_ns"])
+            if first_ts is None:
+                first_ts = ts
+            last_ts = ts
+
+            if t == "signal_generated":
+                n_signals += 1
+            elif t == "signal_rejected":
+                n_rejected += 1
+                reason = str(p.get("reason") or "unknown")
+                rejection_reasons[reason] += 1
+            elif t in ("order_filled", "order_filled_live"):
+                # Field names diverge across runtimes:
+                # - PaperRuntime  : ticker (`SBIN.NS`),  fill_price, fee_inr
+                # - LiveRuntime   : symbol (`SBIN`),     price,      fees_inr
+                # Normalise here so the FIFO loop below stays
+                # one path. Live also tags `.NS` back on so the
+                # OHLCV mark lookup hits.
+                n_fills += 1
+                ticker = str(
+                    p.get("ticker")
+                    or (
+                        f"{p.get('symbol')}.NS"
+                        if p.get("symbol") else ""
+                    )
+                )
+                side = str(p.get("side") or "")
+                qty = int(p.get("qty") or 0)
+                price = float(
+                    p.get("fill_price") or p.get("price") or 0.0,
+                )
+                fee = float(
+                    p.get("fee_inr") or p.get("fees_inr") or 0.0,
+                )
+                if not ticker or qty <= 0 or price <= 0:
+                    continue
+                if side == "BUY":
+                    buys[ticker].append([qty, price, fee])
+                elif side == "SELL":
+                    rem = qty
+                    while rem > 0 and buys[ticker]:
+                        lot = buys[ticker][0]
+                        take = min(rem, lot[0])
+                        # FIFO match — gain = (sell - buy) * qty
+                        # minus the proportional buy fee + the
+                        # proportional sell fee. Sell fees are
+                        # charged on this side of the round trip.
+                        proportional_buy_fee = (
+                            lot[2] * take / qty
+                            if qty > 0 else 0.0
+                        )
+                        proportional_sell_fee = (
+                            fee * take / qty if qty > 0 else 0.0
+                        )
+                        realised[ticker] += (
+                            (price - lot[1]) * take
+                            - proportional_buy_fee
+                            - proportional_sell_fee
+                        )
+                        lot[0] -= take
+                        rem -= take
+                        if lot[0] <= 0:
+                            buys[ticker].popleft()
+                            n_closed_trades[ticker] += 1
+
+        # Track each ticker's last seen fill price so paper-replay
+        # sessions (no live ticks) can mark open positions to the
+        # most recent fixture print. Accept both runtime variants:
+        # PaperRuntime emits `order_filled` with `ticker` +
+        # `fill_price`; LiveRuntime emits `order_filled_live`
+        # with `symbol` + `price` (and re-suffixes `.NS` so
+        # the OHLCV mark fallback still hits).
+        last_fill_price: dict[str, float] = {}
+        for r in rows:
+            if r["type"] not in ("order_filled", "order_filled_live"):
+                continue
+            try:
+                p = json.loads(r["payload_json"])
+            except Exception:  # noqa: BLE001
+                continue
+            t = str(
+                p.get("ticker")
+                or (
+                    f"{p.get('symbol')}.NS"
+                    if p.get("symbol") else ""
+                )
+            )
+            fp = float(
+                p.get("fill_price") or p.get("price") or 0.0,
+            )
+            if t and fp > 0:
+                last_fill_price[t] = fp
+
+        # Live-LTP cache (Redis, written by WS multiplexer +
+        # PaperRuntime/LiveRuntime on every bar close, 60s TTL).
+        # Reading is best-effort — None on cache miss / no Redis.
+        try:
+            from backend.cache import get_cache
+            _cache = get_cache()
+        except Exception:  # noqa: BLE001
+            _cache = None
+
+        # For dry-run synthetic sessions (rehearsal against a
+        # replay fixture or live-ws-with-synthetic-fills), the
+        # `last_fill` price IS the most reliable mark because:
+        # - Replay fixtures emit historic ticks for the ticker
+        #   that wouldn't match the current real-world price.
+        # - The Redis cache:ltp:{ticker} key gets overwritten
+        #   by live Kite WS ticks regardless of which session
+        #   wrote the bar close — so a fixture session's marks
+        #   get clobbered by real-world prices and the user
+        #   sees nonsensical P&L like a 26% drawdown that's
+        #   really just (live_now - fixture_then).
+        # Real-money live sessions (mode=live + dry_run=false)
+        # want the live tick — keep that path.
+        prefer_last_fill = (
+            mode_norm == "live" and dry_run is True
+        )
+
+        def _resolve_mark(ticker: str) -> tuple[float | None, str]:
+            """Return (price, source) for the open-position mark.
+            Source ∈ {'live_ltp', 'last_fill', 'ohlcv_close'}.
+            """
+            if prefer_last_fill and ticker in last_fill_price:
+                return last_fill_price[ticker], "last_fill"
+            if _cache is not None:
+                try:
+                    raw = _cache.get(f"cache:ltp:{ticker}")
+                    if raw is not None:
+                        return float(raw), "live_ltp"
+                except Exception:  # noqa: BLE001
+                    pass
+            if ticker in last_fill_price:
+                return last_fill_price[ticker], "last_fill"
+            try:
+                mk = query_iceberg_table(
+                    "stocks.ohlcv",
+                    "SELECT close FROM ohlcv "
+                    "WHERE ticker = ? "
+                    "ORDER BY date DESC LIMIT 1",
+                    [ticker],
+                )
+                if mk:
+                    return float(mk[0]["close"]), "ohlcv_close"
+            except Exception:  # noqa: BLE001
+                pass
+            return None, "unknown"
+
+        # Open positions = sum of remaining BUY lots per ticker.
+        open_positions: list[dict[str, Any]] = []
+        for ticker, lots in buys.items():
+            if not lots:
+                continue
+            qty = sum(l[0] for l in lots)
+            if qty <= 0:
+                continue
+            cost = sum(l[0] * l[1] for l in lots)
+            avg_price = cost / qty if qty > 0 else 0.0
+            last_price, mark_source = _resolve_mark(ticker)
+            unrealised = (
+                (last_price - avg_price) * qty
+                if last_price is not None else 0.0
+            )
+            unrealised_pct = (
+                (last_price / avg_price - 1.0) * 100.0
+                if last_price is not None and avg_price > 0
+                else 0.0
+            )
+            open_positions.append({
+                "ticker": ticker,
+                "qty": qty,
+                "avg_price": avg_price,
+                "last_price": last_price,
+                "mark_source": mark_source,
+                "unrealised_pnl_inr": unrealised,
+                "unrealised_pnl_pct": unrealised_pct,
+            })
+
+        closed_positions = [
+            {
+                "ticker": ticker,
+                "realised_pnl_inr": realised[ticker],
+                "round_trips": n_closed_trades[ticker],
+            }
+            for ticker in sorted(realised.keys())
+            if n_closed_trades[ticker] > 0
+        ]
+
+        total_realised = sum(realised.values())
+        total_unrealised = sum(
+            p["unrealised_pnl_inr"] for p in open_positions
+        )
+
+        return {
+            "strategy_id": sid_str,
+            "first_event_ts_ns": first_ts,
+            "last_event_ts_ns": last_ts,
+            "n_signals_generated": n_signals,
+            "n_signals_rejected": n_rejected,
+            "n_fills": n_fills,
+            "rejection_reasons": dict(rejection_reasons),
+            "open_positions": open_positions,
+            "closed_positions": closed_positions,
+            "total_realised_pnl_inr": total_realised,
+            "total_unrealised_pnl_inr": total_unrealised,
+            "total_pnl_inr": total_realised + total_unrealised,
+        }
 
     return router
