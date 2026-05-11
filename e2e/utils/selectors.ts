@@ -397,4 +397,33 @@ export const FE = {
   attributionEmpty: "attribution-empty",
   attributionLoading: "attribution-loading",
   attributionMockChip: "attribution-mock-chip",
+
+  // Algo Trading — three-page split (Slice 6)
+  algoSidebarGroup: "sidebar-group-algo-trading",
+  algoBrokerLink: "sidebar-child-zerodha-connect",
+  algoStrategiesLink: "sidebar-child-strategies",
+  algoLiveLink: "sidebar-child-live-trading",
+
+  algoBrokerPage: "algo-broker-page",
+  algoStrategiesHeading: "algo-strategies-heading",
+  algoStrategiesTab: (id: string) => `algo-strategies-tab-${id}`,
+  algoStrategiesPanel: (id: string) => `algo-strategies-panel-${id}`,
+
+  algoLivePage: "algo-live-page",
+  algoLiveTab: (id: string) => `algo-live-tab-${id}`,
+  algoLivePanel: (id: string) => `algo-live-panel-${id}`,
+  algoLiveHeader: "live-header-strip",
+  algoLiveModeChip: "live-mode-chip",
+  algoLiveDashboard: "live-dashboard",
+  algoPanicButton: "panic-close-button",
+  algoPanicInput: "panic-close-input",
+  algoPanicConfirm: "panic-close-confirm",
+  algoPositionsTable: "positions-table",
+  algoPositionsEmpty: "positions-empty",
+
+  algoDryRunTab: "dryrun-tab",
+  algoDryRunBanner: "dryrun-arm-banner",
+  algoDryRunArmBtn: "dryrun-arm-button",
+  // algoPaperTab — defined earlier at the top-level entry,
+  // re-use the existing constant.
 } as const;
