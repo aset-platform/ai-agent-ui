@@ -296,18 +296,33 @@ def run_backtest(
                     ctx,
                 )
             except KeyError as _ke:
-                # Strategy referenced a feature we couldn't
-                # compute for this (ticker, bar) — typically
-                # because the ticker has insufficient OHLCV
-                # history to yet form the rolling window
-                # (newly-listed stocks, recent additions to the
-                # registry, etc.). No-op for this bar; the
-                # strategy will start firing once history fills.
                 _key_err_counts[str(_ke)] = (
                     _key_err_counts.get(str(_ke), 0) + 1
                 )
                 continue
-
+            except Exception:  # pragma: no cover
+                # Defensive — anything else (typos, bad literals)
+                # gets reported as a feature-key-error so the user
+                # can see it on the run summary line.
+                _key_err_counts["eval-exception"] = (
+                    _key_err_counts.get("eval-exception", 0) + 1
+                )
+                continue
+            else:
+                # Strategies whose root is a bare condition (`and`,
+                # `or`, `compare`) return a bool. There's no buy
+                # action attached — treat as no-op rather than
+                # crashing in `_action_to_intent`. Surface in the
+                # run summary as a configuration warning.
+                if not isinstance(action, dict):
+                    _key_err_counts[
+                        "bool-root-no-buy-action"
+                    ] = (
+                        _key_err_counts.get(
+                            "bool-root-no-buy-action", 0,
+                        ) + 1
+                    )
+                    continue
             current_equity = (
                 request.initial_capital_inr
                 + pt.total_realised_pnl_inr()
