@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 from auth.dependencies import pro_or_superuser
@@ -45,15 +45,37 @@ def _kite_with_balances(open_pnl, day_pnl, cash):
 
 
 class TestDashboardSummary:
+    @patch(
+        "backend.algo.routes.live._kill_switch_active",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "backend.algo.routes.live._ws_age_seconds",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "backend.algo.routes.live._dry_run_armed",
+        new_callable=AsyncMock,
+    )
     @patch("backend.algo.routes.live._realised_pnl_today")
     @patch("backend.algo.routes.live._build_kite_client_for_user")
-    def test_happy_path(self, build_kite, realised):
+    def test_happy_path(
+        self,
+        build_kite,
+        realised,
+        dry_run,
+        ws_age,
+        kill_switch,
+    ):
         from fastapi.testclient import TestClient
 
         build_kite.return_value = _kite_with_balances(
             open_pnl=820.30, day_pnl=1240.50, cash=98432.10,
         )
         realised.return_value = Decimal("0")
+        dry_run.return_value = False
+        ws_age.return_value = 2
+        kill_switch.return_value = False
         # Force a clean cache miss by patching cache.get to None.
         with patch(
             "backend.algo.routes.live.get_cache",
@@ -71,7 +93,9 @@ class TestDashboardSummary:
         assert Decimal(body["open_pnl_inr"]) == Decimal("820.30")
         assert Decimal(body["cash_inr"]) == Decimal("98432.10")
         assert body["open_position_count"] == 1
-        assert body["mode"] in {"live", "dry_run"}
+        assert body["mode"] == "live"
+        assert body["ws_age_seconds"] == 2
+        assert body["kill_switch_active"] is False
 
     @patch("backend.algo.routes.live._build_kite_client_for_user")
     def test_kite_token_expired_returns_503(self, build_kite):

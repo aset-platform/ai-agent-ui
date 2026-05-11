@@ -122,9 +122,6 @@ async def _check_gates(
     redis_client: Any,
 ) -> GatesStatus:
     """Evaluate all 4 live-mode gates from PG/Redis."""
-    from backend.algo.broker.credentials_repo import (
-        BrokerCredentialsRepo,
-    )
     from backend.algo.live.caps_repo import CapsRepo
     from backend.algo.live.drift_repo import DriftRepo
     from backend.algo.paper.kill_switch_repo import KillSwitchRepo
@@ -204,11 +201,9 @@ async def _check_gates(
                 tzinfo=UTC,
             )
             if age < _30_DAYS:
-                import json as _json
-
                 summary = row.get("summary_json") or {}
                 if isinstance(summary, str):
-                    summary = _json.loads(summary)
+                    summary = json.loads(summary)
                 # V2-2 stores fields nested under ``aggregate``,
                 # not at the top level. ``avg_pnl_pct > 0`` is
                 # the meaningful gate (raw win-rate alone can
@@ -362,9 +357,16 @@ async def _build_kite_client_for_user(user_id: UUID) -> KiteClient:
             status_code=503,
             detail="Kite token expired",
         )
+    api_key = creds.get("api_key")
+    access_token = creds.get("access_token")
+    if not api_key or not access_token:
+        raise HTTPException(
+            status_code=503,
+            detail="Kite credentials incomplete",
+        )
     return KiteClient(
-        api_key=creds["api_key"],
-        access_token=creds["access_token"],
+        api_key=api_key,
+        access_token=access_token,
         dry_run=False,
     )
 
@@ -410,7 +412,7 @@ async def _ws_age_seconds(user_id: UUID) -> int | None:
     last = snap.get("last_tick_at")
     if last is None:
         return None
-    now = datetime.now(UTC).replace(tzinfo=None)
+    now = datetime.utcnow()
     try:
         return max(0, int((now - last).total_seconds()))
     except (TypeError, ValueError):
@@ -448,14 +450,15 @@ async def _strategy_name_lookup(
     factory = _get_session_factory()
     try:
         async with factory() as session:
-            from sqlalchemy import text
+            from sqlalchemy import bindparam, text
 
+            stmt = text(
+                "SELECT id::text AS id, name FROM algo.strategies "
+                "WHERE id::text IN :ids"
+            ).bindparams(bindparam("ids", expanding=True))
             rows = (
                 await session.execute(
-                    text(
-                        "SELECT id, name FROM algo.strategies "
-                        "WHERE id::text = ANY(:ids)"
-                    ),
+                    stmt,
                     {"ids": list(strategy_ids)},
                 )
             ).mappings().all()
@@ -731,7 +734,7 @@ def _query_postback_events(
             [user_id, limit],
         )
         return rows
-    except Exception:
+    except Exception:  # noqa: BLE001
         _logger.warning(
             "postback query failed for user=%s",
             user_id,
@@ -1207,7 +1210,7 @@ def create_live_router() -> APIRouter:
         last = snap.get("last_tick_at")
         age: int | None = None
         if last is not None:
-            now = datetime.now(UTC).replace(tzinfo=None)
+            now = datetime.utcnow()
             try:
                 age = int((now - last).total_seconds())
             except (TypeError, ValueError):
@@ -1229,8 +1232,6 @@ def create_live_router() -> APIRouter:
     ) -> list[dict]:
         """Return in-flight orders for the most recent live run."""
         from sqlalchemy import text
-
-        from backend.algo.live.caps_repo import CapsRepo  # noqa: F401
 
         uid = UUID(user.user_id)
         # Find latest live run for this strategy
@@ -1256,8 +1257,6 @@ def create_live_router() -> APIRouter:
             return []
         in_flight = row.get("live_orders_in_flight") or []
         if isinstance(in_flight, str):
-            import json
-
             in_flight = json.loads(in_flight)
         return in_flight
 
@@ -1282,11 +1281,8 @@ def create_live_router() -> APIRouter:
             Bare list, newest first. Frontend KitePostback type
             consumes ``event_ts`` as ISO 8601 UTC.
         """
-        import asyncio as _asyncio
-        from datetime import datetime, timezone
-
         cap = min(limit, 200)
-        raw_rows = await _asyncio.to_thread(
+        raw_rows = await asyncio.to_thread(
             _query_postback_events, user.user_id, cap
         )
 
@@ -1294,11 +1290,11 @@ def create_live_router() -> APIRouter:
         for r in raw_rows:
             try:
                 p = json.loads(r["payload_json"])
-            except Exception:
+            except Exception:  # noqa: BLE001
                 continue
             ts_ns = int(r["ts_ns"])
             event_ts = datetime.fromtimestamp(
-                ts_ns / 1_000_000_000, tz=timezone.utc,
+                ts_ns / 1_000_000_000, tz=UTC,
             ).isoformat().replace("+00:00", "Z")
             events.append(
                 PostbackEvent(

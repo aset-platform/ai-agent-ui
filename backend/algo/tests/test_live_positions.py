@@ -1,6 +1,7 @@
 """Unit tests for GET /v1/algo/live/positions."""
 from __future__ import annotations
 
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
@@ -76,7 +77,6 @@ class TestPositions:
         assert rows[0]["strategy_id"] == "abc-123"
         assert rows[0]["entry_reason"].startswith("BULL")
         # pnl_pct ≈ ((311.20 - 307.33)/307.33)*100 ≈ 1.26
-        from decimal import Decimal
         assert Decimal(rows[0]["pnl_pct"]).quantize(
             Decimal("0.01")
         ) == Decimal("1.26")
