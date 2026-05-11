@@ -24,12 +24,22 @@ async function fetchSummary(
   return r.json();
 }
 
-export function useLiveDashboardSummary() {
+interface UseLiveDashboardSummaryResult {
+  summary: LiveDashboardSummary | undefined;
+  error: unknown;
+  loading: boolean;
+  refresh: () => Promise<unknown>;
+}
+
+export function useLiveDashboardSummary(): UseLiveDashboardSummaryResult {
   const { data, error, isLoading, mutate } = useSWR(
     `${API_URL}/algo/live/dashboard-summary`,
     fetchSummary,
     {
       revalidateOnFocus: false,
+      // dedupingInterval intentionally 1/3 of refreshInterval —
+      // matches the positions (3000/10000) and holdings (10000/30000)
+      // hook ratios. Tweak both ends if changing.
       refreshInterval: 15_000,
       dedupingInterval: 5_000,
     },

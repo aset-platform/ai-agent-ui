@@ -28,7 +28,7 @@ export function RecentFillsTape() {
       )}
       <ul className="mt-2 max-h-48 overflow-y-auto space-y-1 text-xs font-mono">
         {fills.map((e) => {
-          const p = e.payload as Record<string, unknown>;
+          const p = e.payload;
           const tsMs = Math.floor(Number(e.ts_ns) / 1_000_000);
           const time = Number.isFinite(tsMs)
             ? new Date(tsMs).toLocaleTimeString("en-IN")

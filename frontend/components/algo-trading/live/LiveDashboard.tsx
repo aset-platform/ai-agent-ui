@@ -4,6 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 
 import { apiFetch } from "@/lib/apiFetch";
+import { panicCloseAll } from "@/lib/algoApi";
 import { API_URL } from "@/lib/config";
 import { useStrategies } from "@/hooks/useStrategies";
 
@@ -26,16 +27,6 @@ async function fetchDryRun(url: string): Promise<DryRunState> {
   return r.json();
 }
 
-async function panicCloseAll(): Promise<void> {
-  const r = await apiFetch(
-    `${API_URL}/algo/kill-switch/panic-close-all`,
-    { method: "POST" },
-  );
-  if (!r.ok) {
-    throw new Error(`panic-close-all HTTP ${r.status}`);
-  }
-}
-
 /**
  * LiveDashboard — body of the Live → Live tab (rose accent).
  *
@@ -54,6 +45,8 @@ export function LiveDashboard() {
 
   // Defensive dry-run banner — should never show on this page,
   // but if the runtime is in rehearsal we surface it loudly.
+  // Silent-fail: if the dry-run endpoint is unreachable we don't
+  // surface a banner. The real surface is the /live page itself.
   const { data: dry } = useSWR<DryRunState>(
     `${API_URL}/algo/live/dry-run`,
     fetchDryRun,

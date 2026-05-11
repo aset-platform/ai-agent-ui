@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface Props {
   onConfirm: () => Promise<void> | void;
@@ -13,24 +13,49 @@ interface Props {
  * type the literal string `PANIC` before the confirm button
  * un-disables. {@link onConfirm} is invoked exactly once per
  * confirmation; the modal is responsible only for the typed-gate.
+ *
+ * On `onConfirm` rejection (HTTP 5xx, network failure) the error
+ * is surfaced inline in rose-700; the modal stays open so the
+ * trader can retry. ESC dismisses (unless mid-flight).
  */
 export function PanicCloseButton({ onConfirm }: Props) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
 
   const confirmable = text.trim() === "PANIC";
 
   async function handle() {
     setBusy(true);
+    setErrMsg(null);
     try {
       await onConfirm();
       setOpen(false);
       setText("");
+    } catch (e) {
+      setErrMsg(e instanceof Error ? e.message : "Panic close failed");
     } finally {
       setBusy(false);
     }
   }
+
+  function cancel() {
+    setOpen(false);
+    setText("");
+    setErrMsg(null);
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) {
+        cancel();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, busy]);
 
   return (
     <>
@@ -47,14 +72,20 @@ export function PanicCloseButton({ onConfirm }: Props) {
         <div
           className="fixed inset-0 z-[70] flex items-center
             justify-center bg-black/40"
-          onClick={() => !busy && setOpen(false)}
+          onClick={() => !busy && cancel()}
           data-testid="panic-close-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="panic-dialog-title"
         >
           <div
             className="w-[440px] rounded-lg bg-white dark:bg-slate-900 p-5 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-base font-semibold text-rose-700">
+            <h3
+              id="panic-dialog-title"
+              className="text-base font-semibold text-rose-700"
+            >
               Close all open positions?
             </h3>
             <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">
@@ -72,11 +103,19 @@ export function PanicCloseButton({ onConfirm }: Props) {
               placeholder="Type PANIC"
               autoFocus
             />
+            {errMsg && (
+              <p
+                className="mt-2 text-xs text-rose-700"
+                data-testid="panic-close-error"
+              >
+                {errMsg}
+              </p>
+            )}
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
                 data-testid="panic-close-cancel"
-                onClick={() => setOpen(false)}
+                onClick={cancel}
                 disabled={busy}
                 className="rounded-md px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
               >

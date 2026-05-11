@@ -31,7 +31,15 @@ async function fetcher(url: string): Promise<PositionsResponse> {
   return r.json();
 }
 
-export function useLivePositions() {
+interface UseLivePositionsResult {
+  rows: PositionRow[] | undefined;
+  ledger_drift: boolean;
+  error: unknown;
+  loading: boolean;
+  refresh: () => Promise<unknown>;
+}
+
+export function useLivePositions(): UseLivePositionsResult {
   const { data, error, isLoading, mutate } = useSWR(
     `${API_URL}/algo/live/positions`,
     fetcher,

@@ -29,7 +29,15 @@ async function fetcher(url: string): Promise<HoldingsResponse> {
   return r.json();
 }
 
-export function useLiveHoldings() {
+interface UseLiveHoldingsResult {
+  rows: HoldingRow[] | undefined;
+  ledger_drift: boolean;
+  error: unknown;
+  loading: boolean;
+  refresh: () => Promise<unknown>;
+}
+
+export function useLiveHoldings(): UseLiveHoldingsResult {
   const { data, error, isLoading, mutate } = useSWR(
     `${API_URL}/algo/live/holdings`,
     fetcher,

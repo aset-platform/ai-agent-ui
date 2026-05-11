@@ -5,17 +5,18 @@ import { useLiveDashboardSummary } from "@/hooks/useLiveDashboardSummary";
 import { LiveModeChip } from "./LiveModeChip";
 
 function inr(value: string | undefined): string {
-  if (value == null) return "₹0";
+  if (value == null) return "—";
   const n = Number(value);
-  if (!Number.isFinite(n)) return "₹0";
+  if (!Number.isFinite(n)) return "—";
   return `₹${n.toLocaleString("en-IN", {
     maximumFractionDigits: 0,
   })}`;
 }
 
 function signed(value: string | undefined): string {
-  const n = Number(value ?? 0);
-  if (!Number.isFinite(n)) return "₹0";
+  if (value == null) return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
   const prefix = n >= 0 ? "+" : "";
   return `${prefix}${inr(value)}`;
 }

@@ -69,9 +69,9 @@ export function OpenPositionsWidget() {
           );
         })}
       </ul>
-      {(rows?.length ?? 0) > 5 && (
+      {rows && rows.length > 5 && (
         <p className="mt-2 text-xs text-slate-400">
-          +{(rows!.length - 5)} more — see Positions tab.
+          +{rows.length - 5} more — see Positions tab.
         </p>
       )}
     </div>

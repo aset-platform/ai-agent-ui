@@ -8,6 +8,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 
 import { PanicCloseButton } from "../live/PanicCloseButton";
@@ -47,5 +48,28 @@ describe("PanicCloseButton", () => {
     expect(confirm.disabled).toBe(false);
     fireEvent.click(confirm);
     expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces onConfirm error in modal and keeps modal open", async () => {
+    const onConfirm = vi
+      .fn()
+      .mockRejectedValue(new Error("panic-close-all HTTP 503"));
+    render(<PanicCloseButton onConfirm={onConfirm} />);
+    fireEvent.click(screen.getByTestId("panic-close-button"));
+
+    fireEvent.change(screen.getByTestId("panic-close-input"), {
+      target: { value: "PANIC" },
+    });
+    fireEvent.click(screen.getByTestId("panic-close-confirm"));
+
+    // Error message renders with rose styling + dedicated testid
+    const err = await screen.findByTestId("panic-close-error");
+    expect(err.textContent ?? "").toContain("HTTP 503");
+
+    // Modal still visible — trader can retry
+    expect(screen.getByTestId("panic-close-confirm")).toBeTruthy();
+    await waitFor(() => {
+      expect(onConfirm).toHaveBeenCalledTimes(1);
+    });
   });
 });
