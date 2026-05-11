@@ -143,7 +143,12 @@ def run_compute_job(
         )
     }
 
-    written = 0
+    # Per CLAUDE.md §4.1 #2 — accumulate all rows in memory and
+    # write in a SINGLE Iceberg commit at the end. The previous
+    # implementation did one upsert per ticker → N+1 commits →
+    # ~1.5 commits/sec on a 800-ticker universe = ~27hr backfill
+    # for 180 days. Bulk-commit drops that to ~1 commit/day.
+    all_rows: list[FactorRow] = []
     for ticker in universe:
         history = _load_ohlcv_for_ticker(ticker, load_start, as_of)
         if history.empty or len(history) < 30:
@@ -165,21 +170,19 @@ def run_compute_job(
         ))
         _merge(compute_quality(ticker, period_start, as_of))
 
-        rows: list[FactorRow] = []
         for d, vals in per_date.items():
             if d < period_start or d > as_of:
                 continue
             merged = {**vals, **breadth_by_date.get(d, {})}
-            rows.append(FactorRow(
+            all_rows.append(FactorRow(
                 ticker=ticker, bar_date=d,
                 values=merged, sector=sector,
             ))
-        if rows:
-            written += upsert_factors(rows)
 
+    written = upsert_factors(all_rows) if all_rows else 0
     _logger.info(
         "compute_daily_factors: wrote %d rows for %d tickers "
-        "(as_of=%s, days=%d)",
+        "(as_of=%s, days=%d) in 1 Iceberg commit",
         written, len(universe), as_of, days,
     )
     return written
