@@ -310,6 +310,24 @@ class PositionsResponse(BaseModel):
     ledger_drift: bool = False
 
 
+class HoldingRow(BaseModel):
+    tradingsymbol: str
+    exchange: str
+    quantity: int
+    average_price: Decimal
+    last_price: Decimal
+    pnl_inr: Decimal
+    pnl_pct: Decimal
+    days_held: int | None = None
+    strategy_id: str | None = None
+    strategy_name: str | None = None
+
+
+class HoldingsResponse(BaseModel):
+    rows: list[HoldingRow]
+    ledger_drift: bool = False
+
+
 # ---------------------------------------------------------------
 # Live-dashboard helpers (shared by /dashboard-summary,
 # /positions, /holdings).
@@ -535,6 +553,80 @@ async def _fetch_strategy_attribution(
         if sid:
             ctx["strategy_name"] = names.get(sid)
     return by_key
+
+
+async def _fetch_holding_attribution(
+    user_id: UUID,
+    symbols: list[str],
+) -> dict[str, dict[str, Any]]:
+    """For each holding symbol, find the earliest live BUY fill
+    (no date floor — holdings can be days/weeks old) and return
+    strategy + days_held. Empty dict on read failure.
+    """
+    if not symbols:
+        return {}
+    wanted = set(symbols)
+    try:
+        rows = await asyncio.to_thread(
+            query_iceberg_table,
+            "algo.events",
+            "SELECT event_id, ts_ns, strategy_id, payload_json "
+            "FROM events "
+            "WHERE user_id = ? "
+            "  AND mode = 'live' "
+            "  AND type = 'order_filled_live' "
+            "ORDER BY ts_ns ASC",
+            [str(user_id)],
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "holding attribution read failed",
+            exc_info=True,
+        )
+        return {}
+
+    out: dict[str, dict[str, Any]] = {}
+    strategy_ids: set[str] = set()
+    today_ist_date = datetime.now(IST).date()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (ValueError, TypeError):
+            continue
+        if payload.get("dry_run"):
+            continue
+        side = payload.get("side") or ""
+        if side.upper() != "BUY":
+            continue
+        sym = payload.get("symbol") or ""
+        if sym not in wanted or sym in out:
+            continue
+        ts_ns = int(row.get("ts_ns") or 0)
+        entry_dt = (
+            datetime.fromtimestamp(
+                ts_ns / 1_000_000_000, tz=UTC,
+            )
+            if ts_ns
+            else None
+        )
+        days_held: int | None = None
+        if entry_dt is not None:
+            entry_ist = entry_dt.astimezone(IST).date()
+            days_held = max(0, (today_ist_date - entry_ist).days)
+        sid = row.get("strategy_id")
+        if sid:
+            strategy_ids.add(str(sid))
+        out[sym] = {
+            "strategy_id": str(sid) if sid else None,
+            "strategy_name": None,
+            "days_held": days_held,
+        }
+    names = await _strategy_name_lookup(strategy_ids)
+    for ctx in out.values():
+        sid = ctx.get("strategy_id")
+        if sid:
+            ctx["strategy_name"] = names.get(sid)
+    return out
 
 
 async def _ledger_kite_drift(
@@ -1034,6 +1126,62 @@ def create_live_router() -> APIRouter:
             {r["tradingsymbol"] for r in open_rows},
         )
         return PositionsResponse(rows=out_rows, ledger_drift=drift)
+
+    # ----------------------------------------------------------
+    # Settled CNC holdings (joined with strategy + days_held).
+    # ----------------------------------------------------------
+    @router.get("/holdings", response_model=HoldingsResponse)
+    async def get_holdings(
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> HoldingsResponse:
+        uid = UUID(user.user_id)
+        kite = await _build_kite_client_for_user(uid)
+        kc = kite._kc
+        try:
+            raw = await asyncio.to_thread(kc.holdings)
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "kite holdings read failed",
+                exc_info=True,
+            )
+            raw = []
+        rows = raw if isinstance(raw, list) else []
+        open_rows = [
+            r for r in rows if int(r.get("quantity", 0)) > 0
+        ]
+
+        attr = await _fetch_holding_attribution(
+            uid,
+            [r["tradingsymbol"] for r in open_rows],
+        )
+
+        out_rows: list[HoldingRow] = []
+        for r in open_rows:
+            ctx = attr.get(r["tradingsymbol"], {})
+            qty = int(r.get("quantity", 0))
+            avg = Decimal(str(r.get("average_price", 0) or 0))
+            ltp = Decimal(str(r.get("last_price", 0) or 0))
+            pnl_inr = Decimal(str(r.get("pnl", 0) or 0))
+            pnl_pct = (
+                ((ltp - avg) / avg) * Decimal("100")
+                if avg > 0
+                else Decimal("0")
+            )
+            out_rows.append(
+                HoldingRow(
+                    tradingsymbol=r["tradingsymbol"],
+                    exchange=r.get("exchange", "NSE"),
+                    quantity=qty,
+                    average_price=avg,
+                    last_price=ltp,
+                    pnl_inr=pnl_inr,
+                    pnl_pct=pnl_pct,
+                    days_held=ctx.get("days_held"),
+                    strategy_id=ctx.get("strategy_id"),
+                    strategy_name=ctx.get("strategy_name"),
+                )
+            )
+        return HoldingsResponse(rows=out_rows, ledger_drift=False)
 
     # ----------------------------------------------------------
     # OBS-1 — Kite WS health snapshot for the dashboard dot.
