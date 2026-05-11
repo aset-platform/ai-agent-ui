@@ -53,3 +53,32 @@ export async function disarmKillSwitch(): Promise<void> {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   await mutate(KEY);
 }
+
+export interface PanicCloseResult {
+  tickers_closed: string[];
+  orders_submitted: number;
+  errors: string[];
+  note?: string;
+}
+
+/** Submits SELL orders for every algo-opened position via Kite,
+ *  then arms the kill switch. Destructive — caller MUST gate
+ *  behind a confirm dialog. Resolves with a summary the caller
+ *  surfaces in a toast. */
+export async function panicCloseAll(): Promise<PanicCloseResult> {
+  const r = await apiFetch(`${KEY}/panic-close-all`, {
+    method: "POST",
+  });
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try {
+      const body = await r.json();
+      if (typeof body?.detail === "string") detail = body.detail;
+    } catch {
+      /* swallow */
+    }
+    throw new Error(detail);
+  }
+  await mutate(KEY);
+  return r.json();
+}
