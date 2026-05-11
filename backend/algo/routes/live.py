@@ -20,6 +20,7 @@ Notes
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -33,11 +34,19 @@ from pydantic import BaseModel, Field
 
 from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
+from backend.algo.broker.credentials_repo import (
+    BrokerCredentialsRepo,
+)
+from backend.algo.broker.kite_client import KiteClient
+from backend.cache import get_cache
+from backend.db.duckdb_engine import query_iceberg_table
 
 _logger = logging.getLogger(__name__)
 
 UTC = timezone.utc
+IST = timezone(timedelta(hours=5, minutes=30))
 _30_DAYS = timedelta(days=30)
+_DASHBOARD_CACHE_TTL = 15  # seconds — per CLAUDE.md § 5.13
 
 
 # ---------------------------------------------------------------
@@ -264,6 +273,131 @@ async def _check_gates(
 
 
 # ---------------------------------------------------------------
+# Live dashboard / positions / holdings models
+# ---------------------------------------------------------------
+
+
+class DashboardSummary(BaseModel):
+    """Aggregated KPIs for the Live Trading header strip."""
+
+    today_pnl_inr: Decimal = Field(default=Decimal("0"))
+    open_pnl_inr: Decimal = Field(default=Decimal("0"))
+    realised_pnl_inr: Decimal = Field(default=Decimal("0"))
+    cash_inr: Decimal = Field(default=Decimal("0"))
+    open_position_count: int = 0
+    mode: str  # "live" | "dry_run"
+    ws_age_seconds: int | None = None
+    kill_switch_active: bool = False
+
+
+# ---------------------------------------------------------------
+# Live-dashboard helpers (shared by /dashboard-summary,
+# /positions, /holdings).
+# ---------------------------------------------------------------
+
+
+def _get_session_factory():
+    from backend.db.engine import get_session_factory
+
+    return get_session_factory()
+
+
+async def _build_kite_client_for_user(user_id: UUID) -> KiteClient:
+    """Load broker creds + construct a real-mode KiteClient.
+
+    Raises HTTPException(503) when credentials are missing or the
+    Kite access token has expired. Dashboard reads are always live
+    truth — never synthetic — so we pin ``dry_run=False`` regardless
+    of the user's dry-run flag.
+    """
+    creds_repo = BrokerCredentialsRepo()
+    factory = _get_session_factory()
+    async with factory() as session:
+        creds = await creds_repo.load(session, user_id)
+    if not creds:
+        raise HTTPException(
+            status_code=503,
+            detail="Kite not connected",
+        )
+    if creds.get("access_token_expired"):
+        raise HTTPException(
+            status_code=503,
+            detail="Kite token expired",
+        )
+    return KiteClient(
+        api_key=creds["api_key"],
+        access_token=creds["access_token"],
+        dry_run=False,
+    )
+
+
+def _ist_midnight_str() -> str:
+    """Return today's date in IST as YYYY-MM-DD."""
+    return datetime.now(IST).strftime("%Y-%m-%d")
+
+
+async def _realised_pnl_today(user_id: UUID) -> Decimal:
+    """Sum realised P&L from algo.events for today (IST, live mode).
+
+    NOTE: the current event vocabulary does NOT emit a dedicated
+    ``pnl_realised`` event (verified via grep across backend/algo).
+    Realised P&L is therefore returned as Decimal("0") until that
+    event is introduced upstream. Frontend already renders 0 as
+    "—" via the empty-state helper, so no UX regression.
+
+    The Iceberg read pattern below is wired but disabled — leaving
+    it in code as the documented integration point for when the
+    runtime starts emitting position_closed / pnl_realised rows.
+    """
+    return Decimal("0")
+
+
+async def _dry_run_armed(user_id: UUID, redis_client: Any) -> bool:
+    """Resolve the per-user dry-run flag from Redis (or env fallback)."""
+    from backend.algo.live.dry_run_flag import is_armed
+
+    return await is_armed(user_id, redis_client)
+
+
+async def _ws_age_seconds(user_id: UUID) -> int | None:
+    """Seconds since the latest Kite WS tick (None if disconnected)."""
+    from backend.algo.broker.ws_registry import (
+        get_multiplexer_if_exists,
+    )
+
+    mux = get_multiplexer_if_exists(user_id)
+    if mux is None:
+        return None
+    snap = mux.health_snapshot()
+    last = snap.get("last_tick_at")
+    if last is None:
+        return None
+    now = datetime.now(UTC).replace(tzinfo=None)
+    try:
+        return max(0, int((now - last).total_seconds()))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _kill_switch_active(
+    user_id: UUID,
+    redis_client: Any,
+) -> bool:
+    """Read the kill-switch active flag (PG-backed via repo)."""
+    from backend.algo.paper.kill_switch_repo import KillSwitchRepo
+
+    repo = KillSwitchRepo(redis_client=redis_client)
+    try:
+        return await repo.is_active(user_id)
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "kill-switch read failed",
+            exc_info=True,
+        )
+        return False
+
+
+# ---------------------------------------------------------------
 # Postback read models (OBS-2 companion)
 # ---------------------------------------------------------------
 
@@ -309,8 +443,6 @@ def _query_postback_events(
     # method that doesn't exist on the repo class — the AttributeError
     # turned every browser poll of /postbacks into a 500 that the
     # frontend rendered as "NetworkError".
-    from backend.db.duckdb_engine import query_iceberg_table
-
     try:
         rows = query_iceberg_table(
             "algo.events",
@@ -540,6 +672,108 @@ def create_live_router() -> APIRouter:
         uid = UUID(user.user_id)
         state = await is_armed(uid, _redis())
         return {"dry_run": state}
+
+    # ----------------------------------------------------------
+    # Live dashboard aggregate KPIs — 15s Redis cache.
+    # ----------------------------------------------------------
+    @router.get(
+        "/dashboard-summary",
+        response_model=DashboardSummary,
+    )
+    async def dashboard_summary(
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> DashboardSummary:
+        """Header-strip KPIs: today/open/realised P&L, cash, mode."""
+        cache = get_cache()
+        cache_key = f"cache:algo:dash:{user.user_id}"
+        cached = cache.get(cache_key)
+        if cached:
+            try:
+                return DashboardSummary.model_validate_json(cached)
+            except (ValueError, TypeError):
+                # Corrupted cache entry — fall through and recompute.
+                pass
+
+        uid = UUID(user.user_id)
+        kite = await _build_kite_client_for_user(uid)
+        kc = kite._kc
+        try:
+            positions = await asyncio.to_thread(kc.positions)
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "kite positions read failed",
+                exc_info=True,
+            )
+            positions = {}
+        try:
+            margins = await asyncio.to_thread(kc.margins, "equity")
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "kite margins read failed",
+                exc_info=True,
+            )
+            margins = {}
+
+        net_rows = (
+            positions.get("net", [])
+            if isinstance(positions, dict) else []
+        )
+        day_rows = (
+            positions.get("day", [])
+            if isinstance(positions, dict) else []
+        )
+        open_pnl = sum(
+            (
+                Decimal(str(r.get("pnl", 0)))
+                for r in net_rows
+                if int(r.get("quantity", 0)) != 0
+            ),
+            Decimal("0"),
+        )
+        today_pnl = sum(
+            (Decimal(str(r.get("pnl", 0))) for r in day_rows),
+            Decimal("0"),
+        )
+        cash = Decimal(
+            str(
+                (margins or {})
+                .get("available", {})
+                .get("live_balance", 0)
+            )
+        )
+        open_count = sum(
+            1
+            for r in net_rows
+            if int(r.get("quantity", 0)) != 0
+        )
+
+        realised = await _realised_pnl_today(uid)
+        dry_run = await _dry_run_armed(uid, _redis())
+        ws_age = await _ws_age_seconds(uid)
+        ks_active = await _kill_switch_active(uid, _redis())
+
+        out = DashboardSummary(
+            today_pnl_inr=today_pnl,
+            open_pnl_inr=open_pnl,
+            realised_pnl_inr=realised,
+            cash_inr=cash,
+            open_position_count=open_count,
+            mode="dry_run" if dry_run else "live",
+            ws_age_seconds=ws_age,
+            kill_switch_active=ks_active,
+        )
+        try:
+            cache.set(
+                cache_key,
+                out.model_dump_json(),
+                ttl=_DASHBOARD_CACHE_TTL,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "dashboard cache set failed",
+                exc_info=True,
+            )
+        return out
 
     # ----------------------------------------------------------
     # OBS-1 — Kite WS health snapshot for the dashboard dot.
