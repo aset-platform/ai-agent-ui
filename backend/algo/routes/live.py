@@ -47,6 +47,8 @@ UTC = timezone.utc
 IST = timezone(timedelta(hours=5, minutes=30))
 _30_DAYS = timedelta(days=30)
 _DASHBOARD_CACHE_TTL = 15  # seconds — per CLAUDE.md § 5.13
+_POSITIONS_CACHE_TTL = 10  # seconds — SWR polls every 10s
+_HOLDINGS_CACHE_TTL = 60  # seconds — SWR polls every 30s
 
 
 # ---------------------------------------------------------------
@@ -412,7 +414,7 @@ async def _ws_age_seconds(user_id: UUID) -> int | None:
     last = snap.get("last_tick_at")
     if last is None:
         return None
-    now = datetime.utcnow()
+    now = datetime.now(UTC).replace(tzinfo=None)
     try:
         return max(0, int((now - last).total_seconds()))
     except (TypeError, ValueError):
@@ -563,12 +565,16 @@ async def _fetch_holding_attribution(
     symbols: list[str],
 ) -> dict[str, dict[str, Any]]:
     """For each holding symbol, find the earliest live BUY fill
-    (no date floor — holdings can be days/weeks old) and return
-    strategy + days_held. Empty dict on read failure.
+    within the past 365 days and return strategy + days_held.
+    Positions opened earlier surface with days_held=None.
+    Empty dict on read failure.
     """
     if not symbols:
         return {}
     wanted = set(symbols)
+    one_year_ago = (
+        datetime.now(IST).date() - timedelta(days=365)
+    ).isoformat()
     try:
         rows = await asyncio.to_thread(
             query_iceberg_table,
@@ -578,8 +584,9 @@ async def _fetch_holding_attribution(
             "WHERE user_id = ? "
             "  AND mode = 'live' "
             "  AND type = 'order_filled_live' "
+            "  AND ts_date >= ? "
             "ORDER BY ts_ns ASC",
-            [str(user_id)],
+            [str(user_id), one_year_ago],
         )
     except Exception:  # noqa: BLE001
         _logger.warning(
@@ -1061,6 +1068,16 @@ def create_live_router() -> APIRouter:
     async def get_positions(
         user: UserContext = Depends(pro_or_superuser),
     ) -> PositionsResponse:
+        cache = get_cache()
+        cache_key = f"cache:algo:live:positions:{user.user_id}"
+        cached = cache.get(cache_key)
+        if cached:
+            try:
+                return PositionsResponse.model_validate_json(cached)
+            except (ValueError, TypeError):
+                # Corrupted cache entry — fall through and recompute.
+                pass
+
         uid = UUID(user.user_id)
         kite = await _build_kite_client_for_user(uid)
         kc = kite._kc
@@ -1128,7 +1145,19 @@ def create_live_router() -> APIRouter:
             uid,
             {r["tradingsymbol"] for r in open_rows},
         )
-        return PositionsResponse(rows=out_rows, ledger_drift=drift)
+        out = PositionsResponse(rows=out_rows, ledger_drift=drift)
+        try:
+            cache.set(
+                cache_key,
+                out.model_dump_json(),
+                ttl=_POSITIONS_CACHE_TTL,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "positions cache set failed",
+                exc_info=True,
+            )
+        return out
 
     # ----------------------------------------------------------
     # Settled CNC holdings (joined with strategy + days_held).
@@ -1137,6 +1166,16 @@ def create_live_router() -> APIRouter:
     async def get_holdings(
         user: UserContext = Depends(pro_or_superuser),
     ) -> HoldingsResponse:
+        cache = get_cache()
+        cache_key = f"cache:algo:live:holdings:{user.user_id}"
+        cached = cache.get(cache_key)
+        if cached:
+            try:
+                return HoldingsResponse.model_validate_json(cached)
+            except (ValueError, TypeError):
+                # Corrupted cache entry — fall through and recompute.
+                pass
+
         uid = UUID(user.user_id)
         kite = await _build_kite_client_for_user(uid)
         kc = kite._kc
@@ -1184,7 +1223,19 @@ def create_live_router() -> APIRouter:
                     strategy_name=ctx.get("strategy_name"),
                 )
             )
-        return HoldingsResponse(rows=out_rows, ledger_drift=False)
+        out = HoldingsResponse(rows=out_rows, ledger_drift=False)
+        try:
+            cache.set(
+                cache_key,
+                out.model_dump_json(),
+                ttl=_HOLDINGS_CACHE_TTL,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "holdings cache set failed",
+                exc_info=True,
+            )
+        return out
 
     # ----------------------------------------------------------
     # OBS-1 — Kite WS health snapshot for the dashboard dot.
@@ -1210,7 +1261,7 @@ def create_live_router() -> APIRouter:
         last = snap.get("last_tick_at")
         age: int | None = None
         if last is not None:
-            now = datetime.utcnow()
+            now = datetime.now(UTC).replace(tzinfo=None)
             try:
                 age = int((now - last).total_seconds())
             except (TypeError, ValueError):

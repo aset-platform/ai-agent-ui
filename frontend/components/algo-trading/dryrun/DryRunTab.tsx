@@ -27,7 +27,9 @@ const DEFAULT_PAGE_SIZE: EventsPageSize = 100;
 
 const DRY_RUN_KEY = `${API_URL}/algo/live/dry-run`;
 
-async function fetchDryRunState(url: string): Promise<{ armed: boolean }> {
+async function fetchDryRunState(
+  url: string,
+): Promise<{ dry_run: boolean }> {
   const r = await apiFetch(url);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
@@ -41,14 +43,18 @@ async function setDryRun(armed: boolean): Promise<void> {
 }
 
 export function DryRunTab() {
-  const { data, mutate } = useSWR(DRY_RUN_KEY, fetchDryRunState, {
-    revalidateOnFocus: false,
-  });
-  const armed = data?.armed ?? false;
+  const { data, mutate } = useSWR<{ dry_run: boolean }>(
+    DRY_RUN_KEY,
+    fetchDryRunState,
+    {
+      revalidateOnFocus: false,
+    },
+  );
+  const armed = data?.dry_run ?? false;
 
   const onToggleArm = useCallback(
     async (next: boolean) => {
-      await mutate({ armed: next }, false);
+      await mutate({ dry_run: next }, { revalidate: false });
       try {
         await setDryRun(next);
       } catch {

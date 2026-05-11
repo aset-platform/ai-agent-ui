@@ -4,6 +4,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
+import pytest
+
 from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
 
@@ -11,6 +13,18 @@ _USER_ID = UUID("22222222-2222-2222-2222-222222222222")
 _USER_CTX = UserContext(
     user_id=str(_USER_ID), email="t@t.com", role="pro",
 )
+
+
+@pytest.fixture(autouse=True)
+def _bypass_cache():
+    """Force a clean cache miss for every test in this module."""
+    with patch(
+        "backend.algo.routes.live.get_cache",
+    ) as gc:
+        cache_mock = MagicMock()
+        cache_mock.get.return_value = None
+        gc.return_value = cache_mock
+        yield
 
 
 def _app():
