@@ -172,6 +172,24 @@ class LiveRuntime:
         self._regime_by_date: dict[date, dict[str, Any]] = {}
         self._regime_loaded: bool = False
 
+    def _flush_events_now(self) -> None:
+        """Flush buffered events to algo.events immediately so
+        the events panel sees signals + orders in real time.
+        Without this the buffer only flushes at session end and
+        the user-facing panel looks frozen during long live-ws
+        sessions. Cheap (single Iceberg commit per call); the
+        runtime emits ~1-10 events/minute typically."""
+        if not self._events:
+            return
+        try:
+            flush_events(self._events)
+            self._events = []
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "in-session flush failed — events will land at "
+                "session end", exc_info=True,
+            )
+
     def _ensure_regime_cache(self, bar_date_obj: date) -> None:
         if self._regime_loaded:
             return
@@ -404,6 +422,7 @@ class LiveRuntime:
                 **_attribution_payload_extension(features),
             },
         ))
+        self._flush_events_now()
 
         # Fresh caps read — do NOT trust stale constructor copy
         # for daily counters; read atomically.
@@ -463,6 +482,7 @@ class LiveRuntime:
                     ),
                 },
             ))
+            self._flush_events_now()
             return 0
 
         effective_qty = (
@@ -549,7 +569,10 @@ class LiveRuntime:
             self._user_id, self._run_id, self._in_flight,
         )
 
-        # Persist order_submitted_live event
+        # Persist order_submitted_live event + flush so the
+        # events panel sees the submit within the next SWR poll
+        # cycle (was buffered until session end, made the panel
+        # look frozen during long live-ws sessions).
         self._events.append(event_row(
             session_id=self._session_id,
             user_id=self._user_id,
@@ -565,9 +588,9 @@ class LiveRuntime:
                 "qty": signal.qty,
                 "order_type": "MARKET",
                 "limit_price": None,
-                "dry_run": is_dry,
             },
         ))
+        self._flush_events_now()
 
         # Dry-run: spawn synthetic fill after short delay
         if is_dry:
@@ -656,10 +679,31 @@ class LiveRuntime:
         )
         self._positions.apply_fill(fill)
 
-        # Mark in-flight entry filled
+        # Mark in-flight entry filled — flip in memory AND
+        # persist so the in-flight orders panel (which polls
+        # algo.runs.live_orders_in_flight) sees the transition.
+        # Without the persist call the panel kept showing every
+        # synthetic fill stuck at status='submitted' forever.
         in_flight_entry["status"] = "filled"
+        in_flight_entry["fill_price"] = str(fill_price)
+        in_flight_entry["fees_inr"] = str(fees.total_inr)
+        try:
+            await self._caps_repo.update_in_flight(
+                self._user_id, self._run_id, self._in_flight,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "synthetic_fill: in-flight persist failed for "
+                "kite_order_id=%s — panel will lag until next "
+                "successful update", kite_order_id,
+                exc_info=True,
+            )
 
-        # Emit fill event
+        # Emit fill event + flush immediately. Default behaviour
+        # batches events to the end-of-drain flush; for in-session
+        # fills we want them visible in the events panel within
+        # the next SWR poll cycle (~5s) so users can verify their
+        # dry-run trades end-to-end without stopping the session.
         self._events.append(event_row(
             session_id=self._session_id,
             user_id=self._user_id,
@@ -675,9 +719,9 @@ class LiveRuntime:
                 "qty": qty,
                 "price": str(fill_price),
                 "fees_inr": str(fees.total_inr),
-                "dry_run": True,
             },
         ))
+        self._flush_events_now()
 
         _logger.info(
             "[DRY_RUN] synthetic fill: symbol=%s side=%s qty=%d "
