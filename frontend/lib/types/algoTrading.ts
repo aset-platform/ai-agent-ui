@@ -6,10 +6,6 @@
  * epic):
  *   - StrategiesTabId — `/algo-trading/strategies` tab strip
  *   - LiveTabId       — `/algo-trading/live` tab strip
- *
- * `AlgoTabId` (the legacy single-page union) is kept as a deprecated
- * alias purely so the orphaned `AlgoTradingClient.tsx` continues to
- * type-check until Slice 5 removes it.
  */
 
 /** Strategies-page tab IDs. URL-synced via ?tab=. */
@@ -59,44 +55,5 @@ export const LIVE_TAB_ORDER: LiveTabId[] = [
   "live",
   "positions",
   "holdings",
-  "settings",
-];
-
-/**
- * @deprecated Legacy single-page tab union. The orphaned
- * `AlgoTradingClient.tsx` still references these; both the file and
- * these exports will be removed in Slice 5.
- */
-export type AlgoTabId =
-  | "connect"
-  | "instruments"
-  | "strategies"
-  | "backtest"
-  | "paper"
-  | "performance"
-  | "replay"
-  | "settings";
-
-/** @deprecated See `AlgoTabId`. */
-export const ALGO_TAB_LABELS: Record<AlgoTabId, string> = {
-  connect: "Connect Broker",
-  instruments: "Instruments",
-  strategies: "Strategies",
-  backtest: "Backtest",
-  paper: "Trading",
-  performance: "Performance",
-  replay: "Replay",
-  settings: "Settings",
-};
-
-/** @deprecated See `AlgoTabId`. */
-export const ALGO_TAB_ORDER: AlgoTabId[] = [
-  "connect",
-  "instruments",
-  "strategies",
-  "backtest",
-  "paper",
-  "performance",
-  "replay",
   "settings",
 ];
