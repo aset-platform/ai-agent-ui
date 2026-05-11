@@ -1,59 +1,52 @@
-// frontend/app/(authenticated)/algo-trading/AlgoTradingClient.tsx
 "use client";
-/**
- * Algo Trading — client subtree. Renders the tab strip and
- * the active tab's content. URL-synced via ?tab=. Mirrors the
- * AdvancedAnalyticsClient pattern (single page, eight tabs).
- *
- * Slice 0 ships the scaffold + Settings tab; subsequent slices
- * replace each placeholder.
- */
 
 import { useCallback, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import {
-  ALGO_TAB_LABELS,
-  ALGO_TAB_ORDER,
-  type AlgoTabId,
+  STRATEGIES_TAB_LABELS,
+  STRATEGIES_TAB_ORDER,
+  type StrategiesTabId,
 } from "@/lib/types/algoTrading";
 
 import { BacktestTab } from "@/components/algo-trading/BacktestTab";
-import { ConnectBrokerTab } from "@/components/algo-trading/ConnectBrokerTab";
 import { InstrumentsTab } from "@/components/algo-trading/InstrumentsTab";
 import { PaperTab } from "@/components/algo-trading/PaperTab";
+import { DryRunTab } from "@/components/algo-trading/dryrun/DryRunTab";
 import { PerformanceTab } from "@/components/algo-trading/PerformanceTab";
 import { ReplayTab } from "@/components/algo-trading/ReplayTab";
-import { SettingsTab } from "@/components/algo-trading/SettingsTab";
+import { StrategiesSettingsTab } from "@/components/algo-trading/StrategiesSettingsTab";
 import { StrategiesTab } from "@/components/algo-trading/StrategiesTab";
 
-const DEFAULT_TAB: AlgoTabId = "settings";
+const DEFAULT_TAB: StrategiesTabId = "instruments";
 
-function isValidTab(v: string | null): v is AlgoTabId {
-  return v !== null && (ALGO_TAB_ORDER as readonly string[]).includes(v);
+function isValidTab(v: string | null): v is StrategiesTabId {
+  return (
+    v !== null &&
+    (STRATEGIES_TAB_ORDER as readonly string[]).includes(v)
+  );
 }
 
-export default function AlgoTradingClient() {
+export default function StrategiesClient() {
   const router = useRouter();
   const sp = useSearchParams();
   const raw = sp.get("tab");
-  const active: AlgoTabId = isValidTab(raw) ? raw : DEFAULT_TAB;
+  const active: StrategiesTabId = isValidTab(raw) ? raw : DEFAULT_TAB;
 
   const handleSwitch = useCallback(
-    (next: AlgoTabId) => {
+    (next: StrategiesTabId) => {
       const params = new URLSearchParams(sp.toString());
       params.set("tab", next);
-      router.replace(`/algo-trading?${params.toString()}`, {
-        scroll: false,
-      });
+      router.replace(
+        `/algo-trading/strategies?${params.toString()}`,
+        { scroll: false },
+      );
     },
     [router, sp],
   );
 
   const tabPanel = useMemo(() => {
     switch (active) {
-      case "connect":
-        return <ConnectBrokerTab />;
       case "instruments":
         return <InstrumentsTab />;
       case "strategies":
@@ -62,14 +55,14 @@ export default function AlgoTradingClient() {
         return <BacktestTab />;
       case "paper":
         return <PaperTab />;
+      case "dryrun":
+        return <DryRunTab />;
       case "performance":
         return <PerformanceTab />;
       case "replay":
         return <ReplayTab />;
       case "settings":
-        return <SettingsTab />;
-      default:
-        return <PlaceholderTab id={active} />;
+        return <StrategiesSettingsTab />;
     }
   }, [active]);
 
@@ -77,23 +70,24 @@ export default function AlgoTradingClient() {
     <div className="space-y-4 p-6">
       <h1
         className="text-xl font-semibold"
-        data-testid="algo-trading-heading"
+        data-testid="algo-strategies-heading"
       >
-        Algo Trading
+        Strategies
       </h1>
 
       <div
         role="tablist"
-        data-testid="algo-trading-tabs"
-        className="flex flex-wrap items-center gap-1 border-b border-gray-200 dark:border-gray-700"
+        data-testid="algo-strategies-tabs"
+        className="flex flex-wrap items-center gap-1 border-b
+          border-gray-200 dark:border-gray-700"
       >
-        {ALGO_TAB_ORDER.map((id) => (
+        {STRATEGIES_TAB_ORDER.map((id) => (
           <button
             key={id}
             type="button"
             role="tab"
             aria-selected={id === active}
-            data-testid={`algo-trading-tab-${id}`}
+            data-testid={`algo-strategies-tab-${id}`}
             onClick={() => handleSwitch(id)}
             className={`px-3 py-2 text-sm transition-colors ${
               id === active
@@ -101,32 +95,19 @@ export default function AlgoTradingClient() {
                 : "text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400"
             }`}
           >
-            {ALGO_TAB_LABELS[id]}
+            {STRATEGIES_TAB_LABELS[id]}
           </button>
         ))}
       </div>
 
       <div
         role="tabpanel"
-        data-testid={`algo-trading-panel-${active}`}
-        className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-4"
+        data-testid={`algo-strategies-panel-${active}`}
+        className="rounded-lg border border-gray-200
+          dark:border-gray-700 bg-white dark:bg-gray-900 p-4"
       >
         {tabPanel}
       </div>
-    </div>
-  );
-}
-
-function PlaceholderTab({ id }: { id: AlgoTabId }) {
-  return (
-    <div className="space-y-2">
-      <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
-        {ALGO_TAB_LABELS[id]}
-      </h2>
-      <p className="text-sm text-gray-500 dark:text-gray-400">
-        This tab will be implemented in a later slice of the
-        Algo Trading epic.
-      </p>
     </div>
   );
 }

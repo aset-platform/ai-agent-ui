@@ -1,37 +1,59 @@
 // frontend/lib/types/algoTrading.ts
 /**
  * Type literals for the Algo Trading module.
- * Tab IDs map 1-to-1 with the spec § 2.2 tab strip.
+ *
+ * Three-page split (Slice 2 of the algo-trading-three-page-split
+ * epic):
+ *   - StrategiesTabId — `/algo-trading/strategies` tab strip
+ *   - LiveTabId       — `/algo-trading/live` tab strip
  */
 
-export type AlgoTabId =
-  | "connect"
+/** Strategies-page tab IDs. URL-synced via ?tab=. */
+export type StrategiesTabId =
   | "instruments"
   | "strategies"
   | "backtest"
   | "paper"
+  | "dryrun"
   | "performance"
   | "replay"
   | "settings";
 
-export const ALGO_TAB_LABELS: Record<AlgoTabId, string> = {
-  connect: "Connect Broker",
+export const STRATEGIES_TAB_LABELS: Record<StrategiesTabId, string> = {
   instruments: "Instruments",
   strategies: "Strategies",
   backtest: "Backtest",
-  paper: "Trading",
+  paper: "Paper",
+  dryrun: "Dry run",
   performance: "Performance",
   replay: "Replay",
   settings: "Settings",
 };
 
-export const ALGO_TAB_ORDER: AlgoTabId[] = [
-  "connect",
+export const STRATEGIES_TAB_ORDER: StrategiesTabId[] = [
   "instruments",
   "strategies",
   "backtest",
   "paper",
+  "dryrun",
   "performance",
   "replay",
+  "settings",
+];
+
+/** Live-page tab IDs. URL-synced via ?tab=. */
+export type LiveTabId = "live" | "positions" | "holdings" | "settings";
+
+export const LIVE_TAB_LABELS: Record<LiveTabId, string> = {
+  live: "Live",
+  positions: "Positions",
+  holdings: "Holdings",
+  settings: "Settings",
+};
+
+export const LIVE_TAB_ORDER: LiveTabId[] = [
+  "live",
+  "positions",
+  "holdings",
   "settings",
 ];

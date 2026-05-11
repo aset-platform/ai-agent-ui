@@ -14,6 +14,9 @@ export type View =
   | "analytics"
   | "advanced-analytics"
   | "algo-trading"
+  | "algo-broker"
+  | "algo-strategies"
+  | "algo-live"
   | "docs"
   | "admin";
 
@@ -133,10 +136,83 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Algo Trading",
     requiresAlgoTrading: true,
     icon: (
-      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        className="w-4 h-4 shrink-0"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
         <path d="M2 12h2l3-9 4 18 3-9 2 5h6" />
       </svg>
     ),
+    children: [
+      {
+        view: "algo-broker",
+        href: "/algo-trading/broker",
+        label: "Zerodha Connect",
+        requiresAlgoTrading: true,
+        icon: (
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className="w-4 h-4 shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+          </svg>
+        ),
+      },
+      {
+        view: "algo-strategies",
+        href: "/algo-trading/strategies",
+        label: "Strategies",
+        requiresAlgoTrading: true,
+        icon: (
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className="w-4 h-4 shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" />
+          </svg>
+        ),
+      },
+      {
+        view: "algo-live",
+        href: "/algo-trading/live",
+        label: "Live Trading",
+        requiresAlgoTrading: true,
+        icon: (
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className="w-4 h-4 shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <circle cx="12" cy="12" r="4" />
+          </svg>
+        ),
+      },
+    ],
   },
   {
     view: "admin",

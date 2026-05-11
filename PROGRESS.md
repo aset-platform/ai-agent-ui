@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-05-11 — Algo Trading three-page split
+
+**Branch:** `feature/algo-trading-three-page-split`. Six-slice
+restructure of `/algo-trading` into a sidebar group with three
+pages (Zerodha Connect, Strategies, Live Trading).
+
+Paper + Dry-run are now sibling tabs on the Strategies page — the
+in-page mode toggle (and its hidden per-user Redis state flip) is
+gone. Live Trading page is real-money only with a sticky KPI
+header strip + 4-zone dashboard (Open Positions / Regime & Stress
+/ Active Strategy / Recent Fills), dedicated Positions and
+Holdings tabs, and a PANIC CLOSE button gated behind a
+typed-confirm modal.
+
+Backend gained three endpoints on the existing live router:
+`GET /algo/live/dashboard-summary` (8-field KPI aggregate, 15s
+cache), `GET /algo/live/positions` (Kite REST + `algo.events`
+strategy join), `GET /algo/live/holdings` (multi-day CNC with
+days-held + strategy origin).
+
+Legacy `?tab=` bookmarks redirect through
+`frontend/app/(authenticated)/algo-trading/redirectMap.ts` so
+existing links keep working.
+
+Slice 6 (this session): added five Playwright specs
+(`algo-sidebar-group`, `algo-broker-page`,
+`algo-strategies-tabs`, `algo-live-page`,
+`algo-live-positions`), shared testid constants in
+`e2e/utils/selectors.ts`, and `docs/algo-trading/page-structure.md`.
+
+---
+
 ## 2026-05-10 — v2 epic CLOSED + verified end-to-end + v3 regime epic planned
 
 **Branch:** `feature/algo-trading-v2-integration` (continued; now **46 commits ahead of `dev`**, was 34 yesterday). v2 epic is functionally complete and end-to-end verified — ready for the integration → `dev` PR.

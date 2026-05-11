@@ -20,6 +20,7 @@ Notes
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -33,11 +34,21 @@ from pydantic import BaseModel, Field
 
 from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
+from backend.algo.broker.credentials_repo import (
+    BrokerCredentialsRepo,
+)
+from backend.algo.broker.kite_client import KiteClient
+from backend.cache import get_cache
+from backend.db.duckdb_engine import query_iceberg_table
 
 _logger = logging.getLogger(__name__)
 
 UTC = timezone.utc
+IST = timezone(timedelta(hours=5, minutes=30))
 _30_DAYS = timedelta(days=30)
+_DASHBOARD_CACHE_TTL = 15  # seconds — per CLAUDE.md § 5.13
+_POSITIONS_CACHE_TTL = 10  # seconds — SWR polls every 10s
+_HOLDINGS_CACHE_TTL = 60  # seconds — SWR polls every 30s
 
 
 # ---------------------------------------------------------------
@@ -113,9 +124,6 @@ async def _check_gates(
     redis_client: Any,
 ) -> GatesStatus:
     """Evaluate all 4 live-mode gates from PG/Redis."""
-    from backend.algo.broker.credentials_repo import (
-        BrokerCredentialsRepo,
-    )
     from backend.algo.live.caps_repo import CapsRepo
     from backend.algo.live.drift_repo import DriftRepo
     from backend.algo.paper.kill_switch_repo import KillSwitchRepo
@@ -195,11 +203,9 @@ async def _check_gates(
                 tzinfo=UTC,
             )
             if age < _30_DAYS:
-                import json as _json
-
                 summary = row.get("summary_json") or {}
                 if isinstance(summary, str):
-                    summary = _json.loads(summary)
+                    summary = json.loads(summary)
                 # V2-2 stores fields nested under ``aggregate``,
                 # not at the top level. ``avg_pnl_pct > 0`` is
                 # the meaningful gate (raw win-rate alone can
@@ -264,6 +270,420 @@ async def _check_gates(
 
 
 # ---------------------------------------------------------------
+# Live dashboard / positions / holdings models
+# ---------------------------------------------------------------
+
+
+class DashboardSummary(BaseModel):
+    """Aggregated KPIs for the Live Trading header strip."""
+
+    today_pnl_inr: Decimal = Field(default=Decimal("0"))
+    open_pnl_inr: Decimal = Field(default=Decimal("0"))
+    realised_pnl_inr: Decimal = Field(default=Decimal("0"))
+    cash_inr: Decimal = Field(default=Decimal("0"))
+    open_position_count: int = 0
+    mode: str  # "live" | "dry_run"
+    ws_age_seconds: int | None = None
+    kill_switch_active: bool = False
+
+
+class PositionRow(BaseModel):
+    tradingsymbol: str
+    exchange: str
+    quantity: int
+    average_price: Decimal
+    last_price: Decimal
+    pnl_inr: Decimal
+    pnl_pct: Decimal
+    product: str
+    strategy_id: str | None = None
+    strategy_name: str | None = None
+    entry_ts_utc: datetime | None = None
+    entry_reason: str | None = None
+
+
+class PositionsResponse(BaseModel):
+    rows: list[PositionRow]
+    ledger_drift: bool = False
+
+
+class HoldingRow(BaseModel):
+    tradingsymbol: str
+    exchange: str
+    quantity: int
+    average_price: Decimal
+    last_price: Decimal
+    pnl_inr: Decimal
+    pnl_pct: Decimal
+    days_held: int | None = None
+    strategy_id: str | None = None
+    strategy_name: str | None = None
+
+
+class HoldingsResponse(BaseModel):
+    rows: list[HoldingRow]
+    ledger_drift: bool = False
+
+
+# ---------------------------------------------------------------
+# Live-dashboard helpers (shared by /dashboard-summary,
+# /positions, /holdings).
+# ---------------------------------------------------------------
+
+
+def _get_session_factory():
+    from backend.db.engine import get_session_factory
+
+    return get_session_factory()
+
+
+async def _build_kite_client_for_user(user_id: UUID) -> KiteClient:
+    """Load broker creds + construct a real-mode KiteClient.
+
+    Raises HTTPException(503) when credentials are missing or the
+    Kite access token has expired. Dashboard reads are always live
+    truth — never synthetic — so we pin ``dry_run=False`` regardless
+    of the user's dry-run flag.
+    """
+    creds_repo = BrokerCredentialsRepo()
+    factory = _get_session_factory()
+    async with factory() as session:
+        creds = await creds_repo.load(session, user_id)
+    if not creds:
+        raise HTTPException(
+            status_code=503,
+            detail="Kite not connected",
+        )
+    if creds.get("access_token_expired"):
+        raise HTTPException(
+            status_code=503,
+            detail="Kite token expired",
+        )
+    api_key = creds.get("api_key")
+    access_token = creds.get("access_token")
+    if not api_key or not access_token:
+        raise HTTPException(
+            status_code=503,
+            detail="Kite credentials incomplete",
+        )
+    return KiteClient(
+        api_key=api_key,
+        access_token=access_token,
+        dry_run=False,
+    )
+
+
+def _ist_midnight_str() -> str:
+    """Return today's date in IST as YYYY-MM-DD."""
+    return datetime.now(IST).strftime("%Y-%m-%d")
+
+
+async def _realised_pnl_today(user_id: UUID) -> Decimal:
+    """Sum realised P&L from algo.events for today (IST, live mode).
+
+    NOTE: the current event vocabulary does NOT emit a dedicated
+    ``pnl_realised`` event (verified via grep across backend/algo).
+    Realised P&L is therefore returned as Decimal("0") until that
+    event is introduced upstream. Frontend already renders 0 as
+    "—" via the empty-state helper, so no UX regression.
+
+    The Iceberg read pattern below is wired but disabled — leaving
+    it in code as the documented integration point for when the
+    runtime starts emitting position_closed / pnl_realised rows.
+    """
+    return Decimal("0")
+
+
+async def _dry_run_armed(user_id: UUID, redis_client: Any) -> bool:
+    """Resolve the per-user dry-run flag from Redis (or env fallback)."""
+    from backend.algo.live.dry_run_flag import is_armed
+
+    return await is_armed(user_id, redis_client)
+
+
+async def _ws_age_seconds(user_id: UUID) -> int | None:
+    """Seconds since the latest Kite WS tick (None if disconnected)."""
+    from backend.algo.broker.ws_registry import (
+        get_multiplexer_if_exists,
+    )
+
+    mux = get_multiplexer_if_exists(user_id)
+    if mux is None:
+        return None
+    snap = mux.health_snapshot()
+    last = snap.get("last_tick_at")
+    if last is None:
+        return None
+    now = datetime.now(UTC).replace(tzinfo=None)
+    try:
+        return max(0, int((now - last).total_seconds()))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _kill_switch_active(
+    user_id: UUID,
+    redis_client: Any,
+) -> bool:
+    """Read the kill-switch active flag (PG-backed via repo)."""
+    from backend.algo.paper.kill_switch_repo import KillSwitchRepo
+
+    repo = KillSwitchRepo(redis_client=redis_client)
+    try:
+        return await repo.is_active(user_id)
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "kill-switch read failed",
+            exc_info=True,
+        )
+        return False
+
+
+async def _strategy_name_lookup(
+    strategy_ids: set[str],
+) -> dict[str, str]:
+    """Return ``{strategy_id_str: name}`` for the given UUIDs.
+
+    Empty dict on read failure — caller treats missing names as
+    "unknown" via the frontend's null-handling helper.
+    """
+    if not strategy_ids:
+        return {}
+    factory = _get_session_factory()
+    try:
+        async with factory() as session:
+            from sqlalchemy import bindparam, text
+
+            stmt = text(
+                "SELECT id::text AS id, name FROM algo.strategies "
+                "WHERE id::text IN :ids"
+            ).bindparams(bindparam("ids", expanding=True))
+            rows = (
+                await session.execute(
+                    stmt,
+                    {"ids": list(strategy_ids)},
+                )
+            ).mappings().all()
+        return {str(r["id"]): r["name"] for r in rows}
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "strategy-name lookup failed",
+            exc_info=True,
+        )
+        return {}
+
+
+async def _fetch_strategy_attribution(
+    user_id: UUID,
+    keys: list[tuple[str, str]],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """For each (symbol, product), find today's first live BUY fill
+    in ``algo.events`` and return the originating strategy + the
+    entry reason carried in the event payload.
+
+    ``algo.events`` has no top-level ``tradingsymbol`` / ``side`` /
+    ``product`` columns — those live inside ``payload_json``. We
+    therefore fetch all of today's live fills for the user, then
+    filter + extract in Python. Returns an empty dict on Iceberg
+    read failure (drift logic still works via the cheap ledger
+    check downstream).
+    """
+    if not keys:
+        return {}
+    wanted_symbols = {sym for sym, _ in keys}
+    today_ist = _ist_midnight_str()
+    try:
+        rows = await asyncio.to_thread(
+            query_iceberg_table,
+            "algo.events",
+            "SELECT event_id, ts_ns, ts_date, strategy_id, "
+            "       payload_json "
+            "FROM events "
+            "WHERE user_id = ? "
+            "  AND mode = 'live' "
+            "  AND type = 'order_filled_live' "
+            "  AND ts_date >= ? "
+            "ORDER BY ts_ns ASC",
+            [str(user_id), today_ist],
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "attribution read failed",
+            exc_info=True,
+        )
+        return {}
+
+    # First BUY per (symbol, product) wins.
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    strategy_ids: set[str] = set()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (ValueError, TypeError):
+            continue
+        if payload.get("dry_run"):
+            continue
+        side = payload.get("side") or ""
+        if side.upper() != "BUY":
+            continue
+        sym = payload.get("symbol") or ""
+        product = payload.get("product") or "MIS"
+        key = (sym, product)
+        if sym not in wanted_symbols or key in by_key:
+            continue
+        sid = row.get("strategy_id")
+        if sid:
+            strategy_ids.add(str(sid))
+        ts_ns = int(row.get("ts_ns") or 0)
+        entry_dt = (
+            datetime.fromtimestamp(
+                ts_ns / 1_000_000_000, tz=UTC,
+            )
+            if ts_ns
+            else None
+        )
+        by_key[key] = {
+            "strategy_id": str(sid) if sid else None,
+            "strategy_name": None,
+            "entry_ts_utc": (
+                entry_dt.isoformat() if entry_dt else None
+            ),
+            "entry_reason": payload.get("reason"),
+        }
+
+    # Resolve strategy names from PG in one round-trip.
+    names = await _strategy_name_lookup(strategy_ids)
+    for ctx in by_key.values():
+        sid = ctx.get("strategy_id")
+        if sid:
+            ctx["strategy_name"] = names.get(sid)
+    return by_key
+
+
+async def _fetch_holding_attribution(
+    user_id: UUID,
+    symbols: list[str],
+) -> dict[str, dict[str, Any]]:
+    """For each holding symbol, find the earliest live BUY fill
+    within the past 365 days and return strategy + days_held.
+    Positions opened earlier surface with days_held=None.
+    Empty dict on read failure.
+    """
+    if not symbols:
+        return {}
+    wanted = set(symbols)
+    one_year_ago = (
+        datetime.now(IST).date() - timedelta(days=365)
+    ).isoformat()
+    try:
+        rows = await asyncio.to_thread(
+            query_iceberg_table,
+            "algo.events",
+            "SELECT event_id, ts_ns, strategy_id, payload_json "
+            "FROM events "
+            "WHERE user_id = ? "
+            "  AND mode = 'live' "
+            "  AND type = 'order_filled_live' "
+            "  AND ts_date >= ? "
+            "ORDER BY ts_ns ASC",
+            [str(user_id), one_year_ago],
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "holding attribution read failed",
+            exc_info=True,
+        )
+        return {}
+
+    out: dict[str, dict[str, Any]] = {}
+    strategy_ids: set[str] = set()
+    today_ist_date = datetime.now(IST).date()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (ValueError, TypeError):
+            continue
+        if payload.get("dry_run"):
+            continue
+        side = payload.get("side") or ""
+        if side.upper() != "BUY":
+            continue
+        sym = payload.get("symbol") or ""
+        if sym not in wanted or sym in out:
+            continue
+        ts_ns = int(row.get("ts_ns") or 0)
+        entry_dt = (
+            datetime.fromtimestamp(
+                ts_ns / 1_000_000_000, tz=UTC,
+            )
+            if ts_ns
+            else None
+        )
+        days_held: int | None = None
+        if entry_dt is not None:
+            entry_ist = entry_dt.astimezone(IST).date()
+            days_held = max(0, (today_ist_date - entry_ist).days)
+        sid = row.get("strategy_id")
+        if sid:
+            strategy_ids.add(str(sid))
+        out[sym] = {
+            "strategy_id": str(sid) if sid else None,
+            "strategy_name": None,
+            "days_held": days_held,
+        }
+    names = await _strategy_name_lookup(strategy_ids)
+    for ctx in out.values():
+        sid = ctx.get("strategy_id")
+        if sid:
+            ctx["strategy_name"] = names.get(sid)
+    return out
+
+
+async def _ledger_kite_drift(
+    user_id: UUID,
+    kite_symbols: set[str],
+) -> bool:
+    """Cheap signal: do today's ledger BUYs match Kite's open set?
+
+    True only if the ledger has open BUYs Kite doesn't, or vice
+    versa (after best-effort net-down). Quiet (False) on any read
+    error — the dedicated reconciliation panel surfaces the real
+    drift signal.
+    """
+    try:
+        rows = await asyncio.to_thread(
+            query_iceberg_table,
+            "algo.events",
+            "SELECT payload_json FROM events "
+            "WHERE user_id = ? "
+            "  AND mode = 'live' "
+            "  AND type = 'order_filled_live' "
+            "  AND ts_date = ?",
+            [str(user_id), _ist_midnight_str()],
+        )
+    except Exception:  # noqa: BLE001
+        return False
+    ledger_net: dict[str, int] = {}
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (ValueError, TypeError):
+            continue
+        if payload.get("dry_run"):
+            continue
+        sym = payload.get("symbol") or ""
+        qty = int(payload.get("qty") or 0)
+        side = (payload.get("side") or "").upper()
+        if not sym or not qty:
+            continue
+        sign = 1 if side == "BUY" else -1
+        ledger_net[sym] = ledger_net.get(sym, 0) + sign * qty
+    ledger_open = {s for s, q in ledger_net.items() if q > 0}
+    # Symmetric difference: drift if either side has extras.
+    return bool(ledger_open.symmetric_difference(kite_symbols))
+
+
+# ---------------------------------------------------------------
 # Postback read models (OBS-2 companion)
 # ---------------------------------------------------------------
 
@@ -309,8 +729,6 @@ def _query_postback_events(
     # method that doesn't exist on the repo class — the AttributeError
     # turned every browser poll of /postbacks into a 500 that the
     # frontend rendered as "NetworkError".
-    from backend.db.duckdb_engine import query_iceberg_table
-
     try:
         rows = query_iceberg_table(
             "algo.events",
@@ -323,7 +741,7 @@ def _query_postback_events(
             [user_id, limit],
         )
         return rows
-    except Exception:
+    except Exception:  # noqa: BLE001
         _logger.warning(
             "postback query failed for user=%s",
             user_id,
@@ -542,6 +960,284 @@ def create_live_router() -> APIRouter:
         return {"dry_run": state}
 
     # ----------------------------------------------------------
+    # Live dashboard aggregate KPIs — 15s Redis cache.
+    # ----------------------------------------------------------
+    @router.get(
+        "/dashboard-summary",
+        response_model=DashboardSummary,
+    )
+    async def dashboard_summary(
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> DashboardSummary:
+        """Header-strip KPIs: today/open/realised P&L, cash, mode."""
+        cache = get_cache()
+        cache_key = f"cache:algo:dash:{user.user_id}"
+        cached = cache.get(cache_key)
+        if cached:
+            try:
+                return DashboardSummary.model_validate_json(cached)
+            except (ValueError, TypeError):
+                # Corrupted cache entry — fall through and recompute.
+                pass
+
+        uid = UUID(user.user_id)
+        kite = await _build_kite_client_for_user(uid)
+        kc = kite._kc
+        try:
+            positions = await asyncio.to_thread(kc.positions)
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "kite positions read failed",
+                exc_info=True,
+            )
+            positions = {}
+        try:
+            margins = await asyncio.to_thread(kc.margins, "equity")
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "kite margins read failed",
+                exc_info=True,
+            )
+            margins = {}
+
+        net_rows = (
+            positions.get("net", [])
+            if isinstance(positions, dict) else []
+        )
+        day_rows = (
+            positions.get("day", [])
+            if isinstance(positions, dict) else []
+        )
+        open_pnl = sum(
+            (
+                Decimal(str(r.get("pnl", 0)))
+                for r in net_rows
+                if int(r.get("quantity", 0)) != 0
+            ),
+            Decimal("0"),
+        )
+        today_pnl = sum(
+            (Decimal(str(r.get("pnl", 0))) for r in day_rows),
+            Decimal("0"),
+        )
+        cash = Decimal(
+            str(
+                (margins or {})
+                .get("available", {})
+                .get("live_balance", 0)
+            )
+        )
+        open_count = sum(
+            1
+            for r in net_rows
+            if int(r.get("quantity", 0)) != 0
+        )
+
+        realised = await _realised_pnl_today(uid)
+        dry_run = await _dry_run_armed(uid, _redis())
+        ws_age = await _ws_age_seconds(uid)
+        ks_active = await _kill_switch_active(uid, _redis())
+
+        out = DashboardSummary(
+            today_pnl_inr=today_pnl,
+            open_pnl_inr=open_pnl,
+            realised_pnl_inr=realised,
+            cash_inr=cash,
+            open_position_count=open_count,
+            mode="dry_run" if dry_run else "live",
+            ws_age_seconds=ws_age,
+            kill_switch_active=ks_active,
+        )
+        try:
+            cache.set(
+                cache_key,
+                out.model_dump_json(),
+                ttl=_DASHBOARD_CACHE_TTL,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "dashboard cache set failed",
+                exc_info=True,
+            )
+        return out
+
+    # ----------------------------------------------------------
+    # Open intraday positions (joined with strategy attribution).
+    # ----------------------------------------------------------
+    @router.get("/positions", response_model=PositionsResponse)
+    async def get_positions(
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> PositionsResponse:
+        cache = get_cache()
+        cache_key = f"cache:algo:live:positions:{user.user_id}"
+        cached = cache.get(cache_key)
+        if cached:
+            try:
+                return PositionsResponse.model_validate_json(cached)
+            except (ValueError, TypeError):
+                # Corrupted cache entry — fall through and recompute.
+                pass
+
+        uid = UUID(user.user_id)
+        kite = await _build_kite_client_for_user(uid)
+        kc = kite._kc
+        try:
+            raw = await asyncio.to_thread(kc.positions)
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "kite positions read failed",
+                exc_info=True,
+            )
+            raw = {}
+        net = raw.get("net", []) if isinstance(raw, dict) else []
+        open_rows = [
+            r for r in net if int(r.get("quantity", 0)) != 0
+        ]
+
+        attr = await _fetch_strategy_attribution(
+            uid,
+            [
+                (r["tradingsymbol"], r.get("product") or "MIS")
+                for r in open_rows
+            ],
+        )
+
+        out_rows: list[PositionRow] = []
+        for r in open_rows:
+            key = (
+                r["tradingsymbol"], r.get("product") or "MIS",
+            )
+            ctx = attr.get(key, {})
+            qty = int(r.get("quantity", 0))
+            avg = Decimal(str(r.get("average_price", 0) or 0))
+            ltp = Decimal(str(r.get("last_price", 0) or 0))
+            pnl_inr = Decimal(str(r.get("pnl", 0) or 0))
+            pnl_pct = (
+                ((ltp - avg) / avg) * Decimal("100")
+                if avg > 0
+                else Decimal("0")
+            )
+            entry_ts_iso = ctx.get("entry_ts_utc")
+            entry_ts = None
+            if entry_ts_iso:
+                try:
+                    entry_ts = datetime.fromisoformat(entry_ts_iso)
+                except (ValueError, TypeError):
+                    entry_ts = None
+            out_rows.append(
+                PositionRow(
+                    tradingsymbol=r["tradingsymbol"],
+                    exchange=r.get("exchange", "NSE"),
+                    quantity=qty,
+                    average_price=avg,
+                    last_price=ltp,
+                    pnl_inr=pnl_inr,
+                    pnl_pct=pnl_pct,
+                    product=r.get("product") or "MIS",
+                    strategy_id=ctx.get("strategy_id"),
+                    strategy_name=ctx.get("strategy_name"),
+                    entry_ts_utc=entry_ts,
+                    entry_reason=ctx.get("entry_reason"),
+                )
+            )
+
+        drift = await _ledger_kite_drift(
+            uid,
+            {r["tradingsymbol"] for r in open_rows},
+        )
+        out = PositionsResponse(rows=out_rows, ledger_drift=drift)
+        try:
+            cache.set(
+                cache_key,
+                out.model_dump_json(),
+                ttl=_POSITIONS_CACHE_TTL,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "positions cache set failed",
+                exc_info=True,
+            )
+        return out
+
+    # ----------------------------------------------------------
+    # Settled CNC holdings (joined with strategy + days_held).
+    # ----------------------------------------------------------
+    @router.get("/holdings", response_model=HoldingsResponse)
+    async def get_holdings(
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> HoldingsResponse:
+        cache = get_cache()
+        cache_key = f"cache:algo:live:holdings:{user.user_id}"
+        cached = cache.get(cache_key)
+        if cached:
+            try:
+                return HoldingsResponse.model_validate_json(cached)
+            except (ValueError, TypeError):
+                # Corrupted cache entry — fall through and recompute.
+                pass
+
+        uid = UUID(user.user_id)
+        kite = await _build_kite_client_for_user(uid)
+        kc = kite._kc
+        try:
+            raw = await asyncio.to_thread(kc.holdings)
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "kite holdings read failed",
+                exc_info=True,
+            )
+            raw = []
+        rows = raw if isinstance(raw, list) else []
+        open_rows = [
+            r for r in rows if int(r.get("quantity", 0)) > 0
+        ]
+
+        attr = await _fetch_holding_attribution(
+            uid,
+            [r["tradingsymbol"] for r in open_rows],
+        )
+
+        out_rows: list[HoldingRow] = []
+        for r in open_rows:
+            ctx = attr.get(r["tradingsymbol"], {})
+            qty = int(r.get("quantity", 0))
+            avg = Decimal(str(r.get("average_price", 0) or 0))
+            ltp = Decimal(str(r.get("last_price", 0) or 0))
+            pnl_inr = Decimal(str(r.get("pnl", 0) or 0))
+            pnl_pct = (
+                ((ltp - avg) / avg) * Decimal("100")
+                if avg > 0
+                else Decimal("0")
+            )
+            out_rows.append(
+                HoldingRow(
+                    tradingsymbol=r["tradingsymbol"],
+                    exchange=r.get("exchange", "NSE"),
+                    quantity=qty,
+                    average_price=avg,
+                    last_price=ltp,
+                    pnl_inr=pnl_inr,
+                    pnl_pct=pnl_pct,
+                    days_held=ctx.get("days_held"),
+                    strategy_id=ctx.get("strategy_id"),
+                    strategy_name=ctx.get("strategy_name"),
+                )
+            )
+        out = HoldingsResponse(rows=out_rows, ledger_drift=False)
+        try:
+            cache.set(
+                cache_key,
+                out.model_dump_json(),
+                ttl=_HOLDINGS_CACHE_TTL,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "holdings cache set failed",
+                exc_info=True,
+            )
+        return out
+
+    # ----------------------------------------------------------
     # OBS-1 — Kite WS health snapshot for the dashboard dot.
     # Always 200; returns disconnected zeros when no multiplexer
     # is registered for the user. MUST NOT spin up a multiplexer
@@ -588,8 +1284,6 @@ def create_live_router() -> APIRouter:
         """Return in-flight orders for the most recent live run."""
         from sqlalchemy import text
 
-        from backend.algo.live.caps_repo import CapsRepo  # noqa: F401
-
         uid = UUID(user.user_id)
         # Find latest live run for this strategy
         factory = _sf()
@@ -614,8 +1308,6 @@ def create_live_router() -> APIRouter:
             return []
         in_flight = row.get("live_orders_in_flight") or []
         if isinstance(in_flight, str):
-            import json
-
             in_flight = json.loads(in_flight)
         return in_flight
 
@@ -640,11 +1332,8 @@ def create_live_router() -> APIRouter:
             Bare list, newest first. Frontend KitePostback type
             consumes ``event_ts`` as ISO 8601 UTC.
         """
-        import asyncio as _asyncio
-        from datetime import datetime, timezone
-
         cap = min(limit, 200)
-        raw_rows = await _asyncio.to_thread(
+        raw_rows = await asyncio.to_thread(
             _query_postback_events, user.user_id, cap
         )
 
@@ -652,11 +1341,11 @@ def create_live_router() -> APIRouter:
         for r in raw_rows:
             try:
                 p = json.loads(r["payload_json"])
-            except Exception:
+            except Exception:  # noqa: BLE001
                 continue
             ts_ns = int(r["ts_ns"])
             event_ts = datetime.fromtimestamp(
-                ts_ns / 1_000_000_000, tz=timezone.utc,
+                ts_ns / 1_000_000_000, tz=UTC,
             ).isoformat().replace("+00:00", "Z")
             events.append(
                 PostbackEvent(

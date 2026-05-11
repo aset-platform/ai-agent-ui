@@ -261,8 +261,31 @@ export function Sidebar({ profile }: SidebarProps) {
     }
   }, [mobileMenuOpen]);
 
-  const [dashboardOpen, setDashboardOpen] =
-    useState(true);
+  // Per-group expand state — keyed by NavItem.view. Each
+  // collapsible group tracks its own open/closed independently.
+  // Shared state (single boolean) broke once a second group
+  // existed: toggling one toggled the other.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(
+    () => {
+      // Default: every group with children starts open.
+      const s = new Set<string>();
+      for (const it of NAV_ITEMS) {
+        if (it.children && it.children.length > 0) {
+          s.add(it.view);
+        }
+      }
+      return s;
+    },
+  );
+
+  const toggleGroup = (view: string) => {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(view)) next.delete(view);
+      else next.add(view);
+      return next;
+    });
+  };
 
   const visibleItems = useMemo(
     () =>
@@ -283,14 +306,20 @@ export function Sidebar({ profile }: SidebarProps) {
 
   const collapsed = sidebarCollapsed;
 
-  // Flyout popover state for collapsed nav groups
+  // Flyout popover state for collapsed nav groups — scoped to
+  // ONE group at a time via flyoutGroupView. Previously a shared
+  // boolean caused every group's flyout to render at the same
+  // y-position when any group was hovered (visible regression
+  // once we had >1 collapsible group).
   const [flyoutTop, setFlyoutTop] = useState(0);
-  const [flyoutVisible, setFlyoutVisible] = useState(false);
+  const [flyoutGroupView, setFlyoutGroupView] = useState<string | null>(
+    null,
+  );
   const flyoutTimeout = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
 
-  function showFlyout(e: React.MouseEvent) {
+  function showFlyout(e: React.MouseEvent, view: string) {
     if (flyoutTimeout.current) {
       clearTimeout(flyoutTimeout.current);
       flyoutTimeout.current = null;
@@ -299,12 +328,12 @@ export function Sidebar({ profile }: SidebarProps) {
       e.currentTarget as HTMLElement
     ).getBoundingClientRect();
     setFlyoutTop(rect.top);
-    setFlyoutVisible(true);
+    setFlyoutGroupView(view);
   }
 
   function hideFlyout() {
     flyoutTimeout.current = setTimeout(
-      () => setFlyoutVisible(false),
+      () => setFlyoutGroupView(null),
       150,
     );
   }
@@ -402,7 +431,7 @@ export function Sidebar({ profile }: SidebarProps) {
       return (
         <React.Fragment key={item.view + "-group"}>
           <div
-            onMouseEnter={showFlyout}
+            onMouseEnter={(e) => showFlyout(e, item.view)}
             onMouseLeave={hideFlyout}
           >
             <Link
@@ -418,7 +447,7 @@ export function Sidebar({ profile }: SidebarProps) {
 
           {/* Flyout popover — fixed position to escape
               overflow-y-auto clipping on <nav> */}
-          {flyoutVisible && (
+          {flyoutGroupView === item.view && (
             <div
               className={[
                 "fixed left-[62px]",
@@ -461,7 +490,7 @@ export function Sidebar({ profile }: SidebarProps) {
                     href={child.href}
                     className={flyoutClasses}
                     onClick={() =>
-                      setFlyoutVisible(false)
+                      setFlyoutGroupView(null)
                     }
                     data-testid={`sidebar-flyout-${child.label.toLowerCase().replace(/\s+/g, "-")}`}
                   >
@@ -497,14 +526,13 @@ export function Sidebar({ profile }: SidebarProps) {
           ].join(" "),
     ].join(" ");
 
+    const groupOpen = openGroups.has(item.view);
     return (
       <div key={item.view + "-group"}>
         <button
           type="button"
           className={parentClasses}
-          onClick={() =>
-            setDashboardOpen((prev) => !prev)
-          }
+          onClick={() => toggleGroup(item.view)}
           data-testid={`sidebar-group-${item.view}`}
         >
           <span className="shrink-0">
@@ -513,14 +541,14 @@ export function Sidebar({ profile }: SidebarProps) {
           <span className="truncate flex-1 text-left">
             {item.label}
           </span>
-          <GroupChevron open={dashboardOpen} />
+          <GroupChevron open={groupOpen} />
         </button>
 
         <div
           className={[
             "overflow-hidden transition-all",
             "duration-200 ease-in-out",
-            dashboardOpen
+            groupOpen
               ? "max-h-60 opacity-100"
               : "max-h-0 opacity-0",
           ].join(" ")}
