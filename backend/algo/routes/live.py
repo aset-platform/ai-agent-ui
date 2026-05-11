@@ -290,6 +290,26 @@ class DashboardSummary(BaseModel):
     kill_switch_active: bool = False
 
 
+class PositionRow(BaseModel):
+    tradingsymbol: str
+    exchange: str
+    quantity: int
+    average_price: Decimal
+    last_price: Decimal
+    pnl_inr: Decimal
+    pnl_pct: Decimal
+    product: str
+    strategy_id: str | None = None
+    strategy_name: str | None = None
+    entry_ts_utc: datetime | None = None
+    entry_reason: str | None = None
+
+
+class PositionsResponse(BaseModel):
+    rows: list[PositionRow]
+    ledger_drift: bool = False
+
+
 # ---------------------------------------------------------------
 # Live-dashboard helpers (shared by /dashboard-summary,
 # /positions, /holdings).
@@ -395,6 +415,170 @@ async def _kill_switch_active(
             exc_info=True,
         )
         return False
+
+
+async def _strategy_name_lookup(
+    strategy_ids: set[str],
+) -> dict[str, str]:
+    """Return ``{strategy_id_str: name}`` for the given UUIDs.
+
+    Empty dict on read failure — caller treats missing names as
+    "unknown" via the frontend's null-handling helper.
+    """
+    if not strategy_ids:
+        return {}
+    factory = _get_session_factory()
+    try:
+        async with factory() as session:
+            from sqlalchemy import text
+
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT id, name FROM algo.strategies "
+                        "WHERE id::text = ANY(:ids)"
+                    ),
+                    {"ids": list(strategy_ids)},
+                )
+            ).mappings().all()
+        return {str(r["id"]): r["name"] for r in rows}
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "strategy-name lookup failed",
+            exc_info=True,
+        )
+        return {}
+
+
+async def _fetch_strategy_attribution(
+    user_id: UUID,
+    keys: list[tuple[str, str]],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """For each (symbol, product), find today's first live BUY fill
+    in ``algo.events`` and return the originating strategy + the
+    entry reason carried in the event payload.
+
+    ``algo.events`` has no top-level ``tradingsymbol`` / ``side`` /
+    ``product`` columns — those live inside ``payload_json``. We
+    therefore fetch all of today's live fills for the user, then
+    filter + extract in Python. Returns an empty dict on Iceberg
+    read failure (drift logic still works via the cheap ledger
+    check downstream).
+    """
+    if not keys:
+        return {}
+    wanted_symbols = {sym for sym, _ in keys}
+    today_ist = _ist_midnight_str()
+    try:
+        rows = await asyncio.to_thread(
+            query_iceberg_table,
+            "algo.events",
+            "SELECT event_id, ts_ns, ts_date, strategy_id, "
+            "       payload_json "
+            "FROM events "
+            "WHERE user_id = ? "
+            "  AND mode = 'live' "
+            "  AND type = 'order_filled_live' "
+            "  AND ts_date >= ? "
+            "ORDER BY ts_ns ASC",
+            [str(user_id), today_ist],
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "attribution read failed",
+            exc_info=True,
+        )
+        return {}
+
+    # First BUY per (symbol, product) wins.
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    strategy_ids: set[str] = set()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (ValueError, TypeError):
+            continue
+        if payload.get("dry_run"):
+            continue
+        side = payload.get("side") or ""
+        if side.upper() != "BUY":
+            continue
+        sym = payload.get("symbol") or ""
+        product = payload.get("product") or "MIS"
+        key = (sym, product)
+        if sym not in wanted_symbols or key in by_key:
+            continue
+        sid = row.get("strategy_id")
+        if sid:
+            strategy_ids.add(str(sid))
+        ts_ns = int(row.get("ts_ns") or 0)
+        entry_dt = (
+            datetime.fromtimestamp(
+                ts_ns / 1_000_000_000, tz=UTC,
+            )
+            if ts_ns
+            else None
+        )
+        by_key[key] = {
+            "strategy_id": str(sid) if sid else None,
+            "strategy_name": None,
+            "entry_ts_utc": (
+                entry_dt.isoformat() if entry_dt else None
+            ),
+            "entry_reason": payload.get("reason"),
+        }
+
+    # Resolve strategy names from PG in one round-trip.
+    names = await _strategy_name_lookup(strategy_ids)
+    for ctx in by_key.values():
+        sid = ctx.get("strategy_id")
+        if sid:
+            ctx["strategy_name"] = names.get(sid)
+    return by_key
+
+
+async def _ledger_kite_drift(
+    user_id: UUID,
+    kite_symbols: set[str],
+) -> bool:
+    """Cheap signal: do today's ledger BUYs match Kite's open set?
+
+    True only if the ledger has open BUYs Kite doesn't, or vice
+    versa (after best-effort net-down). Quiet (False) on any read
+    error — the dedicated reconciliation panel surfaces the real
+    drift signal.
+    """
+    try:
+        rows = await asyncio.to_thread(
+            query_iceberg_table,
+            "algo.events",
+            "SELECT payload_json FROM events "
+            "WHERE user_id = ? "
+            "  AND mode = 'live' "
+            "  AND type = 'order_filled_live' "
+            "  AND ts_date = ?",
+            [str(user_id), _ist_midnight_str()],
+        )
+    except Exception:  # noqa: BLE001
+        return False
+    ledger_net: dict[str, int] = {}
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (ValueError, TypeError):
+            continue
+        if payload.get("dry_run"):
+            continue
+        sym = payload.get("symbol") or ""
+        qty = int(payload.get("qty") or 0)
+        side = (payload.get("side") or "").upper()
+        if not sym or not qty:
+            continue
+        sign = 1 if side == "BUY" else -1
+        ledger_net[sym] = ledger_net.get(sym, 0) + sign * qty
+    ledger_open = {s for s, q in ledger_net.items() if q > 0}
+    # Symmetric difference: drift if either side has extras.
+    return bool(ledger_open.symmetric_difference(kite_symbols))
 
 
 # ---------------------------------------------------------------
@@ -774,6 +958,82 @@ def create_live_router() -> APIRouter:
                 exc_info=True,
             )
         return out
+
+    # ----------------------------------------------------------
+    # Open intraday positions (joined with strategy attribution).
+    # ----------------------------------------------------------
+    @router.get("/positions", response_model=PositionsResponse)
+    async def get_positions(
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> PositionsResponse:
+        uid = UUID(user.user_id)
+        kite = await _build_kite_client_for_user(uid)
+        kc = kite._kc
+        try:
+            raw = await asyncio.to_thread(kc.positions)
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "kite positions read failed",
+                exc_info=True,
+            )
+            raw = {}
+        net = raw.get("net", []) if isinstance(raw, dict) else []
+        open_rows = [
+            r for r in net if int(r.get("quantity", 0)) != 0
+        ]
+
+        attr = await _fetch_strategy_attribution(
+            uid,
+            [
+                (r["tradingsymbol"], r.get("product") or "MIS")
+                for r in open_rows
+            ],
+        )
+
+        out_rows: list[PositionRow] = []
+        for r in open_rows:
+            key = (
+                r["tradingsymbol"], r.get("product") or "MIS",
+            )
+            ctx = attr.get(key, {})
+            qty = int(r.get("quantity", 0))
+            avg = Decimal(str(r.get("average_price", 0) or 0))
+            ltp = Decimal(str(r.get("last_price", 0) or 0))
+            pnl_inr = Decimal(str(r.get("pnl", 0) or 0))
+            pnl_pct = (
+                ((ltp - avg) / avg) * Decimal("100")
+                if avg > 0
+                else Decimal("0")
+            )
+            entry_ts_iso = ctx.get("entry_ts_utc")
+            entry_ts = None
+            if entry_ts_iso:
+                try:
+                    entry_ts = datetime.fromisoformat(entry_ts_iso)
+                except (ValueError, TypeError):
+                    entry_ts = None
+            out_rows.append(
+                PositionRow(
+                    tradingsymbol=r["tradingsymbol"],
+                    exchange=r.get("exchange", "NSE"),
+                    quantity=qty,
+                    average_price=avg,
+                    last_price=ltp,
+                    pnl_inr=pnl_inr,
+                    pnl_pct=pnl_pct,
+                    product=r.get("product") or "MIS",
+                    strategy_id=ctx.get("strategy_id"),
+                    strategy_name=ctx.get("strategy_name"),
+                    entry_ts_utc=entry_ts,
+                    entry_reason=ctx.get("entry_reason"),
+                )
+            )
+
+        drift = await _ledger_kite_drift(
+            uid,
+            {r["tradingsymbol"] for r in open_rows},
+        )
+        return PositionsResponse(rows=out_rows, ledger_drift=drift)
 
     # ----------------------------------------------------------
     # OBS-1 — Kite WS health snapshot for the dashboard dot.
