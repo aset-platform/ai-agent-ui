@@ -196,8 +196,18 @@ function DailyBrinsonTab({ strategyId }: { strategyId: string | null }) {
 
 // ── Trades sub-tab ──────────────────────────────────────────
 
-function TradeReasonsTab({ strategyId }: { strategyId: string | null }) {
-  const { rows, loading, error } = useAttributionTrades(strategyId);
+function TradeReasonsTab({
+  strategyId,
+  mode,
+  dryRun,
+}: {
+  strategyId: string | null;
+  mode?: "live" | "paper" | "backtest" | null;
+  dryRun?: boolean | null;
+}) {
+  const { rows, loading, error } = useAttributionTrades(
+    strategyId, 1, { mode, dryRun },
+  );
 
   if (!strategyId) {
     return (
@@ -301,9 +311,19 @@ interface AttributionPanelProps {
   /** Strategy selected in the Live segment of PaperTab. May be
    *  empty — the panel renders a guidance state in that case. */
   strategyId: string | null;
+  /** Scope filter forwarded to /algo/attribution/trades so the
+   *  Trade Reasons table only shows fills from the matching
+   *  runtime. Live dashboard passes "live"/false; Dry-run tab
+   *  passes "live"/true; default omits both for back-compat. */
+  mode?: "live" | "paper" | "backtest" | null;
+  dryRun?: boolean | null;
 }
 
-export function AttributionPanel({ strategyId }: AttributionPanelProps) {
+export function AttributionPanel({
+  strategyId,
+  mode,
+  dryRun,
+}: AttributionPanelProps) {
   const [tab, setTab] = useState<SubTab>("brinson");
   // The mock-data signal lives on the regression endpoint (the
   // factor regression is the v3-mocked piece). Brinson + trade
@@ -370,7 +390,11 @@ export function AttributionPanel({ strategyId }: AttributionPanelProps) {
           <DailyBrinsonTab strategyId={strategyId} />
         )}
         {tab === "trades" && (
-          <TradeReasonsTab strategyId={strategyId} />
+          <TradeReasonsTab
+            strategyId={strategyId}
+            mode={mode}
+            dryRun={dryRun}
+          />
         )}
       </div>
     </div>

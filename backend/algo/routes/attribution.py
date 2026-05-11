@@ -160,6 +160,24 @@ def create_attribution_router() -> APIRouter:
         strategy_id: UUID | None = Query(None),
         as_of: date | None = Query(None),
         limit: int = Query(50, ge=1, le=500),
+        mode: str | None = Query(
+            None,
+            description=(
+                "Filter by run mode: 'live' restricts to "
+                "order_filled_live (real Kite fills). 'paper' "
+                "or 'backtest' restricts to order_filled with "
+                "matching events.mode. Omit for all modes."
+            ),
+        ),
+        dry_run: bool | None = Query(
+            None,
+            description=(
+                "Filter by payload.dry_run. Pass true to see "
+                "synthetic-Kite rehearsal fills only; false "
+                "for real-money fills. Omit for both. Only "
+                "meaningful when mode='live'."
+            ),
+        ),
         user: UserContext = Depends(pro_or_superuser),
     ) -> JSONResponse:
         """Build the per-trade reason log on the fly from today's
@@ -169,6 +187,12 @@ def create_attribution_router() -> APIRouter:
         BUY signal opens a position, the next SELL signal on the
         same ticker closes it, and we synthesise a TradeReason
         from the joined payloads.
+
+        ``mode`` and ``dry_run`` are scope filters added so the
+        Live Trading page can show only real-money trades and the
+        Dry-run tab can show only synthetic ones. Without them
+        the panel would intermingle paper + backtest + dry-run +
+        live fills.
         """
         user_id = UUID(user.user_id)
         as_of = as_of or _ist_today()
@@ -176,7 +200,8 @@ def create_attribution_router() -> APIRouter:
         cache_key = (
             "cache:algo:attribution:trades:"
             f"{user_id}:{strategy_id or 'all'}:"
-            f"{as_of.isoformat()}:{limit}"
+            f"{as_of.isoformat()}:{limit}:"
+            f"{mode or 'any'}:{dry_run if dry_run is not None else 'any'}"
         )
         hit = cache.get(cache_key)
         if hit is not None:
@@ -184,20 +209,60 @@ def create_attribution_router() -> APIRouter:
 
         from backend.db.duckdb_engine import query_iceberg_table
 
+        # Event-type filter: live mode reads only the live event
+        # type; paper/backtest read only the generic order_filled
+        # type with an events.mode predicate; default keeps the
+        # pre-2026-05-11 behaviour and intermingles everything.
+        if mode == "live":
+            type_predicate = (
+                "type IN ('signal_generated', 'order_filled_live')"
+            )
+            mode_clause = ""
+            mode_params: list = []
+        elif mode in ("paper", "backtest"):
+            type_predicate = (
+                "type IN ('signal_generated', 'order_filled')"
+            )
+            mode_clause = " AND mode = ?"
+            mode_params = [mode]
+        else:
+            type_predicate = (
+                "type IN ('signal_generated', "
+                "         'order_filled', "
+                "         'order_filled_live')"
+            )
+            mode_clause = ""
+            mode_params = []
+
+        dry_run_clause = ""
+        dry_run_params: list = []
+        if dry_run is not None:
+            # payload_json is text JSON — match the
+            # /algo/paper/events extraction shape so the
+            # row's payload.dry_run bool matches.
+            wanted = "true" if dry_run else "false"
+            dry_run_clause = (
+                " AND (type = 'signal_generated' "
+                "   OR json_extract_string("
+                "        payload_json, '$.dry_run') = ?)"
+            )
+            dry_run_params = [wanted]
+
         sql = (
             "SELECT user_id, strategy_id, type, payload_json, ts_ns "
             "FROM events "
             "WHERE user_id = ? "
             "  AND ts_date = ? "
-            "  AND type IN ('signal_generated', "
-            "               'order_filled', "
-            "               'order_filled_live') "
+            f"  AND {type_predicate}"
+            f"{mode_clause}"
+            f"{dry_run_clause} "
             "ORDER BY ts_ns"
         )
         try:
             events = query_iceberg_table(
                 "algo.events", sql,
-                [str(user_id), as_of.isoformat()],
+                [str(user_id), as_of.isoformat()]
+                + mode_params + dry_run_params,
             )
         except Exception:  # noqa: BLE001
             _logger.exception(

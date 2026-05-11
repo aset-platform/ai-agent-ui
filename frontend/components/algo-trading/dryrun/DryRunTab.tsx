@@ -105,7 +105,11 @@ export function DryRunTab() {
 
       <KitePostbackPanel />
 
-      <AttributionPanel strategyId={strategies[0]?.id ?? null} />
+      <AttributionPanel
+        strategyId={strategies[0]?.id ?? null}
+        mode="live"
+        dryRun={true}
+      />
 
       <RegimeHistoryChart />
 

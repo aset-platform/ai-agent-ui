@@ -134,7 +134,11 @@ export function LiveDashboard() {
           Attribution
         </summary>
         <div className="border-t border-slate-200 dark:border-slate-700 p-3">
-          <AttributionPanel strategyId={strategyId || null} />
+          <AttributionPanel
+            strategyId={strategyId || null}
+            mode="live"
+            dryRun={false}
+          />
         </div>
       </details>
     </div>
