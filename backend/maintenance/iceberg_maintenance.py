@@ -367,6 +367,26 @@ def compact_table(table_name: str) -> dict:
         preserve_index=False,
     )
 
+    # Align Arrow nullability with the Iceberg schema's
+    # required/optional flags. ``pa.Table.from_pandas``
+    # unconditionally produces nullable columns; pyiceberg's
+    # ``overwrite()`` then rejects the schema check whenever
+    # the table declares a column ``required=True``
+    # (ValueError: "Mismatch in fields: bar_date required vs
+    # optional"). Affects every table with a NOT-NULL column
+    # — e.g. ``stocks.regime_history``, ``stocks.daily_factors``,
+    # ``stocks.regime_hmm_state``.
+    try:
+        target_arrow_schema = tbl.schema().as_arrow()
+        arrow = arrow.cast(target_arrow_schema)
+    except Exception:
+        _logger.warning(
+            "[maint] Arrow schema cast failed for %s — "
+            "proceeding with default Arrow schema",
+            table_name,
+            exc_info=True,
+        )
+
     # Use overwrite to replace all data in one
     # commit — produces 1 file per partition
     try:
