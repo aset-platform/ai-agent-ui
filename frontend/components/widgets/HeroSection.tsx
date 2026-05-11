@@ -7,6 +7,19 @@ import type { UserProfile } from "@/hooks/useEditProfile";
 import type { MarketFilter } from "@/app/(authenticated)/dashboard/DashboardClient";
 import { WidgetError } from "./WidgetError";
 
+/** Live-overlay metadata, surfaced as a chip beneath the
+ *  portfolio value so the user knows whether they're looking at
+ *  live ticks (during market hours with active Kite WS) or
+ *  end-of-day OHLCV close (off-hours / WS down). Optional —
+ *  callers that don't pass it just get the legacy server-totals
+ *  rendering with no chip. */
+export interface HeroLiveMeta {
+  live_count: number;
+  eod_count: number;
+  unknown_count: number;
+  total_count: number;
+}
+
 interface HeroSectionProps {
   watchlist: DashboardData<WatchlistResponse>;
   profile: UserProfile | null;
@@ -17,6 +30,8 @@ interface HeroSectionProps {
   /** Portfolio invested totals per currency. */
   portfolioInvestedTotals?: Record<string, number>;
   portfolioHoldingsCount?: number;
+  /** Live LTP overlay status — drives the source chip. */
+  liveMeta?: HeroLiveMeta;
 }
 
 const quickActions = [
@@ -40,6 +55,7 @@ export function HeroSection({
   portfolioTotals = {},
   portfolioInvestedTotals = {},
   portfolioHoldingsCount = 0,
+  liveMeta,
 }: HeroSectionProps) {
   const router = useRouter();
   // Hero greeting + portfolio value come from `profile` and
@@ -167,6 +183,35 @@ export function HeroSection({
                   maximumFractionDigits: 2,
                 })}
               </p>
+              {liveMeta && liveMeta.total_count > 0 && (
+                <span
+                  data-testid="dashboard-hero-live-chip"
+                  className={
+                    "mt-1 inline-flex items-center gap-1 "
+                    + "rounded-full px-2 py-0.5 text-[10px] "
+                    + "font-medium uppercase tracking-wide "
+                    + (liveMeta.live_count > 0
+                      ? "bg-emerald-50 text-emerald-700 "
+                        + "dark:bg-emerald-950/40 "
+                        + "dark:text-emerald-300"
+                      : "bg-slate-100 text-slate-600 "
+                        + "dark:bg-slate-800 "
+                        + "dark:text-slate-400")
+                  }
+                  title={
+                    `Live LTP: ${liveMeta.live_count} · `
+                    + `EOD close: ${liveMeta.eod_count} · `
+                    + `Unknown: ${liveMeta.unknown_count}`
+                  }
+                >
+                  {liveMeta.live_count > 0
+                    ? `● live · ${liveMeta.live_count}/`
+                      + `${liveMeta.total_count}`
+                    : `● eod close · `
+                      + `${liveMeta.eod_count}/`
+                      + `${liveMeta.total_count}`}
+                </span>
+              )}
               <span
                 data-testid="dashboard-hero-daily-change"
                 className={`
