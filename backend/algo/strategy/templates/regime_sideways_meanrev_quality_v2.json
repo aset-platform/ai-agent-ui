@@ -1,0 +1,102 @@
+{
+  "id": "00000000-0000-0000-0000-000000000013",
+  "name": "SIDEWAYS v2 — Mean Reversion (hysteresis)",
+  "universe": {
+    "type": "scope",
+    "scope": "discovery",
+    "filter": {
+      "ticker_type": ["stock"],
+      "market": "india"
+    }
+  },
+  "schedule": {
+    "type": "bar_close",
+    "interval": "1d",
+    "time": "15:25 IST"
+  },
+  "rebalance": {
+    "type": "daily",
+    "max_positions": 6
+  },
+  "root": {
+    "type": "if",
+    "cond": {
+      "type": "or",
+      "operands": [
+        {
+          "type": "compare",
+          "left": {"feature": "regime_label"},
+          "op": "!=",
+          "right": {"literal": "SIDEWAYS"}
+        },
+        {
+          "type": "compare",
+          "left": {"feature": "rsi"},
+          "op": ">",
+          "right": {"literal": 65}
+        },
+        {
+          "type": "compare",
+          "left": {"feature": "realized_vol_60d"},
+          "op": ">",
+          "right": {"literal": 0.40}
+        }
+      ]
+    },
+    "then": {"type": "exit", "scope": "this_symbol"},
+    "else": {
+      "type": "if",
+      "cond": {
+        "type": "and",
+        "operands": [
+          {
+            "type": "compare",
+            "left": {"feature": "regime_label"},
+            "op": "==",
+            "right": {"literal": "SIDEWAYS"}
+          },
+          {
+            "type": "compare",
+            "left": {"feature": "rsi"},
+            "op": "<",
+            "right": {"literal": 35}
+          },
+          {
+            "type": "compare",
+            "left": {"feature": "realized_vol_60d"},
+            "op": "<",
+            "right": {"literal": 0.25}
+          },
+          {
+            "type": "compare",
+            "left": {"feature": "adx_14"},
+            "op": "<",
+            "right": {"literal": 20}
+          },
+          {
+            "type": "between",
+            "value": {"feature": "distance_from_sma200"},
+            "low": {"literal": -0.10},
+            "high": {"literal": 0.05}
+          }
+        ]
+      },
+      "then": {"type": "set_target_weight", "weight": 0.10},
+      "else": {"type": "hold"}
+    }
+  },
+  "risk": {
+    "per_trade": {
+      "stop_loss_pct": 4.0,
+      "max_qty": 5000
+    },
+    "portfolio": {
+      "max_exposure_pct": 60.0,
+      "max_concentration_pct": 10.0
+    },
+    "daily": {
+      "max_loss_pct": 2.0,
+      "max_open_positions": 6
+    }
+  }
+}

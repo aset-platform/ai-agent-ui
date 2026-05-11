@@ -200,6 +200,83 @@ export const TEMPLATES: { key: string; label: string; ast: StrategyAst }[] = [
     } as unknown as StrategyAst,
   },
   {
+    key: "regime_sideways_meanrev_quality_v2",
+    label: "SIDEWAYS v2 — Mean Reversion (hysteresis)",
+    ast: {
+      id: randomId(),
+      name: "SIDEWAYS v2 — Mean Reversion (hysteresis)",
+      ..._common,
+      rebalance: { type: "daily", max_positions: 6 },
+      risk: {
+        per_trade: { stop_loss_pct: 4, max_qty: 5000 },
+        portfolio: {
+          max_exposure_pct: 60, max_concentration_pct: 10,
+        },
+        daily: { max_loss_pct: 2, max_open_positions: 6 },
+      },
+      root: {
+        type: "if",
+        cond: {
+          type: "or",
+          operands: [
+            {
+              type: "compare",
+              left: { feature: "regime_label" },
+              op: "!=", right: { literal: "SIDEWAYS" },
+            },
+            {
+              type: "compare",
+              left: { feature: "rsi" },
+              op: ">", right: { literal: 65 },
+            },
+            {
+              type: "compare",
+              left: { feature: "realized_vol_60d" },
+              op: ">", right: { literal: 0.40 },
+            },
+          ],
+        },
+        then: { type: "exit", scope: "this_symbol" },
+        else: {
+          type: "if",
+          cond: {
+            type: "and",
+            operands: [
+              {
+                type: "compare",
+                left: { feature: "regime_label" },
+                op: "==", right: { literal: "SIDEWAYS" },
+              },
+              {
+                type: "compare",
+                left: { feature: "rsi" },
+                op: "<", right: { literal: 35 },
+              },
+              {
+                type: "compare",
+                left: { feature: "realized_vol_60d" },
+                op: "<", right: { literal: 0.25 },
+              },
+              {
+                type: "compare",
+                left: { feature: "adx_14" },
+                op: "<", right: { literal: 20 },
+              },
+              {
+                type: "between",
+                value: { feature: "distance_from_sma200" },
+                low: { literal: -0.10 },
+                high: { literal: 0.05 },
+              },
+            ],
+          },
+          then: { type: "set_target_weight", weight: 0.10 },
+          else: { type: "hold" },
+        },
+      },
+    } as unknown as StrategyAst,
+  },
+  {
     key: "regime_bear_defensive_lowvol",
     label: "BEAR — Defensive Low-Vol Quality",
     ast: {
