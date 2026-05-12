@@ -163,10 +163,11 @@ def test_regression_strips_mock_flag_into_metadata(app) -> None:
 def test_trades_pairs_buy_sell_signals_via_fills(
     app, monkeypatch,
 ) -> None:
-    """Two BUY fills + two SELL fills on the same ticker pair
-    in chronological order to produce two TradeReason rows."""
-    import backend.algo.routes.attribution as routes_mod
-
+    """ASETPLTFRM-381 — pairing now bucketed by the canonical
+    symbol (``RELIANCE``, no ``.NS`` suffix). Signals carry
+    ``payload.ticker`` (with ``.NS``); fills carry
+    ``payload.symbol`` (without). The route normalises both into
+    the same bucket so the pair surfaces."""
     base_ts = int(
         datetime(2026, 5, 10, 9, 30, tzinfo=timezone.utc)
         .timestamp() * 1_000_000_000,
@@ -188,7 +189,7 @@ def test_trades_pairs_buy_sell_signals_via_fills(
             "strategy_id": "ssss",
             "type": "order_filled",
             "payload_json": (
-                '{"ticker": "RELIANCE.NS", "side": "BUY", '
+                '{"symbol": "RELIANCE", "side": "BUY", '
                 '"qty": 10, "fill_price": 1234.5}'
             ),
             "ts_ns": base_ts + 1,
@@ -208,7 +209,7 @@ def test_trades_pairs_buy_sell_signals_via_fills(
             "strategy_id": "ssss",
             "type": "order_filled",
             "payload_json": (
-                '{"ticker": "RELIANCE.NS", "side": "SELL", '
+                '{"symbol": "RELIANCE", "side": "SELL", '
                 '"qty": 10, "fill_price": 1456.0}'
             ),
             "ts_ns": base_ts + 101,
@@ -224,7 +225,8 @@ def test_trades_pairs_buy_sell_signals_via_fills(
     body = r.json()
     assert body["total"] == 1
     row = body["rows"][0]
-    assert row["ticker"] == "RELIANCE.NS"
+    # Canonical symbol form: ``.NS`` stripped.
+    assert row["ticker"] == "RELIANCE"
     assert row["entry_price"] == 1234.5
     assert row["exit_price"] == 1456.0
     assert row["qty"] == 10
@@ -232,6 +234,121 @@ def test_trades_pairs_buy_sell_signals_via_fills(
     assert row["exit_reason"] == "trailing_stop"
     assert "BULL" in row["reason_text"]
     assert "trailing_stop" in row["reason_text"]
+
+
+def test_trades_panic_close_pairs_without_sell_signal(
+    app, monkeypatch,
+) -> None:
+    """ASETPLTFRM-381 — when panic close fills a SELL without a
+    matching signal_generated, the pair still surfaces. Today's
+    live session: BUY fill at 11:41 + Panic Close SELL fill at
+    12:25 → one trade row with exit_reason resolved from the
+    synthetic panic_close signal."""
+    base_ts = int(
+        datetime(2026, 5, 12, 6, 11, tzinfo=timezone.utc)
+        .timestamp() * 1_000_000_000,
+    )
+    fake_events = [
+        # BUY: full signal → fill
+        {
+            "user_id": USER_ID, "strategy_id": "ssss",
+            "type": "signal_generated", "ts_ns": base_ts,
+            "payload_json": (
+                '{"ticker": "ITC.NS", "side": "BUY", '
+                '"qty": 4, "regime_label": "BULL"}'
+            ),
+        },
+        {
+            "user_id": USER_ID, "strategy_id": "ssss",
+            "type": "order_filled_live", "ts_ns": base_ts + 1,
+            "payload_json": (
+                '{"symbol": "ITC", "side": "BUY", "qty": 4, '
+                '"fill_price": 304.05}'
+            ),
+        },
+        # Panic close synthetic signal_generated (ASETPLTFRM-381)
+        {
+            "user_id": USER_ID, "strategy_id": "ssss",
+            "type": "signal_generated", "ts_ns": base_ts + 100,
+            "payload_json": (
+                '{"symbol": "ITC", "ticker": "ITC.NS", '
+                '"side": "SELL", "qty": 4, '
+                '"reason": "panic_close", '
+                '"exit_reason": "panic_close"}'
+            ),
+        },
+        # SELL fill from Kite postback
+        {
+            "user_id": USER_ID, "strategy_id": "ssss",
+            "type": "order_filled_live", "ts_ns": base_ts + 101,
+            "payload_json": (
+                '{"symbol": "ITC", "side": "SELL", "qty": 4, '
+                '"fill_price": 304.70}'
+            ),
+        },
+    ]
+    monkeypatch.setattr(
+        "backend.db.duckdb_engine.query_iceberg_table",
+        lambda table, sql, params=None: fake_events,
+    )
+    client = TestClient(app)
+    r = client.get("/v1/algo/attribution/trades")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 1
+    row = body["rows"][0]
+    assert row["ticker"] == "ITC"
+    assert row["qty"] == 4
+    assert row["entry_price"] == 304.05
+    assert row["exit_price"] == 304.70
+    assert row["exit_reason"] == "panic_close"
+
+
+def test_trades_pairs_when_no_signals_at_all(
+    app, monkeypatch,
+) -> None:
+    """Bare fills (no signals on either side — manual order
+    placement) should still pair into a trade row with
+    exit_reason=None. Avoids the pre-381 false-empty case."""
+    base_ts = int(
+        datetime(2026, 5, 12, 6, 11, tzinfo=timezone.utc)
+        .timestamp() * 1_000_000_000,
+    )
+    fake_events = [
+        {
+            "user_id": USER_ID, "strategy_id": "ssss",
+            "type": "order_filled_live", "ts_ns": base_ts,
+            "payload_json": (
+                '{"symbol": "TCS", "side": "BUY", "qty": 1, '
+                '"fill_price": 4000.0}'
+            ),
+        },
+        {
+            "user_id": USER_ID, "strategy_id": "ssss",
+            "type": "order_filled_live", "ts_ns": base_ts + 1,
+            "payload_json": (
+                '{"symbol": "TCS", "side": "SELL", "qty": 1, '
+                '"fill_price": 4050.0}'
+            ),
+        },
+    ]
+    monkeypatch.setattr(
+        "backend.db.duckdb_engine.query_iceberg_table",
+        lambda table, sql, params=None: fake_events,
+    )
+    client = TestClient(app)
+    r = client.get("/v1/algo/attribution/trades")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 1
+    row = body["rows"][0]
+    assert row["ticker"] == "TCS"
+    assert row["entry_price"] == 4000.0
+    assert row["exit_price"] == 4050.0
+    # No entry signal → no regime / exposures, but pair still
+    # surfaces.
+    assert row["entry_regime"] is None
+    assert row["exit_reason"] is None
 
 
 def test_trades_returns_empty_when_no_events(

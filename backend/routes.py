@@ -3302,6 +3302,93 @@ def create_app(
         dependencies=[Depends(superuser_only)],
     )
 
+    # ── Pipeline assertion violations (ASETPLTFRM-380) ──
+
+    async def _admin_pipeline_assertions(
+        days: int = 7,
+        severity: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """GET /admin/data-health/pipeline-assertions
+
+        Surfaces ``data_quality_violation`` events emitted by the
+        pipeline assertion framework (ASETPLTFRM-380). The admin
+        Data Health card uses this to flag silent-success runs
+        like the 2026-05-11 stale-VIX case.
+
+        Args:
+            days: Window. Default 7 days back.
+            severity: Optional filter — ``warn`` or ``error``.
+            limit: Cap. Default 100, max 500.
+
+        Returns:
+            ``{rows: [...], counts: {warn, error, ok}}`` where each
+            row is ``{ts_ns, ts_date, pipeline_id, step, assertion,
+            severity, message, detail}``.
+        """
+        from datetime import datetime, timedelta, timezone
+        from backend.db.duckdb_engine import query_iceberg_table
+        cap = min(max(limit, 1), 500)
+        window_days = min(max(days, 1), 90)
+        sql = (
+            "SELECT ts_ns, ts_date, payload_json "
+            "FROM events "
+            "WHERE type = 'data_quality_violation' "
+            "  AND ts_date >= CAST(? AS DATE) "
+            "ORDER BY ts_ns DESC "
+            "LIMIT ?"
+        )
+        threshold = (
+            datetime.now(timezone.utc).date()
+            - timedelta(days=window_days)
+        )
+        try:
+            raw_rows = await asyncio.to_thread(
+                query_iceberg_table,
+                "algo.events",
+                sql,
+                [threshold.isoformat(), cap],
+            )
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "admin/data-health/pipeline-assertions query "
+                "failed",
+            )
+            raw_rows = []
+        rows: list[dict[str, Any]] = []
+        counts = {"warn": 0, "error": 0}
+        import json as _json
+        for r in raw_rows:
+            try:
+                p = _json.loads(r.get("payload_json") or "{}")
+            except (ValueError, TypeError):
+                continue
+            sev = str(p.get("severity") or "warn")
+            if severity and sev != severity:
+                continue
+            if sev in counts:
+                counts[sev] += 1
+            rows.append({
+                "ts_ns": int(r.get("ts_ns") or 0),
+                "ts_date": str(r.get("ts_date") or ""),
+                "pipeline_id": p.get("pipeline_id"),
+                "run_id": p.get("run_id"),
+                "step": p.get("step"),
+                "assertion": p.get("assertion"),
+                "severity": sev,
+                "message": p.get("message"),
+                "detail": p.get("detail") or {},
+                "ts_ist": p.get("ts_ist"),
+            })
+        return {"rows": rows, "counts": counts}
+
+    admin_router.add_api_route(
+        "/admin/data-health/pipeline-assertions",
+        _admin_pipeline_assertions,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+
     # ── Admin Recommendations (cross-user) ──────
 
     async def _admin_recommendations_list(

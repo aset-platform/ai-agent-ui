@@ -11,6 +11,7 @@ import useSWR from "swr";
 
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
+import { todayIstIso } from "@/lib/datetime";
 
 /** Subset of the kite_postback_received event payload
  *  returned by GET /v1/algo/live/postbacks. */
@@ -26,7 +27,19 @@ export interface KitePostback {
   raw: Record<string, unknown>;
 }
 
-const KEY = `${API_URL}/algo/live/postbacks?limit=50`;
+// ASETPLTFRM-382 — restrict the Live → Postbacks panel to today's
+// real-money rows. ``dry_run=false`` treats NULL-payload-dry_run as
+// real money (post-ASETPLTFRM-374 the runtime omits the field for
+// real-money events); ``since_date`` is today in IST so the panel
+// never bleeds prior sessions.
+function buildPostbacksKey(): string {
+  const qs = new URLSearchParams({
+    limit: "50",
+    dry_run: "false",
+    since_date: todayIstIso(),
+  });
+  return `${API_URL}/algo/live/postbacks?${qs.toString()}`;
+}
 
 async function fetcher(url: string): Promise<KitePostback[]> {
   const r = await apiFetch(url);
@@ -47,7 +60,7 @@ async function fetcher(url: string): Promise<KitePostback[]> {
 
 export function useKitePostbacks() {
   const { data, error, isLoading, mutate } = useSWR<KitePostback[]>(
-    KEY,
+    buildPostbacksKey(),
     fetcher,
     {
       revalidateOnFocus: false,

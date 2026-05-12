@@ -765,48 +765,67 @@ class OrderSubmissionsResponse(BaseModel):
     submissions: list[OrderSubmissionEvent]
 
 
+def _dry_run_clause(dry_run: bool | None) -> str:
+    """SQL fragment for the optional dry_run filter (ASETPLTFRM-382).
+
+    Mirrors ``routes/paper.py::list_events`` — when ``dry_run=False``
+    the NULL-payload-field rows (post-ASETPLTFRM-374 the runtime
+    omits the field for real-money events) are treated as real
+    money, so the Live page never bleeds dry-run rows.
+    """
+    if dry_run is None:
+        return ""
+    if dry_run:
+        return (
+            " AND json_extract_string(payload_json, '$.dry_run') "
+            "= 'true' "
+        )
+    return (
+        " AND (json_extract_string(payload_json, '$.dry_run') "
+        "= 'false' OR json_extract_string(payload_json, "
+        "'$.dry_run') IS NULL) "
+    )
+
+
 def _query_order_submission_events(
     user_id: str,
     limit: int,
     session_id: str | None = None,
+    *,
+    dry_run: bool | None = None,
+    since_date: str | None = None,
 ) -> list[dict]:
     """Query algo.events for order_submitted_live rows.
 
-    Mirrors ``_query_postback_events``. ``session_id`` filter is
-    optional — when provided, restricts to a single LiveRuntime
-    session (one frontend Submissions panel typically wants the
-    current session only; without a filter we show all live mode
-    submissions for the user).
+    ASETPLTFRM-382 — ``dry_run`` and ``since_date`` filters
+    introduced so the Live → Submissions panel never bleeds
+    dry-run rows or prior sessions into today's view.
+
+    ``session_id`` filter is optional — when provided, restricts to
+    a single LiveRuntime session (one frontend Submissions panel
+    typically wants the current session only; without a filter we
+    show all live mode submissions for the user).
     """
     try:
+        params: list[Any] = [user_id]
+        sql = (
+            "SELECT event_id, ts_ns, ts_date, session_id, "
+            "       strategy_id, payload_json "
+            "FROM events "
+            "WHERE user_id = ? "
+            "  AND mode = 'live' "
+            "  AND type = 'order_submitted_live' "
+        )
         if session_id:
-            rows = query_iceberg_table(
-                "algo.events",
-                "SELECT event_id, ts_ns, ts_date, session_id, "
-                "       strategy_id, payload_json "
-                "FROM events "
-                "WHERE user_id = ? "
-                "  AND mode = 'live' "
-                "  AND session_id = ? "
-                "  AND type = 'order_submitted_live' "
-                "ORDER BY ts_ns DESC "
-                "LIMIT ?",
-                [user_id, session_id, limit],
-            )
-        else:
-            rows = query_iceberg_table(
-                "algo.events",
-                "SELECT event_id, ts_ns, ts_date, session_id, "
-                "       strategy_id, payload_json "
-                "FROM events "
-                "WHERE user_id = ? "
-                "  AND mode = 'live' "
-                "  AND type = 'order_submitted_live' "
-                "ORDER BY ts_ns DESC "
-                "LIMIT ?",
-                [user_id, limit],
-            )
-        return rows
+            sql += " AND session_id = ? "
+            params.append(session_id)
+        if since_date:
+            sql += " AND ts_date >= ? "
+            params.append(since_date)
+        sql += _dry_run_clause(dry_run)
+        sql += " ORDER BY ts_ns DESC LIMIT ?"
+        params.append(limit)
+        return query_iceberg_table("algo.events", sql, params)
     except Exception:  # noqa: BLE001
         _logger.warning(
             "order_submitted_live query failed for user=%s",
@@ -819,15 +838,16 @@ def _query_order_submission_events(
 def _query_postback_events(
     user_id: str,
     limit: int,
+    *,
+    dry_run: bool | None = None,
+    since_date: str | None = None,
 ) -> list[dict]:
     """Query algo.events for kite_postback_received rows.
 
-    Args:
-        user_id: Our internal user UUID string.
-        limit: Max rows to return (default 50).
-
-    Returns:
-        List of raw event dicts ordered by ts_ns DESC.
+    ASETPLTFRM-382 — ``dry_run`` and ``since_date`` filters mirror
+    ``_query_order_submission_events`` so the Live → Postbacks
+    panel never bleeds synthetic dry-run postbacks or prior
+    sessions into today's view.
     """
     # Use the canonical query_iceberg_table helper which auto-creates
     # a DuckDB view from the Iceberg metadata. The previous direct
@@ -836,17 +856,20 @@ def _query_postback_events(
     # turned every browser poll of /postbacks into a 500 that the
     # frontend rendered as "NetworkError".
     try:
-        rows = query_iceberg_table(
-            "algo.events",
+        params: list[Any] = [user_id]
+        sql = (
             "SELECT event_id, ts_ns, ts_date, payload_json "
             "FROM events "
             "WHERE user_id = ? "
             "  AND type = 'kite_postback_received' "
-            "ORDER BY ts_ns DESC "
-            "LIMIT ?",
-            [user_id, limit],
         )
-        return rows
+        if since_date:
+            sql += " AND ts_date >= ? "
+            params.append(since_date)
+        sql += _dry_run_clause(dry_run)
+        sql += " ORDER BY ts_ns DESC LIMIT ?"
+        params.append(limit)
+        return query_iceberg_table("algo.events", sql, params)
     except Exception:  # noqa: BLE001
         _logger.warning(
             "postback query failed for user=%s",
@@ -1430,12 +1453,22 @@ def create_live_router() -> APIRouter:
     )
     async def get_live_postbacks(
         limit: int = 50,
+        dry_run: bool | None = None,
+        since_date: str | None = None,
         user: UserContext = Depends(pro_or_superuser),
     ) -> list[PostbackEvent]:
         """Return last N Kite postback events for the user.
 
         Args:
             limit: Max rows (capped at 200, default 50).
+            dry_run: Optional filter on payload.dry_run. ``False``
+                returns only real-money rows (treats NULL as real,
+                per ASETPLTFRM-374 omission convention). ``True``
+                returns only synthetic dry-run rows. ``None`` (the
+                default) returns both — kept for legacy callers.
+            since_date: ``YYYY-MM-DD`` IST lower bound on
+                ``ts_date``; today-only widgets pass today's IST
+                date so prior sessions don't bleed in.
 
         Returns:
             Bare list, newest first. Frontend KitePostback type
@@ -1443,7 +1476,11 @@ def create_live_router() -> APIRouter:
         """
         cap = min(limit, 200)
         raw_rows = await asyncio.to_thread(
-            _query_postback_events, user.user_id, cap
+            _query_postback_events,
+            user.user_id,
+            cap,
+            dry_run=dry_run,
+            since_date=since_date,
         )
 
         events: list[PostbackEvent] = []
@@ -1486,6 +1523,8 @@ def create_live_router() -> APIRouter:
     async def get_order_submissions(
         limit: int = 50,
         session_id: str | None = None,
+        dry_run: bool | None = None,
+        since_date: str | None = None,
         user: UserContext = Depends(pro_or_superuser),
     ) -> OrderSubmissionsResponse:
         """Return last N ``order_submitted_live`` events for user.
@@ -1496,11 +1535,20 @@ def create_live_router() -> APIRouter:
         returned (newest first). Full request/context/response
         payload exposed under each row's ``raw`` field for the
         Submissions panel expand-toggle.
+
+        ``dry_run`` / ``since_date`` (ASETPLTFRM-382) mirror the
+        ``GET /postbacks`` semantics: ``False`` restricts to real-
+        money submissions (NULL treated as real per ASETPLTFRM-374
+        omission convention); ``since_date`` is an IST
+        ``YYYY-MM-DD`` lower bound on ``ts_date`` so today-only
+        widgets don't bleed prior sessions.
         """
         cap = min(limit, 200)
         raw_rows = await asyncio.to_thread(
             _query_order_submission_events,
             user.user_id, cap, session_id,
+            dry_run=dry_run,
+            since_date=since_date,
         )
 
         out: list[OrderSubmissionEvent] = []

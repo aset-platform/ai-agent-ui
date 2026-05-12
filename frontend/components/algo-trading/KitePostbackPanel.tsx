@@ -12,6 +12,7 @@
 
 import { useState } from "react";
 
+import { formatIstDateTime, formatIstTime } from "@/lib/datetime";
 import {
   useKitePostbacks,
   type KitePostback,
@@ -47,35 +48,9 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-// ── Helpers ─────────────────────────────────────────────────
-
-/** Formats an ISO 8601 UTC string to IST local time (HH:MM:SS). */
-function fmtTime(iso: string): string {
-  try {
-    return new Date(iso).toLocaleTimeString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    });
-  } catch {
-    return iso;
-  }
-}
-
-/** Full absolute datetime for the title tooltip. */
-function fmtAbsolute(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      dateStyle: "short",
-      timeStyle: "medium",
-    });
-  } catch {
-    return iso;
-  }
-}
+// IST formatting via shared helper (ASETPLTFRM-373).
+const fmtTime = (iso: string) => formatIstTime(iso);
+const fmtAbsolute = (iso: string) => formatIstDateTime(iso);
 
 // ── Sub-components ───────────────────────────────────────────
 

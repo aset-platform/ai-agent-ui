@@ -324,6 +324,36 @@ def create_kill_switch_router() -> APIRouter:
                 "price": float(limit_price),
             }
 
+            # ASETPLTFRM-381 — emit a synthetic ``signal_generated``
+            # BEFORE the panic SELL so attribution.trades can pair
+            # the (buy fill, sell fill) and surface the exit reason
+            # as ``panic_close``. Pre-381 panic-close fills had no
+            # matching SELL signal, which collapsed the pairing
+            # logic (min(len(buys), len(sells)) → 0 SELL pairs).
+            panic_signal_session = uuid4()
+            events.append(event_row(
+                session_id=panic_signal_session,
+                user_id=user_id,
+                strategy_id=None,
+                mode="live",
+                type_="signal_generated",
+                payload={
+                    # Emit BOTH ``symbol`` (canonical, no .NS) and
+                    # ``ticker`` (with .NS) — attribution normalises
+                    # both shapes; downstream consumers may prefer
+                    # one or the other.
+                    "symbol": sym,
+                    "ticker": f"{sym}.NS",
+                    "side": "SELL",
+                    "qty": qty,
+                    "reason": "panic_close",
+                    "exit_reason": "panic_close",
+                    "ref_last_price": (
+                        str(ltp) if ltp else None
+                    ),
+                },
+            ))
+
             try:
                 kite_order_id = await asyncio.to_thread(
                     kite.place_order,
@@ -339,7 +369,7 @@ def create_kill_switch_router() -> APIRouter:
                 orders_submitted += 1
                 tickers_closed.append(sym)
                 events.append(event_row(
-                    session_id=uuid4(),
+                    session_id=panic_signal_session,
                     user_id=user_id,
                     strategy_id=None,
                     mode="live",

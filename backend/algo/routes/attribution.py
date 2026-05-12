@@ -278,58 +278,80 @@ def create_attribution_router() -> APIRouter:
                 if str(e.get("strategy_id")) == sid_s
             ]
 
-        # Pair up BUY/SELL signal_generated events per ticker
-        signals_by_ticker: dict[str, list[dict]] = {}
-        fills_by_ticker: dict[str, list[dict]] = {}
+        # ASETPLTFRM-381 — pair BY FILLS (Kite's ground truth),
+        # not by signals. Pre-381 the pairing was driven by
+        # ``min(len(buy_signals), len(sell_signals))``; on a panic-
+        # close day with 13 BUY signals + 0 SELL signals (panic
+        # close skipped emitting signal_generated for the SELL),
+        # this produced 0 pairs even though both fills existed.
+        #
+        # Plus the field-naming inconsistency: signals carry
+        # ``payload.ticker`` ("ITC.NS"); fills carry
+        # ``payload.symbol`` ("ITC"). Normalise to a canonical
+        # symbol (strip ``.NS``) before bucketing.
+        signals_by_symbol: dict[str, list[dict]] = {}
+        fills_by_symbol: dict[str, list[dict]] = {}
         for ev in events:
             try:
                 payload = json.loads(ev.get("payload_json") or "{}")
             except (json.JSONDecodeError, TypeError):
                 continue
-            ticker = payload.get("ticker")
-            if not ticker:
+            raw_sym = (
+                payload.get("symbol")
+                or payload.get("ticker")
+                or ""
+            )
+            sym = str(raw_sym).upper().removesuffix(".NS")
+            if not sym:
                 continue
             ev_kind = ev.get("type")
             if ev_kind == "signal_generated":
-                signals_by_ticker.setdefault(ticker, []).append({
+                signals_by_symbol.setdefault(sym, []).append({
                     **ev, "_payload": payload,
                 })
             elif ev_kind in ("order_filled", "order_filled_live"):
-                fills_by_ticker.setdefault(ticker, []).append({
+                fills_by_symbol.setdefault(sym, []).append({
                     **ev, "_payload": payload,
                 })
 
         out: list[dict] = []
-        for ticker, sigs in signals_by_ticker.items():
-            buys = [s for s in sigs if s["_payload"].get(
-                "side",
-            ) == "BUY"]
-            sells = [s for s in sigs if s["_payload"].get(
-                "side",
-            ) == "SELL"]
-            fills = fills_by_ticker.get(ticker, [])
-            buy_fills = [
-                f for f in fills
-                if f["_payload"].get("side") == "BUY"
+        for sym, fills in fills_by_symbol.items():
+            sigs = signals_by_symbol.get(sym, [])
+            buy_sigs = [
+                s for s in sigs
+                if s["_payload"].get("side") == "BUY"
             ]
-            sell_fills = [
-                f for f in fills
-                if f["_payload"].get("side") == "SELL"
+            sell_sigs = [
+                s for s in sigs
+                if s["_payload"].get("side") == "SELL"
             ]
-            for i in range(min(len(buys), len(sells))):
-                entry_event = buys[i]
-                exit_event = sells[i]
-                buy_fill = (
-                    buy_fills[i] if i < len(buy_fills) else None
+            buy_fills = sorted(
+                [
+                    f for f in fills
+                    if f["_payload"].get("side") == "BUY"
+                ],
+                key=lambda f: int(f.get("ts_ns") or 0),
+            )
+            sell_fills = sorted(
+                [
+                    f for f in fills
+                    if f["_payload"].get("side") == "SELL"
+                ],
+                key=lambda f: int(f.get("ts_ns") or 0),
+            )
+            # FIFO pair: each BUY fill paired with the next SELL
+            # fill in time order. Unmatched fills (open positions,
+            # naked SELLs) skipped — surface separately later if
+            # the UX needs them.
+            for i in range(min(len(buy_fills), len(sell_fills))):
+                buy_fill = buy_fills[i]
+                sell_fill = sell_fills[i]
+                entry_event = (
+                    buy_sigs[i] if i < len(buy_sigs) else None
                 )
-                sell_fill = (
-                    sell_fills[i] if i < len(sell_fills)
-                    else None
+                exit_event = (
+                    sell_sigs[i] if i < len(sell_sigs) else None
                 )
-                if buy_fill is None or sell_fill is None:
-                    # No fills yet — skip this pair until both
-                    # fills land (next refresh).
-                    continue
                 avg_entry = float(
                     buy_fill["_payload"].get("fill_price") or 0,
                 )
@@ -347,7 +369,7 @@ def create_attribution_router() -> APIRouter:
                     int(sell_fill["ts_ns"]),
                 )
                 trade = {
-                    "ticker": ticker,
+                    "ticker": sym,
                     "opened_at": opened_at,
                     "closed_at": closed_at,
                     "qty": qty,

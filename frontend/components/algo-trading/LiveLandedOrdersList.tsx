@@ -6,6 +6,7 @@
  * Polling every 10s (handled in useLiveOrders).
  */
 
+import { formatIstTime } from "@/lib/datetime";
 import type { InFlightOrder } from "@/hooks/useLiveOrders";
 import { useLiveOrders } from "@/hooks/useLiveOrders";
 
@@ -80,10 +81,7 @@ export function LiveLandedOrdersList({ strategyId }: Props) {
             <span className="text-slate-500">×{order.qty}</span>
           </div>
           <div className="text-[11px] text-slate-400">
-            {new Date(order.submitted_at).toLocaleTimeString(
-              "en-IN",
-              { timeZone: "Asia/Kolkata" },
-            )}
+            {formatIstTime(order.submitted_at)}
             {" · "}
             <span className="text-slate-500">{order.kite_order_id}</span>
           </div>

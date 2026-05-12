@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { formatIstTime } from "@/lib/datetime";
 import { useBrokerStatus } from "@/hooks/useBrokerStatus";
 import {
   type PaperRunSource,
@@ -321,12 +322,7 @@ export function ActiveRunsPanel({ tradingMode = "paper" }: Props) {
                     {r.strategy_name}
                   </span>
                   <span className="ml-2 text-xs text-slate-500">
-                    started{" "}
-                    {new Date(r.started_at).toLocaleTimeString(
-                      "en-IN",
-                      { timeZone: "Asia/Kolkata" },
-                    )}{" "}
-                    · {r.status}
+                    started {formatIstTime(r.started_at)} · {r.status}
                   </span>
                 </div>
                 <button

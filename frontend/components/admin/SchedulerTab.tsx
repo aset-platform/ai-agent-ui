@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
+import { formatIst } from "@/lib/datetime";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   useSchedulerJobs,
@@ -57,14 +58,11 @@ function fmtCountdown(
 function fmtTimestamp(ts: string | null): string {
   if (!ts) return "\u2014";
   try {
-    const d = new Date(ts);
-    return d.toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
+    return formatIst(ts, {
       month: "short",
       day: "numeric",
       hour: "2-digit",
       minute: "2-digit",
-      hour12: false,
     });
   } catch {
     return ts;

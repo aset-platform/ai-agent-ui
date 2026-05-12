@@ -1,17 +1,7 @@
 "use client";
 
+import { formatIstTime, todayIstIso } from "@/lib/datetime";
 import { usePaperEvents } from "@/hooks/usePaperEvents";
-
-/** Today's date in IST as YYYY-MM-DD — used to bound the fills
- *  query so we don't bleed prior sessions into the panel. */
-function todayIstIso(): string {
-  // en-CA produces ISO-style YYYY-MM-DD; explicit IST timezone
-  // keeps the boundary at midnight IST regardless of viewer
-  // locale (feedback_ist_dates_user_facing).
-  return new Date().toLocaleDateString("en-CA", {
-    timeZone: "Asia/Kolkata",
-  });
-}
 
 /**
  * Footer-zone tape: latest LIVE fills today (real money only).
@@ -52,9 +42,7 @@ export function RecentFillsTape() {
         {fills.map((e) => {
           const p = e.payload;
           const tsMs = Math.floor(Number(e.ts_ns) / 1_000_000);
-          const time = Number.isFinite(tsMs)
-            ? new Date(tsMs).toLocaleTimeString("en-IN")
-            : "—";
+          const time = formatIstTime(tsMs);
           return (
             <li
               key={e.event_id}
