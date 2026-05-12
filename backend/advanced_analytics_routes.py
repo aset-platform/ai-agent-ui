@@ -417,6 +417,29 @@ def _rolling_band_20d_prev(
     )
 
 
+def _rsi_lookback(
+    ind: pd.DataFrame,
+) -> tuple[float | None, float | None, float | None]:
+    """Return (today_rsi, rsi_3d_ago, rsi_max_10d) for the bearish
+    rollover detector. Any value not computable safely is None.
+    """
+    if "RSI_14" not in ind.columns or len(ind) == 0:
+        return (None, None, None)
+    s = ind["RSI_14"]
+    today = s.iloc[-1]
+    today_val = None if pd.isna(today) else float(today)
+    three_ago_val: float | None
+    if len(s) < 4:
+        three_ago_val = None
+    else:
+        v = s.iloc[-4]
+        three_ago_val = None if pd.isna(v) else float(v)
+    window = s.iloc[-min(10, len(s)):]
+    max_10 = window.max(skipna=True)
+    max_10_val = None if pd.isna(max_10) else float(max_10)
+    return (today_val, three_ago_val, max_10_val)
+
+
 def _load_indicators_latest(tickers: list[str]) -> pd.DataFrame:
     """Compute latest RSI-14, SMA-50, SMA-200 per ticker.
 

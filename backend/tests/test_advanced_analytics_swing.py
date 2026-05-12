@@ -9,6 +9,7 @@ from advanced_analytics_models import AdvancedRow
 from advanced_analytics_routes import (
     _death_cross_days_ago,
     _rolling_band_20d_prev,
+    _rsi_lookback,
 )
 
 
@@ -98,3 +99,41 @@ def test_rolling_band_handles_nan() -> None:
     low, high = _rolling_band_20d_prev(df)
     assert low == 10
     assert high == 34
+
+
+def test_rsi_lookback_basic() -> None:
+    """RSI lookback: today, 3-days-ago, max over last 10."""
+    rsi_series = pd.Series(
+        [40, 45, 50, 55, 60, 65, 70, 68, 60, 50, 45]
+    )
+    df = pd.DataFrame({"RSI_14": rsi_series})
+    today, three_ago, max_10 = _rsi_lookback(df)
+    assert today == 45
+    assert three_ago == 68  # index -4 (3 trading days before today)
+    assert max_10 == 70  # max over last 10 rows
+
+
+def test_rsi_lookback_short_series_returns_partial_nones() -> None:
+    """<4 rows → three_ago None; <10 rows → max_10 still computes
+    over available rows."""
+    df = pd.DataFrame({"RSI_14": [40, 50, 60]})
+    today, three_ago, max_10 = _rsi_lookback(df)
+    assert today == 60
+    assert three_ago is None
+    assert max_10 == 60  # max of the 3 available
+
+
+def test_rsi_lookback_missing_column_returns_all_none() -> None:
+    df = pd.DataFrame({"close": [100, 101]})
+    assert _rsi_lookback(df) == (None, None, None)
+
+
+def test_rsi_lookback_handles_nan() -> None:
+    """NaN today returns None for today; lookback unaffected."""
+    df = pd.DataFrame({
+        "RSI_14": [40, 50, 60, 65, 55, float("nan")],
+    })
+    today, three_ago, max_10 = _rsi_lookback(df)
+    assert today is None
+    assert three_ago == 60
+    assert max_10 == 65
