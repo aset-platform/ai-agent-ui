@@ -102,6 +102,35 @@ async def _run_startup_hooks() -> None:
             "Live caps reset catch-up failed at startup: %s", exc,
         )
 
+    # ASETPLTFRM-379 — sweep zombie 'running' algo.runs rows whose
+    # backing asyncio task was killed by the previous restart.
+    # Without this, postback reconciliation walks stale runs every
+    # request and the dashboard "currently running" panel shows
+    # ghost entries.
+    try:
+        import os
+        from backend.algo.backtest.runs_repo import BacktestRunsRepo
+        from backend.db.engine import get_session_factory
+        thr = int(os.environ.get(
+            "ALGO_RUN_STALE_THRESHOLD_SECONDS", "3600",
+        ) or "3600")
+        runs_repo = BacktestRunsRepo()
+        factory = get_session_factory()
+        async with factory() as session:
+            crashed_ids = (
+                await runs_repo.mark_stale_running_as_crashed(
+                    session, threshold_seconds=thr,
+                )
+            )
+        logger.info(
+            "Zombie runs sweep: marked %d run(s) crashed "
+            "(threshold %ds)", len(crashed_ids), thr,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Zombie runs sweep failed at startup: %s", exc,
+        )
+
 
 class ChatServer:
     """Thin orchestrator that wires registries and the ASGI app.

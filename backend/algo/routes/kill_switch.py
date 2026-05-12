@@ -345,7 +345,11 @@ def create_kill_switch_router() -> APIRouter:
                     mode="live",
                     type_="order_submitted_live",
                     payload={
-                        "dry_run": False,
+                        # ASETPLTFRM-374 epic: omit dry_run on
+                        # Live events. Panic close never runs in
+                        # dry-run (pinned dry_run=False on the
+                        # KiteClient at L218) so absence is
+                        # always correct here.
                         "internal_order_id": str(uuid4()),
                         "kite_order_id": kite_order_id,
                         "symbol": sym,
