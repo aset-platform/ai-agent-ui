@@ -16,6 +16,11 @@ export interface HoldingRow {
   days_held: number | null;
   strategy_id: string | null;
   strategy_name: string | null;
+  /** SEBI T+1 settlement: shares from a CNC BUY are owned but not
+   *  yet settled (quantity=0, t1_quantity>0 on the Kite side).
+   *  Sellable today via a regular CNC sell order; we chip the row
+   *  so the user can see at a glance which holdings are pending. */
+  t1_pending: boolean;
 }
 
 interface HoldingsResponse {

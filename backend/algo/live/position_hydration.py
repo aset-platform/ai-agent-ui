@@ -48,7 +48,18 @@ UTC = timezone.utc
 
 @dataclass(frozen=True)
 class HydratedPosition:
-    """One position/holding hydrated into the runtime at spawn."""
+    """One position/holding hydrated into the runtime at spawn.
+
+    ``t1_pending`` flags the SEBI T+1 settlement window for CNC
+    BUYs: post Jan 2023 a delivery BUY's shares appear on
+    ``holdings()`` as ``quantity=0, t1_quantity=N`` for one
+    trading session, then settle to ``quantity=N, t1_quantity=0``
+    overnight. T+1 holdings are legally owned and sellable today
+    via a regular CNC sell order (Zerodha auto-routes from T+1
+    pool). We hydrate them as full ``qty`` so EXIT logic can
+    target them, and surface ``t1_pending`` so the UI can chip
+    the row distinctly.
+    """
 
     symbol: str           # Internal ticker form (``RELIANCE.NS``).
     qty: int
@@ -56,6 +67,7 @@ class HydratedPosition:
     source: str           # ``"positions"`` | ``"holdings"``.
     product: str          # ``"MIS"`` | ``"CNC"``.
     entry_ts: datetime | None  # UTC; None if no matching event.
+    t1_pending: bool = False
 
 
 # ----------------------------------------------------------------
@@ -234,9 +246,15 @@ def hydrate(
         raw_hold = []
     rows = raw_hold if isinstance(raw_hold, list) else []
     for r in rows:
-        qty = _safe_int(r.get("quantity"))
+        # SEBI T+1 (post Jan 2023): a CNC BUY's shares appear as
+        # quantity=0 + t1_quantity=N during the settlement session.
+        # Either pool counts as "held"; sum them so the algo sees
+        # the position and EXIT signals can fire CNC SELLs.
+        settled_qty = _safe_int(r.get("quantity"))
+        t1_qty = _safe_int(r.get("t1_quantity"))
+        effective_qty = settled_qty + t1_qty
         product = (r.get("product") or "CNC").upper()
-        if qty <= 0 or product != "CNC":
+        if effective_qty <= 0 or product != "CNC":
             continue
         internal = _to_internal_ticker(
             r.get("tradingsymbol") or "",
@@ -249,11 +267,12 @@ def hydrate(
         ts_ns = reader(user_id, internal)
         out.append(HydratedPosition(
             symbol=internal,
-            qty=qty,
+            qty=effective_qty,
             avg_price=avg,
             source="holdings",
             product="CNC",
             entry_ts=_ns_to_utc(ts_ns),
+            t1_pending=(settled_qty == 0 and t1_qty > 0),
         ))
 
     _logger.info(
@@ -330,6 +349,7 @@ def hydration_events(
                 "entry_ts": (
                     h.entry_ts.isoformat() if h.entry_ts else None
                 ),
+                "t1_pending": h.t1_pending,
             },
         ))
     return rows

@@ -295,6 +295,87 @@ def test_zero_qty_positions_and_non_mis_are_skipped() -> None:
     assert out == []
 
 
+def test_t1_quantity_pending_holding_hydrates_with_t1_flag() -> None:
+    """SEBI T+1 settlement: a CNC BUY from yesterday shows up as
+    ``quantity=0, t1_quantity=N`` for one trading session before
+    settling. The hydrator must include it as full qty so EXIT
+    signals can fire today, with ``t1_pending=True`` for UI."""
+    kite = _kite(
+        holdings=[
+            {
+                "tradingsymbol": "ITC",
+                "quantity": 0,
+                "t1_quantity": 8,
+                "average_price": "307.325",
+                "product": "CNC",
+            },
+        ],
+    )
+    captured: list[tuple[UUID, str]] = []
+
+    def reader(uid: UUID, sym: str) -> int | None:
+        captured.append((uid, sym))
+        return None
+
+    out = hydrate(
+        kite=kite,
+        strategy=_strategy(),
+        user_id=uuid4(),
+        allowed_tickers=None,
+        events_reader=reader,
+    )
+    assert len(out) == 1
+    leg = out[0]
+    assert leg.symbol == "ITC.NS"
+    assert leg.qty == 8                # effective_qty = 0 + 8
+    assert leg.source == "holdings"
+    assert leg.product == "CNC"
+    assert leg.t1_pending is True
+    # Tracker takes the full qty as a synthetic BUY.
+    tracker = PositionTracker()
+    apply_hydrated_positions(tracker, out)
+    assert tracker.open_positions().get("ITC.NS") is not None
+    assert tracker.open_positions()["ITC.NS"].qty == 8
+    # Event payload carries t1_pending so observability tooling
+    # can chip the row.
+    events = hydration_events(
+        session_id=uuid4(), user_id=uuid4(),
+        strategy_id=uuid4(), hydrated=out, dry_run=False,
+    )
+    import json as _json
+    assert (
+        _json.loads(events[0]["payload_json"])["t1_pending"]
+        is True
+    )
+
+
+def test_settled_holding_has_t1_pending_false() -> None:
+    """After T+1 settlement: quantity=N, t1_quantity=0 — same
+    hydration but t1_pending must be False so the UI doesn't
+    misleadingly chip settled rows."""
+    kite = _kite(
+        holdings=[
+            {
+                "tradingsymbol": "ITC",
+                "quantity": 8,
+                "t1_quantity": 0,
+                "average_price": "307.325",
+                "product": "CNC",
+            },
+        ],
+    )
+    out = hydrate(
+        kite=kite,
+        strategy=_strategy(),
+        user_id=uuid4(),
+        allowed_tickers=None,
+        events_reader=lambda u, s: None,
+    )
+    assert len(out) == 1
+    assert out[0].qty == 8
+    assert out[0].t1_pending is False
+
+
 def test_hydrated_position_dataclass_is_frozen() -> None:
     """Defence: HydratedPosition mustn't mutate after construction."""
     leg = HydratedPosition(

@@ -80,9 +80,25 @@ export function HoldingsTab() {
           <tr
             key={r.tradingsymbol}
             className="border-b border-slate-100 dark:border-slate-800"
+            data-testid={`holdings-row-${r.tradingsymbol}`}
           >
             <td className="px-2 py-2 font-medium">
-              {r.tradingsymbol}
+              <span className="inline-flex items-center gap-1.5">
+                {r.tradingsymbol}
+                {r.t1_pending && (
+                  <span
+                    title="Shares from yesterday's CNC BUY are settling today (T+1). Sellable via regular CNC sell order."
+                    className="inline-flex items-center rounded
+                      bg-amber-100 px-1.5 py-0.5 text-[10px]
+                      font-semibold uppercase tracking-wide
+                      text-amber-800 dark:bg-amber-900/40
+                      dark:text-amber-200"
+                    data-testid={`holdings-t1-chip-${r.tradingsymbol}`}
+                  >
+                    T+1
+                  </span>
+                )}
+              </span>
             </td>
             <td className="px-2 py-2 text-right">{r.quantity}</td>
             <td className="px-2 py-2 text-right">
