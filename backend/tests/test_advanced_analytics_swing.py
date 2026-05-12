@@ -726,3 +726,88 @@ def test_apply_rec_data_empty_dict_is_noop() -> None:
     import advanced_analytics_routes as aar
     aar._apply_rec_data(rows, {})
     assert rows[0].rec_category is None
+
+
+from advanced_analytics_models import (
+    SwingMethodology,
+    SwingMethodologyGate,
+    SwingMethodologyRank,
+    SwingSetupsResponse,
+)
+
+
+def test_swing_methodology_constructs() -> None:
+    m = SwingMethodology(
+        regime="bull",
+        summary="Trend-up + demand + quality.",
+        gates=[
+            SwingMethodologyGate(
+                label="Trend stack", rule="x>y", why="trend",
+            ),
+        ],
+        rank=SwingMethodologyRank(
+            formula="a*b", direction="DESC", cap=25, degraded=None,
+        ),
+    )
+    assert m.regime == "bull"
+    assert m.gates[0].label == "Trend stack"
+    assert m.rank.direction == "DESC"
+
+
+def test_swing_methodology_rejects_invalid_direction() -> None:
+    """Pydantic validation rejects directions outside ASC/DESC."""
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        SwingMethodologyRank(
+            formula="a", direction="BOTH",  # type: ignore[arg-type]
+            cap=25, degraded=None,
+        )
+
+
+def test_swing_setups_response_constructs() -> None:
+    resp = SwingSetupsResponse(
+        rows=[],
+        total=0,
+        regime="bull",
+        as_of="2026-05-12",
+        rec_gate_applied=False,
+        rec_run_id=None,
+        rec_run_date=None,
+        notes=[
+            "Recommendation gate not applied — no rec run this "
+            "month",
+        ],
+        methodology=SwingMethodology(
+            regime="bull", summary="x", gates=[],
+            rank=SwingMethodologyRank(
+                formula="a", direction="DESC", cap=25,
+                degraded=None,
+            ),
+        ),
+    )
+    assert resp.regime == "bull"
+    assert resp.rec_gate_applied is False
+    assert resp.methodology.regime == "bull"
+
+
+def test_swing_setups_response_default_notes_empty() -> None:
+    """`notes` defaults to empty list."""
+    resp = SwingSetupsResponse(
+        rows=[],
+        total=0,
+        regime="sideways",
+        as_of="2026-05-12",
+        rec_gate_applied=True,
+        rec_run_id="uuid",
+        rec_run_date="2026-05-01",
+        methodology=SwingMethodology(
+            regime="sideways", summary="x", gates=[],
+            rank=SwingMethodologyRank(
+                formula="a", direction="ASC", cap=25,
+                degraded=None,
+            ),
+        ),
+    )
+    assert resp.notes == []

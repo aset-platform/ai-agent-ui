@@ -147,3 +147,48 @@ class AdvancedReportResponse(BaseModel):
     page: int = 1
     page_size: int = 25
     stale_tickers: list[StaleTicker] = Field(default_factory=list)
+
+
+class SwingMethodologyGate(BaseModel):
+    """One row of the methodology panel — a single filter gate."""
+
+    label: str
+    rule: str
+    why: str
+
+
+class SwingMethodologyRank(BaseModel):
+    """Ranking formula descriptor for a swing regime."""
+
+    formula: str
+    direction: Literal["ASC", "DESC"]
+    cap: int
+    degraded: str | None = None
+
+
+class SwingMethodology(BaseModel):
+    """Methodology block surfaced both inline on the swing-setups
+    response and standalone at ``/swing-setups/methodology``.
+    Mirror of ``advanced_analytics_swing.build_methodology()``.
+    """
+
+    regime: Literal["bull", "sideways", "bearish"]
+    summary: str
+    gates: list[SwingMethodologyGate]
+    rank: SwingMethodologyRank
+
+
+class SwingSetupsResponse(BaseModel):
+    """Paginated regime watchlist + methodology + degraded-rec
+    metadata. Returned by ``GET /swing-setups``.
+    """
+
+    rows: list[AdvancedRow]
+    total: int
+    regime: Literal["bull", "sideways", "bearish"]
+    as_of: str
+    rec_gate_applied: bool
+    rec_run_id: str | None = None
+    rec_run_date: str | None = None
+    notes: list[str] = Field(default_factory=list)
+    methodology: SwingMethodology
