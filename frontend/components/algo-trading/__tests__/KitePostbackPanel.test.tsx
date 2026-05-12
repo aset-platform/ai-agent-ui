@@ -23,10 +23,29 @@ vi.mock("@/hooks/useKitePostbacks", () => ({
   useKitePostbacks: vi.fn(),
 }));
 
+// Order-Safety PR #1 — Submissions tab also reads from this hook.
+// Default it to an empty-list mock so the existing Postbacks tests
+// keep their narrow scope.
+vi.mock("@/hooks/useOrderSubmissions", () => ({
+  useOrderSubmissions: vi.fn().mockReturnValue({
+    submissions: [],
+    isLoading: false,
+    error: null,
+    mutate: () => undefined,
+  }),
+}));
+
 import { useKitePostbacks } from "@/hooks/useKitePostbacks";
 import { KitePostbackPanel } from "../KitePostbackPanel";
 
 const mockHook = useKitePostbacks as ReturnType<typeof vi.fn>;
+
+/** PR #1 added a tab strip — every Postbacks test needs to click
+ *  the Postbacks tab first because Submissions is the default. */
+function activatePostbacksTab() {
+  const tab = screen.getByTestId("kite-postback-tab-postbacks");
+  fireEvent.click(tab);
+}
 
 // ── Task 3 ──────────────────────────────────────────────────
 describe("KitePostbackPanel — loading state", () => {
@@ -39,6 +58,7 @@ describe("KitePostbackPanel — loading state", () => {
     });
 
     render(<KitePostbackPanel />);
+    activatePostbacksTab();
 
     // Must contain a text node — not just a CSS shimmer div.
     expect(screen.getByText(/loading postbacks/i)).toBeTruthy();
@@ -56,6 +76,7 @@ describe("KitePostbackPanel — empty state", () => {
     });
 
     render(<KitePostbackPanel />);
+    activatePostbacksTab();
 
     const card = screen.getByTestId("kite-postback-empty-state");
     expect(card).toBeTruthy();
@@ -74,6 +95,7 @@ describe("KitePostbackPanel — empty state", () => {
     });
 
     render(<KitePostbackPanel />);
+    activatePostbacksTab();
 
     const card = screen.getByTestId("kite-postback-empty-state");
     expect(card.className).toContain("border-amber-300");
@@ -88,6 +110,7 @@ describe("KitePostbackPanel — empty state", () => {
     });
 
     render(<KitePostbackPanel />);
+    activatePostbacksTab();
 
     expect(
       screen.queryByTestId("kite-postback-empty-state"),
@@ -125,6 +148,7 @@ describe("KitePostbackPanel — populated state", () => {
     });
 
     render(<KitePostbackPanel />);
+    activatePostbacksTab();
 
     const rows = screen.getAllByTestId("kite-postback-row");
     expect(rows).toHaveLength(2);
@@ -139,6 +163,7 @@ describe("KitePostbackPanel — populated state", () => {
     });
 
     render(<KitePostbackPanel />);
+    activatePostbacksTab();
 
     expect(screen.getByText("RELIANCE.NS")).toBeTruthy();
     expect(screen.getByText("INFY.NS")).toBeTruthy();
@@ -153,6 +178,7 @@ describe("KitePostbackPanel — populated state", () => {
     });
 
     render(<KitePostbackPanel />);
+    activatePostbacksTab();
 
     expect(screen.getByText("₹2950.75")).toBeTruthy();
   });
@@ -166,6 +192,7 @@ describe("KitePostbackPanel — populated state", () => {
     });
 
     render(<KitePostbackPanel />);
+    activatePostbacksTab();
 
     expect(screen.getByText("—")).toBeTruthy();
   });
@@ -179,6 +206,7 @@ describe("KitePostbackPanel — populated state", () => {
     });
 
     render(<KitePostbackPanel />);
+    activatePostbacksTab();
 
     expect(
       screen.queryByTestId("kite-postback-empty-state"),
@@ -194,6 +222,7 @@ describe("KitePostbackPanel — populated state", () => {
     });
 
     render(<KitePostbackPanel />);
+    activatePostbacksTab();
 
     // Header should contain "(2)" count.
     const panel = screen.getByTestId("kite-postback-panel");
@@ -233,6 +262,7 @@ describe("KitePostbackPanel — status badge colours", () => {
       });
 
       render(<KitePostbackPanel />);
+      activatePostbacksTab();
 
       const badge = screen.getByText(status);
       expect(badge.className).toContain(cls);
@@ -271,6 +301,7 @@ describe("KitePostbackPanel — payload toggle", () => {
     });
 
     render(<KitePostbackPanel />);
+    activatePostbacksTab();
 
     // "111" is only in the raw JSON — should not be visible initially.
     expect(screen.queryByText(/"111"/)).toBeNull();
@@ -285,6 +316,7 @@ describe("KitePostbackPanel — payload toggle", () => {
     });
 
     render(<KitePostbackPanel />);
+    activatePostbacksTab();
 
     const toggles = screen.getAllByTestId(
       "kite-postback-payload-toggle",
@@ -304,6 +336,7 @@ describe("KitePostbackPanel — payload toggle", () => {
     });
 
     render(<KitePostbackPanel />);
+    activatePostbacksTab();
 
     const toggles = screen.getAllByTestId(
       "kite-postback-payload-toggle",
@@ -324,6 +357,7 @@ describe("KitePostbackPanel — payload toggle", () => {
     });
 
     render(<KitePostbackPanel />);
+    activatePostbacksTab();
 
     const toggles = screen.getAllByTestId(
       "kite-postback-payload-toggle",

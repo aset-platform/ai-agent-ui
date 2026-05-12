@@ -2,6 +2,51 @@
 
 ---
 
+## 2026-05-12 — Order Safety Hardening epic + PR #1 (payload logging + LTP staleness)
+
+**Branch:** `feature/algo-order-safety-payload-ltp` (off `dev`).
+**Jira:** Epic **ASETPLTFRM-367** (15 SP, In Progress) + 4 sub-tasks **368–371**.
+**Spec:** `docs/superpowers/specs/2026-05-12-algo-order-safety-hardening-design.md`.
+
+Scoped six order-layer Kite-algo footguns into a single contained
+slice (no DB migrations). Spec covers LTP staleness gate,
+composite-signal liquidity-bucket slippage caps, order TTL +
+auto-cancel, pre-submit Redis SETNX dedup, freeze-quantity cache
+with NSE-circular defensive defaults, and a full
+`order_submitted_live` payload audit event mirroring the existing
+postback observability pattern.
+
+Open questions resolved: bucket source is composite mcap ∧ ADTV
+(more-conservative-wins, smallcap-on-missing); freeze fallback
+uses hardcoded NSE-circular defaults keyed on liquidity bucket;
+`algo.events` retention bumped to 12 months flat.
+
+**PR #1 (ASETPLTFRM-368, 4 SP, uncommitted)** — payload logging +
+LTP staleness gate landed on the branch. `KiteClient.place_order`
+grew 11 new kwargs (`last_price_ts`, `events_sink`, `session_id`,
+etc.); on every submission (real **and** dry-run) it emits an
+`order_submitted_live` event with nested
+`request` / `context` / `response.raw` blocks while preserving the
+top-level legacy keys `PaperEventsTimeline` reads. Staleness gate
+fires before the SDK call and emits `order_ltp_stale_blocked` +
+raises `LtpStaleError` — gated by `ALGO_MAX_LTP_AGE_S` (default
+`999999`, lowered to `5` in a follow-up after 24h soak per spec
+§6 phase 1).
+
+Runtime now tracks per-ticker `last_price_ts` from `Tick.ts_ns`
+(local arrival — `exchange_timestamp` upgrade tracked separately).
+New endpoint `GET /v1/algo/live/order-submissions` mirrors
+`/postbacks` shape (response wrapped in `{"submissions": [...]}`);
+`KitePostbackPanel` grew a 2-tab UI (Submissions default,
+Postbacks secondary) with the same raw-payload toggle.
+
+Tests: **8 new unit tests pass** covering within-budget /
+over-budget / unset-ts / env-default / payload-shape / dry-run /
+no-sink legacy callers. Frontend `KitePostbackPanel.test.tsx`
+updated for the new tab strip — **18/18 pass**.
+
+---
+
 ## 2026-05-11 — Algo Trading three-page split
 
 **Branch:** `feature/algo-trading-three-page-split`. Six-slice

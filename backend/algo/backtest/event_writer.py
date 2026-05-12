@@ -18,6 +18,12 @@ Known event type registry (append-only — never remove):
     order_submitted_live / order_acknowledged_live
     order_filled_live / order_rejected_live / order_cancelled_live
     ws_connected / ws_disconnected / ws_gap_filled
+  Order-safety hardening (2026-05-12 PR #1):
+    order_ltp_stale_blocked  — placement blocked: stale LTP gate
+    (order_submitted_live now carries the spec §3.6 full payload —
+     request / context / response.raw nested blocks; top-level keys
+     kite_order_id / dry_run / side / qty / symbol preserved for
+     PaperEventsTimeline compatibility.)
   Reconciliation (V2-3):
     position_drift_detected / drift_resolved
 """
