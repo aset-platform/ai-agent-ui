@@ -45,6 +45,7 @@ from backend.algo.backtest.positions import PositionTracker
 from backend.algo.broker.kite_client import KiteClient
 # REGIME-2a — pre-computed nightly factor library overlay.
 from backend.algo.factors.repo import get_factors_window
+from backend.algo.live import slippage as _slippage
 from backend.algo.live.safety import (
     LiveRejectReason, pre_trade_check,
 )
@@ -171,6 +172,63 @@ class LiveRuntime:
         # features identically to backtest + paper.
         self._regime_by_date: dict[date, dict[str, Any]] = {}
         self._regime_loaded: bool = False
+
+        # PR #2 (order-safety) — per-ticker liquidity bucket loaded
+        # once at session start from the latest universe_snapshot
+        # rebalance. Tickers absent from the snapshot fall through
+        # to ``None`` → ``slippage.bps_for(None)`` returns 30 bps,
+        # preserving today's behaviour. Missing snapshot column or
+        # query failure is non-fatal — every ticker just defaults.
+        self._bucket_by_ticker: dict[str, str] = (
+            self._load_bucket_by_ticker()
+        )
+
+    def _load_bucket_by_ticker(self) -> dict[str, str]:
+        """Read latest ``stocks.universe_snapshot`` and build a
+        ticker → liquidity_bucket dict for this session.
+
+        Best-effort: any failure (missing column, empty table,
+        DuckDB hiccup) logs a warning and returns an empty dict.
+        The runtime then falls back to the unknown bucket for
+        every ticker, matching pre-PR #2 behaviour.
+        """
+        try:
+            from backend.db.duckdb_engine import query_iceberg_table
+            rows = query_iceberg_table(
+                "stocks.universe_snapshot",
+                "SELECT ticker, liquidity_bucket, "
+                "       MAX(rebalance_date) AS rd "
+                "FROM universe_snapshot "
+                "WHERE liquidity_bucket IS NOT NULL "
+                "GROUP BY ticker, liquidity_bucket",
+                [],
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "LiveRuntime: bucket cache load failed: %s — "
+                "every ticker falls back to unknown (30 bps)",
+                exc,
+            )
+            return {}
+        # Pick the most-recent rebalance per ticker. The GROUP BY
+        # above lets a ticker appear in multiple rebalances; we
+        # keep the latest.
+        latest: dict[str, tuple[Any, str]] = {}
+        for r in rows:
+            t = r.get("ticker")
+            b = r.get("liquidity_bucket")
+            rd = r.get("rd")
+            if not t or not b:
+                continue
+            prev = latest.get(t)
+            if prev is None or rd > prev[0]:
+                latest[t] = (rd, b)
+        out = {t: b for t, (_rd, b) in latest.items()}
+        _logger.info(
+            "LiveRuntime: bucket cache loaded — %d tickers",
+            len(out),
+        )
+        return out
 
     def _flush_events_now(self) -> None:
         """Flush buffered events to algo.events immediately so
@@ -535,10 +593,10 @@ class LiveRuntime:
         side = "BUY" if signal.side == "BUY" else "SELL"
 
         # Use LIMIT orders priced at the bar-close LTP plus a
-        # small marketable buffer (0.3% buy higher / sell lower)
-        # so the order is aggressive enough to fill on the
-        # opposite side of the spread but capped against runaway
-        # slippage. Switching from MARKET solves three problems:
+        # small marketable buffer so the order is aggressive
+        # enough to fill on the opposite side of the spread but
+        # capped against runaway slippage. Switching from MARKET
+        # solves three problems:
         #   1. Kite Connect refuses naked MARKET orders without
         #      market_protection — see commit 13001fb.
         #   2. The strategy was evaluated at `last_price` so we
@@ -547,12 +605,17 @@ class LiveRuntime:
         #      P&L summary's last_fill mark logic.
         #   3. Aggressive LIMIT mirrors how a manual day trader
         #      places intraday entries on big-cap NSE stocks.
-        # Falls back to MARKET (with market_protection) only if
-        # last_price is missing/zero — defensive.
-        SPREAD_BPS = Decimal("30")  # 0.3%
+        # PR #2 (order-safety) — slippage bps now ticker-aware via
+        # the liquidity-bucket lookup loaded at session start.
+        # Bucket = composite of mcap + 20d ADTV, conservative wins.
+        # Defaults: largecap 20 / midcap 50 / smallcap 100 /
+        # unknown 30 bps. Env-overrideable (spec §4).
+        bucket = self._bucket_by_ticker.get(signal.ticker)
+        slippage_bps = _slippage.bps_for(bucket)
+        spread_bps = Decimal(slippage_bps)
         BPS_DENOM = Decimal("10000")
         if last_price and last_price > 0:
-            buffer = last_price * SPREAD_BPS / BPS_DENOM
+            buffer = last_price * spread_bps / BPS_DENOM
             limit_price = (
                 last_price + buffer if side == "BUY"
                 else last_price - buffer
@@ -591,13 +654,14 @@ class LiveRuntime:
                 variety="regular",
                 tag=f"algo-{str(self._strategy.id)[:8]}",
                 # PR #1 — order-safety hardening + full-payload
-                # audit. last_price_ts feeds the staleness gate;
-                # liquidity_bucket / slippage_bps_applied stay
-                # None on PR #1 (PR #2 populates them).
+                # audit. last_price_ts feeds the staleness gate.
+                # PR #2 — populate bucket + applied bps so the
+                # order_submitted_live audit row carries the
+                # full pre-trade decision trace (spec §3.6).
                 last_price=lp_float,
                 last_price_ts=last_price_ts,
-                liquidity_bucket=None,
-                slippage_bps_applied=None,
+                liquidity_bucket=bucket,
+                slippage_bps_applied=slippage_bps,
                 chunk_index=None,
                 chunk_total=None,
                 events_sink=self._events.append,
