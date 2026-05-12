@@ -1,11 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import useSWR from "swr";
 
-import { apiFetch } from "@/lib/apiFetch";
 import { panicCloseAll } from "@/lib/algoApi";
-import { API_URL } from "@/lib/config";
 import { useStrategies } from "@/hooks/useStrategies";
 
 import { AttributionPanel } from "../AttributionPanel";
@@ -18,41 +15,27 @@ import { OpenPositionsWidget } from "./OpenPositionsWidget";
 import { PanicCloseButton } from "./PanicCloseButton";
 import { RecentFillsTape } from "./RecentFillsTape";
 
-interface DryRunState {
-  dry_run: boolean;
-}
-
-async function fetchDryRun(url: string): Promise<DryRunState> {
-  const r = await apiFetch(url);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
-}
-
 /**
  * LiveDashboard — body of the Live → Live tab (rose accent).
  *
- * Layout: defensive dry-run banner → strategy picker + RegimeWidget
- * + PanicCloseButton row → 4-zone 2x2 grid (positions / regime /
- * active-strategy safety belts / fills tape) → collapsed
- * attribution drawer at the bottom.
+ * Layout: LiveActiveRunsPanel (Start/Stop) → strategy picker +
+ * RegimeWidget + PanicCloseButton row → 4-zone 2x2 grid
+ * (positions / regime / active-strategy safety belts / fills tape)
+ * → collapsed attribution drawer at the bottom.
  *
  * The strategy picker state drives both the safety belts form and
  * AttributionPanel (passing `strategyId || null` so neither
  * renders against an arbitrary default).
+ *
+ * ASETPLTFRM-374 (epic): no dry-run banner on this page. Live is
+ * fully decoupled from the per-user dry-run Redis flag — any
+ * runtime spawned from LiveActiveRunsPanel pins dry_run=False at
+ * the API boundary (see backend routes/paper.py). Rehearsal mode
+ * lives exclusively on Strategies → Dry-run tab.
  */
 export function LiveDashboard() {
   const { strategies } = useStrategies();
   const [strategyId, setStrategyId] = useState<string>("");
-
-  // Defensive dry-run banner — should never show on this page,
-  // but if the runtime is in rehearsal we surface it loudly.
-  // Silent-fail: if the dry-run endpoint is unreachable we don't
-  // surface a banner. The real surface is the /live page itself.
-  const { data: dry } = useSWR<DryRunState>(
-    `${API_URL}/algo/live/dry-run`,
-    fetchDryRun,
-    { refreshInterval: 30_000, revalidateOnFocus: false },
-  );
 
   return (
     <div className="space-y-3" data-testid="live-dashboard">
@@ -61,18 +44,6 @@ export function LiveDashboard() {
           Previously users had to start the live runtime from the
           Strategies → Dry-run tab, which was conceptually wrong. */}
       <LiveActiveRunsPanel />
-
-      {dry?.dry_run && (
-        <div
-          className="rounded-md border border-amber-300 bg-amber-50
-            px-3 py-2 text-xs text-amber-800"
-          data-testid="live-dryrun-warning"
-        >
-          Dry-run is armed. You are on the Live page; this banner
-          means the runtime is in rehearsal mode. Disarm dry-run in
-          Live → Settings to send real orders.
-        </div>
-      )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <select

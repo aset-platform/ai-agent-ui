@@ -3,6 +3,7 @@
 import { useLiveDashboardSummary } from "@/hooks/useLiveDashboardSummary";
 import { usePaperRuns } from "@/hooks/usePaperRuns";
 
+import { LiveWsHealthDot } from "../LiveWsHealthDot";
 import { LiveModeChip } from "./LiveModeChip";
 
 function inr(value: string | undefined): string {
@@ -44,9 +45,6 @@ export function LiveHeaderStrip() {
     (r) => r.mode === "live" && !r.dry_run,
   );
 
-  const wsAge = summary?.ws_age_seconds;
-  const wsOk = (wsAge ?? 999) < 10;
-
   return (
     <div
       className="sticky top-0 z-10 flex flex-wrap items-center gap-3
@@ -74,12 +72,7 @@ export function LiveHeaderStrip() {
         data-testid="live-ws-age"
       >
         <span>WS</span>
-        <span
-          className={`h-2 w-2 rounded-full ${
-            wsOk ? "bg-emerald-500" : "bg-rose-500"
-          }`}
-        />
-        <span>{wsAge != null ? `${wsAge}s` : "—"}</span>
+        <LiveWsHealthDot />
       </div>
     </div>
   );
