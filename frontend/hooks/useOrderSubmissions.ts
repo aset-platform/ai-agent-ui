@@ -11,6 +11,7 @@ import useSWR from "swr";
 
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
+import { todayIstIso } from "@/lib/datetime";
 
 /** One row from GET /v1/algo/live/order-submissions.
  *  Top-level fields are flattened from the event payload so the
@@ -36,7 +37,19 @@ interface SubmissionsResponse {
   submissions: OrderSubmission[];
 }
 
-const KEY = `${API_URL}/algo/live/order-submissions?limit=50`;
+// ASETPLTFRM-382 — restrict the Live → Submissions panel to today's
+// real-money rows. ``dry_run=false`` treats NULL-payload-dry_run as
+// real money so post-ASETPLTFRM-374 omitted-dry_run events still
+// surface; ``since_date`` is today in IST so prior sessions stay
+// out of the visible window.
+function buildSubmissionsKey(): string {
+  const qs = new URLSearchParams({
+    limit: "50",
+    dry_run: "false",
+    since_date: todayIstIso(),
+  });
+  return `${API_URL}/algo/live/order-submissions?${qs.toString()}`;
+}
 
 async function fetcher(url: string): Promise<OrderSubmission[]> {
   const r = await apiFetch(url);
@@ -58,7 +71,7 @@ async function fetcher(url: string): Promise<OrderSubmission[]> {
 
 export function useOrderSubmissions() {
   const { data, error, isLoading, mutate } = useSWR<OrderSubmission[]>(
-    KEY,
+    buildSubmissionsKey(),
     fetcher,
     {
       revalidateOnFocus: false,
