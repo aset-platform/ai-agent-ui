@@ -40,7 +40,18 @@ const KEY = `${API_URL}/algo/live/order-submissions?limit=50`;
 
 async function fetcher(url: string): Promise<OrderSubmission[]> {
   const r = await apiFetch(url);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) {
+    let detail = "";
+    try {
+      const body = await r.json();
+      detail = body?.detail ?? "";
+    } catch {
+      // body wasn't JSON — fall back to plain status.
+    }
+    throw new Error(
+      `HTTP ${r.status}${detail ? ` — ${detail}` : ""}`,
+    );
+  }
   const body = (await r.json()) as SubmissionsResponse;
   return body.submissions ?? [];
 }

@@ -27,7 +27,18 @@ interface PositionsResponse {
 
 async function fetcher(url: string): Promise<PositionsResponse> {
   const r = await apiFetch(url);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) {
+    let detail = "";
+    try {
+      const body = await r.json();
+      detail = body?.detail ?? "";
+    } catch {
+      // body wasn't JSON — fall back to plain status.
+    }
+    throw new Error(
+      `HTTP ${r.status}${detail ? ` — ${detail}` : ""}`,
+    );
+  }
   return r.json();
 }
 

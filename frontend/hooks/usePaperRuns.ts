@@ -45,11 +45,17 @@ export function usePaperRuns() {
 
 export type PaperRunSource = "replay" | "live-ws";
 
-/** Trading mode the user is starting a run in. Backend uses this
- *  to choose between PaperRuntime (mode=paper) and LiveRuntime
- *  (mode=live). When mode=live, ALGO_LIVE_DRY_RUN env decides
- *  whether KiteAdapter short-circuits to synthetic responses. */
-export type RunMode = "paper" | "live";
+/** Trading mode the user is starting a run in.
+ *
+ *  ASETPLTFRM-377 — three first-class values. Backend pins
+ *  KiteClient.dry_run explicitly per mode, no longer consults
+ *  the per-user Redis dry-run flag:
+ *    - "paper"  → PaperRuntime (synthetic broker, no Kite).
+ *    - "dryrun" → LiveRuntime with KiteClient(dry_run=True).
+ *                 Real WS ticks, synthetic Kite responses.
+ *    - "live"   → LiveRuntime with KiteClient(dry_run=False).
+ *                 Real money. */
+export type RunMode = "paper" | "dryrun" | "live";
 
 export async function startPaperRun(
   strategyId: string,

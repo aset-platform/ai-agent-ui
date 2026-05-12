@@ -13,6 +13,7 @@ import { LiveSafetyBeltsForm } from "../LiveSafetyBeltsForm";
 import { RegimeHistoryChart } from "../RegimeHistoryChart";
 import { RegimeWidget } from "../RegimeWidget";
 
+import { LiveActiveRunsPanel } from "./LiveActiveRunsPanel";
 import { OpenPositionsWidget } from "./OpenPositionsWidget";
 import { PanicCloseButton } from "./PanicCloseButton";
 import { RecentFillsTape } from "./RecentFillsTape";
@@ -55,6 +56,12 @@ export function LiveDashboard() {
 
   return (
     <div className="space-y-3" data-testid="live-dashboard">
+      {/* ASETPLTFRM-378 — Start / Stop control for the Live runtime
+          mounts at the top of this page (above OPEN POSITIONS).
+          Previously users had to start the live runtime from the
+          Strategies → Dry-run tab, which was conceptually wrong. */}
+      <LiveActiveRunsPanel />
+
       {dry?.dry_run && (
         <div
           className="rounded-md border border-amber-300 bg-amber-50
