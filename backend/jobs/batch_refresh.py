@@ -974,6 +974,31 @@ def batch_data_refresh(
             )
 
         if not new_only.empty:
+            # NaN-ticker / NaT-date sanitisation barrier. PyArrow's
+            # ``pa.string()`` cast on a NaN raises "Expected bytes,
+            # got a 'float' object" — bringing down the whole
+            # pipeline step (Daily Market Close - USA, 2026-05-12).
+            # yfinance bulk downloads occasionally return multi-
+            # index columns or partial rows after a "database is
+            # locked" retry; this guard drops any contaminated
+            # rows before they reach the writer.
+            pre_count = len(new_only)
+            new_only = new_only[
+                new_only["ticker"].notna()
+                & new_only["date"].notna()
+            ]
+            new_only = new_only[
+                new_only["ticker"].astype(str).str.strip() != ""
+            ]
+            if len(new_only) < pre_count:
+                _logger.warning(
+                    "[batch] dropped %d row(s) with NaN/empty "
+                    "ticker or NaT date before OHLCV write "
+                    "(yfinance shape glitch)",
+                    pre_count - len(new_only),
+                )
+
+        if not new_only.empty:
             now = _now_utc()
             dates = pd.to_datetime(new_only["date"])
             adj = (
