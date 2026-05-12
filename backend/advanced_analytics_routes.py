@@ -45,7 +45,7 @@ import logging
 import math
 from datetime import date
 from io import StringIO
-from typing import Literal
+from typing import Any, Literal
 
 import pandas as pd
 from advanced_analytics_filters import (
@@ -586,6 +586,79 @@ def _load_company(tickers: list[str]) -> pd.DataFrame:
         f"  WHERE ticker IN ({_ph(tickers)})"
         ") WHERE rn = 1",
     )
+
+
+async def _load_latest_recommendations(
+    user_id: str, tickers: list[str],
+) -> dict[str, Any]:
+    """Batched fetch of the user's most recent active recs.
+
+    Returns::
+
+        {
+            "run_id": str | None,
+            "run_date": str | None,   # ISO date string
+            "recs": {
+                ticker: (
+                    category, severity, expected_return_pct,
+                ),
+                ...
+            },
+        }
+
+    ``run_id`` / ``run_date`` are ``None`` when no eligible run
+    exists (degraded path — bull regime drops the rec gate; chip
+    in UI). Admin-test runs are excluded.
+    """
+    if not tickers:
+        return {"run_id": None, "run_date": None, "recs": {}}
+
+    from sqlalchemy import text
+
+    from stocks.repository import _pg_session
+
+    async with _pg_session() as session:
+        run_row = await session.execute(
+            text(
+                "SELECT run_id, run_date "
+                "FROM stocks.recommendation_runs "
+                "WHERE user_id = CAST(:uid AS UUID) "
+                "  AND run_type != 'admin_test' "
+                "ORDER BY run_date DESC "
+                "LIMIT 1"
+            ),
+            {"uid": user_id},
+        )
+        first = run_row.fetchone()
+        if first is None:
+            return {
+                "run_id": None, "run_date": None, "recs": {},
+            }
+        run_id, run_date = first
+
+        rec_rows = await session.execute(
+            text(
+                "SELECT ticker, category, severity, "
+                "       expected_return_pct "
+                "FROM stocks.recommendations "
+                "WHERE run_id = :rid "
+                "  AND status = 'active' "
+                "  AND ticker = ANY(:tk)"
+            ),
+            {"rid": str(run_id), "tk": tickers},
+        )
+        rows = rec_rows.fetchall()
+
+    recs: dict[str, tuple[str | None, str | None, float | None]] = {}
+    for r in rows:
+        recs[r[0]] = (r[1], r[2], r[3])
+    return {
+        "run_id": str(run_id),
+        "run_date": (
+            run_date.isoformat() if run_date else None
+        ),
+        "recs": recs,
+    }
 
 
 # ---------------------------------------------------------------

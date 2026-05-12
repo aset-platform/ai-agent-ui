@@ -584,3 +584,117 @@ def test_rank_bearish_higher_for_fresher_cross() -> None:
 def test_rank_bearish_nan_returns_zero() -> None:
     row = _bearish_row(death_cross_days_ago=None)
     assert rank_bearish(row) == 0.0
+
+
+# ---------------------------------------------------------------
+# Task 10 — _load_latest_recommendations batched PG lookup
+# ---------------------------------------------------------------
+
+import asyncio
+
+from advanced_analytics_routes import _load_latest_recommendations
+
+
+def test_load_latest_recommendations_empty_for_unknown_user() -> None:
+    """No rec runs for an unknown user → run_id None, recs empty."""
+    fake_uuid = "00000000-0000-0000-0000-000000000000"
+    result = asyncio.run(
+        _load_latest_recommendations(
+            user_id=fake_uuid, tickers=["TCS.NS", "ITC.NS"],
+        )
+    )
+    assert result["run_id"] is None
+    assert result["run_date"] is None
+    assert result["recs"] == {}
+
+
+def test_load_latest_recommendations_empty_for_empty_ticker_list() -> None:
+    """Empty ticker list → degenerate empty response, no PG hit."""
+    fake_uuid = "00000000-0000-0000-0000-000000000000"
+    result = asyncio.run(
+        _load_latest_recommendations(
+            user_id=fake_uuid, tickers=[],
+        )
+    )
+    assert result["run_id"] is None
+    assert result["run_date"] is None
+    assert result["recs"] == {}
+
+
+async def _discover_real_user_and_tickers() -> (
+    tuple[str | None, list[str]]
+):
+    """Use the same async PG session helper to probe for fixtures.
+
+    Returns ``(user_id, tickers)`` or ``(None, [])`` if the DB has
+    no active recs — keeping the integration test CI-safe.
+    """
+    from sqlalchemy import text
+
+    from stocks.repository import _pg_session
+
+    async with _pg_session() as session:
+        result = await session.execute(
+            text(
+                "SELECT DISTINCT run.user_id "
+                "FROM stocks.recommendation_runs run "
+                "JOIN stocks.recommendations r "
+                "  ON r.run_id = run.run_id "
+                "WHERE r.status = 'active' "
+                "  AND run.run_type != 'admin_test' "
+                "LIMIT 1"
+            )
+        )
+        row = result.fetchone()
+        if row is None:
+            return None, []
+        real_user_id = str(row[0])
+
+        tres = await session.execute(
+            text(
+                "SELECT DISTINCT ticker "
+                "FROM stocks.recommendations r "
+                "JOIN stocks.recommendation_runs run "
+                "  ON r.run_id = run.run_id "
+                "WHERE run.user_id = CAST(:uid AS UUID) "
+                "  AND r.status = 'active' "
+                "  AND r.ticker IS NOT NULL "
+                "  AND run.run_type != 'admin_test' "
+                "LIMIT 5"
+            ),
+            {"uid": real_user_id},
+        )
+        real_tickers = [r[0] for r in tres.fetchall()]
+    return real_user_id, real_tickers
+
+
+def test_load_latest_recommendations_returns_shape_for_real_user() -> None:
+    """If any real user has an active rec run, the function returns
+    the expected shape (run_id non-null, recs dict with values being
+    (category, severity, expected_return_pct) tuples).
+
+    Skipped if the DB has no active recs (CI-safe).
+    """
+    real_user_id, real_tickers = asyncio.run(
+        _discover_real_user_and_tickers()
+    )
+    if real_user_id is None:
+        pytest.skip("No active rec runs in DB")
+    if not real_tickers:
+        pytest.skip("No tickered recs for user")
+
+    result = asyncio.run(
+        _load_latest_recommendations(
+            user_id=real_user_id, tickers=real_tickers,
+        )
+    )
+    assert result["run_id"] is not None
+    assert result["run_date"] is not None
+    assert len(result["recs"]) >= 1
+    # Spot-check one entry's shape.
+    sample = next(iter(result["recs"].values()))
+    assert isinstance(sample, tuple) and len(sample) == 3
+    cat, sev, ret = sample
+    assert cat is None or isinstance(cat, str)
+    assert sev is None or isinstance(sev, str)
+    assert ret is None or isinstance(ret, (int, float))
