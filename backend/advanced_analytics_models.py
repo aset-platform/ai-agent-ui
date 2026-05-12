@@ -10,9 +10,20 @@ across the seven tabs (per plan §6).
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import BaseModel, Field
+
+
+# Returned by ``_golden_cross_days_ago`` / ``_death_cross_days_ago``
+# when SMA-50 has been on one side of SMA-200 for the entire
+# 215-row indicator window — i.e. any visible cross happened
+# earlier than our history. Stays a finite ``int`` so JSON
+# serialization on AdvancedRow is safe (math.inf would break
+# strict-JSON consumers). Callers using upper-bound checks
+# (``dxa <= 60``) MUST special-case this constant — see
+# ``passes_bearish`` for the canonical pattern.
+ESTABLISHED_CROSS_DAYS: Final[int] = 999
 
 
 StaleReason = Literal[

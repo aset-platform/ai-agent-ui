@@ -57,15 +57,19 @@ def test_death_cross_n_days_back() -> None:
 
 
 def test_death_cross_sentinel_when_below_entire_window() -> None:
-    """SMA-50 below SMA-200 entire window with no cross → 999."""
+    """SMA-50 below SMA-200 entire window → established sentinel."""
+    from advanced_analytics_models import ESTABLISHED_CROSS_DAYS
+
     df = _make_sma_df([90, 91, 92], [100, 101, 102])
-    assert _death_cross_days_ago(df) == 999
+    assert _death_cross_days_ago(df) == ESTABLISHED_CROSS_DAYS
 
 
 def test_death_cross_handles_nan_prefix() -> None:
-    """NaN prefix (insufficient warmup) returns 999 sentinel."""
+    """NaN prefix (insufficient warmup) → established sentinel."""
+    from advanced_analytics_models import ESTABLISHED_CROSS_DAYS
+
     df = _make_sma_df([np.nan, np.nan, 95], [np.nan, np.nan, 100])
-    assert _death_cross_days_ago(df) == 999
+    assert _death_cross_days_ago(df) == ESTABLISHED_CROSS_DAYS
 
 
 def test_death_cross_missing_columns_returns_none() -> None:
@@ -160,11 +164,13 @@ def test_build_row_populates_swing_computed_cols() -> None:
     })
 
     # Indicators dict — mirror contract _load_indicators_latest emits.
+    from advanced_analytics_models import ESTABLISHED_CROSS_DAYS
+
     indicators = {
         "rsi_14": 55.0,
         "sma_50": 110.0,
         "sma_200": 105.0,
-        "golden_cross_days_ago": 999,
+        "golden_cross_days_ago": ESTABLISHED_CROSS_DAYS,
         # Pre-computed by _load_indicators_latest (Task 5 extension):
         "death_cross_days_ago": None,
         "rsi_3d_ago": 60.0,
@@ -251,6 +257,9 @@ def test_build_methodology_unknown_regime_raises() -> None:
         build_methodology("noisy")  # type: ignore[arg-type]
 
 
+from advanced_analytics_models import (
+    ESTABLISHED_CROSS_DAYS as _ESTABLISHED,
+)
 from advanced_analytics_swing import (
     passes_bull,
     rank_bull,
@@ -263,7 +272,7 @@ def _bull_row(**overrides: Any) -> AdvancedRow:
         today_ltp=120.0,
         sma_50=110.0,
         sma_200=100.0,
-        golden_cross_days_ago=999,
+        golden_cross_days_ago=_ESTABLISHED,
         today_x_vol=3.0,
         current_dpc=55.0,
         avg_20d_dpc=45.0,
@@ -320,6 +329,12 @@ def test_passes_bull_rejects_high_pledged() -> None:
     assert passes_bull(_bull_row(pledged=15.0), True) is False
 
 
+def test_passes_bull_accepts_null_pledged() -> None:
+    """promoter_holdings is sparse — NULL pledged tolerated.
+    Only positive distress signal (pledged >= 10) rejects."""
+    assert passes_bull(_bull_row(pledged=None), True) is True
+
+
 def test_passes_bull_accepts_fresh_golden_cross_without_stack() -> None:
     """If SMA stack fails but golden_cross is fresh, gate passes."""
     row = _bull_row(
@@ -327,6 +342,33 @@ def test_passes_bull_accepts_fresh_golden_cross_without_stack() -> None:
         golden_cross_days_ago=5,
     )
     assert passes_bull(row, True) is True
+
+
+def test_passes_bull_accepts_established_with_pullback() -> None:
+    """Long-confirmed uptrend (gxa = ESTABLISHED_CROSS_DAYS) with
+    today's price pulled back to / below SMA-50 — buy-the-dip
+    case. Symmetric to the bearish established-sentinel acceptance.
+    Without this branch, names that have been bullish for 215+
+    days but happen to be in a normal pullback are silently
+    rejected as if they weren't in an uptrend at all.
+    """
+    row = _bull_row(
+        # Price has pulled back BELOW SMA-50 (stack fails).
+        today_ltp=105.0, sma_50=110.0, sma_200=100.0,
+        # Long-confirmed uptrend — SMA-50 > SMA-200 entire window.
+        golden_cross_days_ago=_ESTABLISHED,
+    )
+    assert passes_bull(row, True) is True
+
+
+def test_passes_bull_rejects_stale_mid_window_cross() -> None:
+    """Mid-window stale cross (31-214 days) still rejects when
+    SMA stack also fails — neither fresh nor established."""
+    row = _bull_row(
+        today_ltp=105.0, sma_50=110.0, sma_200=108.0,
+        golden_cross_days_ago=100,
+    )
+    assert passes_bull(row, True) is False
 
 
 def test_passes_bull_rejects_non_bullish_category() -> None:
@@ -530,8 +572,24 @@ def test_passes_bearish_happy_path() -> None:
 
 
 def test_passes_bearish_rejects_stale_death_cross() -> None:
+    """Mid-window stale cross (61-214d ago) is rejected — neither
+    fresh nor the established-bearish 999 sentinel."""
     row = _bearish_row(death_cross_days_ago=100)
     assert passes_bearish(row, "india") is False
+
+
+def test_passes_bearish_accepts_established_sentinel() -> None:
+    """``_death_cross_days_ago`` returns
+    ``ESTABLISHED_CROSS_DAYS`` when SMA-50 has been below SMA-200
+    for the entire 215-row window. That's a deep, long-confirmed
+    bearish state — a valid swing-short candidate. The gate must
+    accept it alongside fresh crosses (≤ 60d)."""
+    from advanced_analytics_models import ESTABLISHED_CROSS_DAYS
+
+    row = _bearish_row(
+        death_cross_days_ago=ESTABLISHED_CROSS_DAYS,
+    )
+    assert passes_bearish(row, "india") is True
 
 
 def test_passes_bearish_rejects_no_death_cross() -> None:
@@ -1115,6 +1173,10 @@ def test_methodology_thresholds_match_filter_constants() -> None:
     assert str(BULL_PLEDGED_MAX) in rules_bull
     assert str(BULL_RANGE_MAX) in rules_bull
     assert str(BULL_GOLDEN_CROSS_FRESH_DAYS) in rules_bull
+    # Established-uptrend sentinel branch on the bull trend gate
+    # (parallel to bearish's established-bearish sentinel acceptance).
+    from advanced_analytics_models import ESTABLISHED_CROSS_DAYS
+    assert str(ESTABLISHED_CROSS_DAYS) in rules_bull
 
     sw = build_methodology("sideways")
     rules_sw = " ".join(g["rule"] for g in sw["gates"])
