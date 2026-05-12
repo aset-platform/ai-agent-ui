@@ -422,3 +422,80 @@ def rank_bull(row: AdvancedRow, rec_gate_applied: bool) -> float:
     x_dv = _safe_float(row.x_dv_20d) or 0.0
     x_vol = _safe_float(row.today_x_vol) or 0.0
     return rec_mult * x_dv * x_vol
+
+
+def passes_sideways(row: AdvancedRow, market: str) -> bool:
+    today_ltp = _safe_float(row.today_ltp)
+    sma_50 = _safe_float(row.sma_50)
+    sma_200 = _safe_float(row.sma_200)
+    rsi = _safe_float(row.rsi)
+    today_x_vol = _safe_float(row.today_x_vol)
+    today_not = _safe_float(row.today_not)
+    pscore = row.pscore
+
+    # MA convergence.
+    if (
+        sma_50 is None
+        or sma_200 is None
+        or sma_200 == 0
+        or abs(sma_50 - sma_200) / abs(sma_200)
+        >= SIDEWAYS_MA_CONV_MAX
+    ):
+        return False
+
+    # Price near SMA-50.
+    if (
+        today_ltp is None
+        or sma_50 is None
+        or sma_50 == 0
+        or abs(today_ltp - sma_50) / abs(sma_50)
+        >= SIDEWAYS_PRICE_NEAR_SMA50
+    ):
+        return False
+
+    # RSI band.
+    if (
+        rsi is None
+        or not (SIDEWAYS_RSI_MIN <= rsi <= SIDEWAYS_RSI_MAX)
+    ):
+        return False
+
+    # Volume band.
+    if (
+        today_x_vol is None
+        or not (
+            SIDEWAYS_VOL_MIN <= today_x_vol <= SIDEWAYS_VOL_MAX
+        )
+    ):
+        return False
+
+    # Liquidity floor (native currency).
+    floor = (
+        SIDEWAYS_NOT_FLOOR_USD if market == "us"
+        else SIDEWAYS_NOT_FLOOR_INR
+    )
+    if today_not is None or today_not <= floor:
+        return False
+
+    # Quality.
+    if pscore is None or pscore < SIDEWAYS_PSCORE_MIN:
+        return False
+
+    return True
+
+
+def rank_sideways(row: AdvancedRow) -> float:
+    """Distance-to-band-edge fraction. Sort ASC (smaller = nearer
+    edge = higher priority). Returns inf when band is missing.
+    """
+    today_ltp = _safe_float(row.today_ltp)
+    low = _safe_float(row.rolling_low_20d_prev)
+    high = _safe_float(row.rolling_high_20d_prev)
+    if (
+        today_ltp is None
+        or low is None
+        or high is None
+        or today_ltp == 0
+    ):
+        return float("inf")
+    return min(today_ltp - low, high - today_ltp) / today_ltp

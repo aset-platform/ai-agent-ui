@@ -395,3 +395,100 @@ def test_rank_bull_clamps_negative_rec_return() -> None:
         rec_expected_return_pct=-5.0, x_dv_20d=2.0, today_x_vol=3.0,
     )
     assert rank_bull(row, rec_gate_applied=True) == 0.0
+
+
+from advanced_analytics_swing import (
+    passes_sideways,
+    rank_sideways,
+)
+
+
+def _sideways_row(
+    market: str = "india", **overrides: Any
+) -> AdvancedRow:
+    base = dict(
+        ticker="ITC.NS",
+        today_ltp=100.0,
+        sma_50=100.5,
+        sma_200=100.0,  # |0.5|/100 = 0.005 (below 0.05)
+        rsi=50.0,
+        today_x_vol=1.0,
+        today_not=100_000_000.0,  # ₹10cr > floor
+        pscore=5,
+        rolling_low_20d_prev=95.0,
+        rolling_high_20d_prev=105.0,
+    )
+    base.update(overrides)
+    return AdvancedRow(**base)  # type: ignore[arg-type]
+
+
+def test_passes_sideways_happy_path() -> None:
+    assert passes_sideways(_sideways_row(), market="india") is True
+
+
+def test_passes_sideways_rejects_diverged_mas() -> None:
+    row = _sideways_row(sma_50=110.0, sma_200=100.0)
+    assert passes_sideways(row, "india") is False
+
+
+def test_passes_sideways_rejects_price_far_from_sma50() -> None:
+    row = _sideways_row(today_ltp=105.0, sma_50=100.0)
+    assert passes_sideways(row, "india") is False
+
+
+def test_passes_sideways_rejects_rsi_outside_band() -> None:
+    assert passes_sideways(_sideways_row(rsi=35.0), "india") is False
+    assert passes_sideways(_sideways_row(rsi=65.0), "india") is False
+
+
+def test_passes_sideways_rejects_volume_surge() -> None:
+    assert (
+        passes_sideways(_sideways_row(today_x_vol=1.5), "india")
+        is False
+    )
+
+
+def test_passes_sideways_rejects_volume_drought() -> None:
+    assert (
+        passes_sideways(_sideways_row(today_x_vol=0.5), "india")
+        is False
+    )
+
+
+def test_passes_sideways_applies_inr_floor() -> None:
+    row = _sideways_row(today_not=30_000_000.0)
+    assert passes_sideways(row, "india") is False
+
+
+def test_passes_sideways_applies_usd_floor_for_us_market() -> None:
+    row = _sideways_row(today_not=500_000.0)
+    assert passes_sideways(row, "us") is False
+
+
+def test_passes_sideways_rejects_low_pscore() -> None:
+    assert (
+        passes_sideways(_sideways_row(pscore=3), "india") is False
+    )
+
+
+def test_rank_sideways_lower_at_band_edge() -> None:
+    """A row near the band edge scores LOWER (closer to 0) → ranks
+    higher when sorted ASC."""
+    near_low = _sideways_row(
+        today_ltp=96.0,
+        rolling_low_20d_prev=95.0,
+        rolling_high_20d_prev=105.0,
+    )
+    mid_band = _sideways_row(
+        today_ltp=100.0,
+        rolling_low_20d_prev=95.0,
+        rolling_high_20d_prev=105.0,
+    )
+    assert rank_sideways(near_low) < rank_sideways(mid_band)
+
+
+def test_rank_sideways_nan_returns_inf() -> None:
+    row = _sideways_row(
+        rolling_low_20d_prev=None, rolling_high_20d_prev=None,
+    )
+    assert rank_sideways(row) == float("inf")
