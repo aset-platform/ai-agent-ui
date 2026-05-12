@@ -142,6 +142,40 @@ class LiveRuntime:
         self._in_flight: list[dict[str, Any]] = []
         self._bars_by_ticker: dict[str, list] = {}
 
+        # ASETPLTFRM-376 — hydrate PositionTracker from any pre-
+        # existing Kite positions/holdings so EXIT logic can see
+        # yesterday's overnight CNC + today's already-open MIS
+        # legs. Wrapped: a Kite hiccup must NOT fail runtime
+        # construction; we degrade to the empty tracker and log.
+        try:
+            from backend.algo.live.position_hydration import (
+                apply_hydrated_positions,
+                hydrate,
+                hydration_events,
+            )
+            allowed = caps.get("allowed_tickers") or None
+            hydrated = hydrate(
+                kite=kite,
+                strategy=strategy,
+                user_id=user_id,
+                allowed_tickers=allowed,
+            )
+            if hydrated:
+                apply_hydrated_positions(self._positions, hydrated)
+                self._events.extend(hydration_events(
+                    session_id=self._session_id,
+                    user_id=user_id,
+                    strategy_id=strategy.id,
+                    hydrated=hydrated,
+                    dry_run=self._dry_run,
+                ))
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "LiveRuntime: position hydration failed: %s — "
+                "PositionTracker starts empty (EXIT signals on "
+                "pre-existing positions will no-op)", exc,
+            )
+
         # Pre-load NIFTY regime + trend features so strategies
         # gated on ``nifty_above_sma200`` / ``nifty_30d_return_pct``
         # don't silent-fail every bar with a KeyError. Same
