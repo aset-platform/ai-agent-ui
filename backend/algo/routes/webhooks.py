@@ -210,18 +210,29 @@ async def kite_postback(request: Request) -> dict:
             "kite postback not enabled on this instance",
         )
 
-    # Gate 2: read body. Kite sends application/x-www-form-
-    # urlencoded with the order fields as form values (not JSON
-    # despite some old docs). Try form-decode first, fall back
-    # to JSON for any test-harness senders that POST as JSON.
+    # Gate 2: read body. Kite Connect v3 quirk: advertises
+    # ``application/x-www-form-urlencoded`` in the Content-Type
+    # header but POSTs the order fields as a JSON object in the
+    # body (verified 2026-05-12 against live postbacks: body
+    # starts with ``{`` despite the form-encoded header). Trust
+    # the body shape over the header — try JSON first when the
+    # body LOOKS like JSON, fall back to form-urlencoded for
+    # any well-behaved senders or older Kite deliveries.
     raw = await request.body()
     content_type = (
         request.headers.get("content-type") or ""
     ).lower()
     payload: dict
+    body_starts_jsonlike = raw[:1] in (b"{", b"[")
     try:
-        if "application/json" in content_type:
+        if body_starts_jsonlike or "application/json" in content_type:
             payload = json.loads(raw)
+            # Coerce to dict regardless — JSON array bodies are
+            # not a Kite shape and would crash downstream.
+            if not isinstance(payload, dict):
+                raise ValueError(
+                    "postback JSON body is not an object",
+                )
         else:
             # form-urlencoded — convert to plain dict; values
             # come back as strings, the downstream verifier +
@@ -232,10 +243,11 @@ async def kite_postback(request: Request) -> dict:
                 k: (v[0] if len(v) == 1 else v)
                 for k, v in parsed.items()
             }
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
         _logger.warning(
-            "kite postback: body parse failed (ct=%s): %s",
-            content_type, exc,
+            "kite postback: body parse failed (ct=%s, "
+            "starts=%s): %s",
+            content_type, raw[:32], exc,
         )
         raise HTTPException(400, "invalid body")
 
