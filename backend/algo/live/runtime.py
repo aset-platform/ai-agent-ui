@@ -719,6 +719,14 @@ class LiveRuntime:
         if signal is None:
             return 0
 
+        # ASETPLTFRM-381 — also emit ``symbol`` (canonical, no .NS)
+        # alongside ``ticker`` so attribution.trades can pair
+        # signals with fills (fills carry payload.symbol only). The
+        # ``.NS`` suffix denotes the NSE market in our internal
+        # ticker scheme; Kite's tradingsymbol drops it.
+        _canonical_symbol = (
+            str(signal.ticker).upper().removesuffix(".NS")
+        )
         self._events.append(event_row(
             session_id=self._session_id,
             user_id=self._user_id,
@@ -728,6 +736,7 @@ class LiveRuntime:
             payload={
                 **({"dry_run": True} if self._dry_run else {}),
                 "ticker": signal.ticker,
+                "symbol": _canonical_symbol,
                 "side": signal.side,
                 "qty": signal.qty,
                 # REGIME-6 — attribution context (additive).
