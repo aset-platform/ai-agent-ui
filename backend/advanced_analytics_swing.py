@@ -18,7 +18,10 @@ from __future__ import annotations
 import math
 from typing import Any, Literal
 
-from advanced_analytics_models import AdvancedRow
+from advanced_analytics_models import (
+    AdvancedRow,
+    ESTABLISHED_CROSS_DAYS,
+)
 
 Regime = Literal["bull", "sideways", "bearish"]
 REGIMES: tuple[Regime, ...] = ("bull", "sideways", "bearish")
@@ -111,9 +114,13 @@ def _bull_gates() -> list[dict[str, str]]:
             "label": "Quality floor",
             "rule": (
                 f"pscore ≥ {BULL_PSCORE_MIN} AND "
-                f"pledged_pct < {BULL_PLEDGED_MAX}"
+                f"(pledged_pct < {BULL_PLEDGED_MAX} OR pledged_pct IS NULL)"
             ),
-            "why": "Filters out distressed names.",
+            "why": (
+                "Filters out distressed names. Pledged NULL is "
+                "tolerated — most stocks have no public pledge "
+                "filing, so missing = no red flag."
+            ),
         },
         {
             "label": "Room to run",
@@ -196,11 +203,18 @@ def _bearish_gates() -> list[dict[str, str]]:
             "label": "Death-cross active",
             "rule": (
                 "sma_50 < sma_200 AND "
-                "death_cross_days_ago ≤ "
-                f"{BEARISH_DEATH_CROSS_FRESH_DAYS}"
+                "(death_cross_days_ago ≤ "
+                f"{BEARISH_DEATH_CROSS_FRESH_DAYS} OR "
+                "death_cross_days_ago == "
+                f"{ESTABLISHED_CROSS_DAYS})"
             ),
             "why": (
-                "Fresh structural downtrend, not stale weakness."
+                "Fresh structural downtrend (≤ 60 d cross) OR "
+                "long-confirmed bearish (SMA-50 below SMA-200 for "
+                "the entire 215-row window — the "
+                f"{ESTABLISHED_CROSS_DAYS} sentinel). Both are "
+                "swing-short candidates; stale mid-window crosses "
+                "(61-214d) are excluded."
             ),
         },
         {
@@ -387,7 +401,12 @@ def passes_bull(
     # Quality.
     if pscore is None or pscore < BULL_PSCORE_MIN:
         return False
-    if pledged is None or pledged >= BULL_PLEDGED_MAX:
+    # Pledged: tolerate NULL — promoter_holdings coverage is
+    # sparse in the dataset (most names have no pledge filing).
+    # Only reject when we have a positive signal of distress
+    # (pledged >= 10%). Absence is treated as "no red flag",
+    # not "fail gate".
+    if pledged is not None and pledged >= BULL_PLEDGED_MAX:
         return False
 
     # Room to run.
@@ -520,10 +539,21 @@ def passes_bearish(row: AdvancedRow, market: str) -> bool:
     w52_low = _safe_float(row.week_52_low)
     today_not = _safe_float(row.today_not)
 
-    # Death-cross active + fresh.
+    # Death-cross active + fresh-or-established. The
+    # ``ESTABLISHED_CROSS_DAYS`` sentinel from
+    # :func:`_death_cross_days_ago` means SMA-50 has been below
+    # SMA-200 for the entire 215-row window — the *deepest*
+    # bearish state (long-confirmed downtrend), exactly what a
+    # swing-short candidate wants. Accept both fresh crosses
+    # (≤ 60 days) and the established-bearish sentinel.
     if sma_50 is None or sma_200 is None or sma_50 >= sma_200:
         return False
-    if dxa is None or dxa > BEARISH_DEATH_CROSS_FRESH_DAYS:
+    if dxa is None:
+        return False
+    if not (
+        dxa <= BEARISH_DEATH_CROSS_FRESH_DAYS
+        or dxa == ESTABLISHED_CROSS_DAYS
+    ):
         return False
 
     # RSI rollover.
