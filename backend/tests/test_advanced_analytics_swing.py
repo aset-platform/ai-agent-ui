@@ -698,3 +698,31 @@ def test_load_latest_recommendations_returns_shape_for_real_user() -> None:
     assert cat is None or isinstance(cat, str)
     assert sev is None or isinstance(sev, str)
     assert ret is None or isinstance(ret, (int, float))
+
+
+def test_apply_rec_data_populates_row_fields() -> None:
+    """Stamp rec_* fields onto rows from the rec dict."""
+    import advanced_analytics_routes as aar
+
+    rows = [
+        AdvancedRow(ticker="TCS.NS"),
+        AdvancedRow(ticker="ITC.NS"),
+    ]
+    recs = {
+        "TCS.NS": ("offensive", "high", 12.0),
+        # ITC.NS missing — should remain None
+    }
+    aar._apply_rec_data(rows, recs)
+    assert rows[0].rec_category == "offensive"
+    assert rows[0].rec_severity == "high"
+    assert rows[0].rec_expected_return_pct == 12.0
+    assert rows[1].rec_category is None
+    assert rows[1].rec_severity is None
+    assert rows[1].rec_expected_return_pct is None
+
+
+def test_apply_rec_data_empty_dict_is_noop() -> None:
+    rows = [AdvancedRow(ticker="TCS.NS")]
+    import advanced_analytics_routes as aar
+    aar._apply_rec_data(rows, {})
+    assert rows[0].rec_category is None

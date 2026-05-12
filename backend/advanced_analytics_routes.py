@@ -661,6 +661,24 @@ async def _load_latest_recommendations(
     }
 
 
+def _apply_rec_data(
+    rows: list[AdvancedRow],
+    recs: dict[str, tuple[str | None, str | None, float | None]],
+) -> None:
+    """Stamp ``rec_*`` fields onto each row in-place from the rec
+    map. Tickers absent from the map are left as ``None`` so the
+    bull-regime gate (or graceful degrade) handles them uniformly.
+    """
+    for r in rows:
+        rec = recs.get(r.ticker)
+        if rec is None:
+            continue
+        cat, sev, ret = rec
+        r.rec_category = cat
+        r.rec_severity = sev
+        r.rec_expected_return_pct = ret
+
+
 # ---------------------------------------------------------------
 # Per-ticker derivation
 # ---------------------------------------------------------------
