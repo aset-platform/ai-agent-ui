@@ -1718,4 +1718,91 @@ def create_advanced_analytics_router() -> APIRouter:
             name=(f"advanced_analytics_" f"{report.replace('-', '_')}_export"),
         )
 
+    # -------- Swing Setups --------
+
+    @router.get(
+        "/swing-setups/methodology",
+        response_model=SwingMethodology,
+        name="advanced_analytics_swing_methodology",
+    )
+    async def get_swing_methodology(
+        regime: Literal["bull", "sideways", "bearish"] = Query(...),
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> SwingMethodology:
+        return SwingMethodology.model_validate(
+            build_methodology(regime),
+        )
+
+    @router.get(
+        "/swing-setups",
+        response_model=SwingSetupsResponse,
+        name="advanced_analytics_swing_setups",
+    )
+    async def get_swing_setups(
+        user: UserContext = Depends(pro_or_superuser),
+        regime: Literal["bull", "sideways", "bearish"] = Query(...),
+        market: str = Query(
+            "all", pattern="^(all|india|us)$",
+        ),
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+        sort_key: str | None = Query(None),
+        sort_dir: str = Query(
+            "desc", pattern="^(asc|desc)$",
+        ),
+    ) -> SwingSetupsResponse:
+        try:
+            cache = get_cache()
+            as_of = _effective_trading_date()
+            ck = (
+                f"cache:advanced_analytics:swing-setups:"
+                f"{regime}:{user.user_id}:{market}:"
+                f"p{page}:ps{page_size}:"
+                f"sk{sort_key or ''}:sd{sort_dir}"
+            )
+            blob = cache.get(ck)
+            if blob is not None:
+                try:
+                    return SwingSetupsResponse.model_validate_json(
+                        blob,
+                    )
+                except Exception:  # pragma: no cover
+                    _logger.warning(
+                        "swing-setups cache parse failed",
+                        exc_info=True,
+                    )
+
+            result = await _compute_swing_setup(
+                user=user,
+                regime=regime,
+                market=market,
+                as_of=as_of,
+                page=page,
+                page_size=page_size,
+                sort_key=sort_key,
+                sort_dir=sort_dir,
+            )
+            try:
+                cache.set(
+                    ck,
+                    result.model_dump_json(),
+                    ttl=TTL_STABLE,
+                )
+            except Exception:  # pragma: no cover
+                _logger.warning(
+                    "swing-setups cache set failed",
+                    exc_info=True,
+                )
+            return result
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _logger.exception(
+                "advanced_analytics swing-setups failed: %s", exc,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="advanced_analytics swing-setups failed",
+            )
+
     return router

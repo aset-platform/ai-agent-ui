@@ -956,3 +956,117 @@ def test_compute_swing_setup_unknown_regime_raises(
             sort_key=None,
             sort_dir=None,
         ))
+
+
+# ---------------------------------------------------------------
+# Task 14 + 15 — swing-setups endpoints (router registration)
+# ---------------------------------------------------------------
+
+
+def _build_swing_test_app(monkeypatch: pytest.MonkeyPatch):
+    """Mount the AA router on a bare FastAPI app with the
+    ``pro_or_superuser`` guard stubbed to a superuser.
+
+    Mirrors the fixture pattern in
+    ``tests/backend/test_advanced_analytics_routes.py``.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import advanced_analytics_routes as aar
+    from auth.dependencies import pro_or_superuser
+    from auth.models import UserContext
+
+    app = FastAPI()
+    router = aar.create_advanced_analytics_router()
+    app.include_router(router, prefix="/v1")
+
+    # Stub out the heavy collaborators so route-existence tests
+    # don't require Iceberg / Redis / Postgres.
+    async def _fake_rows(_user, _as_of):
+        return []
+
+    async def _fake_recs(user_id, tickers):
+        return {"run_id": None, "run_date": None, "recs": {}}
+
+    monkeypatch.setattr(aar, "_cached_full_rows", _fake_rows)
+    monkeypatch.setattr(
+        aar, "_load_latest_recommendations", _fake_recs,
+    )
+
+    class _NoOpCache:
+        def get(self, _k):
+            return None
+
+        def set(self, _k, _v, ttl=None):
+            return None
+
+    monkeypatch.setattr(aar, "get_cache", lambda: _NoOpCache())
+
+    def _ctx() -> UserContext:
+        return UserContext(
+            user_id="swing-test-user",
+            email="swing@test",
+            role="superuser",
+        )
+
+    app.dependency_overrides[pro_or_superuser] = _ctx
+    return TestClient(app)
+
+
+def test_swing_setups_methodology_endpoint_returns_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``GET /swing-setups/methodology?regime=sideways`` returns
+    a structured methodology block."""
+    client = _build_swing_test_app(monkeypatch)
+    resp = client.get(
+        "/v1/advanced-analytics/swing-setups/methodology"
+        "?regime=sideways"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # SwingMethodology shape — must carry at least these keys.
+    assert "regime" in body
+    assert body["regime"] == "sideways"
+
+
+def test_swing_setups_endpoint_route_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``GET /swing-setups?regime=bull`` is registered and
+    returns a 200 with the SwingSetupsResponse envelope."""
+    client = _build_swing_test_app(monkeypatch)
+    resp = client.get(
+        "/v1/advanced-analytics/swing-setups?regime=bull"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "rows" in body
+    assert "total" in body
+    assert "regime" in body
+    assert body["regime"] == "bull"
+
+
+def test_swing_setups_endpoint_rejects_unknown_regime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unknown regime is rejected by FastAPI's ``Literal``
+    validator (422) before our orchestrator runs."""
+    client = _build_swing_test_app(monkeypatch)
+    resp = client.get(
+        "/v1/advanced-analytics/swing-setups?regime=mango"
+    )
+    assert resp.status_code in (400, 422)
+
+
+def test_swing_setups_methodology_rejects_unknown_regime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Methodology endpoint also validates regime."""
+    client = _build_swing_test_app(monkeypatch)
+    resp = client.get(
+        "/v1/advanced-analytics/swing-setups/methodology"
+        "?regime=cheesy"
+    )
+    assert resp.status_code in (400, 422)
