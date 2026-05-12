@@ -3308,7 +3308,7 @@ def create_app(
         days: int = 7,
         severity: str | None = None,
         limit: int = 100,
-    ) -> dict[str, Any]:
+    ) -> dict:
         """GET /admin/data-health/pipeline-assertions
 
         Surfaces ``data_quality_violation`` events emitted by the
@@ -3355,7 +3355,7 @@ def create_app(
                 "failed",
             )
             raw_rows = []
-        rows: list[dict[str, Any]] = []
+        rows: list[dict] = []
         counts = {"warn": 0, "error": 0}
         import json as _json
         for r in raw_rows:
