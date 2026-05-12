@@ -213,6 +213,17 @@ def create_paper_router() -> APIRouter:
                 "live orders. Omit for both."
             ),
         ),
+        since_date: str | None = Query(
+            None,
+            description=(
+                "Restrict to events on or after this IST date "
+                "(YYYY-MM-DD). Matches the events table's "
+                "``ts_date`` partition column directly — "
+                "useful for `today only` widgets like "
+                "RecentFillsTape that should never bleed "
+                "prior sessions into the panel."
+            ),
+        ),
         user: UserContext = Depends(pro_or_superuser),
     ) -> list[dict[str, Any]]:
         """Recent algo events for the caller (newest first).
@@ -257,6 +268,9 @@ def create_paper_router() -> APIRouter:
                     "OR json_extract_string(payload_json, "
                     "'$.dry_run') IS NULL)"
                 )
+        if since_date is not None:
+            clauses.append("ts_date >= ?")
+            base_params.append(since_date)
         where = " AND ".join(clauses)
 
         sql = (

@@ -54,6 +54,10 @@ export function usePaperEvents(
    *  RecentFillsTape that would otherwise be drowned out by
    *  high-volume types (signal_generated, signal_rejected). */
   type: string | null = null,
+  /** Optional IST-date floor (YYYY-MM-DD). Server filters
+   *  ``ts_date >= since_date`` so today-only widgets don't bleed
+   *  prior sessions into the visible window. */
+  sinceDate: string | null = null,
 ) {
   const params = new URLSearchParams({
     limit: String(limit),
@@ -62,6 +66,7 @@ export function usePaperEvents(
   if (mode != null) params.set("mode", mode);
   if (dryRun != null) params.set("dry_run", String(dryRun));
   if (type != null) params.set("type", type);
+  if (sinceDate != null) params.set("since_date", sinceDate);
   const key = `${API_URL}/algo/paper/events?${params.toString()}`;
   const { data, error, isLoading } = useSWR<EventsPage>(
     key,

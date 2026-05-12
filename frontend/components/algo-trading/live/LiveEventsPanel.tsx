@@ -95,6 +95,11 @@ const TYPE_BADGE: Record<string, BadgeStyle> = {
     text: "text-purple-800 dark:text-purple-200",
     label: "HYDRATE",
   },
+  kite_postback_received: {
+    bg: "bg-slate-100 dark:bg-slate-800",
+    text: "text-slate-700 dark:text-slate-300",
+    label: "POSTBACK",
+  },
 };
 
 const FALLBACK_BADGE: BadgeStyle = {
@@ -177,6 +182,11 @@ function summarise(
       return `${sym} × ${qty}${
         payload["t1_pending"] ? " (T+1)" : ""
       } — ${payload["source"]}`;
+    case "kite_postback_received": {
+      const ts = payload["tradingsymbol"] ?? sym;
+      const status = String(payload["status"] ?? "");
+      return `${ts || "?"} — ${status || "received"}`;
+    }
     default:
       return sym || "—";
   }
