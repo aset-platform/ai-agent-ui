@@ -12,6 +12,7 @@ import {
   type FixTarget,
   type FixProgress,
 } from "@/hooks/useAdminData";
+import { PipelineAssertionsCard } from "./PipelineAssertionsCard";
 import { SentimentDetailsModal } from "./SentimentDetailsModal";
 
 type Status = "green" | "yellow" | "red";
@@ -931,6 +932,11 @@ export function DataHealthPanel() {
           )}
         </div>
       ) : null}
+
+      {/* ASETPLTFRM-380 — surfaces silent-success pipeline runs
+          via assertion-failure events. Self-hides when no
+          violations are present. */}
+      <PipelineAssertionsCard />
 
       <SentimentDetailsModal
         open={showSentimentDetails}

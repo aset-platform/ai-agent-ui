@@ -110,8 +110,106 @@ def run_regime_classifier_step(
     from backend.algo.regime.classifier_job import (
         run_classifier_job,
     )
-    out = run_classifier_job({})
-    return {"forced": force, **(out or {})}
+    out = run_classifier_job({}) or {}
+
+    # ASETPLTFRM-380 — post-step data-quality assertions. The 2026-
+    # 05-11 stale-VIX silent-success run motivated this: pipeline
+    # reported status=success while writing vix_close=16.84 against
+    # an actual ^INDIAVIX close of 18.55. Assertions surface that
+    # delta as a data_quality_violation event so admin Data Health
+    # can flag the run without blocking subsequent steps.
+    try:
+        _run_regime_classifier_assertions(
+            out, run_id=run_id, today=today,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            "regime_classifier assertion run failed: %s — "
+            "step output left unflagged", exc,
+        )
+
+    return {"forced": force, **out}
+
+
+def _run_regime_classifier_assertions(
+    out: dict,
+    *,
+    run_id: str,
+    today: date,
+) -> None:
+    """Evaluate post-step assertions on the regime classifier's
+    output and emit ``data_quality_violation`` events for any
+    failures (ASETPLTFRM-380)."""
+    from backend.algo.backtest.event_writer import flush_events
+    from backend.algo.pipeline.quality import (
+        cross_source_close_enough,
+        emit_violation_events,
+        evaluate_assertions,
+        value_in_range,
+        value_is_not_nan,
+    )
+    from backend.db.duckdb_engine import query_iceberg_table
+
+    rule_inputs = out.get("rule_inputs") or {}
+    ctx: dict[str, Any] = {
+        "vix_close": rule_inputs.get("vix_close"),
+        "pct_above_50sma": rule_inputs.get("pct_above_50sma"),
+        "stress_prob": out.get("stress_prob"),
+    }
+
+    # Cross-source freshness: pull what stocks.ohlcv has for
+    # ^INDIAVIX on the same day. If both are populated, the
+    # cross_source_close_enough assertion catches the stale-VIX
+    # case (16.84 vs 18.55 → ~9% delta → warn).
+    try:
+        rows = query_iceberg_table(
+            "stocks.ohlcv",
+            "SELECT close FROM ohlcv "
+            "WHERE ticker = '^INDIAVIX' "
+            "ORDER BY date DESC LIMIT 1",
+            [],
+        )
+        if rows and rows[0].get("close") is not None:
+            ctx["expected_vix_close"] = float(rows[0]["close"])
+    except Exception:  # noqa: BLE001
+        pass
+
+    assertions = [
+        value_is_not_nan("vix_close"),
+        value_is_not_nan("pct_above_50sma"),
+        value_in_range(
+            "pct_above_50sma", 0.0, 1.0, severity="error",
+        ),
+        value_in_range(
+            "stress_prob", 0.0, 1.0, severity="warn",
+        ),
+        cross_source_close_enough(
+            "vix_close",
+            "expected_vix_close",
+            tolerance_pct=5.0,
+            severity="warn",
+        ),
+    ]
+    report = evaluate_assertions(
+        "regime_classifier_daily", assertions, ctx,
+    )
+    if not report.failed:
+        return
+    events: list[dict] = []
+    emit_violation_events(
+        report,
+        pipeline_id="india_regime_daily",
+        run_id=run_id,
+        events_sink=events.append,
+    )
+    if events:
+        try:
+            flush_events(events)
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "data_quality_violation flush failed",
+                exc_info=True,
+            )
 
 
 def _regime_history_has_today(today: date) -> bool:

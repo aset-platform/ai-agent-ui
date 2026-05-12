@@ -91,7 +91,12 @@ describe("useKitePostbacks", () => {
     expect(result.current.error).toBe("HTTP 500");
   });
 
-  it("uses the correct SWR key", () => {
+  it("uses the correct SWR key (today + real-money filters)", () => {
+    // ASETPLTFRM-382 — the hook now scopes to today (IST) and
+    // real-money only so dry-run / prior-session rows don't bleed
+    // onto the Live page. The exact `since_date` value depends on
+    // wall-clock at test time; we match the structural shape and
+    // assert the two new query params are present.
     mockUseSWR.mockReturnValue({
       data: [],
       error: undefined,
@@ -102,9 +107,12 @@ describe("useKitePostbacks", () => {
     renderHook(() => useKitePostbacks());
 
     const [key] = mockUseSWR.mock.calls[0];
-    expect(key).toBe(
-      "http://localhost:8181/v1/algo/live/postbacks?limit=50",
+    expect(key).toMatch(
+      /^http:\/\/localhost:8181\/v1\/algo\/live\/postbacks\?/,
     );
+    expect(key).toContain("limit=50");
+    expect(key).toContain("dry_run=false");
+    expect(key).toMatch(/since_date=\d{4}-\d{2}-\d{2}/);
   });
 
   it("passes revalidateOnFocus: false to SWR", () => {
