@@ -133,15 +133,20 @@ export const ADVANCED_REPORT_ORDER: AdvancedReportName[] = [
  *  Help tab. Keep AdvancedReportName separate — it mirrors
  *  the backend endpoint set and drives RSC pre-fetch + URL
  *  validation. */
-export type AdvancedTabId = AdvancedReportName | "help";
+export type AdvancedTabId =
+  | AdvancedReportName
+  | "swing-setups"
+  | "help";
 
 export const ADVANCED_TAB_LABELS: Record<AdvancedTabId, string> = {
   ...ADVANCED_REPORT_LABELS,
+  "swing-setups": "Swing Setups",
   help: "Help",
 };
 
 export const ADVANCED_TAB_ORDER: AdvancedTabId[] = [
   ...ADVANCED_REPORT_ORDER,
+  "swing-setups",
   "help",
 ];
 

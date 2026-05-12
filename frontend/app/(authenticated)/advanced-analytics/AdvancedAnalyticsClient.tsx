@@ -32,6 +32,7 @@ import { MomVolumeDeliveryTab } from "@/components/advanced-analytics/MomVolumeD
 import { WowVolumeDeliveryTab } from "@/components/advanced-analytics/WowVolumeDeliveryTab";
 import { TwoDayScanTab } from "@/components/advanced-analytics/TwoDayScanTab";
 import { ThreeDayScanTab } from "@/components/advanced-analytics/ThreeDayScanTab";
+import { SwingSetupsTab } from "@/components/advanced-analytics/SwingSetupsTab";
 import { Top50DeliveryByQtyTab } from "@/components/advanced-analytics/Top50DeliveryByQtyTab";
 
 interface AdvancedAnalyticsClientProps {
@@ -121,6 +122,7 @@ export default function AdvancedAnalyticsClient({
         {tab === "two-day-scan" && <TwoDayScanTab />}
         {tab === "three-day-scan" && <ThreeDayScanTab />}
         {tab === "top-50-delivery-by-qty" && <Top50DeliveryByQtyTab />}
+        {tab === "swing-setups" && <SwingSetupsTab />}
         {tab === "help" && <HelpTab />}
       </div>
     </div>
