@@ -24,6 +24,15 @@ Known event type registry (append-only — never remove):
      request / context / response.raw nested blocks; top-level keys
      kite_order_id / dry_run / side / qty / symbol preserved for
      PaperEventsTimeline compatibility.)
+  Order-safety hardening (2026-05-12 PR #3):
+    order_cancelled_timeout  — _OrderTimeoutWatcher cancelled a
+       session-tagged LIMIT after ALGO_ORDER_TTL_S (default 90s)
+       still in OPEN / TRIGGER PENDING. Payload: kite_order_id,
+       tag, status_at_cancel, age_seconds, ttl_seconds, symbol,
+       side, qty, filled_qty, reason.
+    order_cancel_failed      — cancellation attempt raised; emitted
+       per failure with kite_order_id, status_at_cancel_attempt,
+       age_seconds, exc_str. The watcher then continues polling.
   Reconciliation (V2-3):
     position_drift_detected / drift_resolved
 """
