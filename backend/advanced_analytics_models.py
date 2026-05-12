@@ -124,6 +124,18 @@ class AdvancedRow(BaseModel):
     event: str | None = None
     event_date: str | None = None  # ISO 8601 UTC ``Z`` suffix
 
+    # Swing-setup computed columns (Task 2-4 of plan).
+    death_cross_days_ago: int | None = None
+    rolling_low_20d_prev: float | None = None
+    rolling_high_20d_prev: float | None = None
+    rsi_3d_ago: float | None = None
+    rsi_max_10d: float | None = None
+
+    # Recommendation-engine join (Task 10 of plan).
+    rec_category: str | None = None
+    rec_severity: str | None = None
+    rec_expected_return_pct: float | None = None
+
 
 class AdvancedReportResponse(BaseModel):
     """Paginated response for any of the 7 reports."""
