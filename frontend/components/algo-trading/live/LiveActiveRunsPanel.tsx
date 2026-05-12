@@ -25,7 +25,19 @@ import {
 } from "@/hooks/usePaperRuns";
 import { useStrategies } from "@/hooks/useStrategies";
 
-export function LiveActiveRunsPanel() {
+interface Props {
+  /** Selected strategy id, hoisted to LiveDashboard so all Live
+   *  page dropdowns (Start picker, safety belts, attribution)
+   *  stay in sync. Optional for backward compat — when absent
+   *  the panel falls back to a local useState. */
+  strategyId?: string;
+  onStrategyChange?: (id: string) => void;
+}
+
+export function LiveActiveRunsPanel({
+  strategyId: controlledStrategyId,
+  onStrategyChange,
+}: Props = {}) {
   const { runs: allRuns, loading } = usePaperRuns();
   // Live-only filter — dry-run runs land in the Strategies →
   // Dry-run tab's panel, never here.
@@ -34,7 +46,21 @@ export function LiveActiveRunsPanel() {
   );
   const { strategies } = useStrategies();
   const { value: brokerStatus } = useBrokerStatus();
-  const [strategyId, setStrategyId] = useState<string>("");
+  // Controlled-or-uncontrolled pattern: if the parent passes a
+  // strategyId we mirror it; otherwise we maintain our own.
+  const [localStrategyId, setLocalStrategyId] = useState<string>("");
+  const strategyId = (
+    controlledStrategyId !== undefined
+      ? controlledStrategyId
+      : localStrategyId
+  );
+  const setStrategyId = (id: string) => {
+    if (onStrategyChange) {
+      onStrategyChange(id);
+    } else {
+      setLocalStrategyId(id);
+    }
+  };
   const [capital, setCapital] = useState<string>("100000.00");
   const [pending, setPending] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
