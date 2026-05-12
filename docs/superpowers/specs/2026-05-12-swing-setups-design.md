@@ -188,13 +188,48 @@ GET /v1/advanced-analytics/swing-setups
   "rec_gate_applied": true,
   "rec_run_id": "uuid-or-null",
   "rec_run_date": "2026-05-01",
-  "notes": ["Recommendation gate not applied — no rec run this month"]
+  "notes": ["Recommendation gate not applied — no rec run this month"],
+  "methodology": {
+    "regime": "bull",
+    "summary": "Trend-up stocks with fresh delivery-backed demand confirmed by the LLM recommendation engine.",
+    "gates": [
+      {
+        "label": "Trend stack",
+        "rule": "today_ltp > sma_50 > sma_200 OR golden_cross_days_ago ≤ 30",
+        "why": "Establishes an uptrend or a fresh trend reversal."
+      },
+      {
+        "label": "Volume sweet spot",
+        "rule": "2 ≤ today_x_vol ≤ 5",
+        "why": "Below 2× lacks conviction; above 5× is usually news-spike / exhaustion."
+      },
+      { "label": "Delivery confirmation", "rule": "current_dpc > avg_20d_dpc", "why": "Today's delivery % above 20-day average — real buying, not just churn." },
+      { "label": "Accumulation trend", "rule": "x_dv_20d > 1", "why": "20-day delivery quantity trending up." },
+      { "label": "Not exhausted", "rule": "rsi < 70", "why": "Leaves room before momentum reverses." },
+      { "label": "Quality floor", "rule": "pscore ≥ 5 AND pledged_pct < 10", "why": "Filters out distressed names." },
+      { "label": "Room to run", "rule": "today_ltp / week52_high < 0.95", "why": "Not already at the top of the 52-week range." },
+      { "label": "Rec-engine bullish", "rule": "rec_category ∈ {bullish set} AND rec_severity ∈ {high, medium}", "why": "LLM engine independently confirms the thesis. Skipped if user has no rec run this month (chip surfaced)." }
+    ],
+    "rank": {
+      "formula": "max(rec_expected_return_pct, 0) × x_dv_20d × today_x_vol",
+      "direction": "DESC",
+      "cap": 25,
+      "degraded": "When no rec run for user this month, formula reduces to x_dv_20d × today_x_vol."
+    },
+    "as_of": "2026-05-12"
+  }
 }
 ```
 
 - `rec_gate_applied`: `true` iff bull regime found a rec run; `false`
   in degraded mode. UI uses this to render the transparency chip.
 - `notes`: human-readable strings shown as panel chips (§5.5).
+- `methodology`: structured rules block — backend is the single source
+  of truth for thresholds. Tuning in Phase A.5 updates one place
+  (a `methodology.py` module) and the UI re-renders automatically.
+  Returned for every request (small payload, ~1 KB); also available
+  standalone at `GET /v1/advanced-analytics/swing-setups/methodology
+  ?regime=...` for the page-load case.
 - Row payload extends existing `AdvancedRow` schema (no breaking
   change to the seven existing tabs).
 
@@ -237,7 +272,65 @@ Follows the **tabular page pattern** (CLAUDE.md §5.4):
 
 `ticker` is the locked identity column for all three.
 
-### 7.4 Actions
+### 7.4 Methodology panel ("How this list is built")
+
+Each regime's filter rules are surfaced on the page so users can
+**see exactly which gates produced the list** and self-diagnose why
+a ticker did or didn't make the cut. Rendered from the backend
+`methodology` block — no hard-coded rule copy in the frontend.
+
+**Layout:** A collapsible info strip sits between the regime-pill
+row and the table. Default state: **expanded on first visit per
+regime per session** (localStorage flag `aa.swing.<regime>.methodology_seen`),
+collapsed thereafter. A persistent `<InfoIcon>` button to the right
+of the pill row toggles it any time.
+
+**Structure inside the strip:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ How this Bull-swing list is built                  [collapse ▲] │
+│                                                                 │
+│ {methodology.summary}                                           │
+│                                                                 │
+│ Gates (all must hold):                                          │
+│   ① Trend stack — today_ltp > sma_50 > sma_200                  │
+│         OR golden_cross_days_ago ≤ 30                           │
+│     ↳ Establishes an uptrend or a fresh trend reversal.         │
+│   ② Volume sweet spot — 2 ≤ today_x_vol ≤ 5                     │
+│     ↳ Below 2× lacks conviction; above 5× is news-spike noise.  │
+│   ③ … (one row per gate, label / rule / why)                    │
+│                                                                 │
+│ Ranking: {methodology.rank.formula} (DESC, top 25)              │
+│     ↳ Rewards confirmed picks with persistent delivery and      │
+│       fresh volume thrust simultaneously.                       │
+│                                                                 │
+│ Last updated: 2026-05-12 · Source: stocks.ohlcv + nse_delivery  │
+│ + stocks.recommendations                                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Implementation notes:**
+
+- Renders from `response.methodology` — never hard-code rules in JSX.
+- Each gate row uses monospace for the `rule` expression (clarity)
+  and regular weight for the `why` sentence.
+- Rule expressions use the same column names that appear in the
+  table headers — click on a header chip and the matching gate row
+  scrolls into view + highlights (lightweight scroll-target).
+- On the degraded-rec-gate path, the Rec-engine row gets a strike-
+  through and the `notes` chip explains.
+- Tooltip on the `InfoIcon` button: "See the rules used to build
+  this list".
+- Mobile: strip collapses by default; tap header to expand.
+
+**Why backend-sourced and not a static doc page:** rules will be
+tuned in Phase A.5 based on observed hit-rates. Sourcing from the
+backend means a single edit to `methodology.py` updates both the
+filter behaviour and the on-page explanation in lockstep — no drift
+between code and copy.
+
+### 7.5 Row actions
 
 Each row exposes the standard AA row-actions (view ticker detail,
 add to watchlist, open in chart). No new modal in Phase A. Adding
@@ -259,6 +352,11 @@ add to watchlist, open in chart). No new modal in Phase A. Adding
 
 **Backend (pytest):**
 
+- Unit test: `methodology.py` returns a complete block for each
+  regime with all gates labelled, all `rule` strings non-empty, and
+  the rank formula matching what the route actually applies (snapshot
+  test — if someone changes a threshold in the filter but forgets to
+  update the methodology block, this fails loudly).
 - Unit tests for the three new computed columns
   (`death_cross_days_ago`, `rolling_low_20d_prev`, RSI lookback) with
   synthetic OHLCV fixtures. Happy path + one boundary each
@@ -277,6 +375,10 @@ add to watchlist, open in chart). No new modal in Phase A. Adding
 
 - vitest: SwingSetupsTab renders three pills; switching pill triggers
   new SWR fetch; column selector persists per-regime localStorage key.
+- vitest: MethodologyPanel renders all gates from the backend
+  `methodology` block, collapses after first view per regime via
+  localStorage flag, and renders the degraded-rec-gate strike-through
+  when `rec_gate_applied: false`.
 - Playwright (`e2e/utils/selectors.ts` registry update):
   `swing-setups-tab`, `swing-regime-pill-{bull|sideways|bearish}`,
   `swing-empty-state`. Page Object Model under
@@ -356,10 +458,13 @@ the spec:
 
 Rough breakdown for the implementation plan to flesh out:
 
-- Backend (route, computed cols, rec join, tests): ~5 SP
-- Frontend (tab, three pills, column selector wiring, tests): ~4 SP
-- E2E (selectors, fixtures, two specs): ~2 SP
+- Backend (route, computed cols, rec join, methodology module,
+  tests): ~6 SP
+- Frontend (tab, three pills, column selector wiring, methodology
+  panel, tests): ~5 SP
+- E2E (selectors, fixtures, two specs including methodology-visible
+  assertion): ~2 SP
 - Polish + docs (CLAUDE.md pattern entry, Serena memory, PROGRESS.md):
   ~1 SP
 
-Total ~12 SP — single sprint slice.
+Total ~14 SP — single sprint slice.
