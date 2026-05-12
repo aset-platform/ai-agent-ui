@@ -12,6 +12,7 @@ import {
 } from "react";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
+import { formatIst } from "@/lib/datetime";
 
 // ---------------------------------------------------------------
 // Types
@@ -36,25 +37,17 @@ interface BackupHealth {
   size_mb?: number;
 }
 
-// Render an ISO 8601 UTC timestamp in IST
-// (Asia/Kolkata) so the displayed time matches the
-// user's mental model regardless of where the
-// browser thinks it is.
+// Render an ISO 8601 UTC timestamp in IST via the shared helper
+// (ASETPLTFRM-373) so the format stays consistent across panels.
 function fmtIst(iso: string | null | undefined): string {
   if (!iso) return "";
-  try {
-    return new Date(iso).toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      year: "numeric",
-      month: "short",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }) + " IST";
-  } catch {
-    return iso;
-  }
+  return formatIst(iso, {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }) + " IST";
 }
 
 interface TableContents {

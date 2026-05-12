@@ -20,6 +20,7 @@
 
 import { useMemo, useState } from "react";
 
+import { formatIstTimeFromNs } from "@/lib/datetime";
 import { usePaperEvents } from "@/hooks/usePaperEvents";
 
 interface BadgeStyle {
@@ -115,21 +116,8 @@ function badgeFor(type: string): BadgeStyle {
   };
 }
 
-// Render-IST time-of-day. Date is implicit from "today's events".
-function fmtTimeIst(tsNs: number): string {
-  try {
-    const ms = Math.floor(tsNs / 1_000_000);
-    return new Date(ms).toLocaleTimeString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    });
-  } catch {
-    return "—";
-  }
-}
+// Render-IST time-of-day via shared helper (ASETPLTFRM-373).
+const fmtTimeIst = (tsNs: number) => formatIstTimeFromNs(tsNs);
 
 // One-line summary extracted from the payload — keeps the row
 // scannable. Type-specific so we surface the most useful field.

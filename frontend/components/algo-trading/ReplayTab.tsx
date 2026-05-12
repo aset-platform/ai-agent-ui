@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { formatIst } from "@/lib/datetime";
 import {
   useReplayEvents,
   type ReplayEvent,
@@ -33,8 +34,7 @@ const TONE: Record<string, string> = {
 };
 
 function fmtTime(ts_ns: number): string {
-  return new Date(ts_ns / 1_000_000).toLocaleString("en-IN", {
-    timeZone: "Asia/Kolkata",
+  return formatIst(Math.floor(ts_ns / 1_000_000), {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",

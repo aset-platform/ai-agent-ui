@@ -1,5 +1,6 @@
 "use client";
 
+import { formatIst } from "@/lib/datetime";
 import type { PaperEvent } from "@/hooks/usePaperEvents";
 
 export const EVENTS_PAGE_SIZE_OPTIONS = [25, 50, 100, 200] as const;
@@ -48,8 +49,7 @@ const EVENT_TONE: Record<string, string> = {
 };
 
 function fmtTime(ts_ns: number): string {
-  return new Date(ts_ns / 1_000_000).toLocaleString("en-IN", {
-    timeZone: "Asia/Kolkata",
+  return formatIst(Math.floor(ts_ns / 1_000_000), {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",

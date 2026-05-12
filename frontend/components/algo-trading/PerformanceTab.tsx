@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 
+import { formatIstDateTime } from "@/lib/datetime";
 import {
   usePerformanceRuns,
   type PerformanceRunRow,
@@ -224,10 +225,7 @@ export function PerformanceTab() {
                       {r.status}
                     </td>
                     <td className="px-3 py-1.5 font-mono text-xs text-slate-600 dark:text-slate-400">
-                      {new Date(r.started_at).toLocaleString(
-                        "en-IN",
-                        { timeZone: "Asia/Kolkata" },
-                      )}
+                      {formatIstDateTime(r.started_at)}
                     </td>
                     <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">
                       {r.total_pnl_pct
