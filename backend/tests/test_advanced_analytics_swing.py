@@ -193,3 +193,57 @@ def test_build_row_populates_swing_computed_cols() -> None:
     # high = max(105 + i) for i in 9..28 → at i=28 → 133.
     assert row.rolling_low_20d_prev == pytest.approx(92.2)
     assert row.rolling_high_20d_prev == pytest.approx(133.0)
+
+
+from advanced_analytics_swing import (
+    BULLISH_CATEGORIES,
+    REGIMES,
+    build_methodology,
+)
+
+
+def test_regimes_constant() -> None:
+    """Regime literal set is exactly the three published values."""
+    assert REGIMES == ("bull", "sideways", "bearish")
+
+
+def test_bullish_categories_non_empty() -> None:
+    """The bullish set is pinned at module level (Task 0)."""
+    assert len(BULLISH_CATEGORIES) >= 2
+    assert all(isinstance(c, str) for c in BULLISH_CATEGORIES)
+
+
+def test_build_methodology_bull_shape() -> None:
+    """Bull methodology has all required sub-fields and >= 8 gates."""
+    m = build_methodology("bull")
+    assert m["regime"] == "bull"
+    assert isinstance(m["summary"], str) and len(m["summary"]) > 20
+    assert isinstance(m["gates"], list)
+    assert len(m["gates"]) >= 8
+    for g in m["gates"]:
+        assert "label" in g and "rule" in g and "why" in g
+        assert g["rule"]  # non-empty
+    assert "formula" in m["rank"]
+    assert m["rank"]["direction"] == "DESC"
+    assert m["rank"]["cap"] == 25
+
+
+def test_build_methodology_sideways_shape() -> None:
+    m = build_methodology("sideways")
+    assert m["regime"] == "sideways"
+    assert len(m["gates"]) >= 6
+    assert m["rank"]["direction"] == "ASC"
+
+
+def test_build_methodology_bearish_shape() -> None:
+    m = build_methodology("bearish")
+    assert m["regime"] == "bearish"
+    assert len(m["gates"]) >= 5
+    assert m["rank"]["direction"] == "DESC"
+
+
+def test_build_methodology_unknown_regime_raises() -> None:
+    import pytest
+
+    with pytest.raises(ValueError):
+        build_methodology("noisy")  # type: ignore[arg-type]
