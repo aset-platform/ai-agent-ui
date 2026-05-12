@@ -21,17 +21,19 @@ import { RecentFillsTape } from "./RecentFillsTape";
  * LiveDashboard — body of the Live → Live tab (rose accent).
  *
  * Layout (top to bottom):
- *   1. Open Positions + Regime &amp; Stress (side-by-side row).
- *   2. Live runtime + Events feed (side-by-side row — same height).
- *   3. Strategy picker + RegimeWidget + PanicCloseButton.
+ *   1. Strategy picker + RegimeWidget + PanicCloseButton (bar).
+ *   2. Open Positions + Regime &amp; Stress (side-by-side row).
+ *   3. Live runtime + Events feed (side-by-side row — same height).
  *   4. Active Strategy safety belts + Recent fills (2-col grid).
  *   5. Attribution drawer (collapsed).
  *
  * Single source of truth for `strategyId` lives here; passed down
  * to LiveActiveRunsPanel (Start picker), LiveSafetyBeltsForm, and
- * AttributionPanel so picking once is enough. Auto-defaults to the
- * first running live strategy or the first available strategy in
- * the list — the user only re-picks if they want to switch.
+ * AttributionPanel so picking once is enough — every dropdown +
+ * detail panel on the page reads from the same value. Auto-
+ * defaults to the first running live strategy or the first
+ * available strategy in the list so the user typically arrives
+ * to a pre-populated state.
  *
  * ASETPLTFRM-374 (epic): no dry-run banner on this page. Live is
  * fully decoupled from the per-user dry-run Redis flag — any
@@ -46,8 +48,9 @@ export function LiveDashboard() {
 
   // Auto-default once strategies (and any running runs) load.
   // Priority: first live, non-dry-run running strategy → first
-  // strategy in the list. Stops once the user has picked anything,
-  // even if they later switch to "".
+  // strategy in the list. Re-runs whenever inputs change while
+  // strategyId is still empty, so a strategy that arrives after
+  // initial render (slow useStrategies fetch) is still picked.
   useEffect(() => {
     if (strategyId) return;
     const liveRun = runs.find(
@@ -64,34 +67,11 @@ export function LiveDashboard() {
 
   return (
     <div className="space-y-3" data-testid="live-dashboard">
-      {/* Row 1 — Open Positions + Regime & Stress. */}
-      <div className="grid gap-3 lg:grid-cols-2">
-        <OpenPositionsWidget />
-        <div
-          className="rounded-md border border-slate-200 dark:border-slate-700 p-3"
-          data-testid="live-zone-b-regime"
-        >
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Regime &amp; Stress
-          </h3>
-          <RegimeHistoryChart />
-        </div>
-      </div>
-
-      {/* Row 2 — Live runtime Start/Stop + Events feed.
-          ASETPLTFRM-378: per-page Start UI lives here; Events
-          panel surfaces signals + order outcomes in real time so
-          testers don't need to leave the page. Same-height row
-          via auto-stretch + Events panel's h-full inner flex. */}
-      <div className="grid gap-3 lg:grid-cols-2 items-stretch">
-        <LiveActiveRunsPanel
-          strategyId={strategyId}
-          onStrategyChange={setStrategyId}
-        />
-        <LiveEventsPanel />
-      </div>
-
-      {/* Row 3 — Strategy picker + Regime + Panic Close. */}
+      {/* Row 1 — Strategy picker · Regime · Panic Close.
+          Top of page per user feedback: these are the controls
+          the trader reaches for first. The picker is the single
+          source of truth — its value flows down to LiveRuntime
+          Start panel, safety belts, and attribution. */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <select
           className="rounded border border-slate-300 dark:border-slate-600
@@ -111,6 +91,33 @@ export function LiveDashboard() {
           <RegimeWidget />
           <PanicCloseButton onConfirm={panicCloseAll} />
         </div>
+      </div>
+
+      {/* Row 2 — Open Positions + Regime & Stress. */}
+      <div className="grid gap-3 lg:grid-cols-2">
+        <OpenPositionsWidget />
+        <div
+          className="rounded-md border border-slate-200 dark:border-slate-700 p-3"
+          data-testid="live-zone-b-regime"
+        >
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Regime &amp; Stress
+          </h3>
+          <RegimeHistoryChart />
+        </div>
+      </div>
+
+      {/* Row 3 — Live runtime Start/Stop + Events feed.
+          ASETPLTFRM-378: per-page Start UI lives here; Events
+          panel surfaces signals + order outcomes in real time so
+          testers don't need to leave the page. Same-height row
+          via auto-stretch + Events panel's h-full inner flex. */}
+      <div className="grid gap-3 lg:grid-cols-2 items-stretch">
+        <LiveActiveRunsPanel
+          strategyId={strategyId}
+          onStrategyChange={setStrategyId}
+        />
+        <LiveEventsPanel />
       </div>
 
       {/* Row 4 — Active Strategy safety belts + Recent fills. */}
