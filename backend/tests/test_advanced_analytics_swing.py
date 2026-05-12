@@ -6,7 +6,10 @@ import numpy as np
 import pandas as pd
 
 from advanced_analytics_models import AdvancedRow
-from advanced_analytics_routes import _death_cross_days_ago
+from advanced_analytics_routes import (
+    _death_cross_days_ago,
+    _rolling_band_20d_prev,
+)
 
 
 def test_advanced_row_swing_fields_default_none() -> None:
@@ -65,3 +68,33 @@ def test_death_cross_missing_columns_returns_none() -> None:
     """Missing SMA columns return None safely."""
     df = pd.DataFrame({"close": [100, 101]})
     assert _death_cross_days_ago(df) is None
+
+
+def test_rolling_band_20d_prev_basic() -> None:
+    """20-day rolling band excludes today."""
+    # 21 rows: index 0..19 used for the band, index 20 is "today".
+    lows = list(range(10, 30)) + [5]  # today_low = 5 (below band)
+    highs = list(range(20, 40)) + [50]  # today_high = 50 (above)
+    df = pd.DataFrame({"low": lows, "high": highs})
+    low, high = _rolling_band_20d_prev(df)
+    assert low == 10  # min of 10..29 (indices 0..19)
+    assert high == 39  # max of 20..39 (indices 0..19)
+
+
+def test_rolling_band_short_history_returns_none() -> None:
+    """Fewer than 21 rows → cannot exclude today, returns (None, None)."""
+    df = pd.DataFrame({
+        "low": [10, 11, 12],
+        "high": [15, 16, 17],
+    })
+    assert _rolling_band_20d_prev(df) == (None, None)
+
+
+def test_rolling_band_handles_nan() -> None:
+    """NaN low/high values are ignored in min/max."""
+    lows = [float("nan")] * 5 + list(range(10, 25)) + [5]
+    highs = [float("nan")] * 5 + list(range(20, 35)) + [50]
+    df = pd.DataFrame({"low": lows, "high": highs})
+    low, high = _rolling_band_20d_prev(df)
+    assert low == 10
+    assert high == 34

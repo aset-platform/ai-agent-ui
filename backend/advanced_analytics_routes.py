@@ -395,6 +395,28 @@ def _death_cross_days_ago(ind: pd.DataFrame) -> int | None:
     return 999
 
 
+def _rolling_band_20d_prev(
+    ohlcv: pd.DataFrame,
+) -> tuple[float | None, float | None]:
+    """20-day rolling (low, high) EXCLUDING the last row (today).
+
+    Returns (None, None) when fewer than 21 rows of history are
+    available — caller cannot use the band for breakout detection
+    without a clean prior window.
+    """
+    if "low" not in ohlcv.columns or "high" not in ohlcv.columns:
+        return (None, None)
+    if len(ohlcv) < 21:
+        return (None, None)
+    prev_window = ohlcv.iloc[-21:-1]
+    low = prev_window["low"].min(skipna=True)
+    high = prev_window["high"].max(skipna=True)
+    return (
+        None if pd.isna(low) else float(low),
+        None if pd.isna(high) else float(high),
+    )
+
+
 def _load_indicators_latest(tickers: list[str]) -> pd.DataFrame:
     """Compute latest RSI-14, SMA-50, SMA-200 per ticker.
 
