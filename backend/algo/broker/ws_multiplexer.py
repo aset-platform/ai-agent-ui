@@ -370,9 +370,27 @@ class KiteWsMultiplexer:
                 if not ticker:
                     continue
                 ltp_val = float(raw.get("last_price", 0) or 0)
+                # ASETPLTFRM-372 — capture the authoritative
+                # exchange-emission timestamp when Kite supplies
+                # it (full/quote-mode packets, NOT LTP-mode).
+                # kiteconnect SDK sets ``exchange_timestamp`` to a
+                # naive datetime from ``fromtimestamp(epoch_s)`` —
+                # round-trip via ``.timestamp()`` to ns.
+                # Parse failures collapse to None so the tick
+                # loop never crashes.
+                exch_ts_ns: int | None = None
+                exch_raw = raw.get("exchange_timestamp")
+                if exch_raw is not None:
+                    try:
+                        exch_ts_ns = int(
+                            exch_raw.timestamp() * 1_000_000_000,
+                        )
+                    except (AttributeError, TypeError, ValueError):
+                        exch_ts_ns = None
                 tick = Tick(
                     ticker=ticker,
                     ts_ns=now_ns,
+                    exchange_ts_ns=exch_ts_ns,
                     ltp=ltp_val,
                     volume=int(
                         raw.get("last_traded_quantity", 0) or 0,
