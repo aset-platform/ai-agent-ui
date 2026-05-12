@@ -9,10 +9,17 @@ import { usePaperEvents } from "@/hooks/usePaperEvents";
  * that's paper) and the payload keys are `symbol` / `side` / `qty`
  * / `price` (see backend/algo/live/runtime.py). Timestamp is
  * nanoseconds since epoch on `ts_ns`.
+ *
+ * Filters by ``type=order_filled_live`` server-side so high-volume
+ * non-fill events (signal_generated, signal_rejected) can't push
+ * the actual fills out of the limit-20 window — the previous
+ * client-side filter was silently dropping morning fills after
+ * the runtime's mid-day signal storm.
  */
 export function RecentFillsTape() {
-  const { events } = usePaperEvents(20, 0, "live", null);
-  const fills = events.filter((e) => e.type === "order_filled_live");
+  const { events: fills } = usePaperEvents(
+    20, 0, "live", null, "order_filled_live",
+  );
   return (
     <div
       className="rounded-md border border-slate-200 dark:border-slate-700 p-3"
