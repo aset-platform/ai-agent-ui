@@ -721,6 +721,93 @@ class PostbackEvent(BaseModel):
     raw: dict = Field(default_factory=dict)
 
 
+class OrderSubmissionEvent(BaseModel):
+    """Single ``order_submitted_live`` row for the Submissions tab.
+
+    Mirrors PostbackEvent shape but exposes the spec §3.6 payload
+    structure (request / context / response). Top-level legacy
+    fields (kite_order_id, symbol, side, qty, dry_run) are flattened
+    out of payload for the table view; full payload is preserved
+    under ``raw`` for the expand-row toggle.
+    """
+
+    event_id: str
+    event_ts: str
+    ts_ns: int
+    ts_date: str
+    session_id: str
+    strategy_id: str | None = None
+    internal_order_id: str
+    kite_order_id: str
+    symbol: str
+    side: str
+    qty: int
+    dry_run: bool
+    raw: dict = Field(default_factory=dict)
+
+
+class OrderSubmissionsResponse(BaseModel):
+    """Wrapper response for ``GET /order-submissions``.
+
+    Keyed under ``submissions`` (vs. postbacks' bare-list shape) so
+    we can grow the response with pagination + filter metadata
+    later without a breaking change.
+    """
+
+    submissions: list[OrderSubmissionEvent]
+
+
+def _query_order_submission_events(
+    user_id: str,
+    limit: int,
+    session_id: str | None = None,
+) -> list[dict]:
+    """Query algo.events for order_submitted_live rows.
+
+    Mirrors ``_query_postback_events``. ``session_id`` filter is
+    optional — when provided, restricts to a single LiveRuntime
+    session (one frontend Submissions panel typically wants the
+    current session only; without a filter we show all live mode
+    submissions for the user).
+    """
+    try:
+        if session_id:
+            rows = query_iceberg_table(
+                "algo.events",
+                "SELECT event_id, ts_ns, ts_date, session_id, "
+                "       strategy_id, payload_json "
+                "FROM events "
+                "WHERE user_id = ? "
+                "  AND mode = 'live' "
+                "  AND session_id = ? "
+                "  AND type = 'order_submitted_live' "
+                "ORDER BY ts_ns DESC "
+                "LIMIT ?",
+                [user_id, session_id, limit],
+            )
+        else:
+            rows = query_iceberg_table(
+                "algo.events",
+                "SELECT event_id, ts_ns, ts_date, session_id, "
+                "       strategy_id, payload_json "
+                "FROM events "
+                "WHERE user_id = ? "
+                "  AND mode = 'live' "
+                "  AND type = 'order_submitted_live' "
+                "ORDER BY ts_ns DESC "
+                "LIMIT ?",
+                [user_id, limit],
+            )
+        return rows
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "order_submitted_live query failed for user=%s",
+            user_id,
+            exc_info=True,
+        )
+        return []
+
+
 def _query_postback_events(
     user_id: str,
     limit: int,
@@ -1370,5 +1457,68 @@ def create_live_router() -> APIRouter:
             )
 
         return events
+
+    # ---------------------------------------------------------------
+    # Order-submission read endpoint (PR #1 — order-safety hardening)
+    # ---------------------------------------------------------------
+
+    @router.get(
+        "/order-submissions",
+        response_model=OrderSubmissionsResponse,
+    )
+    async def get_order_submissions(
+        limit: int = 50,
+        session_id: str | None = None,
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> OrderSubmissionsResponse:
+        """Return last N ``order_submitted_live`` events for user.
+
+        Mirrors ``GET /postbacks`` filter shape. ``session_id``
+        restricts to a single LiveRuntime session when supplied;
+        without it the most-recent N across all sessions are
+        returned (newest first). Full request/context/response
+        payload exposed under each row's ``raw`` field for the
+        Submissions panel expand-toggle.
+        """
+        cap = min(limit, 200)
+        raw_rows = await asyncio.to_thread(
+            _query_order_submission_events,
+            user.user_id, cap, session_id,
+        )
+
+        out: list[OrderSubmissionEvent] = []
+        for r in raw_rows:
+            try:
+                p = json.loads(r["payload_json"] or "{}")
+            except Exception:  # noqa: BLE001
+                continue
+            ts_ns = int(r["ts_ns"])
+            event_ts = datetime.fromtimestamp(
+                ts_ns / 1_000_000_000, tz=UTC,
+            ).isoformat().replace("+00:00", "Z")
+            sid = r.get("strategy_id")
+            out.append(
+                OrderSubmissionEvent(
+                    event_id=r["event_id"],
+                    event_ts=event_ts,
+                    ts_ns=ts_ns,
+                    ts_date=str(r["ts_date"]),
+                    session_id=str(r.get("session_id") or ""),
+                    strategy_id=str(sid) if sid else None,
+                    internal_order_id=str(
+                        p.get("internal_order_id") or "",
+                    ),
+                    kite_order_id=str(
+                        p.get("kite_order_id") or "",
+                    ),
+                    symbol=str(p.get("symbol") or ""),
+                    side=str(p.get("side") or ""),
+                    qty=int(p.get("qty") or 0),
+                    dry_run=bool(p.get("dry_run")),
+                    raw=p,
+                )
+            )
+
+        return OrderSubmissionsResponse(submissions=out)
 
     return router

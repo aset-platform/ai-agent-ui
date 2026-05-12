@@ -19,12 +19,36 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, AsyncIterator
+from datetime import datetime, timezone
+from typing import Any, AsyncIterator, Callable
 from uuid import uuid4
 
 from kiteconnect import KiteConnect
 
+from backend.algo.broker.exceptions import LtpStaleError
+
 _logger = logging.getLogger(__name__)
+
+UTC = timezone.utc
+
+# Default chosen high enough to be effectively disabled on PR #1 ship.
+# Follow-up commit lowers to 5 after 24h soak (per spec §6 rollout).
+_DEFAULT_MAX_LTP_AGE_S = 999999
+
+
+def _read_max_ltp_age_s() -> int:
+    """Read ALGO_MAX_LTP_AGE_S env var; fall back to default."""
+    raw = os.environ.get("ALGO_MAX_LTP_AGE_S", "").strip()
+    if not raw:
+        return _DEFAULT_MAX_LTP_AGE_S
+    try:
+        return int(raw)
+    except ValueError:
+        _logger.warning(
+            "ALGO_MAX_LTP_AGE_S=%r is not an int — using default %d",
+            raw, _DEFAULT_MAX_LTP_AGE_S,
+        )
+        return _DEFAULT_MAX_LTP_AGE_S
 
 
 def _read_dry_run_env() -> bool:
@@ -223,6 +247,18 @@ class KiteClient:
         variety: str = "regular",
         price: float = 0.0,
         tag: str = "",
+        # ── Order-safety hardening (PR #1) ──────────────────
+        last_price: float | None = None,
+        last_price_ts: datetime | None = None,
+        liquidity_bucket: str | None = None,
+        slippage_bps_applied: int | None = None,
+        chunk_index: int | None = None,
+        chunk_total: int | None = None,
+        events_sink: Callable[[dict], None] | None = None,
+        session_id: Any = None,
+        user_id: Any = None,
+        strategy_id: Any = None,
+        internal_order_id: str | None = None,
     ) -> str:
         """Place a live order on Kite.  Returns ``kite_order_id``.
 
@@ -233,16 +269,42 @@ class KiteClient:
         - product MUST be CNC (delivery equity).
         - variety MUST be regular.
 
+        Order-safety kwargs (PR #1 — 2026-05-12 spec §3.1, §3.6):
+        - ``last_price`` / ``last_price_ts``: reference LTP and its
+          timestamp. When ``last_price_ts`` is older than
+          ``ALGO_MAX_LTP_AGE_S`` seconds → emits an
+          ``order_ltp_stale_blocked`` event and raises
+          ``LtpStaleError``. None → gate skipped (legacy callers).
+        - ``liquidity_bucket`` / ``slippage_bps_applied``: pre-trade
+          decision trace (audit only — populated by PR #2).
+        - ``chunk_index`` / ``chunk_total``: accepted-but-unused
+          on PR #1; PR #4 will populate them on freeze-chunked
+          orders. Pass-through to the submitted event payload.
+        - ``events_sink``: callable that receives one
+          ``event_row(...)`` dict per emission. Typically the
+          runtime's ``self._events.append``. ``None`` → log only.
+        - ``session_id`` / ``user_id`` / ``strategy_id``:
+          stamped on the emitted event_row. ``None`` → uuid4()
+          fallback so panic-close / kill-switch entry points (no
+          strategy context) still get a well-formed row.
+        - ``internal_order_id``: caller-generated UUID linking
+          this submission to the eventual fill / postback. Auto-
+          generated when ``None``.
+
         Raises:
             ValueError: if an unsupported order_type / product /
                 variety is passed.
             RuntimeError: if no access_token is set.
+            LtpStaleError: if last_price_ts exceeds budget.
         """
         if self._access_token is None:
             raise RuntimeError(
                 "place_order requires an access_token; "
                 "complete the OAuth handshake first.",
             )
+        if internal_order_id is None:
+            internal_order_id = str(uuid4())
+
         if self._dry_run:
             synthetic_id = f"DRY_{uuid4().hex[:12]}"
             _logger.info(
@@ -252,7 +314,75 @@ class KiteClient:
                 tradingsymbol, transaction_type, quantity,
                 order_type, price, product, variety, synthetic_id,
             )
+            self._emit_submitted_event(
+                events_sink=events_sink,
+                session_id=session_id,
+                user_id=user_id,
+                strategy_id=strategy_id,
+                internal_order_id=internal_order_id,
+                kite_order_id=synthetic_id,
+                dry_run=True,
+                tradingsymbol=tradingsymbol,
+                exchange=exchange,
+                transaction_type=transaction_type,
+                quantity=quantity,
+                order_type=order_type,
+                product=product,
+                variety=variety,
+                price=price,
+                tag=tag,
+                last_price=last_price,
+                last_price_ts=last_price_ts,
+                liquidity_bucket=liquidity_bucket,
+                slippage_bps_applied=slippage_bps_applied,
+                chunk_index=chunk_index,
+                chunk_total=chunk_total,
+                response_raw={"dry_run": True},
+            )
             return synthetic_id
+
+        # ── LTP staleness gate (real-money path only) ──────────
+        max_age_s = _read_max_ltp_age_s()
+        if last_price_ts is not None:
+            # Tolerate tz-naive timestamps from legacy callers by
+            # assuming UTC — matches Iceberg convention (CLAUDE.md
+            # §5.1 iceberg-tz-naive-timestamps).
+            ts = (
+                last_price_ts
+                if last_price_ts.tzinfo is not None
+                else last_price_ts.replace(tzinfo=UTC)
+            )
+            age = (datetime.now(UTC) - ts).total_seconds()
+            if age > max_age_s:
+                _logger.warning(
+                    "place_order BLOCKED: stale LTP symbol=%s "
+                    "age=%.1fs max=%ds last_price_ts=%s",
+                    tradingsymbol, age, max_age_s, ts.isoformat(),
+                )
+                self._emit_blocked_event(
+                    events_sink=events_sink,
+                    session_id=session_id,
+                    user_id=user_id,
+                    strategy_id=strategy_id,
+                    internal_order_id=internal_order_id,
+                    symbol=tradingsymbol,
+                    side=transaction_type,
+                    qty=quantity,
+                    last_price_ts=ts,
+                    age_seconds=age,
+                    max_age_seconds=max_age_s,
+                )
+                raise LtpStaleError(
+                    f"LTP age {age:.1f}s exceeds {max_age_s}s "
+                    f"for symbol={tradingsymbol!r}",
+                )
+        else:
+            _logger.warning(
+                "place_order: last_price_ts not supplied for "
+                "symbol=%s — staleness gate skipped",
+                tradingsymbol,
+            )
+
         if order_type not in self._ALLOWED_ORDER_TYPES:
             raise ValueError(
                 f"order_type={order_type!r} not supported in v2. "
@@ -301,7 +431,209 @@ class KiteClient:
             tradingsymbol, transaction_type, quantity,
             order_type, order_id,
         )
+        self._emit_submitted_event(
+            events_sink=events_sink,
+            session_id=session_id,
+            user_id=user_id,
+            strategy_id=strategy_id,
+            internal_order_id=internal_order_id,
+            kite_order_id=order_id,
+            dry_run=False,
+            tradingsymbol=tradingsymbol,
+            exchange=exchange,
+            transaction_type=transaction_type,
+            quantity=quantity,
+            order_type=order_type,
+            product=product,
+            variety=variety,
+            price=price,
+            tag=tag,
+            last_price=last_price,
+            last_price_ts=last_price_ts,
+            liquidity_bucket=liquidity_bucket,
+            slippage_bps_applied=slippage_bps_applied,
+            chunk_index=chunk_index,
+            chunk_total=chunk_total,
+            response_raw=resp if isinstance(resp, dict) else {
+                "raw": str(resp),
+            },
+        )
         return order_id
+
+    # ---- Order-safety event helpers (PR #1) ---------------------
+
+    @staticmethod
+    def _build_context_block(
+        *,
+        last_price: float | None,
+        last_price_ts: datetime | None,
+        liquidity_bucket: str | None,
+        slippage_bps_applied: int | None,
+        chunk_index: int | None,
+        chunk_total: int | None,
+    ) -> dict[str, Any]:
+        ltp_age: float | None = None
+        ts_iso: str | None = None
+        if last_price_ts is not None:
+            ts = (
+                last_price_ts
+                if last_price_ts.tzinfo is not None
+                else last_price_ts.replace(tzinfo=UTC)
+            )
+            ts_iso = ts.isoformat()
+            ltp_age = (datetime.now(UTC) - ts).total_seconds()
+        return {
+            "last_price": last_price,
+            "last_price_ts": ts_iso,
+            "ltp_age_seconds": ltp_age,
+            "liquidity_bucket": liquidity_bucket,
+            "slippage_bps_applied": slippage_bps_applied,
+            "chunk_index": chunk_index,
+            "chunk_total": chunk_total,
+        }
+
+    def _emit_submitted_event(
+        self,
+        *,
+        events_sink: Callable[[dict], None] | None,
+        session_id: Any,
+        user_id: Any,
+        strategy_id: Any,
+        internal_order_id: str,
+        kite_order_id: str,
+        dry_run: bool,
+        tradingsymbol: str,
+        exchange: str,
+        transaction_type: str,
+        quantity: int,
+        order_type: str,
+        product: str,
+        variety: str,
+        price: float,
+        tag: str,
+        last_price: float | None,
+        last_price_ts: datetime | None,
+        liquidity_bucket: str | None,
+        slippage_bps_applied: int | None,
+        chunk_index: int | None,
+        chunk_total: int | None,
+        response_raw: dict[str, Any],
+    ) -> None:
+        """Build + dispatch a full-payload order_submitted_live row.
+
+        Top-level keys (kite_order_id, dry_run, side, qty, symbol,
+        internal_order_id) are preserved for legacy consumers
+        (PaperEventsTimeline). Nested request/context/response
+        blocks carry the new full-payload audit trail per spec §3.6.
+        """
+        if events_sink is None:
+            return
+        # Local import — avoids circular dep if event_writer ever
+        # grows a dep on broker. Hot path: micro-cost.
+        from backend.algo.backtest.event_writer import event_row
+
+        request_block: dict[str, Any] = {
+            "tradingsymbol": tradingsymbol,
+            "exchange": exchange,
+            "transaction_type": transaction_type,
+            "quantity": quantity,
+            "order_type": order_type,
+            "product": product,
+            "variety": variety,
+            "tag": tag,
+        }
+        if order_type == "LIMIT":
+            request_block["price"] = price
+        context_block = self._build_context_block(
+            last_price=last_price,
+            last_price_ts=last_price_ts,
+            liquidity_bucket=liquidity_bucket,
+            slippage_bps_applied=slippage_bps_applied,
+            chunk_index=chunk_index,
+            chunk_total=chunk_total,
+        )
+        payload: dict[str, Any] = {
+            # Top-level legacy keys (PaperEventsTimeline reads
+            # these at the root; do not nest under `request.*` to
+            # avoid breaking the existing renderer).
+            "dry_run": dry_run,
+            "internal_order_id": internal_order_id,
+            "kite_order_id": kite_order_id,
+            "symbol": tradingsymbol,
+            "side": transaction_type,
+            "qty": quantity,
+            # Full audit blocks (spec §3.6).
+            "request": request_block,
+            "context": context_block,
+            "response": {"raw": response_raw},
+            "submitted_at": datetime.now(UTC).isoformat(),
+        }
+        sid = session_id if session_id is not None else uuid4()
+        uid = user_id if user_id is not None else uuid4()
+        try:
+            row = event_row(
+                session_id=sid,
+                user_id=uid,
+                strategy_id=strategy_id,
+                mode="live",
+                type_="order_submitted_live",
+                payload=payload,
+            )
+            events_sink(row)
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "order_submitted_live emit failed for "
+                "kite_order_id=%s — order placed successfully but "
+                "audit row dropped", kite_order_id,
+                exc_info=True,
+            )
+
+    def _emit_blocked_event(
+        self,
+        *,
+        events_sink: Callable[[dict], None] | None,
+        session_id: Any,
+        user_id: Any,
+        strategy_id: Any,
+        internal_order_id: str,
+        symbol: str,
+        side: str,
+        qty: int,
+        last_price_ts: datetime,
+        age_seconds: float,
+        max_age_seconds: int,
+    ) -> None:
+        if events_sink is None:
+            return
+        from backend.algo.backtest.event_writer import event_row
+
+        payload = {
+            "internal_order_id": internal_order_id,
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "last_price_ts": last_price_ts.isoformat(),
+            "age_seconds": age_seconds,
+            "max_age_seconds": max_age_seconds,
+            "reason": "ltp_stale",
+        }
+        sid = session_id if session_id is not None else uuid4()
+        uid = user_id if user_id is not None else uuid4()
+        try:
+            row = event_row(
+                session_id=sid,
+                user_id=uid,
+                strategy_id=strategy_id,
+                mode="live",
+                type_="order_ltp_stale_blocked",
+                payload=payload,
+            )
+            events_sink(row)
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "order_ltp_stale_blocked emit failed for symbol=%s",
+                symbol, exc_info=True,
+            )
 
     def cancel_order(
         self,

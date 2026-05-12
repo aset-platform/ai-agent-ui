@@ -252,6 +252,13 @@ class LiveRuntime:
         """Drain the tick source. Returns fill count."""
         fills = 0
         last_price_per_ticker: dict[str, Decimal] = {}
+        # PR #1 (order-safety) — track per-ticker last-tick arrival
+        # so place_order can enforce ALGO_MAX_LTP_AGE_S. Sourced
+        # from Tick.ts_ns (multiplexer stamps now_ns; see open
+        # question #1 in spec §7 — exchange_timestamp upgrade is
+        # tracked separately, local arrival is adequate for the
+        # WS-freeze detection the gate is designed to catch).
+        last_price_ts_per_ticker: dict[str, datetime] = {}
         tick_count = 0
         bar_count = 0
         signal_count = 0
@@ -271,14 +278,21 @@ class LiveRuntime:
                 last_price_per_ticker[tick.ticker] = (
                     Decimal(str(tick.ltp))
                 )
+                # PR #1 — stamp arrival time for staleness gate.
+                last_price_ts_per_ticker[tick.ticker] = (
+                    datetime.fromtimestamp(
+                        tick.ts_ns / 1_000_000_000, tz=UTC,
+                    )
+                )
                 self._resampler.feed(tick)
                 for bar in self._resampler.pop_completed():
                     bar_count += 1
                     lp = last_price_per_ticker.get(
                         bar.ticker, Decimal(str(bar.close)),
                     )
+                    lp_ts = last_price_ts_per_ticker.get(bar.ticker)
                     n = await self._on_bar_close(
-                        bar=bar, last_price=lp,
+                        bar=bar, last_price=lp, last_price_ts=lp_ts,
                     )
                     fills += n
                     if n > 0:
@@ -293,8 +307,9 @@ class LiveRuntime:
                 lp = last_price_per_ticker.get(
                     bar.ticker, Decimal(str(bar.close)),
                 )
+                lp_ts = last_price_ts_per_ticker.get(bar.ticker)
                 fills += await self._on_bar_close(
-                    bar=bar, last_price=lp,
+                    bar=bar, last_price=lp, last_price_ts=lp_ts,
                 )
             if self._events:
                 _logger.info(
@@ -322,6 +337,7 @@ class LiveRuntime:
         *,
         bar: Any,
         last_price: Decimal,
+        last_price_ts: datetime | None = None,
     ) -> int:
         """Evaluate → gate → submit to Kite. Returns 1 if filled."""
         # Best-effort: publish bar close as live LTP so the paper
@@ -493,7 +509,9 @@ class LiveRuntime:
         signal = signal.model_copy(update={"qty": effective_qty})
 
         return await self._submit_order(
-            signal=signal, last_price=last_price,
+            signal=signal,
+            last_price=last_price,
+            last_price_ts=last_price_ts,
         )
 
     # ----------------------------------------------------------
@@ -505,6 +523,7 @@ class LiveRuntime:
         *,
         signal: Signal,
         last_price: Decimal,
+        last_price_ts: datetime | None = None,
     ) -> int:
         """Submit one order to Kite. Returns 1 on success, 0 on error."""
         internal_order_id = str(uuid4())
@@ -552,6 +571,14 @@ class LiveRuntime:
         else:
             order_kwargs = {"order_type": "MARKET"}
 
+        # PR #1 — convert Decimal LTP to float for the staleness
+        # gate + audit payload (Iceberg JSON serialises Decimal
+        # to string; keeping it as float in the payload makes the
+        # frontend renderer simpler).
+        lp_float: float | None = (
+            float(last_price)
+            if last_price and last_price > 0 else None
+        )
         try:
             kite_order_id = await asyncio.to_thread(
                 self._kite.place_order,
@@ -563,6 +590,21 @@ class LiveRuntime:
                 product="CNC",
                 variety="regular",
                 tag=f"algo-{str(self._strategy.id)[:8]}",
+                # PR #1 — order-safety hardening + full-payload
+                # audit. last_price_ts feeds the staleness gate;
+                # liquidity_bucket / slippage_bps_applied stay
+                # None on PR #1 (PR #2 populates them).
+                last_price=lp_float,
+                last_price_ts=last_price_ts,
+                liquidity_bucket=None,
+                slippage_bps_applied=None,
+                chunk_index=None,
+                chunk_total=None,
+                events_sink=self._events.append,
+                session_id=self._session_id,
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                internal_order_id=internal_order_id,
             )
         except Exception as exc:
             rejection_reason = str(exc)
@@ -613,31 +655,14 @@ class LiveRuntime:
             self._user_id, self._run_id, self._in_flight,
         )
 
-        # Persist order_submitted_live event + flush so the
-        # events panel sees the submit within the next SWR poll
-        # cycle (was buffered until session end, made the panel
-        # look frozen during long live-ws sessions).
-        self._events.append(event_row(
-            session_id=self._session_id,
-            user_id=self._user_id,
-            strategy_id=self._strategy.id,
-            mode="live",
-            type_="order_submitted_live",
-            payload={
-                "dry_run": self._dry_run,
-                "internal_order_id": internal_order_id,
-                "kite_order_id": kite_order_id,
-                "symbol": symbol,
-                "side": side,
-                "qty": signal.qty,
-                "order_type": order_kwargs.get("order_type"),
-                "limit_price": order_kwargs.get("price"),
-                "ref_last_price": str(last_price)
-                if last_price else None,
-                "reason": signal.reason,
-                "product": "CNC",
-            },
-        ))
+        # PR #1 (order-safety) — order_submitted_live is now
+        # emitted from inside KiteClient.place_order with the full
+        # request/context/response payload (spec §3.6). We carry
+        # `reason` separately into in_flight_entry above so the
+        # eventual order_filled_live event keeps the attribution
+        # link; the kite_client payload preserves all top-level
+        # keys (kite_order_id / dry_run / side / qty / symbol)
+        # that PaperEventsTimeline reads.
         self._flush_events_now()
 
         # Dry-run: spawn synthetic fill after short delay
