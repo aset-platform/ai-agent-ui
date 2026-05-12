@@ -92,14 +92,18 @@ Plus a **new join** to the recommendation engine:
 5. `rsi < 70` (not exhausted)
 6. `pscore ≥ 5` AND `pledged_pct < 10` (quality floor)
 7. `today_ltp / week52_high < 0.95` (room to run, not at top)
-8. **If rec available:** `rec_category ∈ {bullish set}` AND
-   `rec_severity ∈ {'high', 'medium'}`.
-   If no rec for user this month, gate is skipped (with UI chip).
+8. **If rec available:** `rec_category ∈ {offensive, value, growth,
+   hold_accumulate}`. No severity tightening in Phase A — severity
+   is surfaced on the row for analysis but doesn't gate. If no rec
+   for user this month, gate is skipped (with UI chip).
 
-**Bullish category set** — to be confirmed at implementation against
-`SELECT DISTINCT category FROM stocks.recommendations`. Expected
-candidates: `Strong Buy`, `Buy`, `Accumulate` (or equivalents).
-Implementation plan will pin the exact list.
+**Bullish category set** — pinned 2026-05-12 from DB inspection:
+`{offensive, value, growth, hold_accumulate}`. The rec engine uses
+a portfolio-action vocabulary (not stock-rating); these four are
+the categories whose semantics map to "go long this name". Coverage
+is sparse (~21 of 78 active recs match), so the rec-gate-degraded
+path will be the common case for most users most days — the UI
+transparency chip exists precisely for this.
 
 **Rank:**
 
@@ -408,10 +412,12 @@ new code paths).
 These are flagged for the implementation-plan phase, not blockers for
 the spec:
 
-- **Q1:** Exact bullish category enum values in
-  `stocks.recommendations.category`. Verify via
-  `SELECT DISTINCT category FROM stocks.recommendations` against
-  staging before pinning.
+- **Q1:** ~~Exact bullish category enum values~~ — **RESOLVED
+  2026-05-12.** Pinned set: `{offensive, value, growth,
+  hold_accumulate}`. Rec engine uses portfolio-action vocabulary,
+  not stock-rating; coverage is sparse (~27% of active recs).
+  Severity field surfaced on row but does not gate (Phase A.5 may
+  revisit).
 - **Q2:** Whether `today_not` is denominated in INR or native currency
   per ticker. If native, US tickers need a USD threshold variant in
   the sideways + bearish liquidity gates (placeholder used in §5.2 /

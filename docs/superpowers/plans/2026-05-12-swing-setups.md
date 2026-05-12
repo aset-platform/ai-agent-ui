@@ -76,13 +76,13 @@ docker compose exec postgres psql -U postgres -d aiagent \
 
 Expected: a list of category strings with counts. Record them.
 
-- [ ] **Step 2: Decide the bullish set**
+- [x] **Step 2: Decide the bullish set** — **RESOLVED 2026-05-12**
 
-Pin the bullish set as those whose semantic meaning is "buy / accumulate" (e.g. `Strong Buy`, `Buy`, `Accumulate`). Document the chosen set in a comment at the top of `advanced_analytics_swing.py` (created in Task 6) and as a constant `BULLISH_CATEGORIES: frozenset[str]` in that file.
+Bullish set pinned: `{"offensive", "value", "growth", "hold_accumulate"}`.
 
-- [ ] **Step 3: No commit yet**
+Rationale: rec engine uses a portfolio-action vocabulary, not stock-rating; these four are the categories whose semantics map to "go long this name." Other categories surfaced in the DB (`defensive`, `rebalance`, `risk_alert`, `gap_fill`, `diversification`) are either direction-agnostic or bearish. Severity field is surfaced on the row for analysis but is NOT used as a hard gate in Phase A (Phase A.5 may revisit if hit-rate data suggests tightening).
 
-This is a verification step. Carry the chosen set forward into Task 6's constants.
+- [x] **Step 3: No commit yet** — done as part of plan-edit; carry the set forward into Task 6 constants.
 
 ---
 
@@ -732,12 +732,17 @@ from typing import Any, Literal
 Regime = Literal["bull", "sideways", "bearish"]
 REGIMES: tuple[Regime, ...] = ("bull", "sideways", "bearish")
 
-# Pinned from staging DB query (Task 0). Update + bump test snapshot
-# when the rec engine introduces new categories.
+# Pinned 2026-05-12 from DB inspection (Task 0). Rec engine uses a
+# portfolio-action vocabulary (not stock-rating); these four
+# categories map semantically to "go long this name". Other live
+# categories (defensive, rebalance, risk_alert, gap_fill,
+# diversification) are direction-agnostic or bearish. Severity is
+# NOT used as a hard gate in Phase A.
 BULLISH_CATEGORIES: frozenset[str] = frozenset({
-    "Strong Buy",
-    "Buy",
-    "Accumulate",
+    "offensive",
+    "value",
+    "growth",
+    "hold_accumulate",
 })
 
 # ----- Bull regime thresholds -----
@@ -748,7 +753,6 @@ BULL_PSCORE_MIN = 5
 BULL_PLEDGED_MAX = 10.0
 BULL_RANGE_MAX = 0.95  # today_ltp / week52_high
 BULL_GOLDEN_CROSS_FRESH_DAYS = 30
-BULL_REC_SEVERITIES: frozenset[str] = frozenset({"high", "medium"})
 
 # ----- Sideways regime thresholds -----
 SIDEWAYS_MA_CONV_MAX = 0.05  # |sma_50 - sma_200| / sma_200
@@ -830,12 +834,13 @@ def _bull_gates() -> list[dict[str, str]]:
             "label": "Rec-engine bullish",
             "rule": (
                 "rec_category ∈ "
-                f"{sorted(BULLISH_CATEGORIES)} AND "
-                "rec_severity ∈ {high, medium}"
+                f"{sorted(BULLISH_CATEGORIES)}"
             ),
             "why": (
-                "LLM engine independently confirms the thesis. "
-                "Skipped if user has no rec run this month."
+                "Rec engine independently confirms the long "
+                "thesis (offensive / value / growth / "
+                "hold_accumulate). Skipped if user has no rec run "
+                "this month — chip surfaced."
             ),
         },
     ]
@@ -1060,7 +1065,7 @@ def _bull_row(**overrides: Any) -> AdvancedRow:
         pscore=7,
         pledged_pct=2.0,
         week52_high=150.0,
-        rec_category="Buy",
+        rec_category="offensive",
         rec_severity="high",
         rec_expected_return_pct=12.0,
     )
@@ -1116,9 +1121,35 @@ def test_passes_bull_accepts_fresh_golden_cross_without_stack() -> None:
 
 
 def test_passes_bull_rejects_non_bullish_category() -> None:
+    """`risk_alert`, `rebalance`, `defensive` etc. are NOT in
+    BULLISH_CATEGORIES."""
     assert (
-        passes_bull(_bull_row(rec_category="Hold"), True) is False
+        passes_bull(_bull_row(rec_category="risk_alert"), True)
+        is False
     )
+    assert (
+        passes_bull(_bull_row(rec_category="rebalance"), True)
+        is False
+    )
+    assert (
+        passes_bull(_bull_row(rec_category="defensive"), True)
+        is False
+    )
+
+
+def test_passes_bull_accepts_each_bullish_category() -> None:
+    """All four pinned bullish categories pass the gate."""
+    for cat in ("offensive", "value", "growth", "hold_accumulate"):
+        assert passes_bull(_bull_row(rec_category=cat), True) is True
+
+
+def test_passes_bull_severity_does_not_gate() -> None:
+    """Phase A does NOT gate on severity; all severities pass when
+    the category is bullish."""
+    for sev in ("high", "medium", "low"):
+        assert (
+            passes_bull(_bull_row(rec_severity=sev), True) is True
+        )
 
 
 def test_passes_bull_skips_rec_gate_when_degraded() -> None:
@@ -1263,11 +1294,10 @@ def passes_bull(
     ):
         return False
 
-    # Rec engine — skip when degraded.
+    # Rec engine — skip when degraded. Category only; severity is
+    # surfaced on the row but does not gate in Phase A.
     if rec_gate_applied:
         if row.rec_category not in BULLISH_CATEGORIES:
-            return False
-        if row.rec_severity not in BULL_REC_SEVERITIES:
             return False
 
     return True
@@ -1725,13 +1755,13 @@ def test_load_latest_recommendations_returns_dict() -> None:
     fake_rows = [
         {
             "ticker": "TCS.NS",
-            "category": "Buy",
+            "category": "offensive",
             "severity": "high",
             "expected_return_pct": 12.0,
         },
         {
             "ticker": "ITC.NS",
-            "category": "Hold",
+            "category": "rebalance",
             "severity": "low",
             "expected_return_pct": 0.0,
         },
@@ -1754,8 +1784,8 @@ def test_load_latest_recommendations_returns_dict() -> None:
         )
     assert result["run_id"] == "uuid-abc"
     assert result["run_date"] == "2026-05-01"
-    assert result["recs"]["TCS.NS"] == ("Buy", "high", 12.0)
-    assert result["recs"]["ITC.NS"] == ("Hold", "low", 0.0)
+    assert result["recs"]["TCS.NS"] == ("offensive", "high", 12.0)
+    assert result["recs"]["ITC.NS"] == ("rebalance", "low", 0.0)
 
 
 def test_load_latest_recommendations_no_run() -> None:
@@ -1902,11 +1932,11 @@ def test_apply_rec_data_populates_row_fields() -> None:
         AdvancedRow(ticker="ITC.NS"),
     ]
     recs = {
-        "TCS.NS": ("Buy", "high", 12.0),
+        "TCS.NS": ("offensive", "high", 12.0),
         # ITC.NS missing
     }
     aar._apply_rec_data(rows, recs)
-    assert rows[0].rec_category == "Buy"
+    assert rows[0].rec_category == "offensive"
     assert rows[0].rec_severity == "high"
     assert rows[0].rec_expected_return_pct == 12.0
     assert rows[1].rec_category is None
@@ -3613,12 +3643,18 @@ that the route consumes AND the on-page methodology panel renders).
 
 ## Pinned bullish category set
 
-Pinned from `SELECT DISTINCT category FROM stocks.recommendations`
-on 2026-05-12 (see plan Task 0):
+Pinned 2026-05-12 from DB inspection (see plan Task 0):
 
-- Strong Buy
-- Buy
-- Accumulate
+- `offensive` (aggressive long signal)
+- `value` (value pick)
+- `growth` (growth pick)
+- `hold_accumulate` (accumulate / hold)
+
+Rec engine uses a portfolio-action vocabulary — not stock-rating.
+Other live categories (`defensive`, `rebalance`, `risk_alert`,
+`gap_fill`, `diversification`) are direction-agnostic or bearish.
+Severity is surfaced on the row for analysis but NOT used as a
+hard gate in Phase A.
 
 When the rec engine introduces new categories, update
 `BULLISH_CATEGORIES` in `advanced_analytics_swing.py` AND the
