@@ -62,6 +62,19 @@ _logger = logging.getLogger(__name__)
 UTC = timezone.utc
 
 
+def _select_last_price_ts_ns(tick: Any) -> int:
+    """Return the best available ns-since-epoch stamp for ``tick``.
+
+    ASETPLTFRM-372 — prefer the exchange-emission timestamp when
+    Kite supplied it (full/quote-mode packets); fall back to the
+    local arrival stamp otherwise. The exchange stamp catches
+    "exchange feed froze but our WS is healthy" (Yahoo ^BSESN-
+    style mid-session freeze) which a local-arrival stamp cannot
+    detect.
+    """
+    return tick.exchange_ts_ns or tick.ts_ns
+
+
 class LiveNotEnabledError(RuntimeError):
     """Raised when live trading is not enabled for (user, strategy)."""
 
@@ -372,9 +385,14 @@ class LiveRuntime:
                     Decimal(str(tick.ltp))
                 )
                 # PR #1 — stamp arrival time for staleness gate.
+                # ASETPLTFRM-372 — prefer exchange-emission ts
+                # when Kite supplied it (full/quote-mode packets);
+                # fall back to local arrival. Catches "exchange
+                # froze but WS connection is healthy" failures.
+                ts_ns = _select_last_price_ts_ns(tick)
                 last_price_ts_per_ticker[tick.ticker] = (
                     datetime.fromtimestamp(
-                        tick.ts_ns / 1_000_000_000, tz=UTC,
+                        ts_ns / 1_000_000_000, tz=UTC,
                     )
                 )
                 self._resampler.feed(tick)
