@@ -225,10 +225,14 @@ export function LiveEventsPanel() {
         </p>
       )}
 
-      {/* Scrollable feed. Fixed max-height so 5-10 rows are
-          visible without resizing the parent layout. */}
+      {/* Scrollable feed with explicit max-height so the panel
+          stays compact regardless of the row mate's height —
+          ~5-7 rows visible, scroll for the rest. Relying on
+          h-full alone left the panel expanding to fit all events
+          on pages where the grid row was unconstrained. */}
       <div
-        className="mt-2 flex-1 overflow-y-auto min-h-0"
+        className="mt-2 flex-1 min-h-0 max-h-[260px]
+          overflow-y-auto"
         data-testid="live-events-feed"
       >
         {loading && sorted.length === 0 && (
