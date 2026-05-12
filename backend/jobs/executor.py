@@ -2630,6 +2630,15 @@ _HOT_ICEBERG_TABLES = (
     "stocks.daily_factors",
     "stocks.universe_snapshot",
     "stocks.regime_hmm_state",
+    # Algo event streams — write-heaviest tables in the system.
+    # 2026-05-12 incident: algo.events ballooned to 11 GB of
+    # metadata.json (5,901 snapshots) because it wasn't in this
+    # list. LiveRuntime emits 10+ events/minute during a session
+    # (signal_generated, order_submitted_live, kite_postback_*,
+    # fills, etc.); each emission = one Iceberg commit = one new
+    # metadata.json with the full snapshot history embedded.
+    "algo.events",
+    "algo.intraday_bars",
 )
 
 
