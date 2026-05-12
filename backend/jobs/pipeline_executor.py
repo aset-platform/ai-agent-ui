@@ -205,10 +205,16 @@ class PipelineExecutor:
             elapsed = (
                 datetime.now(UTC) - start
             ).total_seconds()
+            # ``exc_info=True`` so the next failure dumps the full
+            # traceback into the backend logs. Pre-this, only the
+            # short message landed (e.g. "Expected bytes, got a
+            # 'float' object" from 2026-05-12 USA pipeline) — the
+            # actual call site had to be reverse-engineered.
             _logger.warning(
                 "Pipeline step %s failed: %s",
                 step["job_name"],
                 exc,
+                exc_info=True,
             )
             self._repo.update_scheduler_run(
                 run_id,
