@@ -21,6 +21,27 @@ Open questions resolved: bucket source is composite mcap ∧ ADTV
 uses hardcoded NSE-circular defaults keyed on liquidity bucket;
 `algo.events` retention bumped to 12 months flat.
 
+**PR #2 (ASETPLTFRM-369, 3 SP, uncommitted)** — composite-signal
+liquidity-bucket slippage caps. New `backend/algo/live/slippage.py`
+with `bps_for(bucket)` + `classify(mcap, adtv)` (NaN-safe,
+env-overrideable per bucket). `_derive_liquidity_bucket` in
+`snapshot_job.py` annotates each universe row with
+`liquidity_bucket` (composite mcap ∧ ADTV, more-conservative-wins)
+and `is_top100_mcap` (whole-cohort rank → demotes a high-mcap
+ticker outside top-100 to midcap). `LiveRuntime.__init__` loads a
+`_bucket_by_ticker` cache once at session start; `_submit_order`
+replaces the hardcoded 30 bps with `slippage.bps_for(bucket)` and
+populates the `liquidity_bucket`/`slippage_bps_applied` kwargs
+that PR #1 left as `None`. Defaults: largecap 20 / midcap 50 /
+smallcap 100 / unknown 30 bps. Tests: **43 new** (35 slippage
+matrix + 8 snapshot bucket) — all pass alongside PR #1's 8.
+ADTV reuses `adtv_inr_60d` (existing 60-day rolling) vs the
+spec's 20-day suggestion — a 20-day column is a follow-up if
+needed; threshold spacing makes the smoothing window choice
+unimportant for most tickers. Schema-evolution helper
+(`evolve_universe_snapshot_buckets()`) runs once manually + `docker
+compose restart backend` + `redis-cli FLUSHALL` post-merge.
+
 **PR #1 (ASETPLTFRM-368, 4 SP, uncommitted)** — payload logging +
 LTP staleness gate landed on the branch. `KiteClient.place_order`
 grew 11 new kwargs (`last_price_ts`, `events_sink`, `session_id`,
