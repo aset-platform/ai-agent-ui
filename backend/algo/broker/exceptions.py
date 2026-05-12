@@ -19,3 +19,24 @@ class LtpStaleError(Exception):
     never reaches Kite and the daily cap slot is preserved. The
     runtime catches this and surfaces it as a rejection event.
     """
+
+
+class DuplicateOrderError(Exception):
+    """Raised by ``KiteClient.place_order`` when the same
+    ``(user, strategy, symbol, side, qty, minute_bucket)`` tuple
+    is re-submitted inside the same 60-second window.
+
+    Caught by a Redis SETNX guard BEFORE the SDK call so duplicate
+    Kite submissions never happen. Runtime catches this and surfaces
+    it as an ``order_duplicate_blocked`` rejection event.
+    """
+
+
+class FreezeChunkExceedsDailyCapError(Exception):
+    """Raised by ``KiteClient.place_order`` when splitting an order
+    by NSE freeze quantity would produce more chunks than the
+    remaining ``max_orders_per_day`` budget.
+
+    Raised BEFORE any chunk is submitted so the daily cap is not
+    silently breached partway through a multi-chunk submission.
+    """
