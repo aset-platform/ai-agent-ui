@@ -125,6 +125,8 @@ class AdvancedRow(BaseModel):
     event_date: str | None = None  # ISO 8601 UTC ``Z`` suffix
 
     # Swing-setup computed columns (Task 2-4 of plan).
+    # OHLCV today snapshot for swing setups (lower-low break gate).
+    today_low: float | None = None
     death_cross_days_ago: int | None = None
     rolling_low_20d_prev: float | None = None
     rolling_high_20d_prev: float | None = None

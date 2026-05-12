@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from advanced_analytics_models import AdvancedRow
 from advanced_analytics_routes import (
@@ -137,3 +138,58 @@ def test_rsi_lookback_handles_nan() -> None:
     assert today is None
     assert three_ago == 60
     assert max_10 == 65
+
+
+def test_build_row_populates_swing_computed_cols() -> None:
+    """Integration: _build_row stamps the 5 swing computed cols +
+    today_low when ohlcv_g + indicators dict carry the right inputs.
+    """
+    import advanced_analytics_routes as aar
+
+    n = 30
+    dates = pd.date_range("2026-04-01", periods=n).date
+    ohlcv_g = pd.DataFrame({
+        "date": dates,
+        "open": [100.0] * n,
+        "high": [105.0 + i for i in range(n)],
+        "low": [95.0 - i * 0.1 for i in range(n)],
+        "close": [100.0 + i * 0.5 for i in range(n)],
+        "volume": [1_000_000] * n,
+    })
+
+    # Indicators dict — mirror contract _load_indicators_latest emits.
+    indicators = {
+        "rsi_14": 55.0,
+        "sma_50": 110.0,
+        "sma_200": 105.0,
+        "golden_cross_days_ago": 999,
+        # Pre-computed by _load_indicators_latest (Task 5 extension):
+        "death_cross_days_ago": None,
+        "rsi_3d_ago": 60.0,
+        "rsi_max_10d": 65.0,
+    }
+
+    row = aar._build_row(
+        ticker="TCS.NS",
+        ohlcv_g=ohlcv_g,
+        delivery_g=None,
+        indicators=indicators,
+        funds=None,
+        prom=None,
+        event=None,
+        pscore=None,
+        company=None,
+    )
+
+    # Today snapshot — last row of OHLCV.
+    assert row.today_low == pytest.approx(95.0 - 29 * 0.1)
+    # Indicator-dict-derived fields.
+    assert row.death_cross_days_ago is None
+    assert row.rsi_3d_ago == 60.0
+    assert row.rsi_max_10d == 65.0
+    # OHLCV-derived band (computed inside _build_row).
+    # Window: indices 9..28 (last 20 before today).
+    # low = min(95 - i*0.1) for i in 9..28 → at i=28 → 95 - 2.8 = 92.2.
+    # high = max(105 + i) for i in 9..28 → at i=28 → 133.
+    assert row.rolling_low_20d_prev == pytest.approx(92.2)
+    assert row.rolling_high_20d_prev == pytest.approx(133.0)

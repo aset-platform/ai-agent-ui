@@ -484,6 +484,7 @@ def _load_indicators_latest(tickers: list[str]) -> pd.DataFrame:
         try:
             ind = _calculate_technical_indicators(ohlcv)
             last = ind.iloc[-1]
+            _, rsi_3d, rsi_max10 = _rsi_lookback(ind)
             result_rows.append(
                 {
                     "ticker": str(tkr),
@@ -491,6 +492,9 @@ def _load_indicators_latest(tickers: list[str]) -> pd.DataFrame:
                     "sma_50": last.get("SMA_50"),
                     "sma_200": last.get("SMA_200"),
                     "golden_cross_days_ago": _golden_cross_days_ago(ind),
+                    "death_cross_days_ago": _death_cross_days_ago(ind),
+                    "rsi_3d_ago": rsi_3d,
+                    "rsi_max_10d": rsi_max10,
                 }
             )
         except Exception as exc:
@@ -730,6 +734,20 @@ def _build_row(
             if v is not None and not (isinstance(v, float) and math.isnan(v))
         ]
 
+    # Swing-setup OHLCV-derived signals: today's low + 20d rolling band
+    # (prior window only, excludes today). Indicator-derived cousins
+    # (death_cross, rsi_3d_ago, rsi_max_10d) come in via indicators dict
+    # — pre-computed by _load_indicators_latest against the full
+    # indicators DataFrame.
+    today_low: float | None = None
+    rb_low: float | None = None
+    rb_high: float | None = None
+    if ohlcv_g is not None and not ohlcv_g.empty:
+        last_low = ohlcv_g["low"].iloc[-1]
+        if not (isinstance(last_low, float) and math.isnan(last_low)):
+            today_low = _f(last_low)
+        rb_low, rb_high = _rolling_band_20d_prev(ohlcv_g)
+
     dv_qty: list[float] = []
     dpc: list[float] = []
     if delivery_g is not None and not delivery_g.empty:
@@ -780,6 +798,14 @@ def _build_row(
         golden_cross_days_ago=_i(
             (indicators or {}).get("golden_cross_days_ago")
         ),
+        today_low=today_low,
+        death_cross_days_ago=_i(
+            (indicators or {}).get("death_cross_days_ago")
+        ),
+        rolling_low_20d_prev=rb_low,
+        rolling_high_20d_prev=rb_high,
+        rsi_3d_ago=_f((indicators or {}).get("rsi_3d_ago")),
+        rsi_max_10d=_f((indicators or {}).get("rsi_max_10d")),
         week_52_high=week_52_high,
         week_52_low=week_52_low,
         away_from_52week_high=away,
