@@ -15,7 +15,10 @@ and the snapshot test in test_advanced_analytics_swing.py.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
+
+from advanced_analytics_models import AdvancedRow
 
 Regime = Literal["bull", "sideways", "bearish"]
 REGIMES: tuple[Regime, ...] = ("bull", "sideways", "bearish")
@@ -307,3 +310,115 @@ def build_methodology(regime: Regime) -> dict[str, Any]:
         "gates": gates,
         "rank": _RANK[regime],
     }
+
+
+def _safe_float(v: float | int | None) -> float | None:
+    """Return v as float unless NaN/None."""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(f):
+        return None
+    return f
+
+
+def passes_bull(
+    row: AdvancedRow, rec_gate_applied: bool,
+) -> bool:
+    """Return True iff the row passes ALL bull-regime gates.
+
+    ``rec_gate_applied`` is False when the user has no rec run
+    this IST month — in that case the rec-category gate is
+    bypassed (graceful degrade; transparency chip surfaced by
+    the route).
+    """
+    today_ltp = _safe_float(row.today_ltp)
+    sma_50 = _safe_float(row.sma_50)
+    sma_200 = _safe_float(row.sma_200)
+    gxa = row.golden_cross_days_ago
+    today_x_vol = _safe_float(row.today_x_vol)
+    current_dpc = _safe_float(row.current_dpc)
+    avg_20d_dpc = _safe_float(row.avg_20d_dpc)
+    x_dv_20d = _safe_float(row.x_dv_20d)
+    rsi = _safe_float(row.rsi)
+    pscore = row.pscore
+    pledged = _safe_float(row.pledged)
+    w52_high = _safe_float(row.week_52_high)
+
+    # Trend stack OR fresh golden cross.
+    stack_ok = (
+        today_ltp is not None
+        and sma_50 is not None
+        and sma_200 is not None
+        and today_ltp > sma_50 > sma_200
+    )
+    fresh_cross = (
+        gxa is not None
+        and 0 <= gxa <= BULL_GOLDEN_CROSS_FRESH_DAYS
+    )
+    if not (stack_ok or fresh_cross):
+        return False
+
+    # Volume sweet spot.
+    if today_x_vol is None or not (
+        BULL_VOL_MIN <= today_x_vol <= BULL_VOL_MAX
+    ):
+        return False
+
+    # Delivery confirmation.
+    if (
+        current_dpc is None
+        or avg_20d_dpc is None
+        or current_dpc <= avg_20d_dpc
+    ):
+        return False
+
+    # Accumulation.
+    if x_dv_20d is None or x_dv_20d <= 1.0:
+        return False
+
+    # Not exhausted.
+    if rsi is None or rsi >= BULL_RSI_MAX:
+        return False
+
+    # Quality.
+    if pscore is None or pscore < BULL_PSCORE_MIN:
+        return False
+    if pledged is None or pledged >= BULL_PLEDGED_MAX:
+        return False
+
+    # Room to run.
+    if (
+        today_ltp is None
+        or w52_high is None
+        or w52_high == 0
+        or today_ltp / w52_high >= BULL_RANGE_MAX
+    ):
+        return False
+
+    # Rec engine — skip when degraded. Category only; severity is
+    # surfaced on the row but does not gate in Phase A.
+    if rec_gate_applied:
+        if row.rec_category not in BULLISH_CATEGORIES:
+            return False
+
+    return True
+
+
+def rank_bull(row: AdvancedRow, rec_gate_applied: bool) -> float:
+    """Bull rank score; sort DESC. Degrades to vol*delivery when
+    rec-engine is unavailable for the user this month.
+    """
+    rec_ret = (
+        _safe_float(row.rec_expected_return_pct)
+        if rec_gate_applied else None
+    )
+    rec_mult = (
+        max(rec_ret or 1.0, 0.0) if rec_gate_applied else 1.0
+    )
+    x_dv = _safe_float(row.x_dv_20d) or 0.0
+    x_vol = _safe_float(row.today_x_vol) or 0.0
+    return rec_mult * x_dv * x_vol

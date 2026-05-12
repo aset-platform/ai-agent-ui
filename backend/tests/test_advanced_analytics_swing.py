@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -247,3 +249,149 @@ def test_build_methodology_unknown_regime_raises() -> None:
 
     with pytest.raises(ValueError):
         build_methodology("noisy")  # type: ignore[arg-type]
+
+
+from advanced_analytics_swing import (
+    passes_bull,
+    rank_bull,
+)
+
+
+def _bull_row(**overrides: Any) -> AdvancedRow:
+    base = dict(
+        ticker="TCS.NS",
+        today_ltp=120.0,
+        sma_50=110.0,
+        sma_200=100.0,
+        golden_cross_days_ago=999,
+        today_x_vol=3.0,
+        current_dpc=55.0,
+        avg_20d_dpc=45.0,
+        x_dv_20d=1.5,
+        rsi=60.0,
+        pscore=7,
+        pledged=2.0,
+        week_52_high=150.0,
+        rec_category="offensive",
+        rec_severity="high",
+        rec_expected_return_pct=12.0,
+    )
+    base.update(overrides)
+    return AdvancedRow(**base)  # type: ignore[arg-type]
+
+
+def test_passes_bull_happy_path() -> None:
+    assert passes_bull(_bull_row(), rec_gate_applied=True) is True
+
+
+def test_passes_bull_rejects_volume_above_band() -> None:
+    assert passes_bull(_bull_row(today_x_vol=6.0), True) is False
+
+
+def test_passes_bull_rejects_volume_below_band() -> None:
+    assert passes_bull(_bull_row(today_x_vol=1.5), True) is False
+
+
+def test_passes_bull_rejects_delivery_below_avg() -> None:
+    assert (
+        passes_bull(
+            _bull_row(current_dpc=40.0, avg_20d_dpc=45.0), True
+        ) is False
+    )
+
+
+def test_passes_bull_rejects_at_52w_high() -> None:
+    assert (
+        passes_bull(
+            _bull_row(today_ltp=149.0, week_52_high=150.0), True
+        ) is False
+    )
+
+
+def test_passes_bull_rejects_rsi_overbought() -> None:
+    assert passes_bull(_bull_row(rsi=75.0), True) is False
+
+
+def test_passes_bull_rejects_low_pscore() -> None:
+    assert passes_bull(_bull_row(pscore=3), True) is False
+
+
+def test_passes_bull_rejects_high_pledged() -> None:
+    assert passes_bull(_bull_row(pledged=15.0), True) is False
+
+
+def test_passes_bull_accepts_fresh_golden_cross_without_stack() -> None:
+    """If SMA stack fails but golden_cross is fresh, gate passes."""
+    row = _bull_row(
+        today_ltp=105.0, sma_50=110.0, sma_200=108.0,
+        golden_cross_days_ago=5,
+    )
+    assert passes_bull(row, True) is True
+
+
+def test_passes_bull_rejects_non_bullish_category() -> None:
+    """`risk_alert`, `rebalance`, `defensive` etc. are NOT in
+    BULLISH_CATEGORIES."""
+    assert (
+        passes_bull(_bull_row(rec_category="risk_alert"), True)
+        is False
+    )
+    assert (
+        passes_bull(_bull_row(rec_category="rebalance"), True)
+        is False
+    )
+    assert (
+        passes_bull(_bull_row(rec_category="defensive"), True)
+        is False
+    )
+
+
+def test_passes_bull_accepts_each_bullish_category() -> None:
+    """All four pinned bullish categories pass the gate."""
+    for cat in ("offensive", "value", "growth", "hold_accumulate"):
+        assert passes_bull(_bull_row(rec_category=cat), True) is True
+
+
+def test_passes_bull_severity_does_not_gate() -> None:
+    """Phase A does NOT gate on severity; all severities pass when
+    the category is bullish."""
+    for sev in ("high", "medium", "low"):
+        assert (
+            passes_bull(_bull_row(rec_severity=sev), True) is True
+        )
+
+
+def test_passes_bull_skips_rec_gate_when_degraded() -> None:
+    """When user has no rec run, rec-category gate is bypassed."""
+    row = _bull_row(
+        rec_category=None, rec_severity=None,
+        rec_expected_return_pct=None,
+    )
+    assert passes_bull(row, rec_gate_applied=False) is True
+
+
+def test_passes_bull_handles_nan_inputs() -> None:
+    """NaN in any hard-gate column rejects the row (no crash)."""
+    row = _bull_row(today_x_vol=float("nan"))
+    assert passes_bull(row, True) is False
+
+
+def test_rank_bull_uses_rec_score_when_present() -> None:
+    row = _bull_row(
+        rec_expected_return_pct=10.0, x_dv_20d=2.0, today_x_vol=3.0,
+    )
+    assert rank_bull(row, rec_gate_applied=True) == 10.0 * 2.0 * 3.0
+
+
+def test_rank_bull_degrades_when_no_rec() -> None:
+    row = _bull_row(
+        rec_expected_return_pct=None, x_dv_20d=2.0, today_x_vol=3.0,
+    )
+    assert rank_bull(row, rec_gate_applied=False) == 1.0 * 2.0 * 3.0
+
+
+def test_rank_bull_clamps_negative_rec_return() -> None:
+    row = _bull_row(
+        rec_expected_return_pct=-5.0, x_dv_20d=2.0, today_x_vol=3.0,
+    )
+    assert rank_bull(row, rec_gate_applied=True) == 0.0
