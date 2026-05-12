@@ -317,16 +317,19 @@ async def kite_postback(request: Request) -> dict:
         },
     )]
 
-    # COMPLETE/PARTIAL postbacks → reconcile against the
-    # in-flight order list and emit `order_filled_live` so the
-    # P&L summary card and in-flight panel update. Without this
-    # the user sees "0 fills" forever even after Kite confirms
-    # execution.
+    # Terminal-status postbacks (COMPLETE / REJECTED / CANCELLED)
+    # → reconcile against the in-flight order list and emit the
+    # matching derived event so the Events panel + P&L summary
+    # surface the outcome. Without this the user sees the order
+    # submission but no resolution, even after Kite confirms.
     status = str(payload.get("status", "")).upper()
-    if status == "COMPLETE" and our_user_id is not None:
+    if status in ("COMPLETE", "REJECTED", "CANCELLED") and (
+        our_user_id is not None
+    ):
         try:
-            await _reconcile_fill_with_in_flight(
+            await _reconcile_terminal_with_in_flight(
                 user_id=our_user_id,
+                status=status,
                 kite_order_id=str(payload.get("order_id", "")),
                 tradingsymbol=str(
                     payload.get("tradingsymbol", ""),
@@ -336,13 +339,19 @@ async def kite_postback(request: Request) -> dict:
                 avg_price=float(
                     payload.get("average_price", 0) or 0,
                 ),
+                status_message=str(
+                    payload.get("status_message")
+                    or payload.get("status_message_raw")
+                    or "",
+                ),
                 rows_to_persist=rows_to_persist,
             )
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
                 "kite postback: in-flight reconcile failed for "
-                "order_id=%s: %s",
-                payload.get("order_id", ""), exc, exc_info=True,
+                "order_id=%s status=%s: %s",
+                payload.get("order_id", ""), status, exc,
+                exc_info=True,
             )
 
     await asyncio.to_thread(flush_events, rows_to_persist)
@@ -365,20 +374,26 @@ def _postback_enabled() -> bool:
     return os.environ.get("KITE_POSTBACK_ENABLED", "false").lower() == "true"
 
 
-async def _reconcile_fill_with_in_flight(
+async def _reconcile_terminal_with_in_flight(
     *,
     user_id: UUID,
+    status: str,
     kite_order_id: str,
     tradingsymbol: str,
     side: str,
     qty: int,
     avg_price: float,
+    status_message: str,
     rows_to_persist: list[dict],
 ) -> None:
     """Find the matching in-flight order across this user's
-    live runs, mark it `filled`, and append an
-    `order_filled_live` event to ``rows_to_persist`` (caller
-    flushes once at the end of the request).
+    live runs, transition it to the terminal status, and append
+    the matching derived event to ``rows_to_persist``.
+
+    Supports the three terminal Kite statuses:
+      COMPLETE  → in-flight.status='filled'    → order_filled_live
+      REJECTED  → in-flight.status='rejected'  → order_rejected_live
+      CANCELLED → in-flight.status='cancelled' → order_cancelled_live
 
     Match is by (user_id, kite_order_id) — Kite IDs are unique
     per user. We scan recent live runs (up to 5 most-recent) so
@@ -387,12 +402,27 @@ async def _reconcile_fill_with_in_flight(
     """
     if not kite_order_id or not user_id:
         return
+    if status not in ("COMPLETE", "REJECTED", "CANCELLED"):
+        return
+
     from sqlalchemy import text
     from sqlalchemy.dialects.postgresql import JSONB
     from sqlalchemy import bindparam
     from backend.db.engine import get_session_factory
     from backend.algo.backtest.event_writer import event_row
     from datetime import datetime as _dt, UTC
+
+    # Per-status mapping — keeps the loop body small.
+    in_flight_status = {
+        "COMPLETE": "filled",
+        "REJECTED": "rejected",
+        "CANCELLED": "cancelled",
+    }[status]
+    event_type = {
+        "COMPLETE": "order_filled_live",
+        "REJECTED": "order_rejected_live",
+        "CANCELLED": "order_cancelled_live",
+    }[status]
 
     factory = get_session_factory()
     async with factory() as session:
@@ -411,48 +441,65 @@ async def _reconcile_fill_with_in_flight(
                 in_flight = json.loads(in_flight)
             matched = False
             for entry in in_flight:
-                if entry.get("kite_order_id") == kite_order_id:
-                    entry["status"] = "filled"
+                if entry.get("kite_order_id") != kite_order_id:
+                    continue
+                entry["status"] = in_flight_status
+                now_iso = _dt.now(UTC).isoformat()
+                if status == "COMPLETE":
                     entry["fill_price"] = str(avg_price)
                     entry["fill_qty"] = qty
-                    entry["filled_at"] = _dt.now(
-                        UTC,
-                    ).isoformat()
-                    matched = True
-                    # Emit order_filled_live so the summary card
-                    # and events panel pick it up.
-                    rows_to_persist.append(event_row(
-                        session_id=_NULL_UUID,
-                        user_id=user_id,
-                        strategy_id=None,  # postback is run-agnostic
-                        mode="live",
-                        type_="order_filled_live",
-                        payload={
-                            # Postbacks only fire for real Kite
-                            # orders — never dry-run. ASETPLTFRM-374
-                            # epic: omit dry_run on Live events;
-                            # absence already implies real.
-                            "kite_order_id": kite_order_id,
-                            "internal_order_id": entry.get(
-                                "internal_order_id",
-                            ),
-                            "symbol": tradingsymbol,
-                            "side": side or entry.get("side", ""),
-                            "qty": qty,
-                            "price": str(avg_price),
-                            "fees_inr": "0",
-                            "source": "kite_postback",
-                            # Carry from in-flight entry so the
-                            # Positions tab Reason column + the
-                            # (symbol, product) attribution join
-                            # both populate. Both nullable for
-                            # entries written before the runtime
-                            # started stamping reason/product.
-                            "reason": entry.get("reason"),
-                            "product": entry.get("product"),
-                        },
-                    ))
-                    break
+                    entry["filled_at"] = now_iso
+                elif status == "REJECTED":
+                    entry["rejected_at"] = now_iso
+                    entry["rejection_reason"] = status_message
+                elif status == "CANCELLED":
+                    entry["cancelled_at"] = now_iso
+                    entry["cancel_reason"] = status_message
+                matched = True
+
+                # Common audit envelope — ASETPLTFRM-374 epic:
+                # omit dry_run on Live events (postbacks fire
+                # only for real Kite orders, so absence is
+                # already accurate).
+                base_payload: dict[str, Any] = {
+                    "kite_order_id": kite_order_id,
+                    "internal_order_id": entry.get(
+                        "internal_order_id",
+                    ),
+                    "symbol": tradingsymbol,
+                    "side": side or entry.get("side", ""),
+                    "qty": qty,
+                    "source": "kite_postback",
+                    # Carry from in-flight entry so the
+                    # Positions tab Reason column + the
+                    # (symbol, product) attribution join both
+                    # populate. Both nullable for entries
+                    # written before the runtime started
+                    # stamping reason/product.
+                    "reason": entry.get("reason"),
+                    "product": entry.get("product"),
+                }
+                if status == "COMPLETE":
+                    base_payload["price"] = str(avg_price)
+                    base_payload["fees_inr"] = "0"
+                elif status == "REJECTED":
+                    base_payload["rejection_reason"] = (
+                        status_message or "rejected_by_kite"
+                    )
+                elif status == "CANCELLED":
+                    base_payload["cancel_reason"] = (
+                        status_message or "cancelled_by_kite"
+                    )
+
+                rows_to_persist.append(event_row(
+                    session_id=_NULL_UUID,
+                    user_id=user_id,
+                    strategy_id=None,
+                    mode="live",
+                    type_=event_type,
+                    payload=base_payload,
+                ))
+                break
             if matched:
                 stmt = text("""
                     UPDATE algo.runs
@@ -465,8 +512,8 @@ async def _reconcile_fill_with_in_flight(
                 await session.commit()
                 _logger.info(
                     "kite postback reconciled: order_id=%s "
-                    "run_id=%s sym=%s qty=%d @₹%.2f",
-                    kite_order_id, run["id"],
+                    "run_id=%s status=%s sym=%s qty=%d @₹%.2f",
+                    kite_order_id, run["id"], status,
                     tradingsymbol, qty, avg_price,
                 )
                 return  # stop after first match

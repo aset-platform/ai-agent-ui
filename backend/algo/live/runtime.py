@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -60,6 +60,10 @@ from backend.algo.strategy.ast import Strategy
 _logger = logging.getLogger(__name__)
 
 UTC = timezone.utc
+# ISO strings emitted into algo.events payloads are user-facing
+# (Submissions panel raw-JSON viewer). Stamp with +05:30 per
+# feedback_ist_dates_user_facing — internal datetimes still UTC.
+IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def _select_last_price_ts_ns(tick: Any) -> int:
@@ -715,7 +719,7 @@ class LiveRuntime:
     ) -> int:
         """Submit one order to Kite. Returns 1 on success, 0 on error."""
         internal_order_id = str(uuid4())
-        now_iso = datetime.now(UTC).isoformat()
+        now_iso = datetime.now(IST).isoformat()
 
         # Determine exchange — Indian .NS → NSE
         exchange = "NSE"

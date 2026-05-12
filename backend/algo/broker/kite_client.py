@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Callable
 from uuid import uuid4
 
@@ -40,6 +40,11 @@ from backend.algo.broker.redis_keys import build_dedup_key
 _logger = logging.getLogger(__name__)
 
 UTC = timezone.utc
+# Payload ISO strings use IST per feedback_ist_dates_user_facing —
+# the Submissions panel raw-payload viewer is user-facing, so the
+# ``submitted_at`` / ``last_price_ts`` keys must read naturally in
+# Indian wall-clock with the +05:30 offset explicit.
+IST = timezone(timedelta(hours=5, minutes=30))
 
 # Default chosen high enough to be effectively disabled on PR #1 ship.
 # Follow-up commit lowers to 5 after 24h soak (per spec §6 rollout).
@@ -835,7 +840,7 @@ class KiteClient:
                 if last_price_ts.tzinfo is not None
                 else last_price_ts.replace(tzinfo=UTC)
             )
-            ts_iso = ts.isoformat()
+            ts_iso = ts.astimezone(IST).isoformat()
             ltp_age = (datetime.now(UTC) - ts).total_seconds()
         return {
             "last_price": last_price,
@@ -929,7 +934,7 @@ class KiteClient:
             "request": request_block,
             "context": context_block,
             "response": {"raw": response_raw},
-            "submitted_at": datetime.now(UTC).isoformat(),
+            "submitted_at": datetime.now(IST).isoformat(),
         }
         sid = session_id if session_id is not None else uuid4()
         uid = user_id if user_id is not None else uuid4()
@@ -975,7 +980,7 @@ class KiteClient:
             "symbol": symbol,
             "side": side,
             "qty": qty,
-            "last_price_ts": last_price_ts.isoformat(),
+            "last_price_ts": last_price_ts.astimezone(IST).isoformat(),
             "age_seconds": age_seconds,
             "max_age_seconds": max_age_seconds,
             "reason": "ltp_stale",

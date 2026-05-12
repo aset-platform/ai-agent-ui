@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Callable
 from uuid import UUID, uuid4
@@ -44,6 +44,10 @@ from backend.algo.backtest.types import Fill
 _logger = logging.getLogger(__name__)
 
 UTC = timezone.utc
+# Payload ISO strings render in IST per
+# feedback_ist_dates_user_facing — backend datetimes stay UTC,
+# only the emitted string carries the +05:30 offset.
+IST = timezone(timedelta(hours=5, minutes=30))
 
 
 @dataclass(frozen=True)
@@ -350,7 +354,8 @@ def hydration_events(
                 "source": h.source,
                 "product": h.product,
                 "entry_ts": (
-                    h.entry_ts.isoformat() if h.entry_ts else None
+                    h.entry_ts.astimezone(IST).isoformat()
+                    if h.entry_ts else None
                 ),
                 "t1_pending": h.t1_pending,
             },
