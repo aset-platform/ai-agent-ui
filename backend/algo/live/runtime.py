@@ -46,6 +46,7 @@ from backend.algo.broker.kite_client import KiteClient
 # REGIME-2a — pre-computed nightly factor library overlay.
 from backend.algo.factors.repo import get_factors_window
 from backend.algo.live import slippage as _slippage
+from backend.algo.live.order_timeout import _OrderTimeoutWatcher
 from backend.algo.live.safety import (
     LiveRejectReason, pre_trade_check,
 )
@@ -182,6 +183,15 @@ class LiveRuntime:
         self._bucket_by_ticker: dict[str, str] = (
             self._load_bucket_by_ticker()
         )
+
+        # PR #3 (order-safety) — background asyncio watcher that
+        # cancels any session-tagged LIMIT older than
+        # ALGO_ORDER_TTL_S (default 90s) still in OPEN /
+        # TRIGGER PENDING. Started inside ``run()`` (we need a
+        # running event loop) and stopped in the same method's
+        # ``finally:`` block.
+        self._timeout_watcher: _OrderTimeoutWatcher | None = None
+        self._timeout_watcher_task: asyncio.Task | None = None
 
     def _load_bucket_by_ticker(self) -> dict[str, str]:
         """Read latest ``stocks.universe_snapshot`` and build a
@@ -325,6 +335,31 @@ class LiveRuntime:
             "run_id=%s",
             self._user_id, self._strategy.id, self._run_id,
         )
+        # PR #3 (order-safety) — start the order TTL watcher as a
+        # background task BEFORE the drain loop. Dry-run sessions
+        # still start the watcher (it's a no-op against a Kite client
+        # whose cancel_order is itself a no-op in dry-run, and the
+        # observability events still flow). Disabled when
+        # ALGO_ORDER_TTL_S=0 — preserves the rollout backout knob.
+        if not self._timeout_watcher:
+            from backend.algo.live.order_timeout import _read_ttl_s
+            ttl = _read_ttl_s()
+            if ttl > 0:
+                self._timeout_watcher = _OrderTimeoutWatcher(
+                    kite_client=self._kite,
+                    session_id=self._session_id,
+                    strategy_id=self._strategy.id,
+                    user_id=self._user_id,
+                    events_sink=self._events.append,
+                )
+                self._timeout_watcher_task = asyncio.create_task(
+                    self._timeout_watcher.run(),
+                )
+            else:
+                _logger.info(
+                    "LiveRuntime: order timeout watcher disabled "
+                    "(ALGO_ORDER_TTL_S=0)",
+                )
         try:
             async for tick in source:
                 tick_count += 1
@@ -361,6 +396,36 @@ class LiveRuntime:
                 tick_count, bar_count, fills, len(self._events),
             )
         finally:
+            # PR #3 (order-safety) — stop the timeout watcher first
+            # so any in-flight cancellation event lands in
+            # ``self._events`` before the terminal flush below.
+            # Bounded wait so a hung Kite ``orders()`` cannot block
+            # session teardown indefinitely (30s is well above the
+            # default 15s poll cadence).
+            if self._timeout_watcher is not None:
+                self._timeout_watcher.request_stop()
+            if self._timeout_watcher_task is not None:
+                try:
+                    await asyncio.wait_for(
+                        self._timeout_watcher_task, timeout=30.0,
+                    )
+                except asyncio.TimeoutError:
+                    _logger.warning(
+                        "LiveRuntime: order timeout watcher did "
+                        "not stop within 30s — cancelling task",
+                    )
+                    self._timeout_watcher_task.cancel()
+                    try:
+                        await self._timeout_watcher_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                except Exception:  # noqa: BLE001
+                    _logger.warning(
+                        "LiveRuntime: order timeout watcher "
+                        "raised during stop", exc_info=True,
+                    )
+                self._timeout_watcher = None
+                self._timeout_watcher_task = None
             for bar in self._resampler.close_partial_bars():
                 lp = last_price_per_ticker.get(
                     bar.ticker, Decimal(str(bar.close)),
