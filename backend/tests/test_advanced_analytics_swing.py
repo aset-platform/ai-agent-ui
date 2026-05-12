@@ -344,6 +344,33 @@ def test_passes_bull_accepts_fresh_golden_cross_without_stack() -> None:
     assert passes_bull(row, True) is True
 
 
+def test_passes_bull_accepts_established_with_pullback() -> None:
+    """Long-confirmed uptrend (gxa = ESTABLISHED_CROSS_DAYS) with
+    today's price pulled back to / below SMA-50 — buy-the-dip
+    case. Symmetric to the bearish established-sentinel acceptance.
+    Without this branch, names that have been bullish for 215+
+    days but happen to be in a normal pullback are silently
+    rejected as if they weren't in an uptrend at all.
+    """
+    row = _bull_row(
+        # Price has pulled back BELOW SMA-50 (stack fails).
+        today_ltp=105.0, sma_50=110.0, sma_200=100.0,
+        # Long-confirmed uptrend — SMA-50 > SMA-200 entire window.
+        golden_cross_days_ago=_ESTABLISHED,
+    )
+    assert passes_bull(row, True) is True
+
+
+def test_passes_bull_rejects_stale_mid_window_cross() -> None:
+    """Mid-window stale cross (31-214 days) still rejects when
+    SMA stack also fails — neither fresh nor established."""
+    row = _bull_row(
+        today_ltp=105.0, sma_50=110.0, sma_200=108.0,
+        golden_cross_days_ago=100,
+    )
+    assert passes_bull(row, True) is False
+
+
 def test_passes_bull_rejects_non_bullish_category() -> None:
     """`risk_alert`, `rebalance`, `defensive` etc. are NOT in
     BULLISH_CATEGORIES."""
@@ -1146,6 +1173,10 @@ def test_methodology_thresholds_match_filter_constants() -> None:
     assert str(BULL_PLEDGED_MAX) in rules_bull
     assert str(BULL_RANGE_MAX) in rules_bull
     assert str(BULL_GOLDEN_CROSS_FRESH_DAYS) in rules_bull
+    # Established-uptrend sentinel branch on the bull trend gate
+    # (parallel to bearish's established-bearish sentinel acceptance).
+    from advanced_analytics_models import ESTABLISHED_CROSS_DAYS
+    assert str(ESTABLISHED_CROSS_DAYS) in rules_bull
 
     sw = build_methodology("sideways")
     rules_sw = " ".join(g["rule"] for g in sw["gates"])

@@ -78,9 +78,18 @@ def _bull_gates() -> list[dict[str, str]]:
             "rule": (
                 "today_ltp > sma_50 > sma_200 OR "
                 f"golden_cross_days_ago ≤ "
-                f"{BULL_GOLDEN_CROSS_FRESH_DAYS}"
+                f"{BULL_GOLDEN_CROSS_FRESH_DAYS} OR "
+                "golden_cross_days_ago == "
+                f"{ESTABLISHED_CROSS_DAYS}"
             ),
-            "why": "Establishes an uptrend or a fresh reversal.",
+            "why": (
+                "Uptrend stack (price above both MAs) OR fresh "
+                "golden cross (≤ 30 d) OR long-confirmed uptrend "
+                "currently pulling back to / below SMA-50 (the "
+                f"{ESTABLISHED_CROSS_DAYS} sentinel — SMA-50 above "
+                "SMA-200 for the entire 215-row window). The "
+                "third branch is the buy-the-dip case."
+            ),
         },
         {
             "label": "Volume sweet spot",
@@ -362,7 +371,14 @@ def passes_bull(
     pledged = _safe_float(row.pledged)
     w52_high = _safe_float(row.week_52_high)
 
-    # Trend stack OR fresh golden cross.
+    # Trend stack OR fresh golden cross OR established uptrend.
+    # The ``ESTABLISHED_CROSS_DAYS`` branch catches the "long-
+    # confirmed uptrend currently pulling back to / below SMA-50"
+    # case — gxa=999 means SMA-50 has been above SMA-200 for the
+    # entire 215-row window, so the structural uptrend is intact
+    # even though today's price has dipped under SMA-50. Classic
+    # buy-the-dip swing setup. Symmetric to ``passes_bearish``
+    # which already accepts the established-bearish sentinel.
     stack_ok = (
         today_ltp is not None
         and sma_50 is not None
@@ -373,7 +389,8 @@ def passes_bull(
         gxa is not None
         and 0 <= gxa <= BULL_GOLDEN_CROSS_FRESH_DAYS
     )
-    if not (stack_ok or fresh_cross):
+    established_bull = gxa == ESTABLISHED_CROSS_DAYS
+    if not (stack_ok or fresh_cross or established_bull):
         return False
 
     # Volume sweet spot.
