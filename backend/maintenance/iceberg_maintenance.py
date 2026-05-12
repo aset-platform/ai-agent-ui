@@ -62,6 +62,16 @@ ALL_TABLES = [
     "stocks.fundamentals_snapshot",
     "stocks.corporate_events",
     "stocks.promoter_holdings",
+    # Algo namespace — write-heavy event streams. 2026-05-12
+    # incident: algo.events bloated to 11 GB of metadata.json
+    # (5,901 snapshots, ~2 MB each) because it was missing from
+    # this list. Every LiveRuntime emission (signal_generated,
+    # order_submitted_live, kite_postback_received, fills, etc.)
+    # is one commit + one new metadata.json with the full
+    # snapshot history embedded. Daily maintenance keeps the
+    # snapshot count + manifest count bounded.
+    "algo.events",
+    "algo.intraday_bars",
 ]
 
 # Dead tables safe to drop (migrated to PG or unused)
@@ -89,6 +99,8 @@ DATE_COLUMNS: dict[str, str] = {
     "stocks.fundamentals_snapshot": "snapshot_date",
     "stocks.corporate_events": "event_date",
     "stocks.promoter_holdings": "quarter_end",
+    # Algo event streams — retention pruned by IST partition col.
+    "algo.events": "ts_date",
 }
 
 MAX_RETENTION_YEARS = 11
