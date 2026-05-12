@@ -1070,3 +1070,88 @@ def test_swing_setups_methodology_rejects_unknown_regime(
         "?regime=cheesy"
     )
     assert resp.status_code in (400, 422)
+
+
+def test_methodology_thresholds_match_filter_constants() -> None:
+    """Methodology rule strings must reference the same threshold
+    constants the filters actually use. Catches drift.
+
+    If someone tunes BULL_VOL_MIN to 1.8 in
+    ``advanced_analytics_swing.py`` but forgets to update the
+    methodology block, this test fails loudly.
+    """
+    from advanced_analytics_swing import (
+        BEARISH_DEATH_CROSS_FRESH_DAYS,
+        BEARISH_FLOOR_RATIO,
+        BEARISH_NOT_FLOOR_INR,
+        BEARISH_NOT_FLOOR_USD,
+        BEARISH_RSI_MAX_RECENT,
+        BEARISH_RSI_TODAY_MAX,
+        BULL_GOLDEN_CROSS_FRESH_DAYS,
+        BULL_PLEDGED_MAX,
+        BULL_PSCORE_MIN,
+        BULL_RANGE_MAX,
+        BULL_RSI_MAX,
+        BULL_VOL_MAX,
+        BULL_VOL_MIN,
+        SIDEWAYS_MA_CONV_MAX,
+        SIDEWAYS_NOT_FLOOR_INR,
+        SIDEWAYS_NOT_FLOOR_USD,
+        SIDEWAYS_PRICE_NEAR_SMA50,
+        SIDEWAYS_PSCORE_MIN,
+        SIDEWAYS_RSI_MAX,
+        SIDEWAYS_RSI_MIN,
+        SIDEWAYS_VOL_MAX,
+        SIDEWAYS_VOL_MIN,
+        build_methodology,
+    )
+
+    bull = build_methodology("bull")
+    rules_bull = " ".join(g["rule"] for g in bull["gates"])
+    assert str(BULL_VOL_MIN) in rules_bull
+    assert str(BULL_VOL_MAX) in rules_bull
+    assert str(BULL_RSI_MAX) in rules_bull
+    assert str(BULL_PSCORE_MIN) in rules_bull
+    assert str(BULL_PLEDGED_MAX) in rules_bull
+    assert str(BULL_RANGE_MAX) in rules_bull
+    assert str(BULL_GOLDEN_CROSS_FRESH_DAYS) in rules_bull
+
+    sw = build_methodology("sideways")
+    rules_sw = " ".join(g["rule"] for g in sw["gates"])
+    assert str(SIDEWAYS_MA_CONV_MAX) in rules_sw
+    assert str(SIDEWAYS_PRICE_NEAR_SMA50) in rules_sw
+    assert str(SIDEWAYS_RSI_MIN) in rules_sw
+    assert str(SIDEWAYS_RSI_MAX) in rules_sw
+    assert str(SIDEWAYS_VOL_MIN) in rules_sw
+    assert str(SIDEWAYS_VOL_MAX) in rules_sw
+    assert str(SIDEWAYS_PSCORE_MIN) in rules_sw
+    # Liquidity-floor rule uses formatted numbers (with thousand
+    # separators), so assert against the formatted string rather
+    # than the bare float.
+    assert f"{SIDEWAYS_NOT_FLOOR_INR:,.0f}" in rules_sw
+    assert f"{SIDEWAYS_NOT_FLOOR_USD:,.0f}" in rules_sw
+
+    bear = build_methodology("bearish")
+    rules_bear = " ".join(g["rule"] for g in bear["gates"])
+    assert str(BEARISH_DEATH_CROSS_FRESH_DAYS) in rules_bear
+    assert str(BEARISH_RSI_MAX_RECENT) in rules_bear
+    assert str(BEARISH_RSI_TODAY_MAX) in rules_bear
+    assert str(BEARISH_FLOOR_RATIO) in rules_bear
+    assert f"{BEARISH_NOT_FLOOR_INR:,.0f}" in rules_bear
+    assert f"{BEARISH_NOT_FLOOR_USD:,.0f}" in rules_bear
+
+
+def test_methodology_bullish_categories_match_constant() -> None:
+    """The methodology mentions the exact pinned bullish set."""
+    from advanced_analytics_swing import (
+        BULLISH_CATEGORIES,
+        build_methodology,
+    )
+
+    bull = build_methodology("bull")
+    rules_bull = " ".join(g["rule"] for g in bull["gates"])
+    for cat in BULLISH_CATEGORIES:
+        assert cat in rules_bull, (
+            f"Bullish category {cat!r} not surfaced in "
+            "methodology gates"
+        )
