@@ -428,7 +428,10 @@ async def _reconcile_fill_with_in_flight(
                         mode="live",
                         type_="order_filled_live",
                         payload={
-                            "dry_run": False,
+                            # Postbacks only fire for real Kite
+                            # orders — never dry-run. ASETPLTFRM-374
+                            # epic: omit dry_run on Live events;
+                            # absence already implies real.
                             "kite_order_id": kite_order_id,
                             "internal_order_id": entry.get(
                                 "internal_order_id",

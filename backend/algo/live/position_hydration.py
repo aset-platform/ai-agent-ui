@@ -340,7 +340,10 @@ def hydration_events(
             mode="live",
             type_="position_hydrated",
             payload={
-                "dry_run": dry_run,
+                # Live: omit dry_run (always False by construction).
+                # Dry-run rehearsals: include "dry_run": true so
+                # the Events panel can chip them distinctly.
+                **({"dry_run": True} if dry_run else {}),
                 "symbol": h.symbol,
                 "qty": h.qty,
                 "avg_price": str(h.avg_price),

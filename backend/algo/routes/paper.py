@@ -240,14 +240,23 @@ def create_paper_router() -> APIRouter:
         if dry_run is not None:
             # ``payload_json`` is stored as text JSON; DuckDB's
             # JSON funcs read string-typed members. LiveRuntime
-            # stamps ``dry_run`` as a JSON bool so we extract a
-            # string and compare against 'true'/'false'.
-            wanted = "true" if dry_run else "false"
-            clauses.append(
-                "json_extract_string(payload_json, "
-                "'$.dry_run') = ?"
-            )
-            base_params.append(wanted)
+            # only stamps ``dry_run`` when the run IS dry — Live
+            # events omit the field (ASETPLTFRM-374 epic). So:
+            #   dry_run=true  → payload.dry_run = 'true'
+            #   dry_run=false → payload.dry_run = 'false' OR
+            #                   payload.dry_run is missing (NULL)
+            if dry_run:
+                clauses.append(
+                    "json_extract_string(payload_json, "
+                    "'$.dry_run') = 'true'"
+                )
+            else:
+                clauses.append(
+                    "(json_extract_string(payload_json, "
+                    "'$.dry_run') = 'false' "
+                    "OR json_extract_string(payload_json, "
+                    "'$.dry_run') IS NULL)"
+                )
         where = " AND ".join(clauses)
 
         sql = (

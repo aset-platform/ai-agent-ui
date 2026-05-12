@@ -605,7 +605,7 @@ class LiveRuntime:
             mode="live",
             type_="signal_generated",
             payload={
-                "dry_run": self._dry_run,
+                **({"dry_run": True} if self._dry_run else {}),
                 "ticker": signal.ticker,
                 "side": signal.side,
                 "qty": signal.qty,
@@ -657,7 +657,7 @@ class LiveRuntime:
                 mode="live",
                 type_="signal_rejected",
                 payload={
-                    "dry_run": self._dry_run,
+                    **({"dry_run": True} if self._dry_run else {}),
                     "reason": reason_str,
                     "ticker": signal.ticker,
                     "side": signal.side,
@@ -811,7 +811,7 @@ class LiveRuntime:
                 mode="live",
                 type_="order_rejected_live",
                 payload={
-                    "dry_run": self._dry_run,
+                    **({"dry_run": True} if self._dry_run else {}),
                     "internal_order_id": internal_order_id,
                     "symbol": symbol,
                     "side": side,
@@ -980,7 +980,7 @@ class LiveRuntime:
             mode="live",
             type_="order_filled_live",
             payload={
-                "dry_run": self._dry_run,
+                **({"dry_run": True} if self._dry_run else {}),
                 "internal_order_id": internal_order_id,
                 "kite_order_id": kite_order_id,
                 "symbol": symbol,
@@ -1043,7 +1043,7 @@ class LiveRuntime:
                     mode="live",
                     type_="order_cancelled_live",
                     payload={
-                        "dry_run": self._dry_run,
+                        **({"dry_run": True} if self._dry_run else {}),
                         "kite_order_id": kite_id,
                         "reason": "kill_switch_armed",
                     },
@@ -1062,7 +1062,7 @@ class LiveRuntime:
                     mode="live",
                     type_="order_cancel_failed",
                     payload={
-                        "dry_run": self._dry_run,
+                        **({"dry_run": True} if self._dry_run else {}),
                         "kite_order_id": kite_id,
                         "error": str(exc),
                     },

@@ -907,11 +907,19 @@ class KiteClient:
             chunk_index=chunk_index,
             chunk_total=chunk_total,
         )
+        # Per ASETPLTFRM-374 epic: Live payloads should not carry
+        # a ``dry_run`` field at all — on Live, dry_run is always
+        # False by construction (C-backend pin) so the field is
+        # noise. Dry-run rehearsals still emit ``dry_run: true``
+        # so consumers can distinguish them. Absence = real.
+        dr_kw: dict[str, Any] = (
+            {"dry_run": True} if dry_run else {}
+        )
         payload: dict[str, Any] = {
             # Top-level legacy keys (PaperEventsTimeline reads
             # these at the root; do not nest under `request.*` to
             # avoid breaking the existing renderer).
-            "dry_run": dry_run,
+            **dr_kw,
             "internal_order_id": internal_order_id,
             "kite_order_id": kite_order_id,
             "symbol": tradingsymbol,
