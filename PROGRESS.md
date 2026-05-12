@@ -2,6 +2,92 @@
 
 ---
 
+## 2026-05-12 (evening) — ASETPLTFRM-383 daily-bar warmup for LiveRuntime
+
+**Branch:** `feature/algo-live-daily-bar-warmup` → squash-merged to `dev` as **PR #212** (commit `6f014dc`).
+**Jira:** ASETPLTFRM-383 (8 SP, Story). Created → In Progress → Done within ~1 hour.
+
+### The bug being fixed
+
+LiveRuntime was accumulating 1-minute bars into `_bars_by_ticker[ticker]` and running `compute_indicators` over that list — treating minute-cadence as if it were daily. Result during today's morning live session: RSI(14) values like 22.98 (BIOCON), 18.75 (GHCL), 25.93 (YESBANK), 29.09 (GRANULES) firing BUY signals on `daily_RSI < 30`. The actual daily RSI(14) for those same tickers at the time was 67.89 / 47.07 / 74.74 / 83.26 — wildly different. **The "below 30" signals were entirely fabricated by minute-bar pollution.**
+
+### Solution (Option B locked after design discussion)
+
+- `backend/algo/live/daily_bar_warmup.py` (new) — `preload_daily_bars()` does a single batched DuckDB `WHERE ticker IN (...)` against `stocks.ohlcv` (≈150 ms for 100 tickers). Per-ticker freshness gate (≥ today − 5 calendar days). Stale tickers fall back to `KiteClient.fetch_daily_historical` rate-limited at 3 req/sec.
+- `LiveRuntime.__init__` preloads 250 closed daily bars per `caps.allowed_tickers` entry.
+- `_on_bar_close` no longer appends minute bars to the daily series. It appends today's running bar lazily on first sight, then **updates the last element in place** each minute (high broadens up, low broadens down, close = LTP, volume accumulates).
+- New eval-time gate `ALGO_DAILY_MIN_EVAL_TIME_IST` (default `14:30` IST) — ticks update today's bar before the cutoff but no strategy eval fires. Suppresses morning false-fires while today's close is still volatile.
+- Universe drift handled: tickers not in `allowed_tickers` lazy-preload on first tick via `asyncio.to_thread` so the event loop never blocks on Iceberg.
+- `routes/paper.py` resolves `ticker_to_token` via `InstrumentsRepo` and threads it through `supervisor.start_live_run` → `LiveRuntime` for the Kite fallback path.
+
+### Persistence model — none
+
+No new Iceberg table, no new PG table, no new Redis key, no new `algo.events` rows. `_bars_by_ticker` is in-memory only; every runtime spawn re-reads from `stocks.ohlcv` (canonical source, written nightly by the daily pipeline). Worst-case crash recovery = "restart and re-preload."
+
+### Tests
+
+- 13 unit tests on the warmup helper (`backend/algo/live/tests/test_daily_bar_warmup.py`).
+- 5 KiteClient tests covering `fetch_daily_historical` (`test_kite_client_historical.py`) including the class-level rate-limit throttle.
+- 7 runtime integration tests (`test_live_runtime_daily_bar_warmup.py`) — preload, in-place update, gate pre/post, universe drift, day rollover.
+- All 25 green; full algo suite at 818 pass / 28 fail vs 807/39 on dev (no regressions, pre-existing flakes only).
+
+### End-to-end smoke against real Iceberg
+
+```
+ITC.NS preload → 250 bars (last 2026-05-11)
+running @ ₹306 → RSI(14) = 48.36
+LTP → ₹298  → RSI(14) = 38.93
+```
+
+Confirms today's running bar refreshes correctly and indicators react to intraday LTP changes against a stable daily history.
+
+### Live verification post-merge
+
+User started a Live test strategy at ~15:23 IST. Observed in `algo.events`: **zero spurious signals**. Computed actual daily RSI for the morning's "signaling" tickers — every one was well above 30 (BIOCON 67.89, GRANULES 83.26, YESBANK 74.74, GHCL 47.07). The new runtime correctly stayed quiet. The absence of signals IS the validation.
+
+### Sprint 10 hygiene cleanup
+
+15 tickets created and worked during the May 9–14 sprint window had been left out of the sprint board (ASETPLTFRM-369..383). Bulk-added to Sprint 10. Sprint composition now reflects reality: **77 SP Done across three epics** (Algo v2, Order Safety, Live Decouple) + 8 SP today (warmup, Done), with 17 SP carry-over backlog (373 / 380 / 381 / 382).
+
+### Follow-ups still open
+
+- **ASETPLTFRM-380** (9 SP) — pipeline data-quality assertion framework. Surfaces silent-success runs (stale VIX, missing fill events, etc.) on the admin Data Health card. Today's stale-fallback masks the symptom but the structural fix is this.
+- **ASETPLTFRM-381** (5 SP) — Attribution Trade Reasons: pair-by-fill + panic-close signals.
+- **ASETPLTFRM-382** (2 SP) — Live Postbacks tab: filter to today + real-money only.
+- **ASETPLTFRM-373** (1 SP) — shared `formatIST()` helper.
+- (deferred) Option C per-strategy `bar_interval` field — add when a strategy actually needs 5min/60min cadence.
+
+---
+
+## 2026-05-12 — Algo Live Decouple + Hydration epic (ASETPLTFRM-374)
+
+**Branch:** `feature/algo-live-decouple-hydration` → squash-merged to `dev` as **PR #211** (commit `8813e51`).
+**Jira:** Epic ASETPLTFRM-374 (9 SP) + sub-tasks 375 / 376 / 377 / 378 + zombie sweep 379 (1 SP).
+
+Live runtime path is now fully decoupled from Paper / Dry-run:
+
+- **A2 caps reset startup catch-up** — `run_if_missed_today()` in `backend/main.py::_run_startup_hooks` replays the 09:00 IST caps reset if backend booted after the schedule. Stamps `algo:caps_last_reset_date` in Redis on success.
+- **B position hydration** — `backend/algo/live/position_hydration.py` reads `kite.positions()` + `kite.holdings()` on LiveRuntime spawn, filters by `allowed_tickers`, sums `quantity + t1_quantity` for T+1 awareness. `HydratedPosition.t1_pending` flag drives an amber "T+1" chip on Holdings.
+- **C-backend** — `routes/paper.py` Live spawn site explicitly pins `KiteClient(..., dry_run=False)`. RunMode widened to `paper | dryrun | live`. Defence-in-depth 500 if dry-run somehow leaks into Live.
+- **C-frontend** — `LiveActiveRunsPanel` new Start Runtime UI with strategy picker + auto-default. Dry-run toggle removed from Live page (lives only on Strategies → Dry-run tab). Header chip rebound to "live runtime running NOW" (truthful), not the prior activity heuristic.
+- **T+1 settlement support** end-to-end — `/holdings` filter `(quantity + t1_quantity) > 0`; `panicCloseAll` sums both for close-target qty; UI shows amber "T+1" chip on the row.
+- **Kite postback parser fix** — Kite Connect v3 sends JSON in body despite `Content-Type: application/x-www-form-urlencoded`. Parser now routes by body shape (starts with `{`/`[`), not Content-Type. Fixed the "Waiting 21 minutes" hang on the postback receiver.
+- **REJECTED/CANCELLED postback → derived events emit unconditionally** — in-flight match is enrichment, not gating.
+- **`order_filled_live` emits regardless of in-flight match** — panic-close + manual orders now produce derived events.
+- **`dry_run` omitted from Live event payloads** — absence = real money, presence = synthetic. Clean audit.
+- **IST timestamps in event payloads** — `astimezone(IST).isoformat()` at the emission boundary; internal datetimes stay UTC.
+- **WS health dot with tooltip** — `LiveWsHealthDot` shows Kite WS status / subscribers / ticks today.
+- **Recent Fills scoped properly** — server-side filters `type=order_filled_live`, `mode=live`, `dry_run=false`, `since_date=todayIstIso()`.
+- **Panic Close `errors[]` surfaced in modal** — Kite CDSL TPIN, margin, freeze-qty errors visible (previously modal closed silently on partial-failure).
+- **Layout reorder** — Strategy picker + Regime + Panic Close at TOP; Open Positions + Regime side-by-side; Live runtime + Events feed (5-7 rows visible, scroll for more).
+- **Zombie runs sweep (ASETPLTFRM-379)** — `BacktestRunsRepo.mark_stale_running_as_crashed` on startup. Threshold via `ALGO_RUN_STALE_THRESHOLD_SECONDS=3600`. Cleared 28+ stale `running` rows that had been slowing postback latency.
+
+End-to-end validated during 2026-05-12 live trading session: real BUY 4 ITC @ ₹304.05; Panic Close → SELL 4 ITC @ ₹304.70; second Panic Close → SELL 8 ITC @ ₹303.60 (T+1 inclusion + CDSL auth flow exercised).
+
+3 follow-up tickets filed during validation: ASETPLTFRM-380 / 381 / 382 (see warmup section above).
+
+---
+
 ## 2026-05-12 — Order Safety Hardening epic + PR #1 (payload logging + LTP staleness)
 
 **Branch:** `feature/algo-order-safety-payload-ltp` (off `dev`).
