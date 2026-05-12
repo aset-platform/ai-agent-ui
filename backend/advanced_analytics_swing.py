@@ -499,3 +499,82 @@ def rank_sideways(row: AdvancedRow) -> float:
     ):
         return float("inf")
     return min(today_ltp - low, high - today_ltp) / today_ltp
+
+
+def passes_bearish(row: AdvancedRow, market: str) -> bool:
+    """Active-distribution short-bias filter.
+
+    Gates: death-cross active+fresh, RSI rollover from >=60 to <=50
+    with 3d decline, lower-low break vs 20d prev low, room above
+    52w floor, liquidity floor.
+    """
+    sma_50 = _safe_float(row.sma_50)
+    sma_200 = _safe_float(row.sma_200)
+    dxa = row.death_cross_days_ago
+    rsi = _safe_float(row.rsi)
+    rsi_3d = _safe_float(row.rsi_3d_ago)
+    rsi_max10 = _safe_float(row.rsi_max_10d)
+    today_low = _safe_float(row.today_low)
+    rb_low = _safe_float(row.rolling_low_20d_prev)
+    today_ltp = _safe_float(row.today_ltp)
+    w52_low = _safe_float(row.week_52_low)
+    today_not = _safe_float(row.today_not)
+
+    # Death-cross active + fresh.
+    if sma_50 is None or sma_200 is None or sma_50 >= sma_200:
+        return False
+    if dxa is None or dxa > BEARISH_DEATH_CROSS_FRESH_DAYS:
+        return False
+
+    # RSI rollover.
+    if rsi_max10 is None or rsi_max10 < BEARISH_RSI_MAX_RECENT:
+        return False
+    if rsi is None or rsi > BEARISH_RSI_TODAY_MAX:
+        return False
+    if rsi_3d is None or rsi >= rsi_3d:
+        return False
+
+    # Lower-low break.
+    if (
+        today_low is None or rb_low is None
+        or today_low >= rb_low
+    ):
+        return False
+
+    # Room to fall above 52-week floor.
+    if (
+        today_ltp is None or w52_low is None or w52_low == 0
+        or today_ltp / w52_low <= BEARISH_FLOOR_RATIO
+    ):
+        return False
+
+    # Liquidity.
+    floor = (
+        BEARISH_NOT_FLOOR_USD if market == "us"
+        else BEARISH_NOT_FLOOR_INR
+    )
+    if today_not is None or today_not <= floor:
+        return False
+
+    return True
+
+
+def rank_bearish(row: AdvancedRow) -> float:
+    """Higher = stronger short. Combines cross freshness, RSI
+    severity, and decisiveness of the lower-low break.
+    """
+    dxa = row.death_cross_days_ago
+    rsi = _safe_float(row.rsi)
+    today_low = _safe_float(row.today_low)
+    rb_low = _safe_float(row.rolling_low_20d_prev)
+    if (
+        dxa is None or rsi is None
+        or today_low is None or rb_low is None
+    ):
+        return 0.0
+    if rb_low == 0:
+        return 0.0
+    fresh = 1.0 / (dxa + 1)
+    severity = max(0.0, 60.0 - rsi)
+    decisiveness = (rb_low - today_low) / rb_low
+    return fresh * severity * decisiveness

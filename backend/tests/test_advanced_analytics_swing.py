@@ -492,3 +492,95 @@ def test_rank_sideways_nan_returns_inf() -> None:
         rolling_low_20d_prev=None, rolling_high_20d_prev=None,
     )
     assert rank_sideways(row) == float("inf")
+
+
+# ---------------------------------------------------------------
+# Task 9: passes_bearish + rank_bearish
+# ---------------------------------------------------------------
+
+from advanced_analytics_swing import (
+    passes_bearish,
+    rank_bearish,
+)
+
+
+def _bearish_row(
+    market: str = "india", **overrides: Any
+) -> AdvancedRow:
+    base = dict(
+        ticker="YESBANK.NS",
+        today_ltp=20.0,
+        today_low=19.5,
+        sma_50=22.0,
+        sma_200=25.0,
+        death_cross_days_ago=10,
+        rsi=45.0,
+        rsi_3d_ago=55.0,
+        rsi_max_10d=65.0,
+        rolling_low_20d_prev=20.0,
+        week_52_low=18.0,
+        today_not=80_000_000.0,
+    )
+    base.update(overrides)
+    return AdvancedRow(**base)  # type: ignore[arg-type]
+
+
+def test_passes_bearish_happy_path() -> None:
+    assert passes_bearish(_bearish_row(), "india") is True
+
+
+def test_passes_bearish_rejects_stale_death_cross() -> None:
+    row = _bearish_row(death_cross_days_ago=100)
+    assert passes_bearish(row, "india") is False
+
+
+def test_passes_bearish_rejects_no_death_cross() -> None:
+    row = _bearish_row(
+        sma_50=25.0, sma_200=22.0, death_cross_days_ago=None,
+    )
+    assert passes_bearish(row, "india") is False
+
+
+def test_passes_bearish_rejects_weak_rsi_history() -> None:
+    """RSI never reached 60 in last 10d → not a rollover."""
+    row = _bearish_row(rsi_max_10d=55.0)
+    assert passes_bearish(row, "india") is False
+
+
+def test_passes_bearish_rejects_rsi_not_rolled_over() -> None:
+    """Today's RSI still >= 50."""
+    row = _bearish_row(rsi=55.0)
+    assert passes_bearish(row, "india") is False
+
+
+def test_passes_bearish_rejects_rsi_recovering() -> None:
+    """Today's RSI > 3-days-ago → recovering, not declining."""
+    row = _bearish_row(rsi=48.0, rsi_3d_ago=40.0)
+    assert passes_bearish(row, "india") is False
+
+
+def test_passes_bearish_rejects_no_lower_low() -> None:
+    """today_low >= 20-day prev low → no decisive break."""
+    row = _bearish_row(today_low=21.0, rolling_low_20d_prev=20.0)
+    assert passes_bearish(row, "india") is False
+
+
+def test_passes_bearish_rejects_at_52w_floor() -> None:
+    row = _bearish_row(today_ltp=18.5, week_52_low=18.0)
+    assert passes_bearish(row, "india") is False
+
+
+def test_passes_bearish_applies_liquidity_floor() -> None:
+    row = _bearish_row(today_not=10_000_000.0)
+    assert passes_bearish(row, "india") is False
+
+
+def test_rank_bearish_higher_for_fresher_cross() -> None:
+    fresh = _bearish_row(death_cross_days_ago=2)
+    stale = _bearish_row(death_cross_days_ago=50)
+    assert rank_bearish(fresh) > rank_bearish(stale)
+
+
+def test_rank_bearish_nan_returns_zero() -> None:
+    row = _bearish_row(death_cross_days_ago=None)
+    assert rank_bearish(row) == 0.0
