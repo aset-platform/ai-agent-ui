@@ -248,6 +248,19 @@ export const FE = {
     `aa-active-filter-chip-${key}-x`,
   aaActiveFilterClearAll: "aa-active-filter-clear-all",
 
+  // ── Advanced Analytics — Swing Setups tab ───────
+  swingSetupsTab: "swing-setups-tab",
+  swingRegimePills: "swing-regime-pills",
+  swingRegimePill: (regime: "bull" | "sideways" | "bearish") =>
+    `swing-regime-pill-${regime}`,
+  swingMethodologyPanel: "swing-methodology-panel",
+  swingMethodologyToggle: "swing-methodology-toggle",
+  swingMethodologyNotes: "swing-methodology-notes",
+  swingTable: "swing-table",
+  swingEmpty: "swing-empty",
+  swingLoading: "swing-loading",
+  swingError: "swing-error",
+
   // ── Algo Trading (Slice 0 of the epic) ──────────
   algoTradingHeading: "algo-trading-heading",
   algoTradingTabs: "algo-trading-tabs",

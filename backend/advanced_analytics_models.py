@@ -124,6 +124,20 @@ class AdvancedRow(BaseModel):
     event: str | None = None
     event_date: str | None = None  # ISO 8601 UTC ``Z`` suffix
 
+    # Swing-setup computed columns (Task 2-4 of plan).
+    # OHLCV today snapshot for swing setups (lower-low break gate).
+    today_low: float | None = None
+    death_cross_days_ago: int | None = None
+    rolling_low_20d_prev: float | None = None
+    rolling_high_20d_prev: float | None = None
+    rsi_3d_ago: float | None = None
+    rsi_max_10d: float | None = None
+
+    # Recommendation-engine join (Task 10 of plan).
+    rec_category: str | None = None
+    rec_severity: str | None = None
+    rec_expected_return_pct: float | None = None
+
 
 class AdvancedReportResponse(BaseModel):
     """Paginated response for any of the 7 reports."""
@@ -133,3 +147,48 @@ class AdvancedReportResponse(BaseModel):
     page: int = 1
     page_size: int = 25
     stale_tickers: list[StaleTicker] = Field(default_factory=list)
+
+
+class SwingMethodologyGate(BaseModel):
+    """One row of the methodology panel — a single filter gate."""
+
+    label: str
+    rule: str
+    why: str
+
+
+class SwingMethodologyRank(BaseModel):
+    """Ranking formula descriptor for a swing regime."""
+
+    formula: str
+    direction: Literal["ASC", "DESC"]
+    cap: int
+    degraded: str | None = None
+
+
+class SwingMethodology(BaseModel):
+    """Methodology block surfaced both inline on the swing-setups
+    response and standalone at ``/swing-setups/methodology``.
+    Mirror of ``advanced_analytics_swing.build_methodology()``.
+    """
+
+    regime: Literal["bull", "sideways", "bearish"]
+    summary: str
+    gates: list[SwingMethodologyGate]
+    rank: SwingMethodologyRank
+
+
+class SwingSetupsResponse(BaseModel):
+    """Paginated regime watchlist + methodology + degraded-rec
+    metadata. Returned by ``GET /swing-setups``.
+    """
+
+    rows: list[AdvancedRow]
+    total: int
+    regime: Literal["bull", "sideways", "bearish"]
+    as_of: str
+    rec_gate_applied: bool
+    rec_run_id: str | None = None
+    rec_run_date: str | None = None
+    notes: list[str] = Field(default_factory=list)
+    methodology: SwingMethodology

@@ -263,6 +263,12 @@ def create_recommendation_router() -> APIRouter:
         cache.invalidate(
             f"cache:portfolio:recs:{uid}:*",
         )
+        # Bust the bull-regime swing-setups cache for this user
+        # since a fresh rec run flips ``rec_gate_applied`` and
+        # can change which tickers pass the rec-category gate.
+        cache.invalidate(
+            f"cache:advanced_analytics:swing-setups:bull:{uid}:*",
+        )
 
         # Pick the primary result: first with a run_id
         primary = next(

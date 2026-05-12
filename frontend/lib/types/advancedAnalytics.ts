@@ -88,6 +88,17 @@ export interface AdvancedRow {
   prom_hld: number | null;
   event: string | null;
   event_date: string | null;
+  // -- Swing-setup computed columns (backend Tasks 2-5) --
+  today_low: number | null;
+  death_cross_days_ago: number | null;
+  rolling_low_20d_prev: number | null;
+  rolling_high_20d_prev: number | null;
+  rsi_3d_ago: number | null;
+  rsi_max_10d: number | null;
+  // -- Rec-engine join (backend Task 10) --
+  rec_category: string | null;
+  rec_severity: string | null;
+  rec_expected_return_pct: number | null;
 }
 
 export interface AdvancedReportResponse {
@@ -122,15 +133,20 @@ export const ADVANCED_REPORT_ORDER: AdvancedReportName[] = [
  *  Help tab. Keep AdvancedReportName separate — it mirrors
  *  the backend endpoint set and drives RSC pre-fetch + URL
  *  validation. */
-export type AdvancedTabId = AdvancedReportName | "help";
+export type AdvancedTabId =
+  | AdvancedReportName
+  | "swing-setups"
+  | "help";
 
 export const ADVANCED_TAB_LABELS: Record<AdvancedTabId, string> = {
   ...ADVANCED_REPORT_LABELS,
+  "swing-setups": "Swing Setups",
   help: "Help",
 };
 
 export const ADVANCED_TAB_ORDER: AdvancedTabId[] = [
   ...ADVANCED_REPORT_ORDER,
+  "swing-setups",
   "help",
 ];
 

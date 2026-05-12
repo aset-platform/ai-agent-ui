@@ -45,7 +45,7 @@ import logging
 import math
 from datetime import date
 from io import StringIO
-from typing import Literal
+from typing import Any, Literal
 
 import pandas as pd
 from advanced_analytics_filters import (
@@ -58,6 +58,19 @@ from advanced_analytics_models import (
     AdvancedReportResponse,
     AdvancedRow,
     StaleTicker,
+    SwingMethodology,
+    SwingSetupsResponse,
+)
+from advanced_analytics_swing import (
+    REGIMES,
+    SWING_CAP,
+    build_methodology,
+    passes_bearish,
+    passes_bull,
+    passes_sideways,
+    rank_bearish,
+    rank_bull,
+    rank_sideways,
 )
 from cache import TTL_STABLE, get_cache
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -361,6 +374,85 @@ def _golden_cross_days_ago(ind: pd.DataFrame) -> int | None:
     return 999
 
 
+def _death_cross_days_ago(ind: pd.DataFrame) -> int | None:
+    """Trading days since SMA 50 last crossed BELOW SMA 200.
+
+    Mirror of :func:`_golden_cross_days_ago` with inverted
+    comparators.
+
+    Returns:
+        None — SMA 50 ≥ SMA 200 today (no death cross active).
+        0–N  — cross happened N trading rows back; 0 = today.
+        999  — SMA 50 has been below SMA 200 for the entire
+               window (established bearish, no cross visible).
+    """
+    s50 = ind["SMA_50"] if "SMA_50" in ind.columns else None
+    s200 = ind["SMA_200"] if "SMA_200" in ind.columns else None
+    if s50 is None or s200 is None:
+        return None
+
+    last50 = s50.iloc[-1]
+    last200 = s200.iloc[-1]
+    if pd.isna(last50) or pd.isna(last200) or last50 >= last200:
+        return None
+
+    n = len(ind)
+    for i in range(n - 1, 0, -1):
+        v50, v200 = s50.iloc[i], s200.iloc[i]
+        p50, p200 = s50.iloc[i - 1], s200.iloc[i - 1]
+        if pd.isna(v50) or pd.isna(v200) or pd.isna(p50) or pd.isna(p200):
+            return 999
+        if v50 < v200 and p50 >= p200:
+            return (n - 1) - i
+
+    return 999
+
+
+def _rolling_band_20d_prev(
+    ohlcv: pd.DataFrame,
+) -> tuple[float | None, float | None]:
+    """20-day rolling (low, high) EXCLUDING the last row (today).
+
+    Returns (None, None) when fewer than 21 rows of history are
+    available — caller cannot use the band for breakout detection
+    without a clean prior window.
+    """
+    if "low" not in ohlcv.columns or "high" not in ohlcv.columns:
+        return (None, None)
+    if len(ohlcv) < 21:
+        return (None, None)
+    prev_window = ohlcv.iloc[-21:-1]
+    low = prev_window["low"].min(skipna=True)
+    high = prev_window["high"].max(skipna=True)
+    return (
+        None if pd.isna(low) else float(low),
+        None if pd.isna(high) else float(high),
+    )
+
+
+def _rsi_lookback(
+    ind: pd.DataFrame,
+) -> tuple[float | None, float | None, float | None]:
+    """Return (today_rsi, rsi_3d_ago, rsi_max_10d) for the bearish
+    rollover detector. Any value not computable safely is None.
+    """
+    if "RSI_14" not in ind.columns or len(ind) == 0:
+        return (None, None, None)
+    s = ind["RSI_14"]
+    today = s.iloc[-1]
+    today_val = None if pd.isna(today) else float(today)
+    three_ago_val: float | None
+    if len(s) < 4:
+        three_ago_val = None
+    else:
+        v = s.iloc[-4]
+        three_ago_val = None if pd.isna(v) else float(v)
+    window = s.iloc[-min(10, len(s)):]
+    max_10 = window.max(skipna=True)
+    max_10_val = None if pd.isna(max_10) else float(max_10)
+    return (today_val, three_ago_val, max_10_val)
+
+
 def _load_indicators_latest(tickers: list[str]) -> pd.DataFrame:
     """Compute latest RSI-14, SMA-50, SMA-200 per ticker.
 
@@ -405,6 +497,7 @@ def _load_indicators_latest(tickers: list[str]) -> pd.DataFrame:
         try:
             ind = _calculate_technical_indicators(ohlcv)
             last = ind.iloc[-1]
+            _, rsi_3d, rsi_max10 = _rsi_lookback(ind)
             result_rows.append(
                 {
                     "ticker": str(tkr),
@@ -412,6 +505,9 @@ def _load_indicators_latest(tickers: list[str]) -> pd.DataFrame:
                     "sma_50": last.get("SMA_50"),
                     "sma_200": last.get("SMA_200"),
                     "golden_cross_days_ago": _golden_cross_days_ago(ind),
+                    "death_cross_days_ago": _death_cross_days_ago(ind),
+                    "rsi_3d_ago": rsi_3d,
+                    "rsi_max_10d": rsi_max10,
                 }
             )
         except Exception as exc:
@@ -503,6 +599,97 @@ def _load_company(tickers: list[str]) -> pd.DataFrame:
         f"  WHERE ticker IN ({_ph(tickers)})"
         ") WHERE rn = 1",
     )
+
+
+async def _load_latest_recommendations(
+    user_id: str, tickers: list[str],
+) -> dict[str, Any]:
+    """Batched fetch of the user's most recent active recs.
+
+    Returns::
+
+        {
+            "run_id": str | None,
+            "run_date": str | None,   # ISO date string
+            "recs": {
+                ticker: (
+                    category, severity, expected_return_pct,
+                ),
+                ...
+            },
+        }
+
+    ``run_id`` / ``run_date`` are ``None`` when no eligible run
+    exists (degraded path — bull regime drops the rec gate; chip
+    in UI). Admin-test runs are excluded.
+    """
+    if not tickers:
+        return {"run_id": None, "run_date": None, "recs": {}}
+
+    from sqlalchemy import text
+
+    from stocks.repository import _pg_session
+
+    async with _pg_session() as session:
+        run_row = await session.execute(
+            text(
+                "SELECT run_id, run_date "
+                "FROM stocks.recommendation_runs "
+                "WHERE user_id = CAST(:uid AS UUID) "
+                "  AND run_type != 'admin_test' "
+                "ORDER BY run_date DESC "
+                "LIMIT 1"
+            ),
+            {"uid": user_id},
+        )
+        first = run_row.fetchone()
+        if first is None:
+            return {
+                "run_id": None, "run_date": None, "recs": {},
+            }
+        run_id, run_date = first
+
+        rec_rows = await session.execute(
+            text(
+                "SELECT ticker, category, severity, "
+                "       expected_return_pct "
+                "FROM stocks.recommendations "
+                "WHERE run_id = :rid "
+                "  AND status = 'active' "
+                "  AND ticker = ANY(:tk)"
+            ),
+            {"rid": str(run_id), "tk": tickers},
+        )
+        rows = rec_rows.fetchall()
+
+    recs: dict[str, tuple[str | None, str | None, float | None]] = {}
+    for r in rows:
+        recs[r[0]] = (r[1], r[2], r[3])
+    return {
+        "run_id": str(run_id),
+        "run_date": (
+            run_date.isoformat() if run_date else None
+        ),
+        "recs": recs,
+    }
+
+
+def _apply_rec_data(
+    rows: list[AdvancedRow],
+    recs: dict[str, tuple[str | None, str | None, float | None]],
+) -> None:
+    """Stamp ``rec_*`` fields onto each row in-place from the rec
+    map. Tickers absent from the map are left as ``None`` so the
+    bull-regime gate (or graceful degrade) handles them uniformly.
+    """
+    for r in rows:
+        rec = recs.get(r.ticker)
+        if rec is None:
+            continue
+        cat, sev, ret = rec
+        r.rec_category = cat
+        r.rec_severity = sev
+        r.rec_expected_return_pct = ret
 
 
 # ---------------------------------------------------------------
@@ -651,6 +838,20 @@ def _build_row(
             if v is not None and not (isinstance(v, float) and math.isnan(v))
         ]
 
+    # Swing-setup OHLCV-derived signals: today's low + 20d rolling band
+    # (prior window only, excludes today). Indicator-derived cousins
+    # (death_cross, rsi_3d_ago, rsi_max_10d) come in via indicators dict
+    # — pre-computed by _load_indicators_latest against the full
+    # indicators DataFrame.
+    today_low: float | None = None
+    rb_low: float | None = None
+    rb_high: float | None = None
+    if ohlcv_g is not None and not ohlcv_g.empty:
+        last_low = ohlcv_g["low"].iloc[-1]
+        if not (isinstance(last_low, float) and math.isnan(last_low)):
+            today_low = _f(last_low)
+        rb_low, rb_high = _rolling_band_20d_prev(ohlcv_g)
+
     dv_qty: list[float] = []
     dpc: list[float] = []
     if delivery_g is not None and not delivery_g.empty:
@@ -701,6 +902,14 @@ def _build_row(
         golden_cross_days_ago=_i(
             (indicators or {}).get("golden_cross_days_ago")
         ),
+        today_low=today_low,
+        death_cross_days_ago=_i(
+            (indicators or {}).get("death_cross_days_ago")
+        ),
+        rolling_low_20d_prev=rb_low,
+        rolling_high_20d_prev=rb_high,
+        rsi_3d_ago=_f((indicators or {}).get("rsi_3d_ago")),
+        rsi_max_10d=_f((indicators or {}).get("rsi_max_10d")),
         week_52_high=week_52_high,
         week_52_low=week_52_low,
         away_from_52week_high=away,
@@ -1032,6 +1241,117 @@ async def _compute_report(
     payload = body.model_dump_json()
     cache.set(inner_ck, payload, ttl=TTL_STABLE)
     return Response(content=payload, media_type="application/json")
+
+
+# ---------------------------------------------------------------
+# Swing-setups orchestrator
+# ---------------------------------------------------------------
+
+# Default sort direction per regime; bull/bearish rank scores
+# favour the largest value (DESC), sideways favours the tightest
+# (smallest) coil score (ASC).
+_REGIME_DEFAULT_DIR: dict[str, str] = {
+    "bull": "desc",
+    "sideways": "asc",
+    "bearish": "desc",
+}
+
+
+async def _compute_swing_setup(
+    user: UserContext,
+    *,
+    regime: str,
+    market: str,
+    as_of: date,
+    page: int,
+    page_size: int,
+    sort_key: str | None,
+    sort_dir: str | None,
+) -> SwingSetupsResponse:
+    """Pull cached row set for *user*, apply rec join, regime
+    filter, regime rank, cap + paginate. Returns a fully formed
+    response with methodology block.
+    """
+    if regime not in REGIMES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown regime: {regime}",
+        )
+
+    rows = await _cached_full_rows(user, as_of)
+
+    # Optional market filter — mirrors the existing AA ``market``
+    # query parameter so swing-setups respects the same ".NS / .BO
+    # vs US" split the rest of Advanced Analytics already uses.
+    if market in ("india", "us"):
+        rows = [
+            r for r in rows
+            if detect_market(r.ticker) == market
+        ]
+
+    # Rec join — single batched PG fetch, then in-place stamp.
+    tickers = [r.ticker for r in rows]
+    rec_payload = await _load_latest_recommendations(
+        user_id=user.user_id, tickers=tickers,
+    )
+    rec_gate_applied = rec_payload["run_id"] is not None
+    _apply_rec_data(rows, rec_payload["recs"])
+
+    # Regime filter.
+    if regime == "bull":
+        rows = [r for r in rows if passes_bull(r, rec_gate_applied)]
+    elif regime == "sideways":
+        rows = [r for r in rows if passes_sideways(r, market)]
+    else:  # bearish
+        rows = [r for r in rows if passes_bearish(r, market)]
+
+    # Rank — Phase A always uses the regime-defined rank function.
+    # The ``sort_key`` arg is accepted for future per-column sort
+    # support but ignored for now (regime rank is the canonical
+    # ordering and avoids drift between cap-list and UI sort).
+    default_dir = _REGIME_DEFAULT_DIR[regime]
+    if regime == "bull":
+        scored = [
+            (rank_bull(r, rec_gate_applied), r) for r in rows
+        ]
+    elif regime == "sideways":
+        scored = [(rank_sideways(r), r) for r in rows]
+    else:
+        scored = [(rank_bearish(r), r) for r in rows]
+    scored.sort(
+        key=lambda kr: kr[0], reverse=default_dir == "desc",
+    )
+    rows = [r for _, r in scored]
+
+    # Cap to SWING_CAP regardless of page_size.
+    rows = rows[:SWING_CAP]
+    total = len(rows)
+
+    # Paginate the capped list.
+    start = max(0, (page - 1) * page_size)
+    end = start + page_size
+    page_rows = rows[start:end]
+
+    notes: list[str] = []
+    if regime == "bull" and not rec_gate_applied:
+        notes.append(
+            "Recommendation gate not applied — no rec run "
+            "this month"
+        )
+
+    return SwingSetupsResponse(
+        rows=page_rows,
+        total=total,
+        regime=regime,  # type: ignore[arg-type]
+        as_of=as_of.isoformat(),
+        rec_gate_applied=rec_gate_applied,
+        rec_run_id=rec_payload["run_id"],
+        rec_run_date=rec_payload["run_date"],
+        notes=notes,
+        methodology=SwingMethodology.model_validate(
+            build_methodology(regime),  # type: ignore[arg-type]
+        ),
+    )
 
 
 # ---------------------------------------------------------------
@@ -1397,5 +1717,92 @@ def create_advanced_analytics_router() -> APIRouter:
             methods=["GET"],
             name=(f"advanced_analytics_" f"{report.replace('-', '_')}_export"),
         )
+
+    # -------- Swing Setups --------
+
+    @router.get(
+        "/swing-setups/methodology",
+        response_model=SwingMethodology,
+        name="advanced_analytics_swing_methodology",
+    )
+    async def get_swing_methodology(
+        regime: Literal["bull", "sideways", "bearish"] = Query(...),
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> SwingMethodology:
+        return SwingMethodology.model_validate(
+            build_methodology(regime),
+        )
+
+    @router.get(
+        "/swing-setups",
+        response_model=SwingSetupsResponse,
+        name="advanced_analytics_swing_setups",
+    )
+    async def get_swing_setups(
+        user: UserContext = Depends(pro_or_superuser),
+        regime: Literal["bull", "sideways", "bearish"] = Query(...),
+        market: str = Query(
+            "all", pattern="^(all|india|us)$",
+        ),
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+        sort_key: str | None = Query(None),
+        sort_dir: str = Query(
+            "desc", pattern="^(asc|desc)$",
+        ),
+    ) -> SwingSetupsResponse:
+        try:
+            cache = get_cache()
+            as_of = _effective_trading_date()
+            ck = (
+                f"cache:advanced_analytics:swing-setups:"
+                f"{regime}:{user.user_id}:{market}:"
+                f"p{page}:ps{page_size}:"
+                f"sk{sort_key or ''}:sd{sort_dir}"
+            )
+            blob = cache.get(ck)
+            if blob is not None:
+                try:
+                    return SwingSetupsResponse.model_validate_json(
+                        blob,
+                    )
+                except Exception:  # pragma: no cover
+                    _logger.warning(
+                        "swing-setups cache parse failed",
+                        exc_info=True,
+                    )
+
+            result = await _compute_swing_setup(
+                user=user,
+                regime=regime,
+                market=market,
+                as_of=as_of,
+                page=page,
+                page_size=page_size,
+                sort_key=sort_key,
+                sort_dir=sort_dir,
+            )
+            try:
+                cache.set(
+                    ck,
+                    result.model_dump_json(),
+                    ttl=TTL_STABLE,
+                )
+            except Exception:  # pragma: no cover
+                _logger.warning(
+                    "swing-setups cache set failed",
+                    exc_info=True,
+                )
+            return result
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _logger.exception(
+                "advanced_analytics swing-setups failed: %s", exc,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="advanced_analytics swing-setups failed",
+            )
 
     return router

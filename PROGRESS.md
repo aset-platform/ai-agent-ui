@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-05-12 (late evening) — Swing Setups tab (Advanced Analytics)
+
+**Branch:** `feature/aa-swing-setups` (26-task plan executed end-to-end via subagent-driven development; PR pending).
+
+### What shipped
+
+New eighth tab under `/v1/advanced-analytics/` — **Swing Setups** — emits three ranked, user-scoped watchlists per trading day: Bull / Sideways / Bearish. Each regime has its own filter set and rank formula encoded in `backend/advanced_analytics_swing.py` — the **single source of truth** that both the route consumes AND the on-page methodology panel renders. Tune thresholds in ONE place; on-page explanation and filter behaviour move in lockstep. A drift snapshot test (`test_methodology_thresholds_match_filter_constants`) fails loudly if they ever de-sync.
+
+### Regime rules
+
+- **Bull-swing**: SMA stack OR fresh golden cross ≤ 30d, volume sweet spot (2–5×), delivery confirmation, 20d delivery accumulation, RSI < 70, pscore ≥ 5, pledged < 10%, room to run (price < 95% of 52w-high), rec-engine confirms (category ∈ `{offensive, value, growth, hold_accumulate}` — pinned 2026-05-12 from DB inspection). Graceful degrade when user has no rec run this month (chip + strike-through). Rank: `max(rec_expected_return_pct, 0) × x_dv_20d × today_x_vol` DESC.
+- **Sideways-swing**: MA convergence < 5%, price within 3% of SMA-50, RSI 40–60, neutral volume (0.7–1.3×), liquidity floor (₹5cr / $600k), pscore ≥ 4. Rank: distance-to-band-edge fraction ASC (nearest edge ranks highest).
+- **Bearish-swing**: Active death cross within 60d, RSI rollover, lower-low break, room to fall, liquidity floor. Rank: `(1 / (death_cross_days_ago + 1)) × max(0, 60 − today_rsi) × ((rb_low − today_low) / rb_low)` DESC.
+
+### How it composes
+
+Reuses the existing AA pipeline: `_cached_full_rows(user, as_of)` provides the row set, swing orchestrator adds rec join + regime filter + regime rank + SWING_CAP=25 + paginate. No new Iceberg tables, no new pipeline step. AdvancedRow extended with 9 optional fields — default None preserves the 7 existing report tabs unchanged.
+
+### Test surface
+
+- 78 backend tests covering 5 helpers, methodology module, 3 regimes' filter+rank, rec lookup (real-PG integration), apply_rec_data, response models, orchestrator (with cap + degraded path + unknown-regime), routes (auth, methodology block, regime-422), methodology↔filter drift snapshot.
+- 3 Playwright E2E tests: tab loads, regime switch swaps methodology copy, panel collapse persists across reload.
+
+### Plan execution
+
+Subagent-driven flow (implementer → spec reviewer → code reviewer per task). 26 tasks, ~14 SP estimate.
+
+Two plan corrections discovered at execution:
+1. Rec-engine categories are portfolio-action verbs (`offensive`/`value`/`growth`/`hold_accumulate`), not stock-rating as originally specced. Pinned by querying live DB via Task 0.
+2. Plan's Task 5 assumed `indicators` was a DataFrame in `_build_row`; reality is a dict from `_load_indicators_latest`. Implementer extended `_load_indicators_latest` to populate the 3 new indicator-derived keys.
+
+Spec: `docs/superpowers/specs/2026-05-12-swing-setups-design.md`.
+Plan: `docs/superpowers/plans/2026-05-12-swing-setups.md`.
+Architecture memory: `.serena/memories/shared/architecture/swing-setups-design.md`.
+
+---
+
 ## 2026-05-12 (evening) — ASETPLTFRM-383 daily-bar warmup for LiveRuntime
 
 **Branch:** `feature/algo-live-daily-bar-warmup` → squash-merged to `dev` as **PR #212** (commit `6f014dc`).

@@ -101,4 +101,27 @@ export class AdvancedAnalyticsPage extends BasePage {
   async clickPrev(report: AdvancedReport): Promise<void> {
     await this.tid(FE.advancedAnalyticsPrev(report)).click();
   }
+
+  /** Navigate directly to the Swing Setups tab. */
+  async gotoSwingSetups(): Promise<void> {
+    await super.goto("/advanced-analytics?tab=swing-setups");
+    await expect(this.heading()).toBeVisible({ timeout: 10_000 });
+  }
+
+  /** Regime-pill locator. */
+  swingPill(
+    regime: "bull" | "sideways" | "bearish",
+  ): Locator {
+    return this.tid(FE.swingRegimePill(regime));
+  }
+
+  /** Methodology panel locator. */
+  swingMethodologyPanel(): Locator {
+    return this.tid(FE.swingMethodologyPanel);
+  }
+
+  /** Collapse/expand toggle locator. */
+  swingMethodologyToggle(): Locator {
+    return this.tid(FE.swingMethodologyToggle);
+  }
 }
