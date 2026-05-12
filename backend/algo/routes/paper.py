@@ -37,12 +37,18 @@ class StartRunRequest(BaseModel):
     source: Literal["replay", "live-ws"] = "replay"
     """Tick source: 'replay' uses a JSONL fixture; 'live-ws' streams
     from the user's connected Kite WebSocket multiplexer."""
-    mode: Literal["paper", "live"] = "paper"
-    """Runtime selector — 'paper' → PaperRuntime; 'live' →
-    LiveRuntime (requires algo.live_caps.live_orders_enabled
-    for the strategy). The ALGO_LIVE_DRY_RUN env variable then
-    decides whether KiteAdapter short-circuits to synthetic
-    responses (dry-run) or hits real Kite (real money)."""
+    mode: Literal["paper", "dryrun", "live"] = "paper"
+    """Runtime selector (ASETPLTFRM-377 — three first-class values):
+      * 'paper'  → PaperRuntime (synthetic broker, no Kite calls).
+      * 'dryrun' → LiveRuntime with KiteClient(dry_run=True).
+                   Real Kite WS ticks but order placement is
+                   short-circuited to synthetic responses. Used
+                   by the Strategies → Dry-run tab.
+      * 'live'   → LiveRuntime with KiteClient(dry_run=False).
+                   Real money. Used by the Live page.
+    The dry_run flag is pinned at KiteClient construction; the
+    per-user Redis flag (algo:dry_run:{user_id}) is no longer
+    consulted from this endpoint."""
     initial_capital_inr: Decimal = Field(
         default=Decimal("100000.00"), ge=Decimal("1000.00"),
     )
@@ -362,7 +368,7 @@ def create_paper_router() -> APIRouter:
         from backend.algo.live.caps_repo import CapsRepo
         from backend.algo.live.runtime import LiveNotEnabledError
 
-        if body.mode == "live":
+        if body.mode in ("live", "dryrun"):
             caps_repo = CapsRepo()
             caps = await caps_repo.get(user_id, body.strategy_id)
             live_enabled = bool(
@@ -403,20 +409,35 @@ def create_paper_router() -> APIRouter:
                     ),
                 )
 
-            # KiteClient now resolves dry_run from the per-user
-            # Redis flag automatically when user_id is passed
-            # (see resolve_dry_run_for_user). The async is_armed
-            # call here is kept only to log the resolved state
-            # for the caller's audit trail.
-            from backend.algo.live.dry_run_flag import is_armed
-            dry_run_user = await is_armed(
-                user_id, get_async_redis(),
-            )
+            # ASETPLTFRM-377 — pin dry_run at construction time.
+            # mode='live'   → dry_run=False (real money).
+            # mode='dryrun' → dry_run=True  (synthetic, real WS).
+            # No user_id kwarg: that would re-introduce the
+            # per-user Redis resolver and re-couple this path to
+            # the Strategies → Dry-run toggle. Wrong UX surface.
+            pinned_dry_run = body.mode == "dryrun"
             kite = KiteClient(
                 api_key=creds["api_key"],
                 access_token=creds["access_token"],
-                user_id=user_id,
+                dry_run=pinned_dry_run,
             )
+
+            # Defence-in-depth: on the Live (real-money) path,
+            # confirm the KiteClient really did pin dry_run=False
+            # before we hand it to LiveRuntime. Future regressions
+            # that accidentally re-introduce Redis resolution
+            # surface here as a 500 instead of silently leaking
+            # dry-run into real money.
+            if body.mode == "live" and kite._dry_run is not False:
+                _logger.error(
+                    "dry-run leak detected on Live path for "
+                    "user=%s strategy=%s — refusing to spawn",
+                    user_id, body.strategy_id,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="dry-run leak on live path",
+                )
 
             # Create algo.runs row up-front so LiveRuntime has
             # a run_id for in-flight tracking. Live mode has no
