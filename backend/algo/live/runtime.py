@@ -649,10 +649,22 @@ class LiveRuntime:
         )
         signal = signal.model_copy(update={"qty": effective_qty})
 
+        # PR #4 — propagate remaining daily-cap budget so the
+        # broker layer can short-circuit freeze-chunked orders
+        # that would breach max_orders_per_day. Zero/negative
+        # means "no cap configured" (KiteClient ignores it).
+        max_orders = int(current_caps.get("max_orders_per_day", 0))
+        orders_today = int(day_state.get("orders_count_today", 0))
+        daily_cap_remaining = (
+            max(0, max_orders - orders_today) if max_orders > 0
+            else None
+        )
+
         return await self._submit_order(
             signal=signal,
             last_price=last_price,
             last_price_ts=last_price_ts,
+            daily_cap_remaining=daily_cap_remaining,
         )
 
     # ----------------------------------------------------------
@@ -665,6 +677,7 @@ class LiveRuntime:
         signal: Signal,
         last_price: Decimal,
         last_price_ts: datetime | None = None,
+        daily_cap_remaining: int | None = None,
     ) -> int:
         """Submit one order to Kite. Returns 1 on success, 0 on error."""
         internal_order_id = str(uuid4())
@@ -752,6 +765,8 @@ class LiveRuntime:
                 user_id=self._user_id,
                 strategy_id=self._strategy.id,
                 internal_order_id=internal_order_id,
+                # PR #4 — daily-cap budget for freeze-chunk pre-check
+                daily_cap_remaining=daily_cap_remaining,
             )
         except Exception as exc:
             rejection_reason = str(exc)

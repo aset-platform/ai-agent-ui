@@ -25,7 +25,17 @@ from uuid import uuid4
 
 from kiteconnect import KiteConnect
 
-from backend.algo.broker.exceptions import LtpStaleError
+from backend.algo.broker.exceptions import (
+    DuplicateOrderError,
+    FreezeChunkExceedsDailyCapError,
+    LtpStaleError,
+)
+from backend.algo.broker.freeze_cache import (
+    default_for_bucket,
+    get_freeze_qty,
+    should_emit_fallback_event,
+)
+from backend.algo.broker.redis_keys import build_dedup_key
 
 _logger = logging.getLogger(__name__)
 
@@ -34,6 +44,24 @@ UTC = timezone.utc
 # Default chosen high enough to be effectively disabled on PR #1 ship.
 # Follow-up commit lowers to 5 after 24h soak (per spec §6 rollout).
 _DEFAULT_MAX_LTP_AGE_S = 999999
+
+# PR #4 — pre-submit dedup window. 0 disables the gate entirely.
+_DEFAULT_DEDUP_TTL_S = 60
+
+
+def _read_dedup_ttl_s() -> int:
+    """Read ALGO_DEDUP_TTL_S env var; default 60s. 0 disables."""
+    raw = os.environ.get("ALGO_DEDUP_TTL_S", "").strip()
+    if not raw:
+        return _DEFAULT_DEDUP_TTL_S
+    try:
+        return int(raw)
+    except ValueError:
+        _logger.warning(
+            "ALGO_DEDUP_TTL_S=%r is not an int — using default %d",
+            raw, _DEFAULT_DEDUP_TTL_S,
+        )
+        return _DEFAULT_DEDUP_TTL_S
 
 
 def _read_max_ltp_age_s() -> int:
@@ -132,12 +160,19 @@ class KiteClient:
         *,
         dry_run: bool | None = None,
         user_id: object | None = None,
+        redis_client: Any | None = None,
     ) -> None:
         self._api_key = api_key
         self._access_token = access_token
         self._kc = KiteConnect(api_key=api_key)
         if access_token:
             self._kc.set_access_token(access_token)
+        # PR #4 — Redis client used by the pre-submit dedup gate
+        # and the daily freeze-qty cache. Optional: when None we
+        # auto-discover from REDIS_URL on first need, and when that
+        # fails too we gracefully degrade (skip dedup, skip freeze
+        # cache writes — never fail-closed on infrastructure).
+        self._redis = redis_client
         # Resolution priority for dry_run:
         #   1. Explicit kwarg (highest — used by panic-close +
         #      tests that need to lock in real or synthetic).
@@ -162,6 +197,27 @@ class KiteClient:
     def dry_run(self) -> bool:
         """True when dry-run mode is active."""
         return self._dry_run
+
+    def _get_redis(self) -> Any | None:
+        """Lazy Redis resolver. Returns the injected client if any,
+        else auto-discovers via REDIS_URL. ``None`` when Redis is
+        unreachable — callers degrade gracefully.
+        """
+        if self._redis is not None:
+            return self._redis
+        try:
+            from auth.token_store import get_redis_client
+            redis_url = os.environ.get("REDIS_URL", "").strip()
+            if not redis_url:
+                return None
+            self._redis = get_redis_client(redis_url)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "KiteClient: lazy redis_client init failed: %s",
+                exc,
+            )
+            self._redis = None
+        return self._redis
 
     # ---- OAuth ----------------------------------------------------
 
@@ -259,6 +315,8 @@ class KiteClient:
         user_id: Any = None,
         strategy_id: Any = None,
         internal_order_id: str | None = None,
+        # ── Order-safety hardening (PR #4) ──────────────────
+        daily_cap_remaining: int | None = None,
     ) -> str:
         """Place a live order on Kite.  Returns ``kite_order_id``.
 
@@ -399,6 +457,151 @@ class KiteClient:
                 f"variety={variety!r} not supported in v2. "
                 f"Only 'regular' is allowed.",
             )
+
+        # ── Pre-submit dedup gate (PR #4 §3.4) ─────────────────
+        # Same (user, strategy, symbol, side, qty) inside the same
+        # minute → block. Cross-minute repeats are intentional. Dry-
+        # run already short-circuited above so we never see it here.
+        self._dedup_guard_or_raise(
+            user_id=user_id,
+            strategy_id=strategy_id,
+            symbol=tradingsymbol,
+            side=transaction_type,
+            qty=quantity,
+            events_sink=events_sink,
+            session_id=session_id,
+            internal_order_id=internal_order_id,
+        )
+
+        # ── Freeze-qty + chunking (PR #4 §3.5) ─────────────────
+        # When quantity exceeds the NSE per-order freeze cap, split
+        # into chunks. Daily-cap budget is checked BEFORE any chunk
+        # submission so the live cap isn't silently breached.
+        freeze_qty = self._resolve_freeze_qty(
+            symbol=tradingsymbol,
+            bucket=liquidity_bucket,
+            events_sink=events_sink,
+            session_id=session_id,
+            user_id=user_id,
+            strategy_id=strategy_id,
+        )
+        if freeze_qty > 0 and quantity > freeze_qty:
+            chunks = self._split_into_chunks(quantity, freeze_qty)
+            if (
+                daily_cap_remaining is not None
+                and daily_cap_remaining > 0
+                and len(chunks) > daily_cap_remaining
+            ):
+                _logger.warning(
+                    "place_order BLOCKED: chunked count=%d exceeds "
+                    "daily_cap_remaining=%d symbol=%s qty=%d "
+                    "freeze_qty=%d",
+                    len(chunks), daily_cap_remaining,
+                    tradingsymbol, quantity, freeze_qty,
+                )
+                raise FreezeChunkExceedsDailyCapError(
+                    f"Order qty={quantity} on {tradingsymbol!r} "
+                    f"requires {len(chunks)} chunks (freeze_qty="
+                    f"{freeze_qty}); only {daily_cap_remaining} "
+                    f"daily-cap slots remain.",
+                )
+            self._emit_freeze_chunked_event(
+                events_sink=events_sink,
+                session_id=session_id,
+                user_id=user_id,
+                strategy_id=strategy_id,
+                internal_order_id=internal_order_id,
+                symbol=tradingsymbol,
+                total_qty=quantity,
+                freeze_qty=freeze_qty,
+                chunk_qtys=chunks,
+            )
+            first_oid = ""
+            for idx, chunk_qty in enumerate(chunks):
+                oid = self._place_single_chunk(
+                    tradingsymbol=tradingsymbol,
+                    exchange=exchange,
+                    transaction_type=transaction_type,
+                    quantity=chunk_qty,
+                    order_type=order_type,
+                    product=product,
+                    variety=variety,
+                    price=price,
+                    tag=(
+                        f"{tag}-c{idx}" if tag else f"c{idx}"
+                    ),
+                    last_price=last_price,
+                    last_price_ts=last_price_ts,
+                    liquidity_bucket=liquidity_bucket,
+                    slippage_bps_applied=slippage_bps_applied,
+                    chunk_index=idx,
+                    chunk_total=len(chunks),
+                    events_sink=events_sink,
+                    session_id=session_id,
+                    user_id=user_id,
+                    strategy_id=strategy_id,
+                    internal_order_id=internal_order_id,
+                )
+                if idx == 0:
+                    first_oid = oid
+            return first_oid
+
+        # Single-chunk path — quantity within freeze cap.
+        return self._place_single_chunk(
+            tradingsymbol=tradingsymbol,
+            exchange=exchange,
+            transaction_type=transaction_type,
+            quantity=quantity,
+            order_type=order_type,
+            product=product,
+            variety=variety,
+            price=price,
+            tag=tag,
+            last_price=last_price,
+            last_price_ts=last_price_ts,
+            liquidity_bucket=liquidity_bucket,
+            slippage_bps_applied=slippage_bps_applied,
+            chunk_index=chunk_index,
+            chunk_total=chunk_total,
+            events_sink=events_sink,
+            session_id=session_id,
+            user_id=user_id,
+            strategy_id=strategy_id,
+            internal_order_id=internal_order_id,
+        )
+
+    def _place_single_chunk(
+        self,
+        *,
+        tradingsymbol: str,
+        exchange: str,
+        transaction_type: str,
+        quantity: int,
+        order_type: str,
+        product: str,
+        variety: str,
+        price: float,
+        tag: str,
+        last_price: float | None,
+        last_price_ts: datetime | None,
+        liquidity_bucket: str | None,
+        slippage_bps_applied: int | None,
+        chunk_index: int | None,
+        chunk_total: int | None,
+        events_sink: Callable[[dict], None] | None,
+        session_id: Any,
+        user_id: Any,
+        strategy_id: Any,
+        internal_order_id: str,
+    ) -> str:
+        """Submit one chunk to Kite and emit the audit event.
+
+        Shared inner helper used by both the single-shot path
+        (qty <= freeze_qty) and the multi-chunk loop. Identical
+        SDK behaviour either way; the only difference is whether
+        ``chunk_index`` / ``chunk_total`` are populated on the
+        emitted event.
+        """
         params: dict[str, Any] = {
             "tradingsymbol": tradingsymbol,
             "exchange": exchange,
@@ -427,9 +630,9 @@ class KiteClient:
         )
         _logger.info(
             "place_order: symbol=%s side=%s qty=%d "
-            "order_type=%s kite_order_id=%s",
+            "order_type=%s chunk=%s/%s kite_order_id=%s",
             tradingsymbol, transaction_type, quantity,
-            order_type, order_id,
+            order_type, chunk_index, chunk_total, order_id,
         )
         self._emit_submitted_event(
             events_sink=events_sink,
@@ -459,6 +662,158 @@ class KiteClient:
             },
         )
         return order_id
+
+    # ---- PR #4 helpers --------------------------------------------
+
+    @staticmethod
+    def _split_into_chunks(
+        quantity: int, freeze_qty: int,
+    ) -> list[int]:
+        """Split ``quantity`` into chunks each <= ``freeze_qty``.
+
+        Returns a list of ints summing to ``quantity``. The final
+        chunk is the remainder. Caller checks ``len(chunks)``
+        against the remaining daily-cap budget before submitting.
+        """
+        if freeze_qty <= 0 or quantity <= freeze_qty:
+            return [quantity]
+        chunks: list[int] = []
+        remaining = quantity
+        while remaining > freeze_qty:
+            chunks.append(freeze_qty)
+            remaining -= freeze_qty
+        if remaining > 0:
+            chunks.append(remaining)
+        return chunks
+
+    def _dedup_guard_or_raise(
+        self,
+        *,
+        user_id: Any,
+        strategy_id: Any,
+        symbol: str,
+        side: str,
+        qty: int,
+        events_sink: Callable[[dict], None] | None,
+        session_id: Any,
+        internal_order_id: str,
+    ) -> None:
+        """Acquire the SETNX dedup slot for this submission tuple.
+
+        Same-minute duplicate → emit ``order_duplicate_blocked`` +
+        raise ``DuplicateOrderError``. Redis unreachable or
+        ``ALGO_DEDUP_TTL_S=0`` → no-op (graceful degradation).
+        """
+        ttl_s = _read_dedup_ttl_s()
+        if ttl_s <= 0:
+            return
+        redis_client = self._get_redis()
+        if redis_client is None:
+            _logger.warning(
+                "place_order: dedup gate skipped — Redis "
+                "unreachable. symbol=%s qty=%d", symbol, qty,
+            )
+            return
+        dedup_key = build_dedup_key(
+            user_id=user_id,
+            strategy_id=strategy_id,
+            symbol=symbol,
+            side=side,
+            qty=qty,
+        )
+        try:
+            acquired = redis_client.set(
+                dedup_key, "1", nx=True, ex=ttl_s,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "place_order: dedup SETNX failed key=%s err=%s — "
+                "allowing order through (fail-open by design)",
+                dedup_key, exc,
+            )
+            return
+        if not acquired:
+            _logger.warning(
+                "place_order BLOCKED: duplicate within %ds "
+                "symbol=%s side=%s qty=%d key=%s",
+                ttl_s, symbol, side, qty, dedup_key,
+            )
+            self._emit_duplicate_blocked_event(
+                events_sink=events_sink,
+                session_id=session_id,
+                user_id=user_id,
+                strategy_id=strategy_id,
+                internal_order_id=internal_order_id,
+                symbol=symbol,
+                side=side,
+                qty=qty,
+                dedup_key=dedup_key,
+                ttl_s=ttl_s,
+            )
+            raise DuplicateOrderError(
+                f"Duplicate submission within {ttl_s}s for "
+                f"symbol={symbol!r} side={side} qty={qty}",
+            )
+
+    def _resolve_freeze_qty(
+        self,
+        *,
+        symbol: str,
+        bucket: str | None,
+        events_sink: Callable[[dict], None] | None,
+        session_id: Any,
+        user_id: Any,
+        strategy_id: Any,
+    ) -> int:
+        """Return the effective freeze_qty for ``symbol``.
+
+        Order of preference:
+        1. Kite SDK value (cached in Redis hash per IST day).
+        2. Defensive default keyed on ``liquidity_bucket``
+           (largecap 500k / midcap 100k / smallcap 50k /
+           unknown 50k).
+
+        On the FIRST fallback per (symbol, IST date) emit a
+        ``freeze_qty_fallback_applied`` event so ops can audit
+        how often we're guessing. Repeats in the same day are
+        suppressed via a SETNX flag.
+        """
+        redis_client = self._get_redis()
+        try:
+            kite_freeze = get_freeze_qty(
+                kc=self._kc,
+                redis_client=redis_client,
+                symbol=symbol,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "freeze_qty resolve failed symbol=%s err=%s — "
+                "falling back to bucket default", symbol, exc,
+            )
+            kite_freeze = 0
+        if kite_freeze and kite_freeze > 0:
+            return int(kite_freeze)
+        # Fallback path.
+        fallback = default_for_bucket(bucket)
+        # Bucket label used in the event mirrors the lookup key so
+        # ops sees exactly which row of _NSE_DEFAULTS was applied.
+        bucket_label = (
+            bucket if bucket in ("largecap", "midcap", "smallcap")
+            else "unknown"
+        )
+        if should_emit_fallback_event(
+            redis_client=redis_client, symbol=symbol,
+        ):
+            self._emit_freeze_fallback_event(
+                events_sink=events_sink,
+                session_id=session_id,
+                user_id=user_id,
+                strategy_id=strategy_id,
+                symbol=symbol,
+                bucket=bucket_label,
+                fallback_freeze_qty=fallback,
+            )
+        return fallback
 
     # ---- Order-safety event helpers (PR #1) ---------------------
 
@@ -632,6 +987,132 @@ class KiteClient:
         except Exception:  # noqa: BLE001
             _logger.warning(
                 "order_ltp_stale_blocked emit failed for symbol=%s",
+                symbol, exc_info=True,
+            )
+
+    # ---- PR #4 event helpers ------------------------------------
+
+    def _emit_duplicate_blocked_event(
+        self,
+        *,
+        events_sink: Callable[[dict], None] | None,
+        session_id: Any,
+        user_id: Any,
+        strategy_id: Any,
+        internal_order_id: str,
+        symbol: str,
+        side: str,
+        qty: int,
+        dedup_key: str,
+        ttl_s: int,
+    ) -> None:
+        if events_sink is None:
+            return
+        from backend.algo.backtest.event_writer import event_row
+        payload = {
+            "internal_order_id": internal_order_id,
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "dedup_key": dedup_key,
+            "dedup_ttl_s": ttl_s,
+            "reason": "duplicate_within_window",
+        }
+        sid = session_id if session_id is not None else uuid4()
+        uid = user_id if user_id is not None else uuid4()
+        try:
+            row = event_row(
+                session_id=sid,
+                user_id=uid,
+                strategy_id=strategy_id,
+                mode="live",
+                type_="order_duplicate_blocked",
+                payload=payload,
+            )
+            events_sink(row)
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "order_duplicate_blocked emit failed symbol=%s",
+                symbol, exc_info=True,
+            )
+
+    def _emit_freeze_chunked_event(
+        self,
+        *,
+        events_sink: Callable[[dict], None] | None,
+        session_id: Any,
+        user_id: Any,
+        strategy_id: Any,
+        internal_order_id: str,
+        symbol: str,
+        total_qty: int,
+        freeze_qty: int,
+        chunk_qtys: list[int],
+    ) -> None:
+        if events_sink is None:
+            return
+        from backend.algo.backtest.event_writer import event_row
+        payload = {
+            "internal_order_id": internal_order_id,
+            "symbol": symbol,
+            "total_qty": total_qty,
+            "freeze_qty": freeze_qty,
+            "chunk_qtys": chunk_qtys,
+            "chunk_total": len(chunk_qtys),
+        }
+        sid = session_id if session_id is not None else uuid4()
+        uid = user_id if user_id is not None else uuid4()
+        try:
+            row = event_row(
+                session_id=sid,
+                user_id=uid,
+                strategy_id=strategy_id,
+                mode="live",
+                type_="order_freeze_chunked",
+                payload=payload,
+            )
+            events_sink(row)
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "order_freeze_chunked emit failed symbol=%s",
+                symbol, exc_info=True,
+            )
+
+    def _emit_freeze_fallback_event(
+        self,
+        *,
+        events_sink: Callable[[dict], None] | None,
+        session_id: Any,
+        user_id: Any,
+        strategy_id: Any,
+        symbol: str,
+        bucket: str,
+        fallback_freeze_qty: int,
+    ) -> None:
+        if events_sink is None:
+            return
+        from backend.algo.backtest.event_writer import event_row
+        payload = {
+            "symbol": symbol,
+            "bucket": bucket,
+            "fallback_freeze_qty": fallback_freeze_qty,
+            "reason": "kite_freeze_qty_null_or_zero",
+        }
+        sid = session_id if session_id is not None else uuid4()
+        uid = user_id if user_id is not None else uuid4()
+        try:
+            row = event_row(
+                session_id=sid,
+                user_id=uid,
+                strategy_id=strategy_id,
+                mode="live",
+                type_="freeze_qty_fallback_applied",
+                payload=payload,
+            )
+            events_sink(row)
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "freeze_qty_fallback_applied emit failed symbol=%s",
                 symbol, exc_info=True,
             )
 

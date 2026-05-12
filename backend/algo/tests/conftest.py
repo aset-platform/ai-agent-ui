@@ -101,3 +101,40 @@ class _StubKiteTicker:
 _kc_stub.KiteConnect = _StubKiteConnect  # type: ignore[attr-defined]
 _kc_stub.KiteTicker = _StubKiteTicker  # type: ignore[attr-defined]
 sys.modules.setdefault("kiteconnect", _kc_stub)
+
+
+# ---------------------------------------------------------------
+# PR #4 dedup gate — disabled by default in unit tests
+# ---------------------------------------------------------------
+# The pre-submit dedup guard (spec §3.4) blocks same-minute repeats
+# of the same submission tuple. Several pre-existing KiteClient
+# tests (PR #1: test_kite_client_safety.py) intentionally re-use
+# the same (symbol, side, qty) across cases inside the same minute
+# and would now get DuplicateOrderError instead of the expected
+# happy path. Set ALGO_DEDUP_TTL_S=0 by default so the gate is
+# off for the bulk of unit tests; the dedup-specific test file
+# overrides this where required via ``patch.dict(os.environ, ...)``.
+
+import pytest  # noqa: E402
+
+
+def pytest_configure(config):
+    """Register custom markers so `--strict-markers` stays clean."""
+    config.addinivalue_line(
+        "markers",
+        "algo_dedup_enabled: opt back into the pre-submit dedup "
+        "gate (default OFF in unit tests)",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _algo_dedup_disabled_by_default(monkeypatch, request):
+    """Default ALGO_DEDUP_TTL_S=0 unless the test opts in.
+
+    Opt back in by marking the test with
+    ``@pytest.mark.algo_dedup_enabled`` or setting the env var
+    inside the test (the test-local patch wins).
+    """
+    if request.node.get_closest_marker("algo_dedup_enabled"):
+        return
+    monkeypatch.setenv("ALGO_DEDUP_TTL_S", "0")
