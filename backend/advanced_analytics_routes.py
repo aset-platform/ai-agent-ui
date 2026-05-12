@@ -361,6 +361,40 @@ def _golden_cross_days_ago(ind: pd.DataFrame) -> int | None:
     return 999
 
 
+def _death_cross_days_ago(ind: pd.DataFrame) -> int | None:
+    """Trading days since SMA 50 last crossed BELOW SMA 200.
+
+    Mirror of :func:`_golden_cross_days_ago` with inverted
+    comparators.
+
+    Returns:
+        None — SMA 50 ≥ SMA 200 today (no death cross active).
+        0–N  — cross happened N trading rows back; 0 = today.
+        999  — SMA 50 has been below SMA 200 for the entire
+               window (established bearish, no cross visible).
+    """
+    s50 = ind["SMA_50"] if "SMA_50" in ind.columns else None
+    s200 = ind["SMA_200"] if "SMA_200" in ind.columns else None
+    if s50 is None or s200 is None:
+        return None
+
+    last50 = s50.iloc[-1]
+    last200 = s200.iloc[-1]
+    if pd.isna(last50) or pd.isna(last200) or last50 >= last200:
+        return None
+
+    n = len(ind)
+    for i in range(n - 1, 0, -1):
+        v50, v200 = s50.iloc[i], s200.iloc[i]
+        p50, p200 = s50.iloc[i - 1], s200.iloc[i - 1]
+        if pd.isna(v50) or pd.isna(v200) or pd.isna(p50) or pd.isna(p200):
+            return 999
+        if v50 < v200 and p50 >= p200:
+            return (n - 1) - i
+
+    return 999
+
+
 def _load_indicators_latest(tickers: list[str]) -> pd.DataFrame:
     """Compute latest RSI-14, SMA-50, SMA-200 per ticker.
 
