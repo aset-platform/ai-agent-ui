@@ -487,6 +487,38 @@ def create_paper_router() -> APIRouter:
             ks_for_runtime = KillSwitchRepo(
                 redis_client=get_async_redis(),
             )
+
+            # ASETPLTFRM-383 — resolve ticker → Kite instrument_token
+            # for the daily-bar warmup's stale-fallback path. Best-
+            # effort: any failure logs and continues with empty map
+            # (Kite fallback then becomes a no-op; partial Iceberg
+            # history is used).
+            ticker_to_token: dict[str, int] = {}
+            try:
+                from backend.algo.instruments.repo import (
+                    InstrumentsRepo,
+                )
+                allowed_for_warmup = list(
+                    caps.get("allowed_tickers") or [],
+                )
+                if allowed_for_warmup:
+                    instr_repo = InstrumentsRepo()
+                    async with factory() as session:
+                        tok_to_tk = (
+                            await instr_repo.get_tokens_for_tickers(
+                                session, allowed_for_warmup,
+                            )
+                        )
+                    ticker_to_token = {
+                        tk: tok for tok, tk in tok_to_tk.items()
+                    }
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning(
+                    "start_run: ticker_to_token resolution failed: "
+                    "%s — daily-bar Kite fallback will be skipped",
+                    exc,
+                )
+
             _logger.info(
                 "start_run: dispatching LiveRuntime user=%s "
                 "strat=%s source=%s",
@@ -503,6 +535,7 @@ def create_paper_router() -> APIRouter:
                     run_id=run_id,
                     caps_repo=caps_repo,
                     kill_switch_repo=ks_for_runtime,
+                    ticker_to_token=ticker_to_token,
                 )
             except LiveNotEnabledError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))

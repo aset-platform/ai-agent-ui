@@ -31,7 +31,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timedelta, timezone
+import os
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -64,6 +65,32 @@ UTC = timezone.utc
 # (Submissions panel raw-JSON viewer). Stamp with +05:30 per
 # feedback_ist_dates_user_facing — internal datetimes still UTC.
 IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _parse_ist_time(s: str) -> time:
+    """Parse ``HH:MM`` 24-hour string → ``time`` object. Tolerant
+    of leading/trailing whitespace; falls back to ``14:30`` on any
+    parse failure with a warning so a malformed env var doesn't
+    crash the runtime constructor."""
+    try:
+        hh, mm = s.strip().split(":")
+        return time(int(hh), int(mm))
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "Invalid ALGO_DAILY_MIN_EVAL_TIME_IST=%r — falling "
+            "back to 14:30", s,
+        )
+        return time(14, 30)
+
+
+# ASETPLTFRM-383 — IST cutoff before which per-minute bar closes
+# update today's running daily bar but do NOT fire strategy eval.
+# Suppresses noisy fires while today's "close" is still volatile.
+# Set via env; lower (e.g. ``09:30``) during smoke testing to see
+# evals fire from market open.
+_MIN_EVAL_TIME_IST = _parse_ist_time(
+    os.environ.get("ALGO_DAILY_MIN_EVAL_TIME_IST", "14:30"),
+)
 
 
 def _select_last_price_ts_ns(tick: Any) -> int:
@@ -119,6 +146,7 @@ class LiveRuntime:
         run_id: UUID,
         caps_repo: Any,
         kill_switch_repo: Any,
+        ticker_to_token: dict[str, int] | None = None,
     ) -> None:
         if not caps.get("live_orders_enabled"):
             raise LiveNotEnabledError(
@@ -138,6 +166,7 @@ class LiveRuntime:
         self._run_id = run_id
         self._caps_repo = caps_repo
         self._kill_switch_repo = kill_switch_repo
+        self._ticker_to_token = ticker_to_token or {}
         self._evaluator = Evaluator()
         self._resampler = Resampler(intervals=(60,))
         self._positions = PositionTracker()
@@ -234,6 +263,40 @@ class LiveRuntime:
         self._bucket_by_ticker: dict[str, str] = (
             self._load_bucket_by_ticker()
         )
+
+        # ASETPLTFRM-383 — preload 250 closed daily bars per allowed
+        # ticker from stocks.ohlcv (Iceberg) so the very first
+        # per-minute eval sees the same indicator landscape as the
+        # backtest. Today's running bar is appended lazily on the
+        # first ``_on_bar_close`` for each ticker via
+        # ``initial_running_bar``. Fail-soft: any error degrades to
+        # the pre-383 empty-history behaviour (strategy silent-skips
+        # until indicators settle).
+        allowed_for_preload = caps.get("allowed_tickers") or []
+        if allowed_for_preload:
+            try:
+                from backend.algo.live.daily_bar_warmup import (
+                    preload_daily_bars,
+                )
+                preloaded = preload_daily_bars(
+                    list(allowed_for_preload),
+                    kite_client=kite,
+                    ticker_to_token=self._ticker_to_token or None,
+                )
+                self._bars_by_ticker.update(preloaded)
+                _logger.info(
+                    "LiveRuntime: daily-bar warmup loaded — "
+                    "%d ticker(s), eval_gate=%s IST",
+                    len(preloaded),
+                    _MIN_EVAL_TIME_IST.strftime("%H:%M"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning(
+                    "LiveRuntime: daily-bar warmup failed: %s — "
+                    "strategies will silent-skip until indicators "
+                    "settle on session-local minute history",
+                    exc,
+                )
 
         # PR #3 (order-safety) — background asyncio watcher that
         # cancels any session-tagged LIMIT older than
@@ -533,23 +596,77 @@ class LiveRuntime:
             pass
         from backend.algo.backtest.indicators import compute_indicators
         from backend.algo.backtest.types import BarData as _BackBar
+        from backend.algo.live.daily_bar_warmup import (
+            preload_daily_bars,
+        )
         from datetime import datetime, timezone
 
         bar_date_obj = datetime.fromtimestamp(
             bar.bar_open_ts_ns / 1_000_000_000,
             tz=timezone.utc,
         ).date()
-        adapted = _BackBar(
-            ticker=bar.ticker,
-            date=bar_date_obj,
-            open=Decimal(str(bar.open)),
-            high=Decimal(str(bar.high)),
-            low=Decimal(str(bar.low)),
-            close=Decimal(str(bar.close)),
-            volume=int(bar.volume),
-        )
-        history = self._bars_by_ticker.setdefault(bar.ticker, [])
-        history.append(adapted)
+
+        # ASETPLTFRM-383 — daily-bar series, not minute-bar series.
+        # ``history`` is the preloaded 250 closed daily bars + 1
+        # running today bar that this minute-close updates in place.
+        history = self._bars_by_ticker.get(bar.ticker)
+        if history is None:
+            # Universe drift: ticker not in caps.allowed_tickers at
+            # __init__. Lazy-preload via thread so we don't block
+            # the event loop on an Iceberg read.
+            try:
+                lazy = await asyncio.to_thread(
+                    preload_daily_bars,
+                    [bar.ticker],
+                    kite_client=self._kite,
+                    ticker_to_token=self._ticker_to_token or None,
+                )
+                history = lazy.get(bar.ticker, [])
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning(
+                    "LiveRuntime: lazy daily-bar preload for %s "
+                    "failed: %s — strategy silent-skips on this "
+                    "ticker until indicators settle", bar.ticker, exc,
+                )
+                history = []
+            self._bars_by_ticker[bar.ticker] = history
+
+        # Append (new day, or first bar for this ticker) or update
+        # (existing today bar) the running daily candle. We refresh
+        # close every minute so the indicator series reflects today's
+        # current LTP; high/low broaden monotonically.
+        cur_open = Decimal(str(bar.open))
+        cur_high = Decimal(str(bar.high))
+        cur_low = Decimal(str(bar.low))
+        cur_close = Decimal(str(bar.close))
+        cur_vol = max(int(bar.volume), 0)
+        if not history or history[-1].date != bar_date_obj:
+            history.append(_BackBar(
+                ticker=bar.ticker,
+                date=bar_date_obj,
+                open=cur_open,
+                high=cur_high,
+                low=cur_low,
+                close=cur_close,
+                volume=cur_vol,
+            ))
+        else:
+            today_bar = history[-1]
+            history[-1] = today_bar.model_copy(update={
+                "high": max(today_bar.high, cur_high),
+                "low": min(today_bar.low, cur_low),
+                "close": cur_close,
+                "volume": today_bar.volume + cur_vol,
+            })
+
+        # ASETPLTFRM-383 — eval-time gate. Before MIN_EVAL_TIME_IST,
+        # ticks update today's bar but no strategy eval fires. Lets
+        # the daily candle stabilise before we act on it. Override
+        # ``ALGO_DAILY_MIN_EVAL_TIME_IST`` for smoke testing.
+        now_ist_t = datetime.now(IST).time()
+        if now_ist_t < _MIN_EVAL_TIME_IST:
+            return 0
+
         ind_map = compute_indicators(history)
         # REGIME-2a — lazy-load cached factor rows for this
         # ticker on first sight; subsequent bars are O(1).

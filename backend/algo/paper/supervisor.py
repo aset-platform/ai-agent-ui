@@ -100,10 +100,15 @@ class PaperSupervisor:
         run_id: UUID,
         caps_repo: Any,
         kill_switch_repo: Any,
+        ticker_to_token: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         """Spawn a LiveRuntime task. Same idempotency contract as
         ``start_run``. ``LiveNotEnabledError`` from the runtime
         constructor bubbles up to the caller.
+
+        ``ticker_to_token`` (ASETPLTFRM-383) is forwarded to the
+        runtime's daily-bar warmup so the Kite historical fallback
+        can resolve symbols to instrument tokens.
         """
         from backend.algo.live.runtime import LiveRuntime
 
@@ -123,6 +128,7 @@ class PaperSupervisor:
             run_id=run_id,
             caps_repo=caps_repo,
             kill_switch_repo=kill_switch_repo,
+            ticker_to_token=ticker_to_token,
         )
         task = asyncio.create_task(runtime.run(source))
         self._runs[key] = {

@@ -262,6 +262,133 @@ class KiteClient:
         return self._kc.instruments(exchange=exchange) if exchange \
             else self._kc.instruments()
 
+    # ---- Historical data (ASETPLTFRM-383) -------------------------
+
+    # Kite Connect docs: 3 req/sec rate limit on historical_data.
+    # Class-level lock + min-interval serialises sequential calls
+    # across every KiteClient instance in the process so a 100-
+    # ticker stale-fallback can't burst above the cap.
+    _HIST_MIN_INTERVAL_S = 0.34  # ~3 req/sec
+    _hist_lock: Any = None  # initialised lazily — see _hist_throttle
+    _hist_last_call_ts: float = 0.0
+
+    @classmethod
+    def _hist_throttle(cls) -> None:
+        """Block until the next call slot is available (≥0.34 s
+        since the last call). Process-wide serialisation; safe
+        against multiple LiveRuntime instances starting up
+        concurrently."""
+        import threading
+        import time
+
+        if cls._hist_lock is None:
+            cls._hist_lock = threading.Lock()
+        with cls._hist_lock:
+            now = time.monotonic()
+            elapsed = now - cls._hist_last_call_ts
+            if elapsed < cls._HIST_MIN_INTERVAL_S:
+                time.sleep(cls._HIST_MIN_INTERVAL_S - elapsed)
+            cls._hist_last_call_ts = time.monotonic()
+
+    def fetch_daily_historical(
+        self,
+        *,
+        ticker: str,
+        instrument_token: int,
+        n_bars: int,
+        end: Any,
+    ) -> list[Any]:
+        """Pull up to ``n_bars`` closed daily candles ending at
+        ``end`` (a ``date``) and return them as
+        ``backend.algo.backtest.types.BarData`` instances.
+
+        Used by the LiveRuntime daily-bar warmup (ASETPLTFRM-383)
+        when the Iceberg ``stocks.ohlcv`` table is stale for a
+        ticker. Rate-limited to ≤ 3 req/sec via the class-level
+        throttle.
+
+        Parameters
+        ----------
+        ticker : str
+            Our internal ticker (used as the ``BarData.ticker`` key).
+        instrument_token : int
+            Kite numeric instrument token. Caller resolves via
+            ``InstrumentsRepo.get_tokens_for_tickers``.
+        n_bars : int
+            Trading-day count to request. Calendar window is
+            widened ~1.6× to absorb weekends + NSE holidays.
+        end : date
+            Inclusive upper bound (typically today). We pass it to
+            Kite verbatim — Kite returns whatever closed candles
+            exist up to and including this date.
+
+        Returns
+        -------
+        list[BarData]
+            Ascending by date, NaN-sanitised, ``volume`` int.
+            Empty list if Kite returns nothing.
+
+        Raises
+        ------
+        RuntimeError
+            If no access_token is set (caller must complete OAuth).
+        Exception
+            Any Kite SDK error is re-raised — caller silently
+            absorbs to fall back to whatever Iceberg has.
+        """
+        from datetime import date as _date
+        from datetime import timedelta as _td
+        from decimal import Decimal as _Dec
+
+        from backend.algo.backtest.types import BarData
+
+        if self._access_token is None:
+            raise RuntimeError(
+                "fetch_daily_historical requires an access_token; "
+                "complete the OAuth handshake first.",
+            )
+        # Calendar window wide enough for n_bars trading days plus
+        # holiday absorption. Matches daily_bar_warmup heuristic.
+        width = max(int(n_bars * 1.6) + 5, 30)
+        from_date = end - _td(days=width)
+        self._hist_throttle()
+        rows = self._kc.historical_data(
+            instrument_token=instrument_token,
+            from_date=from_date,
+            to_date=end,
+            interval="day",
+        )
+        out: list[BarData] = []
+        for r in rows or []:
+            # Kite returns dict with 'date' (datetime), 'open',
+            # 'high', 'low', 'close', 'volume'. Reject NaN/None
+            # cells consistent with data_source._safe_decimal.
+            try:
+                o = _Dec(str(r["open"]))
+                h = _Dec(str(r["high"]))
+                lo = _Dec(str(r["low"]))
+                c = _Dec(str(r["close"]))
+            except Exception:  # noqa: BLE001
+                continue
+            if any(x.is_nan() for x in (o, h, lo, c)):
+                continue
+            d = r["date"]
+            if hasattr(d, "date"):
+                d = d.date()
+            elif not isinstance(d, _date):
+                d = _date.fromisoformat(str(d)[:10])
+            out.append(BarData(
+                ticker=ticker,
+                date=d,
+                open=o,
+                high=h,
+                low=lo,
+                close=c,
+                volume=int(r.get("volume") or 0),
+            ))
+        out.sort(key=lambda b: b.date)
+        return out
+
     async def stream_ticks(
         self,
         instrument_tokens: list[int],
