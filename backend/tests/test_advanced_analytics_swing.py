@@ -811,3 +811,148 @@ def test_swing_setups_response_default_notes_empty() -> None:
         ),
     )
     assert resp.notes == []
+
+
+# ---------------------------------------------------------------
+# Task 13: _compute_swing_setup orchestrator
+# ---------------------------------------------------------------
+
+import asyncio
+from datetime import date
+
+
+def test_compute_swing_setup_bull_filters_and_ranks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: rows that pass bull filter are ranked DESC,
+    capped at SWING_CAP, methodology + degraded-flag set
+    correctly."""
+    import advanced_analytics_routes as aar
+    from advanced_analytics_swing import SWING_CAP
+
+    # Build SWING_CAP + 3 rows that all pass the bull filter, with
+    # rank scores increasing so ordering can be verified.
+    rows: list[AdvancedRow] = []
+    for i in range(SWING_CAP + 3):
+        rows.append(_bull_row(
+            ticker=f"T{i}.NS",
+            today_x_vol=2.0 + i * 0.01,
+            x_dv_20d=1.5,
+            rec_expected_return_pct=10.0 + i,
+            rec_category="offensive",
+        ))
+
+    async def fake_cached_full_rows(_user, _as_of):
+        return rows
+
+    async def fake_load_recs(user_id, tickers):
+        return {
+            "run_id": "uuid-x",
+            "run_date": "2026-05-01",
+            "recs": {
+                r.ticker: ("offensive", "high", float(10.0 + i))
+                for i, r in enumerate(rows)
+            },
+        }
+
+    monkeypatch.setattr(aar, "_cached_full_rows", fake_cached_full_rows)
+    monkeypatch.setattr(
+        aar, "_load_latest_recommendations", fake_load_recs,
+    )
+
+    class _U:
+        user_id = "user-1"
+
+    resp = asyncio.run(aar._compute_swing_setup(
+        user=_U(),  # type: ignore[arg-type]
+        regime="bull",
+        market="all",
+        as_of=date(2026, 5, 12),
+        page=1,
+        page_size=25,
+        sort_key=None,
+        sort_dir=None,
+    ))
+    assert resp.total == SWING_CAP
+    assert len(resp.rows) == 25  # page_size = cap
+    assert resp.rec_gate_applied is True
+    # Highest rank should be the largest i (T_{SWING_CAP+2}).
+    assert resp.rows[0].ticker == f"T{SWING_CAP + 2}.NS"
+    assert resp.methodology.regime == "bull"
+
+
+def test_compute_swing_setup_degrades_when_no_rec_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No rec run for user → rec_gate_applied False, bypass rec
+    gate but still rank by vol*delivery."""
+    import advanced_analytics_routes as aar
+
+    rows = [
+        _bull_row(
+            ticker="X.NS",
+            rec_category=None,
+            rec_severity=None,
+            rec_expected_return_pct=None,
+        ),
+    ]
+
+    async def fake_cached_full_rows(_user, _as_of):
+        return rows
+
+    async def fake_load_recs(user_id, tickers):
+        return {"run_id": None, "run_date": None, "recs": {}}
+
+    monkeypatch.setattr(
+        aar, "_cached_full_rows", fake_cached_full_rows,
+    )
+    monkeypatch.setattr(
+        aar, "_load_latest_recommendations", fake_load_recs,
+    )
+
+    class _U:
+        user_id = "user-2"
+
+    resp = asyncio.run(aar._compute_swing_setup(
+        user=_U(),  # type: ignore[arg-type]
+        regime="bull",
+        market="all",
+        as_of=date(2026, 5, 12),
+        page=1,
+        page_size=25,
+        sort_key=None,
+        sort_dir=None,
+    ))
+    assert resp.rec_gate_applied is False
+    assert resp.total == 1
+    assert any("not applied" in n.lower() for n in resp.notes)
+
+
+def test_compute_swing_setup_unknown_regime_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invalid regime → HTTPException 400."""
+    import advanced_analytics_routes as aar
+    from fastapi import HTTPException
+
+    async def fake_cached_full_rows(_u, _d):
+        return []
+
+    monkeypatch.setattr(
+        aar, "_cached_full_rows", fake_cached_full_rows,
+    )
+
+    class _U:
+        user_id = "u"
+
+    with pytest.raises(HTTPException):
+        asyncio.run(aar._compute_swing_setup(
+            user=_U(),  # type: ignore[arg-type]
+            regime="noisy",  # type: ignore[arg-type]
+            market="all",
+            as_of=date(2026, 5, 12),
+            page=1,
+            page_size=25,
+            sort_key=None,
+            sort_dir=None,
+        ))

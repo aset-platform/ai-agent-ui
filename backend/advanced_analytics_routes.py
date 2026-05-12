@@ -58,6 +58,19 @@ from advanced_analytics_models import (
     AdvancedReportResponse,
     AdvancedRow,
     StaleTicker,
+    SwingMethodology,
+    SwingSetupsResponse,
+)
+from advanced_analytics_swing import (
+    REGIMES,
+    SWING_CAP,
+    build_methodology,
+    passes_bearish,
+    passes_bull,
+    passes_sideways,
+    rank_bearish,
+    rank_bull,
+    rank_sideways,
 )
 from cache import TTL_STABLE, get_cache
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -1228,6 +1241,117 @@ async def _compute_report(
     payload = body.model_dump_json()
     cache.set(inner_ck, payload, ttl=TTL_STABLE)
     return Response(content=payload, media_type="application/json")
+
+
+# ---------------------------------------------------------------
+# Swing-setups orchestrator
+# ---------------------------------------------------------------
+
+# Default sort direction per regime; bull/bearish rank scores
+# favour the largest value (DESC), sideways favours the tightest
+# (smallest) coil score (ASC).
+_REGIME_DEFAULT_DIR: dict[str, str] = {
+    "bull": "desc",
+    "sideways": "asc",
+    "bearish": "desc",
+}
+
+
+async def _compute_swing_setup(
+    user: UserContext,
+    *,
+    regime: str,
+    market: str,
+    as_of: date,
+    page: int,
+    page_size: int,
+    sort_key: str | None,
+    sort_dir: str | None,
+) -> SwingSetupsResponse:
+    """Pull cached row set for *user*, apply rec join, regime
+    filter, regime rank, cap + paginate. Returns a fully formed
+    response with methodology block.
+    """
+    if regime not in REGIMES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown regime: {regime}",
+        )
+
+    rows = await _cached_full_rows(user, as_of)
+
+    # Optional market filter — mirrors the existing AA ``market``
+    # query parameter so swing-setups respects the same ".NS / .BO
+    # vs US" split the rest of Advanced Analytics already uses.
+    if market in ("india", "us"):
+        rows = [
+            r for r in rows
+            if detect_market(r.ticker) == market
+        ]
+
+    # Rec join — single batched PG fetch, then in-place stamp.
+    tickers = [r.ticker for r in rows]
+    rec_payload = await _load_latest_recommendations(
+        user_id=user.user_id, tickers=tickers,
+    )
+    rec_gate_applied = rec_payload["run_id"] is not None
+    _apply_rec_data(rows, rec_payload["recs"])
+
+    # Regime filter.
+    if regime == "bull":
+        rows = [r for r in rows if passes_bull(r, rec_gate_applied)]
+    elif regime == "sideways":
+        rows = [r for r in rows if passes_sideways(r, market)]
+    else:  # bearish
+        rows = [r for r in rows if passes_bearish(r, market)]
+
+    # Rank — Phase A always uses the regime-defined rank function.
+    # The ``sort_key`` arg is accepted for future per-column sort
+    # support but ignored for now (regime rank is the canonical
+    # ordering and avoids drift between cap-list and UI sort).
+    default_dir = _REGIME_DEFAULT_DIR[regime]
+    if regime == "bull":
+        scored = [
+            (rank_bull(r, rec_gate_applied), r) for r in rows
+        ]
+    elif regime == "sideways":
+        scored = [(rank_sideways(r), r) for r in rows]
+    else:
+        scored = [(rank_bearish(r), r) for r in rows]
+    scored.sort(
+        key=lambda kr: kr[0], reverse=default_dir == "desc",
+    )
+    rows = [r for _, r in scored]
+
+    # Cap to SWING_CAP regardless of page_size.
+    rows = rows[:SWING_CAP]
+    total = len(rows)
+
+    # Paginate the capped list.
+    start = max(0, (page - 1) * page_size)
+    end = start + page_size
+    page_rows = rows[start:end]
+
+    notes: list[str] = []
+    if regime == "bull" and not rec_gate_applied:
+        notes.append(
+            "Recommendation gate not applied — no rec run "
+            "this month"
+        )
+
+    return SwingSetupsResponse(
+        rows=page_rows,
+        total=total,
+        regime=regime,  # type: ignore[arg-type]
+        as_of=as_of.isoformat(),
+        rec_gate_applied=rec_gate_applied,
+        rec_run_id=rec_payload["run_id"],
+        rec_run_date=rec_payload["run_date"],
+        notes=notes,
+        methodology=SwingMethodology.model_validate(
+            build_methodology(regime),  # type: ignore[arg-type]
+        ),
+    )
 
 
 # ---------------------------------------------------------------
