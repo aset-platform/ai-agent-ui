@@ -35,6 +35,11 @@ Known event type registry (append-only — never remove):
        age_seconds, exc_str. The watcher then continues polling.
   Reconciliation (V2-3):
     position_drift_detected / drift_resolved
+  Live decoupling (2026-05-12 ASETPLTFRM-376):
+    position_hydrated  — emitted once per leg seeded into
+       PositionTracker at LiveRuntime spawn. Payload: symbol, qty,
+       avg_price, source ("positions" | "holdings"), product
+       ("MIS" | "CNC"), entry_ts (ISO 8601 UTC | null), dry_run.
 """
 from __future__ import annotations
 

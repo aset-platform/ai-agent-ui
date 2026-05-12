@@ -1,7 +1,9 @@
 "use client";
 
 import { useLiveDashboardSummary } from "@/hooks/useLiveDashboardSummary";
+import { usePaperRuns } from "@/hooks/usePaperRuns";
 
+import { LiveWsHealthDot } from "../LiveWsHealthDot";
 import { LiveModeChip } from "./LiveModeChip";
 
 function inr(value: string | undefined): string {
@@ -28,20 +30,20 @@ function signed(value: string | undefined): string {
  * mode chip · today P&L · open P&L · realised P&L · cash ·
  * open positions count · WebSocket age dot.
  *
- * `armed` here is a header-strip heuristic — the runtime has done
- * something today (open positions OR non-zero today P&L) — not a
- * read of `gates.live_orders_enabled`. The full chip wired up to
- * gates lives on the {@link LiveModeToggle} inside Live → Settings.
+ * `armed` reflects "live runtime is running right now for me" —
+ * read directly from {@link usePaperRuns} filtered to
+ * mode=live && !dry_run. ASETPLTFRM-378 replaced the previous
+ * "activity today" heuristic (open positions OR non-zero today
+ * P&L) with this truthful signal: a fresh start of the day shows
+ * ARMED the moment the user clicks Start on the new
+ * LiveActiveRunsPanel, not only after the first fill.
  */
 export function LiveHeaderStrip() {
   const { summary } = useLiveDashboardSummary();
-  const armed =
-    (summary?.open_position_count ?? 0) > 0 ||
-    (summary?.kill_switch_active === false &&
-      Number(summary?.today_pnl_inr ?? 0) !== 0);
-
-  const wsAge = summary?.ws_age_seconds;
-  const wsOk = (wsAge ?? 999) < 10;
+  const { runs } = usePaperRuns();
+  const armed = runs.some(
+    (r) => r.mode === "live" && !r.dry_run,
+  );
 
   return (
     <div
@@ -70,12 +72,7 @@ export function LiveHeaderStrip() {
         data-testid="live-ws-age"
       >
         <span>WS</span>
-        <span
-          className={`h-2 w-2 rounded-full ${
-            wsOk ? "bg-emerald-500" : "bg-rose-500"
-          }`}
-        />
-        <span>{wsAge != null ? `${wsAge}s` : "—"}</span>
+        <LiveWsHealthDot />
       </div>
     </div>
   );

@@ -2,17 +2,39 @@
 
 import { usePaperEvents } from "@/hooks/usePaperEvents";
 
+/** Today's date in IST as YYYY-MM-DD — used to bound the fills
+ *  query so we don't bleed prior sessions into the panel. */
+function todayIstIso(): string {
+  // en-CA produces ISO-style YYYY-MM-DD; explicit IST timezone
+  // keeps the boundary at midnight IST regardless of viewer
+  // locale (feedback_ist_dates_user_facing).
+  return new Date().toLocaleDateString("en-CA", {
+    timeZone: "Asia/Kolkata",
+  });
+}
+
 /**
- * Footer-zone tape: latest live fills (real money + dry-run live).
+ * Footer-zone tape: latest LIVE fills today (real money only).
  *
  * Backend event type is `order_filled_live` (not `order_filled` —
  * that's paper) and the payload keys are `symbol` / `side` / `qty`
  * / `price` (see backend/algo/live/runtime.py). Timestamp is
  * nanoseconds since epoch on `ts_ns`.
+ *
+ * Server-side filters keep the panel scoped to what the trader
+ * actually wants to see on the Live page:
+ *   - ``type=order_filled_live`` — only real fills
+ *   - ``mode=live`` — never paper / backtest
+ *   - ``dry_run=false`` — never synthetic rehearsal fills
+ *   - ``since_date=<today IST>`` — never yesterday's session
+ * Previously the panel pulled every type+mode+day mixed and
+ * filtered client-side, which leaked dry-run fills + prior
+ * sessions into the visible list.
  */
 export function RecentFillsTape() {
-  const { events } = usePaperEvents(20, 0, "live", null);
-  const fills = events.filter((e) => e.type === "order_filled_live");
+  const { events: fills } = usePaperEvents(
+    20, 0, "live", false, "order_filled_live", todayIstIso(),
+  );
   return (
     <div
       className="rounded-md border border-slate-200 dark:border-slate-700 p-3"

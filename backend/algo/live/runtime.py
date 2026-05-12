@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -60,6 +60,10 @@ from backend.algo.strategy.ast import Strategy
 _logger = logging.getLogger(__name__)
 
 UTC = timezone.utc
+# ISO strings emitted into algo.events payloads are user-facing
+# (Submissions panel raw-JSON viewer). Stamp with +05:30 per
+# feedback_ist_dates_user_facing — internal datetimes still UTC.
+IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def _select_last_price_ts_ns(tick: Any) -> int:
@@ -141,6 +145,40 @@ class LiveRuntime:
         self._events: list[dict[str, Any]] = []
         self._in_flight: list[dict[str, Any]] = []
         self._bars_by_ticker: dict[str, list] = {}
+
+        # ASETPLTFRM-376 — hydrate PositionTracker from any pre-
+        # existing Kite positions/holdings so EXIT logic can see
+        # yesterday's overnight CNC + today's already-open MIS
+        # legs. Wrapped: a Kite hiccup must NOT fail runtime
+        # construction; we degrade to the empty tracker and log.
+        try:
+            from backend.algo.live.position_hydration import (
+                apply_hydrated_positions,
+                hydrate,
+                hydration_events,
+            )
+            allowed = caps.get("allowed_tickers") or None
+            hydrated = hydrate(
+                kite=kite,
+                strategy=strategy,
+                user_id=user_id,
+                allowed_tickers=allowed,
+            )
+            if hydrated:
+                apply_hydrated_positions(self._positions, hydrated)
+                self._events.extend(hydration_events(
+                    session_id=self._session_id,
+                    user_id=user_id,
+                    strategy_id=strategy.id,
+                    hydrated=hydrated,
+                    dry_run=self._dry_run,
+                ))
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "LiveRuntime: position hydration failed: %s — "
+                "PositionTracker starts empty (EXIT signals on "
+                "pre-existing positions will no-op)", exc,
+            )
 
         # Pre-load NIFTY regime + trend features so strategies
         # gated on ``nifty_above_sma200`` / ``nifty_30d_return_pct``
@@ -571,7 +609,7 @@ class LiveRuntime:
             mode="live",
             type_="signal_generated",
             payload={
-                "dry_run": self._dry_run,
+                **({"dry_run": True} if self._dry_run else {}),
                 "ticker": signal.ticker,
                 "side": signal.side,
                 "qty": signal.qty,
@@ -623,7 +661,7 @@ class LiveRuntime:
                 mode="live",
                 type_="signal_rejected",
                 payload={
-                    "dry_run": self._dry_run,
+                    **({"dry_run": True} if self._dry_run else {}),
                     "reason": reason_str,
                     "ticker": signal.ticker,
                     "side": signal.side,
@@ -681,7 +719,7 @@ class LiveRuntime:
     ) -> int:
         """Submit one order to Kite. Returns 1 on success, 0 on error."""
         internal_order_id = str(uuid4())
-        now_iso = datetime.now(UTC).isoformat()
+        now_iso = datetime.now(IST).isoformat()
 
         # Determine exchange — Indian .NS → NSE
         exchange = "NSE"
@@ -777,7 +815,7 @@ class LiveRuntime:
                 mode="live",
                 type_="order_rejected_live",
                 payload={
-                    "dry_run": self._dry_run,
+                    **({"dry_run": True} if self._dry_run else {}),
                     "internal_order_id": internal_order_id,
                     "symbol": symbol,
                     "side": side,
@@ -946,7 +984,7 @@ class LiveRuntime:
             mode="live",
             type_="order_filled_live",
             payload={
-                "dry_run": self._dry_run,
+                **({"dry_run": True} if self._dry_run else {}),
                 "internal_order_id": internal_order_id,
                 "kite_order_id": kite_order_id,
                 "symbol": symbol,
@@ -1009,7 +1047,7 @@ class LiveRuntime:
                     mode="live",
                     type_="order_cancelled_live",
                     payload={
-                        "dry_run": self._dry_run,
+                        **({"dry_run": True} if self._dry_run else {}),
                         "kite_order_id": kite_id,
                         "reason": "kill_switch_armed",
                     },
@@ -1028,7 +1066,7 @@ class LiveRuntime:
                     mode="live",
                     type_="order_cancel_failed",
                     payload={
-                        "dry_run": self._dry_run,
+                        **({"dry_run": True} if self._dry_run else {}),
                         "kite_order_id": kite_id,
                         "error": str(exc),
                     },

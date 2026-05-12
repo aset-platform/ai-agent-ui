@@ -238,11 +238,23 @@ def create_kill_switch_router() -> APIRouter:
         except Exception:  # noqa: BLE001
             net_positions = []
 
-        # Net long qty per ticker = holdings.qty + positions.net_qty
+        # Net long qty per ticker = (holdings.quantity +
+        # holdings.t1_quantity) + positions.net_qty.
+        #
+        # SEBI T+1 (post Jan 2023): a CNC BUY's shares sit in
+        # ``t1_quantity`` for one trading session before settling.
+        # T+1 shares are legally owned and sellable today via a
+        # regular CNC SELL (Zerodha auto-routes from T+1 pool), so
+        # they MUST be summed into the panic-close target qty.
+        # Previously we read only ``quantity`` → yesterday's CNC
+        # BUYs were orphaned by panic close even though the user
+        # owns them.
         open_qty: dict[str, int] = {}
         for h in kc_holdings:
             sym = (h.get("tradingsymbol") or "").upper()
-            qty = int(h.get("quantity") or 0)
+            settled = int(h.get("quantity") or 0)
+            t1 = int(h.get("t1_quantity") or 0)
+            qty = settled + t1
             if sym and qty:
                 open_qty[sym] = open_qty.get(sym, 0) + qty
         for p in net_positions:
@@ -333,7 +345,11 @@ def create_kill_switch_router() -> APIRouter:
                     mode="live",
                     type_="order_submitted_live",
                     payload={
-                        "dry_run": False,
+                        # ASETPLTFRM-374 epic: omit dry_run on
+                        # Live events. Panic close never runs in
+                        # dry-run (pinned dry_run=False on the
+                        # KiteClient at L218) so absence is
+                        # always correct here.
                         "internal_order_id": str(uuid4()),
                         "kite_order_id": kite_order_id,
                         "symbol": sym,

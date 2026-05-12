@@ -218,7 +218,10 @@ class TestSubmittedPayloadShape:
         assert p["symbol"] == "ITC"
         assert p["side"] == "BUY"
         assert p["qty"] == 8
-        assert p["dry_run"] is False
+        # Live events omit dry_run entirely — absence = real.
+        # Dry-run rehearsals still set "dry_run": true (see
+        # TestDryRunSubmissionEvent below).
+        assert "dry_run" not in p
 
 
 # -----------------------------------------------------------------

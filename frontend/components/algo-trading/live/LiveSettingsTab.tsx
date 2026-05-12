@@ -21,7 +21,6 @@ import { useStrategies } from "@/hooks/useStrategies";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
 
-import { DryRunArmBanner } from "../dryrun/DryRunArmBanner";
 import { KillSwitchToggle } from "../KillSwitchToggle";
 import { LiveModeToggle } from "../LiveModeToggle";
 import { LiveSafetyBeltsForm } from "../LiveSafetyBeltsForm";
@@ -126,66 +125,11 @@ function DriftThresholdInput() {
   );
 }
 
-const DRY_RUN_KEY = `${API_URL}/algo/live/dry-run`;
-
-async function fetchDryRunState(
-  url: string,
-): Promise<{ dry_run: boolean }> {
-  const r = await apiFetch(url);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
-}
-
-async function setDryRun(armed: boolean): Promise<void> {
-  const path = armed
-    ? `${API_URL}/algo/live/dry-run/arm`
-    : `${API_URL}/algo/live/dry-run/disarm`;
-  const r = await apiFetch(path, { method: "POST" });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-}
-
-/**
- * Dry-Run global arm/disarm control. The defensive banner on
- * the Live dashboard tells users to "Disarm dry-run in Live →
- * Settings" — this is that lever. Same state surface as the
- * Dry-run tab on the Strategies page; mutations from either
- * propagate through Redis.
- */
-function DryRunArmControl() {
-  const { data, mutate } = useSWR(DRY_RUN_KEY, fetchDryRunState, {
-    revalidateOnFocus: false,
-    refreshInterval: 30_000,
-  });
-  const armed = data?.dry_run ?? false;
-
-  const onToggle = async (next: boolean) => {
-    await mutate({ dry_run: next }, { revalidate: false });
-    try {
-      await setDryRun(next);
-    } catch {
-      await mutate();
-    }
-  };
-
-  return (
-    <div
-      className="rounded-md border border-slate-200 p-4 dark:border-slate-700"
-      data-testid="live-settings-dryrun-control"
-    >
-      <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-        Dry-Run mode
-      </h3>
-      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-        While armed, the live runtime accepts orders but Kite
-        responses are synthesised — no real orders reach the
-        exchange. Disarm to send real orders.
-      </p>
-      <div className="mt-3">
-        <DryRunArmBanner armed={armed} onToggle={onToggle} />
-      </div>
-    </div>
-  );
-}
+// ASETPLTFRM-378 — DryRunArmControl was removed from this tab.
+// The Dry-Run toggle belongs only on Strategies → Dry-run tab.
+// The Live page no longer reads the per-user Redis dry-run flag;
+// slice C-backend pins dry_run=False explicitly at KiteClient
+// construction time for mode="live" spawns.
 
 export function LiveSettingsTab() {
   const { strategies } = useStrategies();
@@ -201,7 +145,6 @@ export function LiveSettingsTab() {
         Live Settings
       </h2>
 
-      <DryRunArmControl />
       <KillSwitchToggle />
       <DriftThresholdInput />
 

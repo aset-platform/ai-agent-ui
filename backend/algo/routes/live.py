@@ -318,6 +318,14 @@ class HoldingRow(BaseModel):
     days_held: int | None = None
     strategy_id: str | None = None
     strategy_name: str | None = None
+    # SEBI T+1 settlement (post Jan 2023): a CNC BUY's shares
+    # appear on holdings() as ``quantity=0, t1_quantity=N`` for one
+    # trading session before settling overnight to
+    # ``quantity=N, t1_quantity=0``. We surface ``quantity`` as the
+    # *effective* held qty (settled + t1) and flag T+1-pending
+    # rows so the UI can chip them. T+1 holdings are legally owned
+    # and sellable via a regular CNC sell order.
+    t1_pending: bool = False
 
 
 class HoldingsResponse(BaseModel):
@@ -1280,8 +1288,14 @@ def create_live_router() -> APIRouter:
             )
             raw = []
         rows = raw if isinstance(raw, list) else []
+        # T+1 fix: include rows whose settled qty is 0 but
+        # t1_quantity > 0 (yesterday's CNC BUYs settling today).
         open_rows = [
-            r for r in rows if int(r.get("quantity", 0)) > 0
+            r for r in rows
+            if (
+                int(r.get("quantity", 0))
+                + int(r.get("t1_quantity", 0))
+            ) > 0
         ]
 
         attr = await _fetch_holding_attribution(
@@ -1292,7 +1306,9 @@ def create_live_router() -> APIRouter:
         out_rows: list[HoldingRow] = []
         for r in open_rows:
             ctx = attr.get(r["tradingsymbol"], {})
-            qty = int(r.get("quantity", 0))
+            settled_qty = int(r.get("quantity", 0))
+            t1_qty = int(r.get("t1_quantity", 0))
+            qty = settled_qty + t1_qty
             avg = Decimal(str(r.get("average_price", 0) or 0))
             ltp = Decimal(str(r.get("last_price", 0) or 0))
             pnl_inr = Decimal(str(r.get("pnl", 0) or 0))
@@ -1313,6 +1329,7 @@ def create_live_router() -> APIRouter:
                     days_held=ctx.get("days_held"),
                     strategy_id=ctx.get("strategy_id"),
                     strategy_name=ctx.get("strategy_name"),
+                    t1_pending=(settled_qty == 0 and t1_qty > 0),
                 )
             )
         out = HoldingsResponse(rows=out_rows, ledger_drift=False)

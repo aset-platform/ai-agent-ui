@@ -1,11 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import useSWR from "swr";
+import { useEffect, useState } from "react";
 
-import { apiFetch } from "@/lib/apiFetch";
 import { panicCloseAll } from "@/lib/algoApi";
-import { API_URL } from "@/lib/config";
+import { usePaperRuns } from "@/hooks/usePaperRuns";
 import { useStrategies } from "@/hooks/useStrategies";
 
 import { AttributionPanel } from "../AttributionPanel";
@@ -13,60 +11,67 @@ import { LiveSafetyBeltsForm } from "../LiveSafetyBeltsForm";
 import { RegimeHistoryChart } from "../RegimeHistoryChart";
 import { RegimeWidget } from "../RegimeWidget";
 
+import { LiveActiveRunsPanel } from "./LiveActiveRunsPanel";
+import { LiveEventsPanel } from "./LiveEventsPanel";
 import { OpenPositionsWidget } from "./OpenPositionsWidget";
 import { PanicCloseButton } from "./PanicCloseButton";
 import { RecentFillsTape } from "./RecentFillsTape";
 
-interface DryRunState {
-  dry_run: boolean;
-}
-
-async function fetchDryRun(url: string): Promise<DryRunState> {
-  const r = await apiFetch(url);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
-}
-
 /**
  * LiveDashboard — body of the Live → Live tab (rose accent).
  *
- * Layout: defensive dry-run banner → strategy picker + RegimeWidget
- * + PanicCloseButton row → 4-zone 2x2 grid (positions / regime /
- * active-strategy safety belts / fills tape) → collapsed
- * attribution drawer at the bottom.
+ * Layout (top to bottom):
+ *   1. Strategy picker + RegimeWidget + PanicCloseButton (bar).
+ *   2. Open Positions + Regime &amp; Stress (side-by-side row).
+ *   3. Live runtime + Events feed (side-by-side row — same height).
+ *   4. Active Strategy safety belts + Recent fills (2-col grid).
+ *   5. Attribution drawer (collapsed).
  *
- * The strategy picker state drives both the safety belts form and
- * AttributionPanel (passing `strategyId || null` so neither
- * renders against an arbitrary default).
+ * Single source of truth for `strategyId` lives here; passed down
+ * to LiveActiveRunsPanel (Start picker), LiveSafetyBeltsForm, and
+ * AttributionPanel so picking once is enough — every dropdown +
+ * detail panel on the page reads from the same value. Auto-
+ * defaults to the first running live strategy or the first
+ * available strategy in the list so the user typically arrives
+ * to a pre-populated state.
+ *
+ * ASETPLTFRM-374 (epic): no dry-run banner on this page. Live is
+ * fully decoupled from the per-user dry-run Redis flag — any
+ * runtime spawned from LiveActiveRunsPanel pins dry_run=False at
+ * the API boundary (see backend routes/paper.py). Rehearsal mode
+ * lives exclusively on Strategies → Dry-run tab.
  */
 export function LiveDashboard() {
   const { strategies } = useStrategies();
+  const { runs } = usePaperRuns();
   const [strategyId, setStrategyId] = useState<string>("");
 
-  // Defensive dry-run banner — should never show on this page,
-  // but if the runtime is in rehearsal we surface it loudly.
-  // Silent-fail: if the dry-run endpoint is unreachable we don't
-  // surface a banner. The real surface is the /live page itself.
-  const { data: dry } = useSWR<DryRunState>(
-    `${API_URL}/algo/live/dry-run`,
-    fetchDryRun,
-    { refreshInterval: 30_000, revalidateOnFocus: false },
-  );
+  // Auto-default once strategies (and any running runs) load.
+  // Priority: first live, non-dry-run running strategy → first
+  // strategy in the list. Re-runs whenever inputs change while
+  // strategyId is still empty, so a strategy that arrives after
+  // initial render (slow useStrategies fetch) is still picked.
+  useEffect(() => {
+    if (strategyId) return;
+    const liveRun = runs.find(
+      (r) => r.mode === "live" && !r.dry_run,
+    );
+    if (liveRun) {
+      setStrategyId(liveRun.strategy_id);
+      return;
+    }
+    if (strategies.length > 0) {
+      setStrategyId(strategies[0].id);
+    }
+  }, [strategyId, runs, strategies]);
 
   return (
     <div className="space-y-3" data-testid="live-dashboard">
-      {dry?.dry_run && (
-        <div
-          className="rounded-md border border-amber-300 bg-amber-50
-            px-3 py-2 text-xs text-amber-800"
-          data-testid="live-dryrun-warning"
-        >
-          Dry-run is armed. You are on the Live page; this banner
-          means the runtime is in rehearsal mode. Disarm dry-run in
-          Live → Settings to send real orders.
-        </div>
-      )}
-
+      {/* Row 1 — Strategy picker · Regime · Panic Close.
+          Top of page per user feedback: these are the controls
+          the trader reaches for first. The picker is the single
+          source of truth — its value flows down to LiveRuntime
+          Start panel, safety belts, and attribution. */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <select
           className="rounded border border-slate-300 dark:border-slate-600
@@ -88,12 +93,9 @@ export function LiveDashboard() {
         </div>
       </div>
 
-      {/* 4-zone grid */}
+      {/* Row 2 — Open Positions + Regime & Stress. */}
       <div className="grid gap-3 lg:grid-cols-2">
-        {/* Zone A — Open positions compact */}
         <OpenPositionsWidget />
-
-        {/* Zone B — Regime + stress mini chart */}
         <div
           className="rounded-md border border-slate-200 dark:border-slate-700 p-3"
           data-testid="live-zone-b-regime"
@@ -103,8 +105,23 @@ export function LiveDashboard() {
           </h3>
           <RegimeHistoryChart />
         </div>
+      </div>
 
-        {/* Zone C — Active strategy safety belts */}
+      {/* Row 3 — Live runtime Start/Stop + Events feed.
+          ASETPLTFRM-378: per-page Start UI lives here; Events
+          panel surfaces signals + order outcomes in real time so
+          testers don't need to leave the page. Same-height row
+          via auto-stretch + Events panel's h-full inner flex. */}
+      <div className="grid gap-3 lg:grid-cols-2 items-stretch">
+        <LiveActiveRunsPanel
+          strategyId={strategyId}
+          onStrategyChange={setStrategyId}
+        />
+        <LiveEventsPanel />
+      </div>
+
+      {/* Row 4 — Active Strategy safety belts + Recent fills. */}
+      <div className="grid gap-3 lg:grid-cols-2">
         <div
           className="rounded-md border border-slate-200 dark:border-slate-700 p-3"
           data-testid="live-zone-c-strategy"
@@ -120,8 +137,6 @@ export function LiveDashboard() {
             </p>
           )}
         </div>
-
-        {/* Zone D — Recent fills */}
         <RecentFillsTape />
       </div>
 

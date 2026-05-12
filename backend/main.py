@@ -86,6 +86,51 @@ async def _run_startup_hooks() -> None:
             "Paper replay rebuilder failed at startup: %s", exc,
         )
 
+    # ASETPLTFRM-375 — replay the daily caps reset if the scheduled
+    # 09:00 IST trigger was missed (e.g. backend restarted mid-day).
+    # No-op if already reset today or pre-09:00 IST. Failure is
+    # warned-and-swallowed; the runtime guards already enforce caps
+    # so a missed catch-up just means stale counters until next day.
+    from backend.algo.jobs.live_caps_reset import run_if_missed_today
+    try:
+        caps_result = await run_if_missed_today()
+        logger.info(
+            "Live caps reset catch-up: %s", caps_result,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Live caps reset catch-up failed at startup: %s", exc,
+        )
+
+    # ASETPLTFRM-379 — sweep zombie 'running' algo.runs rows whose
+    # backing asyncio task was killed by the previous restart.
+    # Without this, postback reconciliation walks stale runs every
+    # request and the dashboard "currently running" panel shows
+    # ghost entries.
+    try:
+        import os
+        from backend.algo.backtest.runs_repo import BacktestRunsRepo
+        from backend.db.engine import get_session_factory
+        thr = int(os.environ.get(
+            "ALGO_RUN_STALE_THRESHOLD_SECONDS", "3600",
+        ) or "3600")
+        runs_repo = BacktestRunsRepo()
+        factory = get_session_factory()
+        async with factory() as session:
+            crashed_ids = (
+                await runs_repo.mark_stale_running_as_crashed(
+                    session, threshold_seconds=thr,
+                )
+            )
+        logger.info(
+            "Zombie runs sweep: marked %d run(s) crashed "
+            "(threshold %ds)", len(crashed_ids), thr,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Zombie runs sweep failed at startup: %s", exc,
+        )
+
 
 class ChatServer:
     """Thin orchestrator that wires registries and the ASGI app.

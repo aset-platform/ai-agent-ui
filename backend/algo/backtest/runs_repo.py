@@ -78,6 +78,54 @@ class BacktestRunsRepo:
             {"id": run_id},
         )
 
+    async def mark_stale_running_as_crashed(
+        self,
+        session: AsyncSession,
+        *,
+        threshold_seconds: int = 3600,
+    ) -> list[UUID]:
+        """Mark any ``status='running'`` rows older than the
+        threshold with no ``completed_at`` as ``crashed``.
+
+        Zombie ledger entries appear when the backing asyncio task
+        dies (uvicorn reload, container restart, OS kill) without a
+        clean shutdown path to call ``mark_completed`` /
+        ``mark_failed``. The DB row keeps saying "running" forever,
+        which (a) misleads operators, and (b) bogs down postback
+        reconciliation — every postback walks live_orders_in_flight
+        across all live "running" rows for the user. With several
+        zombies the scan becomes seconds-slow.
+
+        ASETPLTFRM-379 — called once from ``_run_startup_hooks``
+        on backend boot.
+
+        Args:
+            threshold_seconds: a run must have started this many
+                seconds ago to be marked crashed. Tolerates a
+                normal uvicorn reload window. Default 1 hour.
+
+        Returns:
+            list of run ids that were transitioned. Empty list
+            means no zombies were found.
+        """
+        result = await session.execute(
+            text(
+                "UPDATE algo.runs SET "
+                "status = 'crashed', "
+                "completed_at = NOW() "
+                "WHERE status = 'running' "
+                "  AND completed_at IS NULL "
+                "  AND started_at "
+                "    < NOW() - make_interval(secs => :thr) "
+                "RETURNING id"
+            ),
+            {"thr": threshold_seconds},
+        )
+        ids: list[UUID] = [row[0] for row in result]
+        if ids:
+            await session.commit()
+        return ids
+
     async def mark_completed(
         self,
         session: AsyncSession,

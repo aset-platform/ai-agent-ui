@@ -86,11 +86,16 @@ export function ActiveRunsPanel({ tradingMode = "paper" }: Props) {
     setErr(null);
     setPending(strategyId);
     try {
-      // Map UI tradingMode -> backend RunMode. Both 'dryrun'
-      // and 'live' route to LiveRuntime; ALGO_LIVE_DRY_RUN env
-      // controls whether KiteAdapter short-circuits.
+      // ASETPLTFRM-378 — three first-class values match the
+      // backend RunMode enum. dryrun is no longer aliased to
+      // live; the backend now pins KiteClient.dry_run explicitly
+      // based on this value (Redis flag ignored).
       const runMode: RunMode =
-        tradingMode === "paper" ? "paper" : "live";
+        tradingMode === "paper"
+          ? "paper"
+          : tradingMode === "dryrun"
+            ? "dryrun"
+            : "live";
       await startPaperRun(
         strategyId, fixturePath, capital, source, runMode,
       );
