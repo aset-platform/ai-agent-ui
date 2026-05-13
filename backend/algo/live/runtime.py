@@ -663,9 +663,18 @@ class LiveRuntime:
         # ticks update today's bar but no strategy eval fires. Lets
         # the daily candle stabilise before we act on it. Override
         # ``ALGO_DAILY_MIN_EVAL_TIME_IST`` for smoke testing.
-        now_ist_t = datetime.now(IST).time()
-        if now_ist_t < _MIN_EVAL_TIME_IST:
-            return 0
+        #
+        # ASETPLTFRM-390 — gate is daily-only. Intraday cadences
+        # (5m / 1m) want to fire on every closed bar from market
+        # open at 09:15 IST; gating them on the daily-candle-stabilise
+        # cutoff would silence the entire morning session and defeat
+        # the purpose of running an intraday strategy. The env var
+        # name is ALGO_DAILY_MIN_EVAL_TIME_IST precisely because the
+        # constraint is daily-specific.
+        if self._strategy.schedule.interval == "1d":
+            now_ist_t = datetime.now(IST).time()
+            if now_ist_t < _MIN_EVAL_TIME_IST:
+                return 0
 
         ind_map = compute_indicators(history)
         # REGIME-2a — lazy-load cached factor rows for this

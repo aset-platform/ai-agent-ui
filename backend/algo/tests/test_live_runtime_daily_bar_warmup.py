@@ -84,6 +84,14 @@ def _make_runtime(
     # an empty AST node dict (evaluator is patched to "hold" anyway).
     strategy.root = MagicMock()
     strategy.root.model_dump.return_value = {"type": "hold"}
+    # ASETPLTFRM-390 — eval-gate carve-out reads strategy.schedule
+    # .interval; ASETPLTFRM-389 reads strategy.product. MagicMock
+    # (spec=Strategy) doesn't auto-pick-up new optional Pydantic
+    # fields, so pin daily / CNC defaults explicitly to mirror every
+    # strategy created before this slice.
+    strategy.schedule = MagicMock()
+    strategy.schedule.interval = "1d"
+    strategy.product = "CNC"
 
     caps_repo = AsyncMock()
     caps_repo.get.return_value = {"live_orders_enabled": True}
@@ -319,6 +327,93 @@ async def test_post_gate_invokes_evaluator() -> None:
             )
 
     assert eval_spy.call_count == 1
+
+
+# ---------------------------------------------------------------
+# 5b. ASETPLTFRM-390 — eval-gate carve-out for intraday cadence.
+# Daily strategies keep the 14:30 IST gate so today's running daily
+# candle stabilises before they act. Intraday strategies (5m / 1m)
+# need to fire from market open at 09:15 IST; gating them on the
+# same daily cutoff would silence the entire morning session.
+# ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_intraday_strategy_bypasses_pre_gate_skip() -> None:
+    """A 5-min strategy must NOT be silenced by the 14:30 IST gate.
+
+    Pins the carve-out: with the gate fully closed (23:59), the
+    daily-cadence path returns 0 (covered by
+    ``test_pre_gate_skips_eval_but_updates_bar``); the intraday-
+    cadence path must still invoke the evaluator.
+    """
+    today = date.today()
+    payload = {
+        "ITC.NS": _series(
+            "ITC.NS", today - timedelta(days=1), 250,
+        ),
+    }
+    runtime = _make_runtime(
+        allowed_tickers=["ITC.NS"], preload_payload=payload,
+    )
+    # Mark this runtime's strategy as intraday — the carve-out reads
+    # strategy.schedule.interval to decide whether to honour the
+    # daily gate.
+    runtime._strategy.schedule.interval = "5m"
+
+    bar = _minute_bar(
+        "ITC.NS", today, close=301, volume=10,
+    )
+    # Gate fully closed; the daily path would return 0 here.
+    with patch(
+        "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
+        _time(23, 59),
+    ):
+        eval_spy = MagicMock(return_value={"type": "hold"})
+        with patch.object(runtime._evaluator, "eval_node", eval_spy):
+            await runtime._on_bar_close(
+                bar=bar, last_price=Decimal("301"),
+            )
+
+    # Intraday path bypasses the gate → evaluator fires.
+    assert eval_spy.call_count == 1, (
+        "Intraday strategy must evaluate even when the 14:30 IST "
+        "gate is closed — the gate is daily-cadence specific."
+    )
+
+
+@pytest.mark.asyncio
+async def test_daily_strategy_still_gated_after_carve_out() -> None:
+    """Backwards-compat invariant: existing daily strategies keep
+    being gated by the pre-14:30 cutoff. Pins the unchanged path.
+    """
+    today = date.today()
+    payload = {
+        "ITC.NS": _series(
+            "ITC.NS", today - timedelta(days=1), 250,
+        ),
+    }
+    runtime = _make_runtime(
+        allowed_tickers=["ITC.NS"], preload_payload=payload,
+    )
+    # Strategy defaults to interval="1d" via _make_runtime fixture.
+    assert runtime._strategy.schedule.interval == "1d"
+
+    bar = _minute_bar(
+        "ITC.NS", today, close=301, volume=10,
+    )
+    with patch(
+        "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
+        _time(23, 59),
+    ):
+        eval_spy = MagicMock()
+        with patch.object(runtime._evaluator, "eval_node", eval_spy):
+            result = await runtime._on_bar_close(
+                bar=bar, last_price=Decimal("301"),
+            )
+
+    assert result == 0
+    eval_spy.assert_not_called()
 
 
 # ---------------------------------------------------------------
