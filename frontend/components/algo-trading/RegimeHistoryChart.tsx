@@ -78,6 +78,8 @@ interface Band {
   start: string;
   end: string;
   label: string;
+  /** Number of trading days the band spans (inclusive). */
+  span: number;
 }
 
 function compressToBands(rows: RegimeHistoryRow[]): Band[] {
@@ -85,23 +87,54 @@ function compressToBands(rows: RegimeHistoryRow[]): Band[] {
   const out: Band[] = [];
   let runStart = rows[0].bar_date;
   let runLabel = rows[0].regime_label;
+  let runLen = 1;
   for (let i = 1; i < rows.length; i++) {
     if (rows[i].regime_label !== runLabel) {
       out.push({
         start: runStart,
         end: rows[i - 1].bar_date,
         label: runLabel,
+        span: runLen,
       });
       runStart = rows[i].bar_date;
       runLabel = rows[i].regime_label;
+      runLen = 1;
+    } else {
+      runLen += 1;
     }
   }
   out.push({
     start: runStart,
     end: rows[rows.length - 1].bar_date,
     label: runLabel,
+    span: runLen,
   });
   return out;
+}
+
+// Two-letter codes used when a band is too narrow to render the
+// full word but still wide enough to be informative. ``BULL`` and
+// ``BEAR`` both start with B; we lean on the second letter so the
+// codes don't collide.
+const SHORT_LABEL: Record<string, string> = {
+  BULL: "BL",
+  SIDEWAYS: "SW",
+  BEAR: "BR",
+};
+
+// Width gates as a fraction of the visible range. Tuned against
+// 252-trading-day windows: full label needs ~20 px, short code
+// needs ~10 px; anything narrower silently relies on the colored
+// markArea + hover tooltip.
+const FULL_LABEL_RATIO = 0.08;
+const SHORT_LABEL_RATIO = 0.03;
+
+function bandLabelText(b: Band, total: number): string {
+  if (total <= 0) return "";
+  const ratio = b.span / total;
+  if (ratio >= FULL_LABEL_RATIO) return b.label;
+  if (ratio >= SHORT_LABEL_RATIO) return SHORT_LABEL[b.label] ?? "";
+  return "";
 }
 
 export function RegimeHistoryChart() {
@@ -173,14 +206,29 @@ export function RegimeHistoryChart() {
           markArea: {
             silent: true,
             itemStyle: { opacity: 1 },
-            data: bands.map((b) => [
-              {
-                xAxis: b.start,
-                itemStyle: { color: REGIME_COLORS[b.label] },
-                name: b.label,
-              },
-              { xAxis: b.end },
-            ]),
+            // Per-band label sizing: full word when wide enough,
+            // 2-letter shortcut when medium, blank when too narrow
+            // to fit without overlapping the next band. The colored
+            // band itself + axis tooltip still communicate regime
+            // on the hidden ones.
+            data: bands.map((b) => {
+              const labelText = bandLabelText(b, rows.length);
+              return [
+                {
+                  xAxis: b.start,
+                  itemStyle: { color: REGIME_COLORS[b.label] },
+                  name: labelText,
+                  label: {
+                    show: labelText.length > 0,
+                    fontSize: 10,
+                    color: isDark ? "#cbd5e1" : "#475569",
+                    position: "insideTop",
+                    distance: 2,
+                  },
+                },
+                { xAxis: b.end },
+              ];
+            }),
           },
           // Reference lines for the band thresholds. Keeps the
           // user oriented even before they hover.
