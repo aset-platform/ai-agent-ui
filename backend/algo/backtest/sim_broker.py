@@ -166,7 +166,16 @@ class SimBroker:
 
         # Compute fees on the executed leg (uses fill_price, not
         # the bar open).
-        product = "DELIVERY"  # v1 only
+        # ASETPLTFRM-400 slice 4 — fee dispatch on cadence.
+        # Intraday intents (those carrying ``intent_emitted_ts_ns``)
+        # use the INTRADAY schedule: capped brokerage (₹20 / leg
+        # max), sell-side-only STT @ 0.025 %, sell-side-only no
+        # DP charges. Daily strategies keep the DELIVERY schedule.
+        product = (
+            "INTRADAY"
+            if intent.intent_emitted_ts_ns is not None
+            else "DELIVERY"
+        )
         exchange = "NSE"  # v1 only
         breakdown = self._fees.compute(
             Trade(
