@@ -745,8 +745,9 @@ class LiveRuntime:
         ))
         self._flush_events_now()
 
-        # Fresh caps read — do NOT trust stale constructor copy
-        # for daily counters; read atomically.
+        # Fresh caps read — used for max_inr / max_orders_per_day
+        # and the allow-list; the daily-counter columns on the row
+        # are no longer authoritative (see below).
         current_caps = await self._caps_repo.get(
             self._user_id, self._strategy.id,
         ) or self._caps
@@ -755,13 +756,23 @@ class LiveRuntime:
             kill_switch_active=await self._kill_switch_repo
             .is_active(self._user_id),
         )
+        # Exposure-based day_state: "consumption" is the capital
+        # currently tied up in this strategy's open positions, not
+        # turnover-since-09:00. PositionTracker is hydrated from
+        # Kite at runtime spawn (position_hydration.hydrate) so a
+        # restart preserves yesterday's overnight legs. Square-offs
+        # naturally bring this back to 0, no daily reset job needed.
+        positions_open = self._positions.open_positions()
+        committed_inr_now = sum(
+            (
+                Decimal(p.qty) * p.avg_price
+                for p in positions_open.values()
+            ),
+            start=Decimal("0"),
+        )
         day_state = {
-            "cumulative_inr_today": current_caps.get(
-                "cumulative_inr_today", Decimal("0"),
-            ),
-            "orders_count_today": current_caps.get(
-                "orders_count_today", 0,
-            ),
+            "cumulative_inr_today": committed_inr_now,
+            "orders_count_today": len(positions_open),
         }
 
         decision = pre_trade_check(
