@@ -15,6 +15,7 @@ constructor) to short-circuit all write paths.  No real Kite REST
 calls are made; place_order returns a synthetic ``DRY_<hex>`` id and
 the runtime synthesises a fill event after ~100 ms.
 """
+
 from __future__ import annotations
 
 import logging
@@ -64,7 +65,8 @@ def _read_dedup_ttl_s() -> int:
     except ValueError:
         _logger.warning(
             "ALGO_DEDUP_TTL_S=%r is not an int — using default %d",
-            raw, _DEFAULT_DEDUP_TTL_S,
+            raw,
+            _DEFAULT_DEDUP_TTL_S,
         )
         return _DEFAULT_DEDUP_TTL_S
 
@@ -79,7 +81,8 @@ def _read_max_ltp_age_s() -> int:
     except ValueError:
         _logger.warning(
             "ALGO_MAX_LTP_AGE_S=%r is not an int — using default %d",
-            raw, _DEFAULT_MAX_LTP_AGE_S,
+            raw,
+            _DEFAULT_MAX_LTP_AGE_S,
         )
         return _DEFAULT_MAX_LTP_AGE_S
 
@@ -93,7 +96,8 @@ def _read_dry_run_env() -> bool:
     is available (e.g. read-only OAuth / instrument loader).
     """
     return os.environ.get(
-        "ALGO_LIVE_DRY_RUN", "false",
+        "ALGO_LIVE_DRY_RUN",
+        "false",
     ).lower() in ("true", "1", "yes")
 
 
@@ -119,6 +123,7 @@ def resolve_dry_run_for_user(
         return _read_dry_run_env()
     try:
         from auth.token_store import get_redis_client
+
         redis_url = os.environ.get("REDIS_URL", "").strip()
         if not redis_url:
             return _read_dry_run_env()
@@ -131,12 +136,16 @@ def resolve_dry_run_for_user(
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8", errors="ignore")
         return str(raw).strip().lower() in (
-            "1", "true", "yes",
+            "1",
+            "true",
+            "yes",
         )
     except Exception as exc:  # noqa: BLE001
         _logger.warning(
             "resolve_dry_run_for_user: redis read failed "
-            "user=%s: %s — falling back to env", user_id, exc,
+            "user=%s: %s — falling back to env",
+            user_id,
+            exc,
         )
         return _read_dry_run_env()
 
@@ -212,6 +221,7 @@ class KiteClient:
             return self._redis
         try:
             from auth.token_store import get_redis_client
+
             redis_url = os.environ.get("REDIS_URL", "").strip()
             if not redis_url:
                 return None
@@ -231,7 +241,9 @@ class KiteClient:
         return self._kc.login_url()
 
     def generate_session(
-        self, request_token: str, api_secret: str,
+        self,
+        request_token: str,
+        api_secret: str,
     ) -> dict[str, Any]:
         """Exchange a request_token for an access_token + user_id.
 
@@ -242,7 +254,8 @@ class KiteClient:
         ``next 06:00 IST`` as the expiry).
         """
         return self._kc.generate_session(
-            request_token, api_secret=api_secret,
+            request_token,
+            api_secret=api_secret,
         )
 
     # ---- Read paths ----------------------------------------------
@@ -252,15 +265,19 @@ class KiteClient:
         return self._kc.profile()
 
     def instruments(
-        self, exchange: str | None = None,
+        self,
+        exchange: str | None = None,
     ) -> list[dict[str, Any]]:
         """Full instrument dump (or filtered by exchange).
 
         Kite returns a list of ~80 000 entries — caller is expected
         to bulk-upsert into ``algo.instruments``.
         """
-        return self._kc.instruments(exchange=exchange) if exchange \
+        return (
+            self._kc.instruments(exchange=exchange)
+            if exchange
             else self._kc.instruments()
+        )
 
     # ---- Historical data (ASETPLTFRM-383) -------------------------
 
@@ -377,15 +394,17 @@ class KiteClient:
                 d = d.date()
             elif not isinstance(d, _date):
                 d = _date.fromisoformat(str(d)[:10])
-            out.append(BarData(
-                ticker=ticker,
-                date=d,
-                open=o,
-                high=h,
-                low=lo,
-                close=c,
-                volume=int(r.get("volume") or 0),
-            ))
+            out.append(
+                BarData(
+                    ticker=ticker,
+                    date=d,
+                    open=o,
+                    high=h,
+                    low=lo,
+                    close=c,
+                    volume=int(r.get("volume") or 0),
+                )
+            )
         out.sort(key=lambda b: b.date)
         return out
 
@@ -398,6 +417,17 @@ class KiteClient:
         60: "minute",
         300: "5minute",
         900: "15minute",
+    }
+
+    # Kite Connect's per-request window cap for intraday historical
+    # data (calendar days, both bounds inclusive). 1-minute bars are
+    # capped at 60 days, 5-minute at 100, 15-minute at 200. The
+    # backfill paginator (``fetch_intraday_historical_window``) uses
+    # these to chunk an arbitrary user-supplied [start, end] window.
+    _KITE_WINDOW_DAYS = {
+        60: 60,
+        300: 100,
+        900: 200,
     }
 
     def fetch_intraday_historical(
@@ -441,10 +471,10 @@ class KiteClient:
             date the bar opened in. Empty list if Kite returns
             nothing.
         """
-        from datetime import (
-            date as _date, datetime as _dt,
-            timedelta as _td, timezone as _tz,
-        )
+        from datetime import date as _date
+        from datetime import datetime as _dt
+        from datetime import timedelta as _td
+        from datetime import timezone as _tz
         from decimal import Decimal as _Dec
 
         from backend.algo.backtest.types import BarData
@@ -466,7 +496,8 @@ class KiteClient:
         # 22 500) trading days, ×1.6 for holidays + weekends, ≥ 3
         # days minimum. Generous; Kite trims to actual data anyway.
         trading_days_needed = max(
-            1, (n_bars * interval_sec + 22_499) // 22_500,
+            1,
+            (n_bars * interval_sec + 22_499) // 22_500,
         )
         width = max(int(trading_days_needed * 1.6) + 2, 3)
         from_date = end - _td(days=width)
@@ -501,19 +532,23 @@ class KiteClient:
             bar_open_ts_ns = int(
                 bar_open_dt.timestamp() * 1_000_000_000,
             )
-            d_obj = ts.date() if hasattr(ts, "date") else (
-                _date.fromisoformat(str(ts)[:10])
+            d_obj = (
+                ts.date()
+                if hasattr(ts, "date")
+                else (_date.fromisoformat(str(ts)[:10]))
             )
-            out.append(BarData(
-                ticker=ticker,
-                date=d_obj,
-                open=o,
-                high=h,
-                low=lo,
-                close=c,
-                volume=int(r.get("volume") or 0),
-                bar_open_ts_ns=bar_open_ts_ns,
-            ))
+            out.append(
+                BarData(
+                    ticker=ticker,
+                    date=d_obj,
+                    open=o,
+                    high=h,
+                    low=lo,
+                    close=c,
+                    volume=int(r.get("volume") or 0),
+                    bar_open_ts_ns=bar_open_ts_ns,
+                )
+            )
         out.sort(key=lambda b: b.bar_open_ts_ns or 0)
         # Kite often returns the partially-built current bar at the
         # tail; the warmup needs CLOSED bars only. Drop any tail bar
@@ -522,11 +557,154 @@ class KiteClient:
             _dt.now(_tz.utc).timestamp() * 1_000_000_000,
         )
         interval_ns = interval_sec * 1_000_000_000
-        while out and (
-            (out[-1].bar_open_ts_ns or 0) + interval_ns > now_ns
-        ):
+        while out and ((out[-1].bar_open_ts_ns or 0) + interval_ns > now_ns):
             out.pop()
         return out[-n_bars:]
+
+    def fetch_intraday_historical_window(
+        self,
+        *,
+        ticker: str,
+        instrument_token: int,
+        interval_sec: int,
+        start: Any,
+        end: Any,
+    ) -> list[Any]:
+        """Paginated 15m / 5m / 1m fetch over an arbitrary
+        ``[start, end]`` window.
+
+        Splits the window into Kite-cap-sized chunks (200 days for
+        15m, 100 for 5m, 60 for 1m, per
+        ``_KITE_WINDOW_DAYS``) and concatenates the closed bars.
+        Used by the backfill CLI and on-demand backtest pull
+        (ASETPLTFRM-400 slices 1c / 1d).
+
+        The single-window ``fetch_intraday_historical`` is the right
+        method for the LiveRuntime warmup (≤ 100 bars at runtime
+        spawn fits inside one Kite window). This method is for
+        bulk pulls where the window exceeds the per-request cap.
+
+        Parameters
+        ----------
+        ticker : str
+            Internal ticker (used as the ``BarData.ticker`` key).
+        instrument_token : int
+            Kite numeric instrument token.
+        interval_sec : int
+            Bar window in seconds. Must be one of 60 / 300 / 900.
+        start : date
+            Inclusive lower bound.
+        end : date
+            Inclusive upper bound.
+
+        Returns
+        -------
+        list[BarData]
+            Ascending by ``bar_open_ts_ns``. Duplicates at chunk
+            boundaries are removed. Partially-built tail bar (when
+            ``end`` is today) is dropped. Empty list if ``start >
+            end`` or Kite returns nothing.
+
+        Raises
+        ------
+        RuntimeError
+            If no access_token is set (caller must complete OAuth).
+        ValueError
+            If ``interval_sec`` is not in
+            ``_INTRADAY_INTERVAL_MAP``.
+        """
+        from datetime import date as _date
+        from datetime import datetime as _dt
+        from datetime import timedelta as _td
+        from datetime import timezone as _tz
+        from decimal import Decimal as _Dec
+
+        from backend.algo.backtest.types import BarData
+
+        if self._access_token is None:
+            raise RuntimeError(
+                "fetch_intraday_historical_window requires an "
+                "access_token; complete the OAuth handshake first.",
+            )
+        interval = self._INTRADAY_INTERVAL_MAP.get(interval_sec)
+        if interval is None:
+            raise ValueError(
+                f"interval_sec={interval_sec} not supported. Valid "
+                f"values: {sorted(self._INTRADAY_INTERVAL_MAP)}.",
+            )
+        if start > end:
+            return []
+        chunk_days = self._KITE_WINDOW_DAYS[interval_sec]
+
+        out: list[BarData] = []
+        seen_ns: set[int] = set()
+        chunk_start = start
+        while chunk_start <= end:
+            # Kite's from/to are both inclusive, so step by
+            # ``chunk_days`` to advance past the last covered day.
+            # The chunk_end clamp keeps the final partial chunk
+            # within ``end``.
+            chunk_end = min(
+                chunk_start + _td(days=chunk_days - 1),
+                end,
+            )
+            self._hist_throttle()
+            rows = self._kc.historical_data(
+                instrument_token=instrument_token,
+                from_date=chunk_start,
+                to_date=chunk_end,
+                interval=interval,
+            )
+            for r in rows or []:
+                try:
+                    o = _Dec(str(r["open"]))
+                    h = _Dec(str(r["high"]))
+                    lo = _Dec(str(r["low"]))
+                    c = _Dec(str(r["close"]))
+                except Exception:  # noqa: BLE001
+                    continue
+                if any(x.is_nan() for x in (o, h, lo, c)):
+                    continue
+                ts = r["date"]
+                if hasattr(ts, "tzinfo") and ts.tzinfo is not None:
+                    bar_open_dt = ts.astimezone(_tz.utc)
+                else:
+                    bar_open_dt = ts.replace(tzinfo=_tz.utc)
+                bar_open_ts_ns = int(
+                    bar_open_dt.timestamp() * 1_000_000_000,
+                )
+                if bar_open_ts_ns in seen_ns:
+                    continue
+                seen_ns.add(bar_open_ts_ns)
+                d_obj = (
+                    ts.date()
+                    if hasattr(ts, "date")
+                    else (_date.fromisoformat(str(ts)[:10]))
+                )
+                out.append(
+                    BarData(
+                        ticker=ticker,
+                        date=d_obj,
+                        open=o,
+                        high=h,
+                        low=lo,
+                        close=c,
+                        volume=int(r.get("volume") or 0),
+                        bar_open_ts_ns=bar_open_ts_ns,
+                    )
+                )
+            chunk_start = chunk_end + _td(days=1)
+
+        out.sort(key=lambda b: b.bar_open_ts_ns or 0)
+        # Drop the partially-built tail bar (only relevant when
+        # ``end`` is today; earlier windows are entirely closed).
+        now_ns = int(
+            _dt.now(_tz.utc).timestamp() * 1_000_000_000,
+        )
+        interval_ns = interval_sec * 1_000_000_000
+        while out and ((out[-1].bar_open_ts_ns or 0) + interval_ns > now_ns):
+            out.pop()
+        return out
 
     async def stream_ticks(
         self,
@@ -644,8 +822,14 @@ class KiteClient:
                 "[DRY_RUN] place_order symbol=%s side=%s qty=%d "
                 "type=%s limit_price=%s product=%s variety=%s "
                 "-> %s",
-                tradingsymbol, transaction_type, quantity,
-                order_type, price, product, variety, synthetic_id,
+                tradingsymbol,
+                transaction_type,
+                quantity,
+                order_type,
+                price,
+                product,
+                variety,
+                synthetic_id,
             )
             self._emit_submitted_event(
                 events_sink=events_sink,
@@ -690,7 +874,10 @@ class KiteClient:
                 _logger.warning(
                     "place_order BLOCKED: stale LTP symbol=%s "
                     "age=%.1fs max=%ds last_price_ts=%s",
-                    tradingsymbol, age, max_age_s, ts.isoformat(),
+                    tradingsymbol,
+                    age,
+                    max_age_s,
+                    ts.isoformat(),
                 )
                 self._emit_blocked_event(
                     events_sink=events_sink,
@@ -773,8 +960,11 @@ class KiteClient:
                     "place_order BLOCKED: chunked count=%d exceeds "
                     "daily_cap_remaining=%d symbol=%s qty=%d "
                     "freeze_qty=%d",
-                    len(chunks), daily_cap_remaining,
-                    tradingsymbol, quantity, freeze_qty,
+                    len(chunks),
+                    daily_cap_remaining,
+                    tradingsymbol,
+                    quantity,
+                    freeze_qty,
                 )
                 raise FreezeChunkExceedsDailyCapError(
                     f"Order qty={quantity} on {tradingsymbol!r} "
@@ -804,9 +994,7 @@ class KiteClient:
                     product=product,
                     variety=variety,
                     price=price,
-                    tag=(
-                        f"{tag}-c{idx}" if tag else f"c{idx}"
-                    ),
+                    tag=(f"{tag}-c{idx}" if tag else f"c{idx}"),
                     last_price=last_price,
                     last_price_ts=last_price_ts,
                     liquidity_bucket=liquidity_bucket,
@@ -902,14 +1090,18 @@ class KiteClient:
         resp = self._kc.place_order(variety=variety, **params)
         # SDK returns {"order_id": "<id>"} or raises KiteException.
         order_id: str = (
-            resp.get("order_id", "") if isinstance(resp, dict)
-            else str(resp)
+            resp.get("order_id", "") if isinstance(resp, dict) else str(resp)
         )
         _logger.info(
             "place_order: symbol=%s side=%s qty=%d "
             "order_type=%s chunk=%s/%s kite_order_id=%s",
-            tradingsymbol, transaction_type, quantity,
-            order_type, chunk_index, chunk_total, order_id,
+            tradingsymbol,
+            transaction_type,
+            quantity,
+            order_type,
+            chunk_index,
+            chunk_total,
+            order_id,
         )
         self._emit_submitted_event(
             events_sink=events_sink,
@@ -934,9 +1126,13 @@ class KiteClient:
             slippage_bps_applied=slippage_bps_applied,
             chunk_index=chunk_index,
             chunk_total=chunk_total,
-            response_raw=resp if isinstance(resp, dict) else {
-                "raw": str(resp),
-            },
+            response_raw=(
+                resp
+                if isinstance(resp, dict)
+                else {
+                    "raw": str(resp),
+                }
+            ),
         )
         return order_id
 
@@ -944,7 +1140,8 @@ class KiteClient:
 
     @staticmethod
     def _split_into_chunks(
-        quantity: int, freeze_qty: int,
+        quantity: int,
+        freeze_qty: int,
     ) -> list[int]:
         """Split ``quantity`` into chunks each <= ``freeze_qty``.
 
@@ -988,7 +1185,9 @@ class KiteClient:
         if redis_client is None:
             _logger.warning(
                 "place_order: dedup gate skipped — Redis "
-                "unreachable. symbol=%s qty=%d", symbol, qty,
+                "unreachable. symbol=%s qty=%d",
+                symbol,
+                qty,
             )
             return
         dedup_key = build_dedup_key(
@@ -1000,20 +1199,28 @@ class KiteClient:
         )
         try:
             acquired = redis_client.set(
-                dedup_key, "1", nx=True, ex=ttl_s,
+                dedup_key,
+                "1",
+                nx=True,
+                ex=ttl_s,
             )
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
                 "place_order: dedup SETNX failed key=%s err=%s — "
                 "allowing order through (fail-open by design)",
-                dedup_key, exc,
+                dedup_key,
+                exc,
             )
             return
         if not acquired:
             _logger.warning(
                 "place_order BLOCKED: duplicate within %ds "
                 "symbol=%s side=%s qty=%d key=%s",
-                ttl_s, symbol, side, qty, dedup_key,
+                ttl_s,
+                symbol,
+                side,
+                qty,
+                dedup_key,
             )
             self._emit_duplicate_blocked_event(
                 events_sink=events_sink,
@@ -1065,7 +1272,9 @@ class KiteClient:
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
                 "freeze_qty resolve failed symbol=%s err=%s — "
-                "falling back to bucket default", symbol, exc,
+                "falling back to bucket default",
+                symbol,
+                exc,
             )
             kite_freeze = 0
         if kite_freeze and kite_freeze > 0:
@@ -1075,11 +1284,13 @@ class KiteClient:
         # Bucket label used in the event mirrors the lookup key so
         # ops sees exactly which row of _NSE_DEFAULTS was applied.
         bucket_label = (
-            bucket if bucket in ("largecap", "midcap", "smallcap")
+            bucket
+            if bucket in ("largecap", "midcap", "smallcap")
             else "unknown"
         )
         if should_emit_fallback_event(
-            redis_client=redis_client, symbol=symbol,
+            redis_client=redis_client,
+            symbol=symbol,
         ):
             self._emit_freeze_fallback_event(
                 events_sink=events_sink,
@@ -1189,9 +1400,7 @@ class KiteClient:
         # False by construction (C-backend pin) so the field is
         # noise. Dry-run rehearsals still emit ``dry_run: true``
         # so consumers can distinguish them. Absence = real.
-        dr_kw: dict[str, Any] = (
-            {"dry_run": True} if dry_run else {}
-        )
+        dr_kw: dict[str, Any] = {"dry_run": True} if dry_run else {}
         payload: dict[str, Any] = {
             # Top-level legacy keys (PaperEventsTimeline reads
             # these at the root; do not nest under `request.*` to
@@ -1224,7 +1433,8 @@ class KiteClient:
             _logger.warning(
                 "order_submitted_live emit failed for "
                 "kite_order_id=%s — order placed successfully but "
-                "audit row dropped", kite_order_id,
+                "audit row dropped",
+                kite_order_id,
                 exc_info=True,
             )
 
@@ -1272,7 +1482,8 @@ class KiteClient:
         except Exception:  # noqa: BLE001
             _logger.warning(
                 "order_ltp_stale_blocked emit failed for symbol=%s",
-                symbol, exc_info=True,
+                symbol,
+                exc_info=True,
             )
 
     # ---- PR #4 event helpers ------------------------------------
@@ -1294,6 +1505,7 @@ class KiteClient:
         if events_sink is None:
             return
         from backend.algo.backtest.event_writer import event_row
+
         payload = {
             "internal_order_id": internal_order_id,
             "symbol": symbol,
@@ -1318,7 +1530,8 @@ class KiteClient:
         except Exception:  # noqa: BLE001
             _logger.warning(
                 "order_duplicate_blocked emit failed symbol=%s",
-                symbol, exc_info=True,
+                symbol,
+                exc_info=True,
             )
 
     def _emit_freeze_chunked_event(
@@ -1337,6 +1550,7 @@ class KiteClient:
         if events_sink is None:
             return
         from backend.algo.backtest.event_writer import event_row
+
         payload = {
             "internal_order_id": internal_order_id,
             "symbol": symbol,
@@ -1360,7 +1574,8 @@ class KiteClient:
         except Exception:  # noqa: BLE001
             _logger.warning(
                 "order_freeze_chunked emit failed symbol=%s",
-                symbol, exc_info=True,
+                symbol,
+                exc_info=True,
             )
 
     def _emit_freeze_fallback_event(
@@ -1377,6 +1592,7 @@ class KiteClient:
         if events_sink is None:
             return
         from backend.algo.backtest.event_writer import event_row
+
         payload = {
             "symbol": symbol,
             "bucket": bucket,
@@ -1398,7 +1614,8 @@ class KiteClient:
         except Exception:  # noqa: BLE001
             _logger.warning(
                 "freeze_qty_fallback_applied emit failed symbol=%s",
-                symbol, exc_info=True,
+                symbol,
+                exc_info=True,
             )
 
     def cancel_order(
@@ -1417,15 +1634,16 @@ class KiteClient:
             )
         if self._dry_run:
             _logger.info(
-                "[DRY_RUN] cancel_order kite_order_id=%s "
-                "variety=%s",
-                order_id, variety,
+                "[DRY_RUN] cancel_order kite_order_id=%s " "variety=%s",
+                order_id,
+                variety,
             )
             return order_id
         self._kc.cancel_order(variety=variety, order_id=order_id)
         _logger.info(
             "cancel_order: kite_order_id=%s variety=%s",
-            order_id, variety,
+            order_id,
+            variety,
         )
         return order_id
 
@@ -1456,7 +1674,10 @@ class KiteClient:
             _logger.info(
                 "[DRY_RUN] modify_order kite_order_id=%s "
                 "variety=%s price=%s qty=%s",
-                order_id, variety, price, quantity,
+                order_id,
+                variety,
+                price,
+                quantity,
             )
             return order_id
         if order_type is not None and order_type != "LIMIT":
@@ -1472,12 +1693,16 @@ class KiteClient:
         if order_type is not None:
             params["order_type"] = order_type
         self._kc.modify_order(
-            variety=variety, order_id=order_id, **params,
+            variety=variety,
+            order_id=order_id,
+            **params,
         )
         _logger.info(
-            "modify_order: kite_order_id=%s variety=%s "
-            "price=%s qty=%s",
-            order_id, variety, price, quantity,
+            "modify_order: kite_order_id=%s variety=%s " "price=%s qty=%s",
+            order_id,
+            variety,
+            price,
+            quantity,
         )
         return order_id
 
