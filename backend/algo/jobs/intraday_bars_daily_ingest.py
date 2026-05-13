@@ -1,16 +1,21 @@
 """Daily 15:45 IST incremental keeper for ``stocks.intraday_bars``
 (ASETPLTFRM-400 slice 1d).
 
-Runs Mon-Fri at 15:45 IST (15 min after NSE close). Pulls the last
-2 trading-day window's 15m / 5m / 1m bars for the top-200 universe
-plus any ticker referenced in an active intraday LiveRuntime within
-the previous 7 days. Idempotent re-runs overwrite existing rows
-via the NaN-replaceable upsert in
+Runs Mon-Fri at 15:45 IST (15 min after NSE close). Pulls the
+last 2 trading-day window's 15m / 5m / 1m bars for the **Nifty
+500** universe and writes via the NaN-replaceable upsert in
 ``backend/algo/backtest/intraday_backfill``.
 
+The active-MIS-runtime cohort + top-200 cohort hooks are
+intentionally kept in this module but unused by default — the
+operator pulls those ad-hoc with the CLI. Default keeper
+universe is Nifty 500 only so the daily Kite load stays
+predictable.
+
 Wired via ``@register_job("intraday_bars_daily_ingest")`` in
-``backend/jobs/executor.py``. The scheduler row is seeded by
-``scripts/seed_intraday_keeper_job.py``.
+``backend/jobs/executor.py``. The pipeline definition that
+schedules it + chains it with ``iceberg_maintenance`` is seeded
+by ``scripts/seed_intraday_keeper_pipeline.py``.
 
 The job is best-effort: per-ticker failures inside
 ``backfill_window`` are logged with ``exc_info=True`` and the run
@@ -21,8 +26,10 @@ surface them on the Data Health dashboard.
 
 from __future__ import annotations
 
+import csv
 import logging
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -54,6 +61,9 @@ def _default_window() -> tuple[date, date]:
 
 _DEFAULT_INTERVALS = (900, 300, 60)  # 15m, 5m, 1m
 _ACTIVE_MIS_LOOKBACK_DAYS = 7
+_NIFTY500_CSV = (
+    Path(__file__).resolve().parents[3] / "data" / "universe" / "nifty500.csv"
+)
 
 
 async def _resolve_keeper_user(session) -> dict[str, Any] | None:
@@ -93,9 +103,36 @@ async def _resolve_keeper_user(session) -> dict[str, Any] | None:
     return None
 
 
+def _resolve_nifty500_universe() -> list[str]:
+    """Read ``data/universe/nifty500.csv`` and return ``"<symbol>.NS"``
+    for every Nifty 500 constituent.
+
+    The CSV is the same source the OHLCV daily pipeline uses
+    (``download_nifty500.py`` keeps it current with NSE's indices
+    list). Skips header + empty rows. Returns the list sorted +
+    deduplicated.
+    """
+    try:
+        with _NIFTY500_CSV.open("r", encoding="utf-8") as fp:
+            reader = csv.DictReader(fp)
+            tickers = {
+                f"{row['symbol'].strip()}.NS"
+                for row in reader
+                if row.get("symbol", "").strip()
+            }
+    except FileNotFoundError:
+        _logger.error(
+            "intraday-keeper: Nifty 500 CSV missing at %s",
+            _NIFTY500_CSV,
+        )
+        return []
+    return sorted(tickers)
+
+
 def _resolve_top200_universe(anchor: date) -> list[str]:
-    """Latest top-200 cohort as of ``anchor``. Returns empty list
-    when ``stocks.universe_snapshot`` is empty (fresh dev box).
+    """Latest top-200 cohort. Currently unused by the daily
+    keeper (Nifty 500 is the default) but kept available for
+    ad-hoc CLI runs and future per-tier shards.
     """
     from backend.algo.universe.pit_resolver import resolve_pit_universe
 
@@ -218,12 +255,13 @@ async def run_intraday_bars_daily_ingest_job(
                 "end": end.isoformat(),
             }
 
-        tickers = sorted(
-            set(
-                _resolve_top200_universe(end)
-                + _active_intraday_tickers_last_7d(end)
-            )
-        )
+        # Nifty 500 is the canonical daily-keeper universe. The
+        # top-200 and active-MIS cohorts are kept as helpers in
+        # this module but the daily run uses Nifty 500 only —
+        # predictable Kite load (~500 × 5 windows = 2 500 calls
+        # for a full backfill, ~500 × 1 call for the daily
+        # incremental).
+        tickers = _resolve_nifty500_universe()
         if not tickers:
             _logger.warning(
                 "intraday-keeper: empty universe — skipping",

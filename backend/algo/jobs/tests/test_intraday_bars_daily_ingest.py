@@ -86,13 +86,8 @@ async def test_happy_path_aggregates_all_intervals(fake_session):
         ),
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
-            "_resolve_top200_universe",
-            return_value=["A.NS", "B.NS", "C.NS"],
-        ),
-        patch(
-            "backend.algo.jobs.intraday_bars_daily_ingest."
-            "_active_intraday_tickers_last_7d",
-            return_value=["B.NS", "D.NS"],
+            "_resolve_nifty500_universe",
+            return_value=["A.NS", "B.NS", "C.NS", "D.NS"],
         ),
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
@@ -117,7 +112,7 @@ async def test_happy_path_aggregates_all_intervals(fake_session):
         result = await run_intraday_bars_daily_ingest_job(None)
 
     assert result["status"] == "ok"
-    # Universe = sorted({A,B,C} ∪ {B,D}) = [A,B,C,D]
+    # Nifty 500 universe (mocked) = [A,B,C,D]
     assert result["ticker_count"] == 4
     # 3 default intervals → 3 backfill_window calls
     assert mock_bf.call_count == 3
@@ -221,12 +216,7 @@ async def test_skipped_when_universe_empty(fake_session):
         ),
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
-            "_resolve_top200_universe",
-            return_value=[],
-        ),
-        patch(
-            "backend.algo.jobs.intraday_bars_daily_ingest."
-            "_active_intraday_tickers_last_7d",
+            "_resolve_nifty500_universe",
             return_value=[],
         ),
         patch(
@@ -272,13 +262,8 @@ async def test_failures_sample_capped_to_10(fake_session):
         ),
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
-            "_resolve_top200_universe",
+            "_resolve_nifty500_universe",
             return_value=["A.NS"],
-        ),
-        patch(
-            "backend.algo.jobs.intraday_bars_daily_ingest."
-            "_active_intraday_tickers_last_7d",
-            return_value=[],
         ),
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
@@ -328,13 +313,8 @@ async def test_payload_overrides_intervals_and_window(
         ),
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
-            "_resolve_top200_universe",
+            "_resolve_nifty500_universe",
             return_value=["A.NS"],
-        ),
-        patch(
-            "backend.algo.jobs.intraday_bars_daily_ingest."
-            "_active_intraday_tickers_last_7d",
-            return_value=[],
         ),
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
@@ -397,13 +377,8 @@ async def test_keeper_passes_quality_hook_to_backfill_window(
         ),
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
-            "_resolve_top200_universe",
+            "_resolve_nifty500_universe",
             return_value=["A.NS"],
-        ),
-        patch(
-            "backend.algo.jobs.intraday_bars_daily_ingest."
-            "_active_intraday_tickers_last_7d",
-            return_value=[],
         ),
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
@@ -427,8 +402,89 @@ async def test_keeper_passes_quality_hook_to_backfill_window(
 
 async def test_register_job_dispatch_wiring():
     """``intraday_bars_daily_ingest`` must be registered in the
-    JOB_EXECUTORS map — without this the scheduler can't fire it
-    and the seeder script's scheduled_jobs row is dormant."""
+    JOB_EXECUTORS map — without this the pipeline executor can't
+    chain it and the seeder script's pipeline row is dormant."""
     from backend.jobs.executor import JOB_EXECUTORS
 
     assert "intraday_bars_daily_ingest" in JOB_EXECUTORS
+
+
+def test_register_job_wrapper_is_pipeline_compatible():
+    """``PipelineExecutor._run_step`` invokes the registered
+    handler with ``(scope, run_id, repo, cancel_event=, force=)``.
+    Our wrapper must be sync + accept that signature, bridging to
+    the async job under the hood. Without this the handler would
+    return a coroutine and the pipeline step would silent-succeed
+    (the 2026-05-12 stale-VIX class of bug)."""
+    import inspect
+
+    from backend.jobs.executor import JOB_EXECUTORS
+
+    fn = JOB_EXECUTORS["intraday_bars_daily_ingest"]
+    # Must be a regular function (not a coroutine function) so the
+    # pipeline executor's sync invocation actually runs the job.
+    assert not inspect.iscoroutinefunction(fn)
+    params = inspect.signature(fn).parameters
+    for required in ("scope", "run_id", "repo", "cancel_event", "force"):
+        assert (
+            required in params
+        ), f"wrapper missing pipeline-step param: {required}"
+
+
+def test_register_job_wrapper_runs_async_job_via_asyncio():
+    """The sync wrapper must actually drive the async job to
+    completion, not just hand back a coroutine."""
+    from unittest.mock import patch
+
+    from backend.jobs.executor import JOB_EXECUTORS
+
+    fn = JOB_EXECUTORS["intraday_bars_daily_ingest"]
+
+    async def _fake_async_job(payload):
+        return {"status": "ok", "payload_seen": payload}
+
+    with patch(
+        "backend.algo.jobs.intraday_bars_daily_ingest."
+        "run_intraday_bars_daily_ingest_job",
+        new=_fake_async_job,
+    ):
+        result = fn(
+            scope="india",
+            run_id="abc",
+            repo=None,
+            cancel_event=None,
+            force=False,
+            payload={"intervals": [900]},
+        )
+    assert isinstance(result, dict)
+    assert result["status"] == "ok"
+    assert result["payload_seen"] == {"intervals": [900]}
+
+
+def test_resolve_nifty500_universe_against_real_csv():
+    """Integration-light: the production CSV has ~500 rows and
+    every resolved ticker carries the ``.NS`` suffix."""
+    from backend.algo.jobs.intraday_bars_daily_ingest import (
+        _resolve_nifty500_universe,
+    )
+
+    tickers = _resolve_nifty500_universe()
+    assert 450 <= len(tickers) <= 550, (
+        f"Nifty 500 CSV resolved to {len(tickers)} tickers — "
+        "expected ~500; check data/universe/nifty500.csv"
+    )
+    assert all(t.endswith(".NS") for t in tickers)
+    # Sanity: list is sorted + unique.
+    assert tickers == sorted(set(tickers))
+
+
+def test_resolve_nifty500_universe_missing_csv(tmp_path, monkeypatch):
+    """Missing CSV → empty list, logged but not raising."""
+    from backend.algo.jobs import intraday_bars_daily_ingest as mod
+
+    monkeypatch.setattr(
+        mod,
+        "_NIFTY500_CSV",
+        tmp_path / "does_not_exist.csv",
+    )
+    assert mod._resolve_nifty500_universe() == []

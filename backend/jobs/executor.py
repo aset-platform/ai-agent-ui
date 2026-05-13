@@ -3402,20 +3402,37 @@ async def _job_algo_ws_tick_count_reset(
 
 
 @register_job("intraday_bars_daily_ingest")
-async def _job_intraday_bars_daily_ingest(
+def _job_intraday_bars_daily_ingest(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
     payload: dict | None = None,
-):
+) -> dict:
     """Mon-Fri 15:45 IST keeper for stocks.intraday_bars.
 
     ASETPLTFRM-400 slice 1d. Pulls the previous 2 trading-day
-    window of 15m / 5m / 1m bars for the top-200 universe plus
-    active-MIS tickers; idempotent via NaN-replaceable upsert.
+    window of 15m / 5m / 1m bars for the Nifty 500 universe;
+    idempotent via NaN-replaceable upsert.
+
+    Sync + pipeline-step-compatible signature
+    ``(scope, run_id, repo, cancel_event, force)`` so the
+    ``PipelineExecutor`` can chain this step with
+    ``iceberg_maintenance``. The underlying job is async — we
+    bridge with ``asyncio.run`` here (single event loop per
+    pipeline step; matches the pattern in
+    ``backend.algo.jobs.algo_reconciliation`` etc.).
     """
+    import asyncio
+
     from backend.algo.jobs.intraday_bars_daily_ingest import (
         run_intraday_bars_daily_ingest_job,
     )
 
-    return await run_intraday_bars_daily_ingest_job(payload)
+    return asyncio.run(
+        run_intraday_bars_daily_ingest_job(payload or {}),
+    )
 
 
 @register_job("regime_classifier_daily")

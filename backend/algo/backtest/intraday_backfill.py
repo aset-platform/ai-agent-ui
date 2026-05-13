@@ -559,11 +559,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument(
         "--universe",
-        choices=["india_full", "india_top200"],
+        choices=["india_full", "india_top200", "nifty500"],
         help=(
-            "Resolve tickers from stocks.universe_snapshot (latest "
-            "rebalance). 'india_full' = all rows, 'india_top200' = "
-            "included_in_top_200=TRUE."
+            "Ticker source. 'nifty500' reads "
+            "data/universe/nifty500.csv (same source the daily "
+            "keeper uses). 'india_full' / 'india_top200' read "
+            "stocks.universe_snapshot (latest rebalance)."
         ),
     )
     g.add_argument(
@@ -639,7 +640,19 @@ async def _resolve_tokens_async(
 
 
 def _resolve_universe(name: str, anchor: date) -> list[str]:
-    """Read ``stocks.universe_snapshot`` for the requested cohort."""
+    """Resolve the requested ticker cohort.
+
+    ``nifty500`` reads the same CSV the slice-1d keeper uses
+    (single source of truth — the operator's one-shot backfill
+    and the daily keeper cover identical sets). ``india_top200``
+    / ``india_full`` read ``stocks.universe_snapshot``.
+    """
+    if name == "nifty500":
+        from backend.algo.jobs.intraday_bars_daily_ingest import (
+            _resolve_nifty500_universe,
+        )
+
+        return _resolve_nifty500_universe()
     if name == "india_top200":
         from backend.algo.universe.pit_resolver import (
             resolve_pit_universe,
@@ -685,8 +698,17 @@ def _main(argv: list[str] | None = None) -> int:
         _logger.error("No tickers to backfill — abort")
         return 2
 
-    kite = asyncio.run(_resolve_kite_async(args.user_id))
-    tokens = asyncio.run(_resolve_tokens_async(tickers))
+    # Single event loop for all async PG work — two separate
+    # ``asyncio.run`` calls bind the cached async engine to the
+    # first loop, then the second invocation crashes on
+    # ``Future attached to a different loop`` (CLAUDE.md §6.7,
+    # asyncpg-sync-async-bridge memory).
+    async def _bootstrap() -> tuple[Any, dict[str, int]]:
+        kite_ = await _resolve_kite_async(args.user_id)
+        tokens_ = await _resolve_tokens_async(tickers)
+        return kite_, tokens_
+
+    kite, tokens = asyncio.run(_bootstrap())
     stats = backfill_window(
         kite=kite,
         tickers=tickers,
