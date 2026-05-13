@@ -3401,6 +3401,23 @@ async def _job_algo_ws_tick_count_reset(
     return await run_reset_tick_count_job(payload)
 
 
+@register_job("intraday_bars_daily_ingest")
+async def _job_intraday_bars_daily_ingest(
+    payload: dict | None = None,
+):
+    """Mon-Fri 15:45 IST keeper for stocks.intraday_bars.
+
+    ASETPLTFRM-400 slice 1d. Pulls the previous 2 trading-day
+    window of 15m / 5m / 1m bars for the top-200 universe plus
+    active-MIS tickers; idempotent via NaN-replaceable upsert.
+    """
+    from backend.algo.jobs.intraday_bars_daily_ingest import (
+        run_intraday_bars_daily_ingest_job,
+    )
+
+    return await run_intraday_bars_daily_ingest_job(payload)
+
+
 @register_job("regime_classifier_daily")
 def _job_regime_classifier_daily(
     scope: str = "india",
