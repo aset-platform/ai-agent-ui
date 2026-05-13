@@ -339,6 +339,16 @@ class LiveRuntime:
         self._timeout_watcher: _OrderTimeoutWatcher | None = None
         self._timeout_watcher_task: asyncio.Task | None = None
 
+        # ASETPLTFRM-394 — MIS auto-square-off background task.
+        # Scheduled inside ``run()`` (needs a running loop) for any
+        # strategy where product == "MIS". Sleeps until
+        # ``square_off_time`` (default "15:14 IST") IST today, then
+        # emits a synthetic SELL signal per open position through
+        # the normal ``_submit_order`` path. Cancelled in the
+        # ``finally:`` block when the runtime stops.
+        # Daily / CNC strategies leave this as None.
+        self._square_off_task: asyncio.Task | None = None
+
     def _load_bucket_by_ticker(self) -> dict[str, str]:
         """Read latest ``stocks.universe_snapshot`` and build a
         ticker → liquidity_bucket dict for this session.
@@ -462,6 +472,124 @@ class LiveRuntime:
     # Main run loop
     # ----------------------------------------------------------
 
+    # ----------------------------------------------------------
+    # ASETPLTFRM-394 — MIS auto-square-off
+    # ----------------------------------------------------------
+
+    @staticmethod
+    def _parse_square_off_ist(s: str | None) -> time:
+        """Parse a "HH:MM IST" (or bare "HH:MM") string into a
+        ``datetime.time``. Falls back to 15:14 IST on any parse
+        failure — matches the AST default and is one minute before
+        Zerodha's broker-side 15:15 auto-square so our fill lands
+        in the ledger first.
+        """
+        raw = (s or "").strip() or "15:14 IST"
+        cleaned = raw.replace("IST", "").strip()
+        try:
+            hh, mm = cleaned.split(":")
+            return time(int(hh), int(mm))
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "LiveRuntime: invalid square_off_time=%r — "
+                "falling back to 15:14 IST", s,
+            )
+            return time(15, 14)
+
+    async def _schedule_mis_square_off(self) -> None:
+        """Sleep until ``square_off_time`` IST today, then emit a
+        synthetic SELL signal for every open position via the
+        normal ``_submit_order`` path. Caps + slippage + audit all
+        apply normally.
+
+        Cancelled by ``run()``'s ``finally:`` block on session stop.
+        If the target time is already in the past at scheduling
+        (e.g. operator started the runtime at 15:30 IST), the task
+        no-ops immediately.
+
+        Daily / CNC strategies must never reach this method —
+        ``run()`` only schedules it when ``strategy.product == "MIS"``.
+        """
+        from backend.algo.paper.types import Signal
+
+        target_t = self._parse_square_off_ist(
+            self._strategy.square_off_time,
+        )
+        now_ist = datetime.now(IST)
+        target_ist = now_ist.replace(
+            hour=target_t.hour, minute=target_t.minute,
+            second=0, microsecond=0,
+        )
+        delay_s = (target_ist - now_ist).total_seconds()
+        if delay_s <= 0:
+            _logger.info(
+                "LiveRuntime: square_off_time=%s already past at "
+                "runtime start (now_ist=%s) — auto-square no-op",
+                target_t.strftime("%H:%M"),
+                now_ist.strftime("%H:%M:%S"),
+            )
+            return
+
+        _logger.info(
+            "LiveRuntime: MIS auto-square scheduled in %.1fs "
+            "(target=%s IST, strategy=%s)",
+            delay_s, target_t.strftime("%H:%M"), self._strategy.id,
+        )
+        try:
+            await asyncio.sleep(delay_s)
+        except asyncio.CancelledError:
+            _logger.info(
+                "LiveRuntime: MIS auto-square task cancelled "
+                "before firing (session stopped early)",
+            )
+            raise
+
+        open_positions = self._positions.open_positions()
+        if not open_positions:
+            _logger.info(
+                "LiveRuntime: MIS auto-square fired but no open "
+                "positions to close — no-op",
+            )
+            return
+
+        _logger.warning(
+            "LiveRuntime: MIS auto-square firing for %d open "
+            "position(s) at %s IST",
+            len(open_positions),
+            datetime.now(IST).strftime("%H:%M:%S"),
+        )
+        for ticker, pos in list(open_positions.items()):
+            if pos.qty <= 0:
+                continue
+            signal = Signal(
+                strategy_id=self._strategy.id,
+                user_id=self._user_id,
+                ticker=ticker,
+                side="SELL",
+                qty=int(pos.qty),
+                emitted_at_ns=int(
+                    datetime.now(UTC).timestamp() * 1_000_000_000,
+                ),
+                reason="mis_auto_square_off",
+            )
+            # Use the position's avg price as a reference for the
+            # marketable-LIMIT calc inside _submit_order. Real-time
+            # LTP would be better, but this method runs from a
+            # standalone task and doesn't have the per-tick last
+            # price map handy. Avg-price is a conservative anchor.
+            try:
+                await self._submit_order(
+                    signal=signal,
+                    last_price=Decimal(str(pos.avg_price)),
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning(
+                    "LiveRuntime: MIS auto-square SELL failed for "
+                    "%s: %s — Kite's broker-side 15:15 auto-square"
+                    " will still close the position",
+                    ticker, exc, exc_info=True,
+                )
+
     async def run(self, source: TickSource) -> int:
         """Drain the tick source. Returns fill count."""
         fills = 0
@@ -506,6 +634,18 @@ class LiveRuntime:
                     "LiveRuntime: order timeout watcher disabled "
                     "(ALGO_ORDER_TTL_S=0)",
                 )
+
+        # ASETPLTFRM-394 — schedule MIS auto-square-off task for any
+        # MIS strategy. CNC strategies skip this entirely; the
+        # ``finally:`` block tolerates ``_square_off_task`` being
+        # None so the daily-strategy lifecycle is unchanged.
+        if (
+            self._square_off_task is None
+            and getattr(self._strategy, "product", "CNC") == "MIS"
+        ):
+            self._square_off_task = asyncio.create_task(
+                self._schedule_mis_square_off(),
+            )
         try:
             async for tick in source:
                 tick_count += 1
@@ -547,6 +687,20 @@ class LiveRuntime:
                 tick_count, bar_count, fills, len(self._events),
             )
         finally:
+            # ASETPLTFRM-394 — cancel the MIS auto-square task on
+            # session stop. If we stopped BEFORE the scheduled
+            # square-off time, the task is sleeping and gets
+            # cancelled cleanly. If we stopped AFTER firing, the
+            # task already completed and the cancel is a no-op.
+            # CNC strategies leave _square_off_task as None and
+            # skip this whole block.
+            if self._square_off_task is not None:
+                self._square_off_task.cancel()
+                try:
+                    await self._square_off_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
             # PR #3 (order-safety) — stop the timeout watcher first
             # so any in-flight cancellation event lands in
             # ``self._events`` before the terminal flush below.
