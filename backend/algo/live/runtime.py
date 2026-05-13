@@ -913,6 +913,12 @@ class LiveRuntime:
             float(last_price)
             if last_price and last_price > 0 else None
         )
+        # ASETPLTFRM-389 — product is now strategy-driven instead of
+        # hard-coded CNC. Existing daily strategies parse with
+        # product="CNC" (the AST default), so this read returns "CNC"
+        # for every strategy that existed before ASETPLTFRM-387.
+        # Intraday MIS strategies route here with product="MIS".
+        product_code = self._strategy.product
         try:
             kite_order_id = await asyncio.to_thread(
                 self._kite.place_order,
@@ -921,7 +927,7 @@ class LiveRuntime:
                 transaction_type=side,
                 quantity=signal.qty,
                 **order_kwargs,
-                product="CNC",
+                product=product_code,
                 variety="regular",
                 tag=f"algo-{str(self._strategy.id)[:8]}",
                 # PR #1 — order-safety hardening + full-payload
@@ -985,7 +991,12 @@ class LiveRuntime:
             "submitted_at": now_iso,
             "status": "submitted",
             "reason": signal.reason,
-            "product": "CNC",
+            # ASETPLTFRM-389 — strategy-driven (was hard-coded "CNC").
+            # The (symbol, product) attribution join in routes/live.py
+            # reads this to pair postback fills with the originating
+            # strategy; surfacing the actual broker product keeps that
+            # join honest for MIS positions too.
+            "product": product_code,
         }
         self._in_flight.append(in_flight_entry)
         await self._caps_repo.update_in_flight(
@@ -1065,7 +1076,14 @@ class LiveRuntime:
 
         today = datetime.now(UTC).date()
         fee_model = IndianFeeModel(as_of=today)
-        product = "DELIVERY"
+        # ASETPLTFRM-389 — fee model uses DELIVERY / INTRADAY (not
+        # CNC / MIS). Map from strategy.product, defaulting to
+        # DELIVERY so existing CNC strategies keep the same fee
+        # tier they had before this change.
+        product = (
+            "INTRADAY" if self._strategy.product == "MIS"
+            else "DELIVERY"
+        )
         trade = Trade(
             symbol=symbol,
             exchange="NSE",
