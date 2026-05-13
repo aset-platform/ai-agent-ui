@@ -275,6 +275,79 @@ def test_unknown_schedule_interval_rejected():
         parse_strategy(bad)
 
 
+# ---- ASETPLTFRM-387 — MIS / intraday widening ---------------------
+
+class TestCadenceAndProduct:
+    """Backwards-compat + new cadence/product axes.
+
+    Existing daily strategies in production have no ``product`` or
+    ``square_off_time`` keys in their persisted AST JSON. The tests
+    pin that they continue to parse cleanly and default to CNC.
+    """
+
+    def test_existing_daily_strategy_parses_without_product_key(self):
+        # No ``product`` / ``square_off_time`` in payload — mirrors
+        # every strategy created before this slice. Must default to
+        # CNC + None and parse without error.
+        s = parse_strategy(_wrap({"type": "hold"}))
+        assert s.product == "CNC"
+        assert s.square_off_time is None
+        assert s.schedule.interval == "1d"
+
+    def test_intraday_5m_cadence_accepted(self):
+        payload = _wrap({"type": "hold"})
+        payload["schedule"]["interval"] = "5m"
+        s = parse_strategy(payload)
+        assert s.schedule.interval == "5m"
+        # Product still defaults to CNC for intraday + CNC scalpers.
+        assert s.product == "CNC"
+
+    def test_intraday_15m_cadence_accepted(self):
+        payload = _wrap({"type": "hold"})
+        payload["schedule"]["interval"] = "15m"
+        s = parse_strategy(payload)
+        assert s.schedule.interval == "15m"
+
+    def test_intraday_1m_cadence_accepted(self):
+        payload = _wrap({"type": "hold"})
+        payload["schedule"]["interval"] = "1m"
+        s = parse_strategy(payload)
+        assert s.schedule.interval == "1m"
+
+    def test_mis_with_5m_cadence_accepted(self):
+        payload = _wrap({"type": "hold"})
+        payload["schedule"]["interval"] = "5m"
+        payload["product"] = "MIS"
+        payload["square_off_time"] = "15:14 IST"
+        s = parse_strategy(payload)
+        assert s.product == "MIS"
+        assert s.square_off_time == "15:14 IST"
+
+    def test_mis_with_daily_cadence_rejected(self):
+        # MIS + 1d is degenerate (open at close, force-squared by
+        # broker seconds later). Model_validator must reject.
+        payload = _wrap({"type": "hold"})
+        payload["product"] = "MIS"
+        # interval stays "1d" from _wrap default
+        with pytest.raises(ValidationError):
+            parse_strategy(payload)
+
+    def test_unknown_product_rejected(self):
+        payload = _wrap({"type": "hold"})
+        payload["product"] = "NRML"  # CNC/MIS only in v1
+        with pytest.raises(ValidationError):
+            parse_strategy(payload)
+
+    def test_3m_cadence_rejected(self):
+        # Only 1d / 15m / 5m / 1m are valid intervals. 3m / 30m / 1h
+        # are common-mistake values that must still raise — keep
+        # the literal-set narrow until there's data to justify them.
+        payload = _wrap({"type": "hold"})
+        payload["schedule"]["interval"] = "3m"
+        with pytest.raises(ValidationError):
+            parse_strategy(payload)
+
+
 def test_risk_per_trade_negative_sl_rejected():
     bad = _wrap({"type": "hold"})
     bad["risk"]["per_trade"]["stop_loss_pct"] = -1

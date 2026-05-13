@@ -4,13 +4,19 @@
 
   1. Kill switch               (KILL_SWITCH)
   2. Allowed tickers           (LIVE_TICKER_NOT_ALLOWED)   ← cheapest
-  3. max_orders_per_day        (LIVE_ORDERS_PER_DAY_CAP)
-  4. max_inr                   (LIVE_INR_CAP)
+  3. max concurrent positions  (LIVE_ORDERS_PER_DAY_CAP)
+  4. max_inr (strategy alloc)  (LIVE_INR_CAP)
   5. Per-trade max_qty         (MAX_QTY)
   6. Daily max_loss_pct        (DAILY_LOSS_CAP)
   7. Daily max_open_positions  (MAX_OPEN_POSITIONS)
   8. Portfolio max_concentration_pct  (POSITION_CAP)
   9. Portfolio max_exposure_pct       (EXPOSURE_CAP — may scale)
+
+Caps 3 & 4 are **exposure-based**: ``day_state`` carries currently-
+committed values (Σ qty × avg over open legs) rather than turnover
+since 09:00. SELLs and BUY-adds to an existing ticker bypass these
+caps — the only action that consumes new budget / opens a new leg
+is a BUY opening a new ticker.
 
 v2-new layers (2-4) run BEFORE the v1 layers (5-9) so we short-
 circuit cheaply before any portfolio arithmetic.
@@ -149,9 +155,19 @@ def pre_trade_check(
             RejectReason.LIVE_TICKER_NOT_ALLOWED,
         )
 
-    # ---- Cap 3: max_orders_per_day -----------------------------
+    # ---- Cap 3: max concurrent open positions ------------------
+    # Exposure semantics: ``orders_count_today`` is now the count
+    # of open legs for this strategy (not fills-since-09:00).
+    # SELLs reduce the count and BUY-adds to an existing ticker
+    # leave it unchanged — neither should be cap-rejected here.
+    # Only a BUY opening a new ticker raises the count, so this
+    # gate applies only to that case.
     max_orders = int(caps.get("max_orders_per_day", 0))
-    if max_orders > 0:
+    is_new_position_buy = (
+        signal.side == "BUY"
+        and signal.ticker not in account.open_positions
+    )
+    if max_orders > 0 and is_new_position_buy:
         orders_today = int(day_state.get("orders_count_today", 0))
         if orders_today >= max_orders:
             return _reject_live(
@@ -160,9 +176,14 @@ def pre_trade_check(
                 observed=Decimal(orders_today),
             )
 
-    # ---- Cap 4: max_inr per day --------------------------------
+    # ---- Cap 4: max_inr (strategy capital allocation) ----------
+    # Exposure-based: ``cumulative_inr_today`` is the currently
+    # committed notional via this strategy's open positions, not
+    # turnover. SELLs free capital rather than consuming it, so
+    # they bypass this cap; otherwise a square-off could be
+    # rejected by the very cap it would relieve.
     max_inr = Decimal(str(caps.get("max_inr", 0)))
-    if max_inr > 0:
+    if max_inr > 0 and signal.side != "SELL":
         cum_inr = Decimal(
             str(day_state.get("cumulative_inr_today", 0))
         )

@@ -272,8 +272,14 @@ class LiveRuntime:
         # ``initial_running_bar``. Fail-soft: any error degrades to
         # the pre-383 empty-history behaviour (strategy silent-skips
         # until indicators settle).
+        #
+        # ASETPLTFRM-393 — for intraday cadences (15m / 5m / 1m) we
+        # route through ``preload_intraday_bars`` instead, reading
+        # from ``algo.intraday_bars`` and falling back to Kite. The
+        # daily path is preserved bit-for-bit for ``interval="1d"``.
         allowed_for_preload = caps.get("allowed_tickers") or []
-        if allowed_for_preload:
+        interval = strategy.schedule.interval
+        if allowed_for_preload and interval == "1d":
             try:
                 from backend.algo.live.daily_bar_warmup import (
                     preload_daily_bars,
@@ -297,6 +303,32 @@ class LiveRuntime:
                     "settle on session-local minute history",
                     exc,
                 )
+        elif allowed_for_preload and interval != "1d":
+            try:
+                from backend.algo.live.intraday_bar_warmup import (
+                    INTERVAL_SEC_BY_LABEL,
+                    preload_intraday_bars,
+                )
+                interval_sec = INTERVAL_SEC_BY_LABEL[interval]
+                preloaded = preload_intraday_bars(
+                    list(allowed_for_preload),
+                    interval_sec=interval_sec,
+                    kite_client=kite,
+                    ticker_to_token=self._ticker_to_token or None,
+                )
+                self._bars_by_ticker.update(preloaded)
+                _logger.info(
+                    "LiveRuntime: intraday-bar warmup loaded — "
+                    "%d ticker(s), interval=%s",
+                    len(preloaded), interval,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning(
+                    "LiveRuntime: intraday-bar warmup failed: %s "
+                    "— strategies will silent-skip until indicators"
+                    " settle on session-local bars",
+                    exc, exc_info=True,
+                )
 
         # PR #3 (order-safety) — background asyncio watcher that
         # cancels any session-tagged LIMIT older than
@@ -306,6 +338,16 @@ class LiveRuntime:
         # ``finally:`` block.
         self._timeout_watcher: _OrderTimeoutWatcher | None = None
         self._timeout_watcher_task: asyncio.Task | None = None
+
+        # ASETPLTFRM-394 — MIS auto-square-off background task.
+        # Scheduled inside ``run()`` (needs a running loop) for any
+        # strategy where product == "MIS". Sleeps until
+        # ``square_off_time`` (default "15:14 IST") IST today, then
+        # emits a synthetic SELL signal per open position through
+        # the normal ``_submit_order`` path. Cancelled in the
+        # ``finally:`` block when the runtime stops.
+        # Daily / CNC strategies leave this as None.
+        self._square_off_task: asyncio.Task | None = None
 
     def _load_bucket_by_ticker(self) -> dict[str, str]:
         """Read latest ``stocks.universe_snapshot`` and build a
@@ -430,6 +472,124 @@ class LiveRuntime:
     # Main run loop
     # ----------------------------------------------------------
 
+    # ----------------------------------------------------------
+    # ASETPLTFRM-394 — MIS auto-square-off
+    # ----------------------------------------------------------
+
+    @staticmethod
+    def _parse_square_off_ist(s: str | None) -> time:
+        """Parse a "HH:MM IST" (or bare "HH:MM") string into a
+        ``datetime.time``. Falls back to 15:14 IST on any parse
+        failure — matches the AST default and is one minute before
+        Zerodha's broker-side 15:15 auto-square so our fill lands
+        in the ledger first.
+        """
+        raw = (s or "").strip() or "15:14 IST"
+        cleaned = raw.replace("IST", "").strip()
+        try:
+            hh, mm = cleaned.split(":")
+            return time(int(hh), int(mm))
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "LiveRuntime: invalid square_off_time=%r — "
+                "falling back to 15:14 IST", s,
+            )
+            return time(15, 14)
+
+    async def _schedule_mis_square_off(self) -> None:
+        """Sleep until ``square_off_time`` IST today, then emit a
+        synthetic SELL signal for every open position via the
+        normal ``_submit_order`` path. Caps + slippage + audit all
+        apply normally.
+
+        Cancelled by ``run()``'s ``finally:`` block on session stop.
+        If the target time is already in the past at scheduling
+        (e.g. operator started the runtime at 15:30 IST), the task
+        no-ops immediately.
+
+        Daily / CNC strategies must never reach this method —
+        ``run()`` only schedules it when ``strategy.product == "MIS"``.
+        """
+        from backend.algo.paper.types import Signal
+
+        target_t = self._parse_square_off_ist(
+            self._strategy.square_off_time,
+        )
+        now_ist = datetime.now(IST)
+        target_ist = now_ist.replace(
+            hour=target_t.hour, minute=target_t.minute,
+            second=0, microsecond=0,
+        )
+        delay_s = (target_ist - now_ist).total_seconds()
+        if delay_s <= 0:
+            _logger.info(
+                "LiveRuntime: square_off_time=%s already past at "
+                "runtime start (now_ist=%s) — auto-square no-op",
+                target_t.strftime("%H:%M"),
+                now_ist.strftime("%H:%M:%S"),
+            )
+            return
+
+        _logger.info(
+            "LiveRuntime: MIS auto-square scheduled in %.1fs "
+            "(target=%s IST, strategy=%s)",
+            delay_s, target_t.strftime("%H:%M"), self._strategy.id,
+        )
+        try:
+            await asyncio.sleep(delay_s)
+        except asyncio.CancelledError:
+            _logger.info(
+                "LiveRuntime: MIS auto-square task cancelled "
+                "before firing (session stopped early)",
+            )
+            raise
+
+        open_positions = self._positions.open_positions()
+        if not open_positions:
+            _logger.info(
+                "LiveRuntime: MIS auto-square fired but no open "
+                "positions to close — no-op",
+            )
+            return
+
+        _logger.warning(
+            "LiveRuntime: MIS auto-square firing for %d open "
+            "position(s) at %s IST",
+            len(open_positions),
+            datetime.now(IST).strftime("%H:%M:%S"),
+        )
+        for ticker, pos in list(open_positions.items()):
+            if pos.qty <= 0:
+                continue
+            signal = Signal(
+                strategy_id=self._strategy.id,
+                user_id=self._user_id,
+                ticker=ticker,
+                side="SELL",
+                qty=int(pos.qty),
+                emitted_at_ns=int(
+                    datetime.now(UTC).timestamp() * 1_000_000_000,
+                ),
+                reason="mis_auto_square_off",
+            )
+            # Use the position's avg price as a reference for the
+            # marketable-LIMIT calc inside _submit_order. Real-time
+            # LTP would be better, but this method runs from a
+            # standalone task and doesn't have the per-tick last
+            # price map handy. Avg-price is a conservative anchor.
+            try:
+                await self._submit_order(
+                    signal=signal,
+                    last_price=Decimal(str(pos.avg_price)),
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning(
+                    "LiveRuntime: MIS auto-square SELL failed for "
+                    "%s: %s — Kite's broker-side 15:15 auto-square"
+                    " will still close the position",
+                    ticker, exc, exc_info=True,
+                )
+
     async def run(self, source: TickSource) -> int:
         """Drain the tick source. Returns fill count."""
         fills = 0
@@ -474,6 +634,18 @@ class LiveRuntime:
                     "LiveRuntime: order timeout watcher disabled "
                     "(ALGO_ORDER_TTL_S=0)",
                 )
+
+        # ASETPLTFRM-394 — schedule MIS auto-square-off task for any
+        # MIS strategy. CNC strategies skip this entirely; the
+        # ``finally:`` block tolerates ``_square_off_task`` being
+        # None so the daily-strategy lifecycle is unchanged.
+        if (
+            self._square_off_task is None
+            and getattr(self._strategy, "product", "CNC") == "MIS"
+        ):
+            self._square_off_task = asyncio.create_task(
+                self._schedule_mis_square_off(),
+            )
         try:
             async for tick in source:
                 tick_count += 1
@@ -515,6 +687,20 @@ class LiveRuntime:
                 tick_count, bar_count, fills, len(self._events),
             )
         finally:
+            # ASETPLTFRM-394 — cancel the MIS auto-square task on
+            # session stop. If we stopped BEFORE the scheduled
+            # square-off time, the task is sleeping and gets
+            # cancelled cleanly. If we stopped AFTER firing, the
+            # task already completed and the cancel is a no-op.
+            # CNC strategies leave _square_off_task as None and
+            # skip this whole block.
+            if self._square_off_task is not None:
+                self._square_off_task.cancel()
+                try:
+                    await self._square_off_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
             # PR #3 (order-safety) — stop the timeout watcher first
             # so any in-flight cancellation event lands in
             # ``self._events`` before the terminal flush below.
@@ -606,41 +792,89 @@ class LiveRuntime:
             tz=timezone.utc,
         ).date()
 
-        # ASETPLTFRM-383 — daily-bar series, not minute-bar series.
-        # ``history`` is the preloaded 250 closed daily bars + 1
-        # running today bar that this minute-close updates in place.
+        # ASETPLTFRM-393 — bucket-key resolution per cadence.
+        # Daily (interval="1d") buckets by trading date; one running
+        # bar per day. Intraday buckets by bar_open_ts_ns floored to
+        # interval_sec; multiple bars share a date so the date alone
+        # can't tell us when a new bar starts.
+        strategy_interval = self._strategy.schedule.interval
+        if strategy_interval == "1d":
+            bucket_key: Any = bar_date_obj
+            bucket_open_ns: int | None = None
+        else:
+            from backend.algo.live.intraday_bar_warmup import (
+                INTERVAL_SEC_BY_LABEL,
+            )
+            interval_sec = INTERVAL_SEC_BY_LABEL[strategy_interval]
+            interval_ns = interval_sec * 1_000_000_000
+            bucket_open_ns = (
+                bar.bar_open_ts_ns // interval_ns
+            ) * interval_ns
+            bucket_key = bucket_open_ns
+
+        # ASETPLTFRM-383 / 393 — preloaded closed bars + a running
+        # bar that the per-minute callback updates in place.
+        # ``_bars_by_ticker`` is keyed by ticker — each LiveRuntime
+        # carries exactly one cadence, so no (ticker, interval) key
+        # needed at the dict level. Lazy-preload routes through the
+        # right warmup module based on strategy cadence.
         history = self._bars_by_ticker.get(bar.ticker)
         if history is None:
-            # Universe drift: ticker not in caps.allowed_tickers at
-            # __init__. Lazy-preload via thread so we don't block
-            # the event loop on an Iceberg read.
             try:
-                lazy = await asyncio.to_thread(
-                    preload_daily_bars,
-                    [bar.ticker],
-                    kite_client=self._kite,
-                    ticker_to_token=self._ticker_to_token or None,
-                )
+                if strategy_interval == "1d":
+                    lazy = await asyncio.to_thread(
+                        preload_daily_bars,
+                        [bar.ticker],
+                        kite_client=self._kite,
+                        ticker_to_token=(
+                            self._ticker_to_token or None
+                        ),
+                    )
+                else:
+                    from backend.algo.live.intraday_bar_warmup import (
+                        preload_intraday_bars,
+                    )
+                    lazy = await asyncio.to_thread(
+                        preload_intraday_bars,
+                        [bar.ticker],
+                        interval_sec=interval_sec,
+                        kite_client=self._kite,
+                        ticker_to_token=(
+                            self._ticker_to_token or None
+                        ),
+                    )
                 history = lazy.get(bar.ticker, [])
             except Exception as exc:  # noqa: BLE001
                 _logger.warning(
-                    "LiveRuntime: lazy daily-bar preload for %s "
-                    "failed: %s — strategy silent-skips on this "
-                    "ticker until indicators settle", bar.ticker, exc,
+                    "LiveRuntime: lazy %s-bar preload for %s failed:"
+                    " %s — strategy silent-skips on this ticker "
+                    "until indicators settle",
+                    strategy_interval, bar.ticker, exc,
+                    exc_info=True,
                 )
                 history = []
             self._bars_by_ticker[bar.ticker] = history
 
-        # Append (new day, or first bar for this ticker) or update
-        # (existing today bar) the running daily candle. We refresh
-        # close every minute so the indicator series reflects today's
-        # current LTP; high/low broaden monotonically.
+        # Append (new bucket, or first bar for this ticker) or
+        # update (existing running bar) the OHLCV candle. We refresh
+        # close every minute so the indicator series reflects the
+        # current LTP within the still-building bucket; high/low
+        # broaden monotonically; volume accumulates.
         cur_open = Decimal(str(bar.open))
         cur_high = Decimal(str(bar.high))
         cur_low = Decimal(str(bar.low))
         cur_close = Decimal(str(bar.close))
         cur_vol = max(int(bar.volume), 0)
-        if not history or history[-1].date != bar_date_obj:
+
+        def _is_new_bucket(h: list[Any]) -> bool:
+            if not h:
+                return True
+            last = h[-1]
+            if strategy_interval == "1d":
+                return last.date != bar_date_obj
+            return last.bar_open_ts_ns != bucket_open_ns
+
+        if _is_new_bucket(history):
             history.append(_BackBar(
                 ticker=bar.ticker,
                 date=bar_date_obj,
@@ -649,6 +883,7 @@ class LiveRuntime:
                 low=cur_low,
                 close=cur_close,
                 volume=cur_vol,
+                bar_open_ts_ns=bucket_open_ns,
             ))
         else:
             today_bar = history[-1]
@@ -663,9 +898,18 @@ class LiveRuntime:
         # ticks update today's bar but no strategy eval fires. Lets
         # the daily candle stabilise before we act on it. Override
         # ``ALGO_DAILY_MIN_EVAL_TIME_IST`` for smoke testing.
-        now_ist_t = datetime.now(IST).time()
-        if now_ist_t < _MIN_EVAL_TIME_IST:
-            return 0
+        #
+        # ASETPLTFRM-390 — gate is daily-only. Intraday cadences
+        # (5m / 1m) want to fire on every closed bar from market
+        # open at 09:15 IST; gating them on the daily-candle-stabilise
+        # cutoff would silence the entire morning session and defeat
+        # the purpose of running an intraday strategy. The env var
+        # name is ALGO_DAILY_MIN_EVAL_TIME_IST precisely because the
+        # constraint is daily-specific.
+        if self._strategy.schedule.interval == "1d":
+            now_ist_t = datetime.now(IST).time()
+            if now_ist_t < _MIN_EVAL_TIME_IST:
+                return 0
 
         ind_map = compute_indicators(history)
         # REGIME-2a — lazy-load cached factor rows for this
@@ -745,8 +989,9 @@ class LiveRuntime:
         ))
         self._flush_events_now()
 
-        # Fresh caps read — do NOT trust stale constructor copy
-        # for daily counters; read atomically.
+        # Fresh caps read — used for max_inr / max_orders_per_day
+        # and the allow-list; the daily-counter columns on the row
+        # are no longer authoritative (see below).
         current_caps = await self._caps_repo.get(
             self._user_id, self._strategy.id,
         ) or self._caps
@@ -755,13 +1000,23 @@ class LiveRuntime:
             kill_switch_active=await self._kill_switch_repo
             .is_active(self._user_id),
         )
+        # Exposure-based day_state: "consumption" is the capital
+        # currently tied up in this strategy's open positions, not
+        # turnover-since-09:00. PositionTracker is hydrated from
+        # Kite at runtime spawn (position_hydration.hydrate) so a
+        # restart preserves yesterday's overnight legs. Square-offs
+        # naturally bring this back to 0, no daily reset job needed.
+        positions_open = self._positions.open_positions()
+        committed_inr_now = sum(
+            (
+                Decimal(p.qty) * p.avg_price
+                for p in positions_open.values()
+            ),
+            start=Decimal("0"),
+        )
         day_state = {
-            "cumulative_inr_today": current_caps.get(
-                "cumulative_inr_today", Decimal("0"),
-            ),
-            "orders_count_today": current_caps.get(
-                "orders_count_today", 0,
-            ),
+            "cumulative_inr_today": committed_inr_now,
+            "orders_count_today": len(positions_open),
         }
 
         decision = pre_trade_check(
@@ -902,6 +1157,12 @@ class LiveRuntime:
             float(last_price)
             if last_price and last_price > 0 else None
         )
+        # ASETPLTFRM-389 — product is now strategy-driven instead of
+        # hard-coded CNC. Existing daily strategies parse with
+        # product="CNC" (the AST default), so this read returns "CNC"
+        # for every strategy that existed before ASETPLTFRM-387.
+        # Intraday MIS strategies route here with product="MIS".
+        product_code = self._strategy.product
         try:
             kite_order_id = await asyncio.to_thread(
                 self._kite.place_order,
@@ -910,7 +1171,7 @@ class LiveRuntime:
                 transaction_type=side,
                 quantity=signal.qty,
                 **order_kwargs,
-                product="CNC",
+                product=product_code,
                 variety="regular",
                 tag=f"algo-{str(self._strategy.id)[:8]}",
                 # PR #1 — order-safety hardening + full-payload
@@ -974,7 +1235,12 @@ class LiveRuntime:
             "submitted_at": now_iso,
             "status": "submitted",
             "reason": signal.reason,
-            "product": "CNC",
+            # ASETPLTFRM-389 — strategy-driven (was hard-coded "CNC").
+            # The (symbol, product) attribution join in routes/live.py
+            # reads this to pair postback fills with the originating
+            # strategy; surfacing the actual broker product keeps that
+            # join honest for MIS positions too.
+            "product": product_code,
         }
         self._in_flight.append(in_flight_entry)
         await self._caps_repo.update_in_flight(
@@ -1054,7 +1320,14 @@ class LiveRuntime:
 
         today = datetime.now(UTC).date()
         fee_model = IndianFeeModel(as_of=today)
-        product = "DELIVERY"
+        # ASETPLTFRM-389 — fee model uses DELIVERY / INTRADAY (not
+        # CNC / MIS). Map from strategy.product, defaulting to
+        # DELIVERY so existing CNC strategies keep the same fee
+        # tier they had before this change.
+        product = (
+            "INTRADAY" if self._strategy.product == "MIS"
+            else "DELIVERY"
+        )
         trade = Trade(
             symbol=symbol,
             exchange="NSE",

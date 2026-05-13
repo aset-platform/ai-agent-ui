@@ -306,23 +306,34 @@ def expire_snapshots(
 def compact_table(table_name: str) -> dict:
     """Compact small files by rewriting partitions.
 
-    Reads all data via DuckDB, deletes the table
-    contents, and re-appends as a single batch —
-    producing 1 file per partition instead of many.
+    Reads the table via PyIceberg (catalog truth), deletes the
+    contents, and re-appends as a single batch — producing one
+    file per partition instead of many.
 
     Args:
         table_name: e.g. 'stocks.ohlcv'
 
     Returns:
         Dict with before/after file counts.
+
+    Notes
+    -----
+    The read path deliberately bypasses DuckDB / ``query_iceberg_df``
+    and goes straight through PyIceberg's ``tbl.refresh().scan()``.
+    The 2026-05-12 ``stocks.regime_history`` incident traced to a
+    stale-read race: the classifier wrote a new row and called
+    ``invalidate_metadata``, but a concurrent ``/algo/regime/current``
+    request re-populated ``_meta_cache`` with the post-write metadata
+    path *while* compaction was about to begin — and the cache races
+    even further when ``cleanup_orphans_v2`` later commits its own
+    expire-snapshots step. Result: ``query_iceberg_df`` returned the
+    snapshot from the cached metadata file (one row short), the
+    ``tbl.overwrite()`` below committed that short payload, and the
+    just-written daily row was lost. Reading from the same ``tbl``
+    object that performs the overwrite guarantees reader and writer
+    see the same snapshot, which is the only invariant compaction
+    actually needs.
     """
-    from backend.db.duckdb_engine import (
-        query_iceberg_df,
-    )
-
-    view_name = table_name.split(".")[-1]
-
-    # Count files before
     table_dir = WAREHOUSE_DIR / table_name.replace(".", "/")
     before = _count_parquet_files(table_dir)
 
@@ -334,12 +345,18 @@ def compact_table(table_name: str) -> dict:
 
     t0 = time.monotonic()
 
-    # Read all data via DuckDB
+    from tools._stock_shared import _require_repo
+
+    repo = _require_repo()
+
     try:
-        df = query_iceberg_df(
-            table_name,
-            f"SELECT * FROM {view_name}",
-        )
+        tbl = repo.load_table(table_name)
+        # tbl.refresh() forces the in-memory metadata view to match
+        # the catalog pointer — protects against the (rare but real)
+        # case where another thread's commit landed between
+        # load_table() and scan().
+        tbl.refresh()
+        arrow = tbl.scan().to_arrow()
     except Exception:
         _logger.error(
             "[maint] Failed to read %s",
@@ -351,7 +368,8 @@ def compact_table(table_name: str) -> dict:
             "error": "read failed",
         }
 
-    if df.empty:
+    rows = arrow.num_rows
+    if rows == 0:
         _logger.info(
             "[maint] %s is empty, nothing to " "compact",
             table_name,
@@ -363,29 +381,13 @@ def compact_table(table_name: str) -> dict:
             "rows": 0,
         }
 
-    rows = len(df)
-
-    # Overwrite table with compacted data
-    import pyarrow as pa
-    from tools._stock_shared import _require_repo
-
-    repo = _require_repo()
-    tbl = repo.load_table(table_name)
-
-    # Convert DataFrame to Arrow, aligning with
-    # the Iceberg schema
-    arrow = pa.Table.from_pandas(
-        df,
-        preserve_index=False,
-    )
-
     # Align Arrow nullability with the Iceberg schema's
-    # required/optional flags. ``pa.Table.from_pandas``
-    # unconditionally produces nullable columns; pyiceberg's
-    # ``overwrite()`` then rejects the schema check whenever
-    # the table declares a column ``required=True``
-    # (ValueError: "Mismatch in fields: bar_date required vs
-    # optional"). Affects every table with a NOT-NULL column
+    # required/optional flags. ``tbl.scan().to_arrow()`` already
+    # carries the iceberg schema's nullability, but we re-cast
+    # defensively in case PyIceberg's projection ever loosens a
+    # column to nullable — the historical bug ("Mismatch in fields:
+    # bar_date required vs optional") would otherwise resurface on
+    # ``overwrite()``. Affects every table with a NOT-NULL column
     # — e.g. ``stocks.regime_history``, ``stocks.daily_factors``,
     # ``stocks.regime_hmm_state``.
     try:
@@ -403,7 +405,8 @@ def compact_table(table_name: str) -> dict:
     # commit — produces 1 file per partition
     try:
         tbl.overwrite(arrow)
-        # Invalidate DuckDB cache
+        # Invalidate DuckDB cache so subsequent readers (insights,
+        # endpoints) see the post-compact file set.
         try:
             from backend.db.duckdb_engine import (
                 invalidate_metadata,

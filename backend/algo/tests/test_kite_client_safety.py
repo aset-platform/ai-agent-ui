@@ -310,3 +310,86 @@ class TestNoEventsSinkLegacy:
             price=307.0,
         )
         assert oid == "KITE_LEGACY"
+
+
+# -----------------------------------------------------------------
+# ASETPLTFRM-388 — _ALLOWED_PRODUCTS widening (CNC + MIS)
+# -----------------------------------------------------------------
+
+
+class TestProductAllowList:
+    """CNC stays the default for existing strategies; MIS is now
+    admitted for intraday paths. NRML / BO / CO remain rejected at
+    the SDK boundary per v1 scope.
+    """
+
+    def test_cnc_default_unchanged(self, kite_client):
+        """Existing CNC callers must keep working — this is the
+        backwards-compat invariant the rest of the system relies on.
+        """
+        client, mock_kc = kite_client
+        mock_kc.place_order.return_value = {"order_id": "KITE_CNC"}
+        oid = client.place_order(
+            tradingsymbol="ITC",
+            exchange="NSE",
+            transaction_type="BUY",
+            quantity=1,
+            order_type="LIMIT",
+            price=307.0,
+            product="CNC",
+        )
+        assert oid == "KITE_CNC"
+        # SDK saw the right product code.
+        call_kwargs = mock_kc.place_order.call_args.kwargs
+        assert call_kwargs.get("product") == "CNC"
+
+    def test_mis_now_accepted_and_forwarded(self, kite_client):
+        """The new MIS path must call the SDK with product='MIS' so
+        Kite books the position against intraday margin."""
+        client, mock_kc = kite_client
+        mock_kc.place_order.return_value = {"order_id": "KITE_MIS"}
+        oid = client.place_order(
+            tradingsymbol="ITC",
+            exchange="NSE",
+            transaction_type="BUY",
+            quantity=1,
+            order_type="LIMIT",
+            price=307.0,
+            product="MIS",
+        )
+        assert oid == "KITE_MIS"
+        call_kwargs = mock_kc.place_order.call_args.kwargs
+        assert call_kwargs.get("product") == "MIS"
+
+    def test_nrml_still_rejected(self, kite_client):
+        """NRML (overnight F&O margin) is out of scope for v1 — the
+        SDK boundary must still reject so an upstream bug can't
+        accidentally route F&O orders here."""
+        client, mock_kc = kite_client
+        with pytest.raises(ValueError, match="product='NRML'"):
+            client.place_order(
+                tradingsymbol="NIFTY24JANFUT",
+                exchange="NFO",
+                transaction_type="BUY",
+                quantity=50,
+                order_type="LIMIT",
+                price=22000.0,
+                product="NRML",
+            )
+        mock_kc.place_order.assert_not_called()
+
+    def test_bo_still_rejected(self, kite_client):
+        """Bracket orders need separate plumbing (target / stop legs);
+        v1 only ships plain regular variety."""
+        client, mock_kc = kite_client
+        with pytest.raises(ValueError, match="product='BO'"):
+            client.place_order(
+                tradingsymbol="ITC",
+                exchange="NSE",
+                transaction_type="BUY",
+                quantity=1,
+                order_type="LIMIT",
+                price=307.0,
+                product="BO",
+            )
+        mock_kc.place_order.assert_not_called()

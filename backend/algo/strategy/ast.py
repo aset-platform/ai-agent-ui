@@ -262,7 +262,12 @@ class UniverseScope(BaseModel):
 class ScheduleBarClose(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["bar_close"] = "bar_close"
-    interval: Literal["1d"]   # 1m / 5m added in Slice 6
+    # ASETPLTFRM-387 — widened from Literal["1d"]. Daily stays the
+    # default behaviour; intraday cadences (15m / 5m / 1m) land in
+    # this slice. Backwards-compat: existing AST JSON in
+    # algo.strategies carries interval="1d" so all current strategies
+    # parse unchanged.
+    interval: Literal["1d", "15m", "5m", "1m"]
     time: str = Field(default="15:25 IST")
 
 
@@ -302,6 +307,20 @@ class Strategy(BaseModel):
 
     ``id`` is a UUID (DB row id once persisted; transient at
     edit time). ``name`` is a free-form label.
+
+    ``product`` selects Kite's broker-side product code at order
+    placement. ``"CNC"`` is delivery (overnight hold permitted) and
+    is the default — every strategy created before ASETPLTFRM-387
+    has no ``product`` key in its persisted AST, so the default
+    keeps them parsing unchanged. ``"MIS"`` is the intraday product;
+    Zerodha forces a same-day square-off at 15:15 IST. ``"MIS"`` is
+    only valid in combination with intraday cadence (5m / 1m), and
+    the model_validator below enforces that invariant.
+
+    ``square_off_time`` is only meaningful when ``product == "MIS"``.
+    LiveRuntime falls back to ``"15:14 IST"`` (one minute before the
+    Zerodha auto-square so our SELL fill lands in the ledger before
+    the broker forces it) when the field is ``None``.
     """
     model_config = ConfigDict(extra="forbid")
 
@@ -312,6 +331,8 @@ class Strategy(BaseModel):
     rebalance: RebalanceDaily
     root: AnyNode
     risk: RiskConfig
+    product: Literal["CNC", "MIS"] = "CNC"
+    square_off_time: str | None = None
 
     @model_validator(mode="after")
     def _root_must_be_actionable(self) -> "Strategy":
@@ -321,6 +342,22 @@ class Strategy(BaseModel):
         # buy-on-true/hold-on-false semantic.  We therefore only
         # reject truly degenerate cases — currently none beyond what
         # type-checking already enforces at parse time.
+        return self
+
+    @model_validator(mode="after")
+    def _mis_requires_intraday(self) -> "Strategy":
+        # MIS is Zerodha's intraday product — Kite forces a same-day
+        # square-off at 15:15 IST regardless of strategy intent. It
+        # only makes sense paired with intraday cadence; pairing it
+        # with daily cadence would mean "open at today's close, get
+        # force-squared by Kite within seconds" which is degenerate.
+        # Reject loudly at parse time so users see the constraint in
+        # the Builder rather than after their first auto-square.
+        if self.product == "MIS" and self.schedule.interval == "1d":
+            raise ValueError(
+                "MIS product requires intraday cadence (5m or 1m). "
+                "Daily strategies must use CNC.",
+            )
         return self
 
 

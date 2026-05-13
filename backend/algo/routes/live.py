@@ -658,6 +658,96 @@ async def _fetch_holding_attribution(
     return out
 
 
+async def _compute_strategy_commitment(
+    user_id: UUID,
+    strategy_id: UUID,
+) -> tuple[Decimal, int]:
+    """Return (committed_inr, open_leg_count) for a strategy.
+
+    "Committed" = Σ (qty × avg_price) over open Kite positions +
+    holdings whose earliest live BUY event in the past 365 days was
+    emitted by ``strategy_id``. A full square-off drops the leg from
+    Kite's positions/holdings response, so the sum returns to 0.
+
+    Replaces the legacy turnover counters
+    (``cumulative_inr_today`` / ``orders_count_today`` on
+    ``algo.live_caps``) as the source of truth for "currently
+    consumed budget" — the user-facing meaning is exposure now,
+    not fills-since-09:00.
+
+    Quietly returns ``(0, 0)`` on Kite/Iceberg failure: the surface
+    is read-only display, and CapsResponse already tolerates zeros.
+    """
+    try:
+        kite = await _build_kite_client_for_user(user_id)
+    except HTTPException:
+        return Decimal("0"), 0
+    kc = getattr(kite, "_kc", None)
+    if kc is None:
+        return Decimal("0"), 0
+
+    try:
+        raw_pos, raw_hold = await asyncio.gather(
+            asyncio.to_thread(kc.positions),
+            asyncio.to_thread(kc.holdings),
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "commitment: kite read failed", exc_info=True,
+        )
+        return Decimal("0"), 0
+
+    net = raw_pos.get("net", []) if isinstance(raw_pos, dict) else []
+    pos_rows = [r for r in net if int(r.get("quantity", 0)) != 0]
+    hold_rows = [
+        r for r in (raw_hold if isinstance(raw_hold, list) else [])
+        if (
+            int(r.get("quantity", 0))
+            + int(r.get("t1_quantity", 0))
+        ) > 0
+    ]
+
+    # 365-day lookback for both — positions opened yesterday must
+    # still attribute today. ``_fetch_holding_attribution`` already
+    # does this shape; reusing keeps a single attribution code path.
+    syms = list({
+        r["tradingsymbol"]
+        for r in pos_rows + hold_rows
+        if r.get("tradingsymbol")
+    })
+    attr = (
+        await _fetch_holding_attribution(user_id, syms)
+        if syms else {}
+    )
+
+    target = str(strategy_id)
+    committed = Decimal("0")
+    count = 0
+
+    for r in pos_rows:
+        sym = r.get("tradingsymbol") or ""
+        if attr.get(sym, {}).get("strategy_id") != target:
+            continue
+        qty = abs(int(r.get("quantity", 0)))
+        avg = Decimal(str(r.get("average_price", 0) or 0))
+        committed += Decimal(qty) * avg
+        count += 1
+
+    for r in hold_rows:
+        sym = r.get("tradingsymbol") or ""
+        if attr.get(sym, {}).get("strategy_id") != target:
+            continue
+        qty = (
+            int(r.get("quantity", 0))
+            + int(r.get("t1_quantity", 0))
+        )
+        avg = Decimal(str(r.get("average_price", 0) or 0))
+        committed += Decimal(qty) * avg
+        count += 1
+
+    return committed, count
+
+
 async def _ledger_kite_drift(
     user_id: UUID,
     kite_symbols: set[str],
@@ -909,10 +999,20 @@ def create_live_router() -> APIRouter:
         from backend.algo.live.caps_repo import CapsRepo
 
         repo = CapsRepo()
-        row = await repo.get_or_default(
-            UUID(user.user_id),
-            strategy_id,
+        uid = UUID(user.user_id)
+        row = await repo.get_or_default(uid, strategy_id)
+        # Override the legacy turnover counters with the exposure
+        # view: currently-committed INR + open leg count attributed
+        # to this strategy via algo.events history. Returns to 0
+        # naturally on a full square-off; no daily reset needed.
+        committed, open_count = await _compute_strategy_commitment(
+            uid, strategy_id,
         )
+        row = {
+            **row,
+            "cumulative_inr_today": committed,
+            "orders_count_today": open_count,
+        }
         return CapsResponse(
             **{k: row[k] for k in CapsResponse.model_fields if k in row}
         )

@@ -116,16 +116,25 @@ class TestPlaceOrderTypeRejection:
                 order_type=bad_type,
             )
 
-    def test_rejected_product_mis(self, kite_client):
+    def test_rejected_product_nrml(self, kite_client):
+        # ASETPLTFRM-388 widened _ALLOWED_PRODUCTS to {CNC, MIS}. NRML
+        # (overnight F&O margin) remains rejected at the SDK boundary
+        # in v1. The pre-existing fixture inherits dry_run from the
+        # ALGO_LIVE_DRY_RUN env var (true in the test container) and
+        # the dry-run branch short-circuits before product validation,
+        # so we force dry_run=False here to actually exercise the
+        # allow-list. The same gotcha is the reason 13 other tests in
+        # this file have been failing on dev — separate cleanup.
         client, _ = kite_client
-        with pytest.raises(ValueError, match="MIS"):
+        client._dry_run = False
+        with pytest.raises(ValueError, match="NRML"):
             client.place_order(
-                tradingsymbol="RELIANCE",
-                exchange="NSE",
+                tradingsymbol="NIFTY24JANFUT",
+                exchange="NFO",
                 transaction_type="BUY",
-                quantity=1,
+                quantity=50,
                 order_type="MARKET",
-                product="MIS",
+                product="NRML",
             )
 
     def test_rejected_variety_bo(self, kite_client):

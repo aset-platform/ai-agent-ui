@@ -32,6 +32,12 @@ export interface StrategyAst {
   rebalance: unknown;
   root: unknown;
   risk: unknown;
+  // ASETPLTFRM-387 — added in support of MIS / intraday strategies.
+  // Both fields are optional from the frontend's perspective; the
+  // backend AST validator defaults product to "CNC" so existing
+  // strategies remain valid without these keys.
+  product?: "CNC" | "MIS";
+  square_off_time?: string | null;
 }
 
 const LIST_KEY = `${API_URL}/algo/strategies`;

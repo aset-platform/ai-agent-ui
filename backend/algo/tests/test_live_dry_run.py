@@ -215,6 +215,13 @@ class TestLiveRuntimeDryFill:
         strategy.id = strategy_id
         strategy.risk = MagicMock()
         strategy.risk.model_dump.return_value = {}
+        # ASETPLTFRM-389 — runtime now reads strategy.product. The
+        # MagicMock(spec=Strategy) gates attribute access against the
+        # Pydantic model's runtime attribute discovery, which doesn't
+        # automatically pick up newly-added optional fields without an
+        # explicit set. Pin "CNC" to mirror the AST default that every
+        # existing daily strategy carries.
+        strategy.product = "CNC"
 
         caps_repo = AsyncMock()
         caps_repo.get.return_value = {

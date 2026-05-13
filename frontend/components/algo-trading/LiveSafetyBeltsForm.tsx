@@ -124,19 +124,20 @@ export function LiveSafetyBeltsForm({ strategyId }: Props) {
           </span>
         </label>
 
-        {/* Today counters (read-only) */}
+        {/* Currently committed (read-only, exposure-based) */}
         <div className="flex flex-col gap-0.5">
           <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
-            Today&apos;s usage (read-only)
+            Currently committed (read-only)
           </span>
           <div className="rounded border border-slate-200 px-2 py-1 text-sm
             dark:border-slate-700 dark:text-slate-300">
             ₹{caps?.cumulative_inr_today?.toLocaleString("en-IN") ?? 0}
             {" · "}
-            {caps?.orders_count_today ?? 0} orders
+            {caps?.orders_count_today ?? 0} open
           </div>
           <span className="text-[10px] text-slate-400">
-            Resets at 09:00 IST (Mon–Fri)
+            Σ qty × avg of open positions + holdings via this strategy.
+            Returns to 0 on full square-off.
           </span>
         </div>
       </div>

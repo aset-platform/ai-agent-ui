@@ -170,9 +170,14 @@ class TestCap2AllowedTickers:
 # ----------------------------------------------------------------
 
 class TestCap3MaxOrdersPerDay:
-    def test_at_limit_rejects(self):
+    """Exposure semantics: ``orders_count_today`` is the count of
+    currently-open legs. Only BUYs opening a NEW ticker can push it
+    higher, so cap-rejects only fire for that case.
+    """
+
+    def test_at_limit_rejects_new_position_buy(self):
         d = pre_trade_check(
-            signal=_signal(),
+            signal=_signal(ticker="RELIANCE.NS", side="BUY"),
             caps=_caps(max_orders=5),
             day_state=_day_state(orders=5),
             account=_account(),
@@ -190,6 +195,36 @@ class TestCap3MaxOrdersPerDay:
             caps=_caps(max_orders=10),
             day_state=_day_state(orders=3),
             account=_account(),
+            strategy_risk=_risk(),
+            last_price=Decimal("100"),
+        )
+        assert d.reason is None or (
+            d.reason.value != LiveRejectReason.LIVE_ORDERS_PER_DAY_CAP
+        )
+
+    def test_sell_bypasses_cap_even_at_limit(self):
+        # Closing a leg should NEVER be cap-rejected here —
+        # SELLs reduce the open-leg count rather than raise it.
+        d = pre_trade_check(
+            signal=_signal(ticker="RELIANCE.NS", side="SELL"),
+            caps=_caps(max_orders=5),
+            day_state=_day_state(orders=5),
+            account=_account(open_positions={"RELIANCE.NS": 10}),
+            strategy_risk=_risk(),
+            last_price=Decimal("100"),
+        )
+        assert d.reason is None or (
+            d.reason.value != LiveRejectReason.LIVE_ORDERS_PER_DAY_CAP
+        )
+
+    def test_buy_add_to_existing_ticker_bypasses_cap(self):
+        # Adding to an existing position doesn't raise the open-leg
+        # count, so cap 3 must not fire even at the limit.
+        d = pre_trade_check(
+            signal=_signal(ticker="RELIANCE.NS", side="BUY"),
+            caps=_caps(max_orders=5),
+            day_state=_day_state(orders=5),
+            account=_account(open_positions={"RELIANCE.NS": 10}),
             strategy_risk=_risk(),
             last_price=Decimal("100"),
         )
@@ -217,8 +252,13 @@ class TestCap3MaxOrdersPerDay:
 # ----------------------------------------------------------------
 
 class TestCap4MaxInr:
+    """Exposure semantics: ``cumulative_inr_today`` is the currently
+    committed notional via this strategy's open positions. SELLs
+    free capital and must bypass this cap; BUYs add and are gated.
+    """
+
     def test_order_exceeds_remaining_inr_rejects(self):
-        # max_inr=10000, already used 9500, order=1000 > headroom=500
+        # max_inr=10000, committed=9500, BUY=2000 > headroom=500
         d = pre_trade_check(
             signal=_signal(qty=10),  # 10 * 200 = 2000
             caps=_caps(max_inr=Decimal("10000")),
@@ -231,12 +271,28 @@ class TestCap4MaxInr:
         assert d.reason.value == LiveRejectReason.LIVE_INR_CAP
 
     def test_order_within_headroom_passes(self):
-        # max_inr=10000, used=0, order=2000 < 10000
+        # max_inr=10000, committed=0, BUY=2000 < 10000
         d = pre_trade_check(
             signal=_signal(qty=10),
             caps=_caps(max_inr=Decimal("10000")),
             day_state=_day_state(cum_inr=Decimal("0")),
             account=_account(),
+            strategy_risk=_risk(),
+            last_price=Decimal("200"),
+        )
+        assert d.reason is None or (
+            d.reason.value != LiveRejectReason.LIVE_INR_CAP
+        )
+
+    def test_sell_bypasses_cap_even_when_committed_at_max(self):
+        # Square-off must NEVER be rejected by the exposure cap —
+        # otherwise the user cannot release the very budget the cap
+        # is protecting.
+        d = pre_trade_check(
+            signal=_signal(ticker="RELIANCE.NS", side="SELL", qty=10),
+            caps=_caps(max_inr=Decimal("10000")),
+            day_state=_day_state(cum_inr=Decimal("10000")),
+            account=_account(open_positions={"RELIANCE.NS": 10}),
             strategy_risk=_risk(),
             last_price=Decimal("200"),
         )
