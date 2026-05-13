@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { AstTreeView } from "./AstTreeView";
+import { CadenceProductPanel } from "./CadenceProductPanel";
 import { JsonPane } from "./JsonPane";
 import { NodePalette } from "./NodePalette";
 import { StrategyLeversPanel } from "./StrategyLeversPanel";
@@ -184,6 +185,7 @@ export function StrategyBuilder({
           onChange={setApplicableRegimes}
           currentRegime={currentRegimeLower}
         />
+        <CadenceProductPanel ast={ast} onChange={setAst} />
         <StrategyLeversPanel ast={ast} onChange={setAst} />
         <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-white dark:bg-gray-900">
           <AstTreeView node={ast.root} />
