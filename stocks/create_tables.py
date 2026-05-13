@@ -35,6 +35,7 @@ Tables created
 - ``stocks.promoter_holdings``
 - ``stocks.corporate_events``
 - ``stocks.fundamentals_snapshot``
+- ``stocks.intraday_bars``
 
 Migrated to PostgreSQL (no longer created here)
 ------------------------------------------------
@@ -98,6 +99,7 @@ _NSE_DELIVERY_TABLE = f"{_NAMESPACE}.nse_delivery"
 _PROMOTER_HOLDINGS_TABLE = f"{_NAMESPACE}.promoter_holdings"
 _CORPORATE_EVENTS_TABLE = f"{_NAMESPACE}.corporate_events"
 _FUNDAMENTALS_SNAPSHOT_TABLE = f"{_NAMESPACE}.fundamentals_snapshot"
+_INTRADAY_BARS_TABLE = f"{_NAMESPACE}.intraday_bars"
 
 
 def _get_catalog() -> SqlCatalog:
@@ -1514,6 +1516,126 @@ def _fundamentals_snapshot_schema() -> Schema:
     )
 
 
+def _intraday_bars_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.intraday_bars``.
+
+    Returns:
+        Schema: Historical intraday OHLCV bars
+            (15m / 5m / 1m) pulled from Kite Connect
+            for backtesting. Distinct from
+            ``algo.intraday_bars`` which is the live
+            tick-stream resampler output — different
+            write cadence, different retention.
+
+            Bar open is the start of the bar's interval
+            (e.g. for a 15m bar at 09:15:00 IST, the bar
+            holds prices over [09:15:00, 09:30:00)).
+            ``bar_date`` is a YYYY-MM-DD IST string,
+            matching the ``algo.intraday_bars`` quirk so
+            both tables read the same way downstream.
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="ticker",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=2,
+            name="bar_date",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=3,
+            name="interval_sec",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=4,
+            name="bar_open_ts_ns",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=5,
+            name="open",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=6,
+            name="high",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=7,
+            name="low",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=8,
+            name="close",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=9,
+            name="volume",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=10,
+            name="written_at",
+            field_type=TimestampType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=11,
+            name="source",
+            field_type=StringType(),
+            required=True,
+        ),
+    )
+
+
+def _ticker_bar_date_partition_spec(schema: Schema) -> PartitionSpec:
+    """Return a partition spec by ``ticker`` and
+    ``bar_date``.
+
+    Args:
+        schema: Schema containing ``ticker`` and
+            ``bar_date`` fields.
+
+    Returns:
+        PartitionSpec: Identity partition on
+            (ticker, bar_date) — matches
+            ``algo.intraday_bars`` so DuckDB scans on
+            either dimension stay tight.
+    """
+    ticker_fid = schema.find_field("ticker").field_id
+    date_fid = schema.find_field("bar_date").field_id
+    return PartitionSpec(
+        PartitionField(
+            source_id=ticker_fid,
+            field_id=1000,
+            transform=IdentityTransform(),
+            name="ticker",
+        ),
+        PartitionField(
+            source_id=date_fid,
+            field_id=1001,
+            transform=IdentityTransform(),
+            name="bar_date",
+        ),
+    )
+
+
 def _provider_partition_spec(schema: Schema) -> PartitionSpec:
     """Return a partition spec by ``provider``.
 
@@ -2064,17 +2186,37 @@ def create_tables() -> None:
         empty_spec,
     )
 
+    # Historical intraday bars (ASETPLTFRM-400 slice 1b)
+    # — 15m / 5m / 1m OHLCV from Kite Connect for
+    # backtesting MIS strategies. Partitioned by
+    # (ticker, bar_date) like ``algo.intraday_bars``.
+    # Must be enrolled in BOTH ``_HOT_ICEBERG_TABLES``
+    # (backend/jobs/executor.py) and ``ALL_TABLES``
+    # (backend/maintenance/iceberg_maintenance.py) — the
+    # algo.events 11 GB bloat incident (2026-05-12) is
+    # the reminder of why skip-list enrollment is the
+    # #1 silent failure mode for new write-heavy tables.
+    intraday_bars_schema = _intraday_bars_schema()
+    _create_table(
+        catalog,
+        _INTRADAY_BARS_TABLE,
+        intraday_bars_schema,
+        _ticker_bar_date_partition_spec(intraday_bars_schema),
+    )
+
     # Regime engine — REGIME-1 (stocks.regime_history +
     # stocks.regime_hmm_state). Idempotent.
     from backend.algo.regime.iceberg_init import (
         register_tables as _regime_register,
     )
+
     _regime_register()
 
     # Factor library — REGIME-2a (stocks.daily_factors). Idempotent.
     from backend.algo.factors.iceberg_init import (
         register_tables as _factors_register,
     )
+
     _factors_register()
 
     # Universe snapshot — REGIME-7 (stocks.universe_snapshot).
@@ -2082,6 +2224,7 @@ def create_tables() -> None:
     from backend.algo.universe.iceberg_init import (
         register_tables as _universe_register,
     )
+
     _universe_register()
 
     _logger.info("Stocks Iceberg table initialisation complete.")
