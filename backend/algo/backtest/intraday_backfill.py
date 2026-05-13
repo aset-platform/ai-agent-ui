@@ -104,6 +104,10 @@ def _arrow_schema() -> pa.Schema:
             pa.field("volume", pa.int64(), nullable=False),
             pa.field("written_at", pa.timestamp("us"), nullable=False),
             pa.field("source", pa.string(), nullable=False),
+            # ``year_month`` = bar_date[:7] — partition key
+            # (ASETPLTFRM-400 slice 1i). Populated at write
+            # time so the writer is the single source of truth.
+            pa.field("year_month", pa.string(), nullable=False),
         ]
     )
 
@@ -143,10 +147,11 @@ def _bars_to_arrow(
             continue
         if any(math.isnan(x) for x in (o, h, lo, c)):
             continue
+        bar_date_str = b.date.strftime("%Y-%m-%d")
         rows.append(
             {
                 "ticker": b.ticker,
-                "bar_date": b.date.strftime("%Y-%m-%d"),
+                "bar_date": bar_date_str,
                 "interval_sec": interval_sec,
                 "bar_open_ts_ns": int(b.bar_open_ts_ns),
                 "open": o,
@@ -156,6 +161,8 @@ def _bars_to_arrow(
                 "volume": int(b.volume),
                 "written_at": written_at,
                 "source": source,
+                # YYYY-MM prefix of bar_date — partition key.
+                "year_month": bar_date_str[:7],
             }
         )
     if not rows:

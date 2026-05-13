@@ -20,7 +20,7 @@ from pyiceberg.types import (
 from stocks.create_tables import (
     _INTRADAY_BARS_TABLE,
     _intraday_bars_schema,
-    _ticker_bar_date_partition_spec,
+    _ticker_year_month_partition_spec,
 )
 
 
@@ -32,7 +32,8 @@ def test_table_identifier_in_stocks_namespace() -> None:
 
 
 def test_intraday_bars_schema_columns() -> None:
-    """All 11 spec'd fields present with the right types."""
+    """All 12 spec'd fields present with the right types
+    (12th = ``year_month`` added by ASETPLTFRM-400 slice 1i)."""
     schema = _intraday_bars_schema()
     by_name = {f.name: f for f in schema.fields}
 
@@ -48,6 +49,7 @@ def test_intraday_bars_schema_columns() -> None:
         "volume": LongType,
         "written_at": TimestampType,
         "source": StringType,
+        "year_month": StringType,
     }
     assert set(by_name.keys()) == set(expected.keys())
     for name, expected_type in expected.items():
@@ -65,14 +67,15 @@ def test_intraday_bars_all_fields_required() -> None:
         assert field.required, f"{field.name} must be required=True per spec"
 
 
-def test_intraday_bars_partitioned_by_ticker_and_bar_date() -> None:
-    """Partition spec matches ``algo.intraday_bars`` so DuckDB
-    scans on either dimension stay tight."""
+def test_intraday_bars_partitioned_by_ticker_and_year_month() -> None:
+    """Partition spec re-cut to ``(ticker, year_month)`` for
+    ~18× file-count reduction vs the original ``(ticker,
+    bar_date)`` (ASETPLTFRM-400 slice 1i)."""
     schema = _intraday_bars_schema()
-    spec = _ticker_bar_date_partition_spec(schema)
+    spec = _ticker_year_month_partition_spec(schema)
 
     part_names = [pf.name for pf in spec.fields]
-    assert part_names == ["ticker", "bar_date"]
+    assert part_names == ["ticker", "year_month"]
 
 
 def test_enrolled_in_hot_iceberg_tables() -> None:

@@ -60,7 +60,7 @@ def _ensure_table_and_clean_state():
         _create_table,
         _get_catalog,
         _intraday_bars_schema,
-        _ticker_bar_date_partition_spec,
+        _ticker_year_month_partition_spec,
     )
 
     catalog = _get_catalog()
@@ -69,7 +69,7 @@ def _ensure_table_and_clean_state():
         catalog,
         _INTRADAY_BARS_TABLE,
         schema,
-        _ticker_bar_date_partition_spec(schema),
+        _ticker_year_month_partition_spec(schema),
     )
     tbl = catalog.load_table(_INTRADAY_BARS_TABLE)
     try:

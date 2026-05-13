@@ -1530,9 +1530,13 @@ def _intraday_bars_schema() -> Schema:
             Bar open is the start of the bar's interval
             (e.g. for a 15m bar at 09:15:00 IST, the bar
             holds prices over [09:15:00, 09:30:00)).
-            ``bar_date`` is a YYYY-MM-DD IST string,
-            matching the ``algo.intraday_bars`` quirk so
-            both tables read the same way downstream.
+            ``bar_date`` is a YYYY-MM-DD IST string;
+            ``year_month`` is its YYYY-MM prefix and
+            is the partition key (ASETPLTFRM-400 slice
+            1i) so each (ticker, year_month) folds into
+            one parquet of ~150 KB instead of the ~5 KB
+            per-day files the earlier ``(ticker,
+            bar_date)`` scheme produced.
     """
     return Schema(
         NestedField(
@@ -1601,25 +1605,44 @@ def _intraday_bars_schema() -> Schema:
             field_type=StringType(),
             required=True,
         ),
+        NestedField(
+            field_id=12,
+            name="year_month",
+            field_type=StringType(),
+            required=True,
+        ),
     )
 
 
-def _ticker_bar_date_partition_spec(schema: Schema) -> PartitionSpec:
+def _ticker_year_month_partition_spec(
+    schema: Schema,
+) -> PartitionSpec:
     """Return a partition spec by ``ticker`` and
-    ``bar_date``.
+    ``year_month`` (ASETPLTFRM-400 slice 1i).
+
+    Each ticker × month folds into one parquet (~150 KB
+    for 15m cadence at ~22 trading days × ~25 bars
+    × ~80 B/row) instead of the ~5 KB per-day files the
+    earlier ``(ticker, bar_date)`` scheme produced.
+    Backtest reads — which typically span months of a
+    single ticker — open ~12 files instead of ~250 for
+    a one-year window.
+
+    The ``year_month`` column is the YYYY-MM prefix of
+    ``bar_date``; the writer populates both so
+    chronological predicate push-down on either column
+    continues to work at the file-level.
 
     Args:
         schema: Schema containing ``ticker`` and
-            ``bar_date`` fields.
+            ``year_month`` fields.
 
     Returns:
         PartitionSpec: Identity partition on
-            (ticker, bar_date) — matches
-            ``algo.intraday_bars`` so DuckDB scans on
-            either dimension stay tight.
+            (ticker, year_month).
     """
     ticker_fid = schema.find_field("ticker").field_id
-    date_fid = schema.find_field("bar_date").field_id
+    ym_fid = schema.find_field("year_month").field_id
     return PartitionSpec(
         PartitionField(
             source_id=ticker_fid,
@@ -1628,10 +1651,10 @@ def _ticker_bar_date_partition_spec(schema: Schema) -> PartitionSpec:
             name="ticker",
         ),
         PartitionField(
-            source_id=date_fid,
+            source_id=ym_fid,
             field_id=1001,
             transform=IdentityTransform(),
-            name="bar_date",
+            name="year_month",
         ),
     )
 
@@ -2201,7 +2224,7 @@ def create_tables() -> None:
         catalog,
         _INTRADAY_BARS_TABLE,
         intraday_bars_schema,
-        _ticker_bar_date_partition_spec(intraday_bars_schema),
+        _ticker_year_month_partition_spec(intraday_bars_schema),
     )
 
     # Regime engine — REGIME-1 (stocks.regime_history +
