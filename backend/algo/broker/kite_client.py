@@ -420,7 +420,11 @@ class KiteClient:
     # ---- Write paths (V2-5) -------------------------------------
 
     _ALLOWED_ORDER_TYPES = frozenset({"MARKET", "LIMIT"})
-    _ALLOWED_PRODUCTS = frozenset({"CNC"})
+    # ASETPLTFRM-388 — widened from {"CNC"} to admit intraday MIS
+    # orders. v1 still rejects NRML / BO / CO at the SDK boundary;
+    # MIS strategies must combine with intraday cadence (enforced by
+    # the AST validator in backend/algo/strategy/ast.py).
+    _ALLOWED_PRODUCTS = frozenset({"CNC", "MIS"})
     _ALLOWED_VARIETIES = frozenset({"regular"})
 
     def place_order(
@@ -582,7 +586,9 @@ class KiteClient:
         if product not in self._ALLOWED_PRODUCTS:
             raise ValueError(
                 f"product={product!r} not supported in v2. "
-                f"Only CNC (delivery equity) is allowed.",
+                f"Only {sorted(self._ALLOWED_PRODUCTS)} are allowed "
+                f"(CNC = delivery, MIS = intraday). NRML / BO / CO "
+                f"are deferred to v3.",
             )
         if variety not in self._ALLOWED_VARIETIES:
             raise ValueError(
