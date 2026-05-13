@@ -45,7 +45,7 @@ Net: there is **no single line of code** wrong, but **six** layers each silently
 ```python
 class ScheduleBarClose(BaseModel):
     type: Literal["bar_close"] = "bar_close"
-    interval: Literal["1d", "5m", "1m"]  # was Literal["1d"]
+    interval: Literal["1d", "15m", "5m", "1m"]  # was Literal["1d"]
     time: str = Field(default="15:25 IST")
 
 
@@ -58,7 +58,8 @@ class Strategy(BaseModel):
     def _mis_requires_intraday(self) -> "Strategy":
         if self.product == "MIS" and self.schedule.interval == "1d":
             raise ValueError(
-                "MIS product requires intraday cadence (5m / 1m). "
+                "MIS product requires intraday cadence "
+                "(15m / 5m / 1m). "
                 "Daily strategies must use CNC."
             )
         return self
@@ -99,7 +100,7 @@ New module or new function in `backend/algo/live/daily_bar_warmup.py`:
 ```python
 def preload_intraday_bars(
     tickers: list[str],
-    interval: Literal["5m", "1m"],
+    interval: Literal["15m", "5m", "1m"],
     kite_client: KiteClient,
     ticker_to_token: dict[str, int] | None = None,
 ) -> dict[str, list[_BackBar]]:
@@ -118,6 +119,7 @@ In `LiveRuntime.__init__`, branch on `strategy.schedule.interval`:
 | interval | preload | series shape |
 |---|---|---|
 | `"1d"`  | `preload_daily_bars` (existing) | 250 closed daily bars + 1 running |
+| `"15m"` | `preload_intraday_bars(interval="15m")` | 100 closed 15-min bars + 1 running |
 | `"5m"`  | `preload_intraday_bars(interval="5m")` | 100 closed 5-min bars + 1 running |
 | `"1m"`  | `preload_intraday_bars(interval="1m")` | 100 closed 1-min bars + 1 running |
 
@@ -136,13 +138,14 @@ Key = `(ticker, interval)`. Daily and 5-min series for the same ticker are indep
 Bar-close handler branches on `strategy.schedule.interval`:
 
 - **1d**: fold each minute bar into today's running daily bar (existing behaviour, lines 643-660).
+- **15m**: aggregate 15 consecutive 1-min bars into one 15-min bar; close it; append to series; evaluate.
 - **5m**: aggregate 5 consecutive 1-min bars into one 5-min bar; close it; append to series; evaluate.
 - **1m**: each closed 1-min bar from the resampler is a complete bar; append; evaluate.
 
-For 5-min cadence we can either:
+For 5-min / 15-min cadence we can either:
 
-- **Option A**: instantiate `Resampler(intervals=(60, 300))` and consume the 300-second stream directly. Cleaner but requires the resampler API to support multiple intervals natively (need to verify).
-- **Option B**: keep the 1-min resampler, manually aggregate 5 bars in the runtime. Simpler, more flexible.
+- **Option A**: instantiate `Resampler(intervals=(60, 300, 900))` and consume the secondary streams directly. Cleaner but requires the resampler API to support multiple intervals natively (need to verify).
+- **Option B**: keep the 1-min resampler, manually aggregate N bars in the runtime. Simpler, more flexible.
 
 Decision deferred to impl. Lean Option B unless the resampler already supports multi-interval.
 
@@ -232,7 +235,7 @@ mis_rsi_scalper: {
 Two new radio groups in `StrategyBuilder.tsx`:
 
 ```
-Cadence:  ( ) Daily (1d)    ( ) 5-min    ( ) 1-min
+Cadence:  ( ) Daily (1d)    ( ) 15-min    ( ) 5-min    ( ) 1-min
 Product:  ( ) CNC (Delivery)    ( ) MIS (Intraday)
 ```
 

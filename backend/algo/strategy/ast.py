@@ -263,10 +263,11 @@ class ScheduleBarClose(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["bar_close"] = "bar_close"
     # ASETPLTFRM-387 — widened from Literal["1d"]. Daily stays the
-    # default behaviour; intraday cadences land in this slice.
-    # Backwards-compat: existing AST JSON in algo.strategies carries
-    # interval="1d" so all current strategies parse unchanged.
-    interval: Literal["1d", "5m", "1m"]
+    # default behaviour; intraday cadences (15m / 5m / 1m) land in
+    # this slice. Backwards-compat: existing AST JSON in
+    # algo.strategies carries interval="1d" so all current strategies
+    # parse unchanged.
+    interval: Literal["1d", "15m", "5m", "1m"]
     time: str = Field(default="15:25 IST")
 
 

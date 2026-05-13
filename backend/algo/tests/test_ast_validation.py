@@ -302,6 +302,12 @@ class TestCadenceAndProduct:
         # Product still defaults to CNC for intraday + CNC scalpers.
         assert s.product == "CNC"
 
+    def test_intraday_15m_cadence_accepted(self):
+        payload = _wrap({"type": "hold"})
+        payload["schedule"]["interval"] = "15m"
+        s = parse_strategy(payload)
+        assert s.schedule.interval == "15m"
+
     def test_intraday_1m_cadence_accepted(self):
         payload = _wrap({"type": "hold"})
         payload["schedule"]["interval"] = "1m"
@@ -333,7 +339,9 @@ class TestCadenceAndProduct:
             parse_strategy(payload)
 
     def test_3m_cadence_rejected(self):
-        # Only 1d / 5m / 1m are valid intervals.
+        # Only 1d / 15m / 5m / 1m are valid intervals. 3m / 30m / 1h
+        # are common-mistake values that must still raise — keep
+        # the literal-set narrow until there's data to justify them.
         payload = _wrap({"type": "hold"})
         payload["schedule"]["interval"] = "3m"
         with pytest.raises(ValidationError):
