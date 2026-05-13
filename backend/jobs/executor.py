@@ -3435,6 +3435,33 @@ def _job_intraday_bars_daily_ingest(
     )
 
 
+@register_job("intraday_bars_retention")
+def _job_intraday_bars_retention(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """Daily 4-year rolling retention truncation for
+    ``stocks.intraday_bars`` (ASETPLTFRM-400 slice 1g).
+
+    Sync + pipeline-compatible wrapper. Runs as step 2 of the
+    ``Intraday Bars Daily Pipeline`` between the Nifty 500 ingest
+    (step 1) and the Iceberg maintenance (step 3).
+    """
+    import asyncio
+
+    from backend.algo.jobs.intraday_bars_retention import (
+        run_intraday_bars_retention_job,
+    )
+
+    return asyncio.run(
+        run_intraday_bars_retention_job(payload or {}),
+    )
+
+
 @register_job("regime_classifier_daily")
 def _job_regime_classifier_daily(
     scope: str = "india",

@@ -10,14 +10,25 @@ seed_regime_india_pipeline.py``).
 Steps (mon-fri 15:45 IST):
 
   1. Pull Nifty 500 Intraday Bars   — intraday_bars_daily_ingest
-  2. Compact + Backup Iceberg       — iceberg_maintenance
+  2. Trim Bars Older Than 4 Years   — intraday_bars_retention
+  3. Compact + Backup Iceberg       — iceberg_maintenance
+
+Step 2 maintains a rolling 4-year window so the table doesn't
+grow unboundedly — Backtest's max window is ASETPLTFRM-400's
+``2022-05-13 → today`` and there's no reason to retain
+pre-window history. Placed between ingest and maintenance so
+the same maintenance run that compacts also reclaims the
+tombstones from the deleted rows.
 
 Idempotency:
   - Step 1: NaN-replaceable upsert keyed on ``(ticker, bar_date,
     interval_sec)``; re-running the same window overwrites
     cleanly. Per-ticker fetch failures are logged with
     ``exc_info=True`` and the run continues (best-effort).
-  - Step 2: ``execute_iceberg_maintenance`` is already
+  - Step 2: ``tbl.delete(LessThan("bar_date", cutoff_iso))`` —
+    re-running after the cutoff has already been applied
+    matches zero rows.
+  - Step 3: ``execute_iceberg_maintenance`` is already
     idempotent — orphan sweep is near-zero work on a freshly
     swept table, snapshot expiry only acts on snapshots beyond
     the keep window, backup is the fail-closed step 0.
@@ -63,6 +74,11 @@ STEPS = [
     },
     {
         "step_order": 2,
+        "job_type": "intraday_bars_retention",
+        "job_name": "Trim Bars Older Than 4 Years",
+    },
+    {
+        "step_order": 3,
         "job_type": "iceberg_maintenance",
         "job_name": "Compact + Backup Iceberg",
     },
