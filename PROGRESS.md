@@ -2,6 +2,102 @@
 
 ---
 
+## 2026-05-13 — MIS / Intraday Strategy Support shipped (ASETPLTFRM-386)
+
+**Branch:** `feature/mis-intraday-strategy` → squash-merged to `dev` as **PR #219** (commit `888810d`).
+**Jira:** ASETPLTFRM-386 epic + 10 stories (387-396) + 6th commit `c5d40cd` widening cadence set. 25 SP delivered. Sprint 10 raised from 85 SP to **110 SP**.
+
+### Headline
+
+Live trading was hard-locked to **daily × CNC** across six layers (AST validator, KiteClient SDK boundary, runtime loop, bar warmup, eval gate, fee model). After PR #219, two orthogonal axes are configurable independently:
+
+| Cadence × Product | Behaviour |
+|---|---|
+| `1d × CNC` | Existing default — **bit-for-bit unchanged**, 9 existing daily-bar warmup tests pass without edits |
+| `5m / 15m / 1m × CNC` | Intraday CNC scalper (valid but unusual) |
+| `5m / 15m / 1m × MIS` | **Canonical MIS path** — auto-square at 15:14 IST, Kite forces close at 15:15 |
+| `1d × MIS` | Rejected by AST validator (degenerate) |
+
+### What's in the PR (16 commits, ~3 800 lines)
+
+**Bundled prereqs (3 commits):**
+
+1. **Active Strategy "Currently committed"** exposure view (`e062f62`) — display now reads Σ qty × avg over open positions/holdings attributed to strategy (returns to ₹0 on full square-off); Caps 3 & 4 in `safety.py` skip SELL + BUY-add so square-offs aren't rejected by the very cap they would relieve. Fixes the ₹2707 stale-counter complaint that opened the session.
+2. **`compact_table` PyIceberg-native scan** (`b23bb1c`) — root cause of the 2026-05-12 regime row loss. Snapshot timeline showed APPEND 1 → DELETE 3050 → APPEND 3049 (one row short). DuckDB `_meta_cache` was holding a stale metadata path post-orphan-sweep; the in-memory iceberg-scan reader served a snapshot missing the latest append. Fix: read through `tbl.refresh().scan().to_arrow()` so reader and writer share the same snapshot.
+3. **Regime history chart band labels** (`782b79f`) — gate by span (full word ≥ 8 %, 2-letter ≥ 3 %, hide < 3 %) to eliminate the `SISIEDDEWSSIDEWAYBSEAS` overlap mess.
+
+**Phase 1 — Toggle wiring (5 commits, additive only):**
+
+- **ASETPLTFRM-387** (`aa259be` + `c5d40cd`) — AST widened: `interval ∈ {1d, 15m, 5m, 1m}`, `product: Literal["CNC", "MIS"] = "CNC"`, `square_off_time: str | None = None`. Model validator rejects MIS + 1d. 15m added based on Daisy's followup ("most-requested intraday cadence among Indian retail-algo traders").
+- **ASETPLTFRM-388** (`29e8f1e`) — `KiteClient._ALLOWED_PRODUCTS = {"CNC", "MIS"}` widened from `{"CNC"}`. NRML / BO / CO still rejected at SDK boundary.
+- **ASETPLTFRM-389** (`4df7d90`) — `LiveRuntime._submit_order` reads `self._strategy.product` (3 hard-coded `"CNC"` literals removed); fee tier maps `MIS → INTRADAY`.
+- **ASETPLTFRM-390** (`92a8f8c`) — 14:30 IST `_MIN_EVAL_TIME_IST` gate now skips when `strategy.schedule.interval != "1d"` so intraday strategies fire from market open at 09:15 IST.
+- **ASETPLTFRM-391** (`8982c54`) — `mis_rsi_scalper` Builder template (5m × MIS, RSI > 70 exit / < 30 BUY 0.20 / hold).
+
+**Phase 2 — Intraday runtime + UI (5 commits):**
+
+- **ASETPLTFRM-392** (`cc87945`) — `preload_intraday_bars` reads `algo.intraday_bars` Iceberg + Kite `historical_data` fallback. New `KiteClient.fetch_intraday_historical(interval_sec, ...)` with `_INTRADAY_INTERVAL_MAP = {60: "minute", 300: "5minute", 900: "15minute"}`. `BarData.bar_open_ts_ns: int | None = None` added — daily bars leave None, intraday bars carry the bucket-start nanosecond.
+- **ASETPLTFRM-393** (`0030dcf`) — Bar routing branches in `_on_bar_close`: daily uses `bar_date_obj` as bucket key, intraday uses `bucket_open_ns = (bar.bar_open_ts_ns // interval_ns) * interval_ns`. Multiple ticks within the same 5-min window update the running bar in place; crossing a boundary appends a fresh bar.
+- **ASETPLTFRM-394** (`944b445`) — `LiveRuntime._schedule_mis_square_off` background asyncio task fires SELL signals at `square_off_time` IST (default 15:14) through the normal `_submit_order` path. Cancelled cleanly on session stop.
+- **ASETPLTFRM-395** (`d6add33`) — `CadenceProductPanel` Builder UI with cadence + product radios, conditional square-off time picker, auto-snap (clicking MIS from Daily flips cadence to 5m), amber MIS-leverage helper text.
+- **ASETPLTFRM-396** (`968cf3b`) — Smoke E2E proving AST → runtime → KiteClient kwargs wiring with `product=MIS`.
+
+### Daily-strategy invariant
+
+The explicit ask from the operator was *"my daily strategy will not get impacted"*. Verified structurally:
+
+- `Strategy.product` defaults to `"CNC"` → every existing AST in `algo.strategies.ast_json` parses unchanged.
+- `BarData.bar_open_ts_ns` defaults to `None` → every existing construction site preserved.
+- Bar routing branches on `interval == "1d"` first → daily path is bit-for-bit identical to pre-change.
+- `_ALLOWED_PRODUCTS` widened (not narrowed) → CNC still accepted.
+- Auto-square task only scheduled when `product == "MIS"` → CNC strategies see no new background tasks.
+
+**Test count**: 220 backend tests green post-merge, 40 new across `test_intraday_bar_warmup.py` (14) + `test_live_runtime_intraday_routing.py` (5) + `test_mis_square_off.py` (10) + `test_mis_e2e_smoke.py` (4) + `CadenceProductPanel.test.tsx` (7). The 12 pre-existing `test_kite_place_order.py` failures (dry-run-from-env env bug) verified unrelated by `git stash` baseline.
+
+### Last evening's regime row loss — diagnosed and fixed
+
+Session started with the operator noting "Regime: —" and "No regime history yet" on the Live page despite the classifier having run cleanly on 2026-05-12. Forensics:
+
+1. **Endpoints 500-ing** with `duckdb.duckdb.IOException: Cannot open file "…/03247-…metadata.json"` — DuckDB `_meta_cache` was holding a path to a metadata file that orphan-sweep had deleted.
+2. **Underlying compact bug**: snapshot history `APPEND 1 → DELETE 3050 → APPEND 3049` showed the 2026-05-12 row was lost during compaction. Fixed in this PR via `b23bb1c`.
+3. **Replayed classifier** for 2026-05-11 and 2026-05-12 via `run_classifier(as_of=...)` — both now show valid VIX (18.55 / 19.28), valid breadth (79.7 % / 68 %), valid stress_prob (0.36 / 0.21), `degraded=False`.
+
+Memory `shared/debugging/iceberg-compact-duckdb-stale-read` codifies the forensics + detection signals for future recurrences.
+
+### Follow-ups filed (5 tickets, all `spinout-386` label)
+
+| Ticket | Type | SP | What |
+|---|---|---:|---|
+| ASETPLTFRM-397 | Story | 5 | Kite postback live subscription |
+| ASETPLTFRM-398 | Story | 3 | MIS slippage band tune (after 1-2 wks of fill data) |
+| ASETPLTFRM-399 | Story | 5 | Strategy hot-reload (today's RSI<40 edit didn't apply) |
+| ASETPLTFRM-400 | **Epic** | 41 | Intraday-cadence backtest support — Slice 1 fully planned (4-yr × 500-ticker × 15m, ~12.5M rows, daily ingest at 15:45 IST, 5 quality assertions wired into ASETPLTFRM-380 framework, dual-list maintenance enrollment) |
+| ASETPLTFRM-401 | **Epic** | 50 | F&O / NRML support (2-phase: futures-only first, options + Greeks second) |
+
+Easy filter: `project = ASETPLTFRM AND labels = spinout-386 ORDER BY created`.
+
+### Spec doc
+
+`docs/superpowers/specs/2026-05-13-mis-intraday-strategy.md` — per-layer design, 5 risk callouts (MIS leverage UX trap, slippage mis-tune, auto-square robustness, retro-compat, hot-reload gap), phasing, 4 open questions deferred to future review.
+
+### Pending validation
+
+- **Market-hours smoke on 2026-05-14 09:15+ IST**: create `mis_rsi_scalper` from the Builder template, point at a liquid mid-cap, observe full lifecycle from 09:15 IST onward (eval-gate carve-out should produce signals before 14:30, unlike daily).
+- **MIS leverage UX feedback**: surfaced via amber helper text in `CadenceProductPanel` — watch for confused user feedback when real users start running MIS strategies (`max_inr` is notional spent, not margin).
+
+### Memory of session-shape
+
+- Started with the Active Strategy ₹2707 stale-counter complaint at 14:00 IST.
+- Diagnosed compact-time row loss (forensic deep dive into Iceberg snapshot history).
+- Spec'd MIS / intraday support; user added 15m mid-flight (Daisy's followup).
+- Filed Jira epic + 10 stories with full metadata; moved all to Sprint 10 with Abhay as assignee.
+- Implemented 16 commits end-to-end with the daily-strategy-untouched invariant verified after every slice.
+- Pushed branch, opened PR #219, squash-merged, smoke-tested.
+- Filed 5 follow-ups + updated ASETPLTFRM-400 with detailed Slice 1 planning (4-yr backfill + 5 quality assertions inheriting from PR #213 framework + b23bb1c compact-safety).
+- Saved session checkpoint to Serena memories + auto-memory.
+
+---
+
 ## 2026-05-12 (late evening) — Swing Setups tab (Advanced Analytics)
 
 **Branch:** `feature/aa-swing-setups` (26-task plan executed end-to-end via subagent-driven development; PR pending).

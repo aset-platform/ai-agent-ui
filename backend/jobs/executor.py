@@ -2639,6 +2639,13 @@ _HOT_ICEBERG_TABLES = (
     # metadata.json with the full snapshot history embedded.
     "algo.events",
     "algo.intraday_bars",
+    # Intraday backtest data (ASETPLTFRM-400 slice 1b).
+    # Historical 15m / 5m / 1m bars from Kite. The daily
+    # incremental ingest (slice 1d) writes one partition per
+    # (ticker, bar_date); on-demand backfill writes thousands
+    # of partitions per call. Daily compaction prevents file
+    # count drift.
+    "stocks.intraday_bars",
 )
 
 
@@ -3324,6 +3331,7 @@ def execute_promoter_holdings_quarterly(
 async def _job_algo_kite_reauth_notify(payload: dict | None = None):
     """Daily 05:30 IST notify users with expired/expiring Kite tokens."""
     from backend.algo.jobs.reauth_notify import run_reauth_notify_job
+
     return await run_reauth_notify_job(payload)
 
 
@@ -3333,6 +3341,7 @@ async def _job_algo_kite_instruments_refresh(
 ):
     """Daily 07:00 IST refresh of algo.instruments from Kite."""
     from backend.algo.jobs.instrument_refresh import run
+
     return await run(payload)
 
 
@@ -3344,6 +3353,7 @@ async def _job_algo_risk_state_reset(
     from backend.algo.jobs.risk_state_reset import (
         run_risk_state_reset_job,
     )
+
     return await run_risk_state_reset_job(payload)
 
 
@@ -3355,6 +3365,7 @@ async def _job_algo_reconciliation(
     from backend.algo.jobs.algo_reconciliation import (
         run_reconciliation_job,
     )
+
     return await run_reconciliation_job(payload)
 
 
@@ -3370,6 +3381,7 @@ async def _job_algo_live_caps_daily_reset(
     from backend.algo.jobs.live_caps_reset import (
         run_live_caps_daily_reset,
     )
+
     return await run_live_caps_daily_reset(payload)
 
 
@@ -3385,7 +3397,69 @@ async def _job_algo_ws_tick_count_reset(
     from backend.algo.jobs.reset_tick_count import (
         run_reset_tick_count_job,
     )
+
     return await run_reset_tick_count_job(payload)
+
+
+@register_job("intraday_bars_daily_ingest")
+def _job_intraday_bars_daily_ingest(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """Mon-Fri 15:45 IST keeper for stocks.intraday_bars.
+
+    ASETPLTFRM-400 slice 1d. Pulls the previous 2 trading-day
+    window of 15m / 5m / 1m bars for the Nifty 500 universe;
+    idempotent via NaN-replaceable upsert.
+
+    Sync + pipeline-step-compatible signature
+    ``(scope, run_id, repo, cancel_event, force)`` so the
+    ``PipelineExecutor`` can chain this step with
+    ``iceberg_maintenance``. The underlying job is async — we
+    bridge with ``asyncio.run`` here (single event loop per
+    pipeline step; matches the pattern in
+    ``backend.algo.jobs.algo_reconciliation`` etc.).
+    """
+    import asyncio
+
+    from backend.algo.jobs.intraday_bars_daily_ingest import (
+        run_intraday_bars_daily_ingest_job,
+    )
+
+    return asyncio.run(
+        run_intraday_bars_daily_ingest_job(payload or {}),
+    )
+
+
+@register_job("intraday_bars_retention")
+def _job_intraday_bars_retention(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """Daily 4-year rolling retention truncation for
+    ``stocks.intraday_bars`` (ASETPLTFRM-400 slice 1g).
+
+    Sync + pipeline-compatible wrapper. Runs as step 2 of the
+    ``Intraday Bars Daily Pipeline`` between the Nifty 500 ingest
+    (step 1) and the Iceberg maintenance (step 3).
+    """
+    import asyncio
+
+    from backend.algo.jobs.intraday_bars_retention import (
+        run_intraday_bars_retention_job,
+    )
+
+    return asyncio.run(
+        run_intraday_bars_retention_job(payload or {}),
+    )
 
 
 @register_job("regime_classifier_daily")
@@ -3403,9 +3477,13 @@ def _job_regime_classifier_daily(
     from backend.algo.regime.pipeline_steps import (
         run_regime_classifier_step,
     )
+
     return run_regime_classifier_step(
-        scope, run_id, repo,
-        cancel_event=cancel_event, force=force,
+        scope,
+        run_id,
+        repo,
+        cancel_event=cancel_event,
+        force=force,
     )
 
 
@@ -3423,9 +3501,13 @@ def _job_compute_daily_factors(
     from backend.algo.regime.pipeline_steps import (
         run_factors_compute_step,
     )
+
     return run_factors_compute_step(
-        scope, run_id, repo,
-        cancel_event=cancel_event, force=force,
+        scope,
+        run_id,
+        repo,
+        cancel_event=cancel_event,
+        force=force,
     )
 
 
@@ -3444,9 +3526,13 @@ def _job_regime_change_notifier(
     from backend.algo.regime.pipeline_steps import (
         run_regime_notifier_step,
     )
+
     return run_regime_notifier_step(
-        scope, run_id, repo,
-        cancel_event=cancel_event, force=force,
+        scope,
+        run_id,
+        repo,
+        cancel_event=cancel_event,
+        force=force,
     )
 
 
@@ -3464,9 +3550,13 @@ def _job_attribution_daily_brinson(
     from backend.algo.regime.pipeline_steps import (
         run_attribution_brinson_step,
     )
+
     return run_attribution_brinson_step(
-        scope, run_id, repo,
-        cancel_event=cancel_event, force=force,
+        scope,
+        run_id,
+        repo,
+        cancel_event=cancel_event,
+        force=force,
     )
 
 
@@ -3486,9 +3576,13 @@ def _job_attribution_monthly_regression(
     from backend.algo.regime.pipeline_steps import (
         run_attribution_regression_step,
     )
+
     return run_attribution_regression_step(
-        scope, run_id, repo,
-        cancel_event=cancel_event, force=force,
+        scope,
+        run_id,
+        repo,
+        cancel_event=cancel_event,
+        force=force,
     )
 
 
@@ -3508,7 +3602,11 @@ def _job_universe_snapshot_monthly(
     from backend.algo.regime.pipeline_steps import (
         run_universe_snapshot_step,
     )
+
     return run_universe_snapshot_step(
-        scope, run_id, repo,
-        cancel_event=cancel_event, force=force,
+        scope,
+        run_id,
+        repo,
+        cancel_event=cancel_event,
+        force=force,
     )

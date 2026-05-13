@@ -62,6 +62,12 @@ ALL_TABLES = [
     "stocks.fundamentals_snapshot",
     "stocks.corporate_events",
     "stocks.promoter_holdings",
+    # Intraday backtest data (ASETPLTFRM-400 slice 1b).
+    # Historical 15m / 5m / 1m bars from Kite — daily
+    # incremental keeper + on-demand backfill writes
+    # accumulate small parquets per (ticker, bar_date)
+    # partition; daily compaction keeps reads tight.
+    "stocks.intraday_bars",
     # Algo namespace — write-heavy event streams. 2026-05-12
     # incident: algo.events bloated to 11 GB of metadata.json
     # (5,901 snapshots, ~2 MB each) because it was missing from
@@ -101,6 +107,12 @@ DATE_COLUMNS: dict[str, str] = {
     "stocks.promoter_holdings": "quarter_end",
     # Algo event streams — retention pruned by IST partition col.
     "algo.events": "ts_date",
+    # NOTE: ``stocks.intraday_bars`` is intentionally absent —
+    # retention policy is set by the slice 1d daily-ingest job
+    # (rolling 4-year window from the backfill anchor), not
+    # the generic MAX_RETENTION_YEARS purge. Symmetric with
+    # ``algo.intraday_bars`` which is also kept out for the
+    # same reason.
 }
 
 MAX_RETENTION_YEARS = 11
