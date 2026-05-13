@@ -328,4 +328,58 @@ export const TEMPLATES: { key: string; label: string; ast: StrategyAst }[] = [
       },
     } as unknown as StrategyAst,
   },
+  // ASETPLTFRM-391 — MIS / intraday scalper template.
+  // Pairs 5-min cadence with MIS product (Zerodha auto-squares at
+  // 15:15 IST; our runtime fires SELLs at 15:14 IST so fills land
+  // in the ledger before the broker forces them). Exits on RSI
+  // overbought (>70), enters on oversold (<30). Tighter caps than
+  // daily templates because MIS leverages 5× and intraday spreads
+  // are noisier — keep position count low to start.
+  {
+    key: "mis_rsi_scalper",
+    label: "MIS RSI Scalper (5-min, intraday)",
+    ast: {
+      id: randomId(),
+      name: "MIS RSI Scalper (5m)",
+      universe: {
+        type: "scope",
+        scope: "watchlist",
+        filter: { ticker_type: ["stock"], market: "india" },
+      },
+      schedule: {
+        type: "bar_close", interval: "5m", time: "15:14 IST",
+      },
+      rebalance: { type: "daily", max_positions: 3 },
+      risk: {
+        per_trade: { stop_loss_pct: 1.0, max_qty: 100 },
+        portfolio: {
+          max_exposure_pct: 50, max_concentration_pct: 20,
+        },
+        daily: { max_loss_pct: 1.5, max_open_positions: 3 },
+      },
+      product: "MIS",
+      square_off_time: "15:14 IST",
+      root: {
+        type: "if",
+        cond: {
+          type: "compare",
+          left: { feature: "rsi" },
+          op: ">",
+          right: { literal: 70 },
+        },
+        then: { type: "exit", scope: "this_symbol" },
+        else: {
+          type: "if",
+          cond: {
+            type: "compare",
+            left: { feature: "rsi" },
+            op: "<",
+            right: { literal: 30 },
+          },
+          then: { type: "set_target_weight", weight: 0.20 },
+          else: { type: "hold" },
+        },
+      },
+    } as unknown as StrategyAst,
+  },
 ];
