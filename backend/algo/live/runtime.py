@@ -272,8 +272,14 @@ class LiveRuntime:
         # ``initial_running_bar``. Fail-soft: any error degrades to
         # the pre-383 empty-history behaviour (strategy silent-skips
         # until indicators settle).
+        #
+        # ASETPLTFRM-393 — for intraday cadences (15m / 5m / 1m) we
+        # route through ``preload_intraday_bars`` instead, reading
+        # from ``algo.intraday_bars`` and falling back to Kite. The
+        # daily path is preserved bit-for-bit for ``interval="1d"``.
         allowed_for_preload = caps.get("allowed_tickers") or []
-        if allowed_for_preload:
+        interval = strategy.schedule.interval
+        if allowed_for_preload and interval == "1d":
             try:
                 from backend.algo.live.daily_bar_warmup import (
                     preload_daily_bars,
@@ -296,6 +302,32 @@ class LiveRuntime:
                     "strategies will silent-skip until indicators "
                     "settle on session-local minute history",
                     exc,
+                )
+        elif allowed_for_preload and interval != "1d":
+            try:
+                from backend.algo.live.intraday_bar_warmup import (
+                    INTERVAL_SEC_BY_LABEL,
+                    preload_intraday_bars,
+                )
+                interval_sec = INTERVAL_SEC_BY_LABEL[interval]
+                preloaded = preload_intraday_bars(
+                    list(allowed_for_preload),
+                    interval_sec=interval_sec,
+                    kite_client=kite,
+                    ticker_to_token=self._ticker_to_token or None,
+                )
+                self._bars_by_ticker.update(preloaded)
+                _logger.info(
+                    "LiveRuntime: intraday-bar warmup loaded — "
+                    "%d ticker(s), interval=%s",
+                    len(preloaded), interval,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning(
+                    "LiveRuntime: intraday-bar warmup failed: %s "
+                    "— strategies will silent-skip until indicators"
+                    " settle on session-local bars",
+                    exc, exc_info=True,
                 )
 
         # PR #3 (order-safety) — background asyncio watcher that
@@ -606,41 +638,89 @@ class LiveRuntime:
             tz=timezone.utc,
         ).date()
 
-        # ASETPLTFRM-383 — daily-bar series, not minute-bar series.
-        # ``history`` is the preloaded 250 closed daily bars + 1
-        # running today bar that this minute-close updates in place.
+        # ASETPLTFRM-393 — bucket-key resolution per cadence.
+        # Daily (interval="1d") buckets by trading date; one running
+        # bar per day. Intraday buckets by bar_open_ts_ns floored to
+        # interval_sec; multiple bars share a date so the date alone
+        # can't tell us when a new bar starts.
+        strategy_interval = self._strategy.schedule.interval
+        if strategy_interval == "1d":
+            bucket_key: Any = bar_date_obj
+            bucket_open_ns: int | None = None
+        else:
+            from backend.algo.live.intraday_bar_warmup import (
+                INTERVAL_SEC_BY_LABEL,
+            )
+            interval_sec = INTERVAL_SEC_BY_LABEL[strategy_interval]
+            interval_ns = interval_sec * 1_000_000_000
+            bucket_open_ns = (
+                bar.bar_open_ts_ns // interval_ns
+            ) * interval_ns
+            bucket_key = bucket_open_ns
+
+        # ASETPLTFRM-383 / 393 — preloaded closed bars + a running
+        # bar that the per-minute callback updates in place.
+        # ``_bars_by_ticker`` is keyed by ticker — each LiveRuntime
+        # carries exactly one cadence, so no (ticker, interval) key
+        # needed at the dict level. Lazy-preload routes through the
+        # right warmup module based on strategy cadence.
         history = self._bars_by_ticker.get(bar.ticker)
         if history is None:
-            # Universe drift: ticker not in caps.allowed_tickers at
-            # __init__. Lazy-preload via thread so we don't block
-            # the event loop on an Iceberg read.
             try:
-                lazy = await asyncio.to_thread(
-                    preload_daily_bars,
-                    [bar.ticker],
-                    kite_client=self._kite,
-                    ticker_to_token=self._ticker_to_token or None,
-                )
+                if strategy_interval == "1d":
+                    lazy = await asyncio.to_thread(
+                        preload_daily_bars,
+                        [bar.ticker],
+                        kite_client=self._kite,
+                        ticker_to_token=(
+                            self._ticker_to_token or None
+                        ),
+                    )
+                else:
+                    from backend.algo.live.intraday_bar_warmup import (
+                        preload_intraday_bars,
+                    )
+                    lazy = await asyncio.to_thread(
+                        preload_intraday_bars,
+                        [bar.ticker],
+                        interval_sec=interval_sec,
+                        kite_client=self._kite,
+                        ticker_to_token=(
+                            self._ticker_to_token or None
+                        ),
+                    )
                 history = lazy.get(bar.ticker, [])
             except Exception as exc:  # noqa: BLE001
                 _logger.warning(
-                    "LiveRuntime: lazy daily-bar preload for %s "
-                    "failed: %s — strategy silent-skips on this "
-                    "ticker until indicators settle", bar.ticker, exc,
+                    "LiveRuntime: lazy %s-bar preload for %s failed:"
+                    " %s — strategy silent-skips on this ticker "
+                    "until indicators settle",
+                    strategy_interval, bar.ticker, exc,
+                    exc_info=True,
                 )
                 history = []
             self._bars_by_ticker[bar.ticker] = history
 
-        # Append (new day, or first bar for this ticker) or update
-        # (existing today bar) the running daily candle. We refresh
-        # close every minute so the indicator series reflects today's
-        # current LTP; high/low broaden monotonically.
+        # Append (new bucket, or first bar for this ticker) or
+        # update (existing running bar) the OHLCV candle. We refresh
+        # close every minute so the indicator series reflects the
+        # current LTP within the still-building bucket; high/low
+        # broaden monotonically; volume accumulates.
         cur_open = Decimal(str(bar.open))
         cur_high = Decimal(str(bar.high))
         cur_low = Decimal(str(bar.low))
         cur_close = Decimal(str(bar.close))
         cur_vol = max(int(bar.volume), 0)
-        if not history or history[-1].date != bar_date_obj:
+
+        def _is_new_bucket(h: list[Any]) -> bool:
+            if not h:
+                return True
+            last = h[-1]
+            if strategy_interval == "1d":
+                return last.date != bar_date_obj
+            return last.bar_open_ts_ns != bucket_open_ns
+
+        if _is_new_bucket(history):
             history.append(_BackBar(
                 ticker=bar.ticker,
                 date=bar_date_obj,
@@ -649,6 +729,7 @@ class LiveRuntime:
                 low=cur_low,
                 close=cur_close,
                 volume=cur_vol,
+                bar_open_ts_ns=bucket_open_ns,
             ))
         else:
             today_bar = history[-1]
