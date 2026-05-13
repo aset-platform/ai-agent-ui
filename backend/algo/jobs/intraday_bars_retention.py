@@ -32,6 +32,7 @@ from pyiceberg.expressions import LessThan
 
 from backend.algo._iceberg_retry import retry_iceberg_op
 from backend.db.duckdb_engine import invalidate_metadata
+from backend.maintenance.backup import backup_table
 
 _logger = logging.getLogger(__name__)
 
@@ -108,6 +109,33 @@ async def run_intraday_bars_retention_job(
         years,
     )
 
+    # Fail-closed table-level backup BEFORE the delete commits
+    # (ASETPLTFRM-400 slice 1h). The retention delete cannot be
+    # rolled back in-place once the maintenance step expires
+    # the pre-delete snapshot, so a filesystem-level safety
+    # copy is the only durable rollback path. Targeted at this
+    # one table so the rsync stays under the 30-min cap.
+    skip_backup = bool(payload.get("skip_backup"))
+    backup_path: str | None = None
+    if not skip_backup:
+        try:
+            backup_path = backup_table(INTRADAY_BARS_TABLE)
+        except Exception as exc:  # noqa: BLE001
+            _logger.error(
+                "intraday-retention: pre-delete backup failed "
+                "for %s — aborting delete: %s",
+                INTRADAY_BARS_TABLE,
+                exc,
+                exc_info=True,
+            )
+            return {
+                "status": "error",
+                "cutoff": cutoff_iso,
+                "today": today.isoformat(),
+                "years": years,
+                "error": f"backup_failed: {exc!s}"[:200],
+            }
+
     def _do_delete() -> None:
         from stocks.create_tables import _get_catalog
 
@@ -143,4 +171,5 @@ async def run_intraday_bars_retention_job(
         "cutoff": cutoff_iso,
         "today": today.isoformat(),
         "years": years,
+        "backup_path": backup_path,
     }

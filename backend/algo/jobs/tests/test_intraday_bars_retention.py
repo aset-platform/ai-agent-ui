@@ -39,6 +39,21 @@ _TEST_TICKER_PREFIX = "RTN_"
 
 
 @pytest.fixture(autouse=True)
+def _stub_backup_table(monkeypatch):
+    """Skip the real rsync from ``backup_table()`` during unit
+    tests — we only want to exercise retention logic. The
+    backup-gate behaviour itself is tested explicitly below
+    with a failing stub."""
+    from backend.algo.jobs import intraday_bars_retention as mod
+
+    monkeypatch.setattr(
+        mod,
+        "backup_table",
+        lambda table_id, **_kw: f"/tmp/fake-backup-{table_id}",
+    )
+
+
+@pytest.fixture(autouse=True)
 def _ensure_table_and_clean_state():
     """Ensure ``stocks.intraday_bars`` is registered and wipe any
     ``RTN_`` test rows from previous runs."""
@@ -168,12 +183,73 @@ async def test_delete_predicate_is_less_than_cutoff_iso():
 
     assert result["status"] == "ok"
     assert result["cutoff"] == "2022-05-13"
+    assert result["backup_path"] is not None
     # tbl.delete invoked exactly once with LessThan(bar_date, ...)
     mock_tbl.delete.assert_called_once()
     call_arg = mock_tbl.delete.call_args.args[0]
     assert isinstance(call_arg, LessThan)
     assert call_arg.term.name == "bar_date"
     assert call_arg.literal.value == "2022-05-13"
+
+
+async def test_backup_failure_aborts_delete(monkeypatch):
+    """If the pre-delete backup raises, the retention job MUST
+    NOT issue the Iceberg delete — fail-closed contract."""
+    from backend.algo.jobs import intraday_bars_retention as mod
+
+    def _bad_backup(table_id, **_kw):
+        raise RuntimeError("rsync timed out (simulated)")
+
+    monkeypatch.setattr(mod, "backup_table", _bad_backup)
+
+    mock_tbl = MagicMock()
+    mock_cat = MagicMock()
+    mock_cat.load_table.return_value = mock_tbl
+    with (
+        patch(
+            "stocks.create_tables._get_catalog",
+            return_value=mock_cat,
+        ),
+        patch(
+            "backend.algo.jobs.intraday_bars_retention." "invalidate_metadata",
+        ),
+    ):
+        result = await run_intraday_bars_retention_job(
+            {"today": "2026-05-13"},
+        )
+
+    assert result["status"] == "error"
+    assert "backup_failed" in result["error"]
+    # The Iceberg delete must NOT have been called.
+    mock_tbl.delete.assert_not_called()
+
+
+async def test_skip_backup_payload_bypasses_safety_gate():
+    """Operators can disable the backup gate for ad-hoc runs
+    via ``payload={"skip_backup": True}``. The delete still
+    runs; ``backup_path`` is ``None`` in the response."""
+    mock_tbl = MagicMock()
+    mock_cat = MagicMock()
+    mock_cat.load_table.return_value = mock_tbl
+    with (
+        patch(
+            "stocks.create_tables._get_catalog",
+            return_value=mock_cat,
+        ),
+        patch(
+            "backend.algo.jobs.intraday_bars_retention." "invalidate_metadata",
+        ),
+        patch(
+            "backend.algo.jobs.intraday_bars_retention." "backup_table",
+        ) as mock_backup,
+    ):
+        result = await run_intraday_bars_retention_job(
+            {"today": "2026-05-13", "skip_backup": True},
+        )
+    assert result["status"] == "ok"
+    assert result["backup_path"] is None
+    mock_backup.assert_not_called()
+    mock_tbl.delete.assert_called_once()
 
 
 # ────────────────────────────────────────────────────────────────
