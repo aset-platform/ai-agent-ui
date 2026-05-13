@@ -279,6 +279,73 @@ def test_backfill_window_skips_ticker_missing_token():
     kite.fetch_intraday_historical_window.assert_not_called()
 
 
+def test_backfill_window_calls_on_batch_written_hook():
+    """ASETPLTFRM-400 slice 1e: the optional ``on_batch_written``
+    callback must fire exactly once per *successful* batch upsert
+    with ``(batch_bars, interval_sec)``. Used by the daily keeper
+    to run the 5 pipeline quality assertions inline."""
+    bars = {
+        f"TST_HK{i}.NS": [_bar(f"TST_HK{i}.NS", date(2026, 4, 11), 9, 15)]
+        for i in range(3)
+    }
+    kite = _make_kite_returning(bars)
+    tokens = {t: i + 1000 for i, t in enumerate(bars)}
+    seen: list[tuple[int, int]] = []
+
+    def _hook(batch_bars, interval_sec):
+        seen.append((len(batch_bars), interval_sec))
+
+    stats = backfill_window(
+        kite=kite,
+        tickers=list(bars),
+        instrument_tokens=tokens,
+        interval_sec=900,
+        start=date(2026, 4, 11),
+        end=date(2026, 4, 11),
+        source="test",
+        batch_size=2,
+        on_batch_written=_hook,
+    )
+    # 3 tickers @ batch_size=2 → 2 batches → 2 hook invocations.
+    assert len(seen) == 2
+    # Every fire receives interval_sec=900.
+    assert all(iv == 900 for _, iv in seen)
+    assert stats.bars_written == 3
+
+
+def test_backfill_window_hook_exception_does_not_strand_run(
+    caplog,
+):
+    """A buggy on_batch_written must not roll back upserts or
+    abort subsequent batches — slice 1e's contract is best-effort
+    quality observability, not a write barrier."""
+    bars = {
+        f"TST_HKX{i}.NS": [_bar(f"TST_HKX{i}.NS", date(2026, 4, 12), 9, 15)]
+        for i in range(3)
+    }
+    kite = _make_kite_returning(bars)
+    tokens = {t: i + 2000 for i, t in enumerate(bars)}
+
+    def _bad_hook(batch_bars, interval_sec):
+        raise RuntimeError("assertion bug")
+
+    stats = backfill_window(
+        kite=kite,
+        tickers=list(bars),
+        instrument_tokens=tokens,
+        interval_sec=900,
+        start=date(2026, 4, 12),
+        end=date(2026, 4, 12),
+        source="test",
+        batch_size=2,
+        on_batch_written=_bad_hook,
+    )
+    # All 3 bars still wrote (hook fires AFTER upsert; exception is
+    # caught + logged).
+    assert stats.bars_written == 3
+    assert stats.tickers_done == 3
+
+
 def test_backfill_window_batches_upserts():
     """3 tickers with batch_size=2 → 2 batches → 2 upsert commits."""
     bars = {

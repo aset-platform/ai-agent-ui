@@ -29,6 +29,9 @@ from uuid import UUID
 from sqlalchemy import text
 
 from backend.algo.backtest.intraday_backfill import backfill_window
+from backend.algo.backtest.intraday_quality import (
+    run_post_ingest_assertions,
+)
 from backend.algo.broker.credentials_repo import BrokerCredentialsRepo
 from backend.algo.broker.kite_client import KiteClient
 from backend.algo.instruments.repo import InstrumentsRepo
@@ -243,7 +246,26 @@ async def run_intraday_bars_daily_ingest_job(
     total_bars = 0
     total_failed = 0
     sample_failures: list[tuple[str, str]] = []
+    quality_violations = 0
     for interval_sec in intervals:
+        # Each batch's bars flow through the 5 slice-1e assertions
+        # before the next batch starts; failures become
+        # ``data_quality_violation`` events on ``algo.events`` and
+        # increment the keeper's roll-up counter.
+        def _assertions_hook(
+            bars: list,
+            iv: int,
+            interval_sec=interval_sec,
+        ) -> None:
+            nonlocal quality_violations
+            report = run_post_ingest_assertions(
+                bars=bars,
+                interval_sec=iv,
+                pipeline_id="intraday_bars_daily_keeper",
+                user_id=str(keeper["user_id"]),
+            )
+            quality_violations += len(report.failed)
+
         stats = backfill_window(
             kite=kite,
             tickers=tickers,
@@ -253,6 +275,7 @@ async def run_intraday_bars_daily_ingest_job(
             end=end,
             source="kite_daily_keeper",
             batch_size=batch_size,
+            on_batch_written=_assertions_hook,
         )
         per_interval[interval_sec] = {
             "tickers_done": stats.tickers_done,
@@ -267,11 +290,13 @@ async def run_intraday_bars_daily_ingest_job(
                 stats.failures[: 10 - len(sample_failures)],
             )
     _logger.info(
-        "intraday-keeper: done tickers=%d intervals=%s " "bars=%d failures=%d",
+        "intraday-keeper: done tickers=%d intervals=%s "
+        "bars=%d failures=%d quality_violations=%d",
         len(tickers),
         intervals,
         total_bars,
         total_failed,
+        quality_violations,
     )
     return {
         "status": "ok",
@@ -282,6 +307,7 @@ async def run_intraday_bars_daily_ingest_job(
         "end": end.isoformat(),
         "bars_written": total_bars,
         "tickers_failed": total_failed,
+        "quality_violations": quality_violations,
         "sample_failures": sample_failures[:10],
         "per_interval": per_interval,
     }

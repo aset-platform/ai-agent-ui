@@ -351,6 +351,7 @@ def backfill_window(
     end: date,
     source: str = "manual_backfill",
     batch_size: int = 50,
+    on_batch_written: Any = None,
 ) -> BackfillStats:
     """Bulk pull ``[start, end]`` for ``tickers`` at ``interval_sec``
     and write to ``stocks.intraday_bars``.
@@ -382,6 +383,14 @@ def backfill_window(
     batch_size : int
         Number of tickers per upsert commit. Default 50 keeps each
         scoped-delete batch reasonable.
+    on_batch_written : Callable[[list[BarData], int], None] | None
+        Optional hook invoked after each successful batch upsert
+        with ``(batch_bars, interval_sec)``. Used by the daily
+        keeper (ASETPLTFRM-400 slice 1e) to run the pipeline
+        quality assertions and emit ``data_quality_violation``
+        events. Hook exceptions are caught + logged with
+        ``exc_info=True`` so an assertion bug never strands the
+        keeper.
 
     Returns
     -------
@@ -462,6 +471,19 @@ def backfill_window(
                         stats.tickers_failed += 1
                         stats.failures.append(
                             (tk, f"upsert:{exc!s}"[:200]),
+                        )
+            else:
+                if on_batch_written is not None:
+                    try:
+                        on_batch_written(batch_bars, interval_sec)
+                    except Exception as hook_exc:  # noqa: BLE001
+                        _logger.error(
+                            "[intraday-backfill] batch %d/%d "
+                            "on_batch_written hook failed: %s",
+                            bi,
+                            len(batches),
+                            hook_exc,
+                            exc_info=True,
                         )
         _logger.info(
             "[intraday-backfill] batch %d/%d done "

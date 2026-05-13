@@ -367,6 +367,64 @@ async def test_payload_overrides_intervals_and_window(
     assert call_kwargs["end"] == date(2026, 5, 13)
 
 
+async def test_keeper_passes_quality_hook_to_backfill_window(
+    fake_session,
+):
+    """Slice 1e: every backfill_window call MUST receive a
+    non-None ``on_batch_written`` hook so the pipeline quality
+    assertions actually fire on the daily keeper's writes."""
+    factory, _ = fake_session
+    uid = uuid4()
+    with (
+        patch(
+            "backend.algo.jobs.intraday_bars_daily_ingest."
+            "get_session_factory",
+            return_value=factory,
+        ),
+        patch(
+            "backend.algo.jobs.intraday_bars_daily_ingest."
+            "_resolve_keeper_user",
+            new=AsyncMock(
+                return_value={
+                    "user_id": uid,
+                    "creds": {
+                        "api_key": "k",
+                        "access_token": "tok",
+                        "access_token_expired": False,
+                    },
+                }
+            ),
+        ),
+        patch(
+            "backend.algo.jobs.intraday_bars_daily_ingest."
+            "_resolve_top200_universe",
+            return_value=["A.NS"],
+        ),
+        patch(
+            "backend.algo.jobs.intraday_bars_daily_ingest."
+            "_active_intraday_tickers_last_7d",
+            return_value=[],
+        ),
+        patch(
+            "backend.algo.jobs.intraday_bars_daily_ingest."
+            "_resolve_instrument_tokens",
+            new=AsyncMock(return_value={"A.NS": 1}),
+        ),
+        patch(
+            "backend.algo.jobs.intraday_bars_daily_ingest.KiteClient",
+        ),
+        patch(
+            "backend.algo.jobs.intraday_bars_daily_ingest.backfill_window",
+            return_value=_stats(),
+        ) as mock_bf,
+    ):
+        await run_intraday_bars_daily_ingest_job(None)
+
+    # Every interval got a hook.
+    for call in mock_bf.call_args_list:
+        assert call.kwargs.get("on_batch_written") is not None
+
+
 async def test_register_job_dispatch_wiring():
     """``intraday_bars_daily_ingest`` must be registered in the
     JOB_EXECUTORS map — without this the scheduler can't fire it
