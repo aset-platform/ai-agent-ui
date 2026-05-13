@@ -389,6 +389,145 @@ class KiteClient:
         out.sort(key=lambda b: b.date)
         return out
 
+    # Kite's historical_data interval slugs for intraday cadence.
+    # The Kite SDK accepts "minute", "3minute", "5minute", "10minute",
+    # "15minute", "30minute", "60minute", "day". We only expose the
+    # ones supported by ScheduleBarClose.interval today (1m, 5m, 15m)
+    # plus reject the rest at call time.
+    _INTRADAY_INTERVAL_MAP = {
+        60: "minute",
+        300: "5minute",
+        900: "15minute",
+    }
+
+    def fetch_intraday_historical(
+        self,
+        *,
+        ticker: str,
+        instrument_token: int,
+        interval_sec: int,
+        n_bars: int,
+        end: Any,
+    ) -> list[Any]:
+        """Pull up to ``n_bars`` closed intraday candles ending at
+        ``end`` (a ``date``) and return them as ``BarData`` instances
+        with ``bar_open_ts_ns`` populated.
+
+        Used by ``preload_intraday_bars`` (ASETPLTFRM-392) when the
+        Iceberg ``algo.intraday_bars`` table lacks coverage for a
+        ticker / interval. Rate-limited to ≤ 3 req/sec via the same
+        class-level throttle as ``fetch_daily_historical``.
+
+        Parameters
+        ----------
+        ticker : str
+            Internal ticker (used as the ``BarData.ticker`` key).
+        instrument_token : int
+            Kite numeric instrument token.
+        interval_sec : int
+            Bar window in seconds. Must be one of 60 / 300 / 900.
+        n_bars : int
+            Bar count to request. Calendar window is widened to
+            cover roughly n_bars × interval_sec of trading time plus
+            generous slack for holidays + weekends.
+        end : date
+            Inclusive upper bound (typically today).
+
+        Returns
+        -------
+        list[BarData]
+            Ascending by ``bar_open_ts_ns``. ``bar_open_ts_ns`` is
+            set on every returned bar; ``date`` is the IST trading
+            date the bar opened in. Empty list if Kite returns
+            nothing.
+        """
+        from datetime import (
+            date as _date, datetime as _dt,
+            timedelta as _td, timezone as _tz,
+        )
+        from decimal import Decimal as _Dec
+
+        from backend.algo.backtest.types import BarData
+
+        if self._access_token is None:
+            raise RuntimeError(
+                "fetch_intraday_historical requires an access_token;"
+                " complete the OAuth handshake first.",
+            )
+        interval = self._INTRADAY_INTERVAL_MAP.get(interval_sec)
+        if interval is None:
+            raise ValueError(
+                f"interval_sec={interval_sec} not supported. Valid "
+                f"values: {sorted(self._INTRADAY_INTERVAL_MAP)}.",
+            )
+
+        # NSE intraday session is ~6.25h = 22 500s ≈ 75 5-min bars
+        # per day. Calendar widening: ceil(n_bars × interval_sec /
+        # 22 500) trading days, ×1.6 for holidays + weekends, ≥ 3
+        # days minimum. Generous; Kite trims to actual data anyway.
+        trading_days_needed = max(
+            1, (n_bars * interval_sec + 22_499) // 22_500,
+        )
+        width = max(int(trading_days_needed * 1.6) + 2, 3)
+        from_date = end - _td(days=width)
+
+        self._hist_throttle()
+        rows = self._kc.historical_data(
+            instrument_token=instrument_token,
+            from_date=from_date,
+            to_date=end,
+            interval=interval,
+        )
+
+        out: list[BarData] = []
+        for r in rows or []:
+            try:
+                o = _Dec(str(r["open"]))
+                h = _Dec(str(r["high"]))
+                lo = _Dec(str(r["low"]))
+                c = _Dec(str(r["close"]))
+            except Exception:  # noqa: BLE001
+                continue
+            if any(x.is_nan() for x in (o, h, lo, c)):
+                continue
+            ts = r["date"]
+            # Kite returns tz-aware datetimes in IST. Compute the
+            # ns-since-epoch UTC stamp for bar_open_ts_ns; the date
+            # column captures the IST trading date the bar opened in.
+            if hasattr(ts, "tzinfo") and ts.tzinfo is not None:
+                bar_open_dt = ts.astimezone(_tz.utc)
+            else:
+                bar_open_dt = ts.replace(tzinfo=_tz.utc)
+            bar_open_ts_ns = int(
+                bar_open_dt.timestamp() * 1_000_000_000,
+            )
+            d_obj = ts.date() if hasattr(ts, "date") else (
+                _date.fromisoformat(str(ts)[:10])
+            )
+            out.append(BarData(
+                ticker=ticker,
+                date=d_obj,
+                open=o,
+                high=h,
+                low=lo,
+                close=c,
+                volume=int(r.get("volume") or 0),
+                bar_open_ts_ns=bar_open_ts_ns,
+            ))
+        out.sort(key=lambda b: b.bar_open_ts_ns or 0)
+        # Kite often returns the partially-built current bar at the
+        # tail; the warmup needs CLOSED bars only. Drop any tail bar
+        # whose window hasn't ended yet.
+        now_ns = int(
+            _dt.now(_tz.utc).timestamp() * 1_000_000_000,
+        )
+        interval_ns = interval_sec * 1_000_000_000
+        while out and (
+            (out[-1].bar_open_ts_ns or 0) + interval_ns > now_ns
+        ):
+            out.pop()
+        return out[-n_bars:]
+
     async def stream_ticks(
         self,
         instrument_tokens: list[int],

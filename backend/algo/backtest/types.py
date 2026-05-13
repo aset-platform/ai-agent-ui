@@ -49,7 +49,17 @@ class BacktestRequest(BaseModel):
 
 
 class BarData(BaseModel):
-    """One day of OHLCV for one ticker."""
+    """One OHLCV bar for one ticker.
+
+    For daily strategies (the original use case), one bar = one
+    trading day and ``date`` uniquely identifies it. ``bar_open_ts_ns``
+    is None for backwards-compat.
+
+    For intraday strategies (ASETPLTFRM-392), multiple bars share
+    the same ``date``. ``bar_open_ts_ns`` carries the bar window's
+    start as ns-since-epoch so the runtime's append-vs-update logic
+    can distinguish bars within the same trading day.
+    """
     model_config = ConfigDict(extra="forbid")
 
     ticker: str
@@ -59,6 +69,9 @@ class BarData(BaseModel):
     low: Decimal
     close: Decimal
     volume: int
+    # ASETPLTFRM-392 — intraday bar window start (ns since epoch).
+    # Optional: daily bars leave this None.
+    bar_open_ts_ns: int | None = None
 
 
 class OrderIntent(BaseModel):
