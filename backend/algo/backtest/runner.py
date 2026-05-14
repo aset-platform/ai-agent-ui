@@ -22,8 +22,10 @@ from backend.algo.backtest.data_source import (
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 from backend.algo.backtest.event_writer import event_row, flush_events
 from backend.algo.backtest.indicators import (
+    DEFAULT_INTRADAY_WARMUP_DAYS,
     DEFAULT_WARMUP_BARS,
     compute_indicators_for_universe,
+    compute_indicators_for_universe_intraday,
     compute_market_regime,
     compute_market_trend_strength,
 )
@@ -127,13 +129,18 @@ def run_backtest(
             interval_sec=request.interval_sec,
             period_start=request.period_start,
             period_end=request.period_end,
-            warmup_days=DEFAULT_WARMUP_BARS,
+            warmup_days=DEFAULT_INTRADAY_WARMUP_DAYS,
         )
-        # Indicator engine is keyed by ``bar.date`` — collapsing
-        # 25 intraday bars/day would clobber. Slice-3 ships
-        # intraday strategies with bar-level features only
-        # (``today_ltp`` / ``today_vol`` derived per bar below).
-        # Indicator-on-intraday support is a follow-up.
+        # ASETPLTFRM-400 slice 4b — indicators on intraday bars.
+        # Keyed by ``bar_open_ts_ns`` (not ``bar.date``) so the
+        # 25 bars/day each get their own feature dict. Default
+        # SMA windows = (20, 50, 100, 200); RSI(14) + VWAP
+        # (day-resetting) always emitted. Feature lookup in the
+        # inner loop reads ``intraday_indicators[ticker][ts_ns]``.
+        intraday_indicators = compute_indicators_for_universe_intraday(bars)
+        # Date-keyed indicator dict left empty for intraday — the
+        # daily-path lookup in the inner loop returns {} and the
+        # intraday lookup below supplies the features.
         indicators: dict[str, dict[date, dict[str, Decimal]]] = {}
     else:
         # Load with warmup history so SMA200 etc. are well-formed
@@ -146,6 +153,7 @@ def run_backtest(
             warmup_days=DEFAULT_WARMUP_BARS,
         )
         indicators = compute_indicators_for_universe(bars)
+        intraday_indicators: dict[str, dict[int, dict[str, Decimal]]] = {}
     # Top-level regime feature, injected into every (ticker, bar)
     # feature dict below so strategies can gate entries on
     # `{"feature": "nifty_above_sma200"}`. Empty dict if ^NSEI
@@ -320,14 +328,29 @@ def run_backtest(
             # end-of-day equity snapshot below uses last_close.
             last_close[ticker] = current.close
             open_pos = pt.open_positions().get(ticker)
-            ticker_features = {
-                **indicators.get(ticker, {}).get(
+            # ASETPLTFRM-400 slice 4b — intraday strategies look
+            # up per-bar indicators by ``ts_ns``; daily strategies
+            # keep the date-keyed path. Both branches fall back to
+            # ``today_ltp`` / ``today_vol`` for warmup-period bars
+            # where SMA200/RSI haven't settled yet.
+            if is_intraday:
+                bar_feats = intraday_indicators.get(
+                    ticker,
+                    {},
+                ).get(ts_ns) or {
+                    "today_ltp": current.close,
+                    "today_vol": Decimal(current.volume),
+                }
+            else:
+                bar_feats = indicators.get(ticker, {}).get(
                     bar_date,
                     {
                         "today_ltp": current.close,
                         "today_vol": Decimal(current.volume),
                     },
-                ),
+                )
+            ticker_features = {
+                **bar_feats,
                 "nifty_above_sma200": market_regime.get(
                     bar_date,
                     Decimal("0"),
