@@ -2,6 +2,155 @@
 
 ---
 
+## 2026-05-14 — PR #221 merged + PR #222 open (intraday backtest correctness, promotion workflow, retention monthly cadence)
+
+**PR #221** branched from `feature/intraday-backtest-slice2-loader`,
+squash-merged to `dev` as **`f140fd6`** at 11:29 UTC.
+
+### Four thematic commit chains squashed
+
+1. **Backtest correctness + MIS entry cutoff** (ASETPLTFRM-400)
+   - **period_end_mtm force-close**: open positions at the last bar
+     synthetically exit at that bar's close (exit_reason=
+     `period_end_mtm`). Trade table now accounts for 100 % of
+     `total_pnl`.
+   - **MIS daily square-off** honours `strategy.square_off_time` per
+     cadence. 15m + `15:08 IST` → squares at 15:15 bar; 5m + `15:08`
+     → 15:10; 1m → exact.
+   - **MIS entry cutoff** ("no new BUYs after T-1h"): shared
+     `backend/algo/runtime/intraday_window.py::is_entry_allowed`
+     wired into backtest / paper / live runtimes. Default
+     `square_off_time − 60min`, overridable on AST.
+   - **Intraday Opened/Closed timestamps** on `TradeRow`/`Position`
+     (ns since epoch). UI renders `YYYY-MM-DD HH:mm IST`; daily
+     falls back to bare date.
+   - **2-dp formatting** on money + return columns; CSV keeps raw
+     precision.
+   - **Date-inversion fix**: `_action_to_intent` missing
+     `intent_emitted_ts_ns` on `sell(all=True)` + both
+     `set_target_weight` legs → BUYs filled on next calendar day
+     instead of next intraday bar. Side benefit: intraday fees now
+     classified correctly.
+   - Memory: `shared/architecture/backtest-correctness-mis-cnc-suite`.
+
+2. **Strategy promotion workflow** (draft → paper → live)
+   - `algo.strategy_mode_transitions` audit table (migration
+     `b8c9d0e1f2a3`) + `ck_strategies_mode` CHECK constraint.
+   - Gates: draft→paper needs fresh backtest + walkforward
+     (`started_at >= strategies.updated_at`); paper→live needs
+     fresh paper fills in `algo.events` (paper runtime doesn't
+     create algo.runs rows).
+   - AST edits auto-demote any non-draft → draft.
+   - Bypass to live unlocked only after first `to_mode='live'`
+     in history; typed-name confirmation + reason required.
+   - Frontend: `PromoteModal`, `DemoteWarningBanner`,
+     `PromotionToLiveCallout`. Mode-strict picker filters across
+     9 surfaces.
+   - Memory: `shared/architecture/strategy-promotion-workflow`.
+
+3. **Strategies UX overhaul + tab reorder**
+   - Search input, status filter, pagination, icon actions
+     (Promote / Edit / Clone / Archive), archive confirm modal,
+     clone endpoint (`POST /algo/strategies/{id}/clone`).
+   - Tab reorder: **Strategies first**, Instruments between
+     Replay & Settings. Default landing → `strategies`.
+   - HMM widget removed from Dry-run (kept on Live).
+
+4. **Walk-forward + dry-run decoupled from Kite**
+   - `regime_stratified` default flipped True → False (Indian
+     markets 90 % SIDEWAYS makes the gate filter every fold).
+     Frontend opt-in checkbox.
+   - Live **fold progress indicator** with ETA on
+     `GET /walkforward/runs/{id}`. Amber banner "fold X of Y · ETA
+     ~N min" + progress bar.
+   - **Dry-run no Kite creds**: `mode=dryrun + source=replay` no
+     longer requires `live_orders_enabled` caps or real Zerodha
+     session. Dry-run is rehearsal *before* live setup.
+
+### Subsequent pre-merge fixes
+
+- **`disposable_pg_session()` helper** for scheduler-job async PG
+  access. Fixes "Task got Future attached to a different loop"
+  crash on daily intraday keeper after first fire. Cached
+  `get_session_factory()` binds to uvicorn loop; each scheduled
+  job spawns a fresh `asyncio.run` loop; reusing cached pool
+  crashes. New helper builds per-call `NullPool` engine, yields
+  session, disposes on exit. 4 jobs migrated.
+  Memory: `shared/debugging/disposable-pg-session-asyncio-loop-bug`.
+- **Nifty 500 universe** sourced from `stock_master JOIN
+  stock_tags WHERE tag='nifty500'` instead of bundled CSV (CSV
+  path didn't exist inside backend container).
+- **Daily keeper defaults to 15m only** (`_DEFAULT_INTERVALS =
+  (900,)`); 5m + 1m wired but disabled until strategies need them.
+- **React `set-state-in-effect` lint fixes** in `PromoteModal`,
+  `SwingMethodologyPanel`, `LiveDashboard` (queueMicrotask +
+  cancellation flag); apostrophe escape;
+  `Date.now()`-during-render fix in `WalkForwardProgressBanner`
+  (state-backed `nowMs` + 2s interval tick).
+
+### Data cleanup
+
+- Deleted 5m + 1m rows from `stocks.intraday_bars` after PR merge
+  (only 15m strategies exist today). **447,095 rows removed**;
+  15m unchanged at 11.14 M rows.
+
+### Branch hygiene
+
+- 10 stale `feature/algo-trading-session-*` branches deleted from
+  origin (subsumed by the v1-integration squash long ago).
+- Local + remote now: `dev / main / qa / release`.
+
+### Jira
+
+- ASETPLTFRM-400, 401, 402 → assigned to Abhay, moved to
+  Sprint 10.
+
+---
+
+## 2026-05-14 — PR #222 open: intraday retention monthly cadence
+
+**Branch:** `feature/intraday-retention-monthly` → PR #222 (open).
+
+**Why:** `intraday_bars_retention` step spent 974 s yesterday —
+957 s in `backup_table()` (rsync of 536 MB intraday_bars tree)
+and **17 s** in the actual Iceberg `delete()`. Daily backup-
+before-delete fires for an effective no-op on 99 % of days.
+
+**Fix:**
+
+1. Cutoff anchored to first-of-month
+   (`date(today.year - 4, today.month, 1)`). Partition-aligned
+   with `(ticker, year_month)` → Iceberg drops whole-month
+   partitions as a metadata-only operation.
+2. New `_already_ran_this_month(today)` queries
+   `scheduler_runs` for latest successful retention; step
+   short-circuits BEFORE the expensive backup. Detection is by
+   query (not `today.day == 1`) so weekend-first-of-month
+   automatically promotes next Mon's run.
+3. `payload={"force": true}` bypasses the gate for ad-hoc runs.
+
+**Impact:** ~70 hr/yr of pipeline wall clock + I/O reclaimed.
+Retention runs 264/year → 12/year. Storage horizon 48–49 months.
+
+**Tests:** 16/16 pass. New autouse fixture defaults gate off so
+existing delete-path tests don't need to know about it.
+
+Memory: `shared/architecture/intraday-retention-monthly-cadence`.
+
+---
+
+## 2026-05-14 — CLAUDE.md refactored (−22 %)
+
+Reorganised from **508 lines / 42 KB** → **466 lines / 33 KB**.
+Compressed verbose prose around each rule into 1-liners + memory
+pointer; merged duplicate Pattern-Index rows; added §5.16 for the
+strategy promotion workflow; expanded §6.4 with commit-conflicts
+lesson; added React `set-state-in-effect` pattern to §5.3 and
+`disposable_pg_session` pattern to §5.1 / §6.7. Every rule
+preserved, just tighter.
+
+---
+
 ## 2026-05-13 — MIS / Intraday Strategy Support shipped (ASETPLTFRM-386)
 
 **Branch:** `feature/mis-intraday-strategy` → squash-merged to `dev` as **PR #219** (commit `888810d`).
