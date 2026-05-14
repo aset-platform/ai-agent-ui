@@ -18,7 +18,11 @@ import {
   type OpenPosition,
   type SessionSummaryMode,
 } from "@/hooks/usePaperSessionSummary";
-import { useStrategies } from "@/hooks/useStrategies";
+import {
+  filterStrategiesByMode,
+  useStrategies,
+  type StrategyMode,
+} from "@/hooks/useStrategies";
 
 interface PaperSessionSummaryProps {
   /** Which event mode to aggregate. Paper segment passes
@@ -235,7 +239,22 @@ export function PaperSessionSummary({
   dryRun = null,
   heading,
 }: PaperSessionSummaryProps = {}) {
-  const { strategies } = useStrategies();
+  // Picker rules per surface (mode-strict separation):
+  //   Paper tab (mode=paper)                      → paper-only
+  //   Dry-run tab (mode=live, dry_run=true)       → paper-only
+  //   Live tab (mode=live, dry_run=false)         → live-only
+  //   Live + Dry combined (mode=live, dry_run=null) → live-only
+  const { strategies: allStrategies } = useStrategies();
+  const isDryRunView = mode === "live" && dryRun === true;
+  const pickerModes: StrategyMode[] =
+    isDryRunView
+      ? ["paper"]
+      : mode === "live"
+        ? ["live"]
+        : ["paper"];
+  const strategies = filterStrategiesByMode(
+    allStrategies, pickerModes,
+  );
   const [strategyId, setStrategyId] = useState<string>("");
   const { summary, loading, error } =
     usePaperSessionSummary(strategyId, mode, dryRun);

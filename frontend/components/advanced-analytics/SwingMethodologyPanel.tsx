@@ -49,7 +49,21 @@ export function SwingMethodologyPanel({
   useEffect(() => {
     if (typeof window === "undefined") return;
     const seen = window.localStorage.getItem(storageKey);
-    if (seen === "1") setOpen(false);
+    if (seen !== "1") return;
+    // Defer the setState into a microtask so React's
+    // ``react-hooks/set-state-in-effect`` rule is satisfied —
+    // the rule only blocks synchronous setState calls in an
+    // effect body. ``cancelled`` guards against a regime-prop
+    // change that re-fires the effect before this microtask
+    // runs, which would otherwise stamp the wrong collapse
+    // state for the new regime.
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setOpen(false);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [storageKey]);
 
   const toggle = () => {

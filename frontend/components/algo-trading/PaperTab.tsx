@@ -4,7 +4,10 @@ import { useState } from "react";
 
 import { useKillSwitch } from "@/hooks/useKillSwitch";
 import { usePaperEvents } from "@/hooks/usePaperEvents";
-import { useStrategies } from "@/hooks/useStrategies";
+import {
+  filterStrategiesByMode,
+  useStrategies,
+} from "@/hooks/useStrategies";
 
 import { ActiveRunsPanel } from "./ActiveRunsPanel";
 import { AttributionPanel } from "./AttributionPanel";
@@ -13,6 +16,7 @@ import {
   type EventsPageSize,
 } from "./PaperEventsTimeline";
 import { PaperSessionSummary } from "./PaperSessionSummary";
+import { PromotionToLiveCallout } from "./PromotionToLiveCallout";
 
 const DEFAULT_EVENTS_PAGE_SIZE: EventsPageSize = 100;
 
@@ -29,7 +33,13 @@ export function PaperTab() {
   );
 
   const { state: killState } = useKillSwitch();
-  const { strategies } = useStrategies();
+  // Paper-tab picker shows only paper-stage strategies — strict
+  // separation per the promotion workflow (live strategies live
+  // on the Live tab only).
+  const { strategies: allStrategies } = useStrategies();
+  const strategies = filterStrategiesByMode(allStrategies, [
+    "paper",
+  ]);
 
   return (
     <div className="space-y-4" data-testid="paper-tab">
@@ -55,6 +65,8 @@ export function PaperTab() {
           </span>
         )}
       </div>
+
+      <PromotionToLiveCallout surface="paper" />
 
       <ActiveRunsPanel tradingMode="paper" />
       <PaperSessionSummary />

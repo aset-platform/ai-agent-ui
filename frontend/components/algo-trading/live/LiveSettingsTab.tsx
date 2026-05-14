@@ -17,7 +17,10 @@ import { useEffect, useState } from "react";
 
 import useSWR from "swr";
 
-import { useStrategies } from "@/hooks/useStrategies";
+import {
+  filterStrategiesByMode,
+  useStrategies,
+} from "@/hooks/useStrategies";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
 
@@ -132,7 +135,10 @@ function DriftThresholdInput() {
 // construction time for mode="live" spawns.
 
 export function LiveSettingsTab() {
-  const { strategies } = useStrategies();
+  // Settings + safety-belts are per-live-strategy; non-live
+  // strategies never need configuration here.
+  const { strategies: allStrategies } = useStrategies();
+  const strategies = filterStrategiesByMode(allStrategies, ["live"]);
   const [strategyId, setStrategyId] = useState<string>("");
   // If a strategy is archived elsewhere while open, `selected` becomes
   // undefined and the per-strategy card silently hides. Acceptable for

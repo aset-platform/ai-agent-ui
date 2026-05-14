@@ -12,7 +12,11 @@ import {
   usePaperFixtures,
   usePaperRuns,
 } from "@/hooks/usePaperRuns";
-import { useStrategies } from "@/hooks/useStrategies";
+import {
+  filterStrategiesByMode,
+  useStrategies,
+  type StrategyMode,
+} from "@/hooks/useStrategies";
 
 interface Props {
   /** Trading mode this panel is rendered under. Determines:
@@ -40,7 +44,19 @@ export function ActiveRunsPanel({ tradingMode = "paper" }: Props) {
     // dryrun
     return r.mode === "live" && r.dry_run;
   });
-  const { strategies } = useStrategies();
+  // Picker rule per surface (mode-strict separation):
+  //   paper  → paper-only
+  //   dryrun → paper-only (rehearsal of the paper-promoted AST)
+  //   live   → live-only
+  // A strategy promoted to live is no longer offered in
+  // paper / dry-run pickers — those surfaces test paper-stage
+  // strategies, not live ones.
+  const { strategies: allStrategies } = useStrategies();
+  const pickerModes: StrategyMode[] =
+    tradingMode === "live" ? ["live"] : ["paper"];
+  const strategies = filterStrategiesByMode(
+    allStrategies, pickerModes,
+  );
   const { fixtures } = usePaperFixtures();
   const { value: brokerStatus } = useBrokerStatus();
   const [strategyId, setStrategyId] = useState<string>("");

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from datetime import date as date_type
+
 from backend.algo.backtest.types import Fill, Position
 
 
@@ -33,9 +35,12 @@ class PositionTracker:
                 qty=fill.qty,
                 avg_price=fill.fill_price,
                 opened_at=fill.fill_date,
+                opened_at_ts_ns=fill.fill_ts_ns,
             )
             return
-        # Weighted average cost basis.
+        # Weighted average cost basis. Preserve the original
+        # opened_at + ts so the eventual close row shows the
+        # earliest entry, not the last add-on.
         total_qty = existing.qty + fill.qty
         new_avg = (
             (existing.avg_price * existing.qty)
@@ -57,6 +62,7 @@ class PositionTracker:
         if sell_qty == existing.qty:
             closed = existing.model_copy(update={
                 "closed_at": fill.fill_date,
+                "closed_at_ts_ns": fill.fill_ts_ns,
                 "realised_pnl_inr": realised,
             })
             self._closed.append(closed)
@@ -69,12 +75,66 @@ class PositionTracker:
                 qty=sell_qty,
                 avg_price=existing.avg_price,
                 opened_at=existing.opened_at,
+                opened_at_ts_ns=existing.opened_at_ts_ns,
                 closed_at=fill.fill_date,
+                closed_at_ts_ns=fill.fill_ts_ns,
                 realised_pnl_inr=realised,
             ))
             self._open[fill.ticker] = existing.model_copy(update={
                 "qty": existing.qty - sell_qty,
             })
+
+    def force_close_all(
+        self,
+        *,
+        marks: dict[str, Decimal],
+        fill_date: date_type,
+        exit_reason: str,
+        fill_ts_ns: int | None = None,
+    ) -> list[Position]:
+        """Synthetically close every open position at the supplied
+        mark price for that ticker.
+
+        Used by the backtest runner at period end (so trade_list
+        accounts for 100% of total_pnl) and at MIS day-end square-
+        off (so MIS simulations match Zerodha's auto-close
+        contract). Realised PnL is computed at the mark — no fees
+        are charged because there is no real fill.
+
+        Returns the list of positions that were closed. Tickers
+        with no mark in ``marks`` are skipped (no way to value the
+        exit fairly) — those callers should treat them as stranded.
+        """
+        out: list[Position] = []
+        for ticker in list(self._open.keys()):
+            mark = marks.get(ticker)
+            if mark is None:
+                continue
+            pos = self._open[ticker]
+            # Defensive: skip a position whose ``opened_at`` is in
+            # the future relative to this force-close. Used to
+            # happen when a late-day BUY at the last 15m bar of
+            # day N filled on day N+1's opening bar — the position
+            # ended up "opened" in day N's tracker iteration via
+            # the same-loop fill, then day N's MIS square-off
+            # tried to close it. Now we let day N+1's square-off
+            # catch it cleanly.
+            if pos.opened_at > fill_date:
+                continue
+            realised = (mark - pos.avg_price) * pos.qty
+            self._realised_total += realised
+            closed = pos.model_copy(
+                update={
+                    "closed_at": fill_date,
+                    "closed_at_ts_ns": fill_ts_ns,
+                    "realised_pnl_inr": realised,
+                    "exit_reason": exit_reason,
+                },
+            )
+            self._closed.append(closed)
+            del self._open[ticker]
+            out.append(closed)
+        return out
 
     def open_positions(self) -> dict[str, Position]:
         return dict(self._open)

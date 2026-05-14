@@ -24,7 +24,10 @@ import {
   stopPaperRun,
   usePaperRuns,
 } from "@/hooks/usePaperRuns";
-import { useStrategies } from "@/hooks/useStrategies";
+import {
+  filterStrategiesByMode,
+  useStrategies,
+} from "@/hooks/useStrategies";
 
 interface Props {
   /** Selected strategy id, hoisted to LiveDashboard so all Live
@@ -45,7 +48,10 @@ export function LiveActiveRunsPanel({
   const runs = allRuns.filter(
     (r) => r.mode === "live" && !r.dry_run,
   );
-  const { strategies } = useStrategies();
+  // Live-only filter mirrors LiveDashboard. Promotion workflow
+  // keeps non-live strategies out of the real-money picker.
+  const { strategies: allStrategies } = useStrategies();
+  const strategies = filterStrategiesByMode(allStrategies, ["live"]);
   const { value: brokerStatus } = useBrokerStatus();
   // Controlled-or-uncontrolled pattern: if the parent passes a
   // strategyId we mirror it; otherwise we maintain our own.

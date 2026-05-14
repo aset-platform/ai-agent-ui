@@ -18,7 +18,7 @@ import { ReplayTab } from "@/components/algo-trading/ReplayTab";
 import { StrategiesSettingsTab } from "@/components/algo-trading/StrategiesSettingsTab";
 import { StrategiesTab } from "@/components/algo-trading/StrategiesTab";
 
-const DEFAULT_TAB: StrategiesTabId = "instruments";
+const DEFAULT_TAB: StrategiesTabId = "strategies";
 
 function isValidTab(v: string | null): v is StrategiesTabId {
   return (

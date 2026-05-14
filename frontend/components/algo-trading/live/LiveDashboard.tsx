@@ -4,7 +4,10 @@ import { useEffect, useState } from "react";
 
 import { panicCloseAll } from "@/lib/algoApi";
 import { usePaperRuns } from "@/hooks/usePaperRuns";
-import { useStrategies } from "@/hooks/useStrategies";
+import {
+  filterStrategiesByMode,
+  useStrategies,
+} from "@/hooks/useStrategies";
 
 import { AttributionPanel } from "../AttributionPanel";
 import { LiveSafetyBeltsForm } from "../LiveSafetyBeltsForm";
@@ -42,7 +45,11 @@ import { RecentFillsTape } from "./RecentFillsTape";
  * lives exclusively on Strategies → Dry-run tab.
  */
 export function LiveDashboard() {
-  const { strategies } = useStrategies();
+  // Live picker only shows strategies graduated to ``live``.
+  // Promotion workflow keeps draft + paper strategies out of the
+  // real-money trading surface.
+  const { strategies: allStrategies } = useStrategies();
+  const strategies = filterStrategiesByMode(allStrategies, ["live"]);
   const { runs } = usePaperRuns();
   const [strategyId, setStrategyId] = useState<string>("");
 
@@ -53,16 +60,26 @@ export function LiveDashboard() {
   // initial render (slow useStrategies fetch) is still picked.
   useEffect(() => {
     if (strategyId) return;
+    // Wrap the auto-default write in a microtask so React's
+    // ``react-hooks/set-state-in-effect`` rule is satisfied —
+    // the rule blocks synchronous setState in the effect body
+    // (would re-render twice on every poll cycle until a
+    // strategyId lands). ``cancelled`` guards against runs /
+    // strategies arriving after the effect re-fires.
     const liveRun = runs.find(
       (r) => r.mode === "live" && !r.dry_run,
     );
-    if (liveRun) {
-      setStrategyId(liveRun.strategy_id);
-      return;
-    }
-    if (strategies.length > 0) {
-      setStrategyId(strategies[0].id);
-    }
+    const fallback =
+      strategies.length > 0 ? strategies[0].id : null;
+    const next = liveRun?.strategy_id ?? fallback;
+    if (!next) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setStrategyId(next);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [strategyId, runs, strategies]);
 
   return (

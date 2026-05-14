@@ -27,7 +27,7 @@ from backend.algo.live.reconciliation import (
     is_market_open_ist,
     reconcile_user,
 )
-from backend.db.engine import get_session_factory
+from backend.db.engine import disposable_pg_session
 
 _logger = logging.getLogger(__name__)
 
@@ -36,8 +36,7 @@ UTC = timezone.utc
 
 async def _users_with_open_positions() -> list[UUID]:
     """Return distinct user_ids that have open positions today."""
-    factory = get_session_factory()
-    async with factory() as session:
+    async with disposable_pg_session() as session:
         rows = (
             await session.execute(
                 text(

@@ -963,6 +963,43 @@ class LiveRuntime:
         if signal is None:
             return 0
 
+        # MIS "no new entries after T-1h" gate — shared helper so
+        # backtest / paper / dry-run / live all enforce the same
+        # rule. SELL / exit signals are unaffected.
+        if signal.side == "BUY":
+            from backend.algo.runtime.intraday_window import (
+                is_entry_allowed,
+                ist_time_from_ns,
+            )
+            bar_ist_time = ist_time_from_ns(bar.bar_open_ts_ns)
+            if (
+                bar_ist_time is not None
+                and not is_entry_allowed(
+                    product=self._strategy.product,
+                    entry_cutoff_raw=self._strategy.entry_cutoff_time,
+                    bar_time_ist=bar_ist_time,
+                )
+            ):
+                self._events.append(event_row(
+                    session_id=self._session_id,
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    mode="live",
+                    type_="signal_rejected",
+                    payload={
+                        **({"dry_run": True} if self._dry_run else {}),
+                        "reason": "mis_entry_cutoff",
+                        "ticker": signal.ticker,
+                        "side": signal.side,
+                        "qty": signal.qty,
+                        "bar_ist_time": bar_ist_time.isoformat(),
+                        "entry_cutoff": (
+                            self._strategy.entry_cutoff_time
+                        ),
+                    },
+                ))
+                return 0
+
         # ASETPLTFRM-381 — also emit ``symbol`` (canonical, no .NS)
         # alongside ``ticker`` so attribution.trades can pair
         # signals with fills (fills carry payload.symbol only). The

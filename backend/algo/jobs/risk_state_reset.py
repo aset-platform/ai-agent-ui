@@ -17,7 +17,7 @@ from uuid import UUID
 from sqlalchemy import text
 
 from backend.algo.paper.risk_state_repo import RiskStateRepo
-from backend.db.engine import get_session_factory
+from backend.db.engine import disposable_pg_session
 
 _logger = logging.getLogger(__name__)
 
@@ -39,12 +39,11 @@ async def run_risk_state_reset_job(
       - any row at all in algo.kill_switch (active or not — these
         are the users known to the algo system).
     """
-    factory = get_session_factory()
     repo = RiskStateRepo()
     today = _ist_today()
     count = 0
 
-    async with factory() as session:
+    async with disposable_pg_session() as session:
         result = await session.execute(
             text(
                 "SELECT DISTINCT user_id FROM ("

@@ -194,6 +194,36 @@ def test_get_404_on_missing(app: FastAPI):
     assert r.status_code == 404
 
 
+def test_clone_returns_fresh_id_and_suffixed_name(app: FastAPI):
+    """Cloning copies the AST under a fresh row id with a
+    ``(Copy)`` name suffix — see backend/algo/strategy/repo.py
+    ``create_strategy``, which re-mints the uuid regardless of
+    the incoming AST id."""
+    client = TestClient(app)
+    src = client.post(
+        "/v1/algo/strategies", json={"payload": _VALID_PAYLOAD},
+    )
+    assert src.status_code == 201, src.text
+    source_id = src.json()["id"]
+
+    cloned = client.post(
+        f"/v1/algo/strategies/{source_id}/clone",
+    )
+    assert cloned.status_code == 201, cloned.text
+    new_id = cloned.json()["id"]
+    assert new_id != source_id
+
+    listing = client.get("/v1/algo/strategies").json()
+    names = {s["id"]: s["name"] for s in listing["strategies"]}
+    assert names[new_id] == f"{_VALID_PAYLOAD['name']} (Copy)"
+
+
+def test_clone_missing_source_returns_404(app: FastAPI):
+    client = TestClient(app)
+    r = client.post(f"/v1/algo/strategies/{uuid4()}/clone")
+    assert r.status_code == 404
+
+
 def test_archive_then_list_excludes(app: FastAPI):
     client = TestClient(app)
     r = client.post(

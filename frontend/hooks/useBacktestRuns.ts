@@ -14,6 +14,9 @@ export type BacktestStatus =
 export interface EquityPoint {
   bar_date: string;
   equity_inr: string;
+  // ASETPLTFRM-400 slice 5 — intraday backtests emit one point
+  // per bar within the trading day. Daily runs leave it null.
+  bar_open_ts_ns?: number | null;
 }
 
 export interface TradeRow {
@@ -26,6 +29,17 @@ export interface TradeRow {
   holding_days: number;
   realised_pnl_inr: string;
   return_pct: string;
+  // Why this position closed:
+  //   "signal"          — strategy exit rule fired (default)
+  //   "stop_loss"       — per-trade stop-loss tripped
+  //   "mis_square_off"  — MIS auto-square-off at day end
+  //   "period_end_mtm"  — backtest force-closed at last bar
+  exit_reason?: string;
+  // Intraday fill timestamps (ns since epoch UTC). Daily-cadence
+  // runs leave both None; intraday cadences stamp the fill bar's
+  // open ts so Opened / Closed render with "YYYY-MM-DD HH:mm IST".
+  opened_at_ts_ns?: number | null;
+  closed_at_ts_ns?: number | null;
 }
 
 export interface BacktestSummary {
@@ -47,6 +61,10 @@ export interface BacktestSummary {
   started_at: string;
   completed_at: string;
   fee_rates_version: string;
+  // ASETPLTFRM-400 slice 7 — backtest cadence (seconds). 86400 =
+  // daily; 60/300/900 = 1m/5m/15m. Default 86400 on the wire so
+  // pre-slice-7 runs deserialise cleanly.
+  interval_sec?: number;
   equity_curve: EquityPoint[];
   trade_list: TradeRow[];
   error_text: string | null;

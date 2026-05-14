@@ -23,6 +23,7 @@ import { useRegimeCurrent } from "@/hooks/useRegime";
 import {
   createStrategy,
   type StrategyAst,
+  type StrategyMode,
 } from "@/hooks/useStrategies";
 import {
   upsertStrategyMetadata,
@@ -36,6 +37,13 @@ import {
 interface Props {
   initial?: StrategyAst | null;
   strategyId?: string | null;
+  /** Current promotion-workflow mode (used to render the
+   * auto-demote warning when editing a paper / live strategy). */
+  currentMode?: StrategyMode | null;
+  /** Active paper / live runtimes attached to this strategy. */
+  activeRuntimeModes?: string[];
+  /** Open position count from any active or recent runtime. */
+  openPositionCount?: number;
   onSaved?: (id: string) => void;
   onCancel?: () => void;
 }
@@ -43,6 +51,9 @@ interface Props {
 export function StrategyBuilder({
   initial,
   strategyId,
+  currentMode,
+  activeRuntimeModes,
+  openPositionCount,
   onSaved,
   onCancel,
 }: Props) {
@@ -172,6 +183,13 @@ export function StrategyBuilder({
       </aside>
 
       <main className="space-y-3">
+        {strategyId && currentMode && currentMode !== "draft" && (
+          <DemoteWarningBanner
+            currentMode={currentMode}
+            activeRuntimeModes={activeRuntimeModes ?? []}
+            openPositionCount={openPositionCount ?? 0}
+          />
+        )}
         <input
           type="text"
           value={name}
@@ -221,6 +239,49 @@ export function StrategyBuilder({
       <aside>
         <JsonPane ast={ast} onPaste={handlePastedJson} />
       </aside>
+    </div>
+  );
+}
+
+function DemoteWarningBanner({
+  currentMode,
+  activeRuntimeModes,
+  openPositionCount,
+}: {
+  currentMode: StrategyMode;
+  activeRuntimeModes: string[];
+  openPositionCount: number;
+}) {
+  const hasRuntime = activeRuntimeModes.length > 0;
+  return (
+    <div
+      role="alert"
+      data-testid="algo-builder-demote-warning"
+      className="rounded-md border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3 text-xs space-y-1"
+    >
+      <div className="font-medium text-amber-800 dark:text-amber-300">
+        This {currentMode} strategy will be demoted to draft on save.
+      </div>
+      <p className="text-amber-700 dark:text-amber-400">
+        Run backtest + walk-forward (and a fresh paper run for live)
+        to re-promote — or use the bypass card on the Promote dialog
+        if this strategy has been live before.
+      </p>
+      {hasRuntime && (
+        <p className="text-amber-700 dark:text-amber-400">
+          Active {activeRuntimeModes.join(" + ")} runtime is using
+          the previous AST in memory and will keep doing so until
+          it is restarted. Your edits will not affect it.
+        </p>
+      )}
+      {openPositionCount > 0 && (
+        <p className="text-rose-700 dark:text-rose-400">
+          ⚠ {openPositionCount} open position(s) tied to prior
+          runtimes. A new runtime started after re-promotion may
+          interact with them — close positions first if you want
+          a clean slate.
+        </p>
+      )}
     </div>
   );
 }

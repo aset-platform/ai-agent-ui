@@ -5,6 +5,7 @@ evaluator, sim-broker, position tracker, and the run-summary
 endpoint. Keep these stable — every downstream module imports
 the types declared here.
 """
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -31,21 +32,40 @@ def _enforce_backtest_start_floor(v: date) -> date:
     return v
 
 
+_SUPPORTED_INTERVAL_SEC = frozenset({60, 300, 900, 86400})
+
+
 class BacktestRequest(BaseModel):
     """Request body for POST /v1/algo/backtest/run."""
+
     model_config = ConfigDict(extra="forbid")
 
     strategy_id: UUID
     period_start: date
     period_end: date
     initial_capital_inr: Decimal = Field(
-        default=Decimal("100000.00"), ge=Decimal("1000.00"),
+        default=Decimal("100000.00"),
+        ge=Decimal("1000.00"),
     )
+    # ASETPLTFRM-400 slice 3 — backtest cadence. 86400 = daily
+    # (the original use case, unchanged); 60/300/900 select the
+    # intraday loader + (ticker, bar_open_ts_ns) runner loop.
+    interval_sec: int = Field(default=86400)
 
     @field_validator("period_start")
     @classmethod
     def _start_floor(cls, v: date) -> date:
         return _enforce_backtest_start_floor(v)
+
+    @field_validator("interval_sec")
+    @classmethod
+    def _supported_interval(cls, v: int) -> int:
+        if v not in _SUPPORTED_INTERVAL_SEC:
+            raise ValueError(
+                f"interval_sec={v} not supported; use one of "
+                f"{sorted(_SUPPORTED_INTERVAL_SEC)} (86400=daily)."
+            )
+        return v
 
 
 class BarData(BaseModel):
@@ -60,6 +80,7 @@ class BarData(BaseModel):
     start as ns-since-epoch so the runtime's append-vs-update logic
     can distinguish bars within the same trading day.
     """
+
     model_config = ConfigDict(extra="forbid")
 
     ticker: str
@@ -76,6 +97,7 @@ class BarData(BaseModel):
 
 class OrderIntent(BaseModel):
     """Strategy → SimBroker handoff. Emitted by the evaluator."""
+
     model_config = ConfigDict(extra="forbid")
 
     intent_id: UUID = Field(default_factory=uuid4)
@@ -83,10 +105,15 @@ class OrderIntent(BaseModel):
     side: Literal["BUY", "SELL"]
     qty: int = Field(ge=1)
     intent_emitted_at: date  # bar T; fills at T+1 open
+    # ASETPLTFRM-400 slice 3 — intraday cadence. When set, the
+    # SimBroker fills at the NEXT intraday bar's open (not next
+    # calendar day's open). Daily strategies leave this None.
+    intent_emitted_ts_ns: int | None = None
 
 
 class Fill(BaseModel):
     """One executed fill emitted by SimBroker."""
+
     model_config = ConfigDict(extra="forbid")
 
     intent_id: UUID
@@ -94,13 +121,18 @@ class Fill(BaseModel):
     side: Literal["BUY", "SELL"]
     qty: int
     fill_price: Decimal
-    fill_date: date         # T+1
-    fees_inr: Decimal       # IndianFeeModel.compute total
+    fill_date: date  # T+1
+    fees_inr: Decimal  # IndianFeeModel.compute total
     fee_rates_version: str  # stamps the dated YAML row used
+    # ASETPLTFRM-400 slice 3 — intraday cadence. The ns-since-
+    # epoch timestamp of the fill bar's open. ``None`` for daily
+    # fills.
+    fill_ts_ns: int | None = None
 
 
 class Position(BaseModel):
     """Open or closed position from PositionTracker."""
+
     model_config = ConfigDict(extra="forbid")
 
     ticker: str
@@ -109,18 +141,42 @@ class Position(BaseModel):
     opened_at: date
     closed_at: date | None = None
     realised_pnl_inr: Decimal = Field(default=Decimal("0.00"))
+    # Why this position closed:
+    #   "signal"          — strategy exit rule fired (default)
+    #   "stop_loss"       — per-trade stop-loss tripped
+    #   "mis_square_off"  — MIS auto-square-off at day end
+    #   "period_end_mtm"  — backtest force-closed at last bar
+    exit_reason: str = "signal"
+    # Intraday timestamps (ns since epoch UTC). Stays None for
+    # daily-cadence trades; intraday cadences (15m / 5m / 1m)
+    # stamp the bar_open_ts_ns of the fill bar so the UI can
+    # render "YYYY-MM-DD HH:mm IST" instead of bare dates.
+    opened_at_ts_ns: int | None = None
+    closed_at_ts_ns: int | None = None
 
 
 class EquityPoint(BaseModel):
-    """One end-of-day equity snapshot."""
+    """One equity snapshot.
+
+    Daily backtests emit one per ``bar_date`` (``bar_open_ts_ns``
+    stays None). Intraday backtests (slice 5) emit one per
+    closed bar within the trading day — ``bar_open_ts_ns``
+    disambiguates the ~25 snapshots that share a single
+    ``bar_date`` so the equity curve can be plotted with
+    intra-day granularity on the x-axis.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     bar_date: date
     equity_inr: Decimal
+    # ASETPLTFRM-400 slice 5 — intraday equity granularity.
+    bar_open_ts_ns: int | None = None
 
 
 class TradeRow(BaseModel):
     """One closed-position row for the trade table."""
+
     model_config = ConfigDict(extra="forbid")
 
     ticker: str
@@ -132,10 +188,21 @@ class TradeRow(BaseModel):
     holding_days: int
     realised_pnl_inr: Decimal
     return_pct: Decimal
+    # Mirror of ``Position.exit_reason`` so the UI trade-table can
+    # show a badge per row (signal / stop_loss / mis_square_off /
+    # period_end_mtm). Defaults to "signal" on legacy persisted
+    # summaries.
+    exit_reason: str = "signal"
+    # Intraday timestamps (ns since epoch UTC). None on daily
+    # cadence; intraday cadences carry the fill bar's open ts so
+    # the UI can render "YYYY-MM-DD HH:mm IST" in Opened/Closed.
+    opened_at_ts_ns: int | None = None
+    closed_at_ts_ns: int | None = None
 
 
 class BacktestRun(BaseModel):
     """Row shape for GET /runs (list endpoint)."""
+
     model_config = ConfigDict(extra="forbid")
 
     run_id: UUID
@@ -153,12 +220,16 @@ class BacktestRun(BaseModel):
 class BacktestSummary(BaseModel):
     """Run-level metrics persisted to algo.runs and returned by
     GET /v1/algo/backtest/runs/{id}."""
+
     model_config = ConfigDict(extra="forbid")
 
     run_id: UUID
     strategy_id: UUID
     status: Literal[
-        "pending", "running", "completed", "failed",
+        "pending",
+        "running",
+        "completed",
+        "failed",
     ] = "completed"
     period_start: date
     period_end: date
@@ -175,6 +246,12 @@ class BacktestSummary(BaseModel):
     started_at: datetime
     completed_at: datetime
     fee_rates_version: str
+    # ASETPLTFRM-400 slice 7 — surfaced to the UI so the
+    # results panel can show a cadence chip
+    # ("15m" / "5m" / "1m" / "Daily"). Defaults to 86400 so
+    # historical runs serialised before slice 7 deserialise
+    # cleanly as daily.
+    interval_sec: int = 86400
     equity_curve: list[EquityPoint] = Field(default_factory=list)
     trade_list: list[TradeRow] = Field(default_factory=list)
     error_text: str | None = None

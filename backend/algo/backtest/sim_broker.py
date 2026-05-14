@@ -12,6 +12,7 @@ BEFORE fee computation, so the booked fees reflect the actual
 fill price (not the mid). When ``adtv_lookup`` is empty the
 slippage falls back to the 5bps minimum on every leg.
 """
+
 from __future__ import annotations
 
 import logging
@@ -44,9 +45,7 @@ def estimate_slippage_bps(
     """
     if ticker_adtv_inr.is_nan() or ticker_adtv_inr <= 0:
         return SLIPPAGE_MIN_BPS
-    impact = SLIPPAGE_IMPACT_BPS * (
-        order_value_inr / ticker_adtv_inr
-    )
+    impact = SLIPPAGE_IMPACT_BPS * (order_value_inr / ticker_adtv_inr)
     return max(SLIPPAGE_MIN_BPS, impact)
 
 
@@ -73,9 +72,23 @@ class SimBroker:
         self._fees = IndianFeeModel(as_of=fee_as_of)
         self._adtv: dict[str, Decimal] = adtv_lookup or {}
         # Pre-compute date -> index lookup per ticker for O(1)
-        # T+1 resolution.
+        # T+1 resolution on daily strategies. For intraday strategies
+        # (multiple bars per date) this only records the LAST bar's
+        # index per date, so intraday paths key off ``_ts_index``
+        # below instead.
         self._index: dict[str, dict[date, int]] = {
             t: {b.date: i for i, b in enumerate(blist)}
+            for t, blist in bars.items()
+        }
+        # ASETPLTFRM-400 slice 3 — bar_open_ts_ns → index for
+        # intraday strategies. Empty on daily runs (where every
+        # bar's ``bar_open_ts_ns`` is None).
+        self._ts_index: dict[str, dict[int, int]] = {
+            t: {
+                b.bar_open_ts_ns: i
+                for i, b in enumerate(blist)
+                if b.bar_open_ts_ns is not None
+            }
             for t, blist in bars.items()
         }
 
@@ -92,21 +105,51 @@ class SimBroker:
         if intent.ticker not in self._bars:
             raise NoBarAvailableError(intent.ticker)
 
-        idx = self._index[intent.ticker].get(intent.intent_emitted_at)
-        if idx is None:
-            # Intent emitted on a non-trading day for this ticker —
-            # walk forward to the first bar at-or-after.
-            future = [
-                i for d, i in self._index[intent.ticker].items()
-                if d > intent.intent_emitted_at
-            ]
-            if not future:
-                return None
-            next_idx = min(future)
+        # ASETPLTFRM-400 slice 3 — when the intent carries
+        # ``intent_emitted_ts_ns`` (intraday cadence), resolve T+1
+        # to the next intraday BAR open rather than the next
+        # calendar day's open. Daily intents keep the original
+        # date-keyed path below.
+        if intent.intent_emitted_ts_ns is not None:
+            ts_idx = self._ts_index.get(intent.ticker, {}).get(
+                intent.intent_emitted_ts_ns,
+            )
+            if ts_idx is None:
+                future = [
+                    i
+                    for ns, i in self._ts_index.get(
+                        intent.ticker,
+                        {},
+                    ).items()
+                    if ns > intent.intent_emitted_ts_ns
+                ]
+                if not future:
+                    return None
+                next_idx = min(future)
+            else:
+                next_idx = ts_idx + 1
+                if next_idx >= len(self._bars[intent.ticker]):
+                    return None
         else:
-            next_idx = idx + 1
-            if next_idx >= len(self._bars[intent.ticker]):
-                return None
+            idx = self._index[intent.ticker].get(
+                intent.intent_emitted_at,
+            )
+            if idx is None:
+                # Intent emitted on a non-trading day for this
+                # ticker — walk forward to the first bar
+                # at-or-after.
+                future = [
+                    i
+                    for d, i in self._index[intent.ticker].items()
+                    if d > intent.intent_emitted_at
+                ]
+                if not future:
+                    return None
+                next_idx = min(future)
+            else:
+                next_idx = idx + 1
+                if next_idx >= len(self._bars[intent.ticker]):
+                    return None
 
         next_bar = self._bars[intent.ticker][next_idx]
 
@@ -123,8 +166,17 @@ class SimBroker:
 
         # Compute fees on the executed leg (uses fill_price, not
         # the bar open).
-        product = "DELIVERY"  # v1 only
-        exchange = "NSE"      # v1 only
+        # ASETPLTFRM-400 slice 4 — fee dispatch on cadence.
+        # Intraday intents (those carrying ``intent_emitted_ts_ns``)
+        # use the INTRADAY schedule: capped brokerage (₹20 / leg
+        # max), sell-side-only STT @ 0.025 %, sell-side-only no
+        # DP charges. Daily strategies keep the DELIVERY schedule.
+        product = (
+            "INTRADAY"
+            if intent.intent_emitted_ts_ns is not None
+            else "DELIVERY"
+        )
+        exchange = "NSE"  # v1 only
         breakdown = self._fees.compute(
             Trade(
                 symbol=intent.ticker,
@@ -144,4 +196,5 @@ class SimBroker:
             fill_date=next_bar.date,
             fees_inr=breakdown.total_inr,
             fee_rates_version=breakdown.rates_version,
+            fill_ts_ns=next_bar.bar_open_ts_ns,
         )

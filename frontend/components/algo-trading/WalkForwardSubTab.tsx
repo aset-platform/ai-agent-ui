@@ -7,6 +7,7 @@ import {
   useWalkForwardRun,
   useWalkForwardRuns,
   type WalkForwardAggregate,
+  type WalkForwardResult,
   type WindowSummary,
 } from "@/hooks/useWalkForwardRuns";
 import { useStrategies } from "@/hooks/useStrategies";
@@ -329,6 +330,12 @@ export function WalkForwardSubTab() {
   const [testDays, setTestDays] = useState(30);
   const [stepDays, setStepDays] = useState(30);
   const [capital, setCapital] = useState("100000.00");
+  // Regime stratification is opt-in. Indian markets sit in
+  // SIDEWAYS ~90%+ of the time; with BULL / BEAR rare, the
+  // stratified gate (every regime must appear in each train
+  // slice) wipes out every fold. Users turn it on only when
+  // they're specifically testing a bull / bear strategy.
+  const [regimeStratified, setRegimeStratified] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formErr, setFormErr] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -373,6 +380,7 @@ export function WalkForwardSubTab() {
         testDays,
         stepDays,
         capital,
+        regimeStratified,
       );
       setActiveRunId(id);
     } catch (exc) {
@@ -481,6 +489,18 @@ export function WalkForwardSubTab() {
             data-testid="walkforward-capital"
           />
         </Field>
+        <label
+          className="inline-flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300"
+          title="When ON, each fold's train slice must contain every regime (BULL/SIDEWAYS/BEAR) present in the full period. Useful for regime-specific strategies; defaults OFF because Indian markets sit in SIDEWAYS most of the time and stratification can filter every fold."
+        >
+          <input
+            type="checkbox"
+            checked={regimeStratified}
+            onChange={(e) => setRegimeStratified(e.target.checked)}
+            data-testid="walkforward-regime-stratified"
+          />
+          Regime-stratified
+        </label>
         <button
           type="submit"
           disabled={submitting}
@@ -541,12 +561,7 @@ export function WalkForwardSubTab() {
 
       {run &&
         (run.status === "pending" || run.status === "running") && (
-          <div
-            className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800"
-            data-testid="walkforward-run-progress"
-          >
-            Walk-forward is {run.status}…
-          </div>
+          <WalkForwardProgressBanner run={run} />
         )}
 
       {/* Results */}
@@ -569,6 +584,86 @@ export function WalkForwardSubTab() {
           <WindowTable summaries={run.window_summaries} />
         </>
       )}
+    </div>
+  );
+}
+
+function WalkForwardProgressBanner({
+  run,
+}: {
+  run: WalkForwardResult;
+}) {
+  // Hooks must precede any conditional return — React's
+  // rules-of-hooks enforces a stable call order across renders.
+  // The 2-second tick keeps the ETA fresh in step with the SWR
+  // poll cadence so the banner updates roughly in lockstep with
+  // each new ``done`` value from the backend.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 2_000);
+    return () => clearInterval(id);
+  }, []);
+  const p = run.progress;
+  // Pre-spawn (no child rows yet) — minimal "starting" state.
+  if (!p || p.total_estimated === 0) {
+    return (
+      <div
+        className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800"
+        data-testid="walkforward-run-progress"
+      >
+        Walk-forward is {run.status}… preparing folds.
+      </div>
+    );
+  }
+  // Live progress + ETA.
+  const done = p.done;
+  const total = p.total_estimated;
+  const running = p.running;
+  const pct = Math.min(
+    100,
+    total > 0 ? Math.floor((done / total) * 100) : 0,
+  );
+  const startedMs = p.started_at ? Date.parse(p.started_at) : nowMs;
+  const elapsedMs = Math.max(1, nowMs - startedMs);
+  // Skip ETA until we have at least 2 folds completed (one-fold
+  // samples are too noisy).
+  let etaText = "";
+  if (done >= 2 && done < total) {
+    const avgMs = elapsedMs / done;
+    const remainingMs = avgMs * (total - done);
+    const remSec = Math.round(remainingMs / 1000);
+    etaText =
+      remSec > 90
+        ? ` · ETA ~${Math.round(remSec / 60)} min`
+        : ` · ETA ~${remSec}s`;
+  }
+  return (
+    <div
+      className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800"
+      data-testid="walkforward-run-progress"
+    >
+      <div className="flex items-center justify-between">
+        <span>
+          Walk-forward is {run.status} — fold {done} of {total} done
+          {running > 0 ? ` (1 running)` : ""}
+          {etaText}
+        </span>
+        <span
+          className="text-xs font-medium"
+          data-testid="walkforward-run-progress-pct"
+        >
+          {pct}%
+        </span>
+      </div>
+      <div
+        className="h-1.5 w-full overflow-hidden rounded bg-amber-200/60"
+        aria-hidden
+      >
+        <div
+          className="h-full bg-amber-600 transition-[width] duration-500 ease-out"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
     </div>
   );
 }

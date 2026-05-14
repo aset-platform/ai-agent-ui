@@ -11,6 +11,7 @@ Scenarios:
   - aggregate metrics: known PnL% values → avg, std-dev
   - empty window list (period too short) → parent marked failed
 """
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -27,7 +28,6 @@ from backend.algo.backtest.walkforward import (
     _aggregate_windows,
     run_walkforward_job,
 )
-
 
 # ── helpers ────────────────────────────────────────────────────
 
@@ -83,15 +83,22 @@ def _make_repo():
     return repo
 
 
-def _make_fake_strategy(strategy_id):
+def _make_fake_strategy(strategy_id, schedule_interval: str | None = None):
     class _U:
         scope = "watchlist"
 
-    return type("S", (), {
+    attrs: dict = {
         "id": strategy_id,
         "root": None,
         "universe": _U(),
-    })()
+    }
+    if schedule_interval is not None:
+
+        class _Sched:
+            interval = schedule_interval
+
+        attrs["schedule"] = _Sched()
+    return type("S", (), attrs)()
 
 
 # ── aggregate unit tests ───────────────────────────────────────
@@ -166,7 +173,7 @@ class TestRunWalkforwardJob:
         config = WalkForwardConfig(
             strategy_id=strategy_id,
             period_start=date(2024, 1, 1),
-            period_end=date(2024, 5, 8),   # 128 days → 3 windows
+            period_end=date(2024, 5, 8),  # 128 days → 3 windows
             train_days=30,
             test_days=30,
             step_days=30,
@@ -198,17 +205,22 @@ class TestRunWalkforwardJob:
             run_index += 1
             return s
 
-        with patch(
-            "backend.algo.backtest.walkforward.BacktestRunsRepo",
-            return_value=repo,
-        ), patch(
-            "backend.algo.backtest.walkforward.run_backtest",
-            side_effect=_fake_run_backtest,
-        ), patch(
-            "backend.algo.backtest.walkforward.flush_events",
-        ), patch(
-            "backend.algo.backtest.job._session_factory",
-            new=_stub_factory,
+        with (
+            patch(
+                "backend.algo.backtest.walkforward.BacktestRunsRepo",
+                return_value=repo,
+            ),
+            patch(
+                "backend.algo.backtest.walkforward.run_backtest",
+                side_effect=_fake_run_backtest,
+            ),
+            patch(
+                "backend.algo.backtest.walkforward.flush_events",
+            ),
+            patch(
+                "backend.algo.backtest.job._session_factory",
+                new=_stub_factory,
+            ),
         ):
             await run_walkforward_job(
                 walkforward_run_id=wf_id,
@@ -235,7 +247,7 @@ class TestRunWalkforwardJob:
         config = WalkForwardConfig(
             strategy_id=strategy_id,
             period_start=date(2024, 1, 1),
-            period_end=date(2024, 5, 8),   # 128 days → 3 windows
+            period_end=date(2024, 5, 8),  # 128 days → 3 windows
             train_days=30,
             test_days=30,
             step_days=30,
@@ -268,17 +280,22 @@ class TestRunWalkforwardJob:
                 raise RuntimeError("data source error")
             return _summary(child_ids[idx], strategy_id)
 
-        with patch(
-            "backend.algo.backtest.walkforward.BacktestRunsRepo",
-            return_value=repo,
-        ), patch(
-            "backend.algo.backtest.walkforward.run_backtest",
-            side_effect=_fake_run_backtest,
-        ), patch(
-            "backend.algo.backtest.walkforward.flush_events",
-        ), patch(
-            "backend.algo.backtest.job._session_factory",
-            new=_stub_factory,
+        with (
+            patch(
+                "backend.algo.backtest.walkforward.BacktestRunsRepo",
+                return_value=repo,
+            ),
+            patch(
+                "backend.algo.backtest.walkforward.run_backtest",
+                side_effect=_fake_run_backtest,
+            ),
+            patch(
+                "backend.algo.backtest.walkforward.flush_events",
+            ),
+            patch(
+                "backend.algo.backtest.job._session_factory",
+                new=_stub_factory,
+            ),
         ):
             await run_walkforward_job(
                 walkforward_run_id=wf_id,
@@ -307,23 +324,28 @@ class TestRunWalkforwardJob:
             period_start=date(2024, 1, 1),
             period_end=date(2024, 2, 1),  # ~31 days
             train_days=20,
-            test_days=20,     # needs 40 days
+            test_days=20,  # needs 40 days
             step_days=10,
         )
 
         fake_strategy = _make_fake_strategy(strategy_id)
         repo = _make_repo()
 
-        with patch(
-            "backend.algo.backtest.walkforward.BacktestRunsRepo",
-            return_value=repo,
-        ), patch(
-            "backend.algo.backtest.walkforward.run_backtest",
-        ) as mock_runner, patch(
-            "backend.algo.backtest.walkforward.flush_events",
-        ), patch(
-            "backend.algo.backtest.job._session_factory",
-            new=_stub_factory,
+        with (
+            patch(
+                "backend.algo.backtest.walkforward.BacktestRunsRepo",
+                return_value=repo,
+            ),
+            patch(
+                "backend.algo.backtest.walkforward.run_backtest",
+            ) as mock_runner,
+            patch(
+                "backend.algo.backtest.walkforward.flush_events",
+            ),
+            patch(
+                "backend.algo.backtest.job._session_factory",
+                new=_stub_factory,
+            ),
         ):
             await run_walkforward_job(
                 walkforward_run_id=wf_id,
@@ -337,3 +359,309 @@ class TestRunWalkforwardJob:
         mock_runner.assert_not_called()
         # Parent still marks completed (0/0 windows)
         repo.mark_completed.assert_awaited()
+
+
+class TestWalkforwardIntradayInterval:
+    """ASETPLTFRM-400 slice 6 — walk-forward intraday folds.
+
+    Walk-forward MUST plumb ``interval_sec`` end-to-end so that an
+    MIS strategy with ``schedule.interval='15m'`` runs its intraday
+    loader for every child fold. Otherwise each fold silently runs
+    the daily path and the aggregate is meaningless. Two regimes
+    must hold: (1) explicit ``interval_sec`` on the config wins
+    over the auto-derive; (2) when ``interval_sec`` stays at the
+    default 86400, the auto-derive reads ``schedule.interval`` and
+    overrides.
+    """
+
+    @pytest.mark.asyncio
+    async def test_explicit_interval_sec_propagates_to_each_fold(self):
+        wf_id = uuid4()
+        strategy_id = uuid4()
+        user_id = uuid4()
+
+        config = WalkForwardConfig(
+            strategy_id=strategy_id,
+            period_start=date(2026, 4, 1),
+            period_end=date(2026, 4, 30),
+            train_days=10,
+            test_days=10,
+            step_days=10,
+            interval_sec=900,
+        )
+        fake_strategy = _make_fake_strategy(strategy_id)
+        repo = _make_repo()
+
+        async def _create_pending(*args, **kwargs):
+            row = MagicMock()
+            row.run_id = uuid4()
+            row.started_at = datetime.now(timezone.utc)
+            return row
+
+        repo.create_pending.side_effect = _create_pending
+        captured_requests: list = []
+
+        def _capture(**kwargs):
+            captured_requests.append(kwargs["request"])
+            return _summary(kwargs["request"].strategy_id, strategy_id)
+
+        with (
+            patch(
+                "backend.algo.backtest.walkforward.BacktestRunsRepo",
+                return_value=repo,
+            ),
+            patch(
+                "backend.algo.backtest.walkforward.run_backtest",
+                side_effect=_capture,
+            ),
+            patch(
+                "backend.algo.backtest.walkforward.flush_events",
+            ),
+            patch(
+                "backend.algo.backtest.job._session_factory",
+                new=_stub_factory,
+            ),
+        ):
+            await run_walkforward_job(
+                walkforward_run_id=wf_id,
+                user_id=user_id,
+                config=config,
+                strategy=fake_strategy,
+                universe=["ITC.NS"],
+            )
+
+        assert len(captured_requests) >= 1
+        for req in captured_requests:
+            assert req.interval_sec == 900, (
+                f"every fold must inherit interval_sec=900; "
+                f"got {req.interval_sec}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_auto_derives_interval_sec_from_strategy_schedule(self):
+        wf_id = uuid4()
+        strategy_id = uuid4()
+        user_id = uuid4()
+
+        # config leaves interval_sec at default 86400 → must be
+        # overridden by strategy.schedule.interval='15m'.
+        config = WalkForwardConfig(
+            strategy_id=strategy_id,
+            period_start=date(2026, 4, 1),
+            period_end=date(2026, 4, 30),
+            train_days=10,
+            test_days=10,
+            step_days=10,
+        )
+        fake_strategy = _make_fake_strategy(
+            strategy_id,
+            schedule_interval="15m",
+        )
+        repo = _make_repo()
+
+        async def _create_pending(*args, **kwargs):
+            row = MagicMock()
+            row.run_id = uuid4()
+            row.started_at = datetime.now(timezone.utc)
+            return row
+
+        repo.create_pending.side_effect = _create_pending
+        captured_requests: list = []
+
+        def _capture(**kwargs):
+            captured_requests.append(kwargs["request"])
+            return _summary(kwargs["request"].strategy_id, strategy_id)
+
+        with (
+            patch(
+                "backend.algo.backtest.walkforward.BacktestRunsRepo",
+                return_value=repo,
+            ),
+            patch(
+                "backend.algo.backtest.walkforward.run_backtest",
+                side_effect=_capture,
+            ),
+            patch(
+                "backend.algo.backtest.walkforward.flush_events",
+            ),
+            patch(
+                "backend.algo.backtest.job._session_factory",
+                new=_stub_factory,
+            ),
+        ):
+            await run_walkforward_job(
+                walkforward_run_id=wf_id,
+                user_id=user_id,
+                config=config,
+                strategy=fake_strategy,
+                universe=["ITC.NS"],
+            )
+
+        assert len(captured_requests) >= 1
+        for req in captured_requests:
+            assert req.interval_sec == 900, (
+                f"auto-derive 15m→900 must apply to every fold; "
+                f"got {req.interval_sec}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_explicit_interval_sec_wins_over_strategy_schedule(self):
+        """Operator override: config sets interval_sec=300 but
+        strategy schedule says 15m. The explicit config value MUST
+        win — otherwise we lose the operator escape hatch."""
+        wf_id = uuid4()
+        strategy_id = uuid4()
+        user_id = uuid4()
+
+        config = WalkForwardConfig(
+            strategy_id=strategy_id,
+            period_start=date(2026, 4, 1),
+            period_end=date(2026, 4, 30),
+            train_days=10,
+            test_days=10,
+            step_days=10,
+            interval_sec=300,
+        )
+        fake_strategy = _make_fake_strategy(
+            strategy_id,
+            schedule_interval="15m",
+        )
+        repo = _make_repo()
+
+        async def _create_pending(*args, **kwargs):
+            row = MagicMock()
+            row.run_id = uuid4()
+            row.started_at = datetime.now(timezone.utc)
+            return row
+
+        repo.create_pending.side_effect = _create_pending
+        captured_requests: list = []
+
+        def _capture(**kwargs):
+            captured_requests.append(kwargs["request"])
+            return _summary(kwargs["request"].strategy_id, strategy_id)
+
+        with (
+            patch(
+                "backend.algo.backtest.walkforward.BacktestRunsRepo",
+                return_value=repo,
+            ),
+            patch(
+                "backend.algo.backtest.walkforward.run_backtest",
+                side_effect=_capture,
+            ),
+            patch(
+                "backend.algo.backtest.walkforward.flush_events",
+            ),
+            patch(
+                "backend.algo.backtest.job._session_factory",
+                new=_stub_factory,
+            ),
+        ):
+            await run_walkforward_job(
+                walkforward_run_id=wf_id,
+                user_id=user_id,
+                config=config,
+                strategy=fake_strategy,
+                universe=["ITC.NS"],
+            )
+
+        assert len(captured_requests) >= 1
+        for req in captured_requests:
+            assert (
+                req.interval_sec == 300
+            ), "explicit config 300 must win over strategy 15m"
+
+    @pytest.mark.asyncio
+    async def test_daily_strategy_keeps_default_interval_sec(self):
+        """schedule.interval='1d' → no auto-override; every fold
+        runs daily."""
+        wf_id = uuid4()
+        strategy_id = uuid4()
+        user_id = uuid4()
+
+        config = WalkForwardConfig(
+            strategy_id=strategy_id,
+            period_start=date(2026, 4, 1),
+            period_end=date(2026, 4, 30),
+            train_days=10,
+            test_days=10,
+            step_days=10,
+        )
+        fake_strategy = _make_fake_strategy(
+            strategy_id,
+            schedule_interval="1d",
+        )
+        repo = _make_repo()
+
+        async def _create_pending(*args, **kwargs):
+            row = MagicMock()
+            row.run_id = uuid4()
+            row.started_at = datetime.now(timezone.utc)
+            return row
+
+        repo.create_pending.side_effect = _create_pending
+        captured_requests: list = []
+
+        def _capture(**kwargs):
+            captured_requests.append(kwargs["request"])
+            return _summary(kwargs["request"].strategy_id, strategy_id)
+
+        with (
+            patch(
+                "backend.algo.backtest.walkforward.BacktestRunsRepo",
+                return_value=repo,
+            ),
+            patch(
+                "backend.algo.backtest.walkforward.run_backtest",
+                side_effect=_capture,
+            ),
+            patch(
+                "backend.algo.backtest.walkforward.flush_events",
+            ),
+            patch(
+                "backend.algo.backtest.job._session_factory",
+                new=_stub_factory,
+            ),
+        ):
+            await run_walkforward_job(
+                walkforward_run_id=wf_id,
+                user_id=user_id,
+                config=config,
+                strategy=fake_strategy,
+                universe=["TCS.NS"],
+            )
+
+        assert len(captured_requests) >= 1
+        for req in captured_requests:
+            assert req.interval_sec == 86400
+
+
+class TestWalkforwardConfigIntervalSec:
+    """Schema validation for the new ``interval_sec`` field on
+    ``WalkForwardConfig`` — mirrors ``BacktestRequest``."""
+
+    def test_rejects_unsupported_interval_sec(self):
+        with pytest.raises(ValueError):
+            WalkForwardConfig(
+                strategy_id=uuid4(),
+                period_start=date(2026, 4, 1),
+                period_end=date(2026, 4, 30),
+                train_days=10,
+                test_days=10,
+                step_days=10,
+                interval_sec=120,
+            )
+
+    def test_accepts_supported_interval_sec_values(self):
+        for sec in (60, 300, 900, 86400):
+            cfg = WalkForwardConfig(
+                strategy_id=uuid4(),
+                period_start=date(2026, 4, 1),
+                period_end=date(2026, 4, 30),
+                train_days=10,
+                test_days=10,
+                step_days=10,
+                interval_sec=sec,
+            )
+            assert cfg.interval_sec == sec

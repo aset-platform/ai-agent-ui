@@ -70,12 +70,12 @@ STEPS = [
     {
         "step_order": 1,
         "job_type": "intraday_bars_daily_ingest",
-        "job_name": "Pull Nifty 500 Intraday Bars",
+        "job_name": "Fetch Intraday Bars (Nifty 500)",
     },
     {
         "step_order": 2,
         "job_type": "intraday_bars_retention",
-        "job_name": "Trim Bars Older Than 4 Years",
+        "job_name": "Trim to 4-Year Retention",
     },
     {
         "step_order": 3,

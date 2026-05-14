@@ -21,7 +21,7 @@ from typing import Any
 from sqlalchemy import text
 
 from backend.audit_persistence import write_audit_event
-from backend.db.engine import get_session_factory
+from backend.db.engine import disposable_pg_session
 
 _logger = logging.getLogger(__name__)
 
@@ -33,11 +33,10 @@ async def run_reauth_notify_job(
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Scan algo.broker_credentials for tokens expiring soon."""
-    factory = get_session_factory()
     cutoff = datetime.now(timezone.utc) + _NOTICE_WINDOW
     notified: list[str] = []
 
-    async with factory() as session:
+    async with disposable_pg_session() as session:
         rows = (
             (
                 await session.execute(

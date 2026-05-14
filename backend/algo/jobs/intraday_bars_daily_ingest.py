@@ -26,10 +26,8 @@ surface them on the Data Health dashboard.
 
 from __future__ import annotations
 
-import csv
 import logging
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -42,7 +40,7 @@ from backend.algo.backtest.intraday_quality import (
 from backend.algo.broker.credentials_repo import BrokerCredentialsRepo
 from backend.algo.broker.kite_client import KiteClient
 from backend.algo.instruments.repo import InstrumentsRepo
-from backend.db.engine import get_session_factory
+from backend.db.engine import disposable_pg_session
 
 _logger = logging.getLogger(__name__)
 
@@ -59,11 +57,17 @@ def _default_window() -> tuple[date, date]:
     return today - timedelta(days=1), today
 
 
-_DEFAULT_INTERVALS = (900, 300, 60)  # 15m, 5m, 1m
+# 15m (900s), 5m (300s), 1m (60s) are all wired end-to-end —
+# loader, backfill, post-ingest assertions, maintenance. Only
+# 15m is enabled in the daily keeper today because that's the
+# only cadence any user strategy actually consumes. Add ``300``
+# and / or ``60`` to ``_DEFAULT_INTERVALS`` when a 5m or 1m
+# strategy lands; everything else (Kite paginator, NaN-replaceable
+# upsert, Iceberg partitioning, retention) is ready and tested.
+_AVAILABLE_INTERVALS = (900, 300, 60)
+_DEFAULT_INTERVALS = (900,)
+
 _ACTIVE_MIS_LOOKBACK_DAYS = 7
-_NIFTY500_CSV = (
-    Path(__file__).resolve().parents[3] / "data" / "universe" / "nifty500.csv"
-)
 
 
 async def _resolve_keeper_user(session) -> dict[str, Any] | None:
@@ -103,30 +107,36 @@ async def _resolve_keeper_user(session) -> dict[str, Any] | None:
     return None
 
 
-def _resolve_nifty500_universe() -> list[str]:
-    """Read ``data/universe/nifty500.csv`` and return ``"<symbol>.NS"``
-    for every Nifty 500 constituent.
+async def _resolve_nifty500_universe(session) -> list[str]:
+    """Return ``<symbol>.NS`` tickers tagged ``nifty500`` in
+    ``stock_master``.
 
-    The CSV is the same source the OHLCV daily pipeline uses
-    (``download_nifty500.py`` keeps it current with NSE's indices
-    list). Skips header + empty rows. Returns the list sorted +
-    deduplicated.
+    Single source of truth (the OHLCV daily pipeline, the
+    Insights tabs, etc. all derive Nifty 500 membership from the
+    same tag). Avoids the bundle-a-CSV-in-the-Docker-image
+    fragility that earlier failed with
+    ``intraday-keeper: Nifty 500 CSV missing at /app/data/...``.
+
+    The query joins ``stock_master`` to ``stock_tags`` so a
+    ticker stays in the universe only while its tag has not been
+    ``removed_at``-stamped. ``yf_ticker`` is used as the ticker
+    string because that's what the OHLCV / intraday pipelines
+    write into Iceberg (``RELIANCE.NS`` etc.).
     """
-    try:
-        with _NIFTY500_CSV.open("r", encoding="utf-8") as fp:
-            reader = csv.DictReader(fp)
-            tickers = {
-                f"{row['symbol'].strip()}.NS"
-                for row in reader
-                if row.get("symbol", "").strip()
-            }
-    except FileNotFoundError:
-        _logger.error(
-            "intraday-keeper: Nifty 500 CSV missing at %s",
-            _NIFTY500_CSV,
+    rows = (
+        await session.execute(
+            text(
+                "SELECT DISTINCT sm.yf_ticker "
+                "FROM stock_master sm "
+                "JOIN stock_tags st ON st.stock_id = sm.id "
+                "WHERE st.tag = 'nifty500' "
+                "  AND st.removed_at IS NULL "
+                "  AND sm.is_active "
+                "ORDER BY sm.yf_ticker"
+            ),
         )
-        return []
-    return sorted(tickers)
+    ).all()
+    return [r[0] for r in rows if r[0]]
 
 
 def _resolve_top200_universe(anchor: date) -> list[str]:
@@ -216,8 +226,11 @@ async def run_intraday_bars_daily_ingest_job(
         end = date.fromisoformat(payload["end"])
     batch_size = int(payload.get("batch_size") or 50)
 
-    factory = get_session_factory()
-    async with factory() as session:
+    # Scheduler jobs spawn under their own ``asyncio.run`` event
+    # loop. Using the uvicorn-cached engine here raises
+    # "Future attached to a different loop"; ``disposable_pg_session``
+    # gives us a per-call NullPool engine, scoped to this loop.
+    async with disposable_pg_session() as session:
         if payload.get("user_id"):
             user_id = UUID(str(payload["user_id"]))
             creds = await BrokerCredentialsRepo().load(
@@ -261,7 +274,7 @@ async def run_intraday_bars_daily_ingest_job(
         # predictable Kite load (~500 × 5 windows = 2 500 calls
         # for a full backfill, ~500 × 1 call for the daily
         # incremental).
-        tickers = _resolve_nifty500_universe()
+        tickers = await _resolve_nifty500_universe(session)
         if not tickers:
             _logger.warning(
                 "intraday-keeper: empty universe — skipping",

@@ -6,6 +6,7 @@ log + summary.
 Per CLAUDE.md §4.1: single bulk OHLCV read, single Iceberg
 commit at the end (not per-event), no per-ticker hot loops.
 """
+
 from __future__ import annotations
 
 import logging
@@ -14,14 +15,17 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from backend.algo.backtest.data_source import load_ohlcv_window
-# REGIME-7 — pre-load 60d ADTV per ticker for slippage model.
-from backend.db.duckdb_engine import query_iceberg_table
+from backend.algo.backtest.data_source import (
+    load_intraday_bars_window,
+    load_ohlcv_window,
+)
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 from backend.algo.backtest.event_writer import event_row, flush_events
 from backend.algo.backtest.indicators import (
+    DEFAULT_INTRADAY_WARMUP_DAYS,
     DEFAULT_WARMUP_BARS,
     compute_indicators_for_universe,
+    compute_indicators_for_universe_intraday,
     compute_market_regime,
     compute_market_trend_strength,
 )
@@ -30,8 +34,6 @@ from backend.algo.backtest.sim_broker import (
     NoBarAvailableError,
     SimBroker,
 )
-# REGIME-2a — pre-computed nightly factor library overlay.
-from backend.algo.factors.repo import get_factors_window
 from backend.algo.backtest.types import (
     BacktestRequest,
     BacktestSummary,
@@ -39,23 +41,33 @@ from backend.algo.backtest.types import (
     OrderIntent,
     TradeRow,
 )
+
+# REGIME-2a — pre-computed nightly factor library overlay.
+from backend.algo.factors.repo import get_factors_window
 from backend.algo.paper.risk_engine import RiskEngine
 from backend.algo.paper.types import AccountState, Signal
+from backend.algo.runtime.intraday_window import (
+    is_entry_allowed,
+    ist_time_from_ns,
+)
+
 # REGIME-4 — 3-stage sizer (vol-target / Kelly → caps → DD throttle).
 from backend.algo.sizing.composer import SizingContext, compose_qty
 from backend.algo.strategy.ast import Strategy
+
+# REGIME-7 — pre-load 60d ADTV per ticker for slippage model.
+from backend.db.duckdb_engine import query_iceberg_table
 
 _logger = logging.getLogger(__name__)
 
 
 def _trade_row(p, fill_price: Decimal) -> TradeRow:  # noqa: ANN001
     """Project a closed Position into a TradeRow for the UI."""
-    holding_days = (
-        (p.closed_at - p.opened_at).days if p.closed_at else 0
-    )
+    holding_days = (p.closed_at - p.opened_at).days if p.closed_at else 0
     return_pct = (
         ((fill_price - p.avg_price) / p.avg_price) * Decimal("100")
-        if p.avg_price > 0 else Decimal("0")
+        if p.avg_price > 0
+        else Decimal("0")
     )
     return TradeRow(
         ticker=p.ticker,
@@ -67,6 +79,9 @@ def _trade_row(p, fill_price: Decimal) -> TradeRow:  # noqa: ANN001
         holding_days=holding_days,
         realised_pnl_inr=p.realised_pnl_inr,
         return_pct=return_pct,
+        exit_reason=getattr(p, "exit_reason", "signal"),
+        opened_at_ts_ns=getattr(p, "opened_at_ts_ns", None),
+        closed_at_ts_ns=getattr(p, "closed_at_ts_ns", None),
     )
 
 
@@ -94,30 +109,58 @@ def run_backtest(
     session_id = run_id
     events: list[dict[str, Any]] = []
 
-    events.append(event_row(
-        session_id=session_id,
-        user_id=user_id,
-        strategy_id=strategy.id,
-        mode="backtest",
-        type_="backtest_run_started",
-        payload={
-            "period_start": request.period_start.isoformat(),
-            "period_end": request.period_end.isoformat(),
-            "universe_size": len(universe),
-            "initial_capital_inr": str(request.initial_capital_inr),
-        },
-    ))
-
-    # Load with warmup history so SMA200 etc. are well-formed at
-    # period_start. Indicators are computed once over the FULL
-    # series; the bar walk below skips warmup-only dates.
-    bars = load_ohlcv_window(
-        tickers=universe,
-        period_start=request.period_start,
-        period_end=request.period_end,
-        warmup_days=DEFAULT_WARMUP_BARS,
+    events.append(
+        event_row(
+            session_id=session_id,
+            user_id=user_id,
+            strategy_id=strategy.id,
+            mode="backtest",
+            type_="backtest_run_started",
+            payload={
+                "period_start": request.period_start.isoformat(),
+                "period_end": request.period_end.isoformat(),
+                "universe_size": len(universe),
+                "initial_capital_inr": str(request.initial_capital_inr),
+            },
+        )
     )
-    indicators = compute_indicators_for_universe(bars)
+
+    # ASETPLTFRM-400 slice 3 — dispatch on cadence.
+    # 86400 → daily (original path, unchanged).
+    # 60 / 300 / 900 → intraday loader; the runner walks
+    # ``(bar_date, bar_open_ts_ns)`` tuples instead of dates.
+    is_intraday = request.interval_sec != 86400
+    if is_intraday:
+        bars = load_intraday_bars_window(
+            tickers=universe,
+            interval_sec=request.interval_sec,
+            period_start=request.period_start,
+            period_end=request.period_end,
+            warmup_days=DEFAULT_INTRADAY_WARMUP_DAYS,
+        )
+        # ASETPLTFRM-400 slice 4b — indicators on intraday bars.
+        # Keyed by ``bar_open_ts_ns`` (not ``bar.date``) so the
+        # 25 bars/day each get their own feature dict. Default
+        # SMA windows = (20, 50, 100, 200); RSI(14) + VWAP
+        # (day-resetting) always emitted. Feature lookup in the
+        # inner loop reads ``intraday_indicators[ticker][ts_ns]``.
+        intraday_indicators = compute_indicators_for_universe_intraday(bars)
+        # Date-keyed indicator dict left empty for intraday — the
+        # daily-path lookup in the inner loop returns {} and the
+        # intraday lookup below supplies the features.
+        indicators: dict[str, dict[date, dict[str, Decimal]]] = {}
+    else:
+        # Load with warmup history so SMA200 etc. are well-formed
+        # at period_start. Indicators computed once over the FULL
+        # series; the bar walk below skips warmup-only dates.
+        bars = load_ohlcv_window(
+            tickers=universe,
+            period_start=request.period_start,
+            period_end=request.period_end,
+            warmup_days=DEFAULT_WARMUP_BARS,
+        )
+        indicators = compute_indicators_for_universe(bars)
+        intraday_indicators: dict[str, dict[int, dict[str, Decimal]]] = {}
     # Top-level regime feature, injected into every (ticker, bar)
     # feature dict below so strategies can gate entries on
     # `{"feature": "nifty_above_sma200"}`. Empty dict if ^NSEI
@@ -143,8 +186,7 @@ def run_backtest(
     factors_by_key: dict[tuple[str, date], dict[str, Decimal]] = {}
     for r in factor_rows:
         factors_by_key[(r.ticker, r.bar_date)] = {
-            k: Decimal(str(v)) for k, v in r.values.items()
-            if v is not None
+            k: Decimal(str(v)) for k, v in r.values.items() if v is not None
         }
     # REGIME-1 — pre-load regime_label + stress_prob for the
     # period so per-bar features can resolve regime-aware
@@ -155,8 +197,10 @@ def run_backtest(
     regime_by_date: dict[date, dict[str, Any]] = {}
     try:
         from backend.algo.regime.repo import get_regime_history
+
         rh_rows = get_regime_history(
-            request.period_start, request.period_end,
+            request.period_start,
+            request.period_end,
         )
         for rh in rh_rows:
             entry: dict[str, Any] = {"regime_label": rh.regime_label}
@@ -166,7 +210,8 @@ def run_backtest(
     except Exception as exc:  # noqa: BLE001
         _logger.warning(
             "regime_history lookup failed (%s) — regime-aware "
-            "templates will silently no-op for this run", exc,
+            "templates will silently no-op for this run",
+            exc,
         )
     # REGIME-7 — pre-compute 60d ADTV per ticker so SimBroker can
     # apply ``max(5, 50 * order_value / ADTV) bps`` slippage.
@@ -175,6 +220,7 @@ def run_backtest(
     adtv_lookup: dict[str, Decimal] = {}
     if universe:
         from datetime import timedelta as _td
+
         adtv_start = request.period_start - _td(days=90)
         try:
             adtv_rows = query_iceberg_table(
@@ -183,9 +229,7 @@ def run_backtest(
                 "FROM ohlcv "
                 "WHERE ticker IN ({}) "
                 "  AND date BETWEEN ? AND ? "
-                "GROUP BY ticker".format(
-                    ",".join(["?"] * len(universe))
-                ),
+                "GROUP BY ticker".format(",".join(["?"] * len(universe))),
                 [*universe, adtv_start, request.period_start],
             )
         except Exception as exc:  # noqa: BLE001
@@ -196,9 +240,7 @@ def run_backtest(
             )
             adtv_rows = []
         for r in adtv_rows:
-            adtv_lookup[r["ticker"]] = Decimal(
-                str(r["adtv"] or 0)
-            )
+            adtv_lookup[r["ticker"]] = Decimal(str(r["adtv"] or 0))
 
     sim = SimBroker(
         bars=bars,
@@ -235,13 +277,77 @@ def run_backtest(
     # listing gap) keeps its prior close as the mark.
     last_close: dict[str, Decimal] = {}
 
-    # Walk bars chronologically. We zip each ticker's series so
-    # bar dates that are common across the universe step in lockstep.
-    all_dates = sorted({
-        b.date for blist in bars.values() for b in blist
-    })
+    # Walk bars chronologically. Timeline is a sorted list of
+    # ``(bar_date, bar_open_ts_ns | None)`` tuples — daily runs
+    # carry None for the ns slot, intraday runs carry the real
+    # ns-since-epoch UTC stamp. Bars at the same instant across
+    # tickers step in lockstep (slice-3 semantics for cross-
+    # sectional MIS strategies).
+    if is_intraday:
+        timeline: list[tuple[date, int | None]] = sorted(
+            {
+                (b.date, b.bar_open_ts_ns)
+                for blist in bars.values()
+                for b in blist
+                if b.bar_open_ts_ns is not None
+            },
+            key=lambda x: (x[1] or 0, x[0]),
+        )
+        # Per-ticker ts_ns → BarData lookup for O(1) bar fetch.
+        bars_by_ts: dict[str, dict[int, Any]] = {
+            t: {
+                b.bar_open_ts_ns: b
+                for b in blist
+                if b.bar_open_ts_ns is not None
+            }
+            for t, blist in bars.items()
+        }
+    else:
+        timeline = sorted(
+            {(b.date, None) for blist in bars.values() for b in blist}
+        )
+        bars_by_ts = {}
 
-    for bar_date in all_dates:
+    # MIS daily square-off support — pick ONE bar per trading day
+    # to fire the square-off on. Honour ``strategy.square_off_time``
+    # by selecting the FIRST bar whose IST open ≥ square_off_time;
+    # fall back to the last bar of the day when no candidate exists
+    # (e.g. square_off configured after market close).
+    is_mis = strategy.product == "MIS"
+    day_end_keys: set[tuple[date, int | None]] = set()
+    if is_intraday and is_mis:
+        from backend.algo.runtime.intraday_window import parse_ist_time
+        square_off_ist = (
+            parse_ist_time(strategy.square_off_time)
+            or parse_ist_time("15:14 IST")
+        )
+        # Group bar ts_ns by trading day.
+        by_day: dict[date, list[tuple[int, "time"]]] = {}
+        from datetime import time  # noqa: E402  (local import)
+        for bd, ns in timeline:
+            if ns is None:
+                continue
+            bar_ist = ist_time_from_ns(ns)
+            if bar_ist is None:
+                continue
+            by_day.setdefault(bd, []).append((ns, bar_ist))
+        for bd, entries in by_day.items():
+            at_or_after = [
+                (ns, t) for ns, t in entries if t >= square_off_ist
+            ]
+            if at_or_after:
+                # Earliest bar opening at-or-after square_off — that's
+                # the first chance the simulation has to model the
+                # forced exit.
+                ns_chosen = min(at_or_after, key=lambda x: x[1])[0]
+            else:
+                # No bar opens at-or-after the configured square-off
+                # (e.g. square_off=16:00 IST on NSE which closes at
+                # 15:30). Safety net: use the last bar of the day.
+                ns_chosen = max(entries, key=lambda x: x[0])[0]
+            day_end_keys.add((bd, ns_chosen))
+
+    for bar_date, ts_ns in timeline:
         # Warmup-only bars feed the indicator engine but never
         # see strategy evaluation — the user asked to backtest
         # period_start..period_end, not the warmup range.
@@ -250,13 +356,20 @@ def run_backtest(
         if bar_date != last_bar_date:
             day_start_realised = pt.total_realised_pnl_inr()
             last_bar_date = bar_date
+        # IST clock-time for the MIS entry-cutoff gate. Daily
+        # runs (ts_ns is None) return None and the gate no-ops.
+        bar_ist_time = ist_time_from_ns(ts_ns) if is_intraday else None
         for ticker in universe:
             blist = bars.get(ticker)
             if not blist:
                 continue
-            current = next(
-                (b for b in blist if b.date == bar_date), None,
-            )
+            if is_intraday:
+                current = bars_by_ts.get(ticker, {}).get(ts_ns)
+            else:
+                current = next(
+                    (b for b in blist if b.date == bar_date),
+                    None,
+                )
             if current is None:
                 continue
             # Refresh the mark-to-market price for this ticker
@@ -264,19 +377,36 @@ def run_backtest(
             # end-of-day equity snapshot below uses last_close.
             last_close[ticker] = current.close
             open_pos = pt.open_positions().get(ticker)
-            ticker_features = {
-                **indicators.get(ticker, {}).get(
+            # ASETPLTFRM-400 slice 4b — intraday strategies look
+            # up per-bar indicators by ``ts_ns``; daily strategies
+            # keep the date-keyed path. Both branches fall back to
+            # ``today_ltp`` / ``today_vol`` for warmup-period bars
+            # where SMA200/RSI haven't settled yet.
+            if is_intraday:
+                bar_feats = intraday_indicators.get(
+                    ticker,
+                    {},
+                ).get(ts_ns) or {
+                    "today_ltp": current.close,
+                    "today_vol": Decimal(current.volume),
+                }
+            else:
+                bar_feats = indicators.get(ticker, {}).get(
                     bar_date,
                     {
                         "today_ltp": current.close,
                         "today_vol": Decimal(current.volume),
                     },
-                ),
+                )
+            ticker_features = {
+                **bar_feats,
                 "nifty_above_sma200": market_regime.get(
-                    bar_date, Decimal("0"),
+                    bar_date,
+                    Decimal("0"),
                 ),
                 "nifty_30d_return_pct": market_trend.get(
-                    bar_date, Decimal("0"),
+                    bar_date,
+                    Decimal("0"),
                 ),
                 # REGIME-2a — cached factor row overlay (disjoint
                 # from indicator keys by design).
@@ -315,12 +445,12 @@ def run_backtest(
                 # crashing in `_action_to_intent`. Surface in the
                 # run summary as a configuration warning.
                 if not isinstance(action, dict):
-                    _key_err_counts[
-                        "bool-root-no-buy-action"
-                    ] = (
+                    _key_err_counts["bool-root-no-buy-action"] = (
                         _key_err_counts.get(
-                            "bool-root-no-buy-action", 0,
-                        ) + 1
+                            "bool-root-no-buy-action",
+                            0,
+                        )
+                        + 1
                     )
                     continue
             current_equity = (
@@ -332,7 +462,8 @@ def run_backtest(
             # Legacy {shares}/{notional_inr} bypass this block.
             factor_row = factors_by_key.get((ticker, bar_date), {})
             realized_vol = factor_row.get(
-                "realized_vol_60d", Decimal("NaN"),
+                "realized_vol_60d",
+                Decimal("NaN"),
             )
             sizing_ctx = SizingContext(
                 ticker=ticker,
@@ -344,30 +475,65 @@ def run_backtest(
                 sector=None,
                 sector_exposure=Decimal("0"),
                 equity_curve=[
-                    (p.bar_date, p.equity_inr)
-                    for p in equity_points
+                    (p.bar_date, p.equity_inr) for p in equity_points
                 ],
             )
             intent = _action_to_intent(
-                action, ticker=ticker, bar_date=bar_date,
+                action,
+                ticker=ticker,
+                bar_date=bar_date,
                 pt=pt,
                 last_price=current.close,
                 current_equity=current_equity,
                 sizing_ctx=sizing_ctx,
+                bar_open_ts_ns=ts_ns,
             )
             if intent is None:
+                continue
+
+            # MIS "no new entries after T-1h" gate. SELL / exit
+            # intents stay allowed — closing a position is always
+            # OK, especially close to square-off.
+            if (
+                intent.side == "BUY"
+                and is_intraday
+                and is_mis
+                and bar_ist_time is not None
+                and not is_entry_allowed(
+                    product=strategy.product,
+                    entry_cutoff_raw=strategy.entry_cutoff_time,
+                    bar_time_ist=bar_ist_time,
+                )
+            ):
+                rejected_count += 1
+                events.append(
+                    event_row(
+                        session_id=session_id,
+                        user_id=user_id,
+                        strategy_id=strategy.id,
+                        mode="backtest",
+                        type_="signal_rejected",
+                        payload={
+                            "ticker": intent.ticker,
+                            "side": intent.side,
+                            "qty": intent.qty,
+                            "reason": "mis_entry_cutoff",
+                            "bar_ist_time": (
+                                bar_ist_time.isoformat()
+                            ),
+                            "entry_cutoff": (
+                                strategy.entry_cutoff_time
+                            ),
+                        },
+                    )
+                )
                 continue
 
             # 3-tier RiskEngine gate (per-trade / daily / portfolio)
             # — same logic that PaperRuntime uses, so a strategy
             # behaves identically across backtest and paper.
-            open_qty_map = {
-                t: p.qty
-                for t, p in pt.open_positions().items()
-            }
-            day_realised = (
-                pt.total_realised_pnl_inr() - day_start_realised
-            )
+            open_qty_map = {t: p.qty for t, p in pt.open_positions().items()}
+            day_realised = pt.total_realised_pnl_inr() - day_start_realised
             account_state = AccountState(
                 user_id=user_id,
                 day_date=bar_date,
@@ -385,11 +551,18 @@ def run_backtest(
                 ticker=intent.ticker,
                 side=intent.side,
                 qty=intent.qty,
-                emitted_at_ns=int(
-                    datetime(
-                        bar_date.year, bar_date.month, bar_date.day,
-                        tzinfo=timezone.utc,
-                    ).timestamp() * 1_000_000_000
+                emitted_at_ns=(
+                    ts_ns
+                    if ts_ns is not None
+                    else int(
+                        datetime(
+                            bar_date.year,
+                            bar_date.month,
+                            bar_date.day,
+                            tzinfo=timezone.utc,
+                        ).timestamp()
+                        * 1_000_000_000
+                    )
                 ),
             )
             decision = risk.gate(
@@ -400,32 +573,35 @@ def run_backtest(
             )
             if decision.outcome == "reject":
                 rejected_count += 1
-                events.append(event_row(
-                    session_id=session_id,
-                    user_id=user_id,
-                    strategy_id=strategy.id,
-                    mode="backtest",
-                    type_="signal_rejected",
-                    payload={
-                        "ticker": intent.ticker,
-                        "side": intent.side,
-                        "qty": intent.qty,
-                        "reason": (
-                            decision.reason.value
-                            if decision.reason else "unknown"
-                        ),
-                        "threshold": (
-                            str(decision.threshold)
-                            if decision.threshold is not None
-                            else None
-                        ),
-                        "observed_value": (
-                            str(decision.observed_value)
-                            if decision.observed_value is not None
-                            else None
-                        ),
-                    },
-                ))
+                events.append(
+                    event_row(
+                        session_id=session_id,
+                        user_id=user_id,
+                        strategy_id=strategy.id,
+                        mode="backtest",
+                        type_="signal_rejected",
+                        payload={
+                            "ticker": intent.ticker,
+                            "side": intent.side,
+                            "qty": intent.qty,
+                            "reason": (
+                                decision.reason.value
+                                if decision.reason
+                                else "unknown"
+                            ),
+                            "threshold": (
+                                str(decision.threshold)
+                                if decision.threshold is not None
+                                else None
+                            ),
+                            "observed_value": (
+                                str(decision.observed_value)
+                                if decision.observed_value is not None
+                                else None
+                            ),
+                        },
+                    )
+                )
                 continue
             if (
                 decision.outcome == "scale"
@@ -449,22 +625,24 @@ def run_backtest(
             total_fees += fill.fees_inr
             fee_rates_version = fill.fee_rates_version
 
-            events.append(event_row(
-                session_id=session_id,
-                user_id=user_id,
-                strategy_id=strategy.id,
-                mode="backtest",
-                type_="order_filled",
-                payload={
-                    "ticker": fill.ticker,
-                    "side": fill.side,
-                    "qty": fill.qty,
-                    "fill_price": str(fill.fill_price),
-                    "fill_date": fill.fill_date.isoformat(),
-                    "fees_inr": str(fill.fees_inr),
-                    "fee_rates_version": fill.fee_rates_version,
-                },
-            ))
+            events.append(
+                event_row(
+                    session_id=session_id,
+                    user_id=user_id,
+                    strategy_id=strategy.id,
+                    mode="backtest",
+                    type_="order_filled",
+                    payload={
+                        "ticker": fill.ticker,
+                        "side": fill.side,
+                        "qty": fill.qty,
+                        "fill_price": str(fill.fill_price),
+                        "fill_date": fill.fill_date.isoformat(),
+                        "fees_inr": str(fill.fees_inr),
+                        "fee_rates_version": fill.fee_rates_version,
+                    },
+                )
+            )
 
         # End-of-day equity snapshot. last_close holds the
         # most-recent close at-or-before today for each ticker
@@ -478,9 +656,18 @@ def run_backtest(
             + pt.unrealised_pnl_inr(marks)
             - total_fees
         )
-        equity_points.append(EquityPoint(
-            bar_date=bar_date, equity_inr=equity,
-        ))
+        equity_points.append(
+            EquityPoint(
+                bar_date=bar_date,
+                equity_inr=equity,
+                # ASETPLTFRM-400 slice 5 — intraday MTM
+                # granularity. Daily runs pass None (existing
+                # shape); intraday runs stamp the bar's
+                # ns-since-epoch so the curve is plottable
+                # with intra-day resolution on the x-axis.
+                bar_open_ts_ns=ts_ns,
+            )
+        )
         if equity > peak_equity:
             peak_equity = equity
         if peak_equity > 0:
@@ -488,28 +675,68 @@ def run_backtest(
             if dd > max_drawdown_pct:
                 max_drawdown_pct = dd
 
+        # MIS daily square-off — mirror Zerodha's auto-close at
+        # the end of every trading day. Fired AFTER the equity
+        # snapshot so the snapshot reflects MTM-at-day-close, then
+        # positions reset for the next trading day. Marks come
+        # from ``last_close`` (the bar we just walked through).
+        if is_mis and (bar_date, ts_ns) in day_end_keys:
+            pt.force_close_all(
+                marks=dict(last_close),
+                fill_date=bar_date,
+                exit_reason="mis_square_off",
+                fill_ts_ns=ts_ns,
+            )
+
+    # Period-end force-close. After the main loop, any position
+    # still open is silently inflating ``final_equity`` via
+    # unrealised P&L while ``trade_list`` stays mute. Synthetically
+    # exit at the last seen close so trade_list + total_pnl
+    # reconcile and the user can SEE what's been booked.
+    if pt.open_positions():
+        last_bar_date = (
+            equity_points[-1].bar_date
+            if equity_points
+            else request.period_end
+        )
+        last_bar_ts_ns = (
+            equity_points[-1].bar_open_ts_ns
+            if equity_points
+            else None
+        )
+        pt.force_close_all(
+            marks=dict(last_close),
+            fill_date=last_bar_date,
+            exit_reason="period_end_mtm",
+            fill_ts_ns=last_bar_ts_ns,
+        )
+
     final_equity = (
-        equity_points[-1].equity_inr if equity_points
+        equity_points[-1].equity_inr
+        if equity_points
         else request.initial_capital_inr
     )
     total_pnl = final_equity - request.initial_capital_inr
     total_pnl_pct = (
         (total_pnl / request.initial_capital_inr) * Decimal("100")
-        if request.initial_capital_inr > 0 else Decimal("0")
+        if request.initial_capital_inr > 0
+        else Decimal("0")
     )
     closed = pt.closed_positions()
     winning = sum(1 for p in closed if p.realised_pnl_inr > 0)
     losing = sum(1 for p in closed if p.realised_pnl_inr <= 0)
     win_rate = (
         Decimal(winning) / Decimal(len(closed)) * Decimal("100")
-        if closed else Decimal("0")
+        if closed
+        else Decimal("0")
     )
 
     trade_rows: list[TradeRow] = []
     for p in closed:
         implied_fill = (
             p.avg_price + (p.realised_pnl_inr / Decimal(p.qty))
-            if p.qty > 0 else p.avg_price
+            if p.qty > 0
+            else p.avg_price
         )
         trade_rows.append(_trade_row(p, implied_fill))
 
@@ -517,10 +744,15 @@ def run_backtest(
         "backtest run %s: closed=%d trades, "
         "risk-rejected=%d signals, scaled=%d signals, "
         "feature-key-errors=%s",
-        run_id, len(closed), rejected_count, scaled_count,
+        run_id,
+        len(closed),
+        rejected_count,
+        scaled_count,
         sorted(
-            _key_err_counts.items(), key=lambda x: -x[1],
-        )[:5] or "none",
+            _key_err_counts.items(),
+            key=lambda x: -x[1],
+        )[:5]
+        or "none",
     )
 
     summary = BacktestSummary(
@@ -542,18 +774,22 @@ def run_backtest(
         started_at=started_at,
         completed_at=datetime.now(timezone.utc),
         fee_rates_version=fee_rates_version or "n/a",
+        # ASETPLTFRM-400 slice 7 — surface cadence to the UI.
+        interval_sec=request.interval_sec,
         equity_curve=equity_points,
         trade_list=trade_rows,
     )
 
-    events.append(event_row(
-        session_id=session_id,
-        user_id=user_id,
-        strategy_id=strategy.id,
-        mode="backtest",
-        type_="backtest_run_completed",
-        payload=summary.model_dump(mode="json"),
-    ))
+    events.append(
+        event_row(
+            session_id=session_id,
+            user_id=user_id,
+            strategy_id=strategy.id,
+            mode="backtest",
+            type_="backtest_run_completed",
+            payload=summary.model_dump(mode="json"),
+        )
+    )
     flush_events(events)
     return summary
 
@@ -570,6 +806,7 @@ def _action_to_intent(
     last_price: Decimal | None = None,
     current_equity: Decimal | None = None,
     sizing_ctx: SizingContext | None = None,
+    bar_open_ts_ns: int | None = None,
 ) -> OrderIntent | None:
     """Translate an evaluator action dict to an OrderIntent (or None).
 
@@ -583,9 +820,8 @@ def _action_to_intent(
     t = action.get("type")
     if t == "buy":
         qty_spec = action["qty"]
-        if (
-            sizing_ctx is not None
-            and any(k in qty_spec for k in _NEW_SIZING_KEYS)
+        if sizing_ctx is not None and any(
+            k in qty_spec for k in _NEW_SIZING_KEYS
         ):
             qty = compose_qty(qty_spec, sizing_ctx)
         elif "notional_inr" in qty_spec:
@@ -594,17 +830,17 @@ def _action_to_intent(
             if last_price is None or last_price <= 0:
                 qty = 0
             else:
-                qty = int(
-                    Decimal(str(qty_spec["notional_inr"]))
-                    // last_price
-                )
+                qty = int(Decimal(str(qty_spec["notional_inr"])) // last_price)
         else:
             qty = qty_spec.get("shares") or 0
         if qty <= 0:
             return None
         return OrderIntent(
-            ticker=ticker, side="BUY", qty=int(qty),
+            ticker=ticker,
+            side="BUY",
+            qty=int(qty),
             intent_emitted_at=bar_date,
+            intent_emitted_ts_ns=bar_open_ts_ns,
         )
     if t == "sell":
         qty_spec = action["qty"]
@@ -613,23 +849,32 @@ def _action_to_intent(
             if not existing:
                 return None
             return OrderIntent(
-                ticker=ticker, side="SELL", qty=existing.qty,
+                ticker=ticker,
+                side="SELL",
+                qty=existing.qty,
                 intent_emitted_at=bar_date,
+                intent_emitted_ts_ns=bar_open_ts_ns,
             )
         qty = qty_spec.get("shares") or 0
         if qty <= 0:
             return None
         return OrderIntent(
-            ticker=ticker, side="SELL", qty=int(qty),
+            ticker=ticker,
+            side="SELL",
+            qty=int(qty),
             intent_emitted_at=bar_date,
+            intent_emitted_ts_ns=bar_open_ts_ns,
         )
     if t == "exit":
         existing = pt.open_positions().get(ticker)
         if not existing:
             return None
         return OrderIntent(
-            ticker=ticker, side="SELL", qty=existing.qty,
+            ticker=ticker,
+            side="SELL",
+            qty=existing.qty,
             intent_emitted_at=bar_date,
+            intent_emitted_ts_ns=bar_open_ts_ns,
         )
     if t == "set_target_weight":
         # Resolve the weight against current equity at this bar.
@@ -653,13 +898,19 @@ def _action_to_intent(
         diff = target_qty - current_qty
         if diff > 0:
             return OrderIntent(
-                ticker=ticker, side="BUY", qty=int(diff),
+                ticker=ticker,
+                side="BUY",
+                qty=int(diff),
                 intent_emitted_at=bar_date,
+                intent_emitted_ts_ns=bar_open_ts_ns,
             )
         if diff < 0:
             return OrderIntent(
-                ticker=ticker, side="SELL", qty=int(-diff),
+                ticker=ticker,
+                side="SELL",
+                qty=int(-diff),
                 intent_emitted_at=bar_date,
+                intent_emitted_ts_ns=bar_open_ts_ns,
             )
         return None
     # `hold` is an explicit no-op.

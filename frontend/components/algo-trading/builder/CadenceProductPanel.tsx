@@ -52,6 +52,11 @@ export function CadenceProductPanel({ ast, onChange }: Props) {
   const interval = schedule.interval;
   const product = ast.product ?? "CNC";
   const squareOffTime = ast.square_off_time ?? "15:14 IST";
+  // Default the cutoff to (square-off − 60min) when the AST
+  // doesn't pin one. Pure display fallback — backend validator
+  // stamps the same default at parse time when product=MIS.
+  const entryCutoffTime =
+    ast.entry_cutoff_time ?? defaultCutoff(squareOffTime);
 
   function setInterval(next: Interval) {
     onChange({
@@ -80,6 +85,10 @@ export function CadenceProductPanel({ ast, onChange }: Props) {
 
   function setSquareOffTime(next: string) {
     onChange({ ...ast, square_off_time: next });
+  }
+
+  function setEntryCutoffTime(next: string) {
+    onChange({ ...ast, entry_cutoff_time: next });
   }
 
   const dailyDisabled = product === "MIS";
@@ -184,15 +193,15 @@ export function CadenceProductPanel({ ast, onChange }: Props) {
         </div>
       </div>
 
-      {/* Square-off time picker (MIS only) */}
+      {/* Square-off + entry-cutoff time pickers (MIS only) */}
       {product === "MIS" && (
-        <div className="mt-3">
+        <div className="mt-3 space-y-2">
           <label
             className="flex items-center gap-2 text-[12px]"
           >
             <span
               className="text-[11px] font-medium text-slate-600
-                dark:text-slate-300"
+                dark:text-slate-300 w-36"
             >
               Square-off time (IST)
             </span>
@@ -211,8 +220,50 @@ export function CadenceProductPanel({ ast, onChange }: Props) {
               broker-side auto-square at 15:15.
             </span>
           </label>
+          <label
+            className="flex items-center gap-2 text-[12px]"
+          >
+            <span
+              className="text-[11px] font-medium text-slate-600
+                dark:text-slate-300 w-36"
+            >
+              No-new-entries after (IST)
+            </span>
+            <input
+              type="text"
+              value={entryCutoffTime}
+              onChange={(e) => setEntryCutoffTime(e.target.value)}
+              placeholder="14:14 IST"
+              data-testid="algo-builder-entry-cutoff-time"
+              className="w-32 rounded border border-gray-300
+                dark:border-gray-700 bg-white dark:bg-gray-900
+                px-2 py-1 text-[12px]"
+            />
+            <span className="text-[10px] text-slate-500">
+              Skips BUY signals at-or-after this time so open
+              positions have headroom before square-off. Defaults
+              to square-off − 60 min. SELL / exit signals are
+              always honoured.
+            </span>
+          </label>
         </div>
       )}
     </fieldset>
   );
+}
+
+function defaultCutoff(squareOff: string): string {
+  // "HH:MM[:SS] IST" → subtract 60 min, return "HH:MM IST".
+  const m = squareOff.match(/^\s*(\d{1,2}):(\d{2})/);
+  if (!m) return "14:14 IST";
+  let h = parseInt(m[1], 10);
+  let mn = parseInt(m[2], 10) - 60;
+  while (mn < 0) {
+    mn += 60;
+    h -= 1;
+  }
+  if (h < 0) h = 0;
+  return `${h.toString().padStart(2, "0")}:${mn
+    .toString()
+    .padStart(2, "0")} IST`;
 }
