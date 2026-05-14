@@ -85,6 +85,14 @@ ALL_TABLES = [
     # ``(year_month, mode)`` partition layout, not the
     # generic MAX_RETENTION_YEARS purge.
     "stocks.trade_feature_snapshots",
+    # NSE index intraday bars (ASETPLTFRM-402 / FE-6).
+    # Mirrors ``stocks.intraday_bars`` shape exactly — the
+    # daily keeper writes ~10 NSE indices × 1-3 cadences
+    # (15m / 5m / 1m) per run. Intentionally NOT in
+    # DATE_COLUMNS below: ``bar_date`` is a STRING and
+    # retention is governed by the partition layout, same
+    # rationale as ``stocks.intraday_bars``.
+    "stocks.index_intraday_bars",
     # Algo namespace — write-heavy event streams. 2026-05-12
     # incident: algo.events bloated to 11 GB of metadata.json
     # (5,901 snapshots, ~2 MB each) because it was missing from

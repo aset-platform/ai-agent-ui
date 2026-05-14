@@ -2658,6 +2658,14 @@ _HOT_ICEBERG_TABLES = (
     # algo.events — every fill = one commit = one new
     # metadata.json without daily compaction.
     "stocks.trade_feature_snapshots",
+    # NSE index intraday bars (ASETPLTFRM-402 / FE-6). Daily
+    # keeper writes ~10 indices × 1-3 cadences = ≤ 30 commits
+    # per run; small per-run footprint but accumulates over
+    # months without compaction. Same enrollment story as the
+    # rest of the intraday family — partition is
+    # ``(ticker, year_month)`` so compaction folds each
+    # ticker × month into a single parquet.
+    "stocks.index_intraday_bars",
 )
 
 
@@ -3444,6 +3452,39 @@ def _job_intraday_bars_daily_ingest(
 
     return asyncio.run(
         run_intraday_bars_daily_ingest_job(payload or {}),
+    )
+
+
+@register_job("index_intraday_bars_daily_ingest")
+def _job_index_intraday_bars_daily_ingest(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """Mon-Fri 15:45 IST keeper for stocks.index_intraday_bars.
+
+    ASETPLTFRM-402 / FE-6 — daily incremental backfill of the
+    NSE index universe (NIFTY 50 + sector indices) at 15m
+    cadence. Idempotent via NaN-replaceable upsert keyed on
+    ``(ticker, bar_date, interval_sec)``.
+
+    Sync + pipeline-step-compatible signature
+    ``(scope, run_id, repo, cancel_event, force)`` so the
+    ``PipelineExecutor`` can chain this step alongside
+    ``intraday_bars_daily_ingest``. The underlying job is async —
+    we bridge with ``asyncio.run`` here.
+    """
+    import asyncio
+
+    from backend.algo.jobs.index_intraday_bars_daily_ingest import (
+        run_index_intraday_bars_daily_ingest_job,
+    )
+
+    return asyncio.run(
+        run_index_intraday_bars_daily_ingest_job(payload or {}),
     )
 
 

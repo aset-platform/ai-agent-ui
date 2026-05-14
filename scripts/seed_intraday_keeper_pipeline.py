@@ -10,11 +10,23 @@ seed_regime_india_pipeline.py``).
 Steps (mon-fri 15:45 IST):
 
   1. Pull Nifty 500 Intraday Bars   — intraday_bars_daily_ingest
-  2. Compute Intraday Features      — intraday_features_daily_compute
-  3. Trim Bars Older Than 4 Years   — intraday_bars_retention
-  4. Compact + Backup Iceberg       — iceberg_maintenance
+  2. Fetch Index Intraday Bars      — index_intraday_bars_daily_ingest
+  3. Compute Intraday Features      — intraday_features_daily_compute
+  4. Trim Bars Older Than 4 Years   — intraday_bars_retention
+  5. Compact + Backup Iceberg       — iceberg_maintenance
 
-Step 2 (FE-3) reads the freshly-ingested bars and writes the
+Step 2 (FE-6 — first slice of Phase 2) pulls NSE index OHLCV
+(NIFTY 50 + sector indices) into ``stocks.index_intraday_bars``.
+Placed BEFORE feature compute because FE-8 (Phase 2)
+cross-sectional features (RS-vs-NIFTY, sector rotation) will read
+both the per-ticker bars (step 1 output) AND the index bars (this
+step) from the same daily compute. FE-6 only adds the data
+surface; the FE-8 consumer wires the index bars into the compute
+job in a later slice — until then this step is a no-op for
+downstream consumers but pre-positions the universe so the
+cutover is a config flip rather than a data backfill.
+
+Step 3 (FE-3) reads the freshly-ingested bars and writes the
 centralized feature engine's panel into ``stocks.intraday_features``
 so daily-cadence consumers see today's features without re-running
 the compute inline. Placed AFTER ingest (depends on the new rows)
@@ -22,7 +34,7 @@ and BEFORE retention (logical ordering — features land same-day so
 there's no data-race concern, but keeping the order consistent
 helps when operators replay a single step).
 
-Step 3 maintains a rolling 4-year window so the table doesn't
+Step 4 maintains a rolling 4-year window so the table doesn't
 grow unboundedly — Backtest's max window is ASETPLTFRM-400's
 ``2022-05-13 → today`` and there's no reason to retain
 pre-window history. Placed between feature compute and maintenance
@@ -83,16 +95,21 @@ STEPS = [
     },
     {
         "step_order": 2,
+        "job_type": "index_intraday_bars_daily_ingest",
+        "job_name": "Fetch Intraday Bars (Indices)",
+    },
+    {
+        "step_order": 3,
         "job_type": "intraday_features_daily_compute",
         "job_name": "Compute Intraday Features",
     },
     {
-        "step_order": 3,
+        "step_order": 4,
         "job_type": "intraday_bars_retention",
         "job_name": "Trim to 4-Year Retention",
     },
     {
-        "step_order": 4,
+        "step_order": 5,
         "job_type": "iceberg_maintenance",
         "job_name": "Compact + Backup Iceberg",
     },

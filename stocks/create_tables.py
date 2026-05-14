@@ -100,6 +100,7 @@ _PROMOTER_HOLDINGS_TABLE = f"{_NAMESPACE}.promoter_holdings"
 _CORPORATE_EVENTS_TABLE = f"{_NAMESPACE}.corporate_events"
 _FUNDAMENTALS_SNAPSHOT_TABLE = f"{_NAMESPACE}.fundamentals_snapshot"
 _INTRADAY_BARS_TABLE = f"{_NAMESPACE}.intraday_bars"
+_INDEX_INTRADAY_BARS_TABLE = f"{_NAMESPACE}.index_intraday_bars"
 _INTRADAY_FEATURES_TABLE = f"{_NAMESPACE}.intraday_features"
 _TRADE_FEATURE_SNAPSHOTS_TABLE = (
     f"{_NAMESPACE}.trade_feature_snapshots"
@@ -1618,6 +1619,126 @@ def _intraday_bars_schema() -> Schema:
     )
 
 
+def _index_intraday_bars_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.index_intraday_bars``.
+
+    Returns:
+        Schema: Index OHLCV bars (15m / 5m / 1m) from Kite Connect
+            for cross-sectional features (ASETPLTFRM-402 / FE-6).
+            FE-8 (Phase 2) will read this table alongside
+            ``stocks.intraday_bars`` to compute relative-strength
+            and sector-rotation features.
+
+            Mirrors ``_intraday_bars_schema()`` exactly — same 12
+            fields, same field IDs, same types — so the daily
+            keeper, on-demand backfill, and feature compute can
+            reuse the per-ticker code paths against this table by
+            swapping only the identifier. Join-locality with
+            ``stocks.intraday_bars`` is the explicit design choice:
+            partition layout is identical so a backtest reading
+            both opens neighbouring file slabs.
+
+            The ``ticker`` field stores the **NSE index trading
+            symbol exactly as Kite returns it** (e.g.
+            ``"NIFTY 50"``, ``"NIFTY BANK"``) — distinct from the
+            Yahoo ``^NSEI`` / ``^CNXIT`` notation the factor
+            library uses for daily data. The daily factor pipeline
+            keeps its Yahoo names; this table is the Kite-side
+            intraday surface only.
+
+            ``volume`` is ``LongType, required=True`` even though
+            Kite reports 0 for pure indices — preserves shape
+            parity with ``stocks.intraday_bars`` so writer /
+            reader code is symmetric.
+
+            Distinct from ``stocks.sector_intraday_bars`` (FE-7,
+            forthcoming) which will hold sectoral indices in a
+            separate table for partition-prune locality and
+            operator clarity. The two tables are kept apart per
+            spec §3.3 rather than co-mingled.
+
+            Must be enrolled in BOTH ``_HOT_ICEBERG_TABLES``
+            (``backend/jobs/executor.py``) AND ``ALL_TABLES``
+            (``backend/maintenance/iceberg_maintenance.py``) per
+            CLAUDE.md §4.3 #20 — the ``algo.events`` 11 GB bloat
+            incident (2026-05-12) is the canonical reminder.
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="ticker",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=2,
+            name="bar_date",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=3,
+            name="interval_sec",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=4,
+            name="bar_open_ts_ns",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=5,
+            name="open",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=6,
+            name="high",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=7,
+            name="low",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=8,
+            name="close",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=9,
+            name="volume",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=10,
+            name="written_at",
+            field_type=TimestampType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=11,
+            name="source",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=12,
+            name="year_month",
+            field_type=StringType(),
+            required=True,
+        ),
+    )
+
+
 def _intraday_features_schema() -> Schema:
     """Return the Iceberg schema for ``stocks.intraday_features``.
 
@@ -2526,6 +2647,30 @@ def create_tables() -> None:
         _TRADE_FEATURE_SNAPSHOTS_TABLE,
         snapshots_schema,
         _year_month_mode_partition_spec(snapshots_schema),
+    )
+
+    # Index intraday bars (ASETPLTFRM-402 / FE-6 — first slice of
+    # Phase 2). NSE index OHLCV at 15m / 5m / 1m cadence from
+    # Kite Connect, partitioned identically to
+    # ``stocks.intraday_bars`` so FE-8's cross-sectional features
+    # (RS-vs-NIFTY, sector rotation) read both tables with maximum
+    # join-locality. ``ticker`` stores the Kite tradingsymbol
+    # verbatim (``"NIFTY 50"`` etc.) — distinct from the Yahoo
+    # ``^NSEI`` / ``^CNXIT`` notation the daily factor library uses.
+    #
+    # Must be enrolled in BOTH ``_HOT_ICEBERG_TABLES``
+    # (backend/jobs/executor.py) and ``ALL_TABLES``
+    # (backend/maintenance/iceberg_maintenance.py) per
+    # CLAUDE.md §4.3 #20 — the algo.events 11 GB bloat incident
+    # (2026-05-12) is the canonical reminder of why skip-list
+    # enrollment is the #1 silent failure mode for new write-heavy
+    # tables.
+    index_intraday_bars_schema = _index_intraday_bars_schema()
+    _create_table(
+        catalog,
+        _INDEX_INTRADAY_BARS_TABLE,
+        index_intraday_bars_schema,
+        _ticker_year_month_partition_spec(index_intraday_bars_schema),
     )
 
     # Regime engine — REGIME-1 (stocks.regime_history +
