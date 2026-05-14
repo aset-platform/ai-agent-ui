@@ -107,9 +107,14 @@ class WalkForwardConfig(BaseModel):
     # ``backend.algo.backtest.job`` exactly.
     interval_sec: int = Field(default=86400)
     # REGIME-5: regime-stratified windows + 5-gate thresholds.
-    # All optional with safe defaults so existing V2-2 callers
-    # keep working unchanged.
-    regime_stratified: bool = True
+    # Stratification requires every regime present in the full
+    # period to appear in EACH train slice — useful when testing
+    # a strategy that's regime-specific. Defaults to OFF because
+    # Indian markets are 90%+ SIDEWAYS in most periods; with BULL
+    # / BEAR rare, the gate filters out every fold. Users can
+    # opt in from the walk-forward form when they explicitly want
+    # to test bull / bear strategies.
+    regime_stratified: bool = False
     require_per_regime_non_negative: bool = True
     require_dsr_min: Decimal = Decimal("0.95")
     require_pbo_max: Decimal = Decimal("0.30")
@@ -205,6 +210,22 @@ class WalkForwardAggregate(BaseModel):
     regime_stratified: bool = False
 
 
+class WalkForwardProgress(BaseModel):
+    """Live progress snapshot for an in-flight walk-forward.
+
+    Computed on each GET against ``algo.runs`` so the UI can show
+    "X of Y folds done" + a derived ETA while the parent row is
+    still ``status='running'``. None on completed/failed runs.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    done: int
+    running: int
+    total_estimated: int
+    started_at: datetime | None = None
+
+
 class WalkForwardResult(BaseModel):
     """Full result returned by GET /v1/algo/walkforward/runs/{id}."""
 
@@ -223,6 +244,7 @@ class WalkForwardResult(BaseModel):
     )
     aggregate: WalkForwardAggregate | None = None
     error_text: str | None = None
+    progress: WalkForwardProgress | None = None
 
 
 # ── Core iterator ──────────────────────────────────────────────

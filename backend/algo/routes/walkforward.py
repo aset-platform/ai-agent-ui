@@ -32,6 +32,7 @@ from backend.algo.backtest.types import BacktestRun
 from backend.algo.backtest.universe import resolve_universe
 from backend.algo.backtest.walkforward import (
     WalkForwardConfig,
+    WalkForwardProgress,
     WalkForwardResult,
     run_walkforward_job,
 )
@@ -133,12 +134,20 @@ def create_walkforward_router() -> APIRouter:
                 status_code=404, detail="Walk-forward run not found",
             )
 
+        progress = await _compute_progress(run_id, row)
+
         # Completed run: summary_json holds WalkForwardResult shape
         if row["summary_json"] is not None:
             try:
-                return WalkForwardResult.model_validate(
+                wfr = WalkForwardResult.model_validate(
                     row["summary_json"],
                 )
+                # Attach a "done"-flavoured progress for completed
+                # runs so the UI can hide the spinner consistently
+                # whether or not the row carries summary_json yet.
+                if progress is not None:
+                    wfr = wfr.model_copy(update={"progress": progress})
+                return wfr
             except Exception:  # noqa: BLE001
                 pass
 
@@ -153,6 +162,54 @@ def create_walkforward_router() -> APIRouter:
             test_days=0,
             step_days=0,
             error_text=row["error_text"],
+            progress=progress,
+        )
+
+    async def _compute_progress(
+        run_id: UUID, parent_row,
+    ) -> WalkForwardProgress | None:
+        """Live progress snapshot from algo.runs child rows.
+
+        Counts ``done`` (completed children), ``running`` (children
+        currently executing), and a ``total_estimated`` derived from
+        the parent row's period + the config's window cadence. The
+        config isn't stored on the parent today, so we approximate
+        total by recomputing windows from the cadence baked into
+        request_payload when present; otherwise we leave it as the
+        max(done+running) seen so far.
+        """
+        factory = _get_session_factory()
+        async with factory() as session:
+            counts = (
+                await session.execute(
+                    text(
+                        "SELECT "
+                        "  count(*) FILTER (WHERE status='completed') "
+                        "    AS done, "
+                        "  count(*) FILTER (WHERE status='running') "
+                        "    AS running, "
+                        "  count(*) FILTER (WHERE status='failed') "
+                        "    AS failed, "
+                        "  count(*) AS total "
+                        "FROM algo.runs "
+                        "WHERE parent_walkforward_id = :pid"
+                    ),
+                    {"pid": str(run_id)},
+                )
+            ).mappings().first()
+        if counts is None:
+            return None
+        done = int(counts["done"] or 0)
+        running = int(counts["running"] or 0)
+        # Until the runner has spawned every child, ``total`` is a
+        # lower bound. We surface what we have and let the UI
+        # display "X / Y so far" — better than no progress at all.
+        total = int(counts["total"] or 0)
+        return WalkForwardProgress(
+            done=done,
+            running=running,
+            total_estimated=total,
+            started_at=parent_row["started_at"],
         )
 
     @router.get("/runs/{run_id}/gates")

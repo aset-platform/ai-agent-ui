@@ -46,6 +46,13 @@ export interface WalkForwardAggregate {
   regime_stratified?: boolean;
 }
 
+export interface WalkForwardProgress {
+  done: number;
+  running: number;
+  total_estimated: number;
+  started_at: string | null;
+}
+
 export interface WalkForwardResult {
   walkforward_run_id: string;
   strategy_id: string;
@@ -58,6 +65,7 @@ export interface WalkForwardResult {
   window_summaries: WindowSummary[];
   aggregate: WalkForwardAggregate | null;
   error_text: string | null;
+  progress?: WalkForwardProgress | null;
 }
 
 export interface WalkForwardListItem {
@@ -134,6 +142,7 @@ export async function startWalkForwardRun(
   testDays: number,
   stepDays: number,
   initialCapitalInr: string,
+  regimeStratified: boolean = false,
 ): Promise<string> {
   const r = await apiFetch(`${API_URL}/algo/walkforward/run`, {
     method: "POST",
@@ -146,6 +155,7 @@ export async function startWalkForwardRun(
       test_days: testDays,
       step_days: stepDays,
       initial_capital_inr: initialCapitalInr,
+      regime_stratified: regimeStratified,
     }),
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);

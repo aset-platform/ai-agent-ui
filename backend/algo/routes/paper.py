@@ -392,20 +392,6 @@ def create_paper_router() -> APIRouter:
         from backend.algo.live.runtime import LiveNotEnabledError
 
         if body.mode in ("live", "dryrun"):
-            caps_repo = CapsRepo()
-            caps = await caps_repo.get(user_id, body.strategy_id)
-            live_enabled = bool(
-                caps and caps.get("live_orders_enabled"),
-            )
-            if not live_enabled:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "Live trading not enabled for this "
-                        "strategy. Configure caps + flip the "
-                        "Live mode toggle first."
-                    ),
-                )
             from datetime import date as _date
             from backend.algo.broker.credentials_repo import (
                 BrokerCredentialsRepo,
@@ -418,17 +404,59 @@ def create_paper_router() -> APIRouter:
                 KillSwitchRepo,
             )
 
-            # Load Kite credentials.
+            # Live-only pre-flight: caps + real Kite credentials.
+            # Dry-run is the REHEARSAL step BEFORE caps are set —
+            # by definition it must run without ``live_orders_enabled``
+            # and without a working broker session, otherwise the
+            # rehearsal can't precede the thing it rehearses for.
+            caps_repo = CapsRepo()
+            caps = await caps_repo.get(user_id, body.strategy_id)
+            if body.mode == "live":
+                live_enabled = bool(
+                    caps and caps.get("live_orders_enabled"),
+                )
+                if not live_enabled:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Live trading not enabled for this "
+                            "strategy. Configure caps + flip the "
+                            "Live mode toggle first."
+                        ),
+                    )
+
+            # Load Kite credentials (required for live, optional
+            # for dry-run with a replay source — KiteClient with
+            # dry_run=True makes no real Kite REST calls, so a
+            # placeholder api_key is enough to construct it).
             creds_repo = BrokerCredentialsRepo()
             async with factory() as session:
                 creds = await creds_repo.load(session, user_id)
-            if not creds or not creds.get("access_token") \
-                    or creds.get("access_token_expired"):
+            creds_ok = bool(
+                creds
+                and creds.get("access_token")
+                and not creds.get("access_token_expired")
+            )
+            if body.mode == "live" and not creds_ok:
                 raise HTTPException(
                     status_code=400,
                     detail=(
                         "Kite not connected or token expired. "
                         "Reconnect Zerodha first."
+                    ),
+                )
+            if body.mode == "dryrun" and body.source == "live-ws" \
+                    and not creds_ok:
+                # live-ws dry-run still needs real tick stream
+                # → real session required even though orders are
+                # synthesised. Replay-source dry-run does NOT.
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Live-WS dry-run needs a Zerodha session "
+                        "for the tick stream. Either reconnect "
+                        "Zerodha or switch source to Replay "
+                        "fixture."
                     ),
                 )
 
@@ -440,8 +468,12 @@ def create_paper_router() -> APIRouter:
             # the Strategies → Dry-run toggle. Wrong UX surface.
             pinned_dry_run = body.mode == "dryrun"
             kite = KiteClient(
-                api_key=creds["api_key"],
-                access_token=creds["access_token"],
+                api_key=(
+                    creds["api_key"] if creds_ok else "dryrun"
+                ),
+                access_token=(
+                    creds["access_token"] if creds_ok else None
+                ),
                 dry_run=pinned_dry_run,
             )
 
@@ -499,7 +531,7 @@ def create_paper_router() -> APIRouter:
                     InstrumentsRepo,
                 )
                 allowed_for_warmup = list(
-                    caps.get("allowed_tickers") or [],
+                    (caps or {}).get("allowed_tickers") or [],
                 )
                 if allowed_for_warmup:
                     instr_repo = InstrumentsRepo()
