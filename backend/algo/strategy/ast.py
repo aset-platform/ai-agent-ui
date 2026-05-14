@@ -333,6 +333,15 @@ class Strategy(BaseModel):
     risk: RiskConfig
     product: Literal["CNC", "MIS"] = "CNC"
     square_off_time: str | None = None
+    # ASETPLTFRM-400: "no-new-entries" cutoff for MIS strategies.
+    # The runtime ignores BUY intents emitted at-or-after this time
+    # so positions get at least one hour of headroom before the
+    # forced MIS auto-close at ``square_off_time``. SELL / exit
+    # intents are unaffected. Defaults to 60min before square-off
+    # in the model_validator below when product==MIS and the user
+    # leaves it None. Honoured by backtest, paper, dry-run, and
+    # live runtimes — see backend/algo/runtime/intraday_window.py.
+    entry_cutoff_time: str | None = None
 
     @model_validator(mode="after")
     def _root_must_be_actionable(self) -> "Strategy":
@@ -358,6 +367,31 @@ class Strategy(BaseModel):
                 "MIS product requires intraday cadence (5m or 1m). "
                 "Daily strategies must use CNC.",
             )
+        return self
+
+    @model_validator(mode="after")
+    def _default_entry_cutoff_for_mis(self) -> "Strategy":
+        """Default ``entry_cutoff_time`` to 60 min before square-off
+        for MIS strategies when the user hasn't pinned a value.
+
+        Operates in-place on a new copy to stay friendly with
+        Pydantic's frozen post-validate model semantics.
+        """
+        if self.product != "MIS":
+            return self
+        if self.entry_cutoff_time is not None:
+            return self
+        # Defer the actual time math to the runtime helper so the
+        # parsing rule can't get out of sync with the gate. We
+        # just stamp a sentinel that the runtime treats as
+        # "subtract 60min from square_off_time".
+        from backend.algo.runtime.intraday_window import (
+            default_entry_cutoff,
+        )
+        derived = default_entry_cutoff(self.square_off_time)
+        # ``model_copy`` returns a new instance with the field
+        # filled in; safe under frozen semantics.
+        object.__setattr__(self, "entry_cutoff_time", derived)
         return self
 
 

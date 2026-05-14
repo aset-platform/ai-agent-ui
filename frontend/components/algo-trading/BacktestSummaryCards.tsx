@@ -66,10 +66,39 @@ function CadenceChip({ intervalSec }: { intervalSec?: number }) {
 
 export function BacktestSummaryCards({ summary }: Props) {
   const positive = Number(summary.total_pnl_inr) >= 0;
+  // Count trades that were force-closed at period end so the
+  // summary can hint at why the trade table grew vs a strategy
+  // that exited every position via its own signals.
+  const mtmExits = summary.trade_list.filter(
+    (t) => t.exit_reason === "period_end_mtm",
+  ).length;
+  const misExits = summary.trade_list.filter(
+    (t) => t.exit_reason === "mis_square_off",
+  ).length;
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <CadenceChip intervalSec={summary.interval_sec} />
+        {(mtmExits > 0 || misExits > 0) && (
+          <div
+            className="text-[11px] text-slate-500 dark:text-slate-400"
+            data-testid="backtest-exit-summary"
+          >
+            {mtmExits > 0 && (
+              <span title="Open positions at period end were force-closed at the last bar's close so Total PnL reconciles with the trade list.">
+                {mtmExits} position{mtmExits === 1 ? "" : "s"} closed
+                at period end (MTM)
+              </span>
+            )}
+            {mtmExits > 0 && misExits > 0 && " · "}
+            {misExits > 0 && (
+              <span title="MIS strategies auto-square-off at the end of every trading day.">
+                {misExits} MIS daily square-off
+                {misExits === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
+        )}
       </div>
       <div
         className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6"

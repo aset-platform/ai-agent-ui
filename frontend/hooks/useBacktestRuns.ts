@@ -29,6 +29,17 @@ export interface TradeRow {
   holding_days: number;
   realised_pnl_inr: string;
   return_pct: string;
+  // Why this position closed:
+  //   "signal"          — strategy exit rule fired (default)
+  //   "stop_loss"       — per-trade stop-loss tripped
+  //   "mis_square_off"  — MIS auto-square-off at day end
+  //   "period_end_mtm"  — backtest force-closed at last bar
+  exit_reason?: string;
+  // Intraday fill timestamps (ns since epoch UTC). Daily-cadence
+  // runs leave both None; intraday cadences stamp the fill bar's
+  // open ts so Opened / Closed render with "YYYY-MM-DD HH:mm IST".
+  opened_at_ts_ns?: number | null;
+  closed_at_ts_ns?: number | null;
 }
 
 export interface BacktestSummary {

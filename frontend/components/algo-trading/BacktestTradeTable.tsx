@@ -26,6 +26,7 @@ const ALL_COLS: ColumnSpec[] = [
     label: "Return %",
     category: "Performance",
   },
+  { key: "exit_reason", label: "Exit", category: "Trade" },
 ];
 
 const DEFAULT_COLS = [
@@ -38,6 +39,7 @@ const DEFAULT_COLS = [
   "holding_days",
   "realised_pnl_inr",
   "return_pct",
+  "exit_reason",
 ];
 
 const VALID_KEYS = ALL_COLS.map((c) => c.key);
@@ -122,7 +124,7 @@ export function BacktestTradeTable({ rows }: Props) {
                     key={c.key}
                     className="px-3 py-1.5 text-slate-800 dark:text-slate-200"
                   >
-                    {String(r[c.key as keyof TradeRow])}
+                    {renderCell(r, c.key)}
                   </td>
                 ))}
               </tr>
@@ -131,5 +133,113 @@ export function BacktestTradeTable({ rows }: Props) {
         </table>
       </div>
     </div>
+  );
+}
+
+function renderCell(r: TradeRow, key: string): React.ReactNode {
+  if (key === "exit_reason") {
+    return (
+      <ExitReasonBadge reason={(r.exit_reason as string) || "signal"} />
+    );
+  }
+  if (key === "opened_at") {
+    return formatTradeTime(r.opened_at, r.opened_at_ts_ns);
+  }
+  if (key === "closed_at") {
+    return formatTradeTime(r.closed_at, r.closed_at_ts_ns);
+  }
+  // Money / price columns — cap at 2 decimals with Indian
+  // thousands separators so the table doesn't bleed across the
+  // viewport with raw Decimal precision from the backend.
+  if (
+    key === "avg_price" ||
+    key === "fill_price" ||
+    key === "realised_pnl_inr"
+  ) {
+    return formatInr(r[key as keyof TradeRow] as string | number);
+  }
+  if (key === "return_pct") {
+    return formatPct(r.return_pct);
+  }
+  return String(r[key as keyof TradeRow]);
+}
+
+function formatInr(v: string | number): string {
+  const n = typeof v === "string" ? Number(v) : v;
+  if (!Number.isFinite(n)) return String(v);
+  return new Intl.NumberFormat("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(n);
+}
+
+function formatPct(v: string | number): string {
+  const n = typeof v === "string" ? Number(v) : v;
+  if (!Number.isFinite(n)) return String(v);
+  return `${n.toFixed(2)}%`;
+}
+
+// Format a fill date/time. When the intraday ts is present, render
+// "YYYY-MM-DD HH:mm IST" so the user can spot time-sensitive
+// trades (e.g. an MIS scalp that opens at 10:15 and closes at
+// 15:10). Daily-cadence trades fall back to the bare date.
+function formatTradeTime(
+  fallbackDate: string,
+  tsNs: number | null | undefined,
+): string {
+  if (tsNs == null) return fallbackDate;
+  const ms = tsNs / 1_000_000;
+  const d = new Date(ms);
+  const fmt = new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  // Output like "14/05/2026, 15:10". Normalise to ISO-ish:
+  const parts = fmt.formatToParts(d);
+  const get = (t: string) =>
+    parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")} ${get(
+    "hour",
+  )}:${get("minute")} IST`;
+}
+
+function ExitReasonBadge({ reason }: { reason: string }) {
+  const styles: Record<string, string> = {
+    signal:
+      "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-600",
+    stop_loss:
+      "bg-rose-100 text-rose-700 border-rose-300 dark:bg-rose-900/30 dark:text-rose-300 dark:border-rose-700",
+    mis_square_off:
+      "bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-900/30 dark:text-sky-300 dark:border-sky-700",
+    period_end_mtm:
+      "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700",
+  };
+  const cls = styles[reason] ?? styles.signal;
+  const labels: Record<string, string> = {
+    signal: "Signal",
+    stop_loss: "Stop-loss",
+    mis_square_off: "MIS square-off",
+    period_end_mtm: "Period end (MTM)",
+  };
+  const titles: Record<string, string> = {
+    signal: "Closed by the strategy's exit rule.",
+    stop_loss: "Per-trade stop-loss tripped.",
+    mis_square_off:
+      "Auto-closed at the end of the trading day (MIS contract).",
+    period_end_mtm:
+      "Open at backtest period end; force-closed at the last bar's close to reconcile total PnL with the trade list.",
+  };
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${cls}`}
+      title={titles[reason] ?? ""}
+    >
+      {labels[reason] ?? reason}
+    </span>
   );
 }

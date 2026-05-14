@@ -46,6 +46,10 @@ from backend.algo.backtest.types import (
 from backend.algo.factors.repo import get_factors_window
 from backend.algo.paper.risk_engine import RiskEngine
 from backend.algo.paper.types import AccountState, Signal
+from backend.algo.runtime.intraday_window import (
+    is_entry_allowed,
+    ist_time_from_ns,
+)
 
 # REGIME-4 — 3-stage sizer (vol-target / Kelly → caps → DD throttle).
 from backend.algo.sizing.composer import SizingContext, compose_qty
@@ -75,6 +79,9 @@ def _trade_row(p, fill_price: Decimal) -> TradeRow:  # noqa: ANN001
         holding_days=holding_days,
         realised_pnl_inr=p.realised_pnl_inr,
         return_pct=return_pct,
+        exit_reason=getattr(p, "exit_reason", "signal"),
+        opened_at_ts_ns=getattr(p, "opened_at_ts_ns", None),
+        closed_at_ts_ns=getattr(p, "closed_at_ts_ns", None),
     )
 
 
@@ -301,6 +308,45 @@ def run_backtest(
         )
         bars_by_ts = {}
 
+    # MIS daily square-off support — pick ONE bar per trading day
+    # to fire the square-off on. Honour ``strategy.square_off_time``
+    # by selecting the FIRST bar whose IST open ≥ square_off_time;
+    # fall back to the last bar of the day when no candidate exists
+    # (e.g. square_off configured after market close).
+    is_mis = strategy.product == "MIS"
+    day_end_keys: set[tuple[date, int | None]] = set()
+    if is_intraday and is_mis:
+        from backend.algo.runtime.intraday_window import parse_ist_time
+        square_off_ist = (
+            parse_ist_time(strategy.square_off_time)
+            or parse_ist_time("15:14 IST")
+        )
+        # Group bar ts_ns by trading day.
+        by_day: dict[date, list[tuple[int, "time"]]] = {}
+        from datetime import time  # noqa: E402  (local import)
+        for bd, ns in timeline:
+            if ns is None:
+                continue
+            bar_ist = ist_time_from_ns(ns)
+            if bar_ist is None:
+                continue
+            by_day.setdefault(bd, []).append((ns, bar_ist))
+        for bd, entries in by_day.items():
+            at_or_after = [
+                (ns, t) for ns, t in entries if t >= square_off_ist
+            ]
+            if at_or_after:
+                # Earliest bar opening at-or-after square_off — that's
+                # the first chance the simulation has to model the
+                # forced exit.
+                ns_chosen = min(at_or_after, key=lambda x: x[1])[0]
+            else:
+                # No bar opens at-or-after the configured square-off
+                # (e.g. square_off=16:00 IST on NSE which closes at
+                # 15:30). Safety net: use the last bar of the day.
+                ns_chosen = max(entries, key=lambda x: x[0])[0]
+            day_end_keys.add((bd, ns_chosen))
+
     for bar_date, ts_ns in timeline:
         # Warmup-only bars feed the indicator engine but never
         # see strategy evaluation — the user asked to backtest
@@ -310,6 +356,9 @@ def run_backtest(
         if bar_date != last_bar_date:
             day_start_realised = pt.total_realised_pnl_inr()
             last_bar_date = bar_date
+        # IST clock-time for the MIS entry-cutoff gate. Daily
+        # runs (ts_ns is None) return None and the gate no-ops.
+        bar_ist_time = ist_time_from_ns(ts_ns) if is_intraday else None
         for ticker in universe:
             blist = bars.get(ticker)
             if not blist:
@@ -440,6 +489,44 @@ def run_backtest(
                 bar_open_ts_ns=ts_ns,
             )
             if intent is None:
+                continue
+
+            # MIS "no new entries after T-1h" gate. SELL / exit
+            # intents stay allowed — closing a position is always
+            # OK, especially close to square-off.
+            if (
+                intent.side == "BUY"
+                and is_intraday
+                and is_mis
+                and bar_ist_time is not None
+                and not is_entry_allowed(
+                    product=strategy.product,
+                    entry_cutoff_raw=strategy.entry_cutoff_time,
+                    bar_time_ist=bar_ist_time,
+                )
+            ):
+                rejected_count += 1
+                events.append(
+                    event_row(
+                        session_id=session_id,
+                        user_id=user_id,
+                        strategy_id=strategy.id,
+                        mode="backtest",
+                        type_="signal_rejected",
+                        payload={
+                            "ticker": intent.ticker,
+                            "side": intent.side,
+                            "qty": intent.qty,
+                            "reason": "mis_entry_cutoff",
+                            "bar_ist_time": (
+                                bar_ist_time.isoformat()
+                            ),
+                            "entry_cutoff": (
+                                strategy.entry_cutoff_time
+                            ),
+                        },
+                    )
+                )
                 continue
 
             # 3-tier RiskEngine gate (per-trade / daily / portfolio)
@@ -588,6 +675,42 @@ def run_backtest(
             if dd > max_drawdown_pct:
                 max_drawdown_pct = dd
 
+        # MIS daily square-off — mirror Zerodha's auto-close at
+        # the end of every trading day. Fired AFTER the equity
+        # snapshot so the snapshot reflects MTM-at-day-close, then
+        # positions reset for the next trading day. Marks come
+        # from ``last_close`` (the bar we just walked through).
+        if is_mis and (bar_date, ts_ns) in day_end_keys:
+            pt.force_close_all(
+                marks=dict(last_close),
+                fill_date=bar_date,
+                exit_reason="mis_square_off",
+                fill_ts_ns=ts_ns,
+            )
+
+    # Period-end force-close. After the main loop, any position
+    # still open is silently inflating ``final_equity`` via
+    # unrealised P&L while ``trade_list`` stays mute. Synthetically
+    # exit at the last seen close so trade_list + total_pnl
+    # reconcile and the user can SEE what's been booked.
+    if pt.open_positions():
+        last_bar_date = (
+            equity_points[-1].bar_date
+            if equity_points
+            else request.period_end
+        )
+        last_bar_ts_ns = (
+            equity_points[-1].bar_open_ts_ns
+            if equity_points
+            else None
+        )
+        pt.force_close_all(
+            marks=dict(last_close),
+            fill_date=last_bar_date,
+            exit_reason="period_end_mtm",
+            fill_ts_ns=last_bar_ts_ns,
+        )
+
     final_equity = (
         equity_points[-1].equity_inr
         if equity_points
@@ -730,6 +853,7 @@ def _action_to_intent(
                 side="SELL",
                 qty=existing.qty,
                 intent_emitted_at=bar_date,
+                intent_emitted_ts_ns=bar_open_ts_ns,
             )
         qty = qty_spec.get("shares") or 0
         if qty <= 0:
@@ -778,6 +902,7 @@ def _action_to_intent(
                 side="BUY",
                 qty=int(diff),
                 intent_emitted_at=bar_date,
+                intent_emitted_ts_ns=bar_open_ts_ns,
             )
         if diff < 0:
             return OrderIntent(
@@ -785,6 +910,7 @@ def _action_to_intent(
                 side="SELL",
                 qty=int(-diff),
                 intent_emitted_at=bar_date,
+                intent_emitted_ts_ns=bar_open_ts_ns,
             )
         return None
     # `hold` is an explicit no-op.

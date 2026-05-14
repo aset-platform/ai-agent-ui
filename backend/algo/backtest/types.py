@@ -141,6 +141,18 @@ class Position(BaseModel):
     opened_at: date
     closed_at: date | None = None
     realised_pnl_inr: Decimal = Field(default=Decimal("0.00"))
+    # Why this position closed:
+    #   "signal"          — strategy exit rule fired (default)
+    #   "stop_loss"       — per-trade stop-loss tripped
+    #   "mis_square_off"  — MIS auto-square-off at day end
+    #   "period_end_mtm"  — backtest force-closed at last bar
+    exit_reason: str = "signal"
+    # Intraday timestamps (ns since epoch UTC). Stays None for
+    # daily-cadence trades; intraday cadences (15m / 5m / 1m)
+    # stamp the bar_open_ts_ns of the fill bar so the UI can
+    # render "YYYY-MM-DD HH:mm IST" instead of bare dates.
+    opened_at_ts_ns: int | None = None
+    closed_at_ts_ns: int | None = None
 
 
 class EquityPoint(BaseModel):
@@ -176,6 +188,16 @@ class TradeRow(BaseModel):
     holding_days: int
     realised_pnl_inr: Decimal
     return_pct: Decimal
+    # Mirror of ``Position.exit_reason`` so the UI trade-table can
+    # show a badge per row (signal / stop_loss / mis_square_off /
+    # period_end_mtm). Defaults to "signal" on legacy persisted
+    # summaries.
+    exit_reason: str = "signal"
+    # Intraday timestamps (ns since epoch UTC). None on daily
+    # cadence; intraday cadences carry the fill bar's open ts so
+    # the UI can render "YYYY-MM-DD HH:mm IST" in Opened/Closed.
+    opened_at_ts_ns: int | None = None
+    closed_at_ts_ns: int | None = None
 
 
 class BacktestRun(BaseModel):
