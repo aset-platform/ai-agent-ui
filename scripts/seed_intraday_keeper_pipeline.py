@@ -10,14 +10,23 @@ seed_regime_india_pipeline.py``).
 Steps (mon-fri 15:45 IST):
 
   1. Pull Nifty 500 Intraday Bars   — intraday_bars_daily_ingest
-  2. Trim Bars Older Than 4 Years   — intraday_bars_retention
-  3. Compact + Backup Iceberg       — iceberg_maintenance
+  2. Compute Intraday Features      — intraday_features_daily_compute
+  3. Trim Bars Older Than 4 Years   — intraday_bars_retention
+  4. Compact + Backup Iceberg       — iceberg_maintenance
 
-Step 2 maintains a rolling 4-year window so the table doesn't
+Step 2 (FE-3) reads the freshly-ingested bars and writes the
+centralized feature engine's panel into ``stocks.intraday_features``
+so daily-cadence consumers see today's features without re-running
+the compute inline. Placed AFTER ingest (depends on the new rows)
+and BEFORE retention (logical ordering — features land same-day so
+there's no data-race concern, but keeping the order consistent
+helps when operators replay a single step).
+
+Step 3 maintains a rolling 4-year window so the table doesn't
 grow unboundedly — Backtest's max window is ASETPLTFRM-400's
 ``2022-05-13 → today`` and there's no reason to retain
-pre-window history. Placed between ingest and maintenance so
-the same maintenance run that compacts also reclaims the
+pre-window history. Placed between feature compute and maintenance
+so the same maintenance run that compacts also reclaims the
 tombstones from the deleted rows.
 
 Idempotency:
@@ -74,11 +83,16 @@ STEPS = [
     },
     {
         "step_order": 2,
+        "job_type": "intraday_features_daily_compute",
+        "job_name": "Compute Intraday Features",
+    },
+    {
+        "step_order": 3,
         "job_type": "intraday_bars_retention",
         "job_name": "Trim to 4-Year Retention",
     },
     {
-        "step_order": 3,
+        "step_order": 4,
         "job_type": "iceberg_maintenance",
         "job_name": "Compact + Backup Iceberg",
     },

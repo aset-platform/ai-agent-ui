@@ -3453,9 +3453,9 @@ def _job_intraday_bars_retention(
     """Daily 4-year rolling retention truncation for
     ``stocks.intraday_bars`` (ASETPLTFRM-400 slice 1g).
 
-    Sync + pipeline-compatible wrapper. Runs as step 2 of the
-    ``Intraday Bars Daily Pipeline`` between the Nifty 500 ingest
-    (step 1) and the Iceberg maintenance (step 3).
+    Sync + pipeline-compatible wrapper. Runs as step 3 of the
+    ``Intraday Bars Daily Pipeline`` between the feature compute
+    (step 2) and the Iceberg maintenance (step 4).
     """
     import asyncio
 
@@ -3465,6 +3465,38 @@ def _job_intraday_bars_retention(
 
     return asyncio.run(
         run_intraday_bars_retention_job(payload or {}),
+    )
+
+
+@register_job("intraday_features_daily_compute")
+def execute_intraday_features_daily_compute(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """Daily compute step for ``stocks.intraday_features``
+    (ASETPLTFRM-402 / FE-3).
+
+    Reads the freshly-ingested ``stocks.intraday_bars`` window
+    (default ``[yesterday, today]`` IST) and writes long-format
+    feature rows via the NaN-replaceable upsert in
+    :mod:`backend.algo.jobs.intraday_features_daily_compute`.
+
+    Sync + pipeline-compatible wrapper. Runs as step 2 of the
+    ``Intraday Bars Daily Pipeline`` between the Nifty 500 ingest
+    (step 1) and the 4-year retention trim (step 3).
+    """
+    import asyncio
+
+    from backend.algo.jobs.intraday_features_daily_compute import (
+        run_intraday_features_daily_compute_job,
+    )
+
+    return asyncio.run(
+        run_intraday_features_daily_compute_job(payload or {}),
     )
 
 
