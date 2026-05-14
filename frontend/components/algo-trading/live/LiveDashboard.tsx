@@ -60,16 +60,26 @@ export function LiveDashboard() {
   // initial render (slow useStrategies fetch) is still picked.
   useEffect(() => {
     if (strategyId) return;
+    // Wrap the auto-default write in a microtask so React's
+    // ``react-hooks/set-state-in-effect`` rule is satisfied —
+    // the rule blocks synchronous setState in the effect body
+    // (would re-render twice on every poll cycle until a
+    // strategyId lands). ``cancelled`` guards against runs /
+    // strategies arriving after the effect re-fires.
     const liveRun = runs.find(
       (r) => r.mode === "live" && !r.dry_run,
     );
-    if (liveRun) {
-      setStrategyId(liveRun.strategy_id);
-      return;
-    }
-    if (strategies.length > 0) {
-      setStrategyId(strategies[0].id);
-    }
+    const fallback =
+      strategies.length > 0 ? strategies[0].id : null;
+    const next = liveRun?.strategy_id ?? fallback;
+    if (!next) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setStrategyId(next);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [strategyId, runs, strategies]);
 
   return (

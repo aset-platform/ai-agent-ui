@@ -593,6 +593,16 @@ function WalkForwardProgressBanner({
 }: {
   run: WalkForwardResult;
 }) {
+  // Hooks must precede any conditional return — React's
+  // rules-of-hooks enforces a stable call order across renders.
+  // The 2-second tick keeps the ETA fresh in step with the SWR
+  // poll cadence so the banner updates roughly in lockstep with
+  // each new ``done`` value from the backend.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 2_000);
+    return () => clearInterval(id);
+  }, []);
   const p = run.progress;
   // Pre-spawn (no child rows yet) — minimal "starting" state.
   if (!p || p.total_estimated === 0) {
@@ -613,10 +623,8 @@ function WalkForwardProgressBanner({
     100,
     total > 0 ? Math.floor((done / total) * 100) : 0,
   );
-  const startedMs = p.started_at
-    ? Date.parse(p.started_at)
-    : Date.now();
-  const elapsedMs = Math.max(1, Date.now() - startedMs);
+  const startedMs = p.started_at ? Date.parse(p.started_at) : nowMs;
+  const elapsedMs = Math.max(1, nowMs - startedMs);
   // Skip ETA until we have at least 2 folds completed (one-fold
   // samples are too noisy).
   let etaText = "";

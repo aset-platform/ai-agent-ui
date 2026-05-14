@@ -110,7 +110,7 @@ export function PromotionToLiveCallout({ surface }: Props) {
           <div className="text-indigo-700 dark:text-indigo-300">
             Promote from the <strong>Strategies</strong> tab →
             Promote action → choose Live. Gate failures explain
-            what's still missing.
+            what&apos;s still missing.
           </div>
         </div>
       )}
