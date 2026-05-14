@@ -144,12 +144,22 @@ class Position(BaseModel):
 
 
 class EquityPoint(BaseModel):
-    """One end-of-day equity snapshot."""
+    """One equity snapshot.
+
+    Daily backtests emit one per ``bar_date`` (``bar_open_ts_ns``
+    stays None). Intraday backtests (slice 5) emit one per
+    closed bar within the trading day — ``bar_open_ts_ns``
+    disambiguates the ~25 snapshots that share a single
+    ``bar_date`` so the equity curve can be plotted with
+    intra-day granularity on the x-axis.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     bar_date: date
     equity_inr: Decimal
+    # ASETPLTFRM-400 slice 5 — intraday equity granularity.
+    bar_open_ts_ns: int | None = None
 
 
 class TradeRow(BaseModel):
@@ -214,6 +224,12 @@ class BacktestSummary(BaseModel):
     started_at: datetime
     completed_at: datetime
     fee_rates_version: str
+    # ASETPLTFRM-400 slice 7 — surfaced to the UI so the
+    # results panel can show a cadence chip
+    # ("15m" / "5m" / "1m" / "Daily"). Defaults to 86400 so
+    # historical runs serialised before slice 7 deserialise
+    # cleanly as daily.
+    interval_sec: int = 86400
     equity_curve: list[EquityPoint] = Field(default_factory=list)
     trade_list: list[TradeRow] = Field(default_factory=list)
     error_text: str | None = None

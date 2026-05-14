@@ -573,6 +573,12 @@ def run_backtest(
             EquityPoint(
                 bar_date=bar_date,
                 equity_inr=equity,
+                # ASETPLTFRM-400 slice 5 — intraday MTM
+                # granularity. Daily runs pass None (existing
+                # shape); intraday runs stamp the bar's
+                # ns-since-epoch so the curve is plottable
+                # with intra-day resolution on the x-axis.
+                bar_open_ts_ns=ts_ns,
             )
         )
         if equity > peak_equity:
@@ -645,6 +651,8 @@ def run_backtest(
         started_at=started_at,
         completed_at=datetime.now(timezone.utc),
         fee_rates_version=fee_rates_version or "n/a",
+        # ASETPLTFRM-400 slice 7 — surface cadence to the UI.
+        interval_sec=request.interval_sec,
         equity_curve=equity_points,
         trade_list=trade_rows,
     )

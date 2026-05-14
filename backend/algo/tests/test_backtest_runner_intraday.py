@@ -270,6 +270,115 @@ def test_intraday_fills_at_next_intraday_bar_not_next_day():
     assert first_fill["fill_date"] == "2026-04-01"
 
 
+def test_intraday_summary_carries_interval_sec(intraday_patches):
+    """ASETPLTFRM-400 slice 7 — UI reads ``summary.interval_sec``
+    to render the cadence chip. Pin to 900 for the 15m run so
+    the field doesn't silently default to daily on the wire."""
+    strategy = parse_strategy(_intraday_strategy())
+    request = BacktestRequest(
+        strategy_id=strategy.id,
+        period_start=date(2026, 4, 1),
+        period_end=date(2026, 4, 2),
+        interval_sec=900,
+    )
+    summary = run_backtest(
+        strategy=strategy,
+        request=request,
+        user_id=uuid4(),
+        universe=["FAKE.NS"],
+    )
+    assert summary.interval_sec == 900
+
+
+def test_intraday_equity_curve_carries_bar_open_ts_ns(
+    intraday_patches,
+):
+    """ASETPLTFRM-400 slice 5 — every intraday equity snapshot
+    must populate ``bar_open_ts_ns`` so the UI can plot the
+    curve with intra-day resolution. Without this, ~25 points
+    per ``bar_date`` are indistinguishable on the x-axis."""
+    strategy = parse_strategy(_intraday_strategy())
+    request = BacktestRequest(
+        strategy_id=strategy.id,
+        period_start=date(2026, 4, 1),
+        period_end=date(2026, 4, 2),
+        interval_sec=900,
+    )
+    summary = run_backtest(
+        strategy=strategy,
+        request=request,
+        user_id=uuid4(),
+        universe=["FAKE.NS"],
+    )
+    assert len(summary.equity_curve) > 0
+    for point in summary.equity_curve:
+        assert (
+            point.bar_open_ts_ns is not None
+        ), f"intraday EquityPoint missing bar_open_ts_ns: {point}"
+        assert point.bar_open_ts_ns > 0
+    # Strictly ascending across the curve.
+    ts_list = [p.bar_open_ts_ns for p in summary.equity_curve]
+    assert ts_list == sorted(ts_list)
+
+
+def test_daily_equity_curve_leaves_bar_open_ts_ns_none():
+    """Daily backtests stay byte-for-byte identical — the new
+    ``bar_open_ts_ns`` slot is None for every daily
+    EquityPoint."""
+    from datetime import timedelta as _td
+
+    daily_bars = {
+        "FAKE.NS": [
+            BarData(
+                ticker="FAKE.NS",
+                date=date(2026, 4, 1) + _td(days=i),
+                open=Decimal("100") + Decimal(i),
+                high=Decimal("101") + Decimal(i),
+                low=Decimal("99") + Decimal(i),
+                close=Decimal("100") + Decimal(i),
+                volume=10_000,
+            )
+            for i in range(10)
+        ]
+    }
+    strategy = parse_strategy(
+        _intraday_strategy()
+        | {
+            "schedule": {
+                "type": "bar_close",
+                "interval": "1d",
+                "time": "15:25 IST",
+            },
+        }
+    )
+    request = BacktestRequest(
+        strategy_id=strategy.id,
+        period_start=date(2026, 4, 1),
+        period_end=date(2026, 4, 8),
+        # interval_sec defaults to 86400 → daily path
+    )
+    with (
+        patch(
+            "backend.algo.backtest.runner.load_ohlcv_window",
+            return_value=daily_bars,
+        ),
+        patch(
+            "backend.algo.backtest.runner.flush_events",
+        ),
+    ):
+        summary = run_backtest(
+            strategy=strategy,
+            request=request,
+            user_id=uuid4(),
+            universe=["FAKE.NS"],
+        )
+    assert summary.interval_sec == 86400
+    for point in summary.equity_curve:
+        assert (
+            point.bar_open_ts_ns is None
+        ), f"daily EquityPoint should leave bar_open_ts_ns None: {point}"
+
+
 def test_intraday_runner_walks_every_bar_per_day():
     """Run a 1-day × 25-bar window. The buy-every-bar strategy
     should issue at least 24 fills on that day (last bar can't
