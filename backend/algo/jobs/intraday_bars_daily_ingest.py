@@ -57,7 +57,16 @@ def _default_window() -> tuple[date, date]:
     return today - timedelta(days=1), today
 
 
-_DEFAULT_INTERVALS = (900, 300, 60)  # 15m, 5m, 1m
+# 15m (900s), 5m (300s), 1m (60s) are all wired end-to-end —
+# loader, backfill, post-ingest assertions, maintenance. Only
+# 15m is enabled in the daily keeper today because that's the
+# only cadence any user strategy actually consumes. Add ``300``
+# and / or ``60`` to ``_DEFAULT_INTERVALS`` when a 5m or 1m
+# strategy lands; everything else (Kite paginator, NaN-replaceable
+# upsert, Iceberg partitioning, retention) is ready and tested.
+_AVAILABLE_INTERVALS = (900, 300, 60)
+_DEFAULT_INTERVALS = (900,)
+
 _ACTIVE_MIS_LOOKBACK_DAYS = 7
 
 
