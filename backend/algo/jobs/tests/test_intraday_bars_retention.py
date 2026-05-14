@@ -54,6 +54,23 @@ def _stub_backup_table(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _bypass_monthly_gate(monkeypatch):
+    """Default the monthly-cadence gate to OFF so each test
+    exercises the delete path without needing scheduler_runs
+    state. Tests that care about the gate explicitly re-patch
+    ``_already_ran_this_month`` to return True."""
+    from unittest.mock import AsyncMock
+
+    from backend.algo.jobs import intraday_bars_retention as mod
+
+    monkeypatch.setattr(
+        mod,
+        "_already_ran_this_month",
+        AsyncMock(return_value=False),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _ensure_table_and_clean_state():
     """Ensure ``stocks.intraday_bars`` is registered and wipe any
     ``RTN_`` test rows from previous runs."""
@@ -118,39 +135,116 @@ def _bar(ticker, day, hour=9, minute=15, close=100.0):
 # ────────────────────────────────────────────────────────────────
 
 
-def test_cutoff_default_four_years():
+def test_cutoff_default_four_years_is_first_of_month():
+    """Cutoff is partition-aligned with ``year_month`` so the
+    delete drops whole-month partitions, not mid-month rows."""
     assert _retention_cutoff(date(2026, 5, 13)) == date(
-        2022,
-        5,
-        13,
+        2022, 5, 1,
     )
+
+
+def test_cutoff_robust_to_run_day_within_month():
+    """Whether retention fires on the 1st or the 3rd of a month
+    (after a weekend skip), the cutoff lands on the SAME first-
+    of-month — so the same month's partition is dropped either
+    way."""
+    assert _retention_cutoff(date(2026, 6, 1)) == date(2022, 6, 1)
+    assert _retention_cutoff(date(2026, 6, 3)) == date(2022, 6, 1)
+    assert _retention_cutoff(date(2026, 6, 30)) == date(2022, 6, 1)
 
 
 def test_cutoff_year_override():
     assert _retention_cutoff(
         date(2026, 5, 13),
         years=2,
-    ) == date(2024, 5, 13)
+    ) == date(2024, 5, 1)
 
 
-def test_cutoff_leap_day_to_leap_year_keeps_feb_29():
-    """2024-02-29 minus 4 years → 2020-02-29 (also a leap year)."""
+def test_cutoff_leap_day_anchors_first_of_feb():
+    """Feb 29 → cutoff Feb 1 regardless of leap status. No more
+    leap-year clamp special case needed once we anchor on day-1."""
     assert _retention_cutoff(
         date(2024, 2, 29),
-    ) == date(2020, 2, 29)
-
-
-def test_cutoff_leap_day_to_non_leap_year_clamps_to_feb_28():
-    """2024-02-29 minus 1 year → 2023 (non-leap) so we cap to
-    Feb 28 rather than crash."""
+    ) == date(2020, 2, 1)
     assert _retention_cutoff(
         date(2024, 2, 29),
         years=1,
-    ) == date(2023, 2, 28)
+    ) == date(2023, 2, 1)
 
 
 def test_default_retention_years_is_four():
     assert DEFAULT_RETENTION_YEARS == 4
+
+
+# ────────────────────────────────────────────────────────────────
+# Monthly-cadence gate
+# ────────────────────────────────────────────────────────────────
+
+
+async def test_gate_skips_when_already_ran_this_month(monkeypatch):
+    """When ``_already_ran_this_month`` returns True the job
+    short-circuits before backup / delete fire — saves the ~16-min
+    backup window on non-first days of the month."""
+    from unittest.mock import AsyncMock
+
+    from backend.algo.jobs import intraday_bars_retention as mod
+
+    monkeypatch.setattr(
+        mod,
+        "_already_ran_this_month",
+        AsyncMock(return_value=True),
+    )
+    backup_calls = []
+
+    def _capture_backup(table_id, **_kw):
+        backup_calls.append(table_id)
+        return "/tmp/unreachable"
+
+    monkeypatch.setattr(mod, "backup_table", _capture_backup)
+
+    result = await run_intraday_bars_retention_job(
+        {"today": "2026-05-15"},
+    )
+
+    assert result["status"] == "skipped_already_ran_this_month"
+    assert result["today"] == "2026-05-15"
+    # Critical: backup must NOT have fired — that's the whole
+    # point of the monthly gate.
+    assert backup_calls == []
+
+
+async def test_gate_bypass_via_force_payload(monkeypatch):
+    """Operators can override the monthly gate with
+    ``payload={"force": True}`` for ad-hoc CLI runs."""
+    from unittest.mock import AsyncMock
+
+    from backend.algo.jobs import intraday_bars_retention as mod
+
+    monkeypatch.setattr(
+        mod,
+        "_already_ran_this_month",
+        AsyncMock(return_value=True),
+    )
+
+    mock_tbl = MagicMock()
+    mock_cat = MagicMock()
+    mock_cat.load_table.return_value = mock_tbl
+    with (
+        patch(
+            "stocks.create_tables._get_catalog",
+            return_value=mock_cat,
+        ),
+        patch(
+            "backend.algo.jobs.intraday_bars_retention."
+            "invalidate_metadata",
+        ),
+    ):
+        result = await run_intraday_bars_retention_job(
+            {"today": "2026-05-15", "force": True},
+        )
+
+    assert result["status"] == "ok"
+    mock_tbl.delete.assert_called_once()
 
 
 # ────────────────────────────────────────────────────────────────
@@ -182,14 +276,14 @@ async def test_delete_predicate_is_less_than_cutoff_iso():
         )
 
     assert result["status"] == "ok"
-    assert result["cutoff"] == "2022-05-13"
+    assert result["cutoff"] == "2022-05-01"
     assert result["backup_path"] is not None
     # tbl.delete invoked exactly once with LessThan(bar_date, ...)
     mock_tbl.delete.assert_called_once()
     call_arg = mock_tbl.delete.call_args.args[0]
     assert isinstance(call_arg, LessThan)
     assert call_arg.term.name == "bar_date"
-    assert call_arg.literal.value == "2022-05-13"
+    assert call_arg.literal.value == "2022-05-01"
 
 
 async def test_backup_failure_aborts_delete(monkeypatch):
@@ -263,11 +357,13 @@ async def test_retention_removes_only_pre_cutoff_rows():
     from backend.db.duckdb_engine import query_iceberg_table
 
     bars = [
-        _bar("RTN_A.NS", date(2020, 1, 1)),  # pre-cutoff
+        _bar("RTN_A.NS", date(2020, 1, 1)),    # pre-cutoff
         _bar("RTN_A.NS", date(2021, 12, 31)),  # pre-cutoff
-        _bar("RTN_A.NS", date(2022, 5, 13)),  # exactly cutoff (kept)
-        _bar("RTN_A.NS", date(2023, 6, 1)),  # post-cutoff
-        _bar("RTN_A.NS", date(2025, 5, 13)),  # post-cutoff
+        _bar("RTN_A.NS", date(2022, 4, 30)),   # April 2022 — pre-cutoff (whole month dropped)
+        _bar("RTN_A.NS", date(2022, 5, 1)),    # exactly first-of-month cutoff — kept
+        _bar("RTN_A.NS", date(2022, 5, 13)),   # mid-May 2022 — kept (post-cutoff)
+        _bar("RTN_A.NS", date(2023, 6, 1)),    # post-cutoff
+        _bar("RTN_A.NS", date(2025, 5, 13)),   # post-cutoff
     ]
     upsert_intraday_bars(bars, interval_sec=900, source="seed")
 
@@ -275,7 +371,7 @@ async def test_retention_removes_only_pre_cutoff_rows():
         {"today": "2026-05-13"},
     )
     assert result["status"] == "ok"
-    assert result["cutoff"] == "2022-05-13"
+    assert result["cutoff"] == "2022-05-01"
 
     rows = query_iceberg_table(
         INTRADAY_BARS_TABLE,
@@ -284,7 +380,12 @@ async def test_retention_removes_only_pre_cutoff_rows():
         ["RTN_A.NS"],
     )
     kept = {r["bar_date"] for r in rows}
-    assert kept == {"2022-05-13", "2023-06-01", "2025-05-13"}
+    assert kept == {
+        "2022-05-01",
+        "2022-05-13",
+        "2023-06-01",
+        "2025-05-13",
+    }
 
 
 async def test_retention_idempotent_rerun_is_noop():
@@ -319,7 +420,7 @@ async def test_retention_empty_table_returns_ok():
         {"today": "2026-05-13"},
     )
     assert result["status"] == "ok"
-    assert result["cutoff"] == "2022-05-13"
+    assert result["cutoff"] == "2022-05-01"
 
 
 # ────────────────────────────────────────────────────────────────

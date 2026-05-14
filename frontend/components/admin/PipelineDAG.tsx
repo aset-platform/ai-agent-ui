@@ -79,6 +79,9 @@ const JOB_LABELS: Record<string, string> = {
   attribution_daily_brinson: "Daily Brinson Attribution",
   universe_snapshot_monthly: "Refresh Top-200 Universe",
   attribution_monthly_regression: "Run Factor Regression",
+  // ASETPLTFRM-400 — Intraday Bars Daily Pipeline
+  intraday_bars_daily_ingest: "Fetch Intraday Bars (Nifty 500)",
+  intraday_bars_retention: "Trim to 4-Year Retention",
 };
 
 // ---------------------------------------------------------------
@@ -156,7 +159,22 @@ function StepNode({
           Step {step.step_order}
         </span>
         <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-          {JOB_LABELS[step.job_type] ?? step.job_type}
+          {/*
+            Resolution order:
+              1. Per-step ``job_name`` from the DB (operator-set
+                 label — e.g. "Fetch Intraday Bars (Nifty 500)").
+                 The Form lets users override it per pipeline.
+              2. Static ``JOB_LABELS`` fallback for legacy pipelines
+                 that pre-date the form (e.g. seeded steps where
+                 job_name == job_type).
+              3. Raw job_type — final fallback so unknown jobs
+                 are still visible.
+          */}
+          {(step.job_name && step.job_name !== step.job_type
+            ? step.job_name
+            : null) ??
+            JOB_LABELS[step.job_type] ??
+            step.job_type}
         </span>
         <div className="flex items-center gap-1.5 mt-0.5">
           <span className={`h-2 w-2 rounded-full ${style.dot}`} />

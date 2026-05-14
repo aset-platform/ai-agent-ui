@@ -1,25 +1,41 @@
-"""Daily retention truncation for ``stocks.intraday_bars``
+"""Monthly retention truncation for ``stocks.intraday_bars``
 (ASETPLTFRM-400 slice 1g).
 
 Maintains a rolling **4-year window** by deleting any row whose
-``bar_date`` is older than ``today_IST - 4 years``. Runs as
-step 2 of the ``Intraday Bars Daily Pipeline`` — between the
-keeper write (step 1) and the Iceberg maintenance step
-(step 3) so:
+``bar_date`` is older than ``first_of_month(today_IST - 4 years)``.
 
-  - the keeper's fresh writes are already committed when we
-    compute the cutoff and issue the scoped delete
-  - the maintenance step's compaction afterward sees the
-    smaller table and reclaims tombstoned files in the same
-    run (free side-benefit, no extra cost)
+Cadence
+-------
+Wired into the daily ``Intraday Bars Daily Pipeline`` for
+operational simplicity, but **no-ops on every run except the
+first successful run of each IST calendar month**. The first-run
+detection uses ``scheduler_runs`` (looks at the previous
+successful retention's started_at), so:
+
+- 1st of month is a weekday → runs that day
+- 1st of month is Sat / Sun  → no daily-pipeline run those days;
+  next Monday becomes the first-run-of-the-month, retention fires
+- Re-runs within the same month (e.g. operator triggers manually)
+  → no-op
+
+Why monthly rather than daily?
+``stocks.intraday_bars`` partitions on ``(ticker, year_month)``.
+A daily-cadence cutoff (e.g. 2022-05-14) lands mid-partition and
+forces a row-level rewrite of every May 2022 file. A monthly
+cutoff (= ``first_of_month``) is partition-aligned: the whole
+``year_month=2022-05`` slice's parquet files are dropped from
+the manifest as a metadata-only delete. Plus the pre-delete
+``backup_table`` step (~16 min for a 500 MB tree) fires once a
+month instead of every weekday.
 
 The delete predicate uses ``LessThan("bar_date", cutoff_iso)``.
 ``bar_date`` is stored as a ``YYYY-MM-DD`` string so
 lexicographic ordering matches chronological — Iceberg's
 predicate push-down handles this without a custom expression.
 
-Idempotent — re-running after the cutoff has already advanced
-deletes nothing (the predicate matches no rows).
+Idempotent within a month (the gate short-circuits) AND across
+months (re-running after the cutoff has already advanced deletes
+no rows).
 """
 
 from __future__ import annotations
@@ -30,8 +46,11 @@ from typing import Any
 
 from pyiceberg.expressions import LessThan
 
+from sqlalchemy import text
+
 from backend.algo._iceberg_retry import retry_iceberg_op
 from backend.db.duckdb_engine import invalidate_metadata
+from backend.db.engine import disposable_pg_session
 from backend.maintenance.backup import backup_table
 
 _logger = logging.getLogger(__name__)
@@ -50,26 +69,58 @@ def _retention_cutoff(
     *,
     years: int = DEFAULT_RETENTION_YEARS,
 ) -> date:
-    """Return ``today - years``, clamping Feb 29 → Feb 28 in the
-    target year when the target year is non-leap.
+    """First day of the month ``years`` years before ``today``.
+
+    Partition-aligned with the ``(ticker, year_month)`` layout so
+    the eventual ``LessThan("bar_date", cutoff)`` delete drops
+    whole-month partitions as a metadata-only operation, not a
+    mid-partition rewrite.
 
     Examples
     --------
     >>> _retention_cutoff(date(2026, 5, 13))
-    datetime.date(2022, 5, 13)
-    >>> _retention_cutoff(date(2024, 2, 29))  # leap → 4 yrs back leap
-    datetime.date(2020, 2, 29)
-    >>> _retention_cutoff(date(2024, 2, 29), years=1)  # 2023 non-leap
-    datetime.date(2023, 2, 28)
+    datetime.date(2022, 5, 1)
+    >>> _retention_cutoff(date(2026, 6, 3))  # ran late after weekend
+    datetime.date(2022, 6, 1)
+    >>> _retention_cutoff(date(2024, 2, 29), years=4)
+    datetime.date(2020, 2, 1)
     """
-    try:
-        return today.replace(year=today.year - years)
-    except ValueError:
-        # Feb 29 in a non-leap target year → fall back to Feb 28.
-        return today.replace(
-            year=today.year - years,
-            day=28,
-        )
+    return date(today.year - years, today.month, 1)
+
+
+async def _already_ran_this_month(
+    *, today: date,
+) -> bool:
+    """``True`` iff the latest successful intraday-bars-retention
+    run in ``scheduler_runs`` started this IST calendar month.
+
+    Detection by query rather than by ``today.day == 1`` so the
+    job fires on the first run of the month even when the 1st is
+    Sat / Sun (and the daily pipeline skips the weekend).
+    """
+    async with disposable_pg_session() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT started_at FROM scheduler_runs "
+                    "WHERE job_type = 'intraday_bars_retention' "
+                    "  AND status = 'success' "
+                    "ORDER BY started_at DESC LIMIT 1"
+                ),
+            )
+        ).first()
+    if row is None or row[0] is None:
+        return False
+    # ``started_at`` is tz-aware UTC; convert to IST and check
+    # against ``today``'s (year, month).
+    started_ist = (
+        row[0].astimezone(timezone.utc)
+        + timedelta(hours=5, minutes=30)
+    ).date()
+    return (
+        started_ist.year == today.year
+        and started_ist.month == today.month
+    )
 
 
 async def run_intraday_bars_retention_job(
@@ -93,17 +144,37 @@ async def run_intraday_bars_retention_job(
     """
     payload = payload or {}
     years = int(payload.get("years") or DEFAULT_RETENTION_YEARS)
+    force = bool(payload.get("force") or False)
     today = (
         date.fromisoformat(payload["today"])
         if payload.get("today")
         else _ist_today()
     )
+
+    # Monthly-cadence gate: short-circuit when retention already
+    # ran successfully this IST calendar month. The expensive
+    # backup-before-delete only fires once a month this way,
+    # saving ~70 hr/yr of wall clock + I/O. ``payload.force``
+    # bypasses the gate for ad-hoc CLI / one-shot operator runs.
+    if not force and await _already_ran_this_month(today=today):
+        _logger.info(
+            "intraday-retention: skipping — already ran this "
+            "IST month (today=%s); pass payload.force=true to "
+            "override.",
+            today.isoformat(),
+        )
+        return {
+            "status": "skipped_already_ran_this_month",
+            "today": today.isoformat(),
+            "years": years,
+        }
+
     cutoff = _retention_cutoff(today, years=years)
     cutoff_iso = cutoff.isoformat()
 
     _logger.info(
         "intraday-retention: trimming bars older than %s "
-        "(today=%s, years=%d)",
+        "(today=%s, years=%d, partition-aligned monthly cutoff)",
         cutoff_iso,
         today.isoformat(),
         years,

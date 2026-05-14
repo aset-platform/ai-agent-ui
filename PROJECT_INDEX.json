@@ -1,194 +1,236 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "name": "ai-agent-ui",
-  "description": "Fullstack agentic chat application with stock analysis, Prophet forecasting, portfolio management, and Smart Funnel recommendations.",
-  "last_refreshed": "2026-04-29",
-  "branch": "feature/sprint8",
-  "commits_ahead_of_dev": 67,
-  "stack": {
-    "backend": {
-      "language": "python",
-      "version": "3.12",
-      "framework": "FastAPI",
-      "port": 8181,
-      "entry": "backend/main.py",
-      "key_libs": [
-        "FastAPI 0.135",
-        "LangChain 1.2",
-        "SQLAlchemy 2.0 async (asyncpg)",
-        "PyIceberg 0.11",
-        "DuckDB 1.2",
-        "Prophet 1.3",
-        "transformers (FinBERT, CPU)",
-        "pgvector (768-dim embeddings)"
-      ]
-    },
-    "frontend": {
-      "language": "typescript",
-      "framework": "Next.js 16 (App Router) + React 19",
-      "port": 3000,
-      "entry": "frontend/app/page.tsx",
-      "edge": "frontend/proxy.ts",
-      "key_libs": [
-        "SWR 2.3",
-        "lightweight-charts 5.1",
-        "Apache ECharts (tree-shaken)",
-        "react-markdown",
-        "TailwindCSS"
-      ]
-    },
-    "data": {
-      "postgres": {
-        "version": "16 + pgvector",
-        "tables": 19,
-        "url_env": "DATABASE_URL",
-        "scope": "mutable OLTP — auth, portfolio, recommendations, scheduler, conversation context"
-      },
-      "iceberg": {
-        "version": "0.11.1 (PyIceberg)",
-        "tables": 12,
-        "scope": "append-only analytics — ohlcv, sentiment_scores, company_info, analysis_summary, etc.",
-        "read_engine": "DuckDB",
-        "warehouse_path": "~/.ai-agent-ui/data/iceberg/"
-      },
-      "redis": {
-        "version": "7 alpine",
-        "url_env": "REDIS_URL",
-        "scope": "TTL_VOLATILE=60s, TTL_STABLE=300s; per-user cache keys"
-      }
+  "project": "ai-agent-ui",
+  "description": "Fullstack agentic chat app + native portfolio dashboard + algo trading platform (Indian + US equity, Razorpay INR + Stripe USD billing, BYO Groq/Anthropic past 10-turn free).",
+  "refreshed_at": "2026-05-14",
+  "dev_tip": "fd8993a",
+  "open_prs": [
+    {
+      "number": 222,
+      "branch": "feature/intraday-retention-monthly",
+      "title": "perf(intraday-retention): monthly cadence + partition-aligned cutoff",
+      "summary": "Anchors retention cutoff to first-of-month + skips daily fires after the first successful run of the month. ~70 hr/yr of pipeline wall clock reclaimed."
+    }
+  ],
+  "recent_merges": [
+    {"pr": 221, "squash_sha": "f140fd6", "date": "2026-05-14", "summary": "Intraday backtest correctness + Strategy promotion workflow + Strategies UX + dry-run no-Kite-creds + walk-forward progress indicator + disposable_pg_session helper"},
+    {"pr": 220, "squash_sha": "bd7dc52", "date": "2026-05-14", "summary": "Slice 1: historical 15m bars + Nifty 500 keeper"},
+    {"pr": 219, "squash_sha": "888810d", "date": "2026-05-13", "summary": "MIS / Intraday Strategy Support (ASETPLTFRM-386)"},
+    {"pr": 218, "squash_sha": "7602afa", "summary": "aa-swing: NULL-tolerant pledged + death-cross sentinel"},
+    {"pr": 217, "squash_sha": "1267121", "summary": "aa-swing: Swing Setups (Bull/Sideways/Bearish ranked watchlists)"},
+    {"pr": 216, "squash_sha": "bf70784", "summary": "maint: include algo.events + algo.intraday_bars in daily compaction"}
+  ],
+  "counts": {
+    "python_files": 629,
+    "frontend_ts_tsx": 289,
+    "test_files": 295,
+    "alembic_migrations": 21,
+    "serena_memories": {
+      "total": 198,
+      "architecture": 78,
+      "debugging": 46,
+      "conventions": 26,
+      "onboarding": 3,
+      "api": 1
     }
   },
+  "stack": {
+    "backend": {"language": "Python 3.12", "framework": "FastAPI", "orm": "SQLAlchemy 2.0 async", "llm": "LangChain 1.x", "port": 8181},
+    "frontend": {"language": "TypeScript", "framework": "Next.js 16", "react": "React 19", "port": 3000},
+    "postgres": {"image": "pgvector/pg16", "port": 5432, "tables_oltp": 19},
+    "redis": {"image": "Redis 7 Alpine", "port": 6379},
+    "docs": {"engine": "MkDocs Material 9", "port": 8000}
+  },
   "entry_points": {
-    "cli_pipeline": "backend/pipeline/runner.py",
-    "demo_seed": "scripts/seed_demo_data.py",
-    "alembic": "backend/db/migrations/",
-    "health": "GET /v1/health",
-    "websocket": "/ws/chat (NOT /v1/-versioned)",
-    "lifecycle": "./run.sh start|stop|restart|rebuild|status|logs|doctor"
+    "backend_api": "backend/main.py",
+    "frontend_spa": "frontend/app/page.tsx",
+    "pipeline_cli": "backend/pipeline/runner.py",
+    "scheduler_daemon": "backend/jobs/scheduler_service.py",
+    "intraday_backfill_cli": "backend/algo/backtest/intraday_backfill.py",
+    "docs": "docs/index.md"
   },
   "directories": {
-    "backend/": "FastAPI app — routes, agents, tools, jobs",
-    "auth/": "Auth + RBAC + OAuth + BYOM key encryption (Fernet)",
-    "stocks/": "Stock-data domain (Iceberg writers, repos, retention)",
-    "frontend/": "Next.js 16 app + components + tests",
-    "tests/": "Backend pytest suite (538 cases)",
-    "e2e/": "Playwright E2E (51 specs across 3 chromium projects)",
-    "scripts/": "Ops utilities (seed, perf-check, migrations)",
-    "docs/": "MkDocs Material site (65 pages)",
-    "fixtures/": "Test data CSVs",
-    ".serena/memories/": "Shared architecture / convention / debugging memos (~75 files)"
+    "backend": "FastAPI app + agents + tools + jobs + pipelines + algo subsystem",
+    "backend/agents": "LangGraph: 8 sub-agent configs, 11 nodes, graph.py, sub_agents.py, conversation_context.py",
+    "backend/tools": "35 LLM-callable stock/portfolio/forecast/sentiment tools",
+    "backend/jobs": "Scheduler executors + pipeline_executor (chains jobs into pipelines)",
+    "backend/pipeline": "CLI data pipeline (sources/, jobs/, screener/)",
+    "backend/insights": "ScreenQL parser/SQL-gen — 55 fields, LIKE op, Tables sub-mode",
+    "backend/maintenance": "Iceberg backup + compaction + per-table retention",
+    "backend/db": "ORM models (18), Alembic migrations (21), engine.py + duckdb_engine.py + pg_stocks.py",
+    "backend/crypto": "byo_secrets.py — Fernet encryption for user-supplied LLM keys",
+    "backend/algo": "Algo trading subsystem (Sprint 10)",
+    "backend/algo/backtest": "runner.py (period_end_mtm + MIS daily square-off + entry cutoff + intraday timestamps), positions.py (force_close_all), sim_broker.py, walkforward.py (regime_stratified default off + WalkForwardProgress)",
+    "backend/algo/paper": "PaperRuntime, supervisor.py, risk_engine.py, replay_rebuilder.py",
+    "backend/algo/live": "LiveRuntime, kill_switch_repo, position_hydration, caps_repo",
+    "backend/algo/strategy": "ast.py, repo.py (auto-demote on AST edit), promotion.py (gates), mode_repo.py (audit), runtime_state.py",
+    "backend/algo/runtime": "intraday_window.py — shared MIS entry-cutoff helper imported by backtest+paper+live",
+    "backend/algo/broker": "KiteClient (dry_run pinned at construction), credentials_repo, OAuth flow",
+    "backend/algo/jobs": "intraday_bars_daily_ingest, intraday_bars_retention (monthly gate via PR #222), algo_reconciliation, risk_state_reset, reauth_notify",
+    "backend/algo/regime": "HMM classifier, regime_history table",
+    "backend/algo/attribution": "Brinson daily + factor regression monthly",
+    "backend/algo/factors": "Daily factor computation + factor_scores",
+    "backend/algo/sizing": "Position-sizing composer (vol_target_pct, kelly_fraction, notional, shares)",
+    "backend/algo/stream": "Live tick processor + bar resampler",
+    "backend/algo/universe": "PIT universe snapshots, stock_master tag resolution",
+    "backend/algo/routes": "strategies.py (CRUD + clone + PATCH /mode + eligibility), backtest.py, walkforward.py, paper.py, live.py, kill_switch.py, webhooks.py",
+    "auth": "JWT + RBAC + OAuth PKCE (Google + Razorpay)",
+    "stocks": "Iceberg repository (5,200+ lines): repository.py, cached_repository.py, create_tables.py",
+    "frontend": "Next.js 16 App-Router SPA",
+    "frontend/app/(authenticated)": "12+ pages: dashboard, analytics, insights, algo-trading/{strategies,live}, admin, settings",
+    "frontend/components/algo-trading": "StrategiesTab, PromoteModal, BacktestTradeTable, BacktestSummaryCards, WalkForwardSubTab, dryrun/, live/, builder/",
+    "frontend/components/admin": "PipelineDAG, RecommendationsTab, SchedulerTab, AuditLogTab",
+    "frontend/components/insights": "ColumnSelector, InsightsTable, ScreenerTab, ScreenQLTab",
+    "frontend/hooks": "19+ SWR data hooks (useStrategies, useBacktestRuns, useWalkForwardRuns, useSchedulerData)",
+    "frontend/lib": "types/, config (API_URL, BACKEND_URL), apiFetch, downloadCsv, datetime, echarts",
+    "e2e": "Playwright: 51 specs, 17 page objects, fixtures/, utils/selectors.ts",
+    "tests": "97 pytest files (~839 tests)",
+    "scripts": "28+ data/migration/seed scripts",
+    "docs": "56+ MkDocs Material pages"
   },
-  "core_modules": {
-    "backend/agents/": "LangGraph supervisor + 6 sub-agents + 10 nodes + conversation_context",
-    "backend/tools/": "35 LLM-callable tool modules",
-    "backend/jobs/": "Scheduler service + 9 executors + recommendation engine + pipeline_executor",
-    "backend/db/pg_stocks.py": "PG repository for stocks/recommendations + perf-bucket helper",
-    "backend/recommendation_routes.py": "/v1/dashboard/portfolio/recommendations/* (incl. /performance)",
-    "backend/recommendation_models.py": "Pydantic models — incl. PerfBucket, PerfSummary, RecommendationPerformanceResponse",
-    "backend/maintenance/iceberg_maintenance.py": "compact_table + cleanup_orphans_v2 (PyIceberg 0.11.1 native)",
-    "frontend/components/insights/": "Tabbed-page components (Screener, ScreenQL, Recommendations, Piotroski, etc.)",
-    "frontend/components/insights/RecommendationsPanel.tsx": "Sub-tab parent (History | Performance)",
-    "frontend/components/insights/RecommendationPerformanceTab.tsx": "Cohort-bucketed performance view",
-    "frontend/components/common/InfoTooltip.tsx": "Reusable popover with auto-flip placement",
-    "frontend/lib/renderTooltip.ts": "DOM-construction helper for chart tooltips (replaces innerHTML)",
-    "frontend/hooks/useInsightsData.ts": "SWR hooks for insights endpoints",
-    "frontend/lib/apiFetch.ts": "Authenticated fetch wrapper (auto-refresh, bounceToLogin on 401)"
+  "key_modules": {
+    "backend/main.py": "FastAPI entry — lifespan starts scheduler daemon, registers routers",
+    "backend/agents/sub_agents.py": "Sub-agent tool-calling loop factory (3-regime message construction)",
+    "backend/agents/conversation_context.py": "PG-persisted multi-turn context (cross-session resume)",
+    "backend/llm_fallback.py": "FallbackLLM — N-tier cascade with BYO override hook + tool_call ID sanitization",
+    "backend/llm_byo.py": "BYOContext + module-level ContextVar + apply_byo_context + Redis monthly counter",
+    "backend/token_budget.py": "Per-model TPM/RPM/TPD/RPD atomic reserve/release; singleton via get_token_budget()",
+    "backend/observability.py": "LLM usage collector — 30s flush to Iceberg, key_source field for BYO vs platform",
+    "backend/insights/screen_parser.py": "ScreenQL: tokenizer, parser, SQL gen — 55 fields, LIKE op, Tables sub-mode (7 whitelisted tables)",
+    "backend/jobs/executor.py": "25+ @register_job decorators + pipeline_executor (chains jobs into daily pipelines)",
+    "backend/jobs/recommendation_engine.py": "Monthly-per-scope IST quota — get_or_create_monthly_run is the single chokepoint",
+    "backend/maintenance/iceberg_maintenance.py": "Step 3 of daily pipelines — backup → compact → cleanup_orphans_v2",
+    "backend/maintenance/backup.py": "rsync warehouse + catalog.db + 2-rotation; backup_table for per-table; 1800s default timeout",
+    "backend/market_utils.py": "detect_market(ticker), safe_str/safe_sector (NaN-truthy safe), market currency map",
+    "backend/db/engine.py": "get_engine + get_session_factory (cached) + disposable_pg_session (per-call NullPool — scheduler-job safe)",
+    "backend/db/duckdb_engine.py": "Iceberg read engine + metadata cache + invalidate_metadata + query_iceberg_table",
+    "backend/algo/strategy/promotion.py": "check_eligibility — draft→paper gate (backtest+walkforward freshness) + paper→live gate (algo.events order_filled scan)",
+    "backend/algo/strategy/mode_repo.py": "Audit table CRUD (write_transition, list_transitions, has_ever_been, hash_ast)",
+    "backend/algo/strategy/repo.py": "Strategy CRUD + auto-demote on AST edit (UpdateResult.demoted_from)",
+    "backend/algo/strategy/runtime_state.py": "has_active_runtime + open_position_count for builder banner",
+    "backend/algo/backtest/runner.py": "Backtest engine — period_end_mtm, MIS daily square-off honoring square_off_time, MIS entry cutoff, intraday TradeRow ts_ns",
+    "backend/algo/backtest/positions.py": "PositionTracker — apply_fill (BUY/SELL), force_close_all(marks, exit_reason, fill_ts_ns) with opened-after-fill_date guard",
+    "backend/algo/backtest/sim_broker.py": "SimBroker — T+1 open fills, intraday ts_ns resolution, INTRADAY vs DELIVERY fee dispatch",
+    "backend/algo/backtest/walkforward.py": "Walk-forward harness — regime_stratified default off, WalkForwardProgress for live ETA",
+    "backend/algo/runtime/intraday_window.py": "Shared is_entry_allowed + is_past_square_off + ist_time_from_ns",
+    "backend/algo/jobs/intraday_bars_daily_ingest.py": "Nifty 500 keeper — uses stock_master JOIN stock_tags; defaults to 15m only",
+    "backend/algo/jobs/intraday_bars_retention.py": "Monthly cadence (PR #222) — first-of-month cutoff, scheduler_runs-detected first-run gate",
+    "backend/algo/broker/kite_client.py": "KiteClient — dry_run pinned at construction (no Kite REST when dry_run=True)",
+    "backend/algo/routes/strategies.py": "CRUD + clone + PATCH /mode + eligibility GET + history GET; list response enriched",
+    "backend/algo/routes/paper.py": "Paper/dry-run/live runtime start — dry-run + source=replay does NOT require Kite creds",
+    "auth/dependencies.py": "superuser_only, pro_or_superuser, require_role() factory",
+    "auth/repo/user_writes.py": "Tier→role auto-sync pinch point + post-commit ROLE_PROMOTED/DEMOTED audit",
+    "auth/repo/byo_repo.py": "BYO key CRUD + provider validators (groq/anthropic key prefixes) + chat counter bump",
+    "frontend/hooks/useStrategies.ts": "Strategies list + setStrategyMode + fetchEligibility + cloneStrategy + filterStrategiesByMode helper",
+    "frontend/hooks/useBacktestRuns.ts": "Backtest run polling — TradeRow with opened_at_ts_ns, exit_reason",
+    "frontend/components/algo-trading/StrategiesTab.tsx": "Search + status filter + pagination + icon actions + workflow callout + Promote modal mount + archive confirm",
+    "frontend/components/algo-trading/PromoteModal.tsx": "Per-target eligibility cards + bypass card (typed-name + reason)",
+    "frontend/components/algo-trading/BacktestTradeTable.tsx": "exit_reason badge, intraday HH:mm IST timestamps, 2-dp money formatting",
+    "frontend/components/algo-trading/builder/CadenceProductPanel.tsx": "Cadence radio + Product radio + Square-off-time + Entry-cutoff-time (MIS only)",
+    "frontend/components/admin/PipelineDAG.tsx": "Pipelines DAG — prefers step.job_name over hardcoded JOB_LABELS map"
   },
-  "api_routes": {
-    "auth": [
-      "POST /v1/auth/login",
-      "POST /v1/auth/refresh",
-      "POST /v1/auth/logout (auth-tolerant since 2026-04-29)",
-      "POST /v1/auth/oauth/{provider}"
+  "database": {
+    "rule": "Mutable state → PG. Append-only analytics → Iceberg. DuckDB for ALL Iceberg reads.",
+    "postgresql_tables": [
+      "users", "user_tickers", "payments", "registry",
+      "scheduled_jobs", "scheduler_runs", "pipelines", "pipeline_steps",
+      "recommendation_runs", "recommendations", "recommendation_outcomes",
+      "market_indices", "user_memories (pgvector 768)", "conversation_contexts",
+      "stock_master", "stock_tags", "ingestion_cursor", "ingestion_skipped", "sentiment_dormant"
     ],
-    "dashboard": [
-      "GET /v1/dashboard/home",
-      "GET /v1/dashboard/portfolio/forecast",
-      "GET /v1/dashboard/portfolio/performance"
+    "algo_pg_tables": [
+      "algo.strategies", "algo.runs", "algo.positions",
+      "algo.broker_credentials", "algo.live_caps",
+      "algo.strategy_metadata", "algo.strategy_mode_transitions",
+      "algo.drift_state", "algo.kill_switch", "algo.risk_state"
     ],
-    "recommendations": [
-      "GET /v1/dashboard/portfolio/recommendations",
-      "POST /v1/dashboard/portfolio/recommendations/refresh",
-      "GET /v1/dashboard/portfolio/recommendations/history",
-      "GET /v1/dashboard/portfolio/recommendations/stats",
-      "GET /v1/dashboard/portfolio/recommendations/performance (new 2026-04-29)",
-      "GET /v1/dashboard/portfolio/recommendations/{run_id}"
+    "iceberg_tables": [
+      "stocks.ohlcv (1.5M)", "stocks.company_info", "stocks.dividends",
+      "stocks.quarterly_results", "stocks.analysis_summary",
+      "stocks.forecast_runs", "stocks.forecasts", "stocks.piotroski_scores",
+      "stocks.sentiment_scores", "stocks.nse_delivery",
+      "stocks.fundamentals_snapshot", "stocks.corporate_events",
+      "stocks.promoter_holdings", "stocks.intraday_bars (~11M 15m rows after PR-221 cleanup)",
+      "stocks.regime_history", "stocks.regime_hmm_state",
+      "stocks.daily_factors", "stocks.universe_snapshot",
+      "stocks.llm_pricing", "stocks.llm_usage",
+      "stocks.portfolio_transactions",
+      "algo.events", "algo.intraday_bars"
     ],
-    "insights": [
-      "GET /v1/insights/{screener|targets|dividends|risk|sectors|correlation|quarterly}"
-    ],
-    "admin": [
-      "GET /v1/admin/audit-log",
-      "GET /v1/admin/scheduler/{jobs|pipelines|runs|stats}",
-      "POST /v1/admin/scheduler/jobs/{id}/trigger",
-      "POST /v1/admin/recommendations/force-refresh",
-      "POST /v1/admin/recommendation-runs/{id}/promote"
-    ]
+    "maintenance": {
+      "backup_dir": "/Users/abhay/Documents/projects/ai-agent-ui-backups/",
+      "rotation": 2,
+      "rsync_timeout_s": 1800,
+      "hot_tables_must_enroll_in": [
+        "backend/jobs/executor.py::_HOT_ICEBERG_TABLES",
+        "backend/maintenance/iceberg_maintenance.py::ALL_TABLES"
+      ]
+    }
   },
-  "scheduler_jobs": [
-    "data_refresh",
-    "compute_analytics",
-    "run_sentiment",
-    "run_forecasts",
-    "run_piotroski",
-    "recommendations",
-    "recommendation_outcomes (4 horizons {7,30,60,90}, self-healing window)",
-    "recommendation_cleanup (14m retention purge — new 2026-04-29)",
-    "iceberg_maintenance"
+  "promotion_workflow": {
+    "lifecycle": ["draft", "paper", "live"],
+    "gates": {
+      "draft_to_paper": "Fresh completed backtest + walkforward (started_at >= strategies.updated_at)",
+      "paper_to_live": "Fresh paper-fill events in algo.events (mode='paper', type='order_filled')"
+    },
+    "auto_demote": "AST edit demotes any non-draft → draft (audit row reason='auto-demoted on AST edit')",
+    "bypass": "To-live bypass unlocked after first to_mode='live' in audit history; typed-name confirmation + reason required",
+    "picker_filters": {
+      "backtest": "all 3 modes",
+      "walkforward": "all 3 modes",
+      "paper": "paper only",
+      "dryrun": "paper only",
+      "live": "live only"
+    },
+    "endpoints": [
+      "GET  /v1/algo/strategies/{id}/mode-transitions/eligibility",
+      "GET  /v1/algo/strategies/{id}/mode-transitions",
+      "PATCH /v1/algo/strategies/{id}/mode",
+      "POST  /v1/algo/strategies/{id}/clone"
+    ],
+    "memory": "shared/architecture/strategy-promotion-workflow"
+  },
+  "pipelines": [
+    {
+      "name": "daily_india",
+      "cron": "15:30 IST mon-fri",
+      "steps": ["data_refresh", "regime_classifier_daily", "compute_daily_factors", "run_sentiment", "run_forecasts", "iceberg_maintenance", "recommendations"]
+    },
+    {
+      "name": "Intraday Bars Daily Pipeline",
+      "cron": "15:45 IST mon-fri",
+      "steps": ["intraday_bars_daily_ingest", "intraday_bars_retention", "iceberg_maintenance"]
+    },
+    {
+      "name": "recommendation_cleanup",
+      "cron": "03:00 IST daily",
+      "purpose": "14-month retention purge with FK CASCADE"
+    }
   ],
-  "tests": {
-    "pytest_cases": 538,
-    "vitest_cases": 66,
-    "e2e_specs": 51,
-    "e2e_pass_rate": "111/147 on analytics-chromium (34 known-flaky pre-existing)",
-    "frontend_lint_baseline": 0,
-    "frontend_tsc_errors": "4 pre-existing test-fixture errors (unchanged baseline)"
-  },
-  "docs": {
-    "site": "MkDocs Material 9 (Dockerfile.docs, port 8000)",
-    "pages": 65,
-    "key_pages": [
-      "docs/backend/api-reference.md",
-      "docs/backend/scheduler.md",
-      "docs/backend/recommendation-performance.md (new 2026-04-29)",
-      "docs/backend/iceberg-orphan-sweep.md",
-      "docs/backend/agents.md",
-      "docs/backend/tools.md",
-      "docs/backend/byom.md"
+  "scheduler_job_pg_rule": {
+    "rule": "Scheduler-driven async PG callers MUST use disposable_pg_session (per-call NullPool engine). Cached get_session_factory binds asyncpg pool to the uvicorn loop; reusing under asyncio.run from scheduled jobs raises 'Future attached to a different loop'.",
+    "memory": "shared/debugging/disposable-pg-session-asyncio-loop-bug",
+    "migrated_jobs": [
+      "backend/algo/jobs/intraday_bars_daily_ingest.py",
+      "backend/algo/jobs/algo_reconciliation.py",
+      "backend/algo/jobs/risk_state_reset.py",
+      "backend/algo/jobs/reauth_notify.py"
     ]
   },
-  "rules_and_patterns": {
-    "claude_md": "CLAUDE.md (~580 lines, 9 sections, 57-row Pattern Index)",
-    "serena_memories": ".serena/memories/{shared/architecture, shared/conventions, shared/debugging}",
-    "memory_count_approx": 75,
-    "key_patterns": [
-      "shared/conventions/tabular-page-pattern",
-      "shared/conventions/swr-data-fetch-pattern",
-      "shared/conventions/info-tooltip-pattern (new 2026-04-29)",
-      "shared/conventions/render-tooltip-helper (new 2026-04-29)",
-      "shared/architecture/recommendation-performance-tab (new 2026-04-29)",
-      "shared/debugging/asyncpg-null-param-cast (new 2026-04-29)",
-      "shared/debugging/recommendation-outcomes-self-healing (new 2026-04-29)"
-    ]
+  "key_memories": {
+    "shared/architecture/strategy-promotion-workflow": "Lifecycle, schema, gate semantics, bypass rules, picker filter matrix",
+    "shared/architecture/backtest-correctness-mis-cnc-suite": "Six fixes (period_end_mtm, MIS square-off, entry cutoff, intraday timestamps, date-inversion, formatting)",
+    "shared/architecture/intraday-retention-monthly-cadence": "PR #222 design + ops impact",
+    "shared/architecture/mis-intraday-strategy-support": "ASETPLTFRM-386 epic (PR #219)",
+    "shared/architecture/pipeline-quality-assertions": "ASETPLTFRM-380 framework (PR #213)",
+    "shared/architecture/algo-trading-system": "Top-level algo subsystem overview",
+    "shared/debugging/disposable-pg-session-asyncio-loop-bug": "Cross-loop crash root cause + fix",
+    "shared/debugging/iceberg-compact-duckdb-stale-read": "Stale-read race + PyIceberg-native scan fix"
   },
-  "current_state": {
-    "sprint": "8 (id 138, ends 2026-05-01)",
-    "sprint_status": "62 SP / 14 issues Done as of 2026-04-28; +ASETPLTFRM-339 (8 SP, Done) on 2026-04-29",
-    "active_jira": "ASETPLTFRM-339 — Recommendation Performance Analytics",
-    "pending_pr": "feature/sprint8 → dev (squash) — not opened yet, gating Sprint 9 grooming",
-    "known_followups": [
-      "Engine: populate price_at_rec from OHLCV at issue time",
-      "Outcomes: wire benchmark_return_pct to a real index (Nifty / S&P)",
-      "Retention: tier-gate (Free 6m / Pro+ 14m)",
-      "Performance tab: per-rec drill-down chart",
-      "E2E: spec for new Performance sub-tab (auth-fixture wiring)",
-      "Stats: refactor /stats hit_rate_30d/60d/90d to actually be per-horizon"
-    ]
-  },
-  "quickstart": [
-    "cp .env.example .env",
-    "./run.sh start",
-    "docker compose exec backend python scripts/seed_demo_data.py",
-    "open http://localhost:3000  -> admin@demo.com / Admin123!"
-  ]
+  "see_also": {
+    "CLAUDE.md": "Hard rules + patterns (9 sections, Pattern Index at §9)",
+    "PROGRESS.md": "Dated session log (most recent: 2026-05-14 PR #221 + #222)",
+    "docs/algo-trading/": "Algo subsystem guides",
+    "docs/backend/": "Backend ops (maintenance, BYOM, recommendations, iceberg-orphan-sweep)",
+    "frontend/lib/types/algoTrading.ts": "StrategiesTabId, LiveTabId — URL-synced tab IDs"
+  }
 }
