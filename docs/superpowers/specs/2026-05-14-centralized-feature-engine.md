@@ -362,6 +362,36 @@ module reuses Phase-1 implementations; new daily compute step
 in the existing `Stock Pipeline → analytics` chain; no new
 table or backtest reader path.
 
+**Implementation confirmations (FE-2, 2026-05-14):**
+
+| Feature | Transfers cleanly to daily? | Notes |
+|---|---|---|
+| `ema_20` / `ema_50` | Yes | Use ``backend.algo.features.primitives.ema(closes, span=N)`` directly on daily close series. SMA-seeded TA-Lib convention applies identically. |
+| `ema_20_slope_5bar` | Yes | ``series_slope_n_bar(ema_20, 5)`` on daily series — slope is just bar-count difference, semantically identical. |
+| `rsi_5` | Yes | ``wilder_rsi(closes, 5)`` on daily close series — same Wilder smoothing. |
+| `roc_5` | Yes | ``roc_n_bar(closes, 5)`` on daily series — fraction not percent (consistent with intraday convention). |
+| `atr_14` | Yes | ``wilder_atr(daily_bars, 14)`` — true range uses prior close, no intraday assumption. |
+| `range_expansion` | Yes | `(high − low) / atr_14` per daily bar — daily H/L are well-defined. |
+| `bb_width` | Yes | ``bollinger_band_width(closes, 20)`` on daily series — population std + SMA(20). Complements existing ``realized_vol_60d``. |
+| `gap_pct` | Yes (adaptation) | On daily bars: `(today_open − prev_close) / prev_close × 100`. Uses ``bar.open`` and previous bar's ``close`` directly — no IST/timestamp gymnastics needed. The intraday helper's IST-date bucketing collapses to per-row ``bar.date`` on the daily path. |
+| `dist_from_prev_day_high_pct` | Yes | Daily: distance from previous bar's high. Trivial. |
+| `dist_from_prev_day_low_pct` | Yes | Daily: distance from previous bar's low. Trivial. |
+| `volume_spike` | Yes | ``volume_spike_flag(daily_bars, window=20, multiplier=2)`` — binary, same threshold semantics. |
+
+**Skipped (intraday-only) — formal record:**
+
+- `vwap`: daily VWAP degenerates to a single typical-price per row — emit at `interval_sec=86400` only if a strategy explicitly asks; cost is one extra Decimal arithmetic per row.
+- `dist_from_vwap_pct`: derived from daily VWAP — same caveat; can be enabled but adds no signal beyond typical-price proximity.
+- `orb_high_15min` / `orb_low_15min`: intraday-only by definition.
+- `minutes_since_open`: intraday-only by definition.
+- `time_of_day_bucket`: intraday-only by definition.
+- `relative_volume`: today's daily factor library already ships `volume_x_avg_20` covering the daily case. Keep intraday-only.
+- `rs_vs_nifty_15m` / `rs_vs_sector_15m`: daily counterparts (`rs_vs_nifty_3m` / `rs_vs_nifty_6m` / `rs_vs_sector_3m`) already exist as factor-library features.
+
+**Open question parked for ASETPLTFRM-417 design:**
+
+- `bb_width` daily counterpart overlaps semantically with `realized_vol_60d` (annualised) — the daily compute step in ASETPLTFRM-417 should decide whether to ship both or alias. Lean toward **both** because BB-width window (20) is much shorter than the 60d realised-vol — different regime sensitivity.
+
 ## 13. Locked decisions (2026-05-14, post-spec amendments)
 
 These were left as "open questions" in the original spec and
