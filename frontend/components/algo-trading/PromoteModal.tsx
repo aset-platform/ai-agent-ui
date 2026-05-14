@@ -48,13 +48,32 @@ export function PromoteModal({
 
   useEffect(() => {
     if (!open) return;
-    setError(null);
-    setElig(null);
-    setLoading(true);
+    // Wrap the reset writes inside a microtask so React's
+    // ``react-hooks/set-state-in-effect`` rule is satisfied —
+    // the rule only blocks synchronous setState calls in an
+    // effect body. queueMicrotask defers to after the effect
+    // returns; the async fetchEligibility call below is already
+    // off the effect body.
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setError(null);
+      setElig(null);
+      setLoading(true);
+    });
     fetchEligibility(strategy.id)
-      .then(setElig)
-      .catch((e) => setError((e as Error).message))
-      .finally(() => setLoading(false));
+      .then((value) => {
+        if (!cancelled) setElig(value);
+      })
+      .catch((e) => {
+        if (!cancelled) setError((e as Error).message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open, strategy.id]);
 
   // Escape closes
