@@ -40,8 +40,54 @@ export function BacktestEquityCurve({
 }: Props) {
   const isDark = useDarkMode();
 
-  const option = useMemo(
-    () => ({
+  const option = useMemo(() => {
+    // ASETPLTFRM-400 slice 5 — intraday backtests emit ~25 points
+    // per ``bar_date``. Plotting on a date-only category axis
+    // collapses them into a single tick. When ANY point carries a
+    // ``bar_open_ts_ns``, switch to a time-axis keyed off
+    // ns-since-epoch so each intra-day bar has its own x position.
+    const hasIntradayTs = points.some(
+      (p) => typeof p.bar_open_ts_ns === "number",
+    );
+    if (hasIntradayTs) {
+      const series = points.map((p) => {
+        const ms =
+          typeof p.bar_open_ts_ns === "number"
+            ? p.bar_open_ts_ns / 1_000_000
+            : new Date(p.bar_date).getTime();
+        return [ms, Number(p.equity_inr)] as [number, number];
+      });
+      return {
+        grid: { left: 50, right: 12, top: 16, bottom: 32 },
+        xAxis: {
+          type: "time" as const,
+          axisLabel: { fontSize: 11 },
+        },
+        yAxis: {
+          type: "value" as const,
+          scale: true,
+          axisLabel: { fontSize: 11 },
+        },
+        tooltip: { trigger: "axis" as const },
+        series: [
+          {
+            type: "line" as const,
+            showSymbol: false,
+            lineStyle: { width: 2 },
+            data: series,
+            markLine: {
+              symbol: "none",
+              lineStyle: {
+                type: "dashed" as const,
+                color: "#94a3b8",
+              },
+              data: [{ yAxis: Number(initialCapitalInr) }],
+            },
+          },
+        ],
+      };
+    }
+    return {
       grid: { left: 50, right: 12, top: 16, bottom: 32 },
       xAxis: {
         type: "category" as const,
@@ -70,9 +116,8 @@ export function BacktestEquityCurve({
           },
         },
       ],
-    }),
-    [points, initialCapitalInr],
-  );
+    };
+  }, [points, initialCapitalInr]);
 
   if (points.length === 0) {
     return (
