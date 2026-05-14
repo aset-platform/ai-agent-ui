@@ -43,6 +43,7 @@ A window is included only if test_end <= end. Trailing
 partial windows (test_end > end) are dropped — not
 truncated — to keep per-window metrics comparable.
 """
+
 from __future__ import annotations
 
 import logging
@@ -67,6 +68,7 @@ from backend.algo.backtest.metrics import (
 from backend.algo.backtest.runner import run_backtest
 from backend.algo.backtest.runs_repo import BacktestRunsRepo
 from backend.algo.backtest.types import (
+    _SUPPORTED_INTERVAL_SEC,
     BacktestRequest,
     BacktestSummary,
     _enforce_backtest_start_floor,
@@ -81,6 +83,7 @@ _logger = logging.getLogger(__name__)
 
 class WalkForwardConfig(BaseModel):
     """Request body for POST /v1/algo/walkforward/run."""
+
     model_config = ConfigDict(extra="forbid")
 
     strategy_id: UUID
@@ -90,8 +93,19 @@ class WalkForwardConfig(BaseModel):
     test_days: int = Field(ge=1)
     step_days: int = Field(ge=1)
     initial_capital_inr: Decimal = Field(
-        default=Decimal("100000.00"), ge=Decimal("1000.00"),
+        default=Decimal("100000.00"),
+        ge=Decimal("1000.00"),
     )
+    # ASETPLTFRM-400 slice 6 — walk-forward intraday folds. Mirrors
+    # BacktestRequest.interval_sec so a single MIS strategy run
+    # through walk-forward uses the intraday loader for every fold,
+    # not just the first manual run. Default 86400 = daily (V2-2
+    # compat); 60/300/900 select the intraday data + runner path
+    # for each child window. Auto-derived from
+    # ``strategy.schedule.interval`` in ``run_walkforward_job`` when
+    # the request leaves the default unchanged — mirrors
+    # ``backend.algo.backtest.job`` exactly.
+    interval_sec: int = Field(default=86400)
     # REGIME-5: regime-stratified windows + 5-gate thresholds.
     # All optional with safe defaults so existing V2-2 callers
     # keep working unchanged.
@@ -110,11 +124,22 @@ class WalkForwardConfig(BaseModel):
     def _start_floor(cls, v: date) -> date:
         return _enforce_backtest_start_floor(v)
 
+    @field_validator("interval_sec")
+    @classmethod
+    def _supported_interval(cls, v: int) -> int:
+        if v not in _SUPPORTED_INTERVAL_SEC:
+            raise ValueError(
+                f"interval_sec={v} not supported; use one of "
+                f"{sorted(_SUPPORTED_INTERVAL_SEC)} (86400=daily)."
+            )
+        return v
+
 
 @dataclass(frozen=True)
 class Window:
     """One (train, test) pair produced by ``walk_windows``."""
-    index: int           # 0-based
+
+    index: int  # 0-based
     train_start: date
     train_end: date
     test_start: date
@@ -126,6 +151,7 @@ class Window:
 
 class WindowSummary(BaseModel):
     """Per-window aggregate shipped to the frontend."""
+
     model_config = ConfigDict(extra="forbid")
 
     window_index: int
@@ -146,6 +172,7 @@ class WindowSummary(BaseModel):
 
 class PerRegimeRow(BaseModel):
     """Per-regime metrics serialised for the API + persistence."""
+
     model_config = ConfigDict(extra="forbid")
 
     regime: str
@@ -159,6 +186,7 @@ class PerRegimeRow(BaseModel):
 
 class WalkForwardAggregate(BaseModel):
     """Aggregate metrics across all test windows."""
+
     model_config = ConfigDict(extra="forbid")
 
     avg_win_rate_pct: Decimal
@@ -179,6 +207,7 @@ class WalkForwardAggregate(BaseModel):
 
 class WalkForwardResult(BaseModel):
     """Full result returned by GET /v1/algo/walkforward/runs/{id}."""
+
     model_config = ConfigDict(extra="forbid")
 
     walkforward_run_id: str
@@ -225,9 +254,7 @@ def walk_windows(
     - (train_days + test_days) > total period days  → returns []
     """
     if train_days < 1 or test_days < 1 or step_days < 1:
-        raise ValueError(
-            "train_days, test_days, step_days must be >= 1"
-        )
+        raise ValueError("train_days, test_days, step_days must be >= 1")
     if start >= end:
         raise ValueError("start must be before end")
 
@@ -240,20 +267,21 @@ def walk_windows(
         test_end = test_start + timedelta(days=test_days - 1)
         if test_end > end:
             break
-        windows.append(Window(
-            index=i,
-            train_start=train_start,
-            train_end=train_end,
-            test_start=test_start,
-            test_end=test_end,
-        ))
+        windows.append(
+            Window(
+                index=i,
+                train_start=train_start,
+                train_end=train_end,
+                test_start=test_start,
+                test_end=test_end,
+            )
+        )
         i += 1
 
     if regime_labels:
         # Universe of regimes seen anywhere in the full period.
         full_period_regimes = {
-            lab for d, lab in regime_labels.items()
-            if start <= d <= end
+            lab for d, lab in regime_labels.items() if start <= d <= end
         }
         if not full_period_regimes:
             return windows
@@ -331,9 +359,9 @@ def _aggregate_windows(
 
     # std-dev requires at least 2 samples
     if len(pnl_pcts) >= 2:
-        std_pnl = Decimal(str(
-            stdev(float(p) for p in pnl_pcts)
-        )).quantize(Decimal("0.01"))
+        std_pnl = Decimal(str(stdev(float(p) for p in pnl_pcts))).quantize(
+            Decimal("0.01")
+        )
     else:
         std_pnl = Decimal("0")
 
@@ -342,11 +370,13 @@ def _aggregate_windows(
     # curve for per-regime + recovery + DSR/PBO calc.
     full_curve: list[dict[str, Any]] = []
     for s in completed:
-        for ep in (s.equity_curve or []):
-            full_curve.append({
-                "bar_date": ep.bar_date,
-                "equity_inr": float(ep.equity_inr),
-            })
+        for ep in s.equity_curve or []:
+            full_curve.append(
+                {
+                    "bar_date": ep.bar_date,
+                    "equity_inr": float(ep.equity_inr),
+                }
+            )
 
     # Per-regime breakdown
     per_regime_rows: list[PerRegimeRow] = []
@@ -354,24 +384,23 @@ def _aggregate_windows(
         # Normalise label keys to ISO-date strings.
         norm_labels: dict[str, str] = {}
         for k, v in regime_labels.items():
-            key = (
-                k.isoformat()
-                if hasattr(k, "isoformat") else str(k)
-            )
+            key = k.isoformat() if hasattr(k, "isoformat") else str(k)
             norm_labels[key] = v
-        per_regime_metrics: list[PerRegimeMetrics] = (
-            per_regime_breakdown(full_curve, norm_labels)
+        per_regime_metrics: list[PerRegimeMetrics] = per_regime_breakdown(
+            full_curve, norm_labels
         )
         for m in per_regime_metrics:
-            per_regime_rows.append(PerRegimeRow(
-                regime=m.regime,
-                n_days=m.n_days,
-                cum_return_pct=_q2(m.cum_return_pct),
-                sharpe=_q2(m.sharpe),
-                sortino=_q2(m.sortino),
-                max_dd_pct=_q2(m.max_dd_pct),
-                hit_rate=_q2(m.hit_rate),
-            ))
+            per_regime_rows.append(
+                PerRegimeRow(
+                    regime=m.regime,
+                    n_days=m.n_days,
+                    cum_return_pct=_q2(m.cum_return_pct),
+                    sharpe=_q2(m.sharpe),
+                    sortino=_q2(m.sortino),
+                    max_dd_pct=_q2(m.max_dd_pct),
+                    hit_rate=_q2(m.hit_rate),
+                )
+            )
 
     # Recovery months (on aggregated equity curve)
     rec_months = recovery_months_from_dd(full_curve)
@@ -389,6 +418,7 @@ def _aggregate_windows(
             prev = cur
         if rets:
             import math as _math
+
             mu = sum(rets) / len(rets)
             var = sum((r - mu) ** 2 for r in rets) / len(rets)
             sd = _math.sqrt(var) if var > 0 else 0.0
@@ -476,9 +506,42 @@ async def run_walkforward_job(
     try:
         async with _session_factory() as session:
             await repo.mark_running(
-                session, run_id=walkforward_run_id,
+                session,
+                run_id=walkforward_run_id,
             )
             await session.commit()
+
+        # ASETPLTFRM-400 slice 6 — auto-derive ``interval_sec`` from
+        # the strategy's ``schedule.interval`` so an MIS strategy
+        # run through walk-forward uses the intraday loader/runner
+        # for every fold. Mirrors the override path in
+        # ``backend.algo.backtest.job`` exactly: explicit non-86400
+        # on the config wins; otherwise we read the strategy
+        # schedule and stamp the effective interval onto a fresh
+        # ``WalkForwardConfig`` copy. Defensive ``getattr`` chain
+        # tolerates legacy ``Strategy`` shapes that lack
+        # ``schedule``.
+        effective_interval_sec = config.interval_sec
+        if effective_interval_sec == 86400:
+            schedule = getattr(strategy, "schedule", None)
+            interval_str = getattr(schedule, "interval", "1d")
+            interval_map = {
+                "1d": 86400,
+                "15m": 900,
+                "5m": 300,
+                "1m": 60,
+            }
+            derived = interval_map.get(interval_str, 86400)
+            if derived != 86400:
+                _logger.info(
+                    "walk-forward %s — auto-derived "
+                    "interval_sec=%d from "
+                    "strategy.schedule.interval=%s",
+                    walkforward_run_id,
+                    derived,
+                    interval_str,
+                )
+                effective_interval_sec = derived
 
         # REGIME-5: optionally fetch regime_history once for the
         # full period and use it for both stratified window
@@ -493,8 +556,10 @@ async def run_walkforward_job(
                 from backend.algo.regime.repo import (
                     get_regime_history,
                 )
+
                 rows = get_regime_history(
-                    config.period_start, config.period_end,
+                    config.period_start,
+                    config.period_end,
                 )
                 regime_labels = {r.bar_date: r.regime_label for r in rows}
                 if regime_labels:
@@ -504,13 +569,15 @@ async def run_walkforward_job(
                         "walk-forward %s: regime_history empty for "
                         "%s..%s — falling back to non-stratified",
                         walkforward_run_id,
-                        config.period_start, config.period_end,
+                        config.period_start,
+                        config.period_end,
                     )
             except Exception as exc:  # noqa: BLE001
                 _logger.warning(
                     "walk-forward %s: regime_history lookup "
                     "failed (%s) — non-stratified fallback",
-                    walkforward_run_id, exc,
+                    walkforward_run_id,
+                    exc,
                 )
 
         windows = walk_windows(
@@ -525,8 +592,7 @@ async def run_walkforward_job(
         )
 
         _logger.info(
-            "walk-forward %s: %d windows over %s → %s "
-            "(stratified=%s)",
+            "walk-forward %s: %d windows over %s → %s " "(stratified=%s)",
             walkforward_run_id,
             len(windows),
             config.period_start,
@@ -552,27 +618,30 @@ async def run_walkforward_job(
 
             child_run_id = child_row.run_id
 
-            events.append(event_row(
-                session_id=session_id,
-                user_id=user_id,
-                strategy_id=config.strategy_id,
-                mode="walkforward",
-                type_="walkforward_window_started",
-                payload={
-                    "walkforward_run_id": str(walkforward_run_id),
-                    "window_index": win.index,
-                    "child_run_id": str(child_run_id),
-                    "train_start": win.train_start.isoformat(),
-                    "train_end": win.train_end.isoformat(),
-                    "test_start": win.test_start.isoformat(),
-                    "test_end": win.test_end.isoformat(),
-                },
-            ))
+            events.append(
+                event_row(
+                    session_id=session_id,
+                    user_id=user_id,
+                    strategy_id=config.strategy_id,
+                    mode="walkforward",
+                    type_="walkforward_window_started",
+                    payload={
+                        "walkforward_run_id": str(walkforward_run_id),
+                        "window_index": win.index,
+                        "child_run_id": str(child_run_id),
+                        "train_start": win.train_start.isoformat(),
+                        "train_end": win.train_end.isoformat(),
+                        "test_start": win.test_start.isoformat(),
+                        "test_end": win.test_end.isoformat(),
+                    },
+                )
+            )
 
             try:
                 async with _session_factory() as session:
                     await repo.mark_running(
-                        session, run_id=child_run_id,
+                        session,
+                        run_id=child_run_id,
                     )
                     await session.commit()
 
@@ -581,6 +650,7 @@ async def run_walkforward_job(
                     period_start=win.test_start,
                     period_end=win.test_end,
                     initial_capital_inr=config.initial_capital_inr,
+                    interval_sec=effective_interval_sec,
                 )
                 summary = run_backtest(
                     strategy=strategy,
@@ -603,34 +673,30 @@ async def run_walkforward_job(
 
                 window_summaries.append(summary)
 
-                events.append(event_row(
-                    session_id=session_id,
-                    user_id=user_id,
-                    strategy_id=config.strategy_id,
-                    mode="walkforward",
-                    type_="walkforward_window_completed",
-                    payload={
-                        "walkforward_run_id": str(
-                            walkforward_run_id
-                        ),
-                        "window_index": win.index,
-                        "child_run_id": str(child_run_id),
-                        "total_pnl_pct": str(
-                            summary.total_pnl_pct
-                        ),
-                        "win_rate_pct": str(
-                            summary.win_rate_pct
-                        ),
-                        "max_drawdown_pct": str(
-                            summary.max_drawdown_pct
-                        ),
-                    },
-                ))
+                events.append(
+                    event_row(
+                        session_id=session_id,
+                        user_id=user_id,
+                        strategy_id=config.strategy_id,
+                        mode="walkforward",
+                        type_="walkforward_window_completed",
+                        payload={
+                            "walkforward_run_id": str(walkforward_run_id),
+                            "window_index": win.index,
+                            "child_run_id": str(child_run_id),
+                            "total_pnl_pct": str(summary.total_pnl_pct),
+                            "win_rate_pct": str(summary.win_rate_pct),
+                            "max_drawdown_pct": str(summary.max_drawdown_pct),
+                        },
+                    )
+                )
 
             except Exception as win_exc:  # noqa: BLE001
                 _logger.exception(
                     "walk-forward %s window %d failed: %s",
-                    walkforward_run_id, win.index, win_exc,
+                    walkforward_run_id,
+                    win.index,
+                    win_exc,
                 )
                 async with _session_factory() as session:
                     await repo.mark_failed(
@@ -748,9 +814,7 @@ async def run_walkforward_job(
             total_fees_inr=Decimal("0"),
             total_trades=aggregate.completed_count,
             winning_trades=aggregate.completed_count,
-            losing_trades=(
-                aggregate.window_count - aggregate.completed_count
-            ),
+            losing_trades=(aggregate.window_count - aggregate.completed_count),
             win_rate_pct=aggregate.avg_win_rate_pct,
             max_drawdown_pct=aggregate.avg_max_drawdown_pct,
             started_at=now_utc,
@@ -774,6 +838,7 @@ async def run_walkforward_job(
         # rich walkforward shape so the GET endpoint can decode it).
         async with _session_factory() as session:
             from sqlalchemy import text as _text
+
             await session.execute(
                 _text(
                     "UPDATE algo.runs SET "
@@ -812,6 +877,4 @@ async def run_walkforward_job(
                 )
                 await session.commit()
         except Exception:  # noqa: BLE001
-            _logger.exception(
-                "failed to record walk-forward job failure"
-            )
+            _logger.exception("failed to record walk-forward job failure")
