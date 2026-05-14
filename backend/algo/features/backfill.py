@@ -11,9 +11,11 @@ fill a specific window without waiting for the daily cron.
 Internally we delegate to the daily compute job's shared async
 entrypoint with an explicit ``tickers`` + ``period_start`` /
 ``period_end`` payload. The job already implements the
-NaN-replaceable upsert, per-batch error isolation, and structured
-stats roll-up — the on-demand path benefits from the same
-guarantees for free.
+NaN-replaceable upsert, per-batch error isolation, structured
+stats roll-up, AND the FE-4 partition-chunk Redis cache
+invalidation (called from ``_write_features_batch`` after a
+successful ``retry_iceberg_op``) — the on-demand backfill path
+benefits from the same guarantees for free.
 """
 
 from __future__ import annotations

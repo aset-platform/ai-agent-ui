@@ -40,17 +40,17 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Iterable
 
-from backend.algo.backtest.indicators import (
-    DEFAULT_INTRADAY_SMA_WINDOWS,
-    NO_CROSS_SENTINEL,
-)
 from backend.algo.backtest.types import BarData
 from backend.algo.features import primitives as p
 from backend.algo.features.types import (
     TickerFeaturePanel,
     UniverseFeaturePanel,
 )
-from backend.algo.features.version import FEATURE_SET_VERSION
+from backend.algo.features.version import (
+    DEFAULT_INTRADAY_SMA_WINDOWS,
+    FEATURE_SET_VERSION,
+    NO_CROSS_SENTINEL,
+)
 
 
 def compute_intraday_features(

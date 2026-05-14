@@ -22,10 +22,8 @@ from backend.algo.backtest.data_source import (
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 from backend.algo.backtest.event_writer import event_row, flush_events
 from backend.algo.backtest.indicators import (
-    DEFAULT_INTRADAY_WARMUP_DAYS,
     DEFAULT_WARMUP_BARS,
     compute_indicators_for_universe,
-    compute_indicators_for_universe_intraday,
     compute_market_regime,
     compute_market_trend_strength,
 )
@@ -44,6 +42,11 @@ from backend.algo.backtest.types import (
 
 # REGIME-2a — pre-computed nightly factor library overlay.
 from backend.algo.factors.repo import get_factors_window
+from backend.algo.features import (
+    DEFAULT_INTRADAY_WARMUP_DAYS,
+    FeaturePanelMissingError,
+    load_intraday_features_window,
+)
 from backend.algo.paper.risk_engine import RiskEngine
 from backend.algo.paper.types import AccountState, Signal
 from backend.algo.runtime.intraday_window import (
@@ -138,13 +141,31 @@ def run_backtest(
             period_end=request.period_end,
             warmup_days=DEFAULT_INTRADAY_WARMUP_DAYS,
         )
-        # ASETPLTFRM-400 slice 4b — indicators on intraday bars.
-        # Keyed by ``bar_open_ts_ns`` (not ``bar.date``) so the
-        # 25 bars/day each get their own feature dict. Default
-        # SMA windows = (20, 50, 100, 200); RSI(14) + VWAP
-        # (day-resetting) always emitted. Feature lookup in the
-        # inner loop reads ``intraday_indicators[ticker][ts_ns]``.
-        intraday_indicators = compute_indicators_for_universe_intraday(bars)
+        # ASETPLTFRM-402 / FE-4 — intraday features now sourced
+        # from ``stocks.intraday_features`` via the partition-
+        # chunk Redis loader. Slice-4b's in-memory
+        # ``compute_indicators_for_universe_intraday`` is
+        # deleted; on cache miss the loader scans Iceberg, and
+        # on Iceberg miss it triggers an on-demand backfill
+        # (spec §7.3 — no in-memory fallback).
+        try:
+            intraday_indicators = load_intraday_features_window(
+                tickers=list(bars.keys()),
+                interval_sec=request.interval_sec,
+                period_start=request.period_start,
+                period_end=request.period_end,
+            )
+        except FeaturePanelMissingError as exc:
+            _logger.error(
+                "[backtest-runner] feature panel missing for "
+                "intraday run (interval_sec=%d, %s..%s): %s",
+                request.interval_sec,
+                request.period_start,
+                request.period_end,
+                exc,
+                exc_info=True,
+            )
+            raise
         # Date-keyed indicator dict left empty for intraday — the
         # daily-path lookup in the inner loop returns {} and the
         # intraday lookup below supplies the features.
@@ -160,7 +181,9 @@ def run_backtest(
             warmup_days=DEFAULT_WARMUP_BARS,
         )
         indicators = compute_indicators_for_universe(bars)
-        intraday_indicators: dict[str, dict[int, dict[str, Decimal]]] = {}
+        intraday_indicators: dict[str, dict[int, dict[str, Decimal | str]]] = (
+            {}
+        )
     # Top-level regime feature, injected into every (ticker, bar)
     # feature dict below so strategies can gate entries on
     # `{"feature": "nifty_above_sma200"}`. Empty dict if ^NSEI
@@ -317,13 +340,14 @@ def run_backtest(
     day_end_keys: set[tuple[date, int | None]] = set()
     if is_intraday and is_mis:
         from backend.algo.runtime.intraday_window import parse_ist_time
-        square_off_ist = (
-            parse_ist_time(strategy.square_off_time)
-            or parse_ist_time("15:14 IST")
-        )
+
+        square_off_ist = parse_ist_time(
+            strategy.square_off_time
+        ) or parse_ist_time("15:14 IST")
         # Group bar ts_ns by trading day.
         by_day: dict[date, list[tuple[int, "time"]]] = {}
         from datetime import time  # noqa: E402  (local import)
+
         for bd, ns in timeline:
             if ns is None:
                 continue
@@ -332,9 +356,7 @@ def run_backtest(
                 continue
             by_day.setdefault(bd, []).append((ns, bar_ist))
         for bd, entries in by_day.items():
-            at_or_after = [
-                (ns, t) for ns, t in entries if t >= square_off_ist
-            ]
+            at_or_after = [(ns, t) for ns, t in entries if t >= square_off_ist]
             if at_or_after:
                 # Earliest bar opening at-or-after square_off — that's
                 # the first chance the simulation has to model the
@@ -518,12 +540,8 @@ def run_backtest(
                             "side": intent.side,
                             "qty": intent.qty,
                             "reason": "mis_entry_cutoff",
-                            "bar_ist_time": (
-                                bar_ist_time.isoformat()
-                            ),
-                            "entry_cutoff": (
-                                strategy.entry_cutoff_time
-                            ),
+                            "bar_ist_time": (bar_ist_time.isoformat()),
+                            "entry_cutoff": (strategy.entry_cutoff_time),
                         },
                     )
                 )
@@ -695,14 +713,10 @@ def run_backtest(
     # reconcile and the user can SEE what's been booked.
     if pt.open_positions():
         last_bar_date = (
-            equity_points[-1].bar_date
-            if equity_points
-            else request.period_end
+            equity_points[-1].bar_date if equity_points else request.period_end
         )
         last_bar_ts_ns = (
-            equity_points[-1].bar_open_ts_ns
-            if equity_points
-            else None
+            equity_points[-1].bar_open_ts_ns if equity_points else None
         )
         pt.force_close_all(
             marks=dict(last_close),

@@ -44,6 +44,7 @@ from backend.algo.features import (
     FEATURE_SET_VERSION,
     compute_intraday_features_for_universe,
 )
+from backend.cache import get_cache
 from backend.db.duckdb_engine import (
     invalidate_metadata,
     query_iceberg_table,
@@ -300,7 +301,34 @@ def _write_features_batch(
 
     retry_iceberg_op(INTRADAY_FEATURES_TABLE, _do_upsert)
     invalidate_metadata(INTRADAY_FEATURES_TABLE)
+    # FE-4 — invalidate the partition-chunk Redis cache so the
+    # next loader read after a successful write picks up the
+    # fresh rows immediately (per CLAUDE.md §5.13 write-through
+    # invalidation pattern).
+    _invalidate_feature_chunk_cache(year_months=year_months)
     return arrow_tbl.num_rows
+
+
+def _invalidate_feature_chunk_cache(*, year_months: list[str]) -> None:
+    """Best-effort wildcard invalidation of feature-chunk cache
+    keys for the months that were just written. Mirrors the
+    ``cache:feature:chunk:{ticker}:{year_month}:{interval_sec}``
+    schema used by the FE-4 loader. Per CLAUDE.md ``redis-cache-
+    layer``: ``cache.invalidate`` is glob-pattern; failure is
+    logged and swallowed (cache outage must never block a write).
+    """
+    try:
+        cache = get_cache()
+        for ym in year_months:
+            cache.invalidate(f"cache:feature:chunk:*:{ym}:*")
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            "[intraday-features] cache invalidate skipped "
+            "year_months=%s: %s",
+            year_months,
+            exc,
+            exc_info=True,
+        )
 
 
 def _compute_and_write_batch(

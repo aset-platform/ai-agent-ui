@@ -1,44 +1,58 @@
-"""Indicator engine — SMAs + golden_cross_days_ago."""
+"""Indicator engine — SMAs + golden_cross_days_ago.
+
+The DAILY indicator path still lives in
+``backend.algo.backtest.indicators``; the primitive helpers
+(``rolling_sma`` et al.) moved into
+``backend.algo.features.primitives`` in FE-4. This test file
+keeps the daily-path coverage; primitive-level coverage lives
+in ``backend/algo/features/tests/test_primitives.py``.
+"""
+
 from __future__ import annotations
 
 from datetime import date, timedelta
 from decimal import Decimal
 
 from backend.algo.backtest.indicators import (
-    NO_CROSS_SENTINEL,
-    _rolling_sma,
     compute_indicators,
     compute_indicators_for_universe,
 )
 from backend.algo.backtest.types import BarData
+from backend.algo.features.primitives import rolling_sma
+from backend.algo.features.version import NO_CROSS_SENTINEL
 
 
-def _bars(closes: list[float], start: date = date(2026, 1, 1)) -> list[BarData]:
+def _bars(
+    closes: list[float], start: date = date(2026, 1, 1)
+) -> list[BarData]:
     out: list[BarData] = []
     for i, c in enumerate(closes):
         d = start + timedelta(days=i)
-        out.append(BarData(
-            ticker="X",
-            date=d,
-            open=Decimal(str(c)),
-            high=Decimal(str(c + 1)),
-            low=Decimal(str(c - 1)),
-            close=Decimal(str(c)),
-            volume=1000,
-        ))
+        out.append(
+            BarData(
+                ticker="X",
+                date=d,
+                open=Decimal(str(c)),
+                high=Decimal(str(c + 1)),
+                low=Decimal(str(c - 1)),
+                close=Decimal(str(c)),
+                volume=1000,
+            )
+        )
     return out
 
 
 def test_rolling_sma_window_3():
-    out = _rolling_sma(
-        [Decimal(x) for x in [10, 20, 30, 40, 50]], window=3,
+    out = rolling_sma(
+        [Decimal(x) for x in [10, 20, 30, 40, 50]],
+        window=3,
     )
     # i=0,1 → None; i=2 → (10+20+30)/3=20; i=3 → (20+30+40)/3=30; i=4 → 40
     assert out == [None, None, Decimal("20"), Decimal("30"), Decimal("40")]
 
 
 def test_rolling_sma_empty():
-    assert _rolling_sma([], window=3) == []
+    assert rolling_sma([], window=3) == []
 
 
 def test_compute_indicators_keys_and_sma_values():
@@ -92,7 +106,8 @@ def test_compute_indicators_for_universe_sorts_per_ticker():
     bars_a = _bars([10, 20, 30, 40, 50])
     # Reverse the list to confirm internal sort kicks in.
     out = compute_indicators_for_universe(
-        {"A": list(reversed(bars_a))}, sma_windows=(3,),
+        {"A": list(reversed(bars_a))},
+        sma_windows=(3,),
     )
     last = out["A"][bars_a[-1].date]
     assert last["sma_3"] == Decimal("40")
