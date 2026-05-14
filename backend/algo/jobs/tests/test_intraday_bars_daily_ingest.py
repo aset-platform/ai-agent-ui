@@ -36,14 +36,18 @@ from backend.algo.jobs.intraday_bars_daily_ingest import (
 
 @pytest.fixture
 def fake_session():
-    """An async-context-manager-compatible session factory."""
+    """Stand-in for ``disposable_pg_session()`` — itself an async
+    context manager (no factory layer)."""
     sess = AsyncMock()
 
-    factory_cm = AsyncMock()
-    factory_cm.__aenter__.return_value = sess
-    factory_cm.__aexit__.return_value = False
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=sess)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
 
-    factory = MagicMock(return_value=factory_cm)
+    # The patch target replaces ``disposable_pg_session`` (a
+    # callable returning the cm). Wrap so ``disposable_pg_session()``
+    # returns ``session_cm``.
+    factory = MagicMock(return_value=session_cm)
     return factory, sess
 
 
@@ -67,7 +71,7 @@ async def test_happy_path_aggregates_all_intervals(fake_session):
     with (
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
-            "get_session_factory",
+            "disposable_pg_session",
             return_value=factory,
         ),
         patch(
@@ -87,7 +91,7 @@ async def test_happy_path_aggregates_all_intervals(fake_session):
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
             "_resolve_nifty500_universe",
-            return_value=["A.NS", "B.NS", "C.NS", "D.NS"],
+            new=AsyncMock(return_value=["A.NS", "B.NS", "C.NS", "D.NS"]),
         ),
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
@@ -132,7 +136,7 @@ async def test_skipped_when_no_user_has_credentials(fake_session):
     with (
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
-            "get_session_factory",
+            "disposable_pg_session",
             return_value=factory,
         ),
         patch(
@@ -160,7 +164,7 @@ async def test_skipped_when_token_expired(fake_session):
     with (
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
-            "get_session_factory",
+            "disposable_pg_session",
             return_value=factory,
         ),
         patch(
@@ -197,7 +201,7 @@ async def test_skipped_when_universe_empty(fake_session):
     with (
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
-            "get_session_factory",
+            "disposable_pg_session",
             return_value=factory,
         ),
         patch(
@@ -217,7 +221,7 @@ async def test_skipped_when_universe_empty(fake_session):
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
             "_resolve_nifty500_universe",
-            return_value=[],
+            new=AsyncMock(return_value=[]),
         ),
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest.KiteClient",
@@ -243,7 +247,7 @@ async def test_failures_sample_capped_to_10(fake_session):
     with (
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
-            "get_session_factory",
+            "disposable_pg_session",
             return_value=factory,
         ),
         patch(
@@ -263,7 +267,7 @@ async def test_failures_sample_capped_to_10(fake_session):
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
             "_resolve_nifty500_universe",
-            return_value=["A.NS"],
+            new=AsyncMock(return_value=["A.NS"]),
         ),
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
@@ -294,7 +298,7 @@ async def test_payload_overrides_intervals_and_window(
     with (
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
-            "get_session_factory",
+            "disposable_pg_session",
             return_value=factory,
         ),
         patch(
@@ -314,7 +318,7 @@ async def test_payload_overrides_intervals_and_window(
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
             "_resolve_nifty500_universe",
-            return_value=["A.NS"],
+            new=AsyncMock(return_value=["A.NS"]),
         ),
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
@@ -358,7 +362,7 @@ async def test_keeper_passes_quality_hook_to_backfill_window(
     with (
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
-            "get_session_factory",
+            "disposable_pg_session",
             return_value=factory,
         ),
         patch(
@@ -378,7 +382,7 @@ async def test_keeper_passes_quality_hook_to_backfill_window(
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
             "_resolve_nifty500_universe",
-            return_value=["A.NS"],
+            new=AsyncMock(return_value=["A.NS"]),
         ),
         patch(
             "backend.algo.jobs.intraday_bars_daily_ingest."
@@ -461,30 +465,55 @@ def test_register_job_wrapper_runs_async_job_via_asyncio():
     assert result["payload_seen"] == {"intervals": [900]}
 
 
-def test_resolve_nifty500_universe_against_real_csv():
-    """Integration-light: the production CSV has ~500 rows and
-    every resolved ticker carries the ``.NS`` suffix."""
+@pytest.mark.asyncio
+async def test_resolve_nifty500_universe_queries_stock_master():
+    """Universe resolution reads from ``stock_master`` joined to
+    ``stock_tags WHERE tag='nifty500' AND removed_at IS NULL``."""
     from backend.algo.jobs.intraday_bars_daily_ingest import (
         _resolve_nifty500_universe,
     )
 
-    tickers = _resolve_nifty500_universe()
-    assert 450 <= len(tickers) <= 550, (
-        f"Nifty 500 CSV resolved to {len(tickers)} tickers — "
-        "expected ~500; check data/universe/nifty500.csv"
+    captured: dict[str, str] = {}
+
+    class _StubResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):
+            return self._rows
+
+    class _StubSession:
+        async def execute(self, q, params=None):
+            captured["sql"] = str(q)
+            return _StubResult(
+                [("RELIANCE.NS",), ("TCS.NS",), ("INFY.NS",)],
+            )
+
+    tickers = await _resolve_nifty500_universe(_StubSession())
+    assert tickers == ["RELIANCE.NS", "TCS.NS", "INFY.NS"]
+    sql = captured["sql"]
+    # Defence: tag filter + soft-remove guard + is_active so the
+    # keeper never pulls delisted or de-tagged symbols.
+    assert "stock_master" in sql
+    assert "stock_tags" in sql
+    assert "nifty500" in sql
+    assert "removed_at IS NULL" in sql
+    assert "is_active" in sql
+
+
+@pytest.mark.asyncio
+async def test_resolve_nifty500_universe_empty_when_untagged():
+    """Empty query result → empty list, no exception."""
+    from backend.algo.jobs.intraday_bars_daily_ingest import (
+        _resolve_nifty500_universe,
     )
-    assert all(t.endswith(".NS") for t in tickers)
-    # Sanity: list is sorted + unique.
-    assert tickers == sorted(set(tickers))
 
+    class _StubResult:
+        def all(self):
+            return []
 
-def test_resolve_nifty500_universe_missing_csv(tmp_path, monkeypatch):
-    """Missing CSV → empty list, logged but not raising."""
-    from backend.algo.jobs import intraday_bars_daily_ingest as mod
+    class _StubSession:
+        async def execute(self, q, params=None):
+            return _StubResult()
 
-    monkeypatch.setattr(
-        mod,
-        "_NIFTY500_CSV",
-        tmp_path / "does_not_exist.csv",
-    )
-    assert mod._resolve_nifty500_universe() == []
+    assert await _resolve_nifty500_universe(_StubSession()) == []

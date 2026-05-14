@@ -568,9 +568,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--universe",
         choices=["india_full", "india_top200", "nifty500"],
         help=(
-            "Ticker source. 'nifty500' reads "
-            "data/universe/nifty500.csv (same source the daily "
-            "keeper uses). 'india_full' / 'india_top200' read "
+            "Ticker source. 'nifty500' reads from stock_master "
+            "tagged 'nifty500' (same source the daily keeper "
+            "uses). 'india_full' / 'india_top200' read "
             "stocks.universe_snapshot (latest rebalance)."
         ),
     )
@@ -649,17 +649,24 @@ async def _resolve_tokens_async(
 def _resolve_universe(name: str, anchor: date) -> list[str]:
     """Resolve the requested ticker cohort.
 
-    ``nifty500`` reads the same CSV the slice-1d keeper uses
-    (single source of truth — the operator's one-shot backfill
-    and the daily keeper cover identical sets). ``india_top200``
-    / ``india_full`` read ``stocks.universe_snapshot``.
+    ``nifty500`` reads from ``stock_master`` joined to
+    ``stock_tags WHERE tag='nifty500'`` — single source of
+    truth shared with the OHLCV daily pipeline and the
+    Insights tabs. ``india_top200`` / ``india_full`` read
+    ``stocks.universe_snapshot``.
     """
     if name == "nifty500":
+        import asyncio
         from backend.algo.jobs.intraday_bars_daily_ingest import (
             _resolve_nifty500_universe,
         )
+        from backend.db.engine import disposable_pg_session
 
-        return _resolve_nifty500_universe()
+        async def _load() -> list[str]:
+            async with disposable_pg_session() as session:
+                return await _resolve_nifty500_universe(session)
+
+        return asyncio.run(_load())
     if name == "india_top200":
         from backend.algo.universe.pit_resolver import (
             resolve_pit_universe,
