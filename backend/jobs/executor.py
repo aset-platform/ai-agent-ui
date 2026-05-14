@@ -2646,6 +2646,12 @@ _HOT_ICEBERG_TABLES = (
     # of partitions per call. Daily compaction prevents file
     # count drift.
     "stocks.intraday_bars",
+    # Centralized feature engine output (ASETPLTFRM-402 /
+    # FE-1). Long-format rows accumulate one parquet per
+    # feature-batch commit; without daily compaction this
+    # table degrades exactly like algo.events did on
+    # 2026-05-12 (11 GB metadata.json from 5,901 snapshots).
+    "stocks.intraday_features",
 )
 
 

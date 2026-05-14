@@ -195,9 +195,97 @@ If the feature panel is sparse for the requested window, the runner calls `ensur
 
 Live tick-stream resampler emits one feature row per closed bar into `stocks.intraday_features` so the live strategy reads the same source as backtest. Latency budget: < 100 ms per ticker per bar close.
 
-### 7.3 Backwards compatibility
+### 7.3 No backwards-compat path — hard cutover
 
-`compute_indicators_for_universe_intraday()` stays in place during the transition — runner falls back to it when `stocks.intraday_features` is empty for the requested window. After the daily-feature job has run for ~30 days, we can deprecate the in-memory path.
+(Decision locked 2026-05-14.) The 4-yr × Nifty 500 historical
+intraday data is already backfilled in `stocks.intraday_bars`,
+so FE-3's one-time historical feature compute completes
+before FE-4 ships. FE-4 then **hard-cuts** the intraday
+backtest path to read from `stocks.intraday_features`. There
+is no in-memory fallback.
+
+When the feature panel is missing for any (ticker, window)
+the runner fails fast with a structured error
+(`feature-panel-missing: ticker=X interval=Y window=Z`). On-
+demand backfill (FE-3) covers gaps; the runner refuses to
+silently degrade.
+
+`compute_indicators_for_universe_intraday()` from slice 4b
+is deleted in FE-4. The pure-function building blocks it used
+(`_vwap_intraday`, `_wilder_rsi`, `_rolling_sma`) move into the
+new `backend/algo/features/` engine module in FE-2 and become
+the canonical implementations called by both the daily compute
+job (FE-3) and the live runtime emission path (FE-10).
+
+### 7.4 Feature-panel loader — partition-chunk cache (Redis)
+
+Loader signature:
+
+```python
+def load_intraday_features_window(
+    tickers: list[str],
+    interval_sec: int,
+    period_start: date,
+    period_end: date,
+) -> dict[str, dict[int, dict[str, Decimal]]]:
+    ...
+```
+
+Returns `{ticker: {bar_open_ts_ns: {feature: Decimal}}}` — the
+same shape as today's `compute_indicators_for_universe_intraday`
+output, so the runner's per-bar lookup is unchanged.
+
+**Cache strategy: partition-chunk, strategy-agnostic.** Cache
+unit matches the Iceberg partition `(ticker, year_month,
+interval_sec)`, NOT the per-strategy panel. Multiple strategies
+sharing the same universe re-use the same chunks; overlapping
+periods reuse the months in overlap.
+
+Key schema: `cache:feature:chunk:{ticker}:{year_month}:{interval_sec}`
+
+Algorithm:
+
+1. Decompose `(tickers, period_start, period_end)` into
+   `(ticker, year_month)` partition chunks.
+2. `MGET` all chunks from Redis. Deserialize hits.
+3. For misses, single Iceberg scan: `ticker IN (...) AND
+   year_month IN (...) AND interval_sec = ?`.
+4. Group rows by `(ticker, year_month)`; write each chunk back
+   to Redis with TTL = `TTL_STABLE` (300s).
+5. Slice the assembled panel to `[period_start, period_end]`
+   by filtering on `bar_open_ts_ns`.
+
+Per CLAUDE.md §5.13: invalidation hook in `_retry_commit()`
+calls `cache.invalidate("cache:feature:chunk:*:{ym}:*")` for
+months touched by the write. New `_CACHE_INVALIDATION_MAP`
+entry for `stocks.intraday_features`.
+
+Estimated cache footprint (Nifty 500 × 48 months × 3 cadences):
+~72 000 keys max, ~80 KB/chunk after msgpack+zstd ≈ 5.7 GB
+working set. Redis LRU eviction keeps the actually-used subset
+hot; cold months age out naturally.
+
+### 7.5 Trade-snapshot writes do NOT touch `algo.events`
+
+(Decision locked 2026-05-14.) The strategy promotion gate
+(PR #221, `strategy-promotion-workflow` memory) scans
+`algo.events WHERE mode='paper' AND type='order_filled' AND
+ts_ns >= updated_at_ns` to decide paper→live eligibility.
+
+FE-5's per-fill snapshot writes go to a **separate** Iceberg
+table (`stocks.trade_feature_snapshots`). The existing
+`order_filled` / `order_filled_live` emissions on `algo.events`
+are unchanged. The promotion gate is bit-for-bit untouched.
+
+Hook ordering inside `_apply_fill`:
+
+1. Apply fill to `PositionTracker` (existing).
+2. Emit `order_filled` event to `algo.events` (existing —
+   promotion gate observable).
+3. **NEW**: Write `stocks.trade_feature_snapshots` row.
+   Wrapped in try / `log.exception` — snapshot failure NEVER
+   blocks the fill or the event emission. Logged with
+   `exc_info=True` per CLAUDE.md §4.2 #10.
 
 ## 8. Slice breakdown → Jira tickets
 
@@ -224,7 +312,7 @@ Live tick-stream resampler emits one feature row per closed bar into `stocks.int
 ## 9. Risks + open questions
 
 1. **EMA vs SMA semantics on warmup-truncated series** — EMA's first value is undefined for the standard formula until you have at least `span` bars. We'll use "ema starts with simple mean of first `span` bars then exponential thereafter" to match TA-Lib convention; document explicitly.
-2. **Long-format storage cost (~10 GB)** — if it grows past 30 GB, switch hot features (RSI, SMA, VWAP) to a wide-format sibling table; long-format becomes the experimental staging.
+2. **Long-format storage cost (~10 GB)** — if it grows past 30 GB, switch hot features (RSI, SMA, VWAP) to a wide-format sibling table; long-format becomes the experimental staging. *Update 2026-05-14: 4-yr intraday bars already backfilled; FE-3 one-time historical compute estimated under 8 GB → well inside SSD headroom.*
 3. **Index data licensing** — Kite Connect provides ^NSEI bars; sectoral indices may need verification on Kite's allowed symbols. Backfill quota: ~10 indices × 5 windows = 50 API calls (negligible).
 4. **Feature set version pinning** — every row stamps `feature_set_version`. Strategies declare which version they need; backtest fails fast if the requested version isn't in the store. Prevents silent semantic drift.
 5. **Cross-sectional features (breadth, sector rotation)** — can't be computed per-ticker in isolation. Compute job needs an all-Nifty-500 cohort pass before per-ticker rows are emitted.
@@ -236,14 +324,66 @@ Live tick-stream resampler emits one feature row per closed bar into `stocks.int
 - Options-flow / order-flow features — separate epic.
 - Cross-asset features (crypto / commodities) — separate epic.
 
-## 11. Acceptance criteria (epic-level)
+## 12. Daily parity gaps — running log
+
+Maintained while FE-2 builds the engine. Each Phase-1 feature
+that ALSO has value on the CNC daily surface but isn't in
+today's daily indicator path (`compute_indicators_for_universe`,
+`stocks.daily_factors`) gets a row here. End-of-Phase-1
+deliverable: convert this list into ASETPLTFRM-417 (backlog
+follow-up).
+
+**Architecturally additive**: `stocks.intraday_features` already
+carries `interval_sec` as a column, so daily features land as
+rows with `interval_sec=86400`. Same store, no schema fork.
+
+| Feature | Daily formula | Comment |
+|---|---|---|
+| `ema_20`, `ema_50` | exp moving avg of close, span N | Today only SMA exists; EMA preferred by trend strategies. |
+| `ema_20_slope_5bar` | `ema_20[i] − ema_20[i−5]` (daily bars) | Trend acceleration. |
+| `rsi_5` | Wilder RSI window 5 (daily) | Short-term momentum; complements existing `rsi_14`. |
+| `roc_5` | `(close[i]/close[i−5]) − 1` | Rate of change. |
+| `atr_14` | Wilder ATR window 14 (daily) | True-range based; different from existing `realized_vol_60d`; useful for ATR-based stop sizing. |
+| `range_expansion` | `(high − low) / atr_14` | Breakout intensity. |
+| `bb_width` | `2 × std(close, 20) / sma_20` | Volatility regime; complements `realized_vol_60d`. |
+| `gap_pct` | `(today_open − prev_close) / prev_close × 100` | Pre-market reaction signal. |
+| `dist_from_prev_day_high_pct`, `dist_from_prev_day_low_pct` | from prev-day H/L | Breakout proximity. |
+| `volume_spike` | `volume > 2 × rolling_avg(20)` (daily) | Existing `volume_x_avg_20` factor is the underlying; this is the binary form. |
+
+**Skipped (intraday-only by definition)**: `vwap` (daily VWAP
+≈ typical price — weak signal), `dist_from_vwap_pct`,
+`orb_high_15min`, `orb_low_15min`, `minutes_since_open`,
+`time_of_day_bucket`, `rs_vs_nifty_15m`, `rs_vs_sector_15m`
+(daily counterparts already exist as `rs_vs_nifty_3m/6m`,
+`rs_vs_sector_3m` in the factor library).
+
+**Estimated SP for ASETPLTFRM-417**: ~5 SP. Feature engine
+module reuses Phase-1 implementations; new daily compute step
+in the existing `Stock Pipeline → analytics` chain; no new
+table or backtest reader path.
+
+## 13. Locked decisions (2026-05-14, post-spec amendments)
+
+These were left as "open questions" in the original spec and
+have been resolved before kickoff:
+
+| # | Question | Resolution |
+|---|---|---|
+| 1 | Should FE-4 keep an in-memory fallback for sparse windows? | **No.** 4-yr backfill is already complete; hard cutover, fail-fast on missing panel. See §7.3. |
+| 2 | Where do per-fill snapshots write — same `algo.events` stream or separate table? | **Separate** `stocks.trade_feature_snapshots`. Promotion gate's `algo.events` query untouched. See §7.5. |
+| 3 | Is string-valued `time_of_day_bucket` safe through AST `Compare`? | **Yes.** Existing precedent: `regime_label` is a string feature consumed by `Compare`. No AST changes needed. |
+| 4 | Walk-forward panel reload cost across folds? | **Partition-chunk cache** in Redis (`cache:feature:chunk:{ticker}:{year_month}:{interval_sec}`, TTL 300s). Strategy-agnostic — multiple strategies sharing a universe reuse chunks; overlapping windows reuse months. See §7.4. |
+
+## 14. Acceptance criteria (epic-level)
 
 - All 28 Phase-1 features persisted in `stocks.intraday_features` for 4 yr × Nifty 500.
 - `run_backtest(interval_sec=900, ...)` reads from the feature store (verified by mocking the store empty → backtest fails fast with a clear error).
 - A strategy referencing every Phase-1 feature key runs end-to-end without `feature-key-error`.
-- Every fill in backtest/paper/live writes a `stocks.trade_feature_snapshots` row.
+- Every fill in backtest/paper/live writes a `stocks.trade_feature_snapshots` row. Promotion gate's `algo.events` paper-fill scan is verified unchanged (snapshot test on the gate query).
 - Phase 2 index data backfilled; RS-vs-NIFTY feature emits non-null for all Nifty 500 tickers.
 - Phase 3 feature-importance API returns top-10 features for any closed strategy.
+- **Non-regression**: existing CNC daily strategies (e.g. "Live Test ₹3000 RSI") produce identical 4-fold walk-forward results on `dev` vs FE-4. Verified by checksum of trade list + summary cards.
+- **Daily parity gaps log** in §12 turned into ASETPLTFRM-417 at Phase-1 close.
 
 ---
 

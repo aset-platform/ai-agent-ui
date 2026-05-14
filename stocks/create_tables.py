@@ -100,6 +100,7 @@ _PROMOTER_HOLDINGS_TABLE = f"{_NAMESPACE}.promoter_holdings"
 _CORPORATE_EVENTS_TABLE = f"{_NAMESPACE}.corporate_events"
 _FUNDAMENTALS_SNAPSHOT_TABLE = f"{_NAMESPACE}.fundamentals_snapshot"
 _INTRADAY_BARS_TABLE = f"{_NAMESPACE}.intraday_bars"
+_INTRADAY_FEATURES_TABLE = f"{_NAMESPACE}.intraday_features"
 
 
 def _get_catalog() -> SqlCatalog:
@@ -1614,6 +1615,94 @@ def _intraday_bars_schema() -> Schema:
     )
 
 
+def _intraday_features_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.intraday_features``.
+
+    Returns:
+        Schema: Centralized feature engine output
+            (ASETPLTFRM-402 / FE-1). Long format — one
+            row per (ticker, bar_open_ts_ns, interval_sec,
+            feature_name) — chosen on the operator's ask
+            because it keeps the schema stable as the
+            feature catalog evolves through the research
+            phase: new features become new ``feature_name``
+            values, not new columns + schema migrations.
+
+            Partition layout ``(ticker, year_month)``
+            matches ``stocks.intraday_bars`` for
+            join-locality: a backtest reads a single
+            ticker's month-slab of bars + features from
+            the same on-disk neighborhood, so PyIceberg's
+            file-pruning + DuckDB's predicate push-down
+            both fire cleanly.
+
+            ``feature_set_version`` is a coarse semver-ish
+            tag (e.g. ``"v1.0"``) bumped when a feature's
+            definition changes; consumers filter by it to
+            avoid mixing feature regimes across backtests.
+
+            FE-1 is DDL + maintenance-enrollment ONLY —
+            no compute, no writers, no readers. Those land
+            in FE-2/FE-3/FE-4.
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="ticker",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=2,
+            name="bar_open_ts_ns",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=3,
+            name="bar_date",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=4,
+            name="year_month",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=5,
+            name="interval_sec",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=6,
+            name="feature_name",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=7,
+            name="feature_value",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=8,
+            name="feature_set_version",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=9,
+            name="written_at",
+            field_type=TimestampType(),
+            required=True,
+        ),
+    )
+
+
 def _ticker_year_month_partition_spec(
     schema: Schema,
 ) -> PartitionSpec:
@@ -2225,6 +2314,25 @@ def create_tables() -> None:
         _INTRADAY_BARS_TABLE,
         intraday_bars_schema,
         _ticker_year_month_partition_spec(intraday_bars_schema),
+    )
+
+    # Centralized feature engine output
+    # (ASETPLTFRM-402 / FE-1). Long format — one row per
+    # (ticker, bar_open_ts_ns, interval_sec, feature_name)
+    # so the catalog can grow without schema migrations.
+    # Must be enrolled in BOTH ``_HOT_ICEBERG_TABLES``
+    # (backend/jobs/executor.py) and ``ALL_TABLES``
+    # (backend/maintenance/iceberg_maintenance.py) per
+    # CLAUDE.md §4.3 #20 — the algo.events 11 GB bloat
+    # incident (2026-05-12) is the canonical reminder of
+    # why skip-list enrollment is the #1 silent failure
+    # mode for new write-heavy tables.
+    intraday_features_schema = _intraday_features_schema()
+    _create_table(
+        catalog,
+        _INTRADAY_FEATURES_TABLE,
+        intraday_features_schema,
+        _ticker_year_month_partition_spec(intraday_features_schema),
     )
 
     # Regime engine — REGIME-1 (stocks.regime_history +

@@ -68,6 +68,14 @@ ALL_TABLES = [
     # accumulate small parquets per (ticker, bar_date)
     # partition; daily compaction keeps reads tight.
     "stocks.intraday_bars",
+    # Centralized feature engine output (ASETPLTFRM-402 /
+    # FE-1). Long-format feature rows accumulate per
+    # (ticker, year_month) partition. Intentionally NOT
+    # in DATE_COLUMNS below: ``bar_date`` is a STRING and
+    # retention is governed by the partition layout, same
+    # rationale as ``stocks.intraday_bars`` (see NOTE in
+    # DATE_COLUMNS).
+    "stocks.intraday_features",
     # Algo namespace — write-heavy event streams. 2026-05-12
     # incident: algo.events bloated to 11 GB of metadata.json
     # (5,901 snapshots, ~2 MB each) because it was missing from
