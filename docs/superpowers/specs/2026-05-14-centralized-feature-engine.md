@@ -409,7 +409,7 @@ have been resolved before kickoff:
 - All 28 Phase-1 features persisted in `stocks.intraday_features` for 4 yr × Nifty 500.
 - `run_backtest(interval_sec=900, ...)` reads from the feature store (verified by mocking the store empty → backtest fails fast with a clear error).
 - A strategy referencing every Phase-1 feature key runs end-to-end without `feature-key-error`.
-- Every fill in backtest/paper/live writes a `stocks.trade_feature_snapshots` row. Promotion gate's `algo.events` paper-fill scan is verified unchanged (snapshot test on the gate query).
+- Every fill in backtest/paper/live writes a `stocks.trade_feature_snapshots` row. ✓ FE-5 (table DDL + `backend.algo.features.snapshots.write_trade_feature_snapshot` + hooks in backtest runner, paper runtime, live runtime). Promotion gate's `algo.events` paper-fill scan is verified unchanged (snapshot test on the gate query — `test_promotion_gate_unchanged_by_snapshots.py`). ✓ FE-5.
 - Phase 2 index data backfilled; RS-vs-NIFTY feature emits non-null for all Nifty 500 tickers.
 - Phase 3 feature-importance API returns top-10 features for any closed strategy.
 - **Non-regression**: existing CNC daily strategies (e.g. "Live Test ₹3000 RSI") produce identical 4-fold walk-forward results on `dev` vs FE-4. Verified by checksum of trade list + summary cards.

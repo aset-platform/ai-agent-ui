@@ -101,6 +101,9 @@ _CORPORATE_EVENTS_TABLE = f"{_NAMESPACE}.corporate_events"
 _FUNDAMENTALS_SNAPSHOT_TABLE = f"{_NAMESPACE}.fundamentals_snapshot"
 _INTRADAY_BARS_TABLE = f"{_NAMESPACE}.intraday_bars"
 _INTRADAY_FEATURES_TABLE = f"{_NAMESPACE}.intraday_features"
+_TRADE_FEATURE_SNAPSHOTS_TABLE = (
+    f"{_NAMESPACE}.trade_feature_snapshots"
+)
 
 
 def _get_catalog() -> SqlCatalog:
@@ -1703,6 +1706,133 @@ def _intraday_features_schema() -> Schema:
     )
 
 
+def _trade_feature_snapshots_schema() -> Schema:
+    """Return the Iceberg schema for
+    ``stocks.trade_feature_snapshots``.
+
+    Returns:
+        Schema: Per-fill feature-vector snapshot
+            (ASETPLTFRM-402 / FE-5). One row per
+            executed fill — backtest, paper, or live.
+            The full feature vector at the fill bar is
+            serialised to ``features_json`` so the
+            downstream alpha-research workflow can
+            replay the strategy's decision context for
+            every fill without re-deriving features
+            from raw bars.
+
+            Partition layout ``(year_month, mode)``: the
+            ``mode`` partition isolates live-trading
+            snapshots from backtest snapshots so research
+            queries can filter without scanning the
+            wrong cohort, and ``year_month`` keeps
+            per-file size bounded as the dataset grows.
+
+            ``realised_pnl_inr`` + ``outcome_label`` are
+            both ``required=False`` — they are backfilled
+            by Phase-3 jobs (FE-13 meta-labeller +
+            realised-pnl backfill) after the matching SELL
+            closes the position. Snapshot writers MUST
+            write them as NULL at fill time.
+
+            FE-5 is the DDL + per-fill write hook only —
+            the alpha-research consumers (feature
+            importance / SHAP) land in Phase 3.
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="fill_id",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=2,
+            name="run_id",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=3,
+            name="strategy_id",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=4,
+            name="ticker",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=5,
+            name="side",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=6,
+            name="qty",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=7,
+            name="fill_price",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=8,
+            name="fill_ts_ns",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=9,
+            name="bar_date",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=10,
+            name="year_month",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=11,
+            name="mode",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=12,
+            name="features_json",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=13,
+            name="realised_pnl_inr",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=14,
+            name="outcome_label",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=15,
+            name="written_at",
+            field_type=TimestampType(),
+            required=True,
+        ),
+    )
+
+
 def _ticker_year_month_partition_spec(
     schema: Schema,
 ) -> PartitionSpec:
@@ -1744,6 +1874,47 @@ def _ticker_year_month_partition_spec(
             field_id=1001,
             transform=IdentityTransform(),
             name="year_month",
+        ),
+    )
+
+
+def _year_month_mode_partition_spec(
+    schema: Schema,
+) -> PartitionSpec:
+    """Return a partition spec by ``year_month`` and ``mode``
+    (ASETPLTFRM-402 / FE-5).
+
+    The ``mode`` partition isolates ``backtest`` /
+    ``paper`` / ``live`` snapshot cohorts so alpha-research
+    queries (feature-importance, SHAP) can filter to the
+    cohort of interest without scanning the others — most
+    notably keeping production-live fills logically separate
+    from synthetic backtest fills. ``year_month`` is the
+    YYYY-MM prefix of ``bar_date`` and bounds per-file size
+    as the dataset grows.
+
+    Args:
+        schema: Schema containing ``year_month`` and
+            ``mode`` fields.
+
+    Returns:
+        PartitionSpec: Identity partition on
+            (year_month, mode).
+    """
+    ym_fid = schema.find_field("year_month").field_id
+    mode_fid = schema.find_field("mode").field_id
+    return PartitionSpec(
+        PartitionField(
+            source_id=ym_fid,
+            field_id=1000,
+            transform=IdentityTransform(),
+            name="year_month",
+        ),
+        PartitionField(
+            source_id=mode_fid,
+            field_id=1001,
+            transform=IdentityTransform(),
+            name="mode",
         ),
     )
 
@@ -2333,6 +2504,28 @@ def create_tables() -> None:
         _INTRADAY_FEATURES_TABLE,
         intraday_features_schema,
         _ticker_year_month_partition_spec(intraday_features_schema),
+    )
+
+    # Per-fill feature-vector snapshots (ASETPLTFRM-402 /
+    # FE-5). One row per executed fill across backtest /
+    # paper / live; the alpha-research workflow replays
+    # the strategy's decision context for every fill from
+    # this table. Partitioned by ``(year_month, mode)`` so
+    # research queries can filter cohorts cleanly.
+    #
+    # Must be enrolled in BOTH ``_HOT_ICEBERG_TABLES``
+    # (backend/jobs/executor.py) and ``ALL_TABLES``
+    # (backend/maintenance/iceberg_maintenance.py) per
+    # CLAUDE.md §4.3 #20 — the algo.events 11 GB bloat
+    # incident (2026-05-12) is the canonical reminder of
+    # why skip-list enrollment is the #1 silent failure
+    # mode for new write-heavy tables.
+    snapshots_schema = _trade_feature_snapshots_schema()
+    _create_table(
+        catalog,
+        _TRADE_FEATURE_SNAPSHOTS_TABLE,
+        snapshots_schema,
+        _year_month_mode_partition_spec(snapshots_schema),
     )
 
     # Regime engine — REGIME-1 (stocks.regime_history +

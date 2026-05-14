@@ -1439,6 +1439,42 @@ class LiveRuntime:
         ))
         self._flush_events_now()
 
+        # ASETPLTFRM-402 / FE-5 — per-fill feature snapshot.
+        # Live synthetic fills (and real Kite postback fills
+        # which also flow through this method) have no
+        # in-scope feature dict — the decision-time features
+        # were emitted on the prior signal_generated event;
+        # we write an empty features map here for complete
+        # coverage of the fill ledger. Realised-pnl /
+        # outcome_label backfilled by Phase-3 jobs.
+        # Snapshot failure never blocks the fill / event.
+        try:
+            from backend.algo.features.snapshots import (
+                write_trade_feature_snapshot,
+            )
+
+            write_trade_feature_snapshot(
+                fill_id=str(kite_order_id),
+                run_id=str(self._run_id),
+                strategy_id=str(self._strategy.id),
+                ticker=f"{symbol}.NS",
+                side=side,
+                qty=qty,
+                fill_price=fill_price,
+                fill_ts_ns=None,
+                bar_date=today.isoformat(),
+                mode="live",
+                features=None,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "trade_feature_snapshot hook failed "
+                "(non-fatal): symbol=%s mode=live "
+                "kite_order_id=%s",
+                symbol,
+                kite_order_id,
+            )
+
         _logger.info(
             "[DRY_RUN] synthetic fill: symbol=%s side=%s qty=%d "
             "price=%s fees=%s kite_order_id=%s",

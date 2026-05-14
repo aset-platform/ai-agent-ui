@@ -2652,6 +2652,12 @@ _HOT_ICEBERG_TABLES = (
     # table degrades exactly like algo.events did on
     # 2026-05-12 (11 GB metadata.json from 5,901 snapshots).
     "stocks.intraday_features",
+    # Per-fill feature snapshots (ASETPLTFRM-402 / FE-5).
+    # One single-row Iceberg append per executed fill in
+    # backtest / paper / live. Same compaction rationale as
+    # algo.events — every fill = one commit = one new
+    # metadata.json without daily compaction.
+    "stocks.trade_feature_snapshots",
 )
 
 

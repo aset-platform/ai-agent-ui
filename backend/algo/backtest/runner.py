@@ -662,6 +662,46 @@ def run_backtest(
                 )
             )
 
+            # ASETPLTFRM-402 / FE-5 — per-fill feature
+            # snapshot for the alpha-research dataset.
+            # ADDITIVE: snapshot write happens AFTER the
+            # order_filled event so the promotion gate's
+            # algo.events scan + paper-completion stats
+            # are bit-for-bit unchanged. Wrapped in
+            # try/except + logged with exc_info; snapshot
+            # failure never blocks the fill or the event.
+            try:
+                from backend.algo.features.snapshots import (
+                    write_trade_feature_snapshot,
+                )
+
+                _snap_fill_id = f"{session_id}:{fill.ticker}:{fill.intent_id}"
+                write_trade_feature_snapshot(
+                    fill_id=_snap_fill_id,
+                    run_id=str(session_id),
+                    strategy_id=str(strategy.id),
+                    ticker=fill.ticker,
+                    side=fill.side,
+                    qty=fill.qty,
+                    fill_price=fill.fill_price,
+                    fill_ts_ns=(
+                        fill.fill_ts_ns
+                        if fill.fill_ts_ns is not None
+                        else ts_ns
+                    ),
+                    bar_date=fill.fill_date.isoformat(),
+                    mode="backtest",
+                    features=ticker_features,
+                )
+            except Exception:  # noqa: BLE001
+                _logger.exception(
+                    "trade_feature_snapshot hook failed "
+                    "(non-fatal): ticker=%s mode=backtest "
+                    "ts_ns=%s",
+                    fill.ticker,
+                    ts_ns,
+                )
+
         # End-of-day equity snapshot. last_close holds the
         # most-recent close at-or-before today for each ticker
         # we've seen, so unrealised P&L on open positions

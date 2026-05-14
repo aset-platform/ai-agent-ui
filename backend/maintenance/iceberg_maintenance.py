@@ -76,6 +76,15 @@ ALL_TABLES = [
     # rationale as ``stocks.intraday_bars`` (see NOTE in
     # DATE_COLUMNS).
     "stocks.intraday_features",
+    # Per-fill feature snapshots (ASETPLTFRM-402 / FE-5).
+    # One single-row Iceberg append per executed fill —
+    # accumulates one parquet per commit without
+    # compaction. Same rationale as ``stocks.intraday_bars``
+    # for omitting from DATE_COLUMNS: ``bar_date`` is a
+    # STRING and retention is governed by the
+    # ``(year_month, mode)`` partition layout, not the
+    # generic MAX_RETENTION_YEARS purge.
+    "stocks.trade_feature_snapshots",
     # Algo namespace — write-heavy event streams. 2026-05-12
     # incident: algo.events bloated to 11 GB of metadata.json
     # (5,901 snapshots, ~2 MB each) because it was missing from
