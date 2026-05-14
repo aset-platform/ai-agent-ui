@@ -10,34 +10,34 @@
 
 /** Strategies-page tab IDs. URL-synced via ?tab=. */
 export type StrategiesTabId =
-  | "instruments"
   | "strategies"
   | "backtest"
   | "paper"
   | "dryrun"
   | "performance"
   | "replay"
+  | "instruments"
   | "settings";
 
 export const STRATEGIES_TAB_LABELS: Record<StrategiesTabId, string> = {
-  instruments: "Instruments",
   strategies: "Strategies",
   backtest: "Backtest",
   paper: "Paper",
   dryrun: "Dry run",
   performance: "Performance",
   replay: "Replay",
+  instruments: "Instruments",
   settings: "Settings",
 };
 
 export const STRATEGIES_TAB_ORDER: StrategiesTabId[] = [
-  "instruments",
   "strategies",
   "backtest",
   "paper",
   "dryrun",
   "performance",
   "replay",
+  "instruments",
   "settings",
 ];
 

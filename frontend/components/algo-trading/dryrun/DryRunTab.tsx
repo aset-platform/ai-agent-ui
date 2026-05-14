@@ -6,7 +6,10 @@ import useSWR from "swr";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
 import { usePaperEvents } from "@/hooks/usePaperEvents";
-import { useStrategies } from "@/hooks/useStrategies";
+import {
+  filterStrategiesByMode,
+  useStrategies,
+} from "@/hooks/useStrategies";
 
 import { ActiveRunsPanel } from "../ActiveRunsPanel";
 import { AttributionPanel } from "../AttributionPanel";
@@ -16,8 +19,8 @@ import {
   type EventsPageSize,
 } from "../PaperEventsTimeline";
 import { PaperSessionSummary } from "../PaperSessionSummary";
+import { PromotionToLiveCallout } from "../PromotionToLiveCallout";
 import { ReconciliationDriftPanel } from "../ReconciliationDriftPanel";
-import { RegimeHistoryChart } from "../RegimeHistoryChart";
 import { RegimeWidget } from "../RegimeWidget";
 
 import { DryRunArmBanner } from "./DryRunArmBanner";
@@ -75,7 +78,13 @@ export function DryRunTab() {
     true, // dry_run filter
   );
 
-  const { strategies } = useStrategies();
+  // Dry-run rehearses a paper-promoted strategy under live-runtime
+  // plumbing — picker shows paper-only (mode-strict separation
+  // per the promotion workflow rules).
+  const { strategies: allStrategies } = useStrategies();
+  const strategies = filterStrategiesByMode(allStrategies, [
+    "paper",
+  ]);
 
   return (
     <div className="space-y-4" data-testid="dryrun-tab">
@@ -98,6 +107,8 @@ export function DryRunTab() {
 
       <DryRunArmBanner armed={armed} onToggle={onToggleArm} />
 
+      <PromotionToLiveCallout surface="dryrun" />
+
       <ReconciliationDriftPanel />
 
       <ActiveRunsPanel tradingMode="dryrun" />
@@ -114,8 +125,6 @@ export function DryRunTab() {
         mode="live"
         dryRun={true}
       />
-
-      <RegimeHistoryChart />
 
       <PaperSessionSummary mode="live" dryRun={true} />
 

@@ -4,7 +4,10 @@ import { useEffect, useState } from "react";
 
 import { panicCloseAll } from "@/lib/algoApi";
 import { usePaperRuns } from "@/hooks/usePaperRuns";
-import { useStrategies } from "@/hooks/useStrategies";
+import {
+  filterStrategiesByMode,
+  useStrategies,
+} from "@/hooks/useStrategies";
 
 import { AttributionPanel } from "../AttributionPanel";
 import { LiveSafetyBeltsForm } from "../LiveSafetyBeltsForm";
@@ -42,7 +45,11 @@ import { RecentFillsTape } from "./RecentFillsTape";
  * lives exclusively on Strategies → Dry-run tab.
  */
 export function LiveDashboard() {
-  const { strategies } = useStrategies();
+  // Live picker only shows strategies graduated to ``live``.
+  // Promotion workflow keeps draft + paper strategies out of the
+  // real-money trading surface.
+  const { strategies: allStrategies } = useStrategies();
+  const strategies = filterStrategiesByMode(allStrategies, ["live"]);
   const { runs } = usePaperRuns();
   const [strategyId, setStrategyId] = useState<string>("");
 
