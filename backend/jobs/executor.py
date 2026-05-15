@@ -2676,6 +2676,7 @@ def execute_iceberg_maintenance(
     repo,
     cancel_event=None,
     force: bool = False,
+    payload: dict | None = None,
 ) -> None:
     """Compact hot Iceberg tables to keep parquet
     file count bounded.
@@ -2704,43 +2705,126 @@ def execute_iceberg_maintenance(
     The orphan sweep is idempotent — running on a
     freshly-swept table is near-zero work.
 
+    ASETPLTFRM-418 — scoped maintenance:
+        When ``payload`` carries a non-empty
+        ``tables: list[str]`` the run is scoped to
+        that subset only: per-table ``backup_table()``
+        replaces the full-warehouse rsync, and the
+        compact + sweep loop iterates over the
+        scoped list instead of ``_HOT_ICEBERG_TABLES``.
+        Tables not present in
+        ``_HOT_ICEBERG_TABLES`` or ``ALL_TABLES`` are
+        logged + skipped (defensive against seed
+        typos). Empty / missing payload preserves the
+        legacy "all hot tables + full warehouse
+        backup" behaviour so non-pipeline triggers
+        (admin retries, ad-hoc CLI) keep working.
+
     See ``docs/backend/iceberg-orphan-sweep.md`` and
     ``shared/architecture/iceberg-orphan-sweep-design``
     for the safety algorithm + recovery procedure.
     """
-    from backend.maintenance.backup import run_backup
+    from backend.maintenance.backup import (
+        backup_table,
+        run_backup,
+    )
     from backend.maintenance.iceberg_maintenance import (
+        ALL_TABLES,
         cleanup_orphans_v2,
         compact_table,
     )
 
+    # Resolve effective table list from payload.
+    raw_tables: list[str] = []
+    if payload:
+        candidate = payload.get("tables")
+        if isinstance(candidate, list):
+            raw_tables = [t for t in candidate if isinstance(t, str)]
+
+    scoped = bool(raw_tables)
+    if scoped:
+        allowed = set(_HOT_ICEBERG_TABLES) | set(ALL_TABLES)
+        tables: list[str] = []
+        for t in raw_tables:
+            if t in allowed:
+                tables.append(t)
+            else:
+                _logger.warning(
+                    "[maint] payload table %r not in "
+                    "_HOT_ICEBERG_TABLES or ALL_TABLES "
+                    "— skipping (typo?)",
+                    t,
+                )
+        # All payload entries were typos → treat as unscoped.
+        # Better to do the full run than no-op silently.
+        if not tables:
+            _logger.warning(
+                "[maint] payload tables list empty after "
+                "filtering; falling back to full "
+                "_HOT_ICEBERG_TABLES sweep",
+            )
+            scoped = False
+            tables = list(_HOT_ICEBERG_TABLES)
+    else:
+        tables = list(_HOT_ICEBERG_TABLES)
+
     _run_start = datetime.now(timezone.utc)
     # +1 for the backup step counted in `total`/`done`.
-    total = len(_HOT_ICEBERG_TABLES) + 1
+    total = len(tables) + 1
     done = 0
     errors: list[str] = []
     cancelled = False
 
-    _logger.info(
-        "[maint] Starting daily Iceberg maintenance "
-        "(backup + %d hot tables)",
-        len(_HOT_ICEBERG_TABLES),
-    )
+    if scoped:
+        _logger.info(
+            "[maint] Starting SCOPED Iceberg maintenance "
+            "(per-table backup + %d tables: %s)",
+            len(tables),
+            ", ".join(tables),
+        )
+    else:
+        _logger.info(
+            "[maint] Starting daily Iceberg maintenance "
+            "(full-warehouse backup + %d hot tables)",
+            len(tables),
+        )
 
     # Step 0: backup BEFORE any maintenance writes.
     # CLAUDE.md hard rule: "Always run_backup() before
-    # compaction or retention purge." run_backup()
-    # rotates to MAX_BACKUPS=2 automatically and
-    # shells to rsync (now installed in the image).
+    # compaction or retention purge." Scoped runs use
+    # per-table ``backup_table()`` (faster, only the
+    # table-scoped tree); unscoped falls back to the
+    # full-warehouse ``run_backup()`` rsync.
     # Fail-closed: if backup fails we skip compaction
     # and report the error rather than risk an
     # unrecoverable rewrite.
+    backup_path: str | None = None
     try:
-        backup_path = run_backup()
-        _logger.info(
-            "[maint] Backup complete: %s",
-            backup_path,
-        )
+        if scoped:
+            paths: list[str] = []
+            for t in tables:
+                try:
+                    paths.append(backup_table(t))
+                except FileNotFoundError:
+                    # Table not yet written — nothing to
+                    # back up. Not fatal: compact_table will
+                    # also no-op below.
+                    _logger.info(
+                        "[maint] %s: no on-disk data, "
+                        "skipping per-table backup",
+                        t,
+                    )
+            backup_path = "; ".join(paths) if paths else "<none>"
+            _logger.info(
+                "[maint] Per-table backups complete: %d " "table(s)",
+                len(paths),
+            )
+        else:
+            backup_path = run_backup()
+            _logger.info(
+                "[maint] Backup complete: %s",
+                backup_path,
+            )
         done += 1
         try:
             repo.update_scheduler_run(
@@ -2767,7 +2851,7 @@ def execute_iceberg_maintenance(
         )
         return
 
-    for tbl in _HOT_ICEBERG_TABLES:
+    for tbl in tables:
         if cancel_event and cancel_event.is_set():
             cancelled = True
             break

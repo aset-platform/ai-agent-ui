@@ -1,4 +1,5 @@
 """PostgreSQL-backed stock registry + scheduler operations."""
+
 import logging
 import uuid as _uuid
 from datetime import date, datetime, timedelta, timezone
@@ -29,24 +30,16 @@ async def get_registry(
     """Get registry entry by ticker or all entries."""
     if ticker:
         result = await session.execute(
-            select(StockRegistry).where(
-                StockRegistry.ticker == ticker
-            )
+            select(StockRegistry).where(StockRegistry.ticker == ticker)
         )
         row = result.scalar_one_or_none()
         if not row:
             return None
-        return {
-            c.name: getattr(row, c.name)
-            for c in row.__table__.columns
-        }
+        return {c.name: getattr(row, c.name) for c in row.__table__.columns}
 
     result = await session.execute(select(StockRegistry))
     rows = [
-        {
-            c.name: getattr(r, c.name)
-            for c in r.__table__.columns
-        }
+        {c.name: getattr(r, c.name) for c in r.__table__.columns}
         for r in result.scalars().all()
     ]
     return pd.DataFrame(rows) if rows else pd.DataFrame()
@@ -59,9 +52,7 @@ async def upsert_registry(
     """Insert or update registry entry by ticker."""
     ticker = data["ticker"]
     result = await session.execute(
-        select(StockRegistry).where(
-            StockRegistry.ticker == ticker
-        )
+        select(StockRegistry).where(StockRegistry.ticker == ticker)
     )
     existing = result.scalar_one_or_none()
 
@@ -70,10 +61,11 @@ async def upsert_registry(
             if key != "ticker" and hasattr(existing, key):
                 setattr(existing, key, value)
     else:
-        session.add(StockRegistry(**{
-            k: v for k, v in data.items()
-            if hasattr(StockRegistry, k)
-        }))
+        session.add(
+            StockRegistry(
+                **{k: v for k, v in data.items() if hasattr(StockRegistry, k)}
+            )
+        )
 
     await session.commit()
     log.info("Upserted registry: %s", ticker)
@@ -160,18 +152,18 @@ async def record_empty_fetch(
             consecutive_empty=new_count,
             last_checked_at=now,
             next_retry_at=_compute_next_retry(
-                new_count, now=now,
+                new_count,
+                now=now,
             ),
             last_headline_count=0,
         )
         session.add(row)
     else:
-        row.consecutive_empty = (
-            row.consecutive_empty + 1
-        )
+        row.consecutive_empty = row.consecutive_empty + 1
         row.last_checked_at = now
         row.next_retry_at = _compute_next_retry(
-            row.consecutive_empty, now=now,
+            row.consecutive_empty,
+            now=now,
         )
     await session.commit()
 
@@ -208,10 +200,7 @@ async def get_scheduled_jobs(
     """Return all scheduled job definitions."""
     result = await session.execute(select(ScheduledJob))
     return [
-        {
-            c.name: getattr(j, c.name)
-            for c in j.__table__.columns
-        }
+        {c.name: getattr(j, c.name) for c in j.__table__.columns}
         for j in result.scalars().all()
     ]
 
@@ -223,9 +212,7 @@ async def upsert_scheduled_job(
     """Insert or update scheduled job by job_id."""
     job_id = job["job_id"]
     result = await session.execute(
-        select(ScheduledJob).where(
-            ScheduledJob.job_id == job_id
-        )
+        select(ScheduledJob).where(ScheduledJob.job_id == job_id)
     )
     existing = result.scalar_one_or_none()
 
@@ -234,10 +221,11 @@ async def upsert_scheduled_job(
             if key != "job_id" and hasattr(existing, key):
                 setattr(existing, key, value)
     else:
-        session.add(ScheduledJob(**{
-            k: v for k, v in job.items()
-            if hasattr(ScheduledJob, k)
-        }))
+        session.add(
+            ScheduledJob(
+                **{k: v for k, v in job.items() if hasattr(ScheduledJob, k)}
+            )
+        )
 
     await session.commit()
     log.info("Upserted job: %s", job_id)
@@ -249,9 +237,7 @@ async def delete_scheduled_job(
 ) -> None:
     """Delete scheduled job by job_id."""
     result = await session.execute(
-        select(ScheduledJob).where(
-            ScheduledJob.job_id == job_id
-        )
+        select(ScheduledJob).where(ScheduledJob.job_id == job_id)
     )
     job = result.scalar_one_or_none()
     if job:
@@ -263,6 +249,7 @@ async def delete_scheduled_job(
 # -------------------------------------------------------
 # Pipelines
 # -------------------------------------------------------
+
 
 async def get_pipelines(
     session: AsyncSession,
@@ -277,18 +264,21 @@ async def get_pipelines(
     )
     pipelines = []
     for p in result.scalars().all():
-        d = {
-            c.name: getattr(p, c.name)
-            for c in p.__table__.columns
-        }
+        d = {c.name: getattr(p, c.name) for c in p.__table__.columns}
         d["steps"] = [
             {
                 "step_order": s.step_order,
                 "job_type": s.job_type,
                 "job_name": s.job_name,
+                # ``payload`` is JSONB; SQLAlchemy returns the
+                # decoded dict directly. Treat NULL / missing as
+                # an empty dict so callers can always do
+                # ``payload.get("tables")`` without a guard.
+                "payload": s.payload or {},
             }
             for s in sorted(
-                p.steps, key=lambda s: s.step_order,
+                p.steps,
+                key=lambda s: s.step_order,
             )
         ]
         pipelines.append(d)
@@ -312,8 +302,12 @@ async def upsert_pipeline(
 
     if existing:
         for key in (
-            "name", "scope", "enabled",
-            "cron_days", "cron_time", "cron_dates",
+            "name",
+            "scope",
+            "enabled",
+            "cron_days",
+            "cron_time",
+            "cron_dates",
         ):
             if key in data:
                 setattr(existing, key, data[key])
@@ -322,12 +316,15 @@ async def upsert_pipeline(
                 await session.delete(s)
             await session.flush()
             for s in data["steps"]:
-                session.add(PipelineStep(
-                    pipeline_id=pid,
-                    step_order=s["step_order"],
-                    job_type=s["job_type"],
-                    job_name=s["job_name"],
-                ))
+                session.add(
+                    PipelineStep(
+                        pipeline_id=pid,
+                        step_order=s["step_order"],
+                        job_type=s["job_type"],
+                        job_name=s["job_name"],
+                        payload=s.get("payload") or {},
+                    )
+                )
     else:
         p = Pipeline(
             pipeline_id=pid,
@@ -341,12 +338,15 @@ async def upsert_pipeline(
         session.add(p)
         await session.flush()
         for s in data.get("steps", []):
-            session.add(PipelineStep(
-                pipeline_id=pid,
-                step_order=s["step_order"],
-                job_type=s["job_type"],
-                job_name=s["job_name"],
-            ))
+            session.add(
+                PipelineStep(
+                    pipeline_id=pid,
+                    step_order=s["step_order"],
+                    job_type=s["job_type"],
+                    job_name=s["job_name"],
+                    payload=s.get("payload") or {},
+                )
+            )
 
     await session.commit()
     log.info("Upserted pipeline: %s", pid)
@@ -389,11 +389,7 @@ async def insert_scheduler_run(
 ) -> None:
     """Insert a single scheduler run record."""
     obj = SchedulerRun(
-        **{
-            k: v
-            for k, v in run.items()
-            if hasattr(SchedulerRun, k)
-        }
+        **{k: v for k, v in run.items() if hasattr(SchedulerRun, k)}
     )
     session.add(obj)
     await session.commit()
@@ -464,8 +460,7 @@ async def get_scheduler_runs_pg(
         )
     if pipeline_run_id:
         filters.append(
-            SchedulerRun.pipeline_run_id
-            == pipeline_run_id,
+            SchedulerRun.pipeline_run_id == pipeline_run_id,
         )
 
     # Total count.
@@ -500,15 +495,9 @@ async def get_scheduler_run_stats_pg(
     result = await session.execute(base)
     runs = result.scalars().all()
     total = len(runs)
-    success = sum(
-        1 for r in runs if r.status == "success"
-    )
-    failed = sum(
-        1 for r in runs if r.status == "failed"
-    )
-    running = sum(
-        1 for r in runs if r.status == "running"
-    )
+    success = sum(1 for r in runs if r.status == "success")
+    failed = sum(1 for r in runs if r.status == "failed")
+    running = sum(1 for r in runs if r.status == "running")
     return {
         "runs_today": total,
         "runs_today_success": success,
@@ -525,8 +514,7 @@ async def get_pipeline_run_status_pg(
     result = await session.execute(
         select(SchedulerRun)
         .where(
-            SchedulerRun.pipeline_run_id
-            == pipeline_run_id,
+            SchedulerRun.pipeline_run_id == pipeline_run_id,
         )
         .order_by(SchedulerRun.started_at.asc())
     )
@@ -606,8 +594,7 @@ async def insert_recommendation_run(
         **{
             k: v
             for k, v in data.items()
-            if k != "run_id"
-            and hasattr(RecommendationRun, k)
+            if k != "run_id" and hasattr(RecommendationRun, k)
         },
     )
     session.add(obj)
@@ -635,8 +622,7 @@ async def insert_recommendations(
             **{
                 k: v
                 for k, v in rec.items()
-                if k not in ("id", "run_id")
-                and hasattr(Recommendation, k)
+                if k not in ("id", "run_id") and hasattr(Recommendation, k)
             },
         )
         session.add(obj)
@@ -644,7 +630,8 @@ async def insert_recommendations(
     await session.commit()
     log.info(
         "Inserted %d recommendations for run %s",
-        count, run_id,
+        count,
+        run_id,
     )
     return count
 
@@ -670,9 +657,8 @@ async def get_latest_recommendation_run(
         RecommendationRun,
     )
 
-    stmt = (
-        select(RecommendationRun)
-        .where(RecommendationRun.user_id == user_id)
+    stmt = select(RecommendationRun).where(
+        RecommendationRun.user_id == user_id
     )
     if scope != "all":
         stmt = stmt.where(
@@ -752,8 +738,7 @@ async def get_recommendation_history(
         )
         .outerjoin(
             Recommendation,
-            Recommendation.run_id
-            == RecommendationRun.run_id,
+            Recommendation.run_id == RecommendationRun.run_id,
         )
         .where(
             RecommendationRun.user_id == user_id,
@@ -815,22 +800,16 @@ async def get_recommendation_stats(
 
     # Total runs
     run_cnt = await session.execute(
-        _scoped(
-            select(
-                func.count(RecommendationRun.run_id)
-            )
-        )
+        _scoped(select(func.count(RecommendationRun.run_id)))
     )
     total_runs = run_cnt.scalar() or 0
 
     # Total recs via subquery on user's runs
     rec_cnt = await session.execute(
         _scoped(
-            select(func.count(Recommendation.id))
-            .join(
+            select(func.count(Recommendation.id)).join(
                 RecommendationRun,
-                Recommendation.run_id
-                == RecommendationRun.run_id,
+                Recommendation.run_id == RecommendationRun.run_id,
             )
         )
     )
@@ -845,26 +824,22 @@ async def get_recommendation_stats(
                     RecommendationOutcome.return_pct,
                 ),
                 func.avg(
-                    RecommendationOutcome
-                    .excess_return_pct,
+                    RecommendationOutcome.excess_return_pct,
                 ),
                 func.sum(
                     func.cast(
-                        RecommendationOutcome
-                        .excess_return_pct > 0,
+                        RecommendationOutcome.excess_return_pct > 0,
                         Integer,
                     )
                 ),
             )
             .join(
                 Recommendation,
-                RecommendationOutcome.recommendation_id
-                == Recommendation.id,
+                RecommendationOutcome.recommendation_id == Recommendation.id,
             )
             .join(
                 RecommendationRun,
-                Recommendation.run_id
-                == RecommendationRun.run_id,
+                Recommendation.run_id == RecommendationRun.run_id,
             )
         )
     )
@@ -873,11 +848,7 @@ async def get_recommendation_stats(
     avg_return = round(float(row[1] or 0), 2)
     avg_excess = round(float(row[2] or 0), 2)
     hits = row[3] or 0
-    hit_rate = (
-        round(hits / total_outcomes * 100, 1)
-        if total_outcomes
-        else 0.0
-    )
+    hit_rate = round(hits / total_outcomes * 100, 1) if total_outcomes else 0.0
 
     # Total recs acted on (non-null acted_on_date).
     acted_q = await session.execute(
@@ -885,8 +856,7 @@ async def get_recommendation_stats(
             select(func.count(Recommendation.id))
             .join(
                 RecommendationRun,
-                Recommendation.run_id
-                == RecommendationRun.run_id,
+                Recommendation.run_id == RecommendationRun.run_id,
             )
             .where(
                 Recommendation.acted_on_date.isnot(
@@ -1065,9 +1035,7 @@ async def get_recommendation_performance_buckets(
     from sqlalchemy import text
 
     if granularity not in ("week", "month", "quarter"):
-        raise ValueError(
-            "granularity must be week|month|quarter"
-        )
+        raise ValueError("granularity must be week|month|quarter")
     months_back = max(1, min(int(months_back), 14))
     if scope is not None and scope not in ("india", "us"):
         scope = None
@@ -1106,79 +1074,82 @@ async def get_recommendation_performance_buckets(
     # cheap aggregate.
     for r in rows:
         bs: date = r["bucket_start"]
-        buckets.append({
-            "bucket_start": bs.isoformat(),
-            "bucket_label": _bucket_label(
-                bs, granularity,
-            ),
-            "total_recs": int(r["total_recs"] or 0),
-            "acted_on_count": int(
-                r["acted_on_count"] or 0,
-            ),
-            "pending_count": int(
-                r["pending_count"] or 0,
-            ),
-            "hit_rate_7d": (
-                round(float(r["hit_rate_7d"]), 1)
-                if r["hit_rate_7d"] is not None
-                else None
-            ),
-            "hit_rate_30d": (
-                round(float(r["hit_rate_30d"]), 1)
-                if r["hit_rate_30d"] is not None
-                else None
-            ),
-            "hit_rate_60d": (
-                round(float(r["hit_rate_60d"]), 1)
-                if r["hit_rate_60d"] is not None
-                else None
-            ),
-            "hit_rate_90d": (
-                round(float(r["hit_rate_90d"]), 1)
-                if r["hit_rate_90d"] is not None
-                else None
-            ),
-            "avg_return_7d": (
-                round(float(r["avg_return_7d"]), 2)
-                if r["avg_return_7d"] is not None
-                else None
-            ),
-            "avg_return_30d": (
-                round(float(r["avg_return_30d"]), 2)
-                if r["avg_return_30d"] is not None
-                else None
-            ),
-            "avg_return_60d": (
-                round(float(r["avg_return_60d"]), 2)
-                if r["avg_return_60d"] is not None
-                else None
-            ),
-            "avg_return_90d": (
-                round(float(r["avg_return_90d"]), 2)
-                if r["avg_return_90d"] is not None
-                else None
-            ),
-            "avg_excess_7d": (
-                round(float(r["avg_excess_7d"]), 2)
-                if r["avg_excess_7d"] is not None
-                else None
-            ),
-            "avg_excess_30d": (
-                round(float(r["avg_excess_30d"]), 2)
-                if r["avg_excess_30d"] is not None
-                else None
-            ),
-            "avg_excess_60d": (
-                round(float(r["avg_excess_60d"]), 2)
-                if r["avg_excess_60d"] is not None
-                else None
-            ),
-            "avg_excess_90d": (
-                round(float(r["avg_excess_90d"]), 2)
-                if r["avg_excess_90d"] is not None
-                else None
-            ),
-        })
+        buckets.append(
+            {
+                "bucket_start": bs.isoformat(),
+                "bucket_label": _bucket_label(
+                    bs,
+                    granularity,
+                ),
+                "total_recs": int(r["total_recs"] or 0),
+                "acted_on_count": int(
+                    r["acted_on_count"] or 0,
+                ),
+                "pending_count": int(
+                    r["pending_count"] or 0,
+                ),
+                "hit_rate_7d": (
+                    round(float(r["hit_rate_7d"]), 1)
+                    if r["hit_rate_7d"] is not None
+                    else None
+                ),
+                "hit_rate_30d": (
+                    round(float(r["hit_rate_30d"]), 1)
+                    if r["hit_rate_30d"] is not None
+                    else None
+                ),
+                "hit_rate_60d": (
+                    round(float(r["hit_rate_60d"]), 1)
+                    if r["hit_rate_60d"] is not None
+                    else None
+                ),
+                "hit_rate_90d": (
+                    round(float(r["hit_rate_90d"]), 1)
+                    if r["hit_rate_90d"] is not None
+                    else None
+                ),
+                "avg_return_7d": (
+                    round(float(r["avg_return_7d"]), 2)
+                    if r["avg_return_7d"] is not None
+                    else None
+                ),
+                "avg_return_30d": (
+                    round(float(r["avg_return_30d"]), 2)
+                    if r["avg_return_30d"] is not None
+                    else None
+                ),
+                "avg_return_60d": (
+                    round(float(r["avg_return_60d"]), 2)
+                    if r["avg_return_60d"] is not None
+                    else None
+                ),
+                "avg_return_90d": (
+                    round(float(r["avg_return_90d"]), 2)
+                    if r["avg_return_90d"] is not None
+                    else None
+                ),
+                "avg_excess_7d": (
+                    round(float(r["avg_excess_7d"]), 2)
+                    if r["avg_excess_7d"] is not None
+                    else None
+                ),
+                "avg_excess_30d": (
+                    round(float(r["avg_excess_30d"]), 2)
+                    if r["avg_excess_30d"] is not None
+                    else None
+                ),
+                "avg_excess_60d": (
+                    round(float(r["avg_excess_60d"]), 2)
+                    if r["avg_excess_60d"] is not None
+                    else None
+                ),
+                "avg_excess_90d": (
+                    round(float(r["avg_excess_90d"]), 2)
+                    if r["avg_excess_90d"] is not None
+                    else None
+                ),
+            }
+        )
         s_total += int(r["total_recs"] or 0)
         s_acted += int(r["acted_on_count"] or 0)
         s_pending += int(r["pending_count"] or 0)
@@ -1270,15 +1241,18 @@ async def get_recommendation_performance_buckets(
             hr = r["hit_rate"]
             if hr is not None:
                 summary[f"hit_rate_{d}d"] = round(
-                    float(hr), 1,
+                    float(hr),
+                    1,
                 )
             if r["avg_return"] is not None:
                 summary[f"avg_return_{d}d"] = round(
-                    float(r["avg_return"]), 2,
+                    float(r["avg_return"]),
+                    2,
                 )
             if r["avg_excess"] is not None:
                 summary[f"avg_excess_{d}d"] = round(
-                    float(r["avg_excess"]), 2,
+                    float(r["avg_excess"]),
+                    2,
                 )
 
     return {"buckets": buckets, "summary": summary}
@@ -1289,11 +1263,12 @@ async def get_recommendations_due_for_outcome(
     today: date,
 ) -> list[dict]:
     """Find recs due for 30/60/90-day outcome check."""
+    from sqlalchemy import and_
+
     from backend.db.models.recommendation import (
         Recommendation,
         RecommendationOutcome,
     )
-    from sqlalchemy import and_
 
     results: list[dict] = []
     for days in (30, 60, 90):
@@ -1309,17 +1284,15 @@ async def get_recommendations_due_for_outcome(
             .correlate(Recommendation)
             .exists()
         )
-        q = (
-            select(Recommendation)
-            .where(
-                and_(
-                    Recommendation.status == "active",
-                    func.date(
-                        Recommendation.created_at,
-                    ) <= cutoff,
-                    ~checked,
-                ),
-            )
+        q = select(Recommendation).where(
+            and_(
+                Recommendation.status == "active",
+                func.date(
+                    Recommendation.created_at,
+                )
+                <= cutoff,
+                ~checked,
+            ),
         )
         rows = await session.execute(q)
         for r in rows.scalars():
@@ -1377,13 +1350,11 @@ async def update_recommendation_status(
     )
 
     # Get run_ids for this user
-    run_ids_q = (
-        select(RecommendationRun.run_id)
-        .where(RecommendationRun.user_id == user_id)
+    run_ids_q = select(RecommendationRun.run_id).where(
+        RecommendationRun.user_id == user_id
     )
     result = await session.execute(
-        select(Recommendation)
-        .where(
+        select(Recommendation).where(
             Recommendation.run_id.in_(run_ids_q),
             Recommendation.ticker == ticker,
             Recommendation.action.in_(actions),
@@ -1400,7 +1371,10 @@ async def update_recommendation_status(
         await session.commit()
         log.info(
             "Updated %d recs for %s/%s -> %s",
-            count, user_id, ticker, new_status,
+            count,
+            user_id,
+            ticker,
+            new_status,
         )
     return count
 
@@ -1441,13 +1415,9 @@ async def expire_old_recommendations(
         run_filter.append(
             RecommendationRun.scope == cur_scope,
         )
-    run_ids_q = (
-        select(RecommendationRun.run_id)
-        .where(*run_filter)
-    )
+    run_ids_q = select(RecommendationRun.run_id).where(*run_filter)
     result = await session.execute(
-        select(Recommendation)
-        .where(
+        select(Recommendation).where(
             Recommendation.run_id.in_(run_ids_q),
             Recommendation.status == "active",
         )
@@ -1460,9 +1430,10 @@ async def expire_old_recommendations(
     if count:
         await session.commit()
         log.info(
-            "Expired %d old recs for user %s "
-            "scope=%s",
-            count, user_id, cur_scope or "*",
+            "Expired %d old recs for user %s " "scope=%s",
+            count,
+            user_id,
+            cur_scope or "*",
         )
     return count
 
@@ -1478,12 +1449,12 @@ async def expire_stale_recommendations(
 
     cutoff = today - timedelta(days=90)
     result = await session.execute(
-        select(Recommendation)
-        .where(
+        select(Recommendation).where(
             Recommendation.status == "active",
             func.date(
                 Recommendation.created_at,
-            ) <= cutoff,
+            )
+            <= cutoff,
         )
     )
     rows = result.scalars().all()
@@ -1535,14 +1506,14 @@ async def get_all_recommendations(
         )
         .join(
             RecommendationRun,
-            Recommendation.run_id
-            == RecommendationRun.run_id,
+            Recommendation.run_id == RecommendationRun.run_id,
         )
         .outerjoin(
             User,
             User.user_id
             == cast(
-                RecommendationRun.user_id, String,
+                RecommendationRun.user_id,
+                String,
             ),
         )
         .order_by(Recommendation.created_at.desc())
@@ -1554,9 +1525,7 @@ async def get_all_recommendations(
         d = _rec_to_dict(rec)
         d["scope"] = scope
         d["run_type"] = run_type
-        d["run_date"] = (
-            run_date.isoformat() if run_date else None
-        )
+        d["run_date"] = run_date.isoformat() if run_date else None
         d["user_id"] = uid
         d["email"] = email
         d["full_name"] = name
