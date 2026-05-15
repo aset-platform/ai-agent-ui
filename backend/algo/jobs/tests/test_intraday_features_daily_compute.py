@@ -105,10 +105,8 @@ async def test_happy_path_writes_features_with_version_stamp(
         univ_patch,
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
-            "_load_intraday_bars_for_ticker",
-            side_effect=lambda ticker, **_: (
-                bars_a if ticker == "A.NS" else bars_b
-            ),
+            "_load_intraday_bars_for_tickers",
+            return_value={"A.NS": bars_a, "B.NS": bars_b},
         ),
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
@@ -188,8 +186,8 @@ async def test_rerun_scoped_pre_delete_uses_in_ticker(fake_session):
         univ_patch,
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
-            "_load_intraday_bars_for_ticker",
-            return_value=bars,
+            "_load_intraday_bars_for_tickers",
+            return_value={bars[0].ticker: bars},
         ),
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
@@ -246,11 +244,16 @@ async def test_rerun_scoped_pre_delete_uses_in_ticker(fake_session):
     )
 
 
-async def test_per_ticker_fetch_failure_does_not_abort_batch(
+async def test_partial_batch_missing_bars_does_not_abort_batch(
     fake_session,
 ):
-    """One bad ticker (bar fetch raises) is recorded as a failure
-    but doesn't strand the rest of the batch."""
+    """A ticker absent from the batched read result (no bars in
+    window — newly tagged, off-market, etc.) is skipped silently;
+    the rest of the batch proceeds normally. With the batched-read
+    refactor, per-ticker read isolation is replaced by per-ticker
+    absence-from-result: same observable behaviour (good tickers
+    still write), but failures are reported at the compute layer
+    rather than the fetch layer when no bars are present."""
     factory, _ = fake_session
     good_bars = [_bar("OK.NS")]
     panel = {
@@ -258,12 +261,6 @@ async def test_per_ticker_fetch_failure_does_not_abort_batch(
             good_bars[0].bar_open_ts_ns: {"today_ltp": Decimal("100.5")},
         },
     }
-
-    def _loader(ticker, **_):
-        if ticker == "BAD.NS":
-            raise RuntimeError("simulated read failure")
-        return good_bars
-
     mock_tbl = MagicMock()
     mock_cat = MagicMock()
     mock_cat.load_table.return_value = mock_tbl
@@ -277,8 +274,9 @@ async def test_per_ticker_fetch_failure_does_not_abort_batch(
         univ_patch,
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
-            "_load_intraday_bars_for_ticker",
-            side_effect=_loader,
+            "_load_intraday_bars_for_tickers",
+            # BAD.NS absent from result simulates "no bars in window".
+            return_value={"OK.NS": good_bars},
         ),
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
@@ -299,12 +297,51 @@ async def test_per_ticker_fetch_failure_does_not_abort_batch(
         )
 
     assert result["status"] == "ok"
+    # Only OK.NS was processed (BAD.NS silently skipped — not a
+    # failure, just no bars).
     assert result["tickers_processed"] == 1
-    assert result["tickers_failed"] == 1
-    assert any(t == "BAD.NS" for t, _ in result["failures"])
-    # The good ticker's write still happened.
+    assert result["tickers_failed"] == 0
     assert mock_tbl.append.call_count == 1
     assert result["rows_written"] == 1
+
+
+async def test_batched_read_crash_flags_all_tickers_failed(
+    fake_session,
+):
+    """If the batched DuckDB read raises, every ticker in the
+    batch is recorded as a failure (fetch-layer crash). New
+    semantics post batched-read refactor: ALL tickers fail together
+    rather than per-ticker isolation."""
+    factory, _ = fake_session
+    sess_patch, univ_patch = _patch_session_and_universe(
+        factory,
+        ["A.NS", "B.NS"],
+    )
+    with (
+        sess_patch,
+        univ_patch,
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "_load_intraday_bars_for_tickers",
+            side_effect=RuntimeError("simulated batched read failure"),
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "compute_intraday_features_for_universe",
+        ) as mock_compute,
+    ):
+        result = await run_intraday_features_daily_compute_job(
+            {"period_start": "2026-05-13", "period_end": "2026-05-13"},
+        )
+
+    assert result["status"] == "ok"
+    assert result["tickers_processed"] == 0
+    assert result["tickers_failed"] == 2
+    assert all(
+        "fetch:" in reason for _, reason in result["failures"]
+    )
+    # Compute never fires when the read crashed.
+    mock_compute.assert_not_called()
 
 
 async def test_invalid_interval_sec_returns_structured_error(
@@ -322,7 +359,7 @@ async def test_invalid_interval_sec_returns_structured_error(
         univ_patch,
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
-            "_load_intraday_bars_for_ticker",
+            "_load_intraday_bars_for_tickers",
         ) as mock_loader,
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
@@ -347,7 +384,7 @@ async def test_empty_universe_returns_skipped(fake_session):
         univ_patch,
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
-            "_load_intraday_bars_for_ticker",
+            "_load_intraday_bars_for_tickers",
         ) as mock_loader,
     ):
         result = await run_intraday_features_daily_compute_job(None)
@@ -386,8 +423,8 @@ async def test_payload_tickers_override_bypasses_universe_resolver(
         ) as resolver_mock,
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
-            "_load_intraday_bars_for_ticker",
-            return_value=bars,
+            "_load_intraday_bars_for_tickers",
+            return_value={bars[0].ticker: bars},
         ),
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
@@ -448,8 +485,8 @@ async def test_nan_feature_values_filtered_before_write(
         univ_patch,
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
-            "_load_intraday_bars_for_ticker",
-            return_value=bars,
+            "_load_intraday_bars_for_tickers",
+            return_value={bars[0].ticker: bars},
         ),
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
@@ -506,8 +543,8 @@ async def test_daily_compute_passes_fe8_kwargs_into_engine(
         univ_patch,
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
-            "_load_intraday_bars_for_ticker",
-            return_value=bars,
+            "_load_intraday_bars_for_tickers",
+            return_value={bars[0].ticker: bars},
         ),
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
@@ -583,8 +620,8 @@ async def test_daily_compute_proceeds_when_index_bars_empty(
         univ_patch,
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
-            "_load_intraday_bars_for_ticker",
-            return_value=bars,
+            "_load_intraday_bars_for_tickers",
+            return_value={bars[0].ticker: bars},
         ),
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
@@ -660,8 +697,8 @@ async def test_daily_compute_passes_fe9_regime_by_date_into_engine(
         univ_patch,
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
-            "_load_intraday_bars_for_ticker",
-            return_value=bars,
+            "_load_intraday_bars_for_tickers",
+            return_value={bars[0].ticker: bars},
         ),
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
@@ -735,8 +772,8 @@ async def test_daily_compute_handles_regime_history_failure(
         univ_patch,
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
-            "_load_intraday_bars_for_ticker",
-            return_value=bars,
+            "_load_intraday_bars_for_tickers",
+            return_value={bars[0].ticker: bars},
         ),
         patch(
             "backend.algo.jobs.intraday_features_daily_compute."
