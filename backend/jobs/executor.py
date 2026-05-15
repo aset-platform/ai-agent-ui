@@ -3779,3 +3779,32 @@ def _job_universe_snapshot_monthly(
         cancel_event=cancel_event,
         force=force,
     )
+
+
+@register_job("trade_outcome_backfill")
+def execute_trade_outcome_backfill(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """Sync wrapper for FE-13 trade outcome backfill
+    (ASETPLTFRM-415).
+
+    Scans ``stocks.trade_feature_snapshots`` for rows with a
+    non-null ``realised_pnl_inr`` but null ``outcome_label`` and
+    stamps the winner/loser/breakeven meta-label per the sign of
+    the pnl. Defaults to a 30-day rolling window IST; payload
+    knobs override window / strategy / threshold / dry-run.
+    """
+    import asyncio
+
+    from backend.algo.jobs.trade_outcome_backfill import (
+        run_trade_outcome_backfill_job,
+    )
+
+    return asyncio.run(
+        run_trade_outcome_backfill_job(payload or {}),
+    )

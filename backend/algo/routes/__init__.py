@@ -7,6 +7,12 @@ from backend.algo.routes.backtest import create_backtest_router
 from backend.algo.routes.broker import create_broker_router
 from backend.algo.routes.drift import create_drift_router
 from backend.algo.routes.factors import create_factors_router
+from backend.algo.routes.feature_coverage import (
+    create_feature_coverage_router,
+)
+from backend.algo.routes.feature_importance import (
+    create_feature_importance_router,
+)
 from backend.algo.routes.fees import create_fees_router
 from backend.algo.routes.instruments import (
     create_instruments_router,
@@ -22,6 +28,9 @@ from backend.algo.routes.performance import (
 )
 from backend.algo.routes.regime import create_regime_router
 from backend.algo.routes.replay import create_replay_router
+from backend.algo.routes.shap_analysis import (
+    create_shap_analysis_router,
+)
 from backend.algo.routes.strategies import (
     create_strategies_router,
 )
@@ -38,6 +47,8 @@ __all__ = [
     "create_broker_router",
     "create_drift_router",
     "create_factors_router",
+    "create_feature_coverage_router",
+    "create_feature_importance_router",
     "create_fees_router",
     "create_instruments_router",
     "create_kill_switch_router",
@@ -47,6 +58,7 @@ __all__ = [
     "create_performance_router",
     "create_regime_router",
     "create_replay_router",
+    "create_shap_analysis_router",
     "create_strategies_router",
     "create_walkforward_router",
     "create_webhooks_router",

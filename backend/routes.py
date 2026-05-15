@@ -4175,6 +4175,35 @@ def create_app(
         create_attribution_router(),
         prefix="/v1",
     )
+    # FE-11 (ASETPLTFRM-413) — per-strategy feature importance
+    # ranking via sklearn GradientBoostingClassifier on closed
+    # trade outcomes. Pro-or-superuser only.
+    from backend.algo.routes import (
+        create_feature_importance_router,
+    )
+    app.include_router(
+        create_feature_importance_router(),
+        prefix="/v1",
+    )
+    # FE-14 (ASETPLTFRM-416) — feature-coverage admin dashboard
+    # (% of (ticker, ts_ns) bar slots where each feature is
+    # non-null over a window). Superuser-only.
+    from backend.algo.routes import (
+        create_feature_coverage_router,
+    )
+    app.include_router(
+        create_feature_coverage_router(),
+        prefix="/v1",
+    )
+    # FE-12 (ASETPLTFRM-414) — per-prediction SHAP attribution
+    # for the FE-11 trade-outcome classifier. Pro-or-superuser.
+    from backend.algo.routes import (
+        create_shap_analysis_router,
+    )
+    app.include_router(
+        create_shap_analysis_router(),
+        prefix="/v1",
+    )
 
     # WebSocket streaming endpoint.
     from ws import register_ws_routes
