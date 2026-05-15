@@ -14,8 +14,7 @@ Move intraday feature computation OUT of the backtest runner's per-call in-memor
 │ Raw Market Data                                                 │
 │  ├─ stocks.ohlcv                  (daily, 4 yr × 500+ tickers)  │
 │  ├─ stocks.intraday_bars          (15m, 4 yr × Nifty 500)       │
-│  ├─ stocks.index_intraday_bars    (15m, 4 yr × indices) [NEW]   │
-│  └─ stocks.sector_intraday_bars   (15m, 4 yr × sectors) [NEW]   │
+│  └─ stocks.index_intraday_bars    (15m, 4 yr × all indices) [NEW] │
 └─────────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────────┐
@@ -104,16 +103,21 @@ NestedField(15, "written_at",        TimestampType(), required=True)
 
 **Partition:** `(year_month, mode)`. The `mode` partition lets us isolate live-trading snapshots from backtest snapshots for research.
 
-### 3.3 `stocks.index_intraday_bars` + `stocks.sector_intraday_bars` (NEW)
+### 3.3 `stocks.index_intraday_bars` (NEW)
 
-Same schema as `stocks.intraday_bars` (12 cols including `year_month`). Sourced from Kite's `historical_data` for the symbols below. Daily-keeper enrollment.
+Same 12-field schema as `stocks.intraday_bars` (ticker, bar_date, interval_sec, bar_open_ts_ns, OHLCV, written_at, source, year_month). Partition `(ticker, year_month)` matches the equity bars layout for join-locality. Sourced from Kite's `historical_data`. Daily-keeper enrollment as step 2 of `Intraday Bars Daily Pipeline` (FE-6).
 
-**Index symbols (Phase 2):**
-- `^NSEI` (NIFTY 50) — used for RS vs NIFTY
-- `^NSEBANK` (NIFTY BANK)
-- `^NSEAUTO`, `^NSEFMCG`, `^NSEIT`, `^NSEFIN`, `^NSEPHARMA`, `^NSEMETAL`, `^NSEENERGY`, `^NSEREALTY` — used for sector rotation + sector RS
+**All 10 indices live in this one table** (broad + sectoral). Consolidated decision 2026-05-15 — ASETPLTFRM-409 closed as merged into ASETPLTFRM-408. Rationale: identical schema, FE-8 cross-sectional consumers need both broad + sectoral in one scan, `WHERE ticker IN (...)` partition-prunes equally cheaply.
 
-Mapping ticker → sector index lives in the existing `stocks.company_info.sector` column.
+| Kite tradingsymbol | Role |
+|---|---|
+| `NIFTY 50` | Broad market — RS-vs-NIFTY baseline |
+| `NIFTY BANK` | Broad sector — bank stocks |
+| `NIFTY AUTO`, `NIFTY FMCG`, `NIFTY IT`, `NIFTY FIN SERVICE`, `NIFTY PHARMA`, `NIFTY METAL`, `NIFTY ENERGY`, `NIFTY REALTY` | Sectoral — sector rotation + sector RS |
+
+**Ticker storage**: Kite tradingsymbol verbatim (e.g. `"NIFTY 50"`, NOT Yahoo's `^NSEI`). The factor library at `backend/algo/factors/compute_job.py::SECTOR_INDEX_MAP` keeps its Yahoo names untouched — this rename isolates to the index intraday surface only.
+
+Mapping equity ticker → sector index uses the existing `stocks.company_info.sector` column (consumed by FE-8).
 
 ## 4. Feature catalog — Phase 1 (must-ship)
 
@@ -296,8 +300,8 @@ Hook ordering inside `_apply_fill`:
 | 3 | Daily feature compute pipeline step + on-demand backfill | 5 | 1 |
 | 4 | Backtest runner reads from feature store | 5 | 1 |
 | 5 | `stocks.trade_feature_snapshots` + fill-time write hook | 3 | 1 |
-| 6 | `stocks.index_intraday_bars` table + Kite backfill (^NSEI etc.) | 5 | 2 |
-| 7 | `stocks.sector_intraday_bars` table + Kite backfill (sectoral indices) | 5 | 2 |
+| 6 | `stocks.index_intraday_bars` table + Kite backfill (all 10 NSE indices, broad + sectoral) | 5 | 2 |
+| ~~7~~ | ~~stocks.sector_intraday_bars + sectoral backfill~~ — **merged into slice 6** (ASETPLTFRM-409 closed 2026-05-15) | ~~5~~ → 0 | 2 |
 | 8 | Relative-strength + market-breadth features | 3 | 2 |
 | 9 | Sector rotation + regime-link features | 3 | 2 |
 | 10 | Live runtime incremental feature emission | 5 | 2 |
