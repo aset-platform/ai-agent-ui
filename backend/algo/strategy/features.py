@@ -440,6 +440,38 @@ FEATURES: list[Feature] = [
         type="string",
         source="intraday_feature_store",
     ),
+    # ────────────────────────────────────────────────────────────
+    # Intraday — relative-strength + market-breadth (FE-8)
+    # Phase-2 cross-sectional features. The two rs_vs_* features
+    # were deferred from FE-2 because they depend on the FE-6
+    # ``stocks.index_intraday_bars`` table. The two market-breadth
+    # features are introduced fresh here as the first Phase-2
+    # cohort-pass features.
+    # ────────────────────────────────────────────────────────────
+    Feature(
+        key="rs_vs_nifty_15m",
+        label="RS vs NIFTY (15m)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="rs_vs_sector_15m",
+        label="RS vs sector (15m)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="market_breadth_pct_above_sma200",
+        label="% Nifty-500 above SMA200",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="advance_decline_ratio",
+        label="Advance/decline ratio (15m)",
+        type="float",
+        source="intraday_feature_store",
+    ),
 ]
 
 

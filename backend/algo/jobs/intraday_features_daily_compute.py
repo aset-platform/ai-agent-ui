@@ -39,11 +39,16 @@ import pyarrow as pa
 from pyiceberg.expressions import And, In
 
 from backend.algo._iceberg_retry import retry_iceberg_op
+from backend.algo.backtest.index_intraday_backfill import (
+    load_index_intraday_bars_window,
+)
 from backend.algo.backtest.types import BarData
 from backend.algo.features import (
     FEATURE_SET_VERSION,
     compute_intraday_features_for_universe,
 )
+from backend.algo.features.sector_map import build_ticker_to_sector_index_map
+from backend.algo.jobs._index_universe import INDEX_UNIVERSE
 from backend.cache import get_cache
 from backend.db.duckdb_engine import (
     invalidate_metadata,
@@ -331,6 +336,60 @@ def _invalidate_feature_chunk_cache(*, year_months: list[str]) -> None:
         )
 
 
+def _load_index_bars_for_cohort(
+    *,
+    interval_sec: int,
+    start: date,
+    end: date,
+) -> dict[str, list[BarData]]:
+    """Load the FE-6 index universe over the same window. Best-
+    effort: on read failure return ``{}`` and log with
+    ``exc_info=True`` so the FE-8 cohort features are absent for
+    the batch but the rest of the panel still emits.
+    """
+    try:
+        return load_index_intraday_bars_window(
+            symbols=list(INDEX_UNIVERSE),
+            interval_sec=interval_sec,
+            period_start=start,
+            period_end=end,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            "[intraday-features] index bar load failed "
+            "(interval_sec=%d, %s..%s); FE-8 cohort features "
+            "absent for this batch: %s",
+            interval_sec,
+            start,
+            end,
+            exc,
+            exc_info=True,
+        )
+        return {}
+
+
+async def _build_sector_map_for_batch(
+    tickers: list[str],
+) -> dict[str, str]:
+    """Best-effort sector-index map for FE-8's ``rs_vs_sector_15m``.
+
+    Failures are logged with ``exc_info=True`` and an empty dict is
+    returned — ``rs_vs_sector_15m`` will simply be absent for every
+    ticker this batch.
+    """
+    try:
+        return await build_ticker_to_sector_index_map(tickers)
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            "[intraday-features] sector map build failed for "
+            "%d tickers — rs_vs_sector_15m absent: %s",
+            len(tickers),
+            exc,
+            exc_info=True,
+        )
+        return {}
+
+
 def _compute_and_write_batch(
     *,
     tickers: list[str],
@@ -339,12 +398,20 @@ def _compute_and_write_batch(
     end: date,
     feature_set_version: str,
     stats: dict[str, Any],
+    index_bars_by_symbol: dict[str, list[BarData]] | None = None,
+    ticker_to_sector_index: dict[str, str] | None = None,
 ) -> int:
     """Per-batch worker — load bars, run engine, write features.
 
     Per-ticker fetch / compute failures append to ``stats.failures``
     with ``(ticker, reason[:200])`` but do NOT abort the batch.
     Returns the row count actually written.
+
+    ``index_bars_by_symbol`` / ``ticker_to_sector_index`` are FE-8
+    cohort-pass kwargs. They're loaded once per
+    :func:`run_intraday_features_daily_compute_job` invocation and
+    re-used across batches — passing them in keeps the per-batch
+    worker pure-compute (no I/O on the hot path).
     """
     bars_by_ticker: dict[str, list[BarData]] = {}
     for tk in tickers:
@@ -375,6 +442,8 @@ def _compute_and_write_batch(
     try:
         panel = compute_intraday_features_for_universe(
             bars_by_ticker,
+            index_bars_by_symbol=index_bars_by_symbol,
+            ticker_to_sector_index=ticker_to_sector_index,
             feature_set_version=feature_set_version,
         )
     except Exception as exc:  # noqa: BLE001
@@ -551,6 +620,28 @@ async def run_intraday_features_daily_compute_job(
         feature_set_version=feature_set_version,
     )
 
+    # FE-8 cohort-pass inputs — loaded once per job run, reused for
+    # every batch. Both are best-effort: failures degrade the FE-8
+    # cross-sectional features to "absent" without breaking the
+    # rest of the panel.
+    index_bars_by_symbol = _load_index_bars_for_cohort(
+        interval_sec=interval_sec,
+        start=start,
+        end=end,
+    )
+    if not index_bars_by_symbol:
+        _logger.warning(
+            "[intraday-features] no index bars in window "
+            "%s..%s @ interval_sec=%d — FE-8 cohort features "
+            "(rs_vs_nifty_15m, rs_vs_sector_15m, "
+            "market_breadth_pct_above_sma200, "
+            "advance_decline_ratio) will be absent for this run",
+            start.isoformat(),
+            end.isoformat(),
+            interval_sec,
+        )
+    ticker_to_sector_index = await _build_sector_map_for_batch(universe)
+
     batches = [
         universe[i : i + batch_size]
         for i in range(0, len(universe), batch_size)
@@ -574,6 +665,12 @@ async def run_intraday_features_daily_compute_job(
                 end=end,
                 feature_set_version=feature_set_version,
                 stats=stats,
+                index_bars_by_symbol=(
+                    index_bars_by_symbol
+                    if index_bars_by_symbol
+                    else None
+                ),
+                ticker_to_sector_index=ticker_to_sector_index,
             )
         except Exception as exc:  # noqa: BLE001
             _logger.error(

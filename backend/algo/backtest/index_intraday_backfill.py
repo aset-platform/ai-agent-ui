@@ -35,6 +35,7 @@ import logging
 import math
 import time
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 import pyarrow as pa
@@ -44,11 +45,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.algo.backtest.intraday_backfill import BackfillStats
 from backend.algo.backtest.types import BarData
-from backend.db.duckdb_engine import invalidate_metadata
+from backend.db.duckdb_engine import invalidate_metadata, query_iceberg_table
 
 _logger = logging.getLogger(__name__)
 
 INDEX_INTRADAY_BARS_TABLE = "stocks.index_intraday_bars"
+
+_SUPPORTED_INTERVAL_SECONDS = frozenset({60, 300, 900})
 
 
 def _arrow_schema() -> pa.Schema:
@@ -395,3 +398,136 @@ async def backfill_index_window(
         stats.wall_clock_s,
     )
     return stats
+
+
+def load_index_intraday_bars_window(
+    *,
+    symbols: list[str],
+    interval_sec: int,
+    period_start: date,
+    period_end: date,
+) -> dict[str, list[BarData]]:
+    """Bulk-read ``stocks.index_intraday_bars`` for *symbols*.
+
+    Mirrors :func:`backend.algo.backtest.data_source.load_intraday_bars_window`
+    but targets the FE-6 index table. Used by FE-8 to assemble the
+    cohort-pass kwarg ``index_bars_by_symbol`` for the engine.
+
+    The read is partition-pruned via the same
+    ``(ticker, year_month)`` filter the equity loader uses — both
+    tables share the same partition layout per FE-6.
+
+    Returns ``{symbol: [BarData sorted by bar_open_ts_ns]}``. Empty
+    dict on read failure (logged with ``exc_info=True``) so a
+    transient Iceberg blip never strands the FE-8 cohort pass —
+    the four cross-sectional features simply go absent for that
+    batch.
+    """
+    if interval_sec not in _SUPPORTED_INTERVAL_SECONDS:
+        raise ValueError(
+            f"interval_sec={interval_sec} not supported; use one "
+            f"of {sorted(_SUPPORTED_INTERVAL_SECONDS)}.",
+        )
+    if period_start > period_end:
+        raise ValueError(
+            f"period_start {period_start.isoformat()} is after "
+            f"period_end {period_end.isoformat()}.",
+        )
+    if not symbols:
+        return {}
+
+    placeholders = ",".join(["?"] * len(symbols))
+    start_iso = period_start.isoformat()
+    end_iso = period_end.isoformat()
+    start_ym = start_iso[:7]
+    end_ym = end_iso[:7]
+    sql = (
+        "SELECT ticker, bar_date, bar_open_ts_ns, open, high, "
+        "  low, close, volume "
+        "FROM index_intraday_bars "
+        f"WHERE ticker IN ({placeholders}) "
+        "  AND interval_sec = ? "
+        "  AND year_month BETWEEN ? AND ? "
+        "  AND bar_date BETWEEN ? AND ? "
+        "ORDER BY ticker, bar_open_ts_ns"
+    )
+    params: list[Any] = list(symbols) + [
+        int(interval_sec),
+        start_ym,
+        end_ym,
+        start_iso,
+        end_iso,
+    ]
+    try:
+        rows = query_iceberg_table(
+            INDEX_INTRADAY_BARS_TABLE,
+            sql,
+            params,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.error(
+            "[index-loader] scan failed (symbols=%d, "
+            "interval_sec=%d, %s..%s): %s",
+            len(symbols),
+            interval_sec,
+            period_start,
+            period_end,
+            exc,
+            exc_info=True,
+        )
+        return {}
+
+    grouped: dict[str, list[BarData]] = {}
+    skipped = 0
+    for r in rows or []:
+        ticker = str(r["ticker"])
+        try:
+            open_d = Decimal(str(r["open"]))
+            high_d = Decimal(str(r["high"]))
+            low_d = Decimal(str(r["low"]))
+            close_d = Decimal(str(r["close"]))
+        except (TypeError, ValueError, ArithmeticError):
+            skipped += 1
+            continue
+        ts_ns = r.get("bar_open_ts_ns")
+        if ts_ns is None:
+            skipped += 1
+            continue
+        raw_date = r["bar_date"]
+        if isinstance(raw_date, date):
+            bar_date = raw_date
+        else:
+            try:
+                bar_date = date.fromisoformat(str(raw_date)[:10])
+            except (TypeError, ValueError):
+                skipped += 1
+                continue
+        try:
+            bar = BarData(
+                ticker=ticker,
+                date=bar_date,
+                open=open_d,
+                high=high_d,
+                low=low_d,
+                close=close_d,
+                volume=int(r.get("volume") or 0),
+                bar_open_ts_ns=int(ts_ns),
+            )
+        except (TypeError, ValueError) as exc:
+            _logger.warning(
+                "[index-loader] dropping malformed bar for %s "
+                "@ %s: %s",
+                ticker,
+                raw_date,
+                exc,
+            )
+            skipped += 1
+            continue
+        grouped.setdefault(ticker, []).append(bar)
+    if skipped:
+        _logger.info(
+            "[index-loader] skipped %d bars with NaN/None cells "
+            "or missing bar_open_ts_ns",
+            skipped,
+        )
+    return grouped

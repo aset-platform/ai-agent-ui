@@ -102,6 +102,11 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   // Intraday – time
   { key: "minutes_since_open", label: "Minutes since 09:15 IST", type: "int", source: "intraday_feature_store" },
   { key: "time_of_day_bucket", label: "Time-of-day bucket", type: "string", source: "intraday_feature_store" },
+  // Intraday – relative-strength + market-breadth (FE-8 Phase 2)
+  { key: "rs_vs_nifty_15m", label: "RS vs NIFTY (15m)", type: "float", source: "intraday_feature_store" },
+  { key: "rs_vs_sector_15m", label: "RS vs sector (15m)", type: "float", source: "intraday_feature_store" },
+  { key: "market_breadth_pct_above_sma200", label: "% Nifty-500 above SMA200", type: "float", source: "intraday_feature_store" },
+  { key: "advance_decline_ratio", label: "Advance/decline ratio (15m)", type: "float", source: "intraday_feature_store" },
 ];
 
 export const STRATEGY_FEATURE_KEY_SET: Set<string> = new Set(

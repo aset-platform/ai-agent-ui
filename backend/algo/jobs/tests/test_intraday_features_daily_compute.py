@@ -467,6 +467,153 @@ async def test_nan_feature_values_filtered_before_write(
     assert set(feat_names) == {"today_ltp", "vwap"}
 
 
+async def test_daily_compute_passes_fe8_kwargs_into_engine(
+    fake_session,
+):
+    """FE-8: the daily compute MUST load index bars +
+    ticker→sector map and pass them into
+    ``compute_intraday_features_for_universe`` as kwargs. Mock the
+    loaders and assert the kwargs reach the engine."""
+    factory, _ = fake_session
+    bars = [_bar("A.NS")]
+    panel = {
+        "A.NS": {
+            bars[0].bar_open_ts_ns: {"today_ltp": Decimal("100.5")},
+        },
+    }
+    fake_index_bars = {"NIFTY 50": [_bar("NIFTY 50")]}
+    fake_sector_map = {"A.NS": "NIFTY IT"}
+    mock_tbl = MagicMock()
+    mock_cat = MagicMock()
+    mock_cat.load_table.return_value = mock_tbl
+
+    sess_patch, univ_patch = _patch_session_and_universe(
+        factory,
+        ["A.NS"],
+    )
+    with (
+        sess_patch,
+        univ_patch,
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "_load_intraday_bars_for_ticker",
+            return_value=bars,
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "load_index_intraday_bars_window",
+            return_value=fake_index_bars,
+        ) as mock_index_loader,
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "build_ticker_to_sector_index_map",
+            new=AsyncMock(return_value=fake_sector_map),
+        ) as mock_sector,
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "compute_intraday_features_for_universe",
+            return_value=panel,
+        ) as mock_compute,
+        patch(
+            "stocks.create_tables._get_catalog",
+            return_value=mock_cat,
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "invalidate_metadata",
+        ),
+    ):
+        result = await run_intraday_features_daily_compute_job(
+            {"period_start": "2026-05-13", "period_end": "2026-05-13"},
+        )
+
+    assert result["status"] == "ok"
+    # Index loader called once with the full universe.
+    mock_index_loader.assert_called_once()
+    idx_kw = mock_index_loader.call_args.kwargs
+    assert "NIFTY 50" in idx_kw["symbols"]
+    assert idx_kw["interval_sec"] == 900
+    # Sector map called once with the resolved universe.
+    mock_sector.assert_awaited_once_with(["A.NS"])
+    # Compute called with the FE-8 kwargs forwarded.
+    mock_compute.assert_called_once()
+    compute_kwargs = mock_compute.call_args.kwargs
+    assert compute_kwargs["index_bars_by_symbol"] == fake_index_bars
+    assert compute_kwargs["ticker_to_sector_index"] == fake_sector_map
+
+
+async def test_daily_compute_proceeds_when_index_bars_empty(
+    fake_session,
+):
+    """When ``load_index_intraday_bars_window`` returns empty (e.g.
+    FE-6 hasn't backfilled the window yet), the compute MUST still
+    run — non-FE-8 features emit and the FE-8 features are absent.
+    """
+    factory, _ = fake_session
+    bars = [_bar("A.NS")]
+    panel_without_fe8 = {
+        "A.NS": {
+            bars[0].bar_open_ts_ns: {
+                "today_ltp": Decimal("100.5"),
+                "today_vol": Decimal("1000"),
+                "rsi": Decimal("55"),
+            },
+        },
+    }
+    mock_tbl = MagicMock()
+    mock_cat = MagicMock()
+    mock_cat.load_table.return_value = mock_tbl
+
+    sess_patch, univ_patch = _patch_session_and_universe(
+        factory,
+        ["A.NS"],
+    )
+    with (
+        sess_patch,
+        univ_patch,
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "_load_intraday_bars_for_ticker",
+            return_value=bars,
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "load_index_intraday_bars_window",
+            return_value={},  # empty
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "build_ticker_to_sector_index_map",
+            new=AsyncMock(return_value={}),
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "compute_intraday_features_for_universe",
+            return_value=panel_without_fe8,
+        ) as mock_compute,
+        patch(
+            "stocks.create_tables._get_catalog",
+            return_value=mock_cat,
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "invalidate_metadata",
+        ),
+    ):
+        result = await run_intraday_features_daily_compute_job(
+            {"period_start": "2026-05-13", "period_end": "2026-05-13"},
+        )
+
+    assert result["status"] == "ok"
+    # Non-FE-8 features still wrote.
+    assert result["rows_written"] == 3
+    # The engine was called with index_bars_by_symbol=None — the
+    # cohort path is short-circuited cleanly rather than receiving
+    # an empty dict that would re-emit zeros.
+    compute_kwargs = mock_compute.call_args.kwargs
+    assert compute_kwargs["index_bars_by_symbol"] is None
+
+
 def test_register_job_wired_in_executor():
     """``intraday_features_daily_compute`` must be registered in
     ``JOB_EXECUTORS`` so the pipeline executor can chain it."""

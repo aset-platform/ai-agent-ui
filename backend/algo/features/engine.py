@@ -241,13 +241,61 @@ def compute_intraday_features(
 def compute_intraday_features_for_universe(
     bars_by_ticker: dict[str, list[BarData]],
     *,
+    index_bars_by_symbol: dict[str, list[BarData]] | None = None,
+    ticker_to_sector_index: dict[str, str] | None = None,
     sma_windows: Iterable[int] = DEFAULT_INTRADAY_SMA_WINDOWS,
     feature_set_version: str = FEATURE_SET_VERSION,
 ) -> UniverseFeaturePanel:
-    """Apply :func:`compute_intraday_features` per-ticker. Output
-    shape matches
-    ``compute_indicators_for_universe_intraday`` so FE-4's swap
-    is mechanical.
+    """Apply :func:`compute_intraday_features` per-ticker, then run
+    the FE-8 cohort pass to merge in cross-sectional features.
+
+    Phase A (per-ticker, unchanged from FE-2): every ticker's bar
+    series is sorted ascending and fed through
+    :func:`compute_intraday_features`. The output for non-FE-8
+    feature keys is byte-identical to the pre-FE-8 behaviour.
+
+    Phase B (FE-8 cohort pass, NEW): if ``index_bars_by_symbol``
+    is provided, the engine layers four cross-sectional features
+    onto each ticker's panel at every overlapping ``bar_open_ts_ns``:
+
+    * ``rs_vs_nifty_15m`` — ``stock_ret − nifty_ret`` across the
+      previous → current bar.
+    * ``rs_vs_sector_15m`` — same against the ticker's mapped
+      sector index. Emitted only for tickers whose entry is
+      present in ``ticker_to_sector_index``.
+    * ``market_breadth_pct_above_sma200`` — cohort-wide ``%`` of
+      tickers with ``close > sma_200`` at the bar.
+    * ``advance_decline_ratio`` — cohort-wide
+      ``advancers / decliners``. Absent (skip-emission, not NaN)
+      when ``decliners == 0`` (div-by-zero guard).
+
+    When ``index_bars_by_symbol`` is ``None`` or missing
+    ``"NIFTY 50"`` bars, the four FE-8 features are absent for
+    every ticker; the rest of the panel is unaffected. This is
+    the "warmup-style skip" contract — strategies referencing
+    FE-8 features see absence (KeyError) and the pipeline
+    assertion ``intraday-features-coverage-floor`` still passes
+    because the non-cohort features remain ≥ 5 per bar.
+
+    Pure-function discipline holds — no I/O. The compute job and
+    on-demand backfill are responsible for fetching index bars +
+    sector mappings.
+
+    Args:
+        bars_by_ticker: Per-ticker bar series.
+        index_bars_by_symbol: Per-symbol bar series for the index
+            universe (FE-6's ``stocks.index_intraday_bars``). When
+            ``None``, FE-8 features are absent.
+        ticker_to_sector_index: Maps equity ticker → Kite index
+            tradingsymbol. Tickers absent from this dict do not
+            receive ``rs_vs_sector_15m``.
+        sma_windows: SMA windows (passed through to
+            :func:`compute_intraday_features`).
+        feature_set_version: Reserved (passed through).
+
+    Returns:
+        Universe panel
+        ``{ticker: {bar_open_ts_ns: {feature_name: Decimal | str}}}``.
     """
     out: UniverseFeaturePanel = {}
     for ticker, blist in bars_by_ticker.items():
@@ -262,4 +310,213 @@ def compute_intraday_features_for_universe(
             sma_windows=sma_windows,
             feature_set_version=feature_set_version,
         )
+    if index_bars_by_symbol is not None:
+        _apply_cohort_features(
+            panel=out,
+            bars_by_ticker=bars_by_ticker,
+            index_bars_by_symbol=index_bars_by_symbol,
+            ticker_to_sector_index=ticker_to_sector_index or {},
+        )
     return out
+
+
+def _close_by_ts(bars: list[BarData]) -> dict[int, Decimal]:
+    """Helper: ``{bar_open_ts_ns: close}`` for a sorted series.
+
+    Bars without ``bar_open_ts_ns`` are skipped defensively (daily-
+    shaped inputs land here through the test harness occasionally).
+    """
+    return {
+        b.bar_open_ts_ns: b.close
+        for b in bars
+        if b.bar_open_ts_ns is not None
+    }
+
+
+def _bar_to_bar_return(
+    close: Decimal,
+    prev_close: Decimal | None,
+) -> Decimal | None:
+    """Pure-Decimal bar-to-bar return ``(close/prev_close - 1)``.
+
+    Returns ``None`` if ``prev_close`` is ``None`` or zero so the
+    caller emits skip-absence rather than poisoning the cohort
+    pass with ``NaN`` / ``inf``.
+    """
+    if prev_close is None or prev_close == 0:
+        return None
+    return (close / prev_close) - Decimal("1")
+
+
+def _apply_cohort_features(
+    *,
+    panel: UniverseFeaturePanel,
+    bars_by_ticker: dict[str, list[BarData]],
+    index_bars_by_symbol: dict[str, list[BarData]],
+    ticker_to_sector_index: dict[str, str],
+) -> None:
+    """In-place merge of FE-8 cross-sectional features onto
+    ``panel``.
+
+    Each cohort feature is treated independently — failure to
+    compute one (e.g. NIFTY 50 bars missing) does not block the
+    others. Skip-emission contract: features simply absent from
+    each ts_ns entry when not computable.
+    """
+    # ── Index closes lookup (NIFTY 50 + sector indices) ──────
+    nifty_closes = _close_by_ts(
+        index_bars_by_symbol.get("NIFTY 50", []),
+    )
+    sector_closes: dict[str, dict[int, Decimal]] = {}
+    for sym, blist in index_bars_by_symbol.items():
+        if sym == "NIFTY 50":
+            continue
+        sector_closes[sym] = _close_by_ts(blist)
+
+    # ── Per-ticker close lookups (sorted, ts → close) ────────
+    ticker_closes: dict[str, dict[int, Decimal]] = {}
+    ticker_sorted_ts: dict[str, list[int]] = {}
+    for ticker, blist in bars_by_ticker.items():
+        if not blist:
+            continue
+        sorted_bars = sorted(
+            blist,
+            key=lambda b: (b.bar_open_ts_ns or 0),
+        )
+        closes = _close_by_ts(sorted_bars)
+        if not closes:
+            continue
+        ticker_closes[ticker] = closes
+        ticker_sorted_ts[ticker] = sorted(closes.keys())
+
+    # ── Cohort breadth + A/D — group by ts across all tickers
+    breadth_pct: dict[int, Decimal] = {}
+    adr_ratio: dict[int, Decimal] = {}
+    all_ts_set: set[int] = set()
+    for closes in ticker_closes.values():
+        all_ts_set.update(closes.keys())
+    sorted_all_ts = sorted(all_ts_set)
+    for ts_ns in sorted_all_ts:
+        # market_breadth_pct_above_sma200 — uses already-emitted
+        # ``sma_200`` from Phase A so the cohort pass benefits
+        # from the existing primitive without recomputing it.
+        n_tot = 0
+        n_above = 0
+        for ticker, closes in ticker_closes.items():
+            close = closes.get(ts_ns)
+            if close is None:
+                continue
+            feats_at_ts = panel.get(ticker, {}).get(ts_ns)
+            if not feats_at_ts:
+                continue
+            sma200 = feats_at_ts.get("sma_200")
+            if not isinstance(sma200, Decimal):
+                continue
+            n_tot += 1
+            if close > sma200:
+                n_above += 1
+        if n_tot > 0:
+            breadth_pct[ts_ns] = (
+                Decimal(n_above) / Decimal(n_tot) * Decimal("100")
+            )
+
+        # advance_decline_ratio — needs prev-bar close per ticker.
+        # We use each ticker's OWN previous bar (sorted ts list)
+        # rather than the cohort prev-ts, matching the intuition
+        # of "did this stock close up vs its last bar".
+        advancers = 0
+        decliners = 0
+        for ticker, closes in ticker_closes.items():
+            close = closes.get(ts_ns)
+            if close is None:
+                continue
+            sorted_ts = ticker_sorted_ts[ticker]
+            try:
+                idx = sorted_ts.index(ts_ns)
+            except ValueError:
+                continue
+            if idx == 0:
+                continue
+            prev_close = closes.get(sorted_ts[idx - 1])
+            if prev_close is None:
+                continue
+            if close > prev_close:
+                advancers += 1
+            elif close < prev_close:
+                decliners += 1
+        if decliners > 0:
+            adr_ratio[ts_ns] = (
+                Decimal(advancers) / Decimal(decliners)
+            )
+
+    # ── Emit per-(ticker, ts_ns) ───────────────────────────────
+    have_nifty = len(nifty_closes) > 0
+    nifty_sorted_ts = sorted(nifty_closes.keys()) if have_nifty else []
+    sector_sorted_ts: dict[str, list[int]] = {
+        sym: sorted(c.keys()) for sym, c in sector_closes.items()
+    }
+
+    def _index_return_at(
+        closes: dict[int, Decimal],
+        sorted_ts: list[int],
+        ts_ns: int,
+    ) -> Decimal | None:
+        """Same bar-to-bar return rule applied to an index series
+        using ITS OWN prior bar (not the equity ticker's prior).
+        """
+        close = closes.get(ts_ns)
+        if close is None:
+            return None
+        try:
+            idx = sorted_ts.index(ts_ns)
+        except ValueError:
+            return None
+        if idx == 0:
+            return None
+        prev = closes.get(sorted_ts[idx - 1])
+        return _bar_to_bar_return(close, prev)
+
+    for ticker, closes in ticker_closes.items():
+        ticker_panel = panel.setdefault(ticker, {})
+        sorted_ts = ticker_sorted_ts[ticker]
+        sector_sym = ticker_to_sector_index.get(ticker)
+        for i, ts_ns in enumerate(sorted_ts):
+            feats = ticker_panel.setdefault(ts_ns, {})
+            # ── Breadth + A/D (cohort-pass, same value per ts) ─
+            b = breadth_pct.get(ts_ns)
+            if b is not None:
+                feats["market_breadth_pct_above_sma200"] = b
+            ad = adr_ratio.get(ts_ns)
+            if ad is not None:
+                feats["advance_decline_ratio"] = ad
+
+            # ── RS vs NIFTY 50 ────────────────────────────────
+            if have_nifty and i > 0:
+                stock_close = closes.get(ts_ns)
+                stock_prev = closes.get(sorted_ts[i - 1])
+                stock_ret = _bar_to_bar_return(stock_close, stock_prev)
+                nifty_ret = _index_return_at(
+                    nifty_closes,
+                    nifty_sorted_ts,
+                    ts_ns,
+                )
+                if stock_ret is not None and nifty_ret is not None:
+                    feats["rs_vs_nifty_15m"] = stock_ret - nifty_ret
+
+            # ── RS vs sector ──────────────────────────────────
+            if sector_sym and i > 0:
+                closes_sec = sector_closes.get(sector_sym)
+                if closes_sec is not None:
+                    stock_close = closes.get(ts_ns)
+                    stock_prev = closes.get(sorted_ts[i - 1])
+                    stock_ret = _bar_to_bar_return(
+                        stock_close,
+                        stock_prev,
+                    )
+                    sec_ret = _index_return_at(
+                        closes_sec,
+                        sector_sorted_ts[sector_sym],
+                        ts_ns,
+                    )
+                    if stock_ret is not None and sec_ret is not None:
+                        feats["rs_vs_sector_15m"] = stock_ret - sec_ret
