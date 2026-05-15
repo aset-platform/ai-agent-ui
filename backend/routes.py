@@ -4175,6 +4175,16 @@ def create_app(
         create_attribution_router(),
         prefix="/v1",
     )
+    # FE-11 (ASETPLTFRM-413) — per-strategy feature importance
+    # ranking via sklearn GradientBoostingClassifier on closed
+    # trade outcomes. Pro-or-superuser only.
+    from backend.algo.routes import (
+        create_feature_importance_router,
+    )
+    app.include_router(
+        create_feature_importance_router(),
+        prefix="/v1",
+    )
 
     # WebSocket streaming endpoint.
     from ws import register_ws_routes
