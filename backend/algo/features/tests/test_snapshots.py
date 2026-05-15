@@ -1,8 +1,11 @@
 """Tests for the per-fill trade-feature snapshot writer
-(ASETPLTFRM-402 / FE-5).
+(ASETPLTFRM-402 / FE-5, FE-5.1).
 
 Coverage:
-- happy path single-row append
+- happy path single-row append (via ``force_immediate=True``
+  escape hatch — FE-5.1 dispatcher otherwise routes
+  backtest/paper to the in-process buffer; the underlying
+  row-shape contract is unchanged)
 - Decimal + str feature serialization round-trip
 - failure isolation: Iceberg raise → log + return None
 - None / empty features → ``features_json == "{}"``
@@ -62,6 +65,7 @@ def test_writer_appends_single_row() -> None:
             bar_date="2025-03-15",
             mode="backtest",
             features={"rsi_14": Decimal("55.2")},
+            force_immediate=True,
         )
 
     assert len(captured) == 1, "exactly one row appended"
@@ -105,6 +109,7 @@ def test_writer_serializes_features_to_json() -> None:
                 "time_of_day_bucket": "midday",
                 "vwap": Decimal("3499.75"),
             },
+            force_immediate=True,
         )
 
     row = captured[0].to_pylist()[0]
@@ -141,6 +146,7 @@ def test_writer_returns_none_on_iceberg_failure(caplog) -> None:
                 bar_date="2025-01-01",
                 mode="backtest",
                 features={"x": Decimal("1")},
+                force_immediate=True,
             )
 
     assert result is None
@@ -168,6 +174,7 @@ def test_writer_handles_none_features() -> None:
             bar_date="2025-02-01",
             mode="live",
             features=None,
+            force_immediate=True,
         )
 
     row = captured[0].to_pylist()[0]
@@ -193,6 +200,7 @@ def test_writer_handles_empty_features() -> None:
             bar_date="2025-02-01",
             mode="backtest",
             features={},
+            force_immediate=True,
         )
 
     row = captured[0].to_pylist()[0]
@@ -219,6 +227,7 @@ def test_writer_strips_timezone_from_written_at() -> None:
             bar_date="2025-02-01",
             mode="backtest",
             features={},
+            force_immediate=True,
         )
 
     row = captured[0].to_pylist()[0]
@@ -249,6 +258,7 @@ def test_writer_derives_fill_ts_ns_for_daily_fills() -> None:
             bar_date="2025-02-01",
             mode="backtest",
             features={},
+            force_immediate=True,
         )
 
     row = captured[0].to_pylist()[0]

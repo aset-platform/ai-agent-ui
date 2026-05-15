@@ -27,6 +27,7 @@ cancel them.  Each entry is::
         "status": "submitted" | "cancelled" | "filled"
     }
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -44,14 +45,17 @@ from backend.algo.backtest.event_writer import event_row, flush_events
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 from backend.algo.backtest.positions import PositionTracker
 from backend.algo.broker.kite_client import KiteClient
+
 # REGIME-2a — pre-computed nightly factor library overlay.
 from backend.algo.factors.repo import get_factors_window
 from backend.algo.live import slippage as _slippage
 from backend.algo.live.order_timeout import _OrderTimeoutWatcher
 from backend.algo.live.safety import (
-    LiveRejectReason, pre_trade_check,
+    LiveRejectReason,
+    pre_trade_check,
 )
 from backend.algo.paper.types import AccountState, Signal
+
 # REGIME-4 — vol-target / Kelly sizer (legacy modes bypass).
 from backend.algo.sizing.composer import SizingContext, compose_qty
 from backend.algo.stream.resampler import Resampler
@@ -78,7 +82,8 @@ def _parse_ist_time(s: str) -> time:
     except Exception:  # noqa: BLE001
         _logger.warning(
             "Invalid ALGO_DAILY_MIN_EVAL_TIME_IST=%r — falling "
-            "back to 14:30", s,
+            "back to 14:30",
+            s,
         )
         return time(14, 30)
 
@@ -186,6 +191,7 @@ class LiveRuntime:
                 hydrate,
                 hydration_events,
             )
+
             allowed = caps.get("allowed_tickers") or None
             hydrated = hydrate(
                 kite=kite,
@@ -195,18 +201,21 @@ class LiveRuntime:
             )
             if hydrated:
                 apply_hydrated_positions(self._positions, hydrated)
-                self._events.extend(hydration_events(
-                    session_id=self._session_id,
-                    user_id=user_id,
-                    strategy_id=strategy.id,
-                    hydrated=hydrated,
-                    dry_run=self._dry_run,
-                ))
+                self._events.extend(
+                    hydration_events(
+                        session_id=self._session_id,
+                        user_id=user_id,
+                        strategy_id=strategy.id,
+                        hydrated=hydrated,
+                        dry_run=self._dry_run,
+                    )
+                )
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
                 "LiveRuntime: position hydration failed: %s — "
                 "PositionTracker starts empty (EXIT signals on "
-                "pre-existing positions will no-op)", exc,
+                "pre-existing positions will no-op)",
+                exc,
             )
 
         # Pre-load NIFTY regime + trend features so strategies
@@ -221,6 +230,7 @@ class LiveRuntime:
                 compute_market_regime as _cmr,
                 compute_market_trend_strength as _cmts,
             )
+
             # Match ``load_ohlcv_window``'s UTC clock — local IST
             # racing past midnight UTC would trip
             # BackedFutureBarError.
@@ -244,9 +254,7 @@ class LiveRuntime:
         # on first sight of a ticker (same rationale as
         # PaperRuntime: ``strategy.universe`` is a scope spec,
         # not a ticker list).
-        self._factor_cache: dict[
-            tuple[str, date], dict[str, Decimal]
-        ] = {}
+        self._factor_cache: dict[tuple[str, date], dict[str, Decimal]] = {}
         self._factor_loaded_for_ticker: set[str] = set()
         # REGIME-1 — regime_label + stress_prob lookup, loaded
         # lazily on first bar so live sessions resolve regime
@@ -260,9 +268,7 @@ class LiveRuntime:
         # to ``None`` → ``slippage.bps_for(None)`` returns 30 bps,
         # preserving today's behaviour. Missing snapshot column or
         # query failure is non-fatal — every ticker just defaults.
-        self._bucket_by_ticker: dict[str, str] = (
-            self._load_bucket_by_ticker()
-        )
+        self._bucket_by_ticker: dict[str, str] = self._load_bucket_by_ticker()
 
         # ASETPLTFRM-383 — preload 250 closed daily bars per allowed
         # ticker from stocks.ohlcv (Iceberg) so the very first
@@ -284,6 +290,7 @@ class LiveRuntime:
                 from backend.algo.live.daily_bar_warmup import (
                     preload_daily_bars,
                 )
+
                 preloaded = preload_daily_bars(
                     list(allowed_for_preload),
                     kite_client=kite,
@@ -309,6 +316,7 @@ class LiveRuntime:
                     INTERVAL_SEC_BY_LABEL,
                     preload_intraday_bars,
                 )
+
                 interval_sec = INTERVAL_SEC_BY_LABEL[interval]
                 preloaded = preload_intraday_bars(
                     list(allowed_for_preload),
@@ -320,14 +328,16 @@ class LiveRuntime:
                 _logger.info(
                     "LiveRuntime: intraday-bar warmup loaded — "
                     "%d ticker(s), interval=%s",
-                    len(preloaded), interval,
+                    len(preloaded),
+                    interval,
                 )
             except Exception as exc:  # noqa: BLE001
                 _logger.warning(
                     "LiveRuntime: intraday-bar warmup failed: %s "
                     "— strategies will silent-skip until indicators"
                     " settle on session-local bars",
-                    exc, exc_info=True,
+                    exc,
+                    exc_info=True,
                 )
 
         # PR #3 (order-safety) — background asyncio watcher that
@@ -360,6 +370,7 @@ class LiveRuntime:
         """
         try:
             from backend.db.duckdb_engine import query_iceberg_table
+
             rows = query_iceberg_table(
                 "stocks.universe_snapshot",
                 "SELECT ticker, liquidity_bucket, "
@@ -410,8 +421,8 @@ class LiveRuntime:
             self._events = []
         except Exception:  # noqa: BLE001
             _logger.warning(
-                "in-session flush failed — events will land at "
-                "session end", exc_info=True,
+                "in-session flush failed — events will land at " "session end",
+                exc_info=True,
             )
 
     def _ensure_regime_cache(self, bar_date_obj: date) -> None:
@@ -421,6 +432,7 @@ class LiveRuntime:
         try:
             from datetime import timedelta as _td
             from backend.algo.regime.repo import get_regime_history
+
             rh_rows = get_regime_history(
                 bar_date_obj - _td(days=365),
                 bar_date_obj + _td(days=1),
@@ -437,11 +449,14 @@ class LiveRuntime:
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
                 "LiveRuntime: regime_history load failed: %s — "
-                "regime-aware templates will silent-skip", exc,
+                "regime-aware templates will silent-skip",
+                exc,
             )
 
     def _ensure_factor_cache(
-        self, ticker: str, bar_date_obj: date,
+        self,
+        ticker: str,
+        bar_date_obj: date,
     ) -> None:
         """Lazy load factor rows for ``ticker``. Called once per
         ticker."""
@@ -450,6 +465,7 @@ class LiveRuntime:
         self._factor_loaded_for_ticker.add(ticker)
         try:
             from datetime import timedelta as _td
+
             rows = get_factors_window(
                 [ticker],
                 bar_date_obj - _td(days=365),
@@ -458,14 +474,16 @@ class LiveRuntime:
             for r in rows:
                 self._factor_cache[(r.ticker, r.bar_date)] = {
                     k: Decimal(str(v))
-                    for k, v in r.values.items() if v is not None
+                    for k, v in r.values.items()
+                    if v is not None
                 }
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
                 "LiveRuntime: factor cache load for %s failed: "
                 "%s — strategies referencing factor.* keys will "
                 "silent-skip until backfill catches up",
-                ticker, exc,
+                ticker,
+                exc,
             )
 
     # ----------------------------------------------------------
@@ -492,7 +510,8 @@ class LiveRuntime:
         except Exception:  # noqa: BLE001
             _logger.warning(
                 "LiveRuntime: invalid square_off_time=%r — "
-                "falling back to 15:14 IST", s,
+                "falling back to 15:14 IST",
+                s,
             )
             return time(15, 14)
 
@@ -517,8 +536,10 @@ class LiveRuntime:
         )
         now_ist = datetime.now(IST)
         target_ist = now_ist.replace(
-            hour=target_t.hour, minute=target_t.minute,
-            second=0, microsecond=0,
+            hour=target_t.hour,
+            minute=target_t.minute,
+            second=0,
+            microsecond=0,
         )
         delay_s = (target_ist - now_ist).total_seconds()
         if delay_s <= 0:
@@ -533,7 +554,9 @@ class LiveRuntime:
         _logger.info(
             "LiveRuntime: MIS auto-square scheduled in %.1fs "
             "(target=%s IST, strategy=%s)",
-            delay_s, target_t.strftime("%H:%M"), self._strategy.id,
+            delay_s,
+            target_t.strftime("%H:%M"),
+            self._strategy.id,
         )
         try:
             await asyncio.sleep(delay_s)
@@ -587,7 +610,9 @@ class LiveRuntime:
                     "LiveRuntime: MIS auto-square SELL failed for "
                     "%s: %s — Kite's broker-side 15:15 auto-square"
                     " will still close the position",
-                    ticker, exc, exc_info=True,
+                    ticker,
+                    exc,
+                    exc_info=True,
                 )
 
     async def run(self, source: TickSource) -> int:
@@ -605,9 +630,10 @@ class LiveRuntime:
         bar_count = 0
         signal_count = 0
         _logger.info(
-            "LiveRuntime: starting drain user=%s strat=%s "
-            "run_id=%s",
-            self._user_id, self._strategy.id, self._run_id,
+            "LiveRuntime: starting drain user=%s strat=%s " "run_id=%s",
+            self._user_id,
+            self._strategy.id,
+            self._run_id,
         )
         # PR #3 (order-safety) — start the order TTL watcher as a
         # background task BEFORE the drain loop. Dry-run sessions
@@ -617,6 +643,7 @@ class LiveRuntime:
         # ALGO_ORDER_TTL_S=0 — preserves the rollout backout knob.
         if not self._timeout_watcher:
             from backend.algo.live.order_timeout import _read_ttl_s
+
             ttl = _read_ttl_s()
             if ttl > 0:
                 self._timeout_watcher = _OrderTimeoutWatcher(
@@ -652,31 +679,32 @@ class LiveRuntime:
                 if tick_count == 1 or tick_count % 500 == 0:
                     _logger.info(
                         "LiveRuntime: tick #%d ticker=%s",
-                        tick_count, tick.ticker,
+                        tick_count,
+                        tick.ticker,
                     )
-                last_price_per_ticker[tick.ticker] = (
-                    Decimal(str(tick.ltp))
-                )
+                last_price_per_ticker[tick.ticker] = Decimal(str(tick.ltp))
                 # PR #1 — stamp arrival time for staleness gate.
                 # ASETPLTFRM-372 — prefer exchange-emission ts
                 # when Kite supplied it (full/quote-mode packets);
                 # fall back to local arrival. Catches "exchange
                 # froze but WS connection is healthy" failures.
                 ts_ns = _select_last_price_ts_ns(tick)
-                last_price_ts_per_ticker[tick.ticker] = (
-                    datetime.fromtimestamp(
-                        ts_ns / 1_000_000_000, tz=UTC,
-                    )
+                last_price_ts_per_ticker[tick.ticker] = datetime.fromtimestamp(
+                    ts_ns / 1_000_000_000,
+                    tz=UTC,
                 )
                 self._resampler.feed(tick)
                 for bar in self._resampler.pop_completed():
                     bar_count += 1
                     lp = last_price_per_ticker.get(
-                        bar.ticker, Decimal(str(bar.close)),
+                        bar.ticker,
+                        Decimal(str(bar.close)),
                     )
                     lp_ts = last_price_ts_per_ticker.get(bar.ticker)
                     n = await self._on_bar_close(
-                        bar=bar, last_price=lp, last_price_ts=lp_ts,
+                        bar=bar,
+                        last_price=lp,
+                        last_price_ts=lp_ts,
                     )
                     fills += n
                     if n > 0:
@@ -684,7 +712,10 @@ class LiveRuntime:
             _logger.info(
                 "LiveRuntime: drain complete ticks=%d bars=%d "
                 "fills=%d events_buffered=%d",
-                tick_count, bar_count, fills, len(self._events),
+                tick_count,
+                bar_count,
+                fills,
+                len(self._events),
             )
         finally:
             # ASETPLTFRM-394 — cancel the MIS auto-square task on
@@ -712,7 +743,8 @@ class LiveRuntime:
             if self._timeout_watcher_task is not None:
                 try:
                     await asyncio.wait_for(
-                        self._timeout_watcher_task, timeout=30.0,
+                        self._timeout_watcher_task,
+                        timeout=30.0,
                     )
                 except asyncio.TimeoutError:
                     _logger.warning(
@@ -727,22 +759,26 @@ class LiveRuntime:
                 except Exception:  # noqa: BLE001
                     _logger.warning(
                         "LiveRuntime: order timeout watcher "
-                        "raised during stop", exc_info=True,
+                        "raised during stop",
+                        exc_info=True,
                     )
                 self._timeout_watcher = None
                 self._timeout_watcher_task = None
             for bar in self._resampler.close_partial_bars():
                 lp = last_price_per_ticker.get(
-                    bar.ticker, Decimal(str(bar.close)),
+                    bar.ticker,
+                    Decimal(str(bar.close)),
                 )
                 lp_ts = last_price_ts_per_ticker.get(bar.ticker)
                 fills += await self._on_bar_close(
-                    bar=bar, last_price=lp, last_price_ts=lp_ts,
+                    bar=bar,
+                    last_price=lp,
+                    last_price_ts=lp_ts,
                 )
             if self._events:
                 _logger.info(
-                    "LiveRuntime: flushing %d events to "
-                    "algo.events", len(self._events),
+                    "LiveRuntime: flushing %d events to " "algo.events",
+                    len(self._events),
                 )
                 flush_events(self._events)
                 self._events = []
@@ -774,8 +810,10 @@ class LiveRuntime:
         # belt-and-braces fallback for tickers that go quiet.
         try:
             from backend.cache import get_cache
+
             get_cache().set(
-                f"cache:ltp:{bar.ticker}", str(float(bar.close)),
+                f"cache:ltp:{bar.ticker}",
+                str(float(bar.close)),
                 ttl=60,
             )
         except Exception:  # noqa: BLE001
@@ -805,11 +843,10 @@ class LiveRuntime:
             from backend.algo.live.intraday_bar_warmup import (
                 INTERVAL_SEC_BY_LABEL,
             )
+
             interval_sec = INTERVAL_SEC_BY_LABEL[strategy_interval]
             interval_ns = interval_sec * 1_000_000_000
-            bucket_open_ns = (
-                bar.bar_open_ts_ns // interval_ns
-            ) * interval_ns
+            bucket_open_ns = (bar.bar_open_ts_ns // interval_ns) * interval_ns
             bucket_key = bucket_open_ns
 
         # ASETPLTFRM-383 / 393 — preloaded closed bars + a running
@@ -826,22 +863,19 @@ class LiveRuntime:
                         preload_daily_bars,
                         [bar.ticker],
                         kite_client=self._kite,
-                        ticker_to_token=(
-                            self._ticker_to_token or None
-                        ),
+                        ticker_to_token=(self._ticker_to_token or None),
                     )
                 else:
                     from backend.algo.live.intraday_bar_warmup import (
                         preload_intraday_bars,
                     )
+
                     lazy = await asyncio.to_thread(
                         preload_intraday_bars,
                         [bar.ticker],
                         interval_sec=interval_sec,
                         kite_client=self._kite,
-                        ticker_to_token=(
-                            self._ticker_to_token or None
-                        ),
+                        ticker_to_token=(self._ticker_to_token or None),
                     )
                 history = lazy.get(bar.ticker, [])
             except Exception as exc:  # noqa: BLE001
@@ -849,7 +883,9 @@ class LiveRuntime:
                     "LiveRuntime: lazy %s-bar preload for %s failed:"
                     " %s — strategy silent-skips on this ticker "
                     "until indicators settle",
-                    strategy_interval, bar.ticker, exc,
+                    strategy_interval,
+                    bar.ticker,
+                    exc,
                     exc_info=True,
                 )
                 history = []
@@ -875,24 +911,28 @@ class LiveRuntime:
             return last.bar_open_ts_ns != bucket_open_ns
 
         if _is_new_bucket(history):
-            history.append(_BackBar(
-                ticker=bar.ticker,
-                date=bar_date_obj,
-                open=cur_open,
-                high=cur_high,
-                low=cur_low,
-                close=cur_close,
-                volume=cur_vol,
-                bar_open_ts_ns=bucket_open_ns,
-            ))
+            history.append(
+                _BackBar(
+                    ticker=bar.ticker,
+                    date=bar_date_obj,
+                    open=cur_open,
+                    high=cur_high,
+                    low=cur_low,
+                    close=cur_close,
+                    volume=cur_vol,
+                    bar_open_ts_ns=bucket_open_ns,
+                )
+            )
         else:
             today_bar = history[-1]
-            history[-1] = today_bar.model_copy(update={
-                "high": max(today_bar.high, cur_high),
-                "low": min(today_bar.low, cur_low),
-                "close": cur_close,
-                "volume": today_bar.volume + cur_vol,
-            })
+            history[-1] = today_bar.model_copy(
+                update={
+                    "high": max(today_bar.high, cur_high),
+                    "low": min(today_bar.low, cur_low),
+                    "close": cur_close,
+                    "volume": today_bar.volume + cur_vol,
+                }
+            )
 
         # ASETPLTFRM-383 — eval-time gate. Before MIN_EVAL_TIME_IST,
         # ticks update today's bar but no strategy eval fires. Lets
@@ -923,6 +963,7 @@ class LiveRuntime:
                 _INTERVAL_SEC_BY_LABEL,
                 emit_features_for_bar,
             )
+
             _cadence = self._strategy.schedule.interval
             if _cadence in _INTERVAL_SEC_BY_LABEL:
                 emit_features_for_bar(
@@ -951,15 +992,18 @@ class LiveRuntime:
                 },
             ),
             "nifty_above_sma200": self._market_regime.get(
-                bar_date_obj, Decimal("0"),
+                bar_date_obj,
+                Decimal("0"),
             ),
             "nifty_30d_return_pct": self._market_trend.get(
-                bar_date_obj, Decimal("0"),
+                bar_date_obj,
+                Decimal("0"),
             ),
             # REGIME-2a — cached factor row overlay (disjoint
             # from indicator + regime keys by design).
             **self._factor_cache.get(
-                (bar.ticker, bar_date_obj), {},
+                (bar.ticker, bar_date_obj),
+                {},
             ),
             # REGIME-1 — regime_label + stress_prob overlay.
             **self._regime_by_date.get(bar_date_obj, {}),
@@ -997,33 +1041,31 @@ class LiveRuntime:
                 is_entry_allowed,
                 ist_time_from_ns,
             )
+
             bar_ist_time = ist_time_from_ns(bar.bar_open_ts_ns)
-            if (
-                bar_ist_time is not None
-                and not is_entry_allowed(
-                    product=self._strategy.product,
-                    entry_cutoff_raw=self._strategy.entry_cutoff_time,
-                    bar_time_ist=bar_ist_time,
-                )
+            if bar_ist_time is not None and not is_entry_allowed(
+                product=self._strategy.product,
+                entry_cutoff_raw=self._strategy.entry_cutoff_time,
+                bar_time_ist=bar_ist_time,
             ):
-                self._events.append(event_row(
-                    session_id=self._session_id,
-                    user_id=self._user_id,
-                    strategy_id=self._strategy.id,
-                    mode="live",
-                    type_="signal_rejected",
-                    payload={
-                        **({"dry_run": True} if self._dry_run else {}),
-                        "reason": "mis_entry_cutoff",
-                        "ticker": signal.ticker,
-                        "side": signal.side,
-                        "qty": signal.qty,
-                        "bar_ist_time": bar_ist_time.isoformat(),
-                        "entry_cutoff": (
-                            self._strategy.entry_cutoff_time
-                        ),
-                    },
-                ))
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="signal_rejected",
+                        payload={
+                            **({"dry_run": True} if self._dry_run else {}),
+                            "reason": "mis_entry_cutoff",
+                            "ticker": signal.ticker,
+                            "side": signal.side,
+                            "qty": signal.qty,
+                            "bar_ist_time": bar_ist_time.isoformat(),
+                            "entry_cutoff": (self._strategy.entry_cutoff_time),
+                        },
+                    )
+                )
                 return 0
 
         # ASETPLTFRM-381 — also emit ``symbol`` (canonical, no .NS)
@@ -1031,37 +1073,42 @@ class LiveRuntime:
         # signals with fills (fills carry payload.symbol only). The
         # ``.NS`` suffix denotes the NSE market in our internal
         # ticker scheme; Kite's tradingsymbol drops it.
-        _canonical_symbol = (
-            str(signal.ticker).upper().removesuffix(".NS")
+        _canonical_symbol = str(signal.ticker).upper().removesuffix(".NS")
+        self._events.append(
+            event_row(
+                session_id=self._session_id,
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                mode="live",
+                type_="signal_generated",
+                payload={
+                    **({"dry_run": True} if self._dry_run else {}),
+                    "ticker": signal.ticker,
+                    "symbol": _canonical_symbol,
+                    "side": signal.side,
+                    "qty": signal.qty,
+                    # REGIME-6 — attribution context (additive).
+                    **_attribution_payload_extension(features),
+                },
+            )
         )
-        self._events.append(event_row(
-            session_id=self._session_id,
-            user_id=self._user_id,
-            strategy_id=self._strategy.id,
-            mode="live",
-            type_="signal_generated",
-            payload={
-                **({"dry_run": True} if self._dry_run else {}),
-                "ticker": signal.ticker,
-                "symbol": _canonical_symbol,
-                "side": signal.side,
-                "qty": signal.qty,
-                # REGIME-6 — attribution context (additive).
-                **_attribution_payload_extension(features),
-            },
-        ))
         self._flush_events_now()
 
         # Fresh caps read — used for max_inr / max_orders_per_day
         # and the allow-list; the daily-counter columns on the row
         # are no longer authoritative (see below).
-        current_caps = await self._caps_repo.get(
-            self._user_id, self._strategy.id,
-        ) or self._caps
+        current_caps = (
+            await self._caps_repo.get(
+                self._user_id,
+                self._strategy.id,
+            )
+            or self._caps
+        )
 
         account = self._account_snapshot(
-            kill_switch_active=await self._kill_switch_repo
-            .is_active(self._user_id),
+            kill_switch_active=await self._kill_switch_repo.is_active(
+                self._user_id
+            ),
         )
         # Exposure-based day_state: "consumption" is the capital
         # currently tied up in this strategy's open positions, not
@@ -1071,10 +1118,7 @@ class LiveRuntime:
         # naturally bring this back to 0, no daily reset job needed.
         positions_open = self._positions.open_positions()
         committed_inr_now = sum(
-            (
-                Decimal(p.qty) * p.avg_price
-                for p in positions_open.values()
-            ),
+            (Decimal(p.qty) * p.avg_price for p in positions_open.values()),
             start=Decimal("0"),
         )
         day_state = {
@@ -1095,32 +1139,34 @@ class LiveRuntime:
             reason_str = (
                 decision.reason.value
                 if hasattr(decision.reason, "value")
-                else str(decision.reason)
-                if decision.reason else "unknown"
+                else str(decision.reason) if decision.reason else "unknown"
             )
-            self._events.append(event_row(
-                session_id=self._session_id,
-                user_id=self._user_id,
-                strategy_id=self._strategy.id,
-                mode="live",
-                type_="signal_rejected",
-                payload={
-                    **({"dry_run": True} if self._dry_run else {}),
-                    "reason": reason_str,
-                    "ticker": signal.ticker,
-                    "side": signal.side,
-                    "qty": signal.qty,
-                    "threshold": (
-                        str(decision.threshold)
-                        if decision.threshold is not None else None
-                    ),
-                    "observed_value": (
-                        str(decision.observed_value)
-                        if decision.observed_value is not None
-                        else None
-                    ),
-                },
-            ))
+            self._events.append(
+                event_row(
+                    session_id=self._session_id,
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    mode="live",
+                    type_="signal_rejected",
+                    payload={
+                        **({"dry_run": True} if self._dry_run else {}),
+                        "reason": reason_str,
+                        "ticker": signal.ticker,
+                        "side": signal.side,
+                        "qty": signal.qty,
+                        "threshold": (
+                            str(decision.threshold)
+                            if decision.threshold is not None
+                            else None
+                        ),
+                        "observed_value": (
+                            str(decision.observed_value)
+                            if decision.observed_value is not None
+                            else None
+                        ),
+                    },
+                )
+            )
             self._flush_events_now()
             return 0
 
@@ -1138,8 +1184,7 @@ class LiveRuntime:
         max_orders = int(current_caps.get("max_orders_per_day", 0))
         orders_today = int(day_state.get("orders_count_today", 0))
         daily_cap_remaining = (
-            max(0, max_orders - orders_today) if max_orders > 0
-            else None
+            max(0, max_orders - orders_today) if max_orders > 0 else None
         )
 
         return await self._submit_order(
@@ -1195,16 +1240,12 @@ class LiveRuntime:
         if last_price and last_price > 0:
             buffer = last_price * spread_bps / BPS_DENOM
             limit_price = (
-                last_price + buffer if side == "BUY"
-                else last_price - buffer
+                last_price + buffer if side == "BUY" else last_price - buffer
             )
             # NSE tick size — round to 0.05 to satisfy Kite's
             # tick rule, which rejects price not divisible by tick.
             tick = Decimal("0.05")
-            limit_price = (
-                (limit_price / tick).quantize(Decimal("1"))
-                * tick
-            )
+            limit_price = (limit_price / tick).quantize(Decimal("1")) * tick
             order_kwargs = {
                 "order_type": "LIMIT",
                 "price": float(limit_price),
@@ -1217,8 +1258,7 @@ class LiveRuntime:
         # to string; keeping it as float in the payload makes the
         # frontend renderer simpler).
         lp_float: float | None = (
-            float(last_price)
-            if last_price and last_price > 0 else None
+            float(last_price) if last_price and last_price > 0 else None
         )
         # ASETPLTFRM-389 — product is now strategy-driven instead of
         # hard-coded CNC. Existing daily strategies parse with
@@ -1258,26 +1298,30 @@ class LiveRuntime:
             )
         except Exception as exc:
             rejection_reason = str(exc)
-            self._events.append(event_row(
-                session_id=self._session_id,
-                user_id=self._user_id,
-                strategy_id=self._strategy.id,
-                mode="live",
-                type_="order_rejected_live",
-                payload={
-                    **({"dry_run": True} if self._dry_run else {}),
-                    "internal_order_id": internal_order_id,
-                    "symbol": symbol,
-                    "side": side,
-                    "qty": signal.qty,
-                    "rejection_reason": rejection_reason,
-                    "kite_order_id": None,
-                },
-            ))
+            self._events.append(
+                event_row(
+                    session_id=self._session_id,
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    mode="live",
+                    type_="order_rejected_live",
+                    payload={
+                        **({"dry_run": True} if self._dry_run else {}),
+                        "internal_order_id": internal_order_id,
+                        "symbol": symbol,
+                        "side": side,
+                        "qty": signal.qty,
+                        "rejection_reason": rejection_reason,
+                        "kite_order_id": None,
+                    },
+                )
+            )
             _logger.error(
-                "live order rejected: symbol=%s side=%s qty=%d "
-                "reason=%s",
-                symbol, side, signal.qty, rejection_reason,
+                "live order rejected: symbol=%s side=%s qty=%d " "reason=%s",
+                symbol,
+                side,
+                signal.qty,
+                rejection_reason,
             )
             return 0
 
@@ -1307,7 +1351,9 @@ class LiveRuntime:
         }
         self._in_flight.append(in_flight_entry)
         await self._caps_repo.update_in_flight(
-            self._user_id, self._run_id, self._in_flight,
+            self._user_id,
+            self._run_id,
+            self._in_flight,
         )
 
         # PR #1 (order-safety) — order_submitted_live is now
@@ -1338,15 +1384,19 @@ class LiveRuntime:
         # Bump daily counters
         order_notional = Decimal(signal.qty) * last_price
         await self._caps_repo.increment_daily_counters(
-            self._user_id, self._strategy.id,
+            self._user_id,
+            self._strategy.id,
             inr_amount=order_notional,
         )
 
         _logger.info(
             "live order submitted: symbol=%s side=%s qty=%d "
             "kite_order_id=%s internal=%s",
-            symbol, side, signal.qty,
-            kite_order_id, internal_order_id,
+            symbol,
+            side,
+            signal.qty,
+            kite_order_id,
+            internal_order_id,
         )
         return 1
 
@@ -1387,10 +1437,7 @@ class LiveRuntime:
         # CNC / MIS). Map from strategy.product, defaulting to
         # DELIVERY so existing CNC strategies keep the same fee
         # tier they had before this change.
-        product = (
-            "INTRADAY" if self._strategy.product == "MIS"
-            else "DELIVERY"
-        )
+        product = "INTRADAY" if self._strategy.product == "MIS" else "DELIVERY"
         trade = Trade(
             symbol=symbol,
             exchange="NSE",
@@ -1424,13 +1471,16 @@ class LiveRuntime:
         in_flight_entry["fees_inr"] = str(fees.total_inr)
         try:
             await self._caps_repo.update_in_flight(
-                self._user_id, self._run_id, self._in_flight,
+                self._user_id,
+                self._run_id,
+                self._in_flight,
             )
         except Exception:  # noqa: BLE001
             _logger.warning(
                 "synthetic_fill: in-flight persist failed for "
                 "kite_order_id=%s — panel will lag until next "
-                "successful update", kite_order_id,
+                "successful update",
+                kite_order_id,
                 exc_info=True,
             )
 
@@ -1439,30 +1489,32 @@ class LiveRuntime:
         # fills we want them visible in the events panel within
         # the next SWR poll cycle (~5s) so users can verify their
         # dry-run trades end-to-end without stopping the session.
-        self._events.append(event_row(
-            session_id=self._session_id,
-            user_id=self._user_id,
-            strategy_id=self._strategy.id,
-            mode="live",
-            type_="order_filled_live",
-            payload={
-                **({"dry_run": True} if self._dry_run else {}),
-                "internal_order_id": internal_order_id,
-                "kite_order_id": kite_order_id,
-                "symbol": symbol,
-                "side": side,
-                "qty": qty,
-                "price": str(fill_price),
-                "fees_inr": str(fees.total_inr),
-                # Carry forward from in_flight_entry so the
-                # Positions tab Reason column has the action
-                # type and the attribution join can key on
-                # product. Both nullable for legacy entries
-                # written before this change.
-                "reason": in_flight_entry.get("reason"),
-                "product": in_flight_entry.get("product"),
-            },
-        ))
+        self._events.append(
+            event_row(
+                session_id=self._session_id,
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                mode="live",
+                type_="order_filled_live",
+                payload={
+                    **({"dry_run": True} if self._dry_run else {}),
+                    "internal_order_id": internal_order_id,
+                    "kite_order_id": kite_order_id,
+                    "symbol": symbol,
+                    "side": side,
+                    "qty": qty,
+                    "price": str(fill_price),
+                    "fees_inr": str(fees.total_inr),
+                    # Carry forward from in_flight_entry so the
+                    # Positions tab Reason column has the action
+                    # type and the attribution join can key on
+                    # product. Both nullable for legacy entries
+                    # written before this change.
+                    "reason": in_flight_entry.get("reason"),
+                    "product": in_flight_entry.get("product"),
+                },
+            )
+        )
         self._flush_events_now()
 
         # ASETPLTFRM-402 / FE-5 — per-fill feature snapshot.
@@ -1479,6 +1531,10 @@ class LiveRuntime:
                 write_trade_feature_snapshot,
             )
 
+            # FE-5.1 — pass ``user_id`` so the dispatcher routes
+            # this row to the Redis LIST keyed on the user (the
+            # 15:30 IST EOD flush job drains one Iceberg commit
+            # per ``(user_id, trading_date_ist)``).
             write_trade_feature_snapshot(
                 fill_id=str(kite_order_id),
                 run_id=str(self._run_id),
@@ -1491,6 +1547,7 @@ class LiveRuntime:
                 bar_date=today.isoformat(),
                 mode="live",
                 features=None,
+                user_id=str(self._user_id),
             )
         except Exception:  # noqa: BLE001
             _logger.exception(
@@ -1504,8 +1561,12 @@ class LiveRuntime:
         _logger.info(
             "[DRY_RUN] synthetic fill: symbol=%s side=%s qty=%d "
             "price=%s fees=%s kite_order_id=%s",
-            symbol, side, qty, fill_price,
-            fees.total_inr, kite_order_id,
+            symbol,
+            side,
+            qty,
+            fill_price,
+            fees.total_inr,
+            kite_order_id,
         )
 
     # ----------------------------------------------------------
@@ -1523,8 +1584,7 @@ class LiveRuntime:
         counts.
         """
         in_flight = [
-            e for e in self._in_flight
-            if e.get("status") == "submitted"
+            e for e in self._in_flight if e.get("status") == "submitted"
         ]
         cancelled = 0
         failed = 0
@@ -1534,45 +1594,52 @@ class LiveRuntime:
                 continue
             try:
                 await asyncio.to_thread(
-                    self._kite.cancel_order, kite_id,
+                    self._kite.cancel_order,
+                    kite_id,
                 )
                 entry["status"] = "cancelled"
                 cancelled += 1
-                self._events.append(event_row(
-                    session_id=self._session_id,
-                    user_id=self._user_id,
-                    strategy_id=self._strategy.id,
-                    mode="live",
-                    type_="order_cancelled_live",
-                    payload={
-                        **({"dry_run": True} if self._dry_run else {}),
-                        "kite_order_id": kite_id,
-                        "reason": "kill_switch_armed",
-                    },
-                ))
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="order_cancelled_live",
+                        payload={
+                            **({"dry_run": True} if self._dry_run else {}),
+                            "kite_order_id": kite_id,
+                            "reason": "kill_switch_armed",
+                        },
+                    )
+                )
             except Exception as exc:
                 failed += 1
                 _logger.error(
-                    "cancel_in_flight FAILED: kite_order_id=%s "
-                    "error=%s",
-                    kite_id, exc,
+                    "cancel_in_flight FAILED: kite_order_id=%s " "error=%s",
+                    kite_id,
+                    exc,
                 )
-                self._events.append(event_row(
-                    session_id=self._session_id,
-                    user_id=self._user_id,
-                    strategy_id=self._strategy.id,
-                    mode="live",
-                    type_="order_cancel_failed",
-                    payload={
-                        **({"dry_run": True} if self._dry_run else {}),
-                        "kite_order_id": kite_id,
-                        "error": str(exc),
-                    },
-                ))
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="order_cancel_failed",
+                        payload={
+                            **({"dry_run": True} if self._dry_run else {}),
+                            "kite_order_id": kite_id,
+                            "error": str(exc),
+                        },
+                    )
+                )
 
         # Persist updated in-flight list
         await self._caps_repo.update_in_flight(
-            self._user_id, self._run_id, self._in_flight,
+            self._user_id,
+            self._run_id,
+            self._in_flight,
         )
 
         # Flush all accumulated events
@@ -1587,23 +1654,21 @@ class LiveRuntime:
     # ----------------------------------------------------------
 
     def _account_snapshot(
-        self, *, kill_switch_active: bool = False,
+        self,
+        *,
+        kill_switch_active: bool = False,
     ) -> AccountState:
         open_qty = {
-            t: p.qty
-            for t, p in self._positions.open_positions().items()
+            t: p.qty for t, p in self._positions.open_positions().items()
         }
         return AccountState(
             user_id=self._user_id,
             day_date=datetime.now(UTC).date(),
             initial_capital_inr=self._initial,
             current_equity_inr=(
-                self._initial
-                + self._positions.total_realised_pnl_inr()
+                self._initial + self._positions.total_realised_pnl_inr()
             ),
-            daily_realised_pnl_inr=(
-                self._positions.total_realised_pnl_inr()
-            ),
+            daily_realised_pnl_inr=(self._positions.total_realised_pnl_inr()),
             daily_unrealised_pnl_inr=Decimal("0"),
             open_positions=open_qty,
             open_position_count=len(open_qty),
@@ -1622,17 +1687,17 @@ class LiveRuntime:
         if last_price is None or last_price <= 0:
             return 0
         bar_date_obj = datetime.fromtimestamp(
-            bar_date_ns / 1_000_000_000, tz=timezone.utc,
+            bar_date_ns / 1_000_000_000,
+            tz=timezone.utc,
         ).date()
-        nav = (
-            self._initial
-            + self._positions.total_realised_pnl_inr()
-        )
+        nav = self._initial + self._positions.total_realised_pnl_inr()
         factor_row = self._factor_cache.get(
-            (ticker, bar_date_obj), {},
+            (ticker, bar_date_obj),
+            {},
         )
         realized_vol = factor_row.get(
-            "realized_vol_60d", Decimal("NaN"),
+            "realized_vol_60d",
+            Decimal("NaN"),
         )
         ctx = SizingContext(
             ticker=ticker,
@@ -1660,10 +1725,7 @@ class LiveRuntime:
         if t == "buy":
             qty_spec = action["qty"]
             # REGIME-4 — vol-target / Kelly route through composer.
-            if (
-                "vol_target_pct" in qty_spec
-                or "kelly_fraction" in qty_spec
-            ):
+            if "vol_target_pct" in qty_spec or "kelly_fraction" in qty_spec:
                 qty = self._size_via_composer(
                     qty_spec=qty_spec,
                     ticker=ticker,
@@ -1677,16 +1739,16 @@ class LiveRuntime:
             return Signal(
                 strategy_id=self._strategy.id,
                 user_id=self._user_id,
-                ticker=ticker, side="BUY", qty=qty,
+                ticker=ticker,
+                side="BUY",
+                qty=qty,
                 emitted_at_ns=bar_date_ns,
                 reason=t,
             )
         if t == "sell":
             qty_spec = action["qty"]
             if qty_spec.get("all"):
-                existing = (
-                    self._positions.open_positions().get(ticker)
-                )
+                existing = self._positions.open_positions().get(ticker)
                 if not existing:
                     return None
                 qty = existing.qty
@@ -1697,7 +1759,9 @@ class LiveRuntime:
             return Signal(
                 strategy_id=self._strategy.id,
                 user_id=self._user_id,
-                ticker=ticker, side="SELL", qty=qty,
+                ticker=ticker,
+                side="SELL",
+                qty=qty,
                 emitted_at_ns=bar_date_ns,
                 reason=t,
             )
@@ -1708,7 +1772,8 @@ class LiveRuntime:
             return Signal(
                 strategy_id=self._strategy.id,
                 user_id=self._user_id,
-                ticker=ticker, side="SELL",
+                ticker=ticker,
+                side="SELL",
                 qty=existing.qty,
                 emitted_at_ns=bar_date_ns,
                 reason=t,
@@ -1717,8 +1782,7 @@ class LiveRuntime:
             if last_price is None or last_price <= 0:
                 return None
             current_equity = (
-                self._initial
-                + self._positions.total_realised_pnl_inr()
+                self._initial + self._positions.total_realised_pnl_inr()
             )
             if current_equity <= 0:
                 return None
@@ -1738,7 +1802,8 @@ class LiveRuntime:
                 return Signal(
                     strategy_id=self._strategy.id,
                     user_id=self._user_id,
-                    ticker=ticker, side="BUY",
+                    ticker=ticker,
+                    side="BUY",
                     qty=int(diff),
                     emitted_at_ns=bar_date_ns,
                     reason=t,
@@ -1747,7 +1812,8 @@ class LiveRuntime:
                 return Signal(
                     strategy_id=self._strategy.id,
                     user_id=self._user_id,
-                    ticker=ticker, side="SELL",
+                    ticker=ticker,
+                    side="SELL",
                     qty=int(-diff),
                     emitted_at_ns=bar_date_ns,
                     reason=t,

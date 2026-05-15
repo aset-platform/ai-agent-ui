@@ -845,6 +845,28 @@ def run_backtest(
         )
     )
     flush_events(events)
+
+    # ASETPLTFRM-417 / FE-5.1 — drain the per-run feature
+    # snapshot buffer in ONE Iceberg commit. Replaces the
+    # FE-5 per-fill commit pattern that produced
+    # ~2 manifest avros per fill (a 7,000-fill backtest blew
+    # the table to 14,000 manifests / 9.4 GB on disk).
+    # Buffer flush is non-fatal: failures log + return 0
+    # and don't break the run summary returned to the caller.
+    try:
+        from backend.algo.features.snapshots_buffer import (
+            get_buffer,
+        )
+
+        get_buffer().flush(
+            key=(str(strategy.id), str(session_id)),
+        )
+    except Exception:  # noqa: BLE001
+        _logger.exception(
+            "[fe5.1] snapshots buffer flush failed for "
+            "backtest run_id=%s (non-fatal)",
+            session_id,
+        )
     return summary
 
 

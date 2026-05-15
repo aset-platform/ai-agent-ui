@@ -18,6 +18,7 @@ This v1 runtime is one-strategy-per-instance. Multi-strategy
 fan-out across one user's tick stream lives in Slice 8b's
 service shell.
 """
+
 from __future__ import annotations
 
 import logging
@@ -30,15 +31,18 @@ from backend.algo.attribution.payload import (
     attribution_payload_extension as _attribution_payload_extension,
 )
 from backend.algo.backtest.event_writer import (
-    event_row, flush_events,
+    event_row,
+    flush_events,
 )
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 from backend.algo.backtest.positions import PositionTracker
+
 # REGIME-2a — pre-computed nightly factor library overlay.
 from backend.algo.factors.repo import get_factors_window
 from backend.algo.paper.broker import PaperBroker
 from backend.algo.paper.risk_engine import RiskEngine
 from backend.algo.paper.types import AccountState, Signal
+
 # REGIME-4 — vol-target / Kelly sizer (legacy modes bypass).
 from backend.algo.sizing.composer import SizingContext, compose_qty
 from backend.algo.stream.resampler import Resampler
@@ -100,6 +104,7 @@ class PaperRuntime:
                 compute_market_regime as _cmr,
                 compute_market_trend_strength as _cmts,
             )
+
             # ``load_ohlcv_window`` validates against UTC today;
             # using local IST time here would race past the UTC
             # boundary and trip BackedFutureBarError. Match the
@@ -128,9 +133,7 @@ class PaperRuntime:
         # universe upfront — the strategy's ``universe`` is a
         # scope spec, not a ticker list — so eager loading would
         # require resolving the scope here).
-        self._factor_cache: dict[
-            tuple[str, date], dict[str, Decimal]
-        ] = {}
+        self._factor_cache: dict[tuple[str, date], dict[str, Decimal]] = {}
         self._factor_loaded_for_ticker: set[str] = set()
         # REGIME-1 — regime_label + stress_prob lookup, loaded
         # lazily on first bar so paper sessions resolve regime
@@ -145,6 +148,7 @@ class PaperRuntime:
         try:
             from datetime import timedelta as _td
             from backend.algo.regime.repo import get_regime_history
+
             rh_rows = get_regime_history(
                 bar_date_obj - _td(days=365),
                 bar_date_obj + _td(days=1),
@@ -161,11 +165,14 @@ class PaperRuntime:
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
                 "PaperRuntime: regime_history load failed: %s — "
-                "regime-aware templates will silent-skip", exc,
+                "regime-aware templates will silent-skip",
+                exc,
             )
 
     def _ensure_factor_cache(
-        self, ticker: str, bar_date_obj: date,
+        self,
+        ticker: str,
+        bar_date_obj: date,
     ) -> None:
         """Lazy load factor rows for ``ticker`` over a wide
         window so any historical bar in this paper session
@@ -175,6 +182,7 @@ class PaperRuntime:
         self._factor_loaded_for_ticker.add(ticker)
         try:
             from datetime import timedelta as _td
+
             rows = get_factors_window(
                 [ticker],
                 bar_date_obj - _td(days=365),
@@ -183,14 +191,16 @@ class PaperRuntime:
             for r in rows:
                 self._factor_cache[(r.ticker, r.bar_date)] = {
                     k: Decimal(str(v))
-                    for k, v in r.values.items() if v is not None
+                    for k, v in r.values.items()
+                    if v is not None
                 }
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
                 "PaperRuntime: factor cache load for %s failed: "
                 "%s — strategies referencing factor.* keys will "
                 "silent-skip until backfill catches up",
-                ticker, exc,
+                ticker,
+                exc,
             )
 
     async def run(self, source: TickSource) -> int:
@@ -204,15 +214,14 @@ class PaperRuntime:
         last_price_per_ticker: dict[str, Decimal] = {}
         try:
             async for tick in source:
-                last_price_per_ticker[tick.ticker] = (
-                    Decimal(str(tick.ltp))
-                )
+                last_price_per_ticker[tick.ticker] = Decimal(str(tick.ltp))
                 self._resampler.feed(tick)
                 for bar in self._resampler.pop_completed():
                     fills += self._on_bar_close(
                         bar=bar,
                         last_price=last_price_per_ticker.get(
-                            bar.ticker, Decimal(str(bar.close)),
+                            bar.ticker,
+                            Decimal(str(bar.close)),
                         ),
                     )
         finally:
@@ -220,12 +229,34 @@ class PaperRuntime:
                 fills += self._on_bar_close(
                     bar=bar,
                     last_price=last_price_per_ticker.get(
-                        bar.ticker, Decimal(str(bar.close)),
+                        bar.ticker,
+                        Decimal(str(bar.close)),
                     ),
                 )
             if self._events:
                 flush_events(self._events)
                 self._events = []
+            # ASETPLTFRM-417 / FE-5.1 — drain the per-session
+            # feature snapshot buffer in ONE Iceberg commit.
+            # Non-fatal: failure logs + buffer is cleared so a
+            # later session reuse can't pick up stale rows.
+            try:
+                from backend.algo.features.snapshots_buffer import (
+                    get_buffer,
+                )
+
+                get_buffer().flush(
+                    key=(
+                        str(self._strategy.id),
+                        str(self._session_id),
+                    ),
+                )
+            except Exception:  # noqa: BLE001
+                _logger.exception(
+                    "[fe5.1] snapshots buffer flush failed for "
+                    "paper session_id=%s (non-fatal)",
+                    self._session_id,
+                )
             # For live-ws sources, unsubscribe from the multiplexer.
             if hasattr(source, "stop"):
                 try:
@@ -253,15 +284,18 @@ class PaperRuntime:
         # which the summary endpoint falls back to OHLCV close.
         try:
             from backend.cache import get_cache
+
             get_cache().set(
-                f"cache:ltp:{bar.ticker}", str(float(bar.close)),
+                f"cache:ltp:{bar.ticker}",
+                str(float(bar.close)),
                 ttl=60,
             )
         except Exception:  # noqa: BLE001
             pass
         existing_pos = self._positions.open_positions().get(bar.ticker)
         bar_date_obj = datetime.fromtimestamp(
-            bar.bar_open_ts_ns / 1_000_000_000, tz=timezone.utc,
+            bar.bar_open_ts_ns / 1_000_000_000,
+            tz=timezone.utc,
         ).date()
 
         # Append to per-ticker history + recompute indicators
@@ -276,6 +310,7 @@ class PaperRuntime:
         from backend.algo.backtest.types import (
             BarData as _BackBar,
         )
+
         adapted = _BackBar(
             ticker=bar.ticker,
             date=bar_date_obj,
@@ -299,6 +334,7 @@ class PaperRuntime:
                 _INTERVAL_SEC_BY_LABEL,
                 emit_features_for_bar,
             )
+
             _cadence = self._strategy.schedule.interval
             if _cadence in _INTERVAL_SEC_BY_LABEL:
                 emit_features_for_bar(
@@ -321,15 +357,18 @@ class PaperRuntime:
         features = {
             **ind_map.get(bar_date_obj, _features_for_bar(bar)),
             "nifty_above_sma200": self._market_regime.get(
-                bar_date_obj, Decimal("0"),
+                bar_date_obj,
+                Decimal("0"),
             ),
             "nifty_30d_return_pct": self._market_trend.get(
-                bar_date_obj, Decimal("0"),
+                bar_date_obj,
+                Decimal("0"),
             ),
             # REGIME-2a — cached factor row overlay (disjoint
             # from indicator + regime keys by design).
             **self._factor_cache.get(
-                (bar.ticker, bar_date_obj), {},
+                (bar.ticker, bar_date_obj),
+                {},
             ),
             # REGIME-1 — regime_label + stress_prob overlay.
             **self._regime_by_date.get(bar_date_obj, {}),
@@ -372,86 +411,92 @@ class PaperRuntime:
                 is_entry_allowed,
                 ist_time_from_ns,
             )
+
             bar_ist_time = ist_time_from_ns(bar.bar_open_ts_ns)
-            if (
-                bar_ist_time is not None
-                and not is_entry_allowed(
-                    product=self._strategy.product,
-                    entry_cutoff_raw=self._strategy.entry_cutoff_time,
-                    bar_time_ist=bar_ist_time,
-                )
+            if bar_ist_time is not None and not is_entry_allowed(
+                product=self._strategy.product,
+                entry_cutoff_raw=self._strategy.entry_cutoff_time,
+                bar_time_ist=bar_ist_time,
             ):
-                self._events.append(event_row(
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="paper",
+                        type_="signal_rejected",
+                        payload={
+                            "reason": "mis_entry_cutoff",
+                            "ticker": signal.ticker,
+                            "side": signal.side,
+                            "qty": signal.qty,
+                            "bar_ist_time": bar_ist_time.isoformat(),
+                            "entry_cutoff": (self._strategy.entry_cutoff_time),
+                        },
+                    )
+                )
+                return 0
+        self._events.append(
+            event_row(
+                session_id=self._session_id,
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                mode="paper",
+                type_="signal_generated",
+                payload={
+                    "ticker": signal.ticker,
+                    "side": signal.side,
+                    "qty": signal.qty,
+                    # REGIME-6 — attribution context. Backward
+                    # compatible additive keys; readers must use
+                    # .get() since pre-v3 events lack them.
+                    **_attribution_payload_extension(features),
+                },
+            )
+        )
+
+        account = self._account_snapshot()
+        decision = self._risk.gate(
+            signal=signal,
+            account=account,
+            risk=self._strategy.risk.model_dump(),
+            last_price=last_price,
+        )
+        if decision.outcome == "reject":
+            self._events.append(
+                event_row(
                     session_id=self._session_id,
                     user_id=self._user_id,
                     strategy_id=self._strategy.id,
                     mode="paper",
                     type_="signal_rejected",
                     payload={
-                        "reason": "mis_entry_cutoff",
+                        "reason": (
+                            decision.reason.value
+                            if decision.reason
+                            else "unknown"
+                        ),
                         "ticker": signal.ticker,
                         "side": signal.side,
                         "qty": signal.qty,
-                        "bar_ist_time": bar_ist_time.isoformat(),
-                        "entry_cutoff": (
-                            self._strategy.entry_cutoff_time
+                        "threshold": (
+                            str(decision.threshold)
+                            if decision.threshold is not None
+                            else None
+                        ),
+                        "observed_value": (
+                            str(decision.observed_value)
+                            if decision.observed_value is not None
+                            else None
                         ),
                     },
-                ))
-                return 0
-        self._events.append(event_row(
-            session_id=self._session_id,
-            user_id=self._user_id,
-            strategy_id=self._strategy.id,
-            mode="paper",
-            type_="signal_generated",
-            payload={
-                "ticker": signal.ticker, "side": signal.side,
-                "qty": signal.qty,
-                # REGIME-6 — attribution context. Backward
-                # compatible additive keys; readers must use
-                # .get() since pre-v3 events lack them.
-                **_attribution_payload_extension(features),
-            },
-        ))
-
-        account = self._account_snapshot()
-        decision = self._risk.gate(
-            signal=signal, account=account,
-            risk=self._strategy.risk.model_dump(),
-            last_price=last_price,
-        )
-        if decision.outcome == "reject":
-            self._events.append(event_row(
-                session_id=self._session_id,
-                user_id=self._user_id,
-                strategy_id=self._strategy.id,
-                mode="paper",
-                type_="signal_rejected",
-                payload={
-                    "reason": (
-                        decision.reason.value
-                        if decision.reason else "unknown"
-                    ),
-                    "ticker": signal.ticker, "side": signal.side,
-                    "qty": signal.qty,
-                    "threshold": (
-                        str(decision.threshold)
-                        if decision.threshold is not None else None
-                    ),
-                    "observed_value": (
-                        str(decision.observed_value)
-                        if decision.observed_value is not None
-                        else None
-                    ),
-                },
-            ))
+                )
+            )
             return 0
 
         effective_qty = (
             decision.adjusted_qty
-            if decision.outcome == "scale"
-            and decision.adjusted_qty
+            if decision.outcome == "scale" and decision.adjusted_qty
             else signal.qty
         )
         signal = signal.model_copy(update={"qty": effective_qty})
@@ -461,21 +506,24 @@ class PaperRuntime:
             fill_date=bar_date_obj,
         )
         self._positions.apply_fill(fill)
-        self._events.append(event_row(
-            session_id=self._session_id,
-            user_id=self._user_id,
-            strategy_id=self._strategy.id,
-            mode="paper",
-            type_="order_filled",
-            payload={
-                "ticker": fill.ticker, "side": fill.side,
-                "qty": fill.qty,
-                "fill_price": str(fill.fill_price),
-                "fill_date": fill.fill_date.isoformat(),
-                "fees_inr": str(fill.fees_inr),
-                "fee_rates_version": fill.fee_rates_version,
-            },
-        ))
+        self._events.append(
+            event_row(
+                session_id=self._session_id,
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                mode="paper",
+                type_="order_filled",
+                payload={
+                    "ticker": fill.ticker,
+                    "side": fill.side,
+                    "qty": fill.qty,
+                    "fill_price": str(fill.fill_price),
+                    "fill_date": fill.fill_date.isoformat(),
+                    "fees_inr": str(fill.fees_inr),
+                    "fee_rates_version": fill.fee_rates_version,
+                },
+            )
+        )
 
         # ASETPLTFRM-402 / FE-5 — per-fill feature snapshot
         # for alpha research. ADDITIVE write to
@@ -528,10 +576,7 @@ class PaperRuntime:
             # REGIME-4 — vol-target / Kelly route through composer
             # using paper-runtime NAV + factor cache. Legacy
             # {shares} bypasses for byte-for-byte compat.
-            if (
-                "vol_target_pct" in qty_spec
-                or "kelly_fraction" in qty_spec
-            ):
+            if "vol_target_pct" in qty_spec or "kelly_fraction" in qty_spec:
                 qty = self._size_via_composer(
                     qty_spec=qty_spec,
                     ticker=ticker,
@@ -545,15 +590,15 @@ class PaperRuntime:
             return Signal(
                 strategy_id=self._strategy.id,
                 user_id=self._user_id,
-                ticker=ticker, side="BUY", qty=qty,
+                ticker=ticker,
+                side="BUY",
+                qty=qty,
                 emitted_at_ns=bar_date_ns,
             )
         if t == "sell":
             qty_spec = action["qty"]
             if qty_spec.get("all"):
-                existing = (
-                    self._positions.open_positions().get(ticker)
-                )
+                existing = self._positions.open_positions().get(ticker)
                 if not existing:
                     return None
                 qty = existing.qty
@@ -564,7 +609,9 @@ class PaperRuntime:
             return Signal(
                 strategy_id=self._strategy.id,
                 user_id=self._user_id,
-                ticker=ticker, side="SELL", qty=qty,
+                ticker=ticker,
+                side="SELL",
+                qty=qty,
                 emitted_at_ns=bar_date_ns,
             )
         if t == "exit":
@@ -574,7 +621,9 @@ class PaperRuntime:
             return Signal(
                 strategy_id=self._strategy.id,
                 user_id=self._user_id,
-                ticker=ticker, side="SELL", qty=existing.qty,
+                ticker=ticker,
+                side="SELL",
+                qty=existing.qty,
                 emitted_at_ns=bar_date_ns,
             )
         if t == "set_target_weight":
@@ -584,8 +633,7 @@ class PaperRuntime:
             if last_price is None or last_price <= 0:
                 return None
             current_equity = (
-                self._initial
-                + self._positions.total_realised_pnl_inr()
+                self._initial + self._positions.total_realised_pnl_inr()
             )
             if current_equity <= 0:
                 return None
@@ -605,14 +653,17 @@ class PaperRuntime:
                 return Signal(
                     strategy_id=self._strategy.id,
                     user_id=self._user_id,
-                    ticker=ticker, side="BUY", qty=int(diff),
+                    ticker=ticker,
+                    side="BUY",
+                    qty=int(diff),
                     emitted_at_ns=bar_date_ns,
                 )
             if diff < 0:
                 return Signal(
                     strategy_id=self._strategy.id,
                     user_id=self._user_id,
-                    ticker=ticker, side="SELL",
+                    ticker=ticker,
+                    side="SELL",
                     qty=int(-diff),
                     emitted_at_ns=bar_date_ns,
                 )
@@ -634,17 +685,17 @@ class PaperRuntime:
         if last_price is None or last_price <= 0:
             return 0
         bar_date_obj = datetime.fromtimestamp(
-            bar_date_ns / 1_000_000_000, tz=timezone.utc,
+            bar_date_ns / 1_000_000_000,
+            tz=timezone.utc,
         ).date()
-        nav = (
-            self._initial
-            + self._positions.total_realised_pnl_inr()
-        )
+        nav = self._initial + self._positions.total_realised_pnl_inr()
         factor_row = self._factor_cache.get(
-            (ticker, bar_date_obj), {},
+            (ticker, bar_date_obj),
+            {},
         )
         realized_vol = factor_row.get(
-            "realized_vol_60d", Decimal("NaN"),
+            "realized_vol_60d",
+            Decimal("NaN"),
         )
         ctx = SizingContext(
             ticker=ticker,
@@ -661,8 +712,7 @@ class PaperRuntime:
 
     def _account_snapshot(self) -> AccountState:
         open_qty = {
-            t: p.qty
-            for t, p in self._positions.open_positions().items()
+            t: p.qty for t, p in self._positions.open_positions().items()
         }
         # Approximate equity = initial + realised. Unrealised
         # left to caller-supplied marks (Slice 8b reconciles
@@ -672,12 +722,9 @@ class PaperRuntime:
             day_date=datetime.now(timezone.utc).date(),
             initial_capital_inr=self._initial,
             current_equity_inr=(
-                self._initial
-                + self._positions.total_realised_pnl_inr()
+                self._initial + self._positions.total_realised_pnl_inr()
             ),
-            daily_realised_pnl_inr=(
-                self._positions.total_realised_pnl_inr()
-            ),
+            daily_realised_pnl_inr=(self._positions.total_realised_pnl_inr()),
             daily_unrealised_pnl_inr=Decimal("0"),
             open_positions=open_qty,
             open_position_count=len(open_qty),
