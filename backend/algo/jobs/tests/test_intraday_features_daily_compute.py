@@ -215,9 +215,11 @@ async def test_rerun_scoped_pre_delete_uses_in_ticker(fake_session):
     # Walk the And-tree and collect every scoped-ref name seen.
     # PyIceberg collapses ``In(name, [single])`` to ``EqualTo`` so
     # we accept either node type — what matters is that ``ticker``
-    # AND ``year_month`` BOTH appear as scoped predicates (the
-    # NaN-replaceable upsert contract — never on a global column
-    # like ``interval_sec`` alone).
+    # AND ``bar_date`` BOTH appear as scoped predicates (the
+    # NaN-replaceable upsert contract — per-DAY granularity, not
+    # per-month, otherwise the daily keeper [yesterday, today]
+    # window silently wipes prior-day features from the same
+    # month on every run).
     seen_refs: set[str] = set()
 
     def _walk(p):
@@ -233,7 +235,15 @@ async def test_rerun_scoped_pre_delete_uses_in_ticker(fake_session):
 
     _walk(pred)
     assert "ticker" in seen_refs, f"got {seen_refs}"
-    assert "year_month" in seen_refs, f"got {seen_refs}"
+    assert "bar_date" in seen_refs, f"got {seen_refs}"
+    assert (
+        "year_month" not in seen_refs
+    ), (
+        "Regression guard: pre-delete must NOT scope on "
+        "year_month — that wipes prior-day features in the "
+        "current month on every daily keeper run "
+        "(force re-run + day-N-of-month bug). Use bar_date."
+    )
 
 
 async def test_per_ticker_fetch_failure_does_not_abort_batch(
