@@ -4195,6 +4195,17 @@ def create_app(
         create_feature_coverage_router(),
         prefix="/v1",
     )
+    # Daily-factor-coverage admin dashboard — sibling for the
+    # WIDE stocks.daily_factors table (one column per factor;
+    # coverage = % of (ticker, bar_date) rows non-null per col).
+    # Superuser-only.
+    from backend.algo.routes import (
+        create_daily_factor_coverage_router,
+    )
+    app.include_router(
+        create_daily_factor_coverage_router(),
+        prefix="/v1",
+    )
     # FE-12 (ASETPLTFRM-414) — per-prediction SHAP attribution
     # for the FE-11 trade-outcome classifier. Pro-or-superuser.
     from backend.algo.routes import (

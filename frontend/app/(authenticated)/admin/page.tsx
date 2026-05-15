@@ -35,6 +35,7 @@ import { ResetPasswordModal } from "@/components/admin/ResetPasswordModal";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SchedulerTab } from "@/components/admin/SchedulerTab";
 import { RecommendationsTab } from "@/components/admin/RecommendationsTab";
+import { DailyFactorCoverageTab } from "@/components/admin/DailyFactorCoverageTab";
 import { FeatureCoverageTab } from "@/components/admin/FeatureCoverageTab";
 import { DataHealthPanel } from "@/components/admin/DataHealthPanel";
 import { BackupHealthPanel } from "@/components/admin/BackupHealthPanel";
@@ -2001,6 +2002,7 @@ type AdminTab =
   | "scheduler"
   | "recommendations"
   | "feature_coverage"
+  | "daily_factor_coverage"
   | "my_account"
   | "my_audit"
   | "my_llm";
@@ -2021,6 +2023,7 @@ const ALL_TABS: TabDef[] = [
   { id: "scheduler",       label: "Scheduler",         roles: ["superuser"] },
   { id: "recommendations", label: "Recommendations",   roles: ["superuser"] },
   { id: "feature_coverage", label: "Feature Coverage", roles: ["superuser"] },
+  { id: "daily_factor_coverage", label: "Daily Factor Coverage", roles: ["superuser"] },
   { id: "maintenance",     label: "Maintenance",       roles: ["superuser"] },
   { id: "my_account",      label: "My Account",        roles: ["pro"] },
   { id: "my_audit",        label: "My Audit Log",      roles: ["pro"] },
@@ -2173,6 +2176,9 @@ function AdminPageInner() {
         )}
         {tab === "feature_coverage" && (
           <FeatureCoverageTab />
+        )}
+        {tab === "daily_factor_coverage" && (
+          <DailyFactorCoverageTab />
         )}
         {tab === "my_account" && <MyAccountTab />}
         {tab === "my_audit" && (
