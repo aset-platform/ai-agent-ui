@@ -145,6 +145,7 @@ rich==14.3.3
 rsa==4.9.1
 scikit-learn==1.8.0
 scipy==1.17.1
+shap==0.51.0
 xgboost>=2.0
 six==1.17.0
 slowapi==0.1.9
