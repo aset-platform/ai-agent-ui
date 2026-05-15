@@ -4185,6 +4185,16 @@ def create_app(
         create_feature_importance_router(),
         prefix="/v1",
     )
+    # FE-14 (ASETPLTFRM-416) — feature-coverage admin dashboard
+    # (% of (ticker, ts_ns) bar slots where each feature is
+    # non-null over a window). Superuser-only.
+    from backend.algo.routes import (
+        create_feature_coverage_router,
+    )
+    app.include_router(
+        create_feature_coverage_router(),
+        prefix="/v1",
+    )
 
     # WebSocket streaming endpoint.
     from ws import register_ws_routes
