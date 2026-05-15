@@ -3665,6 +3665,41 @@ def execute_trade_feature_snapshots_eod_flush(
     )
 
 
+@register_job("daily_features_daily_compute")
+def execute_daily_features_daily_compute(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """Daily-cadence (interval_sec=86400) feature compute step —
+    FE-15a (ASETPLTFRM-419).
+
+    Reads daily ``stocks.ohlcv`` rows for the Nifty 500 universe
+    over a configurable write window with warmup tail, computes
+    the 18 daily features defined in the FE-15 spec, and writes
+    them to ``stocks.intraday_features`` at ``interval_sec=86400``
+    via the NaN-replaceable upsert in
+    :mod:`backend.algo.jobs.daily_features_daily_compute`.
+
+    Sync + pipeline-compatible wrapper. Standalone scheduled
+    job — not chained into the Intraday Bars Daily Pipeline
+    (different cron cadence: 23:30 IST nightly after
+    ``compute_daily_factors``).
+    """
+    import asyncio
+
+    from backend.algo.jobs.daily_features_daily_compute import (
+        run_daily_features_daily_compute_job,
+    )
+
+    return asyncio.run(
+        run_daily_features_daily_compute_job(payload or {}),
+    )
+
+
 @register_job("regime_classifier_daily")
 def _job_regime_classifier_daily(
     scope: str = "india",
