@@ -2646,6 +2646,26 @@ _HOT_ICEBERG_TABLES = (
     # of partitions per call. Daily compaction prevents file
     # count drift.
     "stocks.intraday_bars",
+    # Centralized feature engine output (ASETPLTFRM-402 /
+    # FE-1). Long-format rows accumulate one parquet per
+    # feature-batch commit; without daily compaction this
+    # table degrades exactly like algo.events did on
+    # 2026-05-12 (11 GB metadata.json from 5,901 snapshots).
+    "stocks.intraday_features",
+    # Per-fill feature snapshots (ASETPLTFRM-402 / FE-5).
+    # One single-row Iceberg append per executed fill in
+    # backtest / paper / live. Same compaction rationale as
+    # algo.events — every fill = one commit = one new
+    # metadata.json without daily compaction.
+    "stocks.trade_feature_snapshots",
+    # NSE index intraday bars (ASETPLTFRM-402 / FE-6). Daily
+    # keeper writes ~10 indices × 1-3 cadences = ≤ 30 commits
+    # per run; small per-run footprint but accumulates over
+    # months without compaction. Same enrollment story as the
+    # rest of the intraday family — partition is
+    # ``(ticker, year_month)`` so compaction folds each
+    # ticker × month into a single parquet.
+    "stocks.index_intraday_bars",
 )
 
 
@@ -3435,6 +3455,39 @@ def _job_intraday_bars_daily_ingest(
     )
 
 
+@register_job("index_intraday_bars_daily_ingest")
+def _job_index_intraday_bars_daily_ingest(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """Mon-Fri 15:45 IST keeper for stocks.index_intraday_bars.
+
+    ASETPLTFRM-402 / FE-6 — daily incremental backfill of the
+    NSE index universe (NIFTY 50 + sector indices) at 15m
+    cadence. Idempotent via NaN-replaceable upsert keyed on
+    ``(ticker, bar_date, interval_sec)``.
+
+    Sync + pipeline-step-compatible signature
+    ``(scope, run_id, repo, cancel_event, force)`` so the
+    ``PipelineExecutor`` can chain this step alongside
+    ``intraday_bars_daily_ingest``. The underlying job is async —
+    we bridge with ``asyncio.run`` here.
+    """
+    import asyncio
+
+    from backend.algo.jobs.index_intraday_bars_daily_ingest import (
+        run_index_intraday_bars_daily_ingest_job,
+    )
+
+    return asyncio.run(
+        run_index_intraday_bars_daily_ingest_job(payload or {}),
+    )
+
+
 @register_job("intraday_bars_retention")
 def _job_intraday_bars_retention(
     scope: str | None = None,
@@ -3447,9 +3500,9 @@ def _job_intraday_bars_retention(
     """Daily 4-year rolling retention truncation for
     ``stocks.intraday_bars`` (ASETPLTFRM-400 slice 1g).
 
-    Sync + pipeline-compatible wrapper. Runs as step 2 of the
-    ``Intraday Bars Daily Pipeline`` between the Nifty 500 ingest
-    (step 1) and the Iceberg maintenance (step 3).
+    Sync + pipeline-compatible wrapper. Runs as step 3 of the
+    ``Intraday Bars Daily Pipeline`` between the feature compute
+    (step 2) and the Iceberg maintenance (step 4).
     """
     import asyncio
 
@@ -3459,6 +3512,38 @@ def _job_intraday_bars_retention(
 
     return asyncio.run(
         run_intraday_bars_retention_job(payload or {}),
+    )
+
+
+@register_job("intraday_features_daily_compute")
+def execute_intraday_features_daily_compute(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """Daily compute step for ``stocks.intraday_features``
+    (ASETPLTFRM-402 / FE-3).
+
+    Reads the freshly-ingested ``stocks.intraday_bars`` window
+    (default ``[yesterday, today]`` IST) and writes long-format
+    feature rows via the NaN-replaceable upsert in
+    :mod:`backend.algo.jobs.intraday_features_daily_compute`.
+
+    Sync + pipeline-compatible wrapper. Runs as step 2 of the
+    ``Intraday Bars Daily Pipeline`` between the Nifty 500 ingest
+    (step 1) and the 4-year retention trim (step 3).
+    """
+    import asyncio
+
+    from backend.algo.jobs.intraday_features_daily_compute import (
+        run_intraday_features_daily_compute_job,
+    )
+
+    return asyncio.run(
+        run_intraday_features_daily_compute_job(payload or {}),
     )
 
 

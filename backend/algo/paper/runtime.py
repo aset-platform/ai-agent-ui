@@ -450,6 +450,42 @@ class PaperRuntime:
                 "fee_rates_version": fill.fee_rates_version,
             },
         ))
+
+        # ASETPLTFRM-402 / FE-5 — per-fill feature snapshot
+        # for alpha research. ADDITIVE write to
+        # stocks.trade_feature_snapshots; the promotion
+        # gate's algo.events ``mode='paper' AND
+        # type='order_filled'`` scan is untouched.
+        # Snapshot failure never blocks the fill.
+        try:
+            from backend.algo.features.snapshots import (
+                write_trade_feature_snapshot,
+            )
+
+            _snap_fid = f"{self._session_id}:{fill.ticker}:{fill.intent_id}"
+            write_trade_feature_snapshot(
+                fill_id=_snap_fid,
+                run_id=str(self._session_id),
+                strategy_id=str(self._strategy.id),
+                ticker=fill.ticker,
+                side=fill.side,
+                qty=fill.qty,
+                fill_price=fill.fill_price,
+                fill_ts_ns=(
+                    fill.fill_ts_ns
+                    if fill.fill_ts_ns is not None
+                    else bar.bar_open_ts_ns
+                ),
+                bar_date=fill.fill_date.isoformat(),
+                mode="paper",
+                features=features,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "trade_feature_snapshot hook failed "
+                "(non-fatal): ticker=%s mode=paper",
+                fill.ticker,
+            )
         return 1
 
     def _action_to_signal(

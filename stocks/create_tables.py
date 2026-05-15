@@ -100,6 +100,11 @@ _PROMOTER_HOLDINGS_TABLE = f"{_NAMESPACE}.promoter_holdings"
 _CORPORATE_EVENTS_TABLE = f"{_NAMESPACE}.corporate_events"
 _FUNDAMENTALS_SNAPSHOT_TABLE = f"{_NAMESPACE}.fundamentals_snapshot"
 _INTRADAY_BARS_TABLE = f"{_NAMESPACE}.intraday_bars"
+_INDEX_INTRADAY_BARS_TABLE = f"{_NAMESPACE}.index_intraday_bars"
+_INTRADAY_FEATURES_TABLE = f"{_NAMESPACE}.intraday_features"
+_TRADE_FEATURE_SNAPSHOTS_TABLE = (
+    f"{_NAMESPACE}.trade_feature_snapshots"
+)
 
 
 def _get_catalog() -> SqlCatalog:
@@ -1614,6 +1619,341 @@ def _intraday_bars_schema() -> Schema:
     )
 
 
+def _index_intraday_bars_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.index_intraday_bars``.
+
+    Returns:
+        Schema: Index OHLCV bars (15m / 5m / 1m) from Kite Connect
+            for cross-sectional features (ASETPLTFRM-402 / FE-6).
+            FE-8 (Phase 2) will read this table alongside
+            ``stocks.intraday_bars`` to compute relative-strength
+            and sector-rotation features.
+
+            Mirrors ``_intraday_bars_schema()`` exactly — same 12
+            fields, same field IDs, same types — so the daily
+            keeper, on-demand backfill, and feature compute can
+            reuse the per-ticker code paths against this table by
+            swapping only the identifier. Join-locality with
+            ``stocks.intraday_bars`` is the explicit design choice:
+            partition layout is identical so a backtest reading
+            both opens neighbouring file slabs.
+
+            The ``ticker`` field stores the **NSE index trading
+            symbol exactly as Kite returns it** (e.g.
+            ``"NIFTY 50"``, ``"NIFTY BANK"``) — distinct from the
+            Yahoo ``^NSEI`` / ``^CNXIT`` notation the factor
+            library uses for daily data. The daily factor pipeline
+            keeps its Yahoo names; this table is the Kite-side
+            intraday surface only.
+
+            ``volume`` is ``LongType, required=True`` even though
+            Kite reports 0 for pure indices — preserves shape
+            parity with ``stocks.intraday_bars`` so writer /
+            reader code is symmetric.
+
+            Distinct from ``stocks.sector_intraday_bars`` (FE-7,
+            forthcoming) which will hold sectoral indices in a
+            separate table for partition-prune locality and
+            operator clarity. The two tables are kept apart per
+            spec §3.3 rather than co-mingled.
+
+            Must be enrolled in BOTH ``_HOT_ICEBERG_TABLES``
+            (``backend/jobs/executor.py``) AND ``ALL_TABLES``
+            (``backend/maintenance/iceberg_maintenance.py``) per
+            CLAUDE.md §4.3 #20 — the ``algo.events`` 11 GB bloat
+            incident (2026-05-12) is the canonical reminder.
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="ticker",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=2,
+            name="bar_date",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=3,
+            name="interval_sec",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=4,
+            name="bar_open_ts_ns",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=5,
+            name="open",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=6,
+            name="high",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=7,
+            name="low",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=8,
+            name="close",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=9,
+            name="volume",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=10,
+            name="written_at",
+            field_type=TimestampType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=11,
+            name="source",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=12,
+            name="year_month",
+            field_type=StringType(),
+            required=True,
+        ),
+    )
+
+
+def _intraday_features_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.intraday_features``.
+
+    Returns:
+        Schema: Centralized feature engine output
+            (ASETPLTFRM-402 / FE-1). Long format — one
+            row per (ticker, bar_open_ts_ns, interval_sec,
+            feature_name) — chosen on the operator's ask
+            because it keeps the schema stable as the
+            feature catalog evolves through the research
+            phase: new features become new ``feature_name``
+            values, not new columns + schema migrations.
+
+            Partition layout ``(ticker, year_month)``
+            matches ``stocks.intraday_bars`` for
+            join-locality: a backtest reads a single
+            ticker's month-slab of bars + features from
+            the same on-disk neighborhood, so PyIceberg's
+            file-pruning + DuckDB's predicate push-down
+            both fire cleanly.
+
+            ``feature_set_version`` is a coarse semver-ish
+            tag (e.g. ``"v1.0"``) bumped when a feature's
+            definition changes; consumers filter by it to
+            avoid mixing feature regimes across backtests.
+
+            FE-1 is DDL + maintenance-enrollment ONLY —
+            no compute, no writers, no readers. Those land
+            in FE-2/FE-3/FE-4.
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="ticker",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=2,
+            name="bar_open_ts_ns",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=3,
+            name="bar_date",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=4,
+            name="year_month",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=5,
+            name="interval_sec",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=6,
+            name="feature_name",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=7,
+            name="feature_value",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=8,
+            name="feature_set_version",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=9,
+            name="written_at",
+            field_type=TimestampType(),
+            required=True,
+        ),
+    )
+
+
+def _trade_feature_snapshots_schema() -> Schema:
+    """Return the Iceberg schema for
+    ``stocks.trade_feature_snapshots``.
+
+    Returns:
+        Schema: Per-fill feature-vector snapshot
+            (ASETPLTFRM-402 / FE-5). One row per
+            executed fill — backtest, paper, or live.
+            The full feature vector at the fill bar is
+            serialised to ``features_json`` so the
+            downstream alpha-research workflow can
+            replay the strategy's decision context for
+            every fill without re-deriving features
+            from raw bars.
+
+            Partition layout ``(year_month, mode)``: the
+            ``mode`` partition isolates live-trading
+            snapshots from backtest snapshots so research
+            queries can filter without scanning the
+            wrong cohort, and ``year_month`` keeps
+            per-file size bounded as the dataset grows.
+
+            ``realised_pnl_inr`` + ``outcome_label`` are
+            both ``required=False`` — they are backfilled
+            by Phase-3 jobs (FE-13 meta-labeller +
+            realised-pnl backfill) after the matching SELL
+            closes the position. Snapshot writers MUST
+            write them as NULL at fill time.
+
+            FE-5 is the DDL + per-fill write hook only —
+            the alpha-research consumers (feature
+            importance / SHAP) land in Phase 3.
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="fill_id",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=2,
+            name="run_id",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=3,
+            name="strategy_id",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=4,
+            name="ticker",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=5,
+            name="side",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=6,
+            name="qty",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=7,
+            name="fill_price",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=8,
+            name="fill_ts_ns",
+            field_type=LongType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=9,
+            name="bar_date",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=10,
+            name="year_month",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=11,
+            name="mode",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=12,
+            name="features_json",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=13,
+            name="realised_pnl_inr",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=14,
+            name="outcome_label",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=15,
+            name="written_at",
+            field_type=TimestampType(),
+            required=True,
+        ),
+    )
+
+
 def _ticker_year_month_partition_spec(
     schema: Schema,
 ) -> PartitionSpec:
@@ -1655,6 +1995,47 @@ def _ticker_year_month_partition_spec(
             field_id=1001,
             transform=IdentityTransform(),
             name="year_month",
+        ),
+    )
+
+
+def _year_month_mode_partition_spec(
+    schema: Schema,
+) -> PartitionSpec:
+    """Return a partition spec by ``year_month`` and ``mode``
+    (ASETPLTFRM-402 / FE-5).
+
+    The ``mode`` partition isolates ``backtest`` /
+    ``paper`` / ``live`` snapshot cohorts so alpha-research
+    queries (feature-importance, SHAP) can filter to the
+    cohort of interest without scanning the others — most
+    notably keeping production-live fills logically separate
+    from synthetic backtest fills. ``year_month`` is the
+    YYYY-MM prefix of ``bar_date`` and bounds per-file size
+    as the dataset grows.
+
+    Args:
+        schema: Schema containing ``year_month`` and
+            ``mode`` fields.
+
+    Returns:
+        PartitionSpec: Identity partition on
+            (year_month, mode).
+    """
+    ym_fid = schema.find_field("year_month").field_id
+    mode_fid = schema.find_field("mode").field_id
+    return PartitionSpec(
+        PartitionField(
+            source_id=ym_fid,
+            field_id=1000,
+            transform=IdentityTransform(),
+            name="year_month",
+        ),
+        PartitionField(
+            source_id=mode_fid,
+            field_id=1001,
+            transform=IdentityTransform(),
+            name="mode",
         ),
     )
 
@@ -2225,6 +2606,71 @@ def create_tables() -> None:
         _INTRADAY_BARS_TABLE,
         intraday_bars_schema,
         _ticker_year_month_partition_spec(intraday_bars_schema),
+    )
+
+    # Centralized feature engine output
+    # (ASETPLTFRM-402 / FE-1). Long format — one row per
+    # (ticker, bar_open_ts_ns, interval_sec, feature_name)
+    # so the catalog can grow without schema migrations.
+    # Must be enrolled in BOTH ``_HOT_ICEBERG_TABLES``
+    # (backend/jobs/executor.py) and ``ALL_TABLES``
+    # (backend/maintenance/iceberg_maintenance.py) per
+    # CLAUDE.md §4.3 #20 — the algo.events 11 GB bloat
+    # incident (2026-05-12) is the canonical reminder of
+    # why skip-list enrollment is the #1 silent failure
+    # mode for new write-heavy tables.
+    intraday_features_schema = _intraday_features_schema()
+    _create_table(
+        catalog,
+        _INTRADAY_FEATURES_TABLE,
+        intraday_features_schema,
+        _ticker_year_month_partition_spec(intraday_features_schema),
+    )
+
+    # Per-fill feature-vector snapshots (ASETPLTFRM-402 /
+    # FE-5). One row per executed fill across backtest /
+    # paper / live; the alpha-research workflow replays
+    # the strategy's decision context for every fill from
+    # this table. Partitioned by ``(year_month, mode)`` so
+    # research queries can filter cohorts cleanly.
+    #
+    # Must be enrolled in BOTH ``_HOT_ICEBERG_TABLES``
+    # (backend/jobs/executor.py) and ``ALL_TABLES``
+    # (backend/maintenance/iceberg_maintenance.py) per
+    # CLAUDE.md §4.3 #20 — the algo.events 11 GB bloat
+    # incident (2026-05-12) is the canonical reminder of
+    # why skip-list enrollment is the #1 silent failure
+    # mode for new write-heavy tables.
+    snapshots_schema = _trade_feature_snapshots_schema()
+    _create_table(
+        catalog,
+        _TRADE_FEATURE_SNAPSHOTS_TABLE,
+        snapshots_schema,
+        _year_month_mode_partition_spec(snapshots_schema),
+    )
+
+    # Index intraday bars (ASETPLTFRM-402 / FE-6 — first slice of
+    # Phase 2). NSE index OHLCV at 15m / 5m / 1m cadence from
+    # Kite Connect, partitioned identically to
+    # ``stocks.intraday_bars`` so FE-8's cross-sectional features
+    # (RS-vs-NIFTY, sector rotation) read both tables with maximum
+    # join-locality. ``ticker`` stores the Kite tradingsymbol
+    # verbatim (``"NIFTY 50"`` etc.) — distinct from the Yahoo
+    # ``^NSEI`` / ``^CNXIT`` notation the daily factor library uses.
+    #
+    # Must be enrolled in BOTH ``_HOT_ICEBERG_TABLES``
+    # (backend/jobs/executor.py) and ``ALL_TABLES``
+    # (backend/maintenance/iceberg_maintenance.py) per
+    # CLAUDE.md §4.3 #20 — the algo.events 11 GB bloat incident
+    # (2026-05-12) is the canonical reminder of why skip-list
+    # enrollment is the #1 silent failure mode for new write-heavy
+    # tables.
+    index_intraday_bars_schema = _index_intraday_bars_schema()
+    _create_table(
+        catalog,
+        _INDEX_INTRADAY_BARS_TABLE,
+        index_intraday_bars_schema,
+        _ticker_year_month_partition_spec(index_intraday_bars_schema),
     )
 
     # Regime engine — REGIME-1 (stocks.regime_history +

@@ -1,14 +1,26 @@
-"""On-the-fly technical-indicator feature computation.
+"""On-the-fly DAILY technical-indicator feature computation.
 
-Used by the backtest + paper runtimes to populate the
+Used by the backtest + paper + live runtimes to populate the
 ``EvalContext.features`` map per (ticker, bar) with values
 referenced by the strategy AST (``sma_50``, ``sma_200``,
-``rsi_14``, ``golden_cross_days_ago``, ...).
+``rsi_14``, ``golden_cross_days_ago``, ...) on the DAILY
+cadence.
 
-Source of truth = ``stocks.ohlcv`` (loaded with warmup history).
-We do NOT depend on a separate ``stocks.technical_indicators``
-table — that table doesn't exist in the schema, and
-recomputing here is fast (O(N) rolling sums).
+Intraday features (15m / 5m / 1m) used to live here too as
+slice-4b's ``compute_indicators_intraday`` /
+``compute_indicators_for_universe_intraday`` — they were
+deleted in ASETPLTFRM-402 / FE-4 when the centralized feature
+engine + ``stocks.intraday_features`` table became the sole
+source of intraday features. The shared primitives
+(``vwap_intraday``, ``wilder_rsi``, ``rolling_sma``,
+``DEFAULT_INTRADAY_SMA_WINDOWS``, ``DEFAULT_INTRADAY_WARMUP_DAYS``,
+``NO_CROSS_SENTINEL``) now live under ``backend.algo.features``.
+
+Source of truth for the daily path = ``stocks.ohlcv`` (loaded
+with warmup history). We do NOT depend on a separate
+``stocks.technical_indicators`` table — that table doesn't
+exist in the schema, and recomputing here is fast (O(N)
+rolling sums).
 
 All features Decimal for consistency with the rest of the
 pipeline. ``golden_cross_days_ago`` for bars before the first
@@ -23,6 +35,10 @@ from decimal import Decimal
 from typing import Iterable
 
 from backend.algo.backtest.types import BarData
+from backend.algo.features.primitives import rolling_sma as _rolling_sma
+from backend.algo.features.primitives import vwap_intraday as _vwap_intraday
+from backend.algo.features.primitives import wilder_rsi as _wilder_rsi
+from backend.algo.features.version import NO_CROSS_SENTINEL
 
 _logger = logging.getLogger(__name__)
 
@@ -32,133 +48,6 @@ _logger = logging.getLogger(__name__)
 # buffer so SMA200 + golden_cross_days_ago are settled by the
 # user-requested period_start.
 DEFAULT_WARMUP_BARS = 400
-
-# ASETPLTFRM-400 slice 4b — calendar-day warmup for the intraday
-# indicator path. SMA(200) at 15m = 200 × 15min = ~8 NSE trading
-# days; weekends bump that to ~12 calendar days. 20d gives
-# comfortable buffer + works at the 1m / 5m cadences as well
-# (each shorter cadence needs FEWER calendar days for the same
-# bar count).
-DEFAULT_INTRADAY_WARMUP_DAYS = 20
-
-# SMA windows for intraday strategies, per operator's slice-4b
-# spec: SMA 20 / 50 / 100 / 200 + RSI 14 + VWAP all available
-# at the bar-level. SMA 100 is added vs the daily default
-# because intraday strategies typically use shorter MAs and
-# the SMA(50) → SMA(100) crossover is a common signal.
-DEFAULT_INTRADAY_SMA_WINDOWS: tuple[int, ...] = (20, 50, 100, 200)
-
-# Sentinel for "no crossover seen yet" — large enough that any
-# `<= N` comparison in a strategy condition fails.
-NO_CROSS_SENTINEL = Decimal("999")
-
-
-def _vwap_intraday(
-    bars: list[BarData],
-) -> list[Decimal | None]:
-    """Intraday Volume-Weighted Average Price.
-
-    VWAP[i] = Σ(typical_price × volume) / Σ(volume), accumulated
-    from the first bar of the calendar day up to and including
-    bars[i]. Resets at each calendar-date boundary so the value
-    matches the standard NSE intraday session definition (the
-    cumulative reset happens implicitly when bars[i].date changes).
-
-    typical_price = (high + low + close) / 3 — the standard
-    Bollinger / VWAP inputs definition. Falls back to None when
-    cumulative volume is zero (a fresh-day bar with vol=0, e.g.
-    pre-market or a halted ticker).
-
-    Notes per runtime:
-    - Live + paper (minute bars): proper intraday running mean.
-      Useful as a `today_ltp < vwap` mean-reversion check.
-    - Backtest (daily bars): degenerates to typical_price
-      (single observation per date). Strategies that gate on
-      VWAP behave differently in backtest vs live; document this
-      when surfacing the feature in the catalog.
-    """
-    out: list[Decimal | None] = [None] * len(bars)
-    if not bars:
-        return out
-    cum_pv = Decimal("0")
-    cum_v = Decimal("0")
-    last_date = None
-    three = Decimal("3")
-    for i, bar in enumerate(bars):
-        if bar.date != last_date:
-            cum_pv = Decimal("0")
-            cum_v = Decimal("0")
-            last_date = bar.date
-        typical = (bar.high + bar.low + bar.close) / three
-        vol = Decimal(bar.volume)
-        cum_pv += typical * vol
-        cum_v += vol
-        if cum_v > 0:
-            out[i] = cum_pv / cum_v
-    return out
-
-
-def _wilder_rsi(
-    closes: list[Decimal],
-    window: int = 14,
-) -> list[Decimal | None]:
-    """Wilder's RSI. Output[i] is None for the first ``window``
-    bars; subsequent bars use the smoothed average gain/loss with
-    Wilder's exponential smoothing (alpha = 1/window).
-    """
-    n = len(closes)
-    out: list[Decimal | None] = [None] * n
-    if n <= window:
-        return out
-    gains = Decimal("0")
-    losses = Decimal("0")
-    for i in range(1, window + 1):
-        diff = closes[i] - closes[i - 1]
-        if diff >= 0:
-            gains += diff
-        else:
-            losses += -diff
-    avg_gain = gains / Decimal(window)
-    avg_loss = losses / Decimal(window)
-    if avg_loss == 0:
-        out[window] = Decimal("100")
-    else:
-        rs = avg_gain / avg_loss
-        out[window] = Decimal("100") - Decimal("100") / (Decimal("1") + rs)
-    w = Decimal(window)
-    for i in range(window + 1, n):
-        diff = closes[i] - closes[i - 1]
-        gain = diff if diff > 0 else Decimal("0")
-        loss = -diff if diff < 0 else Decimal("0")
-        avg_gain = (avg_gain * (w - 1) + gain) / w
-        avg_loss = (avg_loss * (w - 1) + loss) / w
-        if avg_loss == 0:
-            out[i] = Decimal("100")
-        else:
-            rs = avg_gain / avg_loss
-            out[i] = Decimal("100") - Decimal("100") / (Decimal("1") + rs)
-    return out
-
-
-def _rolling_sma(
-    closes: list[Decimal],
-    window: int,
-) -> list[Decimal | None]:
-    """Right-aligned simple moving average. Output[i] = mean of
-    closes[i-window+1 : i+1] when ≥ window points exist, else
-    None. O(N) via a sliding sum.
-    """
-    out: list[Decimal | None] = [None] * len(closes)
-    if not closes or window <= 0:
-        return out
-    running = Decimal("0")
-    for i, c in enumerate(closes):
-        running += c
-        if i >= window:
-            running -= closes[i - window]
-        if i >= window - 1:
-            out[i] = running / Decimal(window)
-    return out
 
 
 def compute_indicators(
@@ -255,130 +144,6 @@ def compute_indicators_for_universe(
         # corrupt every SMA.
         sorted_bars = sorted(blist, key=lambda b: b.date)
         out[ticker] = compute_indicators(
-            sorted_bars,
-            sma_windows=sma_windows,
-        )
-    return out
-
-
-# ────────────────────────────────────────────────────────────────
-# Intraday indicators (ASETPLTFRM-400 slice 4b)
-# ────────────────────────────────────────────────────────────────
-
-
-def compute_indicators_intraday(
-    bars: list[BarData],
-    *,
-    sma_windows: Iterable[int] = DEFAULT_INTRADAY_SMA_WINDOWS,
-) -> dict[int, dict[str, Decimal]]:
-    """Per-bar feature map for a single ticker's INTRADAY series.
-
-    Mirrors :func:`compute_indicators` but keys the result dict by
-    ``bar_open_ts_ns`` (int ns-since-epoch UTC) instead of
-    ``bar.date`` — multiple intraday bars share the same trading
-    day, so date-keying would clobber. The intraday runner looks
-    up features via ``indicators[ticker][ts_ns]``.
-
-    Bars MUST be ascending by ``bar_open_ts_ns`` and from a single
-    ticker. Bars missing ``bar_open_ts_ns`` are skipped (defensive
-    against accidental daily-bar input).
-
-    Returns:
-        ``{bar_open_ts_ns: {feature: Decimal}}``.
-        Features emitted (per slice-4b operator spec):
-        - ``today_ltp`` — bar close
-        - ``today_vol`` — bar volume
-        - ``sma_20`` / ``sma_50`` / ``sma_100`` / ``sma_200``
-        - ``rsi`` / ``rsi_14`` (Wilder, window 14)
-        - ``vwap`` — running mean of typical_price × volume,
-          resets at each ``bar.date`` boundary
-        - ``golden_cross_bars_ago`` — bars since the most recent
-          SMA50/SMA200 cross-up (sentinel 999 until first cross)
-    """
-    if not bars:
-        return {}
-    # Filter to intraday-tagged bars; daily inputs are a caller
-    # bug (we silently skip rather than corrupt the output).
-    series = [b for b in bars if b.bar_open_ts_ns is not None]
-    if not series:
-        return {}
-
-    closes = [b.close for b in series]
-    sma_series: dict[int, list[Decimal | None]] = {
-        w: _rolling_sma(closes, w) for w in sma_windows
-    }
-    rsi_series = _wilder_rsi(closes, 14)
-    vwap_series = _vwap_intraday(series)
-
-    s50 = sma_series.get(50)
-    s200 = sma_series.get(200)
-    last_cross_up_idx: int | None = None
-
-    out: dict[int, dict[str, Decimal]] = {}
-    for i, bar in enumerate(series):
-        feats: dict[str, Decimal] = {
-            "today_ltp": bar.close,
-            "today_vol": Decimal(bar.volume),
-        }
-        for w in sma_windows:
-            v = sma_series[w][i]
-            if v is not None:
-                feats[f"sma_{w}"] = v
-        rsi_v = rsi_series[i]
-        if rsi_v is not None:
-            feats["rsi"] = rsi_v
-            feats["rsi_14"] = rsi_v
-        vwap_v = vwap_series[i]
-        if vwap_v is not None:
-            feats["vwap"] = vwap_v
-
-        if s50 is not None and s200 is not None and i > 0:
-            cur_50 = s50[i]
-            cur_200 = s200[i]
-            prev_50 = s50[i - 1]
-            prev_200 = s200[i - 1]
-            if (
-                cur_50 is not None
-                and cur_200 is not None
-                and prev_50 is not None
-                and prev_200 is not None
-            ):
-                if prev_50 <= prev_200 and cur_50 > cur_200:
-                    last_cross_up_idx = i
-                if prev_50 >= prev_200 and cur_50 < cur_200:
-                    last_cross_up_idx = None
-
-        if last_cross_up_idx is not None:
-            feats["golden_cross_bars_ago"] = Decimal(
-                i - last_cross_up_idx,
-            )
-        else:
-            feats["golden_cross_bars_ago"] = NO_CROSS_SENTINEL
-
-        out[bar.bar_open_ts_ns] = feats
-    return out
-
-
-def compute_indicators_for_universe_intraday(
-    bars_by_ticker: dict[str, list[BarData]],
-    *,
-    sma_windows: Iterable[int] = DEFAULT_INTRADAY_SMA_WINDOWS,
-) -> dict[str, dict[int, dict[str, Decimal]]]:
-    """Per-(ticker, bar_open_ts_ns) feature map for an intraday
-    backtest. Sibling of :func:`compute_indicators_for_universe`
-    keyed by ``bar_open_ts_ns`` instead of ``bar.date``.
-    """
-    out: dict[str, dict[int, dict[str, Decimal]]] = {}
-    for ticker, blist in bars_by_ticker.items():
-        if not blist:
-            continue
-        # Defensive sort — caller is expected to already deliver
-        # ascending-by-ts_ns bars.
-        sorted_bars = sorted(
-            blist,
-            key=lambda b: (b.bar_open_ts_ns or 0),
-        )
-        out[ticker] = compute_indicators_intraday(
             sorted_bars,
             sma_windows=sma_windows,
         )

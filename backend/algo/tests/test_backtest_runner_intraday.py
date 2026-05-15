@@ -158,9 +158,14 @@ def test_unsupported_interval_sec_rejected(bad):
 
 @pytest.fixture
 def intraday_patches():
-    """Patch the intraday loader + event flush so the runner
-    walks a known synthetic series end-to-end without touching
-    Iceberg."""
+    """Patch the intraday bar loader + the feature-store loader
+    (FE-4) + the event flush so the runner walks a known
+    synthetic series end-to-end without touching Iceberg.
+
+    The feature loader is patched to return an empty panel —
+    the test strategies here only reference ``today_ltp`` /
+    ``today_vol`` (sourced from the bar itself by the inner
+    loop), so no per-bar indicator lookups are needed."""
     bars = {"FAKE.NS": _gen_intraday_bars("FAKE.NS")}
     with (
         patch(
@@ -168,16 +173,20 @@ def intraday_patches():
             return_value=bars,
         ) as loader,
         patch(
+            "backend.algo.backtest.runner.load_intraday_features_window",
+            return_value={},
+        ) as feat_loader,
+        patch(
             "backend.algo.backtest.runner.flush_events",
         ) as flush_mock,
     ):
-        yield loader, flush_mock
+        yield loader, flush_mock, feat_loader
 
 
 def test_intraday_dispatch_calls_intraday_loader(intraday_patches):
     """When ``interval_sec=900``, the runner must call
     ``load_intraday_bars_window``, NOT ``load_ohlcv_window``."""
-    loader, _ = intraday_patches
+    loader, _flush, _feat = intraday_patches
     strategy = parse_strategy(_intraday_strategy())
     request = BacktestRequest(
         strategy_id=strategy.id,
@@ -245,6 +254,10 @@ def test_intraday_fills_at_next_intraday_bar_not_next_day():
         patch(
             "backend.algo.backtest.runner.load_intraday_bars_window",
             return_value=bars,
+        ),
+        patch(
+            "backend.algo.backtest.runner.load_intraday_features_window",
+            return_value={},
         ),
         patch(
             "backend.algo.backtest.runner.flush_events",
@@ -402,6 +415,10 @@ def test_intraday_runner_walks_every_bar_per_day():
         patch(
             "backend.algo.backtest.runner.load_intraday_bars_window",
             return_value=bars,
+        ),
+        patch(
+            "backend.algo.backtest.runner.load_intraday_features_window",
+            return_value={},
         ),
         patch(
             "backend.algo.backtest.runner.flush_events",
