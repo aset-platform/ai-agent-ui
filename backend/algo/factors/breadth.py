@@ -36,16 +36,21 @@ def _fetch_breadth_pct(d: date, window: int) -> float:
 
 
 def _fetch_midcap_largecap_ratio(d: date) -> float:
+    # Yahoo's symbol for Nifty Midcap 150 is NIFTYMIDCAP150.NS
+    # (NOT ^NIFMDCP150 — that variant returns silently-empty
+    # downloads from Yahoo). Verified 2026-05-15: 7 years of
+    # daily OHLCV from 2019-01-14.
     rows = query_iceberg_table(
         "stocks.ohlcv",
         "SELECT ticker, close FROM ohlcv "
-        "WHERE ticker IN ('^NIFMDCP150', '^NSEI') AND date = ?",
+        "WHERE ticker IN ('NIFTYMIDCAP150.NS', '^NSEI') "
+        "  AND date = ?",
         [d],
     )
     if not rows:
         return float("nan")
     by_t = {r["ticker"]: r["close"] for r in rows}
-    mid = by_t.get("^NIFMDCP150")
+    mid = by_t.get("NIFTYMIDCAP150.NS")
     large = by_t.get("^NSEI")
     if mid is None or large is None or large == 0:
         return float("nan")
