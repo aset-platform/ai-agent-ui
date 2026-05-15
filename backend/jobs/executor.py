@@ -3631,6 +3631,40 @@ def execute_intraday_features_daily_compute(
     )
 
 
+@register_job("trade_feature_snapshots_eod_flush")
+def execute_trade_feature_snapshots_eod_flush(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """ASETPLTFRM-417 / FE-5.1 — EOD drain of live-mode
+    ``trade_feature_snapshots`` from Redis into Iceberg.
+
+    Cron: Mon-Fri 15:30 IST. Standalone job (not a pipeline
+    step) — runs concurrently with the 15:45 IST Intraday Bars
+    Daily Pipeline. Drains one Redis LIST per
+    ``(user_id, trading_date)`` into ONE Iceberg commit per
+    user (FE-13-style scoped pre-delete on ``fill_id`` for
+    partial-flush idempotency).
+
+    Sync + pipeline-step-compatible signature so the executor
+    can dispatch it through the standard scheduler path. The
+    underlying job is async — bridged with ``asyncio.run``.
+    """
+    import asyncio
+
+    from backend.algo.jobs.trade_feature_snapshots_eod_flush import (
+        run_trade_feature_snapshots_eod_flush_job,
+    )
+
+    return asyncio.run(
+        run_trade_feature_snapshots_eod_flush_job(payload or {}),
+    )
+
+
 @register_job("regime_classifier_daily")
 def _job_regime_classifier_daily(
     scope: str = "india",
