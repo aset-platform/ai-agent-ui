@@ -18,7 +18,8 @@ export interface StrategyFeature {
     | "recommendation"
     | "forecast"
     | "regime"
-    | "factor";
+    | "factor"
+    | "intraday_feature_store";
 }
 
 export const STRATEGY_FEATURES: StrategyFeature[] = [
@@ -33,6 +34,7 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "sma_50", label: "SMA 50", type: "float", source: "technical" },
   { key: "sma_200", label: "SMA 200", type: "float", source: "technical" },
   { key: "rsi", label: "RSI (14)", type: "float", source: "technical" },
+  { key: "vwap", label: "VWAP (intraday)", type: "float", source: "technical" },
   { key: "nifty_above_sma200", label: "NIFTY > SMA200 regime (1/0)", type: "int", source: "technical" },
   { key: "nifty_30d_return_pct", label: "NIFTY 30-day return %", type: "float", source: "technical" },
   { key: "today_dpc", label: "Today delivery %", type: "float", source: "technical" },
@@ -72,6 +74,46 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "rs_vs_nifty_3m", label: "Rel strength vs NIFTY 3m", type: "float", source: "factor" },
   { key: "rs_vs_nifty_6m", label: "Rel strength vs NIFTY 6m", type: "float", source: "factor" },
   { key: "rs_vs_sector_3m", label: "Rel strength vs sector 3m", type: "float", source: "factor" },
+  // Intraday feature store (ASETPLTFRM-403 FE-2, Phase 1) – trend
+  { key: "sma_20", label: "SMA 20 (intraday)", type: "float", source: "intraday_feature_store" },
+  { key: "sma_100", label: "SMA 100 (intraday)", type: "float", source: "intraday_feature_store" },
+  { key: "ema_20", label: "EMA 20", type: "float", source: "intraday_feature_store" },
+  { key: "ema_50", label: "EMA 50", type: "float", source: "intraday_feature_store" },
+  { key: "ema_20_slope_5bar", label: "EMA 20 slope (5-bar)", type: "float", source: "intraday_feature_store" },
+  { key: "dist_from_vwap_pct", label: "Distance from VWAP %", type: "float", source: "intraday_feature_store" },
+  { key: "golden_cross_bars_ago", label: "Golden cross (bars ago, intraday)", type: "int", source: "intraday_feature_store" },
+  // Intraday – momentum
+  { key: "rsi_14", label: "RSI(14)", type: "float", source: "intraday_feature_store" },
+  { key: "rsi_5", label: "RSI(5)", type: "float", source: "intraday_feature_store" },
+  { key: "roc_5", label: "ROC(5)", type: "float", source: "intraday_feature_store" },
+  // Intraday – volatility
+  { key: "atr_14", label: "ATR(14)", type: "float", source: "intraday_feature_store" },
+  { key: "range_expansion", label: "Range expansion ((H-L)/ATR)", type: "float", source: "intraday_feature_store" },
+  { key: "bb_width", label: "BB Width (20)", type: "float", source: "intraday_feature_store" },
+  // Intraday – volume
+  { key: "relative_volume", label: "Relative volume (TOD avg, 20d)", type: "float", source: "intraday_feature_store" },
+  { key: "volume_spike", label: "Volume spike (>2x avg)", type: "int", source: "intraday_feature_store" },
+  // Intraday – structure
+  { key: "gap_pct", label: "Gap % (today open vs prev close)", type: "float", source: "intraday_feature_store" },
+  { key: "orb_high_15min", label: "ORB High (15m)", type: "float", source: "intraday_feature_store" },
+  { key: "orb_low_15min", label: "ORB Low (15m)", type: "float", source: "intraday_feature_store" },
+  { key: "dist_from_prev_day_high_pct", label: "Distance from prev day high %", type: "float", source: "intraday_feature_store" },
+  { key: "dist_from_prev_day_low_pct", label: "Distance from prev day low %", type: "float", source: "intraday_feature_store" },
+  // Intraday – time
+  { key: "minutes_since_open", label: "Minutes since 09:15 IST", type: "int", source: "intraday_feature_store" },
+  { key: "time_of_day_bucket", label: "Time-of-day bucket", type: "string", source: "intraday_feature_store" },
+  // Intraday – relative-strength + market-breadth (FE-8 Phase 2)
+  { key: "rs_vs_nifty_15m", label: "RS vs NIFTY (15m)", type: "float", source: "intraday_feature_store" },
+  { key: "rs_vs_sector_15m", label: "RS vs sector (15m)", type: "float", source: "intraday_feature_store" },
+  { key: "market_breadth_pct_above_sma200", label: "% Nifty-500 above SMA200", type: "float", source: "intraday_feature_store" },
+  { key: "advance_decline_ratio", label: "Advance/decline ratio (15m)", type: "float", source: "intraday_feature_store" },
+  // Intraday – sector rotation (FE-9 Phase 2). regime_label /
+  // stress_prob are intentionally NOT mirrored under
+  // intraday_feature_store here — their canonical AST surface
+  // remains source="regime" (REGIME-1) and FE-9 just makes the
+  // intraday compute job emit those same keys into Iceberg so
+  // FE-4 reads see them on intraday bars.
+  { key: "sector_rotation_score", label: "Sector rotation score (15m)", type: "float", source: "intraday_feature_store" },
 ];
 
 export const STRATEGY_FEATURE_KEY_SET: Set<string> = new Set(

@@ -912,6 +912,32 @@ class LiveRuntime:
                 return 0
 
         ind_map = compute_indicators(history)
+        # FE-10 — emit per-ticker intraday features to
+        # ``stocks.intraday_features`` for the bar that just
+        # closed. Side-effect only; failure is non-fatal. Daily
+        # cadence is a no-op inside the emitter (FE-3 owns the
+        # daily writes). Cohort features (FE-8 / FE-9) are NOT
+        # emitted here — daily-batch compute is canonical.
+        try:
+            from backend.algo.features.live_emitter import (
+                _INTERVAL_SEC_BY_LABEL,
+                emit_features_for_bar,
+            )
+            _cadence = self._strategy.schedule.interval
+            if _cadence in _INTERVAL_SEC_BY_LABEL:
+                emit_features_for_bar(
+                    ticker=bar.ticker,
+                    interval_sec=_INTERVAL_SEC_BY_LABEL[_cadence],
+                    history=history,
+                    cadence_interval=_cadence,
+                    mode="live",
+                )
+        except Exception:
+            _logger.exception(
+                "[live] FE-10 feature emission hook failed "
+                "(non-fatal): ticker=%s",
+                bar.ticker,
+            )
         # REGIME-2a — lazy-load cached factor rows for this
         # ticker on first sight; subsequent bars are O(1).
         self._ensure_factor_cache(bar.ticker, bar_date_obj)
@@ -1438,6 +1464,42 @@ class LiveRuntime:
             },
         ))
         self._flush_events_now()
+
+        # ASETPLTFRM-402 / FE-5 — per-fill feature snapshot.
+        # Live synthetic fills (and real Kite postback fills
+        # which also flow through this method) have no
+        # in-scope feature dict — the decision-time features
+        # were emitted on the prior signal_generated event;
+        # we write an empty features map here for complete
+        # coverage of the fill ledger. Realised-pnl /
+        # outcome_label backfilled by Phase-3 jobs.
+        # Snapshot failure never blocks the fill / event.
+        try:
+            from backend.algo.features.snapshots import (
+                write_trade_feature_snapshot,
+            )
+
+            write_trade_feature_snapshot(
+                fill_id=str(kite_order_id),
+                run_id=str(self._run_id),
+                strategy_id=str(self._strategy.id),
+                ticker=f"{symbol}.NS",
+                side=side,
+                qty=qty,
+                fill_price=fill_price,
+                fill_ts_ns=None,
+                bar_date=today.isoformat(),
+                mode="live",
+                features=None,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "trade_feature_snapshot hook failed "
+                "(non-fatal): symbol=%s mode=live "
+                "kite_order_id=%s",
+                symbol,
+                kite_order_id,
+            )
 
         _logger.info(
             "[DRY_RUN] synthetic fill: symbol=%s side=%s qty=%d "

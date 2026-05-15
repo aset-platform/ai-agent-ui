@@ -25,11 +25,16 @@ FeatureSource = Literal[
     "ohlcv",
     # rsi, sma_50, sma_200, golden_cross_days_ago
     "technical",
-    "fundamentals",       # pscore, debt_to_eq, roce, sales/profit
+    "fundamentals",  # pscore, debt_to_eq, roce, sales/profit
     "recommendation",
     "forecast",
-    "regime",             # REGIME-1: regime_label, stress_prob, etc.
-    "factor",             # REGIME-2a: cached factor library
+    "regime",  # REGIME-1: regime_label, stress_prob, etc.
+    "factor",  # REGIME-2a: cached factor library
+    # ASETPLTFRM-403 FE-2: centralized intraday feature engine
+    # (``stocks.intraday_features`` Iceberg store, populated by
+    # FE-3 daily compute / on-demand backfill). Read at backtest
+    # time by FE-4; written by live runtime by FE-10.
+    "intraday_feature_store",
 ]
 
 
@@ -46,18 +51,14 @@ class Feature(BaseModel):
 # Slice 6 adds intraday-bar features. F&O features = v2.
 FEATURES: list[Feature] = [
     # OHLCV
-    Feature(
-        key="today_ltp", label="Today LTP", type="float", source="ohlcv"
-    ),
+    Feature(key="today_ltp", label="Today LTP", type="float", source="ohlcv"),
     Feature(
         key="prev_day_ltp",
         label="Prev day LTP",
         type="float",
         source="ohlcv",
     ),
-    Feature(
-        key="today_vol", label="Today volume", type="int", source="ohlcv"
-    ),
+    Feature(key="today_vol", label="Today volume", type="int", source="ohlcv"),
     Feature(
         key="today_x_vol",
         label="Today × Vol (vs avg)",
@@ -291,6 +292,208 @@ FEATURES: list[Feature] = [
         label="Rel strength vs sector 3m",
         type="float",
         source="factor",
+    ),
+    # ────────────────────────────────────────────────────────────
+    # Intraday feature store (ASETPLTFRM-403 FE-2, Phase 1)
+    # Populated by the centralized engine at
+    # ``backend.algo.features``; persisted to
+    # ``stocks.intraday_features`` (Iceberg) by FE-3; read by
+    # the backtest runner in FE-4. RS-vs-* features defer to
+    # FE-8 because they depend on FE-6 / FE-7 index + sector
+    # intraday bar tables.
+    # ────────────────────────────────────────────────────────────
+    # Intraday — trend
+    Feature(
+        key="sma_20",
+        label="SMA 20 (intraday)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="sma_100",
+        label="SMA 100 (intraday)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="ema_20",
+        label="EMA 20",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="ema_50",
+        label="EMA 50",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="ema_20_slope_5bar",
+        label="EMA 20 slope (5-bar)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="dist_from_vwap_pct",
+        label="Distance from VWAP %",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="golden_cross_bars_ago",
+        label="Golden cross (bars ago, intraday)",
+        type="int",
+        source="intraday_feature_store",
+    ),
+    # Intraday — momentum
+    Feature(
+        key="rsi_14",
+        label="RSI(14)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="rsi_5",
+        label="RSI(5)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="roc_5",
+        label="ROC(5)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    # Intraday — volatility
+    Feature(
+        key="atr_14",
+        label="ATR(14)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="range_expansion",
+        label="Range expansion ((H-L)/ATR)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="bb_width",
+        label="BB Width (20)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    # Intraday — volume
+    Feature(
+        key="relative_volume",
+        label="Relative volume (TOD avg, 20d)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="volume_spike",
+        label="Volume spike (>2x avg)",
+        type="int",
+        source="intraday_feature_store",
+    ),
+    # Intraday — structure
+    Feature(
+        key="gap_pct",
+        label="Gap % (today open vs prev close)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="orb_high_15min",
+        label="ORB High (15m)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="orb_low_15min",
+        label="ORB Low (15m)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="dist_from_prev_day_high_pct",
+        label="Distance from prev day high %",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="dist_from_prev_day_low_pct",
+        label="Distance from prev day low %",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    # Intraday — time
+    Feature(
+        key="minutes_since_open",
+        label="Minutes since 09:15 IST",
+        type="int",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="time_of_day_bucket",
+        label="Time-of-day bucket",
+        type="string",
+        source="intraday_feature_store",
+    ),
+    # ────────────────────────────────────────────────────────────
+    # Intraday — relative-strength + market-breadth (FE-8)
+    # Phase-2 cross-sectional features. The two rs_vs_* features
+    # were deferred from FE-2 because they depend on the FE-6
+    # ``stocks.index_intraday_bars`` table. The two market-breadth
+    # features are introduced fresh here as the first Phase-2
+    # cohort-pass features.
+    # ────────────────────────────────────────────────────────────
+    Feature(
+        key="rs_vs_nifty_15m",
+        label="RS vs NIFTY (15m)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="rs_vs_sector_15m",
+        label="RS vs sector (15m)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="market_breadth_pct_above_sma200",
+        label="% Nifty-500 above SMA200",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="advance_decline_ratio",
+        label="Advance/decline ratio (15m)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    # ────────────────────────────────────────────────────────────
+    # Intraday — sector rotation + regime link (FE-9, Phase 2)
+    # ``sector_rotation_score`` is a NEW Phase-2 cross-sectional
+    # feature ranking the 8 NSE sectoral indices by 15m return.
+    # Emitted only for tickers whose sector maps into the
+    # rotation universe.
+    #
+    # NOTE: ``regime_label`` + ``stress_prob`` are intentionally
+    # NOT duplicated here under ``intraday_feature_store``. The
+    # daily-cadence ``source="regime"`` entries above (REGIME-1)
+    # remain the canonical AST surface — strategies reference
+    # them by the same key regardless of cadence. FE-9 just
+    # makes the intraday compute job ALSO emit those two values
+    # into ``stocks.intraday_features`` so FE-4 backtest reads
+    # see them on intraday bars. Both daily-runner and intraday
+    # paths converge on the same key.
+    # ────────────────────────────────────────────────────────────
+    Feature(
+        key="sector_rotation_score",
+        label="Sector rotation score (15m)",
+        type="float",
+        source="intraday_feature_store",
     ),
 ]
 

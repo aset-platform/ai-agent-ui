@@ -288,6 +288,32 @@ class PaperRuntime:
         history = self._bars_by_ticker.setdefault(bar.ticker, [])
         history.append(adapted)
         ind_map = compute_indicators(history)
+        # FE-10 — emit per-ticker intraday features to
+        # ``stocks.intraday_features`` for the bar that just
+        # closed. Side-effect only; failure is non-fatal. Daily
+        # cadence is a no-op inside the emitter (FE-3 owns the
+        # daily writes). Cohort features (FE-8 / FE-9) are NOT
+        # emitted here — daily-batch compute is canonical.
+        try:
+            from backend.algo.features.live_emitter import (
+                _INTERVAL_SEC_BY_LABEL,
+                emit_features_for_bar,
+            )
+            _cadence = self._strategy.schedule.interval
+            if _cadence in _INTERVAL_SEC_BY_LABEL:
+                emit_features_for_bar(
+                    ticker=bar.ticker,
+                    interval_sec=_INTERVAL_SEC_BY_LABEL[_cadence],
+                    history=history,
+                    cadence_interval=_cadence,
+                    mode="paper",
+                )
+        except Exception:
+            _logger.exception(
+                "[paper] FE-10 feature emission hook failed "
+                "(non-fatal): ticker=%s",
+                bar.ticker,
+            )
         # REGIME-2a — lazy-load cached factor rows for this
         # ticker on first sight; subsequent bars are O(1).
         self._ensure_factor_cache(bar.ticker, bar_date_obj)
@@ -450,6 +476,42 @@ class PaperRuntime:
                 "fee_rates_version": fill.fee_rates_version,
             },
         ))
+
+        # ASETPLTFRM-402 / FE-5 — per-fill feature snapshot
+        # for alpha research. ADDITIVE write to
+        # stocks.trade_feature_snapshots; the promotion
+        # gate's algo.events ``mode='paper' AND
+        # type='order_filled'`` scan is untouched.
+        # Snapshot failure never blocks the fill.
+        try:
+            from backend.algo.features.snapshots import (
+                write_trade_feature_snapshot,
+            )
+
+            _snap_fid = f"{self._session_id}:{fill.ticker}:{fill.intent_id}"
+            write_trade_feature_snapshot(
+                fill_id=_snap_fid,
+                run_id=str(self._session_id),
+                strategy_id=str(self._strategy.id),
+                ticker=fill.ticker,
+                side=fill.side,
+                qty=fill.qty,
+                fill_price=fill.fill_price,
+                fill_ts_ns=(
+                    fill.fill_ts_ns
+                    if fill.fill_ts_ns is not None
+                    else bar.bar_open_ts_ns
+                ),
+                bar_date=fill.fill_date.isoformat(),
+                mode="paper",
+                features=features,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "trade_feature_snapshot hook failed "
+                "(non-fatal): ticker=%s mode=paper",
+                fill.ticker,
+            )
         return 1
 
     def _action_to_signal(

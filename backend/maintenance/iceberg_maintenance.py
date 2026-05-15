@@ -68,6 +68,31 @@ ALL_TABLES = [
     # accumulate small parquets per (ticker, bar_date)
     # partition; daily compaction keeps reads tight.
     "stocks.intraday_bars",
+    # Centralized feature engine output (ASETPLTFRM-402 /
+    # FE-1). Long-format feature rows accumulate per
+    # (ticker, year_month) partition. Intentionally NOT
+    # in DATE_COLUMNS below: ``bar_date`` is a STRING and
+    # retention is governed by the partition layout, same
+    # rationale as ``stocks.intraday_bars`` (see NOTE in
+    # DATE_COLUMNS).
+    "stocks.intraday_features",
+    # Per-fill feature snapshots (ASETPLTFRM-402 / FE-5).
+    # One single-row Iceberg append per executed fill —
+    # accumulates one parquet per commit without
+    # compaction. Same rationale as ``stocks.intraday_bars``
+    # for omitting from DATE_COLUMNS: ``bar_date`` is a
+    # STRING and retention is governed by the
+    # ``(year_month, mode)`` partition layout, not the
+    # generic MAX_RETENTION_YEARS purge.
+    "stocks.trade_feature_snapshots",
+    # NSE index intraday bars (ASETPLTFRM-402 / FE-6).
+    # Mirrors ``stocks.intraday_bars`` shape exactly — the
+    # daily keeper writes ~10 NSE indices × 1-3 cadences
+    # (15m / 5m / 1m) per run. Intentionally NOT in
+    # DATE_COLUMNS below: ``bar_date`` is a STRING and
+    # retention is governed by the partition layout, same
+    # rationale as ``stocks.intraday_bars``.
+    "stocks.index_intraday_bars",
     # Algo namespace — write-heavy event streams. 2026-05-12
     # incident: algo.events bloated to 11 GB of metadata.json
     # (5,901 snapshots, ~2 MB each) because it was missing from
@@ -354,6 +379,36 @@ def compact_table(table_name: str) -> dict:
         table_name,
         before,
     )
+
+    # Smart-skip: if every partition is already at ~1 parquet,
+    # rewriting them is wasted I/O and exposes us to
+    # PyIceberg's overwrite-conflict failure mode under
+    # concurrent writers. The 2026-05-14 incident burned 6h
+    # rewriting an already-optimal stocks.intraday_bars before
+    # the commit hit a branch-ref conflict. See
+    # ``is_compaction_already_optimal`` for the threshold.
+    if is_compaction_already_optimal(table_dir):
+        files, partitions, avg = _avg_files_per_partition(
+            table_dir,
+        )
+        _logger.info(
+            "[maint] %s already optimal — files=%d "
+            "partitions=%d avg=%.2f ≤ %.2f, "
+            "skipping rewrite",
+            table_name,
+            files,
+            partitions,
+            avg,
+            _OPTIMAL_FILES_PER_PARTITION,
+        )
+        return {
+            "table": table_name,
+            "before": before,
+            "after": before,
+            "skipped_optimal": True,
+            "partitions": partitions,
+            "avg_files_per_partition": avg,
+        }
 
     t0 = time.monotonic()
 
@@ -655,6 +710,65 @@ def _count_parquet_files(
     if not table_dir.exists():
         return 0
     return sum(1 for _ in table_dir.rglob("*.parquet"))
+
+
+# Threshold for considering a table "already optimal" — average
+# parquet files per partition. 1.0 = exactly one file per
+# partition (the ideal); 1.5 leaves a small margin for in-flight
+# writes from a parallel keeper that committed since the last
+# compaction. Above this, compaction does net work; at or below,
+# rewriting all files produces zero improvement and risks the
+# atomic-overwrite-conflict failure mode (see CLAUDE.md §6.4 /
+# the 2026-05-14 stocks.intraday_bars overwrite-failed incident).
+_OPTIMAL_FILES_PER_PARTITION = 1.5
+
+
+def _avg_files_per_partition(
+    table_dir: Path,
+) -> tuple[int, int, float]:
+    """Return ``(files, partitions, avg)`` for the table dir.
+
+    A "partition" is any leaf directory containing at least one
+    ``.parquet`` file. For un-partitioned tables, the data dir
+    itself counts as one partition. ``avg = files / partitions``;
+    returns ``(0, 0, 0.0)`` for an empty / missing table.
+    """
+    if not table_dir.exists():
+        return 0, 0, 0.0
+    partition_dirs: set[Path] = set()
+    files = 0
+    for parquet in table_dir.rglob("*.parquet"):
+        files += 1
+        partition_dirs.add(parquet.parent)
+    partitions = len(partition_dirs)
+    if partitions == 0:
+        return 0, 0, 0.0
+    return files, partitions, files / partitions
+
+
+def is_compaction_already_optimal(
+    table_dir: Path,
+) -> bool:
+    """True iff the table's partitions are already one-file-per
+    (or close enough — see ``_OPTIMAL_FILES_PER_PARTITION``).
+
+    Skipping compaction in this state avoids the
+    rewrite-22k-files-into-22k-new-files pathology that triggered
+    the 2026-05-14 incident: the table was already
+    one-file-per-partition after a fresh backfill, but
+    ``compact_table`` re-read every parquet and tried to atomic-
+    overwrite the whole table, exposing the long-running write
+    to PyIceberg's concurrent-writer-conflict failure mode.
+
+    The fix is conservative: skip only when the layout is
+    demonstrably optimal. Empty tables are NOT optimal (callers
+    handle that branch separately so the skip-log doesn't
+    double-fire with the empty-table log).
+    """
+    files, partitions, avg = _avg_files_per_partition(table_dir)
+    if partitions == 0:
+        return False
+    return avg <= _OPTIMAL_FILES_PER_PARTITION
 
 
 # ---------------------------------------------------------------
