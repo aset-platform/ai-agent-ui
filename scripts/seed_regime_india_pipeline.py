@@ -40,15 +40,16 @@ Usage::
 
     docker compose exec backend python scripts/seed_regime_india_pipeline.py
 """
+
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 
-from sqlalchemy import text
-
 from db.engine import get_session_factory
+from sqlalchemy import text
 
 _logger = logging.getLogger(__name__)
 
@@ -95,6 +96,18 @@ STEPS = [
         "step_order": 7,
         "job_type": "iceberg_maintenance",
         "job_name": "Compact + Backup Iceberg",
+        # ASETPLTFRM-418: scope to the regime engine's
+        # daily-cadence write set. Other hot tables
+        # (OHLCV, sentiment, intraday) are owned by
+        # their own pipelines' maintenance step.
+        "payload": {
+            "tables": [
+                "stocks.regime_history",
+                "stocks.regime_hmm_state",
+                "stocks.daily_factors",
+                "stocks.universe_snapshot",
+            ],
+        },
     },
 ]
 
@@ -121,10 +134,7 @@ async def seed() -> None:
             {"pid": PIPELINE_ID, "name": PIPELINE_NAME},
         )
         await session.execute(
-            text(
-                "DELETE FROM pipeline_steps "
-                "WHERE pipeline_id = :pid"
-            ),
+            text("DELETE FROM pipeline_steps " "WHERE pipeline_id = :pid"),
             {"pid": PIPELINE_ID},
         )
         for step in STEPS:
@@ -132,14 +142,18 @@ async def seed() -> None:
                 text(
                     "INSERT INTO pipeline_steps "
                     "(pipeline_id, step_order, "
-                    " job_type, job_name) "
-                    "VALUES (:pid, :order, :jt, :name)"
+                    " job_type, job_name, payload) "
+                    "VALUES (:pid, :order, :jt, :name,"
+                    "        CAST(:payload AS jsonb))"
                 ),
                 {
                     "pid": PIPELINE_ID,
                     "order": step["step_order"],
                     "jt": step["job_type"],
                     "name": step["job_name"],
+                    "payload": json.dumps(
+                        step.get("payload") or {},
+                    ),
                 },
             )
             _logger.info(
@@ -155,7 +169,9 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     asyncio.run(seed())
     _logger.info(
-        "%s seeded with %d steps", PIPELINE_NAME, len(STEPS),
+        "%s seeded with %d steps",
+        PIPELINE_NAME,
+        len(STEPS),
     )
 
 

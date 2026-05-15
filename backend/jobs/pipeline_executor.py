@@ -1,6 +1,8 @@
 """Pipeline chain executor — sequential job chaining."""
+
 from __future__ import annotations
 
+import inspect
 import logging
 import threading
 import uuid
@@ -73,8 +75,7 @@ class PipelineExecutor:
         pipeline_id = pipeline["pipeline_id"]
 
         _logger.info(
-            "Pipeline %s start: steps=%d from=%d "
-            "run=%s",
+            "Pipeline %s start: steps=%d from=%d " "run=%s",
             pipeline.get("name"),
             len(steps),
             start_step,
@@ -136,13 +137,11 @@ class PipelineExecutor:
                 ]:
                     expire_snapshots(tbl, keep=5)
                 _logger.info(
-                    "Post-pipeline snapshot "
-                    "expiry complete",
+                    "Post-pipeline snapshot " "expiry complete",
                 )
             except Exception:
                 _logger.debug(
-                    "Post-pipeline snapshot "
-                    "expiry failed",
+                    "Post-pipeline snapshot " "expiry failed",
                     exc_info=True,
                 )
 
@@ -163,7 +162,8 @@ class PipelineExecutor:
         executor_fn = JOB_EXECUTORS.get(job_type)
         if not executor_fn:
             _logger.warning(
-                "No executor for %s", job_type,
+                "No executor for %s",
+                job_type,
             )
             return False
 
@@ -195,16 +195,34 @@ class PipelineExecutor:
         )
 
         start = datetime.now(UTC)
+        # Step-scoped payload (ASETPLTFRM-418) — declarative
+        # per-pipeline arguments persisted on the pipeline_steps
+        # row. Pass only when the executor's signature accepts
+        # ``payload``; otherwise existing wrappers (which weren't
+        # rewritten) keep their previous call shape.
+        payload = step.get("payload") or {}
+        kwargs: dict = {
+            "cancel_event": cancel_event,
+            "force": force,
+        }
+        try:
+            sig = inspect.signature(executor_fn)
+            params = sig.parameters
+        except (TypeError, ValueError):
+            params = {}
+        if "payload" in params or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+        ):
+            kwargs["payload"] = payload
         try:
             executor_fn(
-                scope, run_id, self._repo,
-                cancel_event=cancel_event,
-                force=force,
+                scope,
+                run_id,
+                self._repo,
+                **kwargs,
             )
         except Exception as exc:
-            elapsed = (
-                datetime.now(UTC) - start
-            ).total_seconds()
+            elapsed = (datetime.now(UTC) - start).total_seconds()
             # ``exc_info=True`` so the next failure dumps the full
             # traceback into the backend logs. Pre-this, only the
             # short message landed (e.g. "Expected bytes, got a
@@ -227,9 +245,7 @@ class PipelineExecutor:
             )
             return False
 
-        elapsed = (
-            datetime.now(UTC) - start
-        ).total_seconds()
+        elapsed = (datetime.now(UTC) - start).total_seconds()
 
         # Check if the executor itself marked it
         # as failed (e.g. >5% ticker error rate)
@@ -242,10 +258,7 @@ class PipelineExecutor:
             (r for r in last if r.get("run_id") == run_id),
             None,
         )
-        status = (
-            step_run.get("status", "success")
-            if step_run else "success"
-        )
+        status = step_run.get("status", "success") if step_run else "success"
         if status == "running":
             status = "success"
 

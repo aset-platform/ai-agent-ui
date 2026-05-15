@@ -1,4 +1,5 @@
 """Pipeline + PipelineStep ORM models — job chains."""
+
 from datetime import datetime
 
 from sqlalchemy import (
@@ -9,7 +10,9 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     func,
+    text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import (
     Mapped,
     mapped_column,
@@ -23,25 +26,34 @@ class Pipeline(Base):
     __tablename__ = "pipelines"
 
     pipeline_id: Mapped[str] = mapped_column(
-        String(36), primary_key=True,
+        String(36),
+        primary_key=True,
     )
     name: Mapped[str] = mapped_column(
-        String(100), unique=True, nullable=False,
+        String(100),
+        unique=True,
+        nullable=False,
     )
     scope: Mapped[str] = mapped_column(
-        String(50), nullable=False,
+        String(50),
+        nullable=False,
     )
     enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="true",
+        Boolean,
+        nullable=False,
+        server_default="true",
     )
     cron_days: Mapped[str | None] = mapped_column(
-        String(200), nullable=True,
+        String(200),
+        nullable=True,
     )
     cron_time: Mapped[str | None] = mapped_column(
-        String(10), nullable=True,
+        String(10),
+        nullable=True,
     )
     cron_dates: Mapped[str | None] = mapped_column(
-        String(200), nullable=True,
+        String(200),
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -64,13 +76,16 @@ class PipelineStep(Base):
     __tablename__ = "pipeline_steps"
     __table_args__ = (
         UniqueConstraint(
-            "pipeline_id", "step_order",
+            "pipeline_id",
+            "step_order",
             name="uq_pipeline_step_order",
         ),
     )
 
     id: Mapped[int] = mapped_column(
-        Integer, primary_key=True, autoincrement=True,
+        Integer,
+        primary_key=True,
+        autoincrement=True,
     )
     pipeline_id: Mapped[str] = mapped_column(
         String(36),
@@ -81,13 +96,26 @@ class PipelineStep(Base):
         nullable=False,
     )
     step_order: Mapped[int] = mapped_column(
-        Integer, nullable=False,
+        Integer,
+        nullable=False,
     )
     job_type: Mapped[str] = mapped_column(
-        String(50), nullable=False,
+        String(50),
+        nullable=False,
     )
     job_name: Mapped[str] = mapped_column(
-        String(100), nullable=False,
+        String(100),
+        nullable=False,
+    )
+    # Free-form per-step args (e.g. iceberg_maintenance reads
+    # ``payload["tables"]`` to scope the run). Empty dict by
+    # default — wrappers that ignore ``payload`` keep their
+    # existing behaviour. ASETPLTFRM-418.
+    payload: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        default=dict,
     )
 
     pipeline: Mapped["Pipeline"] = relationship(

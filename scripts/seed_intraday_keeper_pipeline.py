@@ -73,6 +73,7 @@ delete the standalone row after migrating to the pipeline.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 
@@ -112,6 +113,19 @@ STEPS = [
         "step_order": 5,
         "job_type": "iceberg_maintenance",
         "job_name": "Compact + Backup Iceberg",
+        # ASETPLTFRM-418: scope maintenance to the
+        # tables this pipeline actually writes (intraday
+        # family only). Avoids the full-warehouse rsync
+        # + 14-table compact loop when only ~4 tables
+        # need attention.
+        "payload": {
+            "tables": [
+                "stocks.intraday_bars",
+                "stocks.index_intraday_bars",
+                "stocks.intraday_features",
+                "stocks.trade_feature_snapshots",
+            ],
+        },
     },
 ]
 
@@ -146,14 +160,18 @@ async def seed() -> None:
                 text(
                     "INSERT INTO pipeline_steps "
                     "(pipeline_id, step_order, "
-                    " job_type, job_name) "
-                    "VALUES (:pid, :order, :jt, :name)"
+                    " job_type, job_name, payload) "
+                    "VALUES (:pid, :order, :jt, :name,"
+                    "        CAST(:payload AS jsonb))"
                 ),
                 {
                     "pid": PIPELINE_ID,
                     "order": step["step_order"],
                     "jt": step["job_type"],
                     "name": step["job_name"],
+                    "payload": json.dumps(
+                        step.get("payload") or {},
+                    ),
                 },
             )
             _logger.info(
