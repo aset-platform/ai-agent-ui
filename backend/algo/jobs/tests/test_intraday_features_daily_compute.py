@@ -614,6 +614,161 @@ async def test_daily_compute_proceeds_when_index_bars_empty(
     assert compute_kwargs["index_bars_by_symbol"] is None
 
 
+async def test_daily_compute_passes_fe9_regime_by_date_into_engine(
+    fake_session,
+):
+    """FE-9: the daily compute MUST call ``_load_regime_for_window``
+    and forward its output to the engine as
+    ``regime_by_date``."""
+    from backend.algo.regime.repo import RegimeRow
+
+    factory, _ = fake_session
+    bars = [_bar("A.NS")]
+    panel = {
+        "A.NS": {
+            bars[0].bar_open_ts_ns: {"today_ltp": Decimal("100.5")},
+        },
+    }
+    fake_rh = [
+        RegimeRow(
+            bar_date=date(2026, 5, 13),
+            regime_label="BULL",
+            stress_prob=0.1,
+            rule_inputs={},
+        ),
+    ]
+    mock_tbl = MagicMock()
+    mock_cat = MagicMock()
+    mock_cat.load_table.return_value = mock_tbl
+
+    sess_patch, univ_patch = _patch_session_and_universe(
+        factory,
+        ["A.NS"],
+    )
+    with (
+        sess_patch,
+        univ_patch,
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "_load_intraday_bars_for_ticker",
+            return_value=bars,
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "load_index_intraday_bars_window",
+            return_value={},
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "build_ticker_to_sector_index_map",
+            new=AsyncMock(return_value={}),
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "get_regime_history",
+            return_value=fake_rh,
+        ) as mock_rh,
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "compute_intraday_features_for_universe",
+            return_value=panel,
+        ) as mock_compute,
+        patch(
+            "stocks.create_tables._get_catalog",
+            return_value=mock_cat,
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "invalidate_metadata",
+        ),
+    ):
+        result = await run_intraday_features_daily_compute_job(
+            {"period_start": "2026-05-13", "period_end": "2026-05-13"},
+        )
+
+    assert result["status"] == "ok"
+    mock_rh.assert_called_once()
+    compute_kwargs = mock_compute.call_args.kwargs
+    # The engine was called with a populated regime_by_date dict.
+    rbd = compute_kwargs["regime_by_date"]
+    assert rbd is not None
+    assert date(2026, 5, 13) in rbd
+    entry = rbd[date(2026, 5, 13)]
+    assert entry["regime_label"] == "BULL"
+    # float stress_prob from repo → Decimal in the engine input.
+    assert entry["stress_prob"] == Decimal(str(0.1))
+
+
+async def test_daily_compute_handles_regime_history_failure(
+    fake_session,
+):
+    """FE-9: if ``get_regime_history`` raises, the compute MUST
+    still proceed — empty dict passed (engine then drops FE-9
+    regime features but rest of the panel still emits)."""
+    factory, _ = fake_session
+    bars = [_bar("A.NS")]
+    panel = {
+        "A.NS": {
+            bars[0].bar_open_ts_ns: {"today_ltp": Decimal("100.5")},
+        },
+    }
+    mock_tbl = MagicMock()
+    mock_cat = MagicMock()
+    mock_cat.load_table.return_value = mock_tbl
+
+    sess_patch, univ_patch = _patch_session_and_universe(
+        factory,
+        ["A.NS"],
+    )
+    with (
+        sess_patch,
+        univ_patch,
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "_load_intraday_bars_for_ticker",
+            return_value=bars,
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "load_index_intraday_bars_window",
+            return_value={},
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "build_ticker_to_sector_index_map",
+            new=AsyncMock(return_value={}),
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "get_regime_history",
+            side_effect=RuntimeError("simulated regime read fail"),
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "compute_intraday_features_for_universe",
+            return_value=panel,
+        ) as mock_compute,
+        patch(
+            "stocks.create_tables._get_catalog",
+            return_value=mock_cat,
+        ),
+        patch(
+            "backend.algo.jobs.intraday_features_daily_compute."
+            "invalidate_metadata",
+        ),
+    ):
+        result = await run_intraday_features_daily_compute_job(
+            {"period_start": "2026-05-13", "period_end": "2026-05-13"},
+        )
+
+    # Job completes successfully and rows are still written.
+    assert result["status"] == "ok"
+    assert result["rows_written"] == 1
+    # Engine sees regime_by_date=None (empty dict short-circuited).
+    compute_kwargs = mock_compute.call_args.kwargs
+    assert compute_kwargs["regime_by_date"] is None
+
+
 def test_register_job_wired_in_executor():
     """``intraday_features_daily_compute`` must be registered in
     ``JOB_EXECUTORS`` so the pipeline executor can chain it."""

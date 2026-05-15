@@ -37,8 +37,9 @@ layers land in FE-3 / FE-5.
 
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Iterable
+from typing import Any, Iterable
 
 from backend.algo.backtest.types import BarData
 from backend.algo.features import primitives as p
@@ -51,6 +52,11 @@ from backend.algo.features.version import (
     FEATURE_SET_VERSION,
     NO_CROSS_SENTINEL,
 )
+from backend.algo.jobs._index_universe import SECTORAL_INDEX_SYMBOLS
+
+# IST timezone for ts_ns → trading-date conversion in the FE-9
+# regime-link feature (regime_history is keyed by IST bar_date).
+_IST = timezone(timedelta(minutes=330))
 
 
 def compute_intraday_features(
@@ -243,6 +249,7 @@ def compute_intraday_features_for_universe(
     *,
     index_bars_by_symbol: dict[str, list[BarData]] | None = None,
     ticker_to_sector_index: dict[str, str] | None = None,
+    regime_by_date: dict[date, dict[str, Any]] | None = None,
     sma_windows: Iterable[int] = DEFAULT_INTRADAY_SMA_WINDOWS,
     feature_set_version: str = FEATURE_SET_VERSION,
 ) -> UniverseFeaturePanel:
@@ -277,18 +284,48 @@ def compute_intraday_features_for_universe(
     assertion ``intraday-features-coverage-floor`` still passes
     because the non-cohort features remain ≥ 5 per bar.
 
+    Phase C (FE-9 cohort pass, NEW): three additional features
+    layered on top of FE-8's output:
+
+    * ``sector_rotation_score`` — per-bar normalised rank of the
+      ticker's mapped sector index, ``0.0`` (worst-performing
+      sector this 15m) → ``1.0`` (best-performing). Computed
+      over the 8 sectoral indices in
+      :data:`SECTORAL_INDEX_SYMBOLS` only;
+      :data:`BROAD_INDEX_SYMBOLS` (``"NIFTY 50"``, ``"NIFTY
+      BANK"``) are excluded — ``NIFTY BANK`` is treated as a
+      broad financial index and ``NIFTY FIN SERVICE`` is used as
+      the sectoral financials proxy. Emitted only for tickers
+      whose entry is in ``ticker_to_sector_index``. Absent when
+      fewer than 2 sectoral indices have a valid 15m return at
+      the bar.
+    * ``regime_label`` / ``stress_prob`` — daily-cadence regime
+      values (from ``stocks.regime_history``) projected onto
+      every bar of the matching IST trading date. Same value for
+      every ticker on the same ``bar_date`` (regime is a
+      market-wide signal). Absent when ``regime_by_date`` is
+      ``None`` OR missing for that date — strategies referencing
+      these keys see absence rather than ``NaN`` (skip-emission
+      contract).
+
     Pure-function discipline holds — no I/O. The compute job and
     on-demand backfill are responsible for fetching index bars +
-    sector mappings.
+    sector mappings + regime history.
 
     Args:
         bars_by_ticker: Per-ticker bar series.
         index_bars_by_symbol: Per-symbol bar series for the index
             universe (FE-6's ``stocks.index_intraday_bars``). When
-            ``None``, FE-8 features are absent.
+            ``None``, FE-8 + FE-9 ``sector_rotation_score`` are
+            absent.
         ticker_to_sector_index: Maps equity ticker → Kite index
             tradingsymbol. Tickers absent from this dict do not
-            receive ``rs_vs_sector_15m``.
+            receive ``rs_vs_sector_15m`` /
+            ``sector_rotation_score``.
+        regime_by_date: ``{bar_date: {"regime_label": str,
+            "stress_prob": Decimal}}`` — same shape the daily
+            backtest runner builds. ``None`` or missing date →
+            regime features absent for that ticker/bar.
         sma_windows: SMA windows (passed through to
             :func:`compute_intraday_features`).
         feature_set_version: Reserved (passed through).
@@ -310,12 +347,13 @@ def compute_intraday_features_for_universe(
             sma_windows=sma_windows,
             feature_set_version=feature_set_version,
         )
-    if index_bars_by_symbol is not None:
+    if index_bars_by_symbol is not None or regime_by_date is not None:
         _apply_cohort_features(
             panel=out,
             bars_by_ticker=bars_by_ticker,
-            index_bars_by_symbol=index_bars_by_symbol,
+            index_bars_by_symbol=index_bars_by_symbol or {},
             ticker_to_sector_index=ticker_to_sector_index or {},
+            regime_by_date=regime_by_date,
         )
     return out
 
@@ -348,14 +386,53 @@ def _bar_to_bar_return(
     return (close / prev_close) - Decimal("1")
 
 
+def _index_return_for(
+    closes: dict[int, Decimal],
+    sorted_ts: list[int],
+    ts_ns: int,
+) -> Decimal | None:
+    """Bar-to-bar return for an index series using ITS OWN prev
+    bar (not the equity ticker's prev). Module-level so FE-9's
+    sector-rotation cohort step can reuse it before the FE-8
+    per-ticker emission loop runs.
+    """
+    close = closes.get(ts_ns)
+    if close is None:
+        return None
+    try:
+        idx = sorted_ts.index(ts_ns)
+    except ValueError:
+        return None
+    if idx == 0:
+        return None
+    prev = closes.get(sorted_ts[idx - 1])
+    return _bar_to_bar_return(close, prev)
+
+
+def _ts_ns_to_ist_date(ts_ns: int) -> date:
+    """Convert a UTC ``bar_open_ts_ns`` to its IST trading date.
+
+    Matches the rule used by every other intraday IST-aware
+    helper (``primitives._ist_date`` / ``per_day_index``) — the
+    IST calendar date of the bar's opening instant. Pure
+    function, no I/O.
+    """
+    dt = datetime.fromtimestamp(
+        ts_ns / 1_000_000_000,
+        tz=timezone.utc,
+    ).astimezone(_IST)
+    return dt.date()
+
+
 def _apply_cohort_features(
     *,
     panel: UniverseFeaturePanel,
     bars_by_ticker: dict[str, list[BarData]],
     index_bars_by_symbol: dict[str, list[BarData]],
     ticker_to_sector_index: dict[str, str],
+    regime_by_date: dict[date, dict[str, Any]] | None = None,
 ) -> None:
-    """In-place merge of FE-8 cross-sectional features onto
+    """In-place merge of FE-8 + FE-9 cross-sectional features onto
     ``panel``.
 
     Each cohort feature is treated independently — failure to
@@ -449,32 +526,43 @@ def _apply_cohort_features(
                 Decimal(advancers) / Decimal(decliners)
             )
 
-    # ── Emit per-(ticker, ts_ns) ───────────────────────────────
-    have_nifty = len(nifty_closes) > 0
-    nifty_sorted_ts = sorted(nifty_closes.keys()) if have_nifty else []
+    # ── FE-9 sector_rotation_score (per ts_ns) ─────────────────
+    # For each ts_ns: compute each sectoral index's 15m bar-to-bar
+    # return (using ITS OWN prev bar), feed to
+    # ``compute_sector_rotation_at_bar`` to get
+    # ``{sector_sym: rank_score}``. The map is keyed by ts_ns and
+    # consumed in the per-(ticker, ts_ns) emission loop below.
     sector_sorted_ts: dict[str, list[int]] = {
         sym: sorted(c.keys()) for sym, c in sector_closes.items()
     }
+    sectoral_set = set(SECTORAL_INDEX_SYMBOLS)
+    rotation_score_by_ts: dict[int, dict[str, Decimal]] = {}
+    # Union of ts_ns across the sectoral indices only — broad
+    # symbols (NIFTY 50, NIFTY BANK) are excluded from the rank
+    # set per FE-9 spec.
+    sectoral_ts_set: set[int] = set()
+    for sym in sectoral_set:
+        sectoral_ts_set.update(sector_closes.get(sym, {}).keys())
+    for ts_ns in sectoral_ts_set:
+        sectoral_returns: dict[str, Decimal] = {}
+        for sym in sectoral_set:
+            closes_sec = sector_closes.get(sym)
+            if closes_sec is None:
+                continue
+            ret = _index_return_for(
+                closes_sec,
+                sector_sorted_ts.get(sym, []),
+                ts_ns,
+            )
+            if ret is not None:
+                sectoral_returns[sym] = ret
+        scores = p.compute_sector_rotation_at_bar(sectoral_returns)
+        if scores:
+            rotation_score_by_ts[ts_ns] = scores
 
-    def _index_return_at(
-        closes: dict[int, Decimal],
-        sorted_ts: list[int],
-        ts_ns: int,
-    ) -> Decimal | None:
-        """Same bar-to-bar return rule applied to an index series
-        using ITS OWN prior bar (not the equity ticker's prior).
-        """
-        close = closes.get(ts_ns)
-        if close is None:
-            return None
-        try:
-            idx = sorted_ts.index(ts_ns)
-        except ValueError:
-            return None
-        if idx == 0:
-            return None
-        prev = closes.get(sorted_ts[idx - 1])
-        return _bar_to_bar_return(close, prev)
+    # ── Emit per-(ticker, ts_ns) ───────────────────────────────
+    have_nifty = len(nifty_closes) > 0
+    nifty_sorted_ts = sorted(nifty_closes.keys()) if have_nifty else []
 
     for ticker, closes in ticker_closes.items():
         ticker_panel = panel.setdefault(ticker, {})
@@ -495,7 +583,7 @@ def _apply_cohort_features(
                 stock_close = closes.get(ts_ns)
                 stock_prev = closes.get(sorted_ts[i - 1])
                 stock_ret = _bar_to_bar_return(stock_close, stock_prev)
-                nifty_ret = _index_return_at(
+                nifty_ret = _index_return_for(
                     nifty_closes,
                     nifty_sorted_ts,
                     ts_ns,
@@ -513,10 +601,36 @@ def _apply_cohort_features(
                         stock_close,
                         stock_prev,
                     )
-                    sec_ret = _index_return_at(
+                    sec_ret = _index_return_for(
                         closes_sec,
                         sector_sorted_ts[sector_sym],
                         ts_ns,
                     )
                     if stock_ret is not None and sec_ret is not None:
                         feats["rs_vs_sector_15m"] = stock_ret - sec_ret
+
+            # ── FE-9: sector_rotation_score (mapped sectors) ──
+            if sector_sym:
+                scores = rotation_score_by_ts.get(ts_ns)
+                if scores is not None:
+                    score = scores.get(sector_sym)
+                    if score is not None:
+                        feats["sector_rotation_score"] = score
+
+            # ── FE-9: regime_label + stress_prob ──────────────
+            if regime_by_date:
+                bar_d = _ts_ns_to_ist_date(ts_ns)
+                rgm = regime_by_date.get(bar_d)
+                if rgm is not None:
+                    label = rgm.get("regime_label")
+                    if isinstance(label, str):
+                        feats["regime_label"] = label
+                    stress = rgm.get("stress_prob")
+                    if stress is not None:
+                        # Mirror the daily-runner pattern: coerce
+                        # floats from the repo to Decimal so the
+                        # panel stays Decimal-typed end-to-end.
+                        if isinstance(stress, Decimal):
+                            feats["stress_prob"] = stress
+                        else:
+                            feats["stress_prob"] = Decimal(str(stress))

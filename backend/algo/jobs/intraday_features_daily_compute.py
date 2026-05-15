@@ -49,6 +49,7 @@ from backend.algo.features import (
 )
 from backend.algo.features.sector_map import build_ticker_to_sector_index_map
 from backend.algo.jobs._index_universe import INDEX_UNIVERSE
+from backend.algo.regime.repo import get_regime_history
 from backend.cache import get_cache
 from backend.db.duckdb_engine import (
     invalidate_metadata,
@@ -368,6 +369,48 @@ def _load_index_bars_for_cohort(
         return {}
 
 
+def _load_regime_for_window(
+    period_start: date,
+    period_end: date,
+) -> dict[date, dict[str, Any]]:
+    """FE-9 — Load ``stocks.regime_history`` rows for the compute
+    window and build the ``{bar_date: {"regime_label": str,
+    "stress_prob": Decimal}}`` lookup the engine expects.
+
+    Mirrors the daily backtest runner pattern at
+    ``backend/algo/backtest/runner.py:215-240`` — float
+    ``stress_prob`` from the repo is coerced to ``Decimal`` so the
+    panel stays Decimal-typed end-to-end.
+
+    Best-effort: on any read failure return ``{}`` and log with
+    ``exc_info=True``. The FE-9 ``regime_label`` /
+    ``stress_prob`` features will be absent for the batch but
+    the rest of the panel still emits — pipeline assertion
+    ``intraday-features-coverage-floor`` (≥5 features per bar)
+    still passes from the non-regime keys.
+    """
+    try:
+        rh_rows = get_regime_history(period_start, period_end)
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            "[intraday-features] regime_history lookup failed "
+            "(%s..%s) — FE-9 regime_label/stress_prob absent for "
+            "this batch: %s",
+            period_start.isoformat(),
+            period_end.isoformat(),
+            exc,
+            exc_info=True,
+        )
+        return {}
+    out: dict[date, dict[str, Any]] = {}
+    for rh in rh_rows:
+        entry: dict[str, Any] = {"regime_label": rh.regime_label}
+        if rh.stress_prob is not None:
+            entry["stress_prob"] = Decimal(str(rh.stress_prob))
+        out[rh.bar_date] = entry
+    return out
+
+
 async def _build_sector_map_for_batch(
     tickers: list[str],
 ) -> dict[str, str]:
@@ -400,6 +443,7 @@ def _compute_and_write_batch(
     stats: dict[str, Any],
     index_bars_by_symbol: dict[str, list[BarData]] | None = None,
     ticker_to_sector_index: dict[str, str] | None = None,
+    regime_by_date: dict[date, dict[str, Any]] | None = None,
 ) -> int:
     """Per-batch worker — load bars, run engine, write features.
 
@@ -444,6 +488,7 @@ def _compute_and_write_batch(
             bars_by_ticker,
             index_bars_by_symbol=index_bars_by_symbol,
             ticker_to_sector_index=ticker_to_sector_index,
+            regime_by_date=regime_by_date,
             feature_set_version=feature_set_version,
         )
     except Exception as exc:  # noqa: BLE001
@@ -641,6 +686,19 @@ async def run_intraday_features_daily_compute_job(
             interval_sec,
         )
     ticker_to_sector_index = await _build_sector_map_for_batch(universe)
+    # FE-9 regime link — daily-cadence ``stocks.regime_history``
+    # snapshot for the window. Best-effort: failure logs +
+    # returns ``{}`` so the per-bar regime_label / stress_prob
+    # features are absent but the rest of the panel still emits.
+    regime_by_date = _load_regime_for_window(start, end)
+    if not regime_by_date:
+        _logger.warning(
+            "[intraday-features] no regime_history rows in window "
+            "%s..%s — FE-9 regime features (regime_label, "
+            "stress_prob) will be absent for this run",
+            start.isoformat(),
+            end.isoformat(),
+        )
 
     batches = [
         universe[i : i + batch_size]
@@ -671,6 +729,9 @@ async def run_intraday_features_daily_compute_job(
                     else None
                 ),
                 ticker_to_sector_index=ticker_to_sector_index,
+                regime_by_date=(
+                    regime_by_date if regime_by_date else None
+                ),
             )
         except Exception as exc:  # noqa: BLE001
             _logger.error(

@@ -472,6 +472,29 @@ FEATURES: list[Feature] = [
         type="float",
         source="intraday_feature_store",
     ),
+    # ────────────────────────────────────────────────────────────
+    # Intraday — sector rotation + regime link (FE-9, Phase 2)
+    # ``sector_rotation_score`` is a NEW Phase-2 cross-sectional
+    # feature ranking the 8 NSE sectoral indices by 15m return.
+    # Emitted only for tickers whose sector maps into the
+    # rotation universe.
+    #
+    # NOTE: ``regime_label`` + ``stress_prob`` are intentionally
+    # NOT duplicated here under ``intraday_feature_store``. The
+    # daily-cadence ``source="regime"`` entries above (REGIME-1)
+    # remain the canonical AST surface — strategies reference
+    # them by the same key regardless of cadence. FE-9 just
+    # makes the intraday compute job ALSO emit those two values
+    # into ``stocks.intraday_features`` so FE-4 backtest reads
+    # see them on intraday bars. Both daily-runner and intraday
+    # paths converge on the same key.
+    # ────────────────────────────────────────────────────────────
+    Feature(
+        key="sector_rotation_score",
+        label="Sector rotation score (15m)",
+        type="float",
+        source="intraday_feature_store",
+    ),
 ]
 
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+from typing import Mapping
 
 from backend.algo.backtest.types import BarData
 
@@ -617,6 +618,60 @@ def minutes_since_open(bars: list[BarData]) -> list[int | None]:
         )
         delta = dt - open_dt
         out[i] = int(delta.total_seconds() // 60)
+    return out
+
+
+# ────────────────────────────────────────────────────────────────
+# FE-9 cross-sectional primitives
+# ────────────────────────────────────────────────────────────────
+
+
+def compute_sector_rotation_at_bar(
+    sectoral_returns: Mapping[str, Decimal],
+) -> dict[str, Decimal]:
+    """Rank sectoral indices by their bar return and return a
+    per-sector normalised score in ``[0.0, 1.0]``.
+
+    - Best-performing sector (highest return) → ``1.0``
+    - Worst-performing sector → ``0.0``
+    - Intermediate ranks evenly spaced via
+      ``score = (N - rank) / (N - 1)`` for ``N`` sectors
+
+    The caller (FE-9 cohort pass) feeds a single bar's per-sector
+    bar-to-bar returns and then maps each equity ticker to its
+    sector symbol → score.
+
+    Pure function. No I/O.
+
+    Empty input or a single-sector input returns ``{}`` — the
+    feature is undefined for fewer than 2 sectors (rank
+    normalisation would divide by zero with ``N == 1``).
+
+    Tie-breaking: ``sorted(..., key=..., reverse=True)`` on
+    ``(return, symbol)`` pairs is Python-stable. When two sectors
+    have identical returns the one whose symbol sorts EARLIER
+    alphabetically gets the better rank — deterministic and
+    reproducible across runs.
+    """
+    if len(sectoral_returns) < 2:
+        return {}
+    # Sort descending by (return, symbol). Symbol is used as a
+    # deterministic tie-breaker so identical returns produce a
+    # stable ordering (Python ``sorted`` is stable but the
+    # initial input dict ordering is not). Negating the
+    # alphabetical symbol order is non-trivial for strings, so
+    # we lean on the natural (best-return, lex-smallest-symbol)
+    # ordering by sorting by ``(-return, symbol)``.
+    ordered = sorted(
+        sectoral_returns.items(),
+        key=lambda kv: (-kv[1], kv[0]),
+    )
+    n = len(ordered)
+    denom = Decimal(n - 1)
+    out: dict[str, Decimal] = {}
+    for rank, (sym, _ret) in enumerate(ordered):
+        # rank 0 = best → score 1.0; rank n-1 = worst → score 0.
+        out[sym] = (Decimal(n - 1 - rank)) / denom
     return out
 
 

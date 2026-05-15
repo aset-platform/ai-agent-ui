@@ -107,6 +107,13 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "rs_vs_sector_15m", label: "RS vs sector (15m)", type: "float", source: "intraday_feature_store" },
   { key: "market_breadth_pct_above_sma200", label: "% Nifty-500 above SMA200", type: "float", source: "intraday_feature_store" },
   { key: "advance_decline_ratio", label: "Advance/decline ratio (15m)", type: "float", source: "intraday_feature_store" },
+  // Intraday – sector rotation (FE-9 Phase 2). regime_label /
+  // stress_prob are intentionally NOT mirrored under
+  // intraday_feature_store here — their canonical AST surface
+  // remains source="regime" (REGIME-1) and FE-9 just makes the
+  // intraday compute job emit those same keys into Iceberg so
+  // FE-4 reads see them on intraday bars.
+  { key: "sector_rotation_score", label: "Sector rotation score (15m)", type: "float", source: "intraday_feature_store" },
 ];
 
 export const STRATEGY_FEATURE_KEY_SET: Set<string> = new Set(

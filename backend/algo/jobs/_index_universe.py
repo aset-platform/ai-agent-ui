@@ -42,3 +42,22 @@ INDEX_UNIVERSE: list[str] = [
     "NIFTY ENERGY",
     "NIFTY REALTY",
 ]
+
+# Broad-market indices: span the whole market or a large
+# financial-sector slice. ``NIFTY BANK`` is intentionally
+# classified as BROAD here even though Kite tags it
+# ``segment='INDICES'`` alongside the others — for sector
+# rotation we use ``NIFTY FIN SERVICE`` as the financials proxy
+# (it spans banks + NBFCs + insurers, the broader financial
+# basket the AMFI sector classification recognises). Keeping
+# ``NIFTY BANK`` out of the sectoral list avoids double-counting
+# banks against ``NIFTY FIN SERVICE`` in cross-sectional ranks.
+BROAD_INDEX_SYMBOLS: tuple[str, ...] = ("NIFTY 50", "NIFTY BANK")
+
+# Sectoral indices used by FE-9's ``sector_rotation_score``.
+# Derived from INDEX_UNIVERSE minus the broad set so the two
+# constants stay mechanically in sync if Phase 3 adds new
+# indices.
+SECTORAL_INDEX_SYMBOLS: tuple[str, ...] = tuple(
+    s for s in INDEX_UNIVERSE if s not in BROAD_INDEX_SYMBOLS
+)
