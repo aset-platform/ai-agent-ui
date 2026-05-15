@@ -268,9 +268,18 @@ def _write_features_batch(
     """NaN-replaceable upsert for one batch of feature rows.
 
     Pre-deletes the cross-product of incoming ``(ticker,
-    year_month)`` pairs at the given ``interval_sec`` set, then
+    bar_date)`` pairs at the given ``interval_sec`` set, then
     appends. Scoped to the incoming batch — never wipes other
-    tickers / months. Returns the number of rows actually written.
+    tickers / days. **Per-day** granularity is required because
+    the daily keeper fetches ``[yesterday, today]`` and a
+    coarser ``(ticker, year_month)`` scope would silently wipe
+    prior-day features from the same month on every daily run.
+    Returns the number of rows actually written.
+
+    Mirrors the scoped-delete granularity used by the bars
+    writers (``intraday_backfill`` + ``index_intraday_backfill``)
+    so all three steps of the Intraday Bars Daily Pipeline keep
+    matching idempotency semantics on force re-run.
     """
     if not arrow_rows:
         return 0
@@ -279,6 +288,7 @@ def _write_features_batch(
     arrow_tbl = pa.table(cols, schema=schema)
 
     tickers = sorted({r["ticker"] for r in arrow_rows})
+    bar_dates = sorted({r["bar_date"] for r in arrow_rows})
     year_months = sorted({r["year_month"] for r in arrow_rows})
     interval_secs = sorted({r["interval_sec"] for r in arrow_rows})
 
@@ -291,7 +301,7 @@ def _write_features_batch(
             tbl.delete(
                 And(
                     In("ticker", tickers),
-                    In("year_month", year_months),
+                    In("bar_date", bar_dates),
                     In("interval_sec", interval_secs),
                 ),
             )
