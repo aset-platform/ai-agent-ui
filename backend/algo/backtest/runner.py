@@ -47,6 +47,10 @@ from backend.algo.features import (
     FeaturePanelMissingError,
     load_intraday_features_window,
 )
+from backend.algo.features.per_bar import (
+    assemble_per_bar_features,
+    lookup_daily_overlay,
+)
 from backend.algo.paper.risk_engine import RiskEngine
 from backend.algo.paper.types import AccountState, Signal
 from backend.algo.runtime.intraday_window import (
@@ -170,6 +174,32 @@ def run_backtest(
         # daily-path lookup in the inner loop returns {} and the
         # intraday lookup below supplies the features.
         indicators: dict[str, dict[date, dict[str, Decimal]]] = {}
+        # FE-15b — cross-cadence DAILY overlay for intraday
+        # strategies. Loads ``stocks.intraday_features`` at
+        # ``interval_sec=86400`` over the same window. The shared
+        # per-bar helper injects these under ``{name}_1d`` keys
+        # so an AST can reference both 15m ``rsi_14`` and daily
+        # ``rsi_14_1d`` simultaneously. Absent panel → empty
+        # dict (strategies without _1d refs are unaffected).
+        try:
+            daily_overlay_panel = load_intraday_features_window(
+                tickers=list(bars.keys()),
+                interval_sec=86400,
+                period_start=request.period_start,
+                period_end=request.period_end,
+                enable_on_demand_backfill=False,
+            )
+        except FeaturePanelMissingError as exc:
+            _logger.warning(
+                "[backtest-runner] daily overlay panel missing "
+                "(interval_sec=86400, %s..%s) — strategies that "
+                "reference _1d keys will see KeyError. Run the "
+                "daily_features_daily_compute backfill to populate: %s",
+                request.period_start,
+                request.period_end,
+                exc,
+            )
+            daily_overlay_panel = {}
     else:
         # Load with warmup history so SMA200 etc. are well-formed
         # at period_start. Indicators computed once over the FULL
@@ -184,6 +214,11 @@ def run_backtest(
         intraday_indicators: dict[str, dict[int, dict[str, Decimal | str]]] = (
             {}
         )
+        # FE-15b — daily strategies see daily features unsuffixed
+        # (primary cadence). No _1d overlay needed.
+        daily_overlay_panel: dict[
+            str, dict[int, dict[str, Decimal | str]]
+        ] = {}
     # Top-level regime feature, injected into every (ticker, bar)
     # feature dict below so strategies can gate entries on
     # `{"feature": "nifty_above_sma200"}`. Empty dict if ^NSEI
@@ -420,22 +455,22 @@ def run_backtest(
                         "today_vol": Decimal(current.volume),
                     },
                 )
-            ticker_features = {
-                **bar_feats,
-                "nifty_above_sma200": market_regime.get(
-                    bar_date,
-                    Decimal("0"),
+            # FE-15b — shared per-bar feature assembly (single
+            # source of truth across backtest/paper/live). Daily
+            # overlay (interval_sec=86400) injected under {_1d}
+            # keys for intraday strategies; empty for daily.
+            ticker_features = assemble_per_bar_features(
+                bar_feats=bar_feats,
+                market_regime=market_regime.get(bar_date),
+                market_trend=market_trend.get(bar_date),
+                factor_row=factors_by_key.get((ticker, bar_date)),
+                regime_row=regime_by_date.get(bar_date),
+                daily_overlay=lookup_daily_overlay(
+                    daily_panel=daily_overlay_panel,
+                    ticker=ticker,
+                    bar_date=bar_date,
                 ),
-                "nifty_30d_return_pct": market_trend.get(
-                    bar_date,
-                    Decimal("0"),
-                ),
-                # REGIME-2a — cached factor row overlay (disjoint
-                # from indicator keys by design).
-                **factors_by_key.get((ticker, bar_date), {}),
-                # REGIME-1 — regime_label + stress_prob overlay.
-                **regime_by_date.get(bar_date, {}),
-            }
+            )
             ctx = EvalContext(
                 ticker=ticker,
                 bar_date=bar_date,

@@ -222,6 +222,14 @@ class TestLiveRuntimeDryFill:
         # explicit set. Pin "CNC" to mirror the AST default that every
         # existing daily strategy carries.
         strategy.product = "CNC"
+        # FE-15b — _on_bar_close now consults strategy.schedule.interval
+        # via _ensure_daily_overlay_cache(). spec=Strategy gates pydantic
+        # field access so we wire the chain explicitly. "1d" interval
+        # short-circuits the overlay loader (daily strategies see daily
+        # features as primary).
+        strategy.schedule = MagicMock()
+        strategy.schedule.interval = "1d"
+        strategy.entry_cutoff_time = None
 
         caps_repo = AsyncMock()
         caps_repo.get.return_value = {

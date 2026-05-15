@@ -504,9 +504,24 @@ def test_runner_uses_loader():
             user_id=uuid4(),
             universe=["FAKE.NS"],
         )
-    feat_loader.assert_called_once()
-    kwargs = feat_loader.call_args.kwargs
-    assert kwargs["interval_sec"] == 900
-    assert kwargs["period_start"] == date(2026, 4, 1)
-    assert kwargs["period_end"] == date(2026, 4, 1)
-    assert kwargs["tickers"] == ["FAKE.NS"]
+    # FE-15b — the runner now calls load_intraday_features_window
+    # TWICE for intraday strategies: once for primary cadence
+    # (interval_sec=900) and once for the daily cross-cadence
+    # overlay (interval_sec=86400). The primary call carries the
+    # canonical loader contract; the overlay call sets
+    # enable_on_demand_backfill=False.
+    assert feat_loader.call_count == 2
+    primary_call = next(
+        c for c in feat_loader.call_args_list
+        if c.kwargs.get("interval_sec") == 900
+    )
+    overlay_call = next(
+        c for c in feat_loader.call_args_list
+        if c.kwargs.get("interval_sec") == 86400
+    )
+    assert primary_call.kwargs["period_start"] == date(2026, 4, 1)
+    assert primary_call.kwargs["period_end"] == date(2026, 4, 1)
+    assert primary_call.kwargs["tickers"] == ["FAKE.NS"]
+    assert overlay_call.kwargs["period_start"] == date(2026, 4, 1)
+    assert overlay_call.kwargs["period_end"] == date(2026, 4, 1)
+    assert overlay_call.kwargs["enable_on_demand_backfill"] is False

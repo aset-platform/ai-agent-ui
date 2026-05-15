@@ -39,6 +39,11 @@ from backend.algo.backtest.positions import PositionTracker
 
 # REGIME-2a — pre-computed nightly factor library overlay.
 from backend.algo.factors.repo import get_factors_window
+# FE-15b — shared per-bar feature assembly.
+from backend.algo.features.per_bar import (
+    assemble_per_bar_features,
+    lookup_daily_overlay,
+)
 from backend.algo.paper.broker import PaperBroker
 from backend.algo.paper.risk_engine import RiskEngine
 from backend.algo.paper.types import AccountState, Signal
@@ -140,6 +145,15 @@ class PaperRuntime:
         # features identically to backtest.
         self._regime_by_date: dict[date, dict[str, Any]] = {}
         self._regime_loaded: bool = False
+        # FE-15b — daily-overlay panel (interval_sec=86400) for
+        # cross-cadence AST references. Loaded lazily per ticker
+        # on first sight, same pattern as the factor cache.
+        # Empty / unused when strategy.schedule.interval == "1d"
+        # (daily strategies read daily features as primary).
+        self._daily_overlay_cache: dict[
+            tuple[str, date], dict[str, Decimal | str]
+        ] = {}
+        self._daily_overlay_loaded_for_ticker: set[str] = set()
 
     def _ensure_regime_cache(self, bar_date_obj: date) -> None:
         if self._regime_loaded:
@@ -201,6 +215,60 @@ class PaperRuntime:
                 "silent-skip until backfill catches up",
                 ticker,
                 exc,
+            )
+
+    def _ensure_daily_overlay_cache(
+        self, ticker: str, bar_date_obj: date,
+    ) -> None:
+        """FE-15b — lazy load daily-cadence features
+        (``interval_sec=86400``) for ``ticker`` so the AST can
+        reference ``{name}_1d`` keys in intraday strategies.
+
+        Skipped entirely for daily strategies (primary cadence
+        is already 86400 — no overlay needed).
+
+        Failures are logged + swallowed; strategies that don't
+        reference ``_1d`` keys are unaffected.
+        """
+        if self._strategy.schedule.interval == "1d":
+            return
+        if ticker in self._daily_overlay_loaded_for_ticker:
+            return
+        self._daily_overlay_loaded_for_ticker.add(ticker)
+        try:
+            from datetime import timedelta as _td
+
+            from backend.algo.features import (
+                load_intraday_features_window,
+            )
+
+            panel = load_intraday_features_window(
+                tickers=[ticker],
+                interval_sec=86400,
+                period_start=bar_date_obj - _td(days=30),
+                period_end=bar_date_obj + _td(days=1),
+                enable_on_demand_backfill=False,
+            )
+            for tk, by_ts in panel.items():
+                from datetime import datetime as _dt
+                from datetime import time as _time
+                from datetime import timezone as _tz
+
+                for ts_ns, feats in by_ts.items():
+                    # Reverse-derive bar_date from ts_ns
+                    # (UTC midnight ns). Daily rows are
+                    # deterministic per
+                    # daily_features_daily_compute._utc_midnight_ns.
+                    bd = _dt.fromtimestamp(
+                        ts_ns / 1_000_000_000, tz=_tz.utc
+                    ).date()
+                    self._daily_overlay_cache[(tk, bd)] = feats
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "PaperRuntime: daily overlay load for %s failed: "
+                "%s — strategies referencing _1d keys will "
+                "silent-skip until backfill catches up",
+                ticker, exc,
             )
 
     async def run(self, source: TickSource) -> int:
@@ -354,25 +422,23 @@ class PaperRuntime:
         # ticker on first sight; subsequent bars are O(1).
         self._ensure_factor_cache(bar.ticker, bar_date_obj)
         self._ensure_regime_cache(bar_date_obj)
-        features = {
-            **ind_map.get(bar_date_obj, _features_for_bar(bar)),
-            "nifty_above_sma200": self._market_regime.get(
-                bar_date_obj,
-                Decimal("0"),
+        self._ensure_daily_overlay_cache(bar.ticker, bar_date_obj)
+        # FE-15b — shared per-bar feature assembly (single
+        # source of truth across backtest/paper/live).
+        features = assemble_per_bar_features(
+            bar_feats=ind_map.get(
+                bar_date_obj, _features_for_bar(bar),
             ),
-            "nifty_30d_return_pct": self._market_trend.get(
-                bar_date_obj,
-                Decimal("0"),
-            ),
-            # REGIME-2a — cached factor row overlay (disjoint
-            # from indicator + regime keys by design).
-            **self._factor_cache.get(
+            market_regime=self._market_regime.get(bar_date_obj),
+            market_trend=self._market_trend.get(bar_date_obj),
+            factor_row=self._factor_cache.get(
                 (bar.ticker, bar_date_obj),
-                {},
             ),
-            # REGIME-1 — regime_label + stress_prob overlay.
-            **self._regime_by_date.get(bar_date_obj, {}),
-        }
+            regime_row=self._regime_by_date.get(bar_date_obj),
+            daily_overlay=self._daily_overlay_cache.get(
+                (bar.ticker, bar_date_obj),
+            ),
+        )
 
         ctx = EvalContext(
             ticker=bar.ticker,
