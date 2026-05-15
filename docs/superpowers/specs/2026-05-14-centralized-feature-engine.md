@@ -333,9 +333,19 @@ Hook ordering inside `_apply_fill`:
 Maintained while FE-2 builds the engine. Each Phase-1 feature
 that ALSO has value on the CNC daily surface but isn't in
 today's daily indicator path (`compute_indicators_for_universe`,
-`stocks.daily_factors`) gets a row here. End-of-Phase-1
-deliverable: convert this list into ASETPLTFRM-417 (backlog
-follow-up).
+`stocks.daily_factors`) gets a row here.
+
+> **2026-05-15 update.** This section is superseded by
+> `2026-05-15-fe15-daily-feature-parity.md` — the full FE-15
+> design spec (compute job + cross-cadence overlay + 3-runtime
+> shared helper). Implementation tracked in
+> **ASETPLTFRM-419 (FE-15a) + ASETPLTFRM-420 (FE-15b)**,
+> Sprint 11.
+> The original §12 closure target was ASETPLTFRM-417, but that
+> ID was repurposed for FE-5.1 Redis-buffered snapshots (Done,
+> PR #226). FE-15 picks up the daily-parity scope and extends
+> it with cross-cadence AST support + a shared per-bar helper
+> for backtest/paper/live consistency.
 
 **Architecturally additive**: `stocks.intraday_features` already
 carries `interval_sec` as a column, so daily features land as

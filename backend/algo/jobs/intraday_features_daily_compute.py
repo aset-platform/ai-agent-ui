@@ -131,49 +131,56 @@ async def _resolve_nifty500_universe(session) -> list[str]:
     return [r[0] for r in rows if r[0]]
 
 
-def _load_intraday_bars_for_ticker(
+def _load_intraday_bars_for_tickers(
     *,
-    ticker: str,
+    tickers: list[str],
     interval_sec: int,
     start: date,
     end: date,
-) -> list[BarData]:
-    """Read ``stocks.intraday_bars`` rows for ``ticker`` over the
-    ``[start, end]`` window at ``interval_sec`` cadence.
+) -> dict[str, list[BarData]]:
+    """Batched read of ``stocks.intraday_bars`` for a list of tickers
+    over the ``[start, end]`` window at ``interval_sec`` cadence.
 
-    Returns an empty list on any read failure (logged with
-    ``exc_info=True``) so a single missing-ticker scan never strands
-    the batch.
+    Executes ONE DuckDB query with ``WHERE ticker IN (...)`` and
+    groups the result by ticker, replacing the prior N-query
+    per-ticker fan-out. Per CLAUDE.md §4.1 #1.
+
+    Returns ``{ticker: [bars...]}``; tickers with no rows in the
+    window are absent from the dict. On a top-level read failure
+    returns ``{}`` and logs with ``exc_info=True`` so the whole
+    batch is treated as "no bars" rather than crashing the run.
     """
+    if not tickers:
+        return {}
+    placeholders = ",".join(["?"] * len(tickers))
+    sql = (
+        "SELECT ticker, bar_date, bar_open_ts_ns, "
+        "       open, high, low, close, volume "
+        "FROM intraday_bars "
+        f"WHERE ticker IN ({placeholders}) AND interval_sec = ? "
+        "  AND bar_date BETWEEN ? AND ? "
+        "ORDER BY ticker, bar_open_ts_ns"
+    )
+    params: list[Any] = list(tickers) + [
+        interval_sec,
+        start.strftime("%Y-%m-%d"),
+        end.strftime("%Y-%m-%d"),
+    ]
     try:
-        rows = query_iceberg_table(
-            INTRADAY_BARS_TABLE,
-            "SELECT ticker, bar_date, bar_open_ts_ns, "
-            "       open, high, low, close, volume "
-            "FROM intraday_bars "
-            "WHERE ticker = ? AND interval_sec = ? "
-            "  AND bar_date BETWEEN ? AND ? "
-            "ORDER BY bar_open_ts_ns",
-            [
-                ticker,
-                interval_sec,
-                start.strftime("%Y-%m-%d"),
-                end.strftime("%Y-%m-%d"),
-            ],
-        )
+        rows = query_iceberg_table(INTRADAY_BARS_TABLE, sql, params)
     except Exception as exc:  # noqa: BLE001
         _logger.error(
-            "[intraday-features] bar load failed for %s "
-            "(interval_sec=%d, %s..%s): %s",
-            ticker,
+            "[intraday-features] batched bar load failed "
+            "(tickers=%d, interval_sec=%d, %s..%s): %s",
+            len(tickers),
             interval_sec,
             start,
             end,
             exc,
             exc_info=True,
         )
-        return []
-    out: list[BarData] = []
+        return {}
+    out: dict[str, list[BarData]] = {}
     for r in rows or []:
         raw_date = r.get("bar_date")
         if isinstance(raw_date, date):
@@ -184,28 +191,47 @@ def _load_intraday_bars_for_ticker(
             except (TypeError, ValueError):
                 continue
         try:
-            out.append(
-                BarData(
-                    ticker=r["ticker"],
-                    date=bar_d,
-                    open=Decimal(str(r["open"])),
-                    high=Decimal(str(r["high"])),
-                    low=Decimal(str(r["low"])),
-                    close=Decimal(str(r["close"])),
-                    volume=int(r["volume"] or 0),
-                    bar_open_ts_ns=int(r["bar_open_ts_ns"]),
-                )
+            bar = BarData(
+                ticker=r["ticker"],
+                date=bar_d,
+                open=Decimal(str(r["open"])),
+                high=Decimal(str(r["high"])),
+                low=Decimal(str(r["low"])),
+                close=Decimal(str(r["close"])),
+                volume=int(r["volume"] or 0),
+                bar_open_ts_ns=int(r["bar_open_ts_ns"]),
             )
         except (TypeError, ValueError, KeyError) as exc:
             _logger.warning(
                 "[intraday-features] dropping malformed bar row "
                 "for %s @ %s: %s",
-                ticker,
+                r.get("ticker"),
                 raw_date,
                 exc,
             )
             continue
+        out.setdefault(bar.ticker, []).append(bar)
     return out
+
+
+def _load_intraday_bars_for_ticker(
+    *,
+    ticker: str,
+    interval_sec: int,
+    start: date,
+    end: date,
+) -> list[BarData]:
+    """Single-ticker convenience wrapper around
+    :func:`_load_intraday_bars_for_tickers`. Kept for ad-hoc callers
+    and for tests pre-dating the batched-read refactor — the
+    production hot path goes through the plural helper directly.
+    """
+    return _load_intraday_bars_for_tickers(
+        tickers=[ticker],
+        interval_sec=interval_sec,
+        start=start,
+        end=end,
+    ).get(ticker, [])
 
 
 def _panel_to_arrow_rows(
@@ -467,30 +493,30 @@ def _compute_and_write_batch(
     re-used across batches — passing them in keeps the per-batch
     worker pure-compute (no I/O on the hot path).
     """
-    bars_by_ticker: dict[str, list[BarData]] = {}
-    for tk in tickers:
-        try:
-            bars = _load_intraday_bars_for_ticker(
-                ticker=tk,
-                interval_sec=interval_sec,
-                start=start,
-                end=end,
-            )
-        except Exception as exc:  # noqa: BLE001
-            _logger.error(
-                "[intraday-features] %s bar fetch crashed: %s",
-                tk,
-                exc,
-                exc_info=True,
-            )
+    # Batched read — ONE DuckDB query per batch instead of N per-ticker
+    # queries. Per CLAUDE.md §4.1 #1.
+    try:
+        bars_by_ticker = _load_intraday_bars_for_tickers(
+            tickers=tickers,
+            interval_sec=interval_sec,
+            start=start,
+            end=end,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.error(
+            "[intraday-features] batched bar fetch crashed "
+            "(tickers=%d, interval_sec=%d): %s",
+            len(tickers),
+            interval_sec,
+            exc,
+            exc_info=True,
+        )
+        for tk in tickers:
             stats["tickers_failed"] += 1
             stats["failures"].append((tk, f"fetch:{exc!s}"[:200]))
-            continue
-        if not bars:
-            # No bars in the window — not a failure (ticker may be
-            # newly tagged or off-market); skip silently.
-            continue
-        bars_by_ticker[tk] = bars
+        return 0
+    # Tickers absent from the result simply had no bars in the
+    # window (newly tagged, off-market, etc.) — not a failure.
     if not bars_by_ticker:
         return 0
     try:
