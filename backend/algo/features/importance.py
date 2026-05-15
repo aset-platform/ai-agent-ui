@@ -62,6 +62,42 @@ class FeatureScore:
     importance: float
 
 
+@dataclass
+class TrainedClassifier:
+    """Fitted classifier + design matrix + row alignment.
+
+    Returned by :func:`train_classifier` and consumed by FE-12's
+    SHAP module. ``X`` is post-imputation (median-filled), so
+    SHAP sees the same matrix the GBC fit saw.
+
+    Attributes:
+        model: Fitted ``GradientBoostingClassifier``.
+        feature_columns: Column names aligned with ``X``.
+        X: Design matrix used to fit (n_rows, n_features).
+        y: Outcome labels aligned with ``X`` (n_rows,).
+        n_trades_used: Number of LABELED rows that fit on.
+        fill_ids: Row identifiers aligned with ``X`` rows. For
+            now sourced from snapshot ``fill_id`` if present;
+            otherwise a positional placeholder ``"row-{i}"``.
+        classifier_version: Reproducibility stamp.
+        strategy_id_seen: Strategy_id pulled from the first
+            labeled row's header (may be empty).
+        period_start_seen: First non-None period_start.
+        period_end_seen: First non-None period_end.
+    """
+
+    model: GradientBoostingClassifier
+    feature_columns: list[str]
+    X: np.ndarray
+    y: np.ndarray
+    n_trades_used: int
+    fill_ids: list[str]
+    classifier_version: str
+    strategy_id_seen: str
+    period_start_seen: date
+    period_end_seen: date
+
+
 @dataclass(frozen=True)
 class FeatureImportanceResult:
     """Sorted top-N feature importance for a strategy / period.
@@ -239,55 +275,58 @@ def _build_design_matrix(
     return X, feature_names
 
 
-def compute_feature_importance(
+def train_classifier(
     rows: list[dict[str, Any]],
     *,
-    top_n: int = 10,
     min_trades: int = 30,
-) -> FeatureImportanceResult:
-    """Train a GBC and return top-N features by importance.
+) -> TrainedClassifier:
+    """Train the GBC and return the fitted model + design matrix.
+
+    Shared core used by both :func:`compute_feature_importance`
+    (FE-11) and FE-12's SHAP analysis. Performs the same outcome
+    derivation + features_json parse + median imputation +
+    deterministic GBC fit; the only difference vs the importance
+    code path is that this function exposes the fitted model and
+    the post-imputation matrix so downstream callers can run
+    per-row explanations.
 
     Args:
-        rows: List of trade snapshot dicts. Each row must
-            carry at least ``features_json`` (the str-encoded
-            feature map) plus EITHER ``outcome_label`` OR
-            ``realised_pnl_inr``. ``strategy_id``,
-            ``period_start``, ``period_end`` are also read for
-            the result metadata; the caller passes them
-            unchanged through every row OR sets the dataclass
-            fields directly via the result object.
-        top_n: Maximum number of features to return.
+        rows: List of trade snapshot dicts (see
+            :func:`compute_feature_importance` for the schema).
         min_trades: Raise ``InsufficientDataError`` when fewer
             than this many rows survive outcome derivation.
 
     Returns:
-        :class:`FeatureImportanceResult` — sorted descending
-        by importance.
+        :class:`TrainedClassifier` — fitted GBC + matrix + the
+        row metadata SHAP needs to attribute predictions.
 
     Raises:
-        InsufficientDataError: < ``min_trades`` labeled rows.
+        InsufficientDataError: < ``min_trades`` labeled rows
+            OR zero numeric features after parsing.
         ValueError: All labeled rows share the same outcome
-            (GBC needs at least two classes to fit).
+            (GBC needs >= 2 classes).
     """
-    if top_n <= 0:
-        raise ValueError("top_n must be > 0")
     if min_trades <= 0:
         raise ValueError("min_trades must be > 0")
 
     # ── Phase 1: outcome derivation + feature parsing. ────────
     parsed_rows: list[dict[str, float]] = []
     outcomes: list[int] = []
+    fill_ids: list[str] = []
     strategy_id_seen: str | None = None
     period_start_seen: date | None = None
     period_end_seen: date | None = None
-    for r in rows:
+    for idx, r in enumerate(rows):
         y = _derive_outcome(r)
         if y is None:
             continue
         feats = _parse_features_json(r.get("features_json"))
-        # Pull header context from the first labeled row we
-        # see. The route layer should pass these consistently
-        # but we don't enforce it row-by-row.
+        fid_raw = r.get("fill_id")
+        if isinstance(fid_raw, str) and fid_raw.strip():
+            fill_ids.append(fid_raw)
+        else:
+            fill_ids.append(f"row-{idx}")
+        # Pull header context from the first labeled row.
         if strategy_id_seen is None:
             sid = r.get("strategy_id")
             if isinstance(sid, str):
@@ -338,12 +377,72 @@ def compute_feature_importance(
     )
     clf.fit(X, y_arr)
 
-    # ── Phase 3: rank + truncate. ────────────────────────────
-    importances = clf.feature_importances_
+    _logger.info(
+        "[feature-importance] train_classifier complete "
+        "strategy_id=%s n_trades=%d n_features=%d",
+        strategy_id_seen,
+        n_labeled,
+        len(feature_names),
+    )
+
+    return TrainedClassifier(
+        model=clf,
+        feature_columns=feature_names,
+        X=X,
+        y=y_arr,
+        n_trades_used=n_labeled,
+        fill_ids=fill_ids,
+        classifier_version=_classifier_version(),
+        strategy_id_seen=strategy_id_seen or "",
+        period_start_seen=period_start_seen or date.min,
+        period_end_seen=period_end_seen or date.min,
+    )
+
+
+def compute_feature_importance(
+    rows: list[dict[str, Any]],
+    *,
+    top_n: int = 10,
+    min_trades: int = 30,
+) -> FeatureImportanceResult:
+    """Train a GBC and return top-N features by importance.
+
+    Thin wrapper over :func:`train_classifier` that extracts
+    ``feature_importances_`` from the fitted model and returns
+    the ranked list. The training pipeline is DRY-shared with
+    FE-12's SHAP analysis to guarantee the two surfaces explain
+    the SAME classifier fit.
+
+    Args:
+        rows: List of trade snapshot dicts. Each row must
+            carry at least ``features_json`` (the str-encoded
+            feature map) plus EITHER ``outcome_label`` OR
+            ``realised_pnl_inr``. ``strategy_id``,
+            ``period_start``, ``period_end`` are also read for
+            the result metadata.
+        top_n: Maximum number of features to return.
+        min_trades: Raise ``InsufficientDataError`` when fewer
+            than this many rows survive outcome derivation.
+
+    Returns:
+        :class:`FeatureImportanceResult` — sorted descending
+        by importance.
+
+    Raises:
+        InsufficientDataError: < ``min_trades`` labeled rows.
+        ValueError: All labeled rows share the same outcome
+            (GBC needs at least two classes to fit).
+    """
+    if top_n <= 0:
+        raise ValueError("top_n must be > 0")
+
+    trained = train_classifier(rows, min_trades=min_trades)
+
+    importances = trained.model.feature_importances_
     ranked: list[FeatureScore] = sorted(
         (
             FeatureScore(name=n, importance=float(i))
-            for n, i in zip(feature_names, importances)
+            for n, i in zip(trained.feature_columns, importances)
         ),
         key=lambda fs: fs.importance,
         reverse=True,
@@ -353,20 +452,20 @@ def compute_feature_importance(
     _logger.info(
         "[feature-importance] fit complete strategy_id=%s "
         "n_trades=%d n_features=%d top_n=%d",
-        strategy_id_seen,
-        n_labeled,
-        len(feature_names),
+        trained.strategy_id_seen,
+        trained.n_trades_used,
+        len(trained.feature_columns),
         len(ranked),
     )
 
     return FeatureImportanceResult(
-        strategy_id=strategy_id_seen or "",
-        period_start=period_start_seen or date.min,
-        period_end=period_end_seen or date.min,
-        n_trades_used=n_labeled,
-        n_features=len(feature_names),
+        strategy_id=trained.strategy_id_seen,
+        period_start=trained.period_start_seen,
+        period_end=trained.period_end_seen,
+        n_trades_used=trained.n_trades_used,
+        n_features=len(trained.feature_columns),
         top_features=ranked,
-        classifier_version=_classifier_version(),
+        classifier_version=trained.classifier_version,
         fitted_at=fitted_at,
     )
 
@@ -375,5 +474,7 @@ __all__ = [
     "FeatureImportanceResult",
     "FeatureScore",
     "InsufficientDataError",
+    "TrainedClassifier",
     "compute_feature_importance",
+    "train_classifier",
 ]
