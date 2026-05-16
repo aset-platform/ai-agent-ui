@@ -58,9 +58,26 @@ def _ist_today() -> date:
     ).date()
 
 
-def _load_pg_session_factory():
-    from backend.db.engine import get_session_factory
-    return get_session_factory()
+def _scheduler_pg_session():
+    """Return an async context manager yielding an AsyncSession
+    backed by a per-call NullPool engine.
+
+    All four PG sites in this module fire from scheduler
+    context (``asyncio.run(...)`` inside a worker thread). The
+    cached ``get_session_factory()`` binds its asyncpg pool to
+    the loop that first used it; reusing it from a fresh
+    ``asyncio.run`` raises::
+
+        Task ... got Future ... attached to a different loop
+
+    which is exactly the production failure we hit on
+    2026-05-15 in step 7 (Run Factor Regression) of the India
+    Regime Daily Pipeline.  ``disposable_pg_session`` (see
+    ``backend.db.engine``) creates + disposes an engine inside
+    the caller's loop, eliminating the leak.
+    """
+    from backend.db.engine import disposable_pg_session
+    return disposable_pg_session()
 
 
 def _load_today_filled_events(
@@ -148,8 +165,7 @@ def _persist_attribution_row(
     from sqlalchemy import text
 
     async def _do() -> None:
-        factory = _load_pg_session_factory()
-        async with factory() as session:
+        async with _scheduler_pg_session() as session:
             await session.execute(
                 text(
                     "INSERT INTO algo.attribution_daily ("
@@ -158,7 +174,9 @@ def _persist_attribution_row(
                     " brinson_interaction, total_active_return"
                     ") VALUES ("
                     " :uid, :sid, :bd, "
-                    " :alloc::jsonb, :sel::jsonb, :inter::jsonb, "
+                    " CAST(:alloc AS jsonb), "
+                    " CAST(:sel AS jsonb), "
+                    " CAST(:inter AS jsonb), "
                     " :tot"
                     ") "
                     "ON CONFLICT (user_id, strategy_id, bar_date) "
@@ -312,8 +330,7 @@ def _load_strategy_daily_returns(
     from sqlalchemy import text
 
     async def _read() -> Any:
-        factory = _load_pg_session_factory()
-        async with factory() as session:
+        async with _scheduler_pg_session() as session:
             r = await session.execute(
                 text(
                     "SELECT summary_json FROM algo.runs "
@@ -391,8 +408,12 @@ def _persist_factor_regression_row(
     from sqlalchemy import text
 
     async def _do() -> None:
-        factory = _load_pg_session_factory()
-        async with factory() as session:
+        # Param names are >=2 chars: the single-letter ``:b``
+        # used previously collided with SQLAlchemy's bindparam
+        # scanner ahead of the ``::jsonb`` cast, silently
+        # leaving ``:b::jsonb`` as literal SQL and triggering
+        # ``syntax error at or near ":"`` from asyncpg.
+        async with _scheduler_pg_session() as session:
             await session.execute(
                 text(
                     "INSERT INTO algo.factor_regression ("
@@ -401,7 +422,8 @@ def _persist_factor_regression_row(
                     " n_observations"
                     ") VALUES ("
                     " :uid, :sid, :ps, :pe, "
-                    " :a, :b::jsonb, :r, :n"
+                    " :alpha_v, CAST(:betas_v AS jsonb), "
+                    " :rsq, :nobs"
                     ") "
                     "ON CONFLICT (user_id, strategy_id, "
                     " period_start, period_end) "
@@ -416,16 +438,16 @@ def _persist_factor_regression_row(
                     "sid": strategy_id,
                     "ps": period_start,
                     "pe": period_end,
-                    "a": (
+                    "alpha_v": (
                         float(alpha)
                         if not np.isnan(alpha) else 0.0
                     ),
-                    "b": json.dumps(betas),
-                    "r": (
+                    "betas_v": json.dumps(betas),
+                    "rsq": (
                         float(r_squared)
                         if not np.isnan(r_squared) else 0.0
                     ),
-                    "n": int(n_obs),
+                    "nobs": int(n_obs),
                 },
             )
             await session.commit()
@@ -443,8 +465,7 @@ def _list_active_strategies(
     from sqlalchemy import text
 
     async def _read() -> list[tuple[UUID, UUID]]:
-        factory = _load_pg_session_factory()
-        async with factory() as session:
+        async with _scheduler_pg_session() as session:
             r = await session.execute(
                 text(
                     "SELECT DISTINCT user_id, strategy_id "

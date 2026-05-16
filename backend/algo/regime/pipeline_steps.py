@@ -342,15 +342,21 @@ def run_attribution_brinson_step(
 
 
 def _attribution_daily_has_today(today: date) -> bool:
-    """attribution_daily lives in PG. The job module already
-    uses async sessions; mirror that via asyncio.run() so we
-    don't introduce a new sync engine."""
+    """attribution_daily lives in PG. The job module uses async
+    sessions; mirror that via asyncio.run() so we don't introduce
+    a new sync engine.
+
+    MUST use disposable_pg_session — pipeline steps fire from a
+    scheduler worker thread under their own asyncio.run() loop;
+    the cached get_session_factory() pool would leak loop-bound
+    futures (see CLAUDE.md §5.1 / pg-nullpool-sync-async-bridge).
+    """
     import asyncio
 
     async def _check() -> bool:
         from sqlalchemy import text
-        from db.engine import get_session_factory
-        async with get_session_factory()() as s:
+        from backend.db.engine import disposable_pg_session
+        async with disposable_pg_session() as s:
             row = (await s.execute(text(
                 "SELECT 1 FROM algo.attribution_daily "
                 "WHERE bar_date = :d LIMIT 1"
@@ -472,8 +478,8 @@ def _factor_regression_has_month(today: date) -> bool:
 
     async def _check() -> bool:
         from sqlalchemy import text
-        from db.engine import get_session_factory
-        async with get_session_factory()() as s:
+        from backend.db.engine import disposable_pg_session
+        async with disposable_pg_session() as s:
             row = (await s.execute(text(
                 "SELECT 1 FROM algo.factor_regression "
                 "WHERE EXTRACT(YEAR FROM period_end) = :y "
@@ -493,8 +499,8 @@ def _delete_factor_regression_month(today: date) -> None:
 
     async def _delete() -> None:
         from sqlalchemy import text
-        from db.engine import get_session_factory
-        async with get_session_factory()() as s:
+        from backend.db.engine import disposable_pg_session
+        async with disposable_pg_session() as s:
             await s.execute(text(
                 "DELETE FROM algo.factor_regression "
                 "WHERE EXTRACT(YEAR FROM period_end) = :y "
@@ -515,8 +521,8 @@ def _delete_attribution_today(today: date) -> None:
 
     async def _delete() -> None:
         from sqlalchemy import text
-        from db.engine import get_session_factory
-        async with get_session_factory()() as s:
+        from backend.db.engine import disposable_pg_session
+        async with disposable_pg_session() as s:
             await s.execute(text(
                 "DELETE FROM algo.attribution_daily "
                 "WHERE bar_date = :d"
