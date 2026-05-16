@@ -266,13 +266,17 @@ def _generate_forecast(
 
     # For logistic growth: set cap/floor on future DataFrame.
     if growth == "logistic":
-        # Re-derive bounds from the original (non-log) training y.
-        # prophet_df["y"] may be log-transformed; we need raw prices.
-        # Use exp() to recover if transform was applied, else use as-is.
-        if transform == "log":
-            raw_y = np.exp(prophet_df["y"])
-        else:
-            raw_y = prophet_df["y"]
+        # ``_train_prophet_model`` log-transforms a LOCAL .copy() of
+        # the input — the caller's ``prophet_df`` (passed in here)
+        # always holds RAW prices. A prior version applied
+        # ``np.exp(prophet_df["y"])`` thinking it was undoing a
+        # log-transform that had never actually been applied to
+        # this object — for volatile-regime tickers (~₹500-2000)
+        # that exponentiated raw prices to ``inf``, producing
+        # ``cap = floor = inf`` and tripping Prophet's
+        # ``cap must be greater than floor`` validator
+        # (incident 2026-05-16: ATLANTAELE.NS, INDIAMART.NS).
+        raw_y = prophet_df["y"]
         proxy_df = pd.DataFrame({"high": raw_y, "low": raw_y})
         raw_cap, raw_floor = compute_logistic_bounds(proxy_df)
         if transform == "log":

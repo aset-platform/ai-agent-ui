@@ -311,3 +311,121 @@ class TestApplyTechnicalBias:
         assert "signals" in meta
         assert isinstance(meta["total_bias"], float)
         assert isinstance(meta["signals"], list)
+
+
+# ---------------------------------------------------------------------------
+# TestVolatileLogisticGrowthEndToEnd — regression for 2026-05-16 incident
+# ---------------------------------------------------------------------------
+
+class TestVolatileLogisticGrowthEndToEnd:
+    """ATLANTAELE.NS + INDIAMART.NS hit the volatile regime
+    (≥60 % annualised vol) → ``growth="logistic"`` + log-transform
+    path. A latent bug in ``_generate_forecast`` applied
+    ``np.exp(prophet_df["y"])`` to the caller's RAW-price series
+    (the function had assumed it was already log-transformed),
+    overflowing to +inf for ₹500-2000 tickers and producing
+    ``cap = floor = inf``. Prophet then raised::
+
+        cap must be greater than floor (which defaults to 0).
+
+    These tests reproduce the failing path with a synthetic
+    volatile-regime series and assert the forecast now runs
+    cleanly with finite cap/floor.
+    """
+
+    @staticmethod
+    def _volatile_series(n: int = 600, base: float = 1500.0):
+        """Synthesise a high-volatility daily price series in the
+        same ₹500-2000 range as the production failure cases.
+        Annualised vol comes out > 60 % so the regime classifier
+        picks ``logistic`` + log.
+        """
+        rng = np.random.default_rng(42)
+        # ~4 % daily vol → ~63 % annualised
+        log_rets = rng.normal(0.0, 0.04, size=n)
+        prices = base * np.exp(np.cumsum(log_rets))
+        idx = pd.date_range("2024-01-01", periods=n, freq="B")
+        return pd.DataFrame({"ds": idx, "y": prices})
+
+    def test_logistic_log_path_does_not_raise(self):
+        """End-to-end fit + predict in the volatile regime must
+        complete without Prophet's cap/floor validator firing.
+        """
+        from tools._forecast_model import (
+            _generate_forecast,
+            _train_prophet_model,
+        )
+
+        prophet_df = self._volatile_series()
+        model, _train_df = _train_prophet_model(
+            prophet_df,
+            ticker="SYNTH.NS",
+            regime="volatile",
+        )
+        # Confirm we are actually exercising the logistic path.
+        assert getattr(model, "_regime_growth", None) == "logistic"
+        assert getattr(model, "_regime_transform", None) == "log"
+
+        # This used to raise:
+        #   ValueError: cap must be greater than floor
+        #               (which defaults to 0).
+        result = _generate_forecast(
+            model,
+            prophet_df,
+            months=1,
+            regime="volatile",
+        )
+        assert not result.empty
+        assert set(result.columns) >= {
+            "ds", "yhat", "yhat_lower", "yhat_upper",
+        }
+        # All forecasts must be finite — inf cap would also leak
+        # into yhat extrapolations.
+        assert np.isfinite(result["yhat"]).all()
+        assert np.isfinite(result["yhat_lower"]).all()
+        assert np.isfinite(result["yhat_upper"]).all()
+
+    def test_future_cap_floor_are_finite_log_space(self, monkeypatch):
+        """Direct unit-level proof: in the logistic+log path,
+        the ``future`` DataFrame written by ``_generate_forecast``
+        must carry FINITE cap/floor (the bug produced inf).
+        We intercept ``Prophet.predict`` so the test stays cheap
+        — by the time predict() is called, cap/floor are already
+        set on ``future``.
+        """
+        from prophet import Prophet
+
+        from tools._forecast_model import (
+            _generate_forecast,
+            _train_prophet_model,
+        )
+
+        prophet_df = self._volatile_series(n=400)
+        model, _ = _train_prophet_model(
+            prophet_df,
+            ticker="SYNTH.NS",
+            regime="volatile",
+        )
+
+        captured: dict = {}
+        real_predict = Prophet.predict
+
+        def _spy(self, future):
+            captured["cap"] = future["cap"].iloc[-1]
+            captured["floor"] = future["floor"].iloc[-1]
+            return real_predict(self, future)
+
+        monkeypatch.setattr(Prophet, "predict", _spy)
+        _generate_forecast(
+            model, prophet_df, months=1, regime="volatile",
+        )
+
+        assert np.isfinite(captured["cap"]), (
+            f"cap was {captured['cap']!r} — np.exp(raw_price) bug "
+            "has regressed"
+        )
+        assert np.isfinite(captured["floor"])
+        assert captured["cap"] > captured["floor"], (
+            f"cap={captured['cap']} must be > "
+            f"floor={captured['floor']} (Prophet contract)"
+        )
