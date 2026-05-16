@@ -4215,6 +4215,15 @@ def create_app(
         create_shap_analysis_router(),
         prefix="/v1",
     )
+    # Universe Snapshot admin tab (ASETPLTFRM-423) — read-only
+    # view of stocks.universe_snapshot (REGIME-7). Superuser-only.
+    from backend.algo.routes import (
+        create_universe_snapshot_router,
+    )
+    app.include_router(
+        create_universe_snapshot_router(),
+        prefix="/v1",
+    )
 
     # WebSocket streaming endpoint.
     from ws import register_ws_routes

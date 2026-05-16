@@ -37,6 +37,7 @@ import { SchedulerTab } from "@/components/admin/SchedulerTab";
 import { RecommendationsTab } from "@/components/admin/RecommendationsTab";
 import { DailyFactorCoverageTab } from "@/components/admin/DailyFactorCoverageTab";
 import { FeatureCoverageTab } from "@/components/admin/FeatureCoverageTab";
+import { UniverseSnapshotTab } from "@/components/admin/UniverseSnapshotTab";
 import { DataHealthPanel } from "@/components/admin/DataHealthPanel";
 import { BackupHealthPanel } from "@/components/admin/BackupHealthPanel";
 import { MyAccountTab } from "@/components/admin/MyAccountTab";
@@ -2003,6 +2004,7 @@ type AdminTab =
   | "recommendations"
   | "feature_coverage"
   | "daily_factor_coverage"
+  | "universe_snapshot"
   | "my_account"
   | "my_audit"
   | "my_llm";
@@ -2024,6 +2026,7 @@ const ALL_TABS: TabDef[] = [
   { id: "recommendations", label: "Recommendations",   roles: ["superuser"] },
   { id: "feature_coverage", label: "Feature Coverage", roles: ["superuser"] },
   { id: "daily_factor_coverage", label: "Daily Factor Coverage", roles: ["superuser"] },
+  { id: "universe_snapshot", label: "Universe Snapshot", roles: ["superuser"] },
   { id: "maintenance",     label: "Maintenance",       roles: ["superuser"] },
   { id: "my_account",      label: "My Account",        roles: ["pro"] },
   { id: "my_audit",        label: "My Audit Log",      roles: ["pro"] },
@@ -2179,6 +2182,9 @@ function AdminPageInner() {
         )}
         {tab === "daily_factor_coverage" && (
           <DailyFactorCoverageTab />
+        )}
+        {tab === "universe_snapshot" && (
+          <UniverseSnapshotTab />
         )}
         {tab === "my_account" && <MyAccountTab />}
         {tab === "my_audit" && (
