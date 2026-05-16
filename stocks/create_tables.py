@@ -2397,6 +2397,7 @@ def _create_table(
     identifier: str,
     schema: Schema,
     partition_spec: PartitionSpec,
+    sort_order: "SortOrder | None" = None,  # noqa: F821
 ) -> None:
     """Create a single Iceberg table, skipping if it already exists.
 
@@ -2405,13 +2406,20 @@ def _create_table(
         identifier: Fully qualified table name (e.g. ``"stocks.ohlcv"``).
         schema: The Iceberg schema for the table.
         partition_spec: Partition specification for the table.
+        sort_order: Optional ``SortOrder`` — CLAUDE.md §4.3 #22.c
+            requires new tables to declare one to drive compaction
+            layout + predicate pushdown.  Older tables that pre-date
+            the rule pass ``None`` (Iceberg defaults to unsorted).
     """
+    kwargs: dict = {
+        "identifier": identifier,
+        "schema": schema,
+        "partition_spec": partition_spec,
+    }
+    if sort_order is not None:
+        kwargs["sort_order"] = sort_order
     try:
-        catalog.create_table(
-            identifier=identifier,
-            schema=schema,
-            partition_spec=partition_spec,
-        )
+        catalog.create_table(**kwargs)
         _logger.info("Created Iceberg table '%s'.", identifier)
     except Exception:
         _logger.info("Table '%s' already exists — skipping.", identifier)

@@ -74,24 +74,32 @@ DB inventory: 19 PG OLTP + 12 Iceberg OLAP → `db-table-inventory`. Data home: 
 19. Indian stocks `.NS`; use `detect_market` from `market_utils.py`. Never local suffix checks.
 20. **NEVER `rm` Iceberg metadata/parquet** — use `overwrite()` / `delete_rows()` API or `cleanup_orphans_v2()`. → `iceberg-orphan-sweep-design`
 21. **New write-heavy Iceberg table → enroll in BOTH** `_HOT_ICEBERG_TABLES` (`backend/jobs/executor.py`) AND `ALL_TABLES` (`backend/maintenance/iceberg_maintenance.py`) — same PR as DDL. → `iceberg-maintenance-enrollment`
+22. **★ Iceberg table storage design — universal checklist** (every new table, no exceptions). → `iceberg-table-design-checklist`
+    a. **Partition spec** — NEVER `IdentityTransform` on a column with cardinality > 50 (ticker, user_id, session_id). Use `BucketTransform(N)` (N ∈ {8, 16, 32}). For ticker × time data the canonical spec is `BucketTransform(16, ticker) + MonthTransform(date)` → ~192 partitions/year.
+    b. **Time grain** — `MonthTransform` on a `DateType` column for any table writing > 100 commits/day. `DayTransform` only for daily-aggregate tables. `IdentityTransform` on a `StringType("YYYY-MM-DD")` is forbidden (defeats Iceberg date pruning).
+    c. **Sort order** — declare a `SortOrder` on `(bucket_or_partition_key, primary_filter, timestamp)` at create time. Drives compaction layout + predicate pushdown.
+    d. **Schema** — `DateType` for date columns (not `StringType("YYYY-MM-DD")`); primitives only; tz-naive `TimestampType` (strip tz before write).
+    e. **1-year file budget** — estimate `writes/day × distinct_partitions × 365`; reject the spec if projected active file count > 5,000.
+    f. **Enrollment in same PR as DDL** — write-heavy (≥ 10 commits/day): `_HOT_ICEBERG_TABLES` + `ALL_TABLES` + the writing pipeline's scoped maintenance payload. Low-write (< 10 commits/day): `ALL_TABLES` + Weekly Long-Tail Iceberg Maintenance pipeline.
+    g. **Type evolution is one-way** — `StringType` cannot become `DateType` post-hoc without a nuke-rebuild. Get types right on day 1.
 
 ### 4.4 Process & git
 
-22. Branch off `dev`; never push to `dev`/`qa`/`release`/`main`.
-23. Co-Authored-By: `Abhay Kumar Singh <asequitytrading@gmail.com>`.
-24. Update `PROGRESS.md` per session (dated). `git add .serena/` before push.
-25. Test-after-feature — happy + 1 error path minimum.
-26. **PR merge on `dev`: squash only** (merge-commit + rebase blocked).
-27. Jira 3-phase: create → In Progress → comment+Done. Both `customfield_10016` (numeric) + `customfield_10036` (string) for story points. → `jira-3phase-lifecycle`
+23. Branch off `dev`; never push to `dev`/`qa`/`release`/`main`.
+24. Co-Authored-By: `Abhay Kumar Singh <asequitytrading@gmail.com>`.
+25. Update `PROGRESS.md` per session (dated). `git add .serena/` before push.
+26. Test-after-feature — happy + 1 error path minimum.
+27. **PR merge on `dev`: squash only** (merge-commit + rebase blocked).
+28. Jira 3-phase: create → In Progress → comment+Done. Both `customfield_10016` (numeric) + `customfield_10036` (string) for story points. → `jira-3phase-lifecycle`
 
 ### 4.5 Infra & config
 
-28. `NEXT_PUBLIC_BACKEND_URL=http://localhost:8181` — never `127.0.0.1` (cookie mismatch).
-29. `BACKEND_URL=http://backend:8181` on dev frontend container (RSC fetches).
-30. **`API_URL` for all API calls** (mounted under `/v1/`); `BACKEND_URL` for static + WS. WS `/ws/chat` NOT versioned. → `api-versioning`
-31. No `@traceable` on `FallbackLLM.invoke()` — breaks LangChain tool-call parsing.
-32. `scheduler_catchup_enabled=False` default (startup catchup pulled mid-day partial data).
-33. After cache-touching code change: `redis-cli FLUSHALL`.
+29. `NEXT_PUBLIC_BACKEND_URL=http://localhost:8181` — never `127.0.0.1` (cookie mismatch).
+30. `BACKEND_URL=http://backend:8181` on dev frontend container (RSC fetches).
+31. **`API_URL` for all API calls** (mounted under `/v1/`); `BACKEND_URL` for static + WS. WS `/ws/chat` NOT versioned. → `api-versioning`
+32. No `@traceable` on `FallbackLLM.invoke()` — breaks LangChain tool-call parsing.
+33. `scheduler_catchup_enabled=False` default (startup catchup pulled mid-day partial data).
+34. After cache-touching code change: `redis-cli FLUSHALL`.
 
 ---
 
