@@ -118,12 +118,24 @@ STEPS = [
         # family only). Avoids the full-warehouse rsync
         # + 14-table compact loop when only ~4 tables
         # need attention.
+        # ASETPLTFRM-421: include the algo namespace
+        # tables that the LiveRuntime writes during the
+        # session (paper + live event log, resampled
+        # bars from the tick stream). algo.events
+        # ballooned to 11 GB on 2026-05-12 the LAST time
+        # it was missing from a maintenance scope; both
+        # are also in _HOT_ICEBERG_TABLES + ALL_TABLES
+        # but the scoped pipeline run is what catches
+        # them inside the same daily compact + backup
+        # window.
         "payload": {
             "tables": [
                 "stocks.intraday_bars",
                 "stocks.index_intraday_bars",
                 "stocks.intraday_features",
                 "stocks.trade_feature_snapshots",
+                "algo.events",
+                "algo.intraday_bars",
             ],
         },
     },
