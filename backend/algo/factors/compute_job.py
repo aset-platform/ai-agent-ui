@@ -245,8 +245,21 @@ def run_compute_job(
         ))
         _merge(compute_quality(ticker, period_start, as_of))
 
+        # Restrict emission to TRADING DAYS only.  ``compute_quality``
+        # forward-fills f_score across every calendar day in the
+        # window, which pre-2026-05-18 caused weekend / holiday rows
+        # to land in ``stocks.daily_factors`` with NaN for every
+        # OHLCV-derived factor (mom_*, adx_14, distance_from_sma200,
+        # volume_x_avg_20, …). That polluted the table with rows
+        # that no strategy can use and showed up as silent
+        # "strategy fired 0 trades" symptoms when bull-regime gates
+        # landed on a Saturday.  The trading-day set is the
+        # ticker's OHLCV bar_date axis.
+        trading_dates = set(history["bar_date"].tolist())
         for d, vals in per_date.items():
             if d < period_start or d > as_of:
+                continue
+            if d not in trading_dates:
                 continue
             merged = {**vals, **breadth_by_date.get(d, {})}
             all_rows.append(FactorRow(
