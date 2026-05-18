@@ -312,17 +312,47 @@ async def upsert_pipeline(
             if key in data:
                 setattr(existing, key, data[key])
         if "steps" in data:
+            # ASETPLTFRM-428 — preserve scoped payload across
+            # PATCH-without-payload calls.  The admin UI's
+            # ``PipelineForm`` round-trips ``steps`` without the
+            # per-step ``payload`` field, which previously got
+            # written as ``{}`` here.  Every save in the UI
+            # silently erased ``iceberg_maintenance`` scoped table
+            # lists — see the 2026-05-18 incident where the
+            # Intraday Bars Daily Pipeline lost its 6-table scope
+            # and fell back to the full-warehouse 15-table sweep
+            # (24 min instead of ~3 min).
+            #
+            # Defense-in-depth: snapshot existing
+            # ``(job_type, step_order) → payload`` BEFORE deleting
+            # the old rows, then for each incoming step prefer the
+            # caller's payload when it carries data, otherwise
+            # restore the previous payload.  Only an explicit
+            # ``payload: null`` or an explicit empty dict wipes
+            # the prior value.
+            prior_payloads: dict[tuple[str, int], Any] = {
+                (s.job_type, s.step_order): (s.payload or {})
+                for s in existing.steps
+            }
             for s in list(existing.steps):
                 await session.delete(s)
             await session.flush()
             for s in data["steps"]:
+                key = (s["job_type"], s["step_order"])
+                # Distinguish "absent" (preserve) from "explicit
+                # empty" (wipe).  ``in`` check on the dict, not
+                # ``.get(...) or ...`` truthiness.
+                if "payload" in s:
+                    pl = s["payload"] or {}
+                else:
+                    pl = prior_payloads.get(key, {})
                 session.add(
                     PipelineStep(
                         pipeline_id=pid,
                         step_order=s["step_order"],
                         job_type=s["job_type"],
                         job_name=s["job_name"],
-                        payload=s.get("payload") or {},
+                        payload=pl,
                     )
                 )
     else:

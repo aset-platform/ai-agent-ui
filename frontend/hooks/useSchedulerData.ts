@@ -60,6 +60,13 @@ export interface PipelineStep {
   step_order: number;
   job_type: string;
   job_name: string;
+  // ASETPLTFRM-428 — opaque per-step JSON config (e.g. the
+  // scoped ``tables`` list for ``iceberg_maintenance``).
+  // The UI MUST round-trip this field unchanged so that
+  // re-saving a pipeline does not silently erase scoped
+  // configuration.  Optional because not every step type
+  // uses it.
+  payload?: Record<string, unknown>;
   last_status: string | null;
   last_run_id: string | null;
   last_duration: number | null;
