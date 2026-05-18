@@ -32,6 +32,18 @@ SECTOR_INDICES: list[str] = [
     "^CNXPHARMA",
     "^CNXFMCG",
     "^CNXAUTO",
+    "^CNXMETAL",
+    "^CNXENERGY",
+    "^CNXREALTY",
+    # Financial Services + Midcap 150 — added 2026-05-15 after
+    # daily-factor coverage audit surfaced 0% for
+    # rs_vs_sector_3m (Financial Services) and
+    # midcap_largecap_ratio (no midcap index). Yahoo's actual
+    # symbols are NIFTY_FIN_SERVICE.NS (15yr hist) and
+    # NIFTYMIDCAP150.NS (7yr hist) — NOT ^CNXFINANCE /
+    # ^NIFMDCP150 which the gap-filler tried in vain.
+    "NIFTY_FIN_SERVICE.NS",
+    "NIFTYMIDCAP150.NS",
     # US sector ETFs (broad sector proxies)
     "XLK",
     "XLF",

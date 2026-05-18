@@ -210,8 +210,15 @@ def refresh_market_indices() -> int:
             "^CNXENERGY",
             "^CNXREALTY",
             "^CNXPSUBANK",
-            "^CNXFINANCE",
-            "^NIFMDCP150",
+            # Yahoo's symbols for these two changed:
+            # ^CNXFINANCE → NIFTY_FIN_SERVICE.NS (15yr history)
+            # ^NIFMDCP150 → NIFTYMIDCAP150.NS  (7yr history)
+            # The legacy names returned silently-empty downloads,
+            # which is why daily_factors saw 0% coverage on
+            # rs_vs_sector_3m (Financial Services) and
+            # midcap_largecap_ratio (no midcap index data).
+            "NIFTY_FIN_SERVICE.NS",
+            "NIFTYMIDCAP150.NS",
             # Macro indicators (Phase 3)
             "^TNX",  # 10-Year Treasury Yield
             "^IRX",  # 13-Week T-Bill Rate

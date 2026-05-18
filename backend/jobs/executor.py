@@ -2666,6 +2666,19 @@ _HOT_ICEBERG_TABLES = (
     # ``(ticker, year_month)`` so compaction folds each
     # ticker × month into a single parquet.
     "stocks.index_intraday_bars",
+    # NSE bhavcopy delivery (Sprint 9 Advanced Analytics).
+    # 2026-05-15: enrolled here after a nuke-rebuild incident
+    # — the partition spec is identity-by-ticker and NSE
+    # bhavcopy carries ~2,586 distinct symbols (EQ + SM + BE/BZ
+    # + ETFs + bonds + delisted), so each daily ingest writes
+    # ~2,500 new parquet files (one per partition per commit).
+    # Without daily compaction the table regrew to 71,315
+    # files in 142 days (1-file-per-row pathology, same shape
+    # as algo.events before its 2026-05-12 enrollment). India
+    # Daily Pipeline's scoped maintenance ALSO covers it, but
+    # this entry is the safety net that fires even if that
+    # pipeline skips.
+    "stocks.nse_delivery",
 )
 
 
@@ -3597,6 +3610,33 @@ def _job_intraday_bars_retention(
     return asyncio.run(
         run_intraday_bars_retention_job(payload or {}),
     )
+
+
+@register_job("algo_events_retention")
+def _job_algo_events_retention(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """Weekly tiered-retention pass for ``algo.events``.
+
+    Short window (7 d) for backtest / paper / dryrun / live-ws /
+    walkforward / pipeline + live events that are NOT in
+    :data:`backend.algo.iceberg_init.LIVE_PLACED_ZERODHA_TYPES`.
+    Long window (365 d) for live events that confirm a
+    successful Zerodha order placement.
+
+    Sync + pipeline-compatible wrapper.  Schedules into the
+    Weekly Long-Tail Iceberg Maintenance pipeline.
+    """
+    from backend.algo.jobs.algo_events_retention import (
+        run_algo_events_retention_job,
+    )
+
+    return run_algo_events_retention_job(payload or {})
 
 
 @register_job("intraday_features_daily_compute")

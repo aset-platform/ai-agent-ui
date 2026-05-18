@@ -6,6 +6,9 @@ from backend.algo.routes.attribution import (
 from backend.algo.routes.backtest import create_backtest_router
 from backend.algo.routes.broker import create_broker_router
 from backend.algo.routes.drift import create_drift_router
+from backend.algo.routes.daily_factor_coverage import (
+    create_daily_factor_coverage_router,
+)
 from backend.algo.routes.factors import create_factors_router
 from backend.algo.routes.feature_coverage import (
     create_feature_coverage_router,
@@ -34,6 +37,9 @@ from backend.algo.routes.shap_analysis import (
 from backend.algo.routes.strategies import (
     create_strategies_router,
 )
+from backend.algo.routes.universe_snapshot import (
+    create_universe_snapshot_router,
+)
 from backend.algo.routes.walkforward import (
     create_walkforward_router,
 )
@@ -46,6 +52,7 @@ __all__ = [
     "create_backtest_router",
     "create_broker_router",
     "create_drift_router",
+    "create_daily_factor_coverage_router",
     "create_factors_router",
     "create_feature_coverage_router",
     "create_feature_importance_router",
@@ -60,6 +67,7 @@ __all__ = [
     "create_replay_router",
     "create_shap_analysis_router",
     "create_strategies_router",
+    "create_universe_snapshot_router",
     "create_walkforward_router",
     "create_webhooks_router",
 ]

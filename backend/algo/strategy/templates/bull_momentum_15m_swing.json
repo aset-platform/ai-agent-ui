@@ -1,0 +1,88 @@
+{
+  "id": "00000000-0000-0000-0000-000000000020",
+  "name": "BULL — 15m Momentum + Sector + Volume (CNC Swing)",
+  "universe": {
+    "type": "scope",
+    "scope": "discovery",
+    "filter": {
+      "ticker_type": ["stock"],
+      "market": "india"
+    }
+  },
+  "schedule": {
+    "type": "bar_close",
+    "interval": "15m",
+    "time": "15:25 IST"
+  },
+  "rebalance": {
+    "type": "daily",
+    "max_positions": 5
+  },
+  "product": "CNC",
+  "root": {
+    "type": "if",
+    "cond": {
+      "type": "and",
+      "operands": [
+        {
+          "type": "compare",
+          "left": {"feature": "regime_label"},
+          "op": "==",
+          "right": {"literal": "BULL"}
+        },
+        {
+          "type": "compare",
+          "left": {"feature": "sector_rotation_score"},
+          "op": ">=",
+          "right": {"literal": 0.70}
+        },
+        {
+          "type": "compare",
+          "left": {"feature": "relative_volume"},
+          "op": ">=",
+          "right": {"literal": 2.5}
+        },
+        {
+          "type": "compare",
+          "left": {"feature": "dist_from_vwap_pct"},
+          "op": ">=",
+          "right": {"literal": 0.5}
+        },
+        {
+          "type": "compare",
+          "left": {"feature": "rs_vs_nifty_15m"},
+          "op": ">",
+          "right": {"literal": 0.0}
+        },
+        {
+          "type": "compare",
+          "left": {"feature": "minutes_since_open"},
+          "op": ">=",
+          "right": {"literal": 30}
+        }
+      ]
+    },
+    "then": {
+      "type": "set_target_weight",
+      "weight": 0.20
+    },
+    "else": {
+      "type": "exit",
+      "scope": "this_symbol"
+    }
+  },
+  "risk": {
+    "per_trade": {
+      "stop_loss_pct": 4.0,
+      "max_qty": 1000
+    },
+    "portfolio": {
+      "max_exposure_pct": 80.0,
+      "max_concentration_pct": 25.0
+    },
+    "daily": {
+      "max_loss_pct": 5.0,
+      "max_open_positions": 5
+    }
+  }
+}

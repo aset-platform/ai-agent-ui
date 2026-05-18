@@ -319,7 +319,8 @@ def create_paper_router() -> APIRouter:
             out.append({
                 "event_id": r["event_id"],
                 "ts_ns": int(r["ts_ns"]),
-                "ts_date": r["ts_date"],
+                # ts_date is DateType — see replay.py note.
+                "ts_date": str(r["ts_date"]),
                 "strategy_id": r.get("strategy_id"),
                 "type": r["type"],
                 "payload": payload,

@@ -1,25 +1,21 @@
 "use client";
 /**
- * Feature-coverage admin dashboard (ASETPLTFRM-416 / FE-14).
+ * Daily-factor-coverage admin dashboard — sibling of
+ * FeatureCoverageTab for the WIDE ``stocks.daily_factors`` table
+ * (one column per factor; coverage = % of (ticker, bar_date)
+ * rows non-null per column).
  *
- * Renders the per-feature coverage matrix for the centralised
- * intraday feature store (``stocks.intraday_features``).
- * Coverage = % of ``(ticker, bar_open_ts_ns)`` bar slots in the
- * window for which a given ``feature_name`` produced a non-null
- * row.
- *
- * UX:
- *   - Pickers: interval_sec (15m / 5m / 1m), period_start /
- *     period_end (default = last 30 days),
- *     feature_set_version (optional override).
+ * UX intentionally mirrors FeatureCoverageTab so an admin
+ * familiar with one immediately understands the other:
+ *   - Pickers: period_start / period_end (default = last 30 days).
+ *     No interval picker (daily-only) and no version override
+ *     (the wide-table schema is its own version contract).
  *   - Tabular page with ColumnSelector + DownloadCsvButton per
  *     CLAUDE.md §5.4.
- *   - Stale-data chip per §5.5: amber chip if any feature has
- *     coverage_pct < 95.
+ *   - Stale-data chip per §5.5 when any factor < 95 %.
  *
- * Auth: superuser-only — page mounts under the admin tab strip
- * which is itself role-filtered; no extra client-side check
- * needed.
+ * Auth: superuser-only — mounts under the admin tab strip which
+ * is itself role-filtered.
  */
 
 import { useMemo, useState } from "react";
@@ -31,25 +27,25 @@ import { useColumnSelection } from "@/lib/useColumnSelection";
 import { downloadCsv } from "@/lib/downloadCsv";
 import type { CsvColumn } from "@/lib/downloadCsv";
 import {
-  useFeatureCoverage,
-  type FeatureCoverageRow,
-} from "@/hooks/useFeatureCoverage";
+  useDailyFactorCoverage,
+  type DailyFactorCoverageRow,
+} from "@/hooks/useDailyFactorCoverage";
 
-const STORAGE_KEY = "fe14:feature-coverage:cols";
+const STORAGE_KEY = "daily-factor-coverage:cols";
 const STALE_THRESHOLD_PCT = 95;
 
 const COL_CATALOG: ColumnSpec[] = [
-  {
-    key: "feature_name",
-    label: "Feature",
-    category: "Identity",
-  },
+  { key: "factor_name", label: "Factor", category: "Identity" },
   {
     key: "coverage_pct",
     label: "Coverage %",
     category: "Coverage",
   },
-  { key: "rows", label: "Rows", category: "Coverage" },
+  {
+    key: "non_null_rows",
+    label: "Non-null Rows",
+    category: "Coverage",
+  },
   {
     key: "tickers_seen",
     label: "Tickers Seen",
@@ -63,9 +59,9 @@ const COL_CATALOG: ColumnSpec[] = [
 ];
 
 const DEFAULT_COLS = [
-  "feature_name",
+  "factor_name",
   "coverage_pct",
-  "rows",
+  "non_null_rows",
   "tickers_seen",
   "sample_chart",
 ];
@@ -75,7 +71,7 @@ const VALID_KEYS = COL_CATALOG.map((c) => c.key);
 type SortDir = "asc" | "desc";
 
 interface SortState {
-  col: keyof FeatureCoverageRow | "coverage_pct";
+  col: keyof DailyFactorCoverageRow | "coverage_pct";
   dir: SortDir;
 }
 
@@ -87,7 +83,6 @@ function isoDaysAgo(n: number): string {
 
 function CoverageBar({ pct }: { pct: number }) {
   const clamped = Math.max(0, Math.min(100, pct));
-  // Colour ramp: red <70, amber 70–95, green ≥95.
   let cls = "bg-green-500 dark:bg-green-400";
   if (clamped < 70) {
     cls = "bg-red-500 dark:bg-red-400";
@@ -108,19 +103,15 @@ function CoverageBar({ pct }: { pct: number }) {
   );
 }
 
-function StaleCoverageChip({
-  staleCount,
-}: {
-  staleCount: number;
-}) {
+function StaleCoverageChip({ staleCount }: { staleCount: number }) {
   if (staleCount === 0) return null;
   return (
     <span
       data-testid="stale-coverage-chip"
       title={
-        `${staleCount} feature(s) have coverage below ` +
-        `${STALE_THRESHOLD_PCT}% — investigate warm-up or ` +
-        `upstream source gaps.`
+        `${staleCount} factor(s) have coverage below ` +
+        `${STALE_THRESHOLD_PCT}% — investigate the daily factor ` +
+        `compute job or upstream OHLCV gaps.`
       }
       className={
         "ml-2 inline-flex items-center rounded-full " +
@@ -134,16 +125,13 @@ function StaleCoverageChip({
   );
 }
 
-export function FeatureCoverageTab() {
-  const [intervalSec, setIntervalSec] = useState<number>(900);
-  const [periodStart, setPeriodStart] = useState<string>(
-    () => isoDaysAgo(30),
+export function DailyFactorCoverageTab() {
+  const [periodStart, setPeriodStart] = useState<string>(() =>
+    isoDaysAgo(30),
   );
   const [periodEnd, setPeriodEnd] = useState<string>(() =>
     isoDaysAgo(0),
   );
-  const [versionOverride, setVersionOverride] =
-    useState<string>("");
 
   const [selectedCols, setSelectedCols, resetCols] =
     useColumnSelection(STORAGE_KEY, DEFAULT_COLS, VALID_KEYS);
@@ -156,29 +144,20 @@ export function FeatureCoverageTab() {
   const queryArgs = useMemo(
     () =>
       periodStart && periodEnd
-        ? {
-            intervalSec,
-            periodStart,
-            periodEnd,
-            featureSetVersion:
-              versionOverride.trim() || undefined,
-          }
+        ? { periodStart, periodEnd }
         : null,
-    [intervalSec, periodStart, periodEnd, versionOverride],
+    [periodStart, periodEnd],
   );
 
-  const { data, error, loading } = useFeatureCoverage(queryArgs);
+  const { data, error, loading } = useDailyFactorCoverage(queryArgs);
 
-  const rows = useMemo(
-    () => data?.coverage ?? [],
-    [data],
-  );
+  const rows = useMemo(() => data?.coverage ?? [], [data]);
 
   const sortedRows = useMemo(() => {
     const sorted = [...rows];
     sorted.sort((a, b) => {
-      const av = a[sort.col as keyof FeatureCoverageRow];
-      const bv = b[sort.col as keyof FeatureCoverageRow];
+      const av = a[sort.col as keyof DailyFactorCoverageRow];
+      const bv = b[sort.col as keyof DailyFactorCoverageRow];
       if (typeof av === "number" && typeof bv === "number") {
         return sort.dir === "asc" ? av - bv : bv - av;
       }
@@ -192,21 +171,17 @@ export function FeatureCoverageTab() {
   }, [rows, sort]);
 
   const staleCount = useMemo(
-    () =>
-      rows.filter(
-        (r) => r.coverage_pct < STALE_THRESHOLD_PCT,
-      ).length,
+    () => rows.filter((r) => r.coverage_pct < STALE_THRESHOLD_PCT).length,
     [rows],
   );
 
   const visibleCols = useMemo(
-    () =>
-      COL_CATALOG.filter((c) => selectedCols.includes(c.key)),
+    () => COL_CATALOG.filter((c) => selectedCols.includes(c.key)),
     [selectedCols],
   );
 
   const handleSort = (
-    col: keyof FeatureCoverageRow | "coverage_pct",
+    col: keyof DailyFactorCoverageRow | "coverage_pct",
   ) => {
     setSort((prev) =>
       prev.col === col
@@ -216,49 +191,32 @@ export function FeatureCoverageTab() {
   };
 
   const handleDownload = () => {
-    const csvCols: CsvColumn<FeatureCoverageRow>[] = visibleCols
+    const csvCols: CsvColumn<DailyFactorCoverageRow>[] = visibleCols
       .filter((c) => c.key !== "sample_chart")
       .map((c) => ({
-        key: c.key as keyof FeatureCoverageRow,
+        key: c.key as keyof DailyFactorCoverageRow,
         header: c.label,
       }));
-    downloadCsv(sortedRows, csvCols, "feature-coverage");
+    downloadCsv(sortedRows, csvCols, "daily-factor-coverage");
   };
 
   return (
     <div
-      data-testid="feature-coverage-tab"
+      data-testid="daily-factor-coverage-tab"
       className="space-y-4"
     >
       <div className="flex flex-wrap items-center gap-3">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-          Feature Coverage
+          Daily Factor Coverage
         </h2>
         <StaleCoverageChip staleCount={staleCount} />
       </div>
 
-      {/* Filter row */}
       <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col text-xs text-gray-600 dark:text-gray-400">
-          Interval
-          <select
-            data-testid="fc-interval-select"
-            value={intervalSec}
-            onChange={(e) =>
-              setIntervalSec(Number(e.target.value))
-            }
-            className="mt-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1 text-sm text-gray-900 dark:text-gray-100"
-          >
-            <option value={86400}>1 day</option>
-            <option value={900}>15 min</option>
-            <option value={300}>5 min</option>
-            <option value={60}>1 min</option>
-          </select>
-        </label>
         <label className="flex flex-col text-xs text-gray-600 dark:text-gray-400">
           From
           <input
-            data-testid="fc-period-start"
+            data-testid="dfc-period-start"
             type="date"
             value={periodStart}
             onChange={(e) => setPeriodStart(e.target.value)}
@@ -268,40 +226,23 @@ export function FeatureCoverageTab() {
         <label className="flex flex-col text-xs text-gray-600 dark:text-gray-400">
           To
           <input
-            data-testid="fc-period-end"
+            data-testid="dfc-period-end"
             type="date"
             value={periodEnd}
             onChange={(e) => setPeriodEnd(e.target.value)}
             className="mt-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1 text-sm text-gray-900 dark:text-gray-100"
           />
         </label>
-        <label className="flex flex-col text-xs text-gray-600 dark:text-gray-400">
-          Version (optional)
-          <input
-            data-testid="fc-version-input"
-            type="text"
-            value={versionOverride}
-            placeholder="default: current"
-            onChange={(e) =>
-              setVersionOverride(e.target.value)
-            }
-            className="mt-1 w-36 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1 text-sm text-gray-900 dark:text-gray-100"
-          />
-        </label>
       </div>
 
-      {/* Header strip — column selector + summary */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-xs text-gray-600 dark:text-gray-400">
           {data && (
-            <>
-              <span data-testid="fc-summary">
-                {data.coverage.length} features ·{" "}
-                {data.total_unique_bars.toLocaleString()} bars ·{" "}
-                {data.tickers_total} tickers · version{" "}
-                {data.feature_set_version}
-              </span>
-            </>
+            <span data-testid="dfc-summary">
+              {data.coverage.length} factors ·{" "}
+              {data.total_rows.toLocaleString()} rows ·{" "}
+              {data.tickers_total} tickers
+            </span>
           )}
         </div>
         <ColumnSelector
@@ -309,13 +250,13 @@ export function FeatureCoverageTab() {
           selected={selectedCols}
           onChange={setSelectedCols}
           onReset={resetCols}
-          lockedKeys={["feature_name"]}
+          lockedKeys={["factor_name"]}
         />
       </div>
 
       {error && (
         <div
-          data-testid="fc-error"
+          data-testid="dfc-error"
           className="rounded-md border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/30 p-3 text-sm text-red-700 dark:text-red-300"
         >
           Failed to load coverage: {error.message}
@@ -324,7 +265,7 @@ export function FeatureCoverageTab() {
 
       {loading && !data && (
         <div
-          data-testid="fc-loading"
+          data-testid="dfc-loading"
           className="space-y-2"
           aria-busy="true"
         >
@@ -339,12 +280,12 @@ export function FeatureCoverageTab() {
 
       {!loading && rows.length === 0 && !error && (
         <div
-          data-testid="fc-empty"
+          data-testid="dfc-empty"
           className="rounded-md border border-gray-200 dark:border-gray-700 p-6 text-center text-sm text-gray-500 dark:text-gray-400"
         >
-          No feature rows in the selected window. Try widening
-          the date range or check that the feature backfill job
-          has run.
+          No factor rows in the selected window. Try widening the
+          date range or check that ``compute_daily_factors`` has
+          run.
         </div>
       )}
 
@@ -361,7 +302,7 @@ export function FeatureCoverageTab() {
                       c.key === "sample_chart"
                         ? undefined
                         : handleSort(
-                            c.key as keyof FeatureCoverageRow,
+                            c.key as keyof DailyFactorCoverageRow,
                           )
                     }
                     className={
@@ -371,11 +312,14 @@ export function FeatureCoverageTab() {
                         ? ""
                         : "cursor-pointer select-none")
                     }
-                    data-testid={`fc-header-${c.key}`}
+                    data-testid={`dfc-header-${c.key}`}
                   >
                     {c.label}
                     {sort.col === c.key && (
-                      <span aria-hidden> {sort.dir === "asc" ? "▲" : "▼"}</span>
+                      <span aria-hidden>
+                        {" "}
+                        {sort.dir === "asc" ? "▲" : "▼"}
+                      </span>
                     )}
                   </th>
                 ))}
@@ -384,19 +328,14 @@ export function FeatureCoverageTab() {
             <tbody className="divide-y divide-gray-100 dark:divide-gray-800 bg-white dark:bg-gray-900">
               {sortedRows.map((r) => (
                 <tr
-                  key={r.feature_name}
-                  data-testid={`fc-row-${r.feature_name}`}
+                  key={r.factor_name}
+                  data-testid={`dfc-row-${r.factor_name}`}
                 >
                   {visibleCols.map((c) => {
                     if (c.key === "sample_chart") {
                       return (
-                        <td
-                          key={c.key}
-                          className="px-3 py-2"
-                        >
-                          <CoverageBar
-                            pct={r.coverage_pct}
-                          />
+                        <td key={c.key} className="px-3 py-2">
+                          <CoverageBar pct={r.coverage_pct} />
                         </td>
                       );
                     }
@@ -410,19 +349,18 @@ export function FeatureCoverageTab() {
                         </td>
                       );
                     }
-                    if (c.key === "feature_name") {
+                    if (c.key === "factor_name") {
                       return (
                         <td
                           key={c.key}
                           className="px-3 py-2 font-medium text-gray-900 dark:text-gray-100"
                         >
-                          {r.feature_name}
+                          {r.factor_name}
                         </td>
                       );
                     }
-                    const val = r[
-                      c.key as keyof FeatureCoverageRow
-                    ];
+                    const val =
+                      r[c.key as keyof DailyFactorCoverageRow];
                     return (
                       <td
                         key={c.key}
@@ -450,4 +388,4 @@ export function FeatureCoverageTab() {
   );
 }
 
-export default FeatureCoverageTab;
+export default DailyFactorCoverageTab;

@@ -50,6 +50,13 @@ const ALL_DAYS = [
 interface StepDraft {
   job_type: string;
   job_name: string;
+  // ASETPLTFRM-428 — opaque per-step config, round-tripped
+  // unchanged.  See ``PipelineStep.payload`` in
+  // ``useSchedulerData.ts``.  The form doesn't render or
+  // edit this field today (no inline scoped-tables editor
+  // yet); it just preserves it across save so the backend
+  // ``iceberg_maintenance.tables`` scope survives.
+  payload?: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------
@@ -106,6 +113,8 @@ export default function PipelineForm({
         editingPipeline.steps.map((s) => ({
           job_type: s.job_type,
           job_name: s.job_name,
+          // Round-trip the payload — see ASETPLTFRM-428.
+          payload: s.payload,
         })),
       );
     } else {
@@ -169,6 +178,15 @@ export default function PipelineForm({
           step_order: i + 1,
           job_type: s.job_type,
           job_name: s.job_name,
+          // ASETPLTFRM-428 — round-trip per-step payload so
+          // editing a pipeline in the admin UI doesn't wipe
+          // its scoped ``iceberg_maintenance.tables`` (or any
+          // future per-step config).  Backend defense-in-depth
+          // (``upsert_pipeline``) also preserves when this is
+          // missing, but sending it makes the contract explicit.
+          ...(s.payload !== undefined
+            ? { payload: s.payload }
+            : {}),
         })),
       };
       if (editingPipeline) {

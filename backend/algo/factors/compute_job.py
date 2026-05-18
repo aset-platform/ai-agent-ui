@@ -36,7 +36,41 @@ _logger = logging.getLogger(__name__)
 # 2 calendar years gives ~252 trading days for SMA200 / mom_12_1.
 WARMUP_DAYS = 730
 NIFTY_TICKER = "^NSEI"
+# Sector → NSE-index map for rs_vs_sector_3m. Two vocabularies
+# coexist because piotroski_scores.sector emits Yahoo's
+# canonical taxonomy (Industrials / Consumer Cyclical /
+# Healthcare / Technology / Consumer Defensive / Basic
+# Materials / Communication Services / Utilities / Real Estate
+# / Energy / Financial Services) — NOT the short-form labels
+# (IT / Banks / Pharma / FMCG / Metal / ...) that earlier code
+# expected. Pre-2026-05-15 the map used only short-form keys,
+# so 593 of 755 tickers got NaN sector RS. Keep both vocabs for
+# backward compat; Yahoo terms are the source of truth going
+# forward.
+#
+# Also fixes the silent "^CNXFINANCE" download failure: Yahoo's
+# actual symbol for Nifty Financial Services is
+# ``NIFTY_FIN_SERVICE.NS`` (verified 2026-05-15 — 15 years of
+# history from 2011-09-07).
 SECTOR_INDEX_MAP = {
+    # Yahoo's canonical sector vocabulary (matches what
+    # stocks.piotroski_scores writes).
+    "Technology": "^CNXIT",
+    "Financial Services": "NIFTY_FIN_SERVICE.NS",
+    "Healthcare": "^CNXPHARMA",
+    "Consumer Cyclical": "^CNXAUTO",
+    "Consumer Defensive": "^CNXFMCG",
+    "Basic Materials": "^CNXMETAL",
+    "Energy": "^CNXENERGY",
+    "Real Estate": "^CNXREALTY",
+    # Utilities — no direct NSE sector index; energy is the
+    # closest proxy (covers power generation / utilities).
+    "Utilities": "^CNXENERGY",
+    # Industrials & Communication Services — no NSE sector
+    # index. Leave unmapped (→ NaN sector RS for these tickers)
+    # rather than blend a poor proxy.
+    # Legacy short-form keys for back-compat — kept until any
+    # remaining sectoral.sector writer migrates to Yahoo terms.
     "IT": "^CNXIT",
     "Banks": "^NSEBANK",
     "Banking": "^NSEBANK",
@@ -47,10 +81,7 @@ SECTOR_INDEX_MAP = {
     "Consumer Goods": "^CNXFMCG",
     "Metals": "^CNXMETAL",
     "Metal": "^CNXMETAL",
-    "Energy": "^CNXENERGY",
     "Realty": "^CNXREALTY",
-    "Real Estate": "^CNXREALTY",
-    "Financial Services": "^CNXFINANCE",
 }
 
 
@@ -214,8 +245,21 @@ def run_compute_job(
         ))
         _merge(compute_quality(ticker, period_start, as_of))
 
+        # Restrict emission to TRADING DAYS only.  ``compute_quality``
+        # forward-fills f_score across every calendar day in the
+        # window, which pre-2026-05-18 caused weekend / holiday rows
+        # to land in ``stocks.daily_factors`` with NaN for every
+        # OHLCV-derived factor (mom_*, adx_14, distance_from_sma200,
+        # volume_x_avg_20, …). That polluted the table with rows
+        # that no strategy can use and showed up as silent
+        # "strategy fired 0 trades" symptoms when bull-regime gates
+        # landed on a Saturday.  The trading-day set is the
+        # ticker's OHLCV bar_date axis.
+        trading_dates = set(history["bar_date"].tolist())
         for d, vals in per_date.items():
             if d < period_start or d > as_of:
+                continue
+            if d not in trading_dates:
                 continue
             merged = {**vals, **breadth_by_date.get(d, {})}
             all_rows.append(FactorRow(

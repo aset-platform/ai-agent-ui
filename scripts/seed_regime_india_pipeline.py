@@ -76,36 +76,56 @@ STEPS = [
         "job_name": "Compute Daily Factors",
     },
     {
+        # FE-15a (ASETPLTFRM-419) — daily-cadence feature
+        # compute. Reads stocks.ohlcv, writes the 18 daily
+        # features (ema_*, sma_*, rsi_*, atr_14, bb_width,
+        # gap_pct, volume_spike, etc.) into
+        # stocks.intraday_features at interval_sec=86400.
+        # Sequenced AFTER compute_daily_factors so the daily
+        # factor library is already populated when feature
+        # backfill kicks off; the two jobs are otherwise
+        # independent.
         "step_order": 4,
+        "job_type": "daily_features_daily_compute",
+        "job_name": "Compute Daily Features (1d)",
+    },
+    {
+        "step_order": 5,
         "job_type": "attribution_daily_brinson",
         "job_name": "Daily Brinson Attribution",
     },
     # Monthly (skip on non-1st days) ---------------------------
     {
-        "step_order": 5,
+        "step_order": 6,
         "job_type": "universe_snapshot_monthly",
         "job_name": "Refresh Top-200 Universe",
     },
     {
-        "step_order": 6,
+        "step_order": 7,
         "job_type": "attribution_monthly_regression",
         "job_name": "Run Factor Regression",
     },
     # Maintenance ----------------------------------------------
     {
-        "step_order": 7,
+        "step_order": 8,
         "job_type": "iceberg_maintenance",
         "job_name": "Compact + Backup Iceberg",
         # ASETPLTFRM-418: scope to the regime engine's
         # daily-cadence write set. Other hot tables
         # (OHLCV, sentiment, intraday) are owned by
         # their own pipelines' maintenance step.
+        # 2026-05-15: added ``stocks.intraday_features`` here
+        # because step 4 (FE-15a) now writes daily-cadence
+        # rows there with interval_sec=86400. Without
+        # enrolling, daily writes would accumulate parquets
+        # until the next India Daily Pipeline maintenance run.
         "payload": {
             "tables": [
                 "stocks.regime_history",
                 "stocks.regime_hmm_state",
                 "stocks.daily_factors",
                 "stocks.universe_snapshot",
+                "stocks.intraday_features",
             ],
         },
     },

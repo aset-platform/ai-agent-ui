@@ -106,7 +106,11 @@ def create_replay_router() -> APIRouter:
             out.append({
                 "event_id": r["event_id"],
                 "ts_ns": int(r["ts_ns"]),
-                "ts_date": r["ts_date"],
+                # ts_date is DateType in Iceberg (post 2026-05-16
+                # redesign) — DuckDB returns ``date``; older rows
+                # may still surface as ``str``.  Normalise to ISO
+                # string for the JSON response.
+                "ts_date": str(r["ts_date"]),
                 "mode": r["mode"],
                 "strategy_id": r.get("strategy_id"),
                 "type": r["type"],
