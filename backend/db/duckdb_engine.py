@@ -1,6 +1,7 @@
 """DuckDB in-process query engine for Iceberg tables."""
 
 import logging
+import os
 import threading
 
 import duckdb
@@ -64,8 +65,21 @@ def _resolve_metadata(table_name: str) -> str | None:
     """
     with _meta_lock:
         cached = _meta_cache.get(table_name)
-    if cached:
+    if cached and os.path.exists(cached):
         return cached
+    if cached:
+        # Cached path was pruned (orphan sweep / metadata
+        # rotation) without invalidate_metadata firing.
+        # Self-heal by dropping the stale entry and
+        # re-resolving from the filesystem.
+        log.warning(
+            "Stale metadata cache for %s (%s missing); "
+            "re-resolving",
+            table_name,
+            cached,
+        )
+        with _meta_lock:
+            _meta_cache.pop(table_name, None)
 
     metadata_path = (
         ICEBERG_WAREHOUSE
