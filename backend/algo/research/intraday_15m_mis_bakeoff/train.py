@@ -105,6 +105,123 @@ def gate3_leak_audit(
     return "pass"
 
 
+def gate4_random_baseline(
+    y_train: np.ndarray, y_test: np.ndarray, test_mlogloss: float
+) -> tuple[str, float]:
+    """Test mlogloss must beat a stratified random classifier by 0.05.
+
+    The random baseline emits the train class distribution as
+    its prediction for every test row.
+    """
+    pi = np.bincount(y_train, minlength=3) / len(y_train)
+    eps = 1e-15
+    pi_clipped = np.clip(pi, eps, 1.0)
+    baseline = float(-np.log(pi_clipped[y_test]).mean())
+    delta = baseline - test_mlogloss
+    ok = delta >= 0.05
+    return (
+        (
+            "pass"
+            if ok
+            else (
+                f"fail: model {test_mlogloss:.4f} vs "
+                f"baseline {baseline:.4f} (delta={delta:.4f})"
+            )
+        ),
+        baseline,
+    )
+
+
+def gate5_ranking_stability(
+    X_fit: pd.DataFrame,
+    y_fit: np.ndarray,
+    X_val: pd.DataFrame,
+    y_val: np.ndarray,
+    X_test: pd.DataFrame,
+    *,
+    feature_names: list[str],
+    seeds: list[int],
+    top_k: int = 8,
+    min_overlap: int = 6,
+) -> tuple[str, dict]:
+    """Train *seeds* boosters; intersect top-K by SHAP magnitude.
+
+    Returns the gate result string + the stability dict from
+    ``compute_stable_features``.
+    """
+    import shap
+
+    from backend.algo.research.intraday_15m_mis_bakeoff.shap_eval import (
+        compute_stable_features,
+    )
+
+    rankings: list[set[str]] = []
+    for seed in seeds:
+        model = _train_one(X_fit, y_fit, X_val, y_val, seed=seed)
+        sv = shap.TreeExplainer(model).shap_values(X_test)
+        sv_list = (
+            sv
+            if isinstance(sv, list)
+            else [sv[..., k] for k in range(3)]
+        )
+        importance = (
+            np.abs(sv_list[0]).mean(0) + np.abs(sv_list[2]).mean(0)
+        )
+        top_idx = importance.argsort()[-top_k:]
+        rankings.append({feature_names[i] for i in top_idx})
+
+    stab = compute_stable_features(rankings, mostly_overlap=4)
+    overlap = len(stab["stable"])
+    ok = overlap >= min_overlap
+    return (
+        (
+            "pass"
+            if ok
+            else f"fail: only {overlap} features stable across all seeds"
+        ),
+        {
+            "stable": list(stab["stable"]),
+            "mostly_stable": list(stab["mostly_stable"]),
+            "rankings_per_seed": [list(r) for r in rankings],
+        },
+    )
+
+
+def gate7_per_regime(
+    df_test: pd.DataFrame,
+    y_test: np.ndarray,
+    y_pred_proba: np.ndarray,
+    *,
+    min_rows: int = 500,
+) -> dict[str, dict]:
+    """Per-regime mlogloss + count.
+
+    Soft gate: stamps caveats, does not fail.
+    """
+    if "regime_label" not in df_test.columns:
+        return {}
+    result: dict[str, dict] = {}
+    eps = 1e-15
+    proba = np.clip(y_pred_proba, eps, 1.0)
+    for regime in ("BULL", "SIDEWAYS", "BEAR"):
+        mask = df_test["regime_label"].to_numpy() == regime
+        n = int(mask.sum())
+        if n == 0:
+            result[regime] = {
+                "rows": 0,
+                "mlogloss": None,
+                "underpowered": True,
+            }
+            continue
+        ll = float(-np.log(proba[mask, y_test[mask]]).mean())
+        result[regime] = {
+            "rows": n,
+            "mlogloss": ll,
+            "underpowered": n < min_rows,
+        }
+    return result
+
+
 def _synthetic_smoke_frame(
     n_rows: int = 5_000,
     seed: int = 42,
