@@ -13,7 +13,7 @@ import json
 import logging
 import sys
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -160,13 +160,9 @@ def gate5_ranking_stability(
         model = _train_one(X_fit, y_fit, X_val, y_val, seed=seed)
         sv = shap.TreeExplainer(model).shap_values(X_test)
         sv_list = (
-            sv
-            if isinstance(sv, list)
-            else [sv[..., k] for k in range(3)]
+            sv if isinstance(sv, list) else [sv[..., k] for k in range(3)]
         )
-        importance = (
-            np.abs(sv_list[0]).mean(0) + np.abs(sv_list[2]).mean(0)
-        )
+        importance = np.abs(sv_list[0]).mean(0) + np.abs(sv_list[2]).mean(0)
         top_idx = importance.argsort()[-top_k:]
         rankings.append({feature_names[i] for i in top_idx})
 
@@ -244,11 +240,7 @@ def _synthetic_smoke_frame(
     # feature's Pearson |corr| to ~0.3, safely below the 0.5 threshold.
     noise = rng.normal(0, 1.5, size=n_rows)
     score = (
-        0.6 * X[:, 0]
-        + 0.5 * X[:, 1]
-        + 0.4 * X[:, 2]
-        + 0.3 * X[:, 3]
-        + noise
+        0.6 * X[:, 0] + 0.5 * X[:, 1] + 0.4 * X[:, 2] + 0.3 * X[:, 3] + noise
     )
 
     y = np.where(
@@ -312,16 +304,14 @@ def run_smoke() -> dict[str, Any]:
     X_val = train_val[feature_names]
     y_val = train_val["label"].to_numpy()
     X_test = test[feature_names]
-    y_test = test["label"].to_numpy()
+    _y_test = test["label"].to_numpy()  # noqa: F841 — kept for future gates
 
     gate2_status, gate2_pct = gate2_label_distribution(y_fit)
     gates.label_distribution = gate2_status
     gates.leak_audit = gate3_leak_audit(X_fit, y_fit)
 
     model = _train_one(X_fit, y_fit, X_val, y_val, seed=42)
-    test_mlogloss = float(
-        model.evals_result_["validation_0"]["mlogloss"][-1]
-    )
+    test_mlogloss = float(model.evals_result_["validation_0"]["mlogloss"][-1])
 
     return {
         "mode": "smoke",
@@ -337,8 +327,218 @@ def run_smoke() -> dict[str, Any]:
     }
 
 
+def _augment_with_label(df: pd.DataFrame, threshold: float) -> pd.DataFrame:
+    """Apply labeler.label_bars and return the labelled frame.
+
+    Drops unlabellable rows. The label column is integer 0/1/2.
+    """
+    labelled = label_bars(df, threshold=threshold)
+    if labelled.empty:
+        raise RuntimeError("labeler produced 0 rows — check input data")
+    return labelled
+
+
+def run_real(
+    *,
+    tickers: list[str],
+    date_min: date,
+    date_max: date,
+    train_fit_end: date,
+    train_val_end: date,
+    threshold: float,
+    seeds: list[int],
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Real-data mode: load Iceberg → label → split → all gates → report.
+
+    Used by both --dry-run (3 tickers, 2 weeks) and full mode.
+    """
+    from backend.algo.research.intraday_15m_mis_bakeoff.dataset import (
+        load_research_frame,
+    )
+
+    _logger.info(
+        "Loading research frame for %d tickers %s..%s",
+        len(tickers),
+        date_min,
+        date_max,
+    )
+    raw = load_research_frame(
+        tickers=tickers,
+        date_min=date_min,
+        date_max=date_max,
+    )
+    _logger.info(
+        "Raw frame: %d rows × %d cols",
+        len(raw),
+        raw.shape[1] if not raw.empty else 0,
+    )
+    if raw.empty:
+        raise RuntimeError(
+            f"load_research_frame returned 0 rows for "
+            f"{len(tickers)} tickers {date_min}..{date_max}"
+        )
+
+    # The dataset loader does not include atr_14 in OHLCV; it's in
+    # the EAV feature pivot. Coerce the feature_value-derived
+    # columns to float (they come back as object/Decimal from the pivot).
+    feature_value_cols = [
+        c
+        for c in raw.columns
+        if c
+        not in {
+            "ticker",
+            "bar_open_ts_ns",
+            "bar_date",
+            "interval_sec",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "regime_label",
+            "time_of_day_bucket",
+        }
+    ]
+    for c in feature_value_cols:
+        raw[c] = pd.to_numeric(raw[c], errors="coerce")
+
+    labelled = _augment_with_label(raw, threshold=threshold)
+    _logger.info(
+        "Labelled frame: %d rows after dropping unlabellable",
+        len(labelled),
+    )
+
+    # Pre-training data assertions §7.3.
+    assert labelled["entry_px"].notna().all(), "t+1 open missing"
+    assert labelled["exit_px"].notna().all(), "t+4 close missing"
+    assert (labelled["atr_14"] > 0).all(), "ATR_14 zero"
+    assert (
+        labelled.duplicated(["ticker", "bar_open_ts_ns"]).sum() == 0
+    ), "pivot duplicates"
+
+    labelled = labelled.sort_values("bar_date").reset_index(drop=True)
+    train_fit, train_val, test = chronological_split(
+        labelled,
+        date_col="bar_date",
+        train_fit_end=train_fit_end,
+        train_val_end=train_val_end,
+    )
+
+    # Feature columns are everything except identifiers + label + the
+    # forward-looking aux columns the labeler added.
+    excluded = {
+        "ticker",
+        "bar_open_ts_ns",
+        "bar_date",
+        "interval_sec",
+        "label",
+        "entry_px",
+        "exit_px",
+        "r_norm",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    }
+    work = labelled.copy()
+    for cat_col in ("regime_label", "time_of_day_bucket"):
+        if cat_col in work.columns:
+            dummies = pd.get_dummies(
+                work[cat_col], prefix=cat_col, dummy_na=False
+            )
+            work = pd.concat([work.drop(columns=[cat_col]), dummies], axis=1)
+            excluded.add(cat_col)
+
+    feature_names = [
+        c
+        for c in work.columns
+        if c not in excluded and pd.api.types.is_numeric_dtype(work[c])
+    ]
+
+    # Re-split after one-hot using the same row-index partitioning.
+    train_fit_idx = labelled.index[labelled["bar_date"] <= train_fit_end]
+    train_val_idx = labelled.index[
+        (labelled["bar_date"] > train_fit_end)
+        & (labelled["bar_date"] <= train_val_end)
+    ]
+    test_idx = labelled.index[labelled["bar_date"] > train_val_end]
+
+    X_fit = work.loc[train_fit_idx][feature_names]
+    X_val = work.loc[train_val_idx][feature_names]
+    X_test = work.loc[test_idx][feature_names]
+    y_fit = work.loc[train_fit_idx]["label"].to_numpy()
+    y_val = work.loc[train_val_idx]["label"].to_numpy()
+    y_test = work.loc[test_idx]["label"].to_numpy()
+
+    gates = GateResults()
+    gates.chronology = gate1_chronology(
+        labelled.loc[train_fit_idx],
+        labelled.loc[train_val_idx],
+        labelled.loc[test_idx],
+    )
+    gates.label_distribution, label_dist = gate2_label_distribution(y_fit)
+    gates.leak_audit = gate3_leak_audit(X_fit, y_fit)
+
+    primary_model = _train_one(X_fit, y_fit, X_val, y_val, seed=seeds[0])
+    proba_test = primary_model.predict_proba(X_test)
+    eps = 1e-15
+    proba_clipped = np.clip(proba_test, eps, 1.0)
+    test_mlogloss = float(
+        -np.log(proba_clipped[np.arange(len(y_test)), y_test]).mean()
+    )
+
+    gates.random_baseline, baseline = gate4_random_baseline(
+        y_fit,
+        y_test,
+        test_mlogloss,
+    )
+    gates.ranking_stability, stability = gate5_ranking_stability(
+        X_fit,
+        y_fit,
+        X_val,
+        y_val,
+        X_test,
+        feature_names=feature_names,
+        seeds=seeds,
+    )
+    test_with_regime = labelled.loc[test_idx][
+        ["bar_date"] + [c for c in ["regime_label"] if c in labelled.columns]
+    ]
+    gates.per_regime = gate7_per_regime(
+        test_with_regime,
+        y_test,
+        proba_test,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    primary_model.save_model(str(output_dir / "model.json"))
+
+    summary = {
+        "mode": "real",
+        "tickers": len(tickers),
+        "date_window": [str(date_min), str(date_max)],
+        "rows": {
+            "fit": len(X_fit),
+            "val": len(X_val),
+            "test": len(X_test),
+        },
+        "feature_count": len(feature_names),
+        "gates": gates.__dict__,
+        "best_iteration": int(primary_model.best_iteration or 0),
+        "test_mlogloss": test_mlogloss,
+        "random_baseline_mlogloss": baseline,
+        "label_distribution": label_dist,
+        "stability": stability,
+    }
+    (output_dir / "run_summary.json").write_text(
+        json.dumps(summary, default=str, indent=2)
+    )
+    return summary
+
+
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry point — parse args, dispatch mode, emit JSON to stdout."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -347,17 +547,86 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--smoke",
         action="store_true",
-        help="Run on synthetic 5K rows; no Iceberg.",
+        help="Synthetic 5K rows; no Iceberg.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Real Iceberg, 3 tickers, 2 weeks.",
+    )
+    parser.add_argument(
+        "--train-end",
+        type=lambda s: date.fromisoformat(s),
+        default=date(2026, 2, 28),
+        help="Last date (inclusive) of the train_val split.",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.5,
+        help="sigma-multiple threshold for LONG/SHORT.",
+    )
+    parser.add_argument(
+        "--seeds",
+        type=str,
+        default="42,43,44,45,46",
+        help="Comma-separated random seeds for Gate 5.",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=Path.home()
+        / ".ai-agent-ui"
+        / "research_runs"
+        / f"{datetime.now().date()}-intraday-15m-bakeoff",
+        help="Output directory for run artifacts.",
+    )
+    parser.add_argument(
+        "--tickers-cap",
+        type=int,
+        default=None,
+        help="Optional cap on F&O universe for debugging.",
     )
     args = parser.parse_args(argv)
 
-    if not args.smoke:
-        parser.error(
-            "Only --smoke is wired in this commit; "
-            "--dry-run and full mode arrive in Task 9."
-        )
+    seeds = [int(s) for s in args.seeds.split(",")]
 
-    out = run_smoke()
+    if args.smoke:
+        out = run_smoke()
+        sys.stdout.write(json.dumps(out, default=str, indent=2) + "\n")
+        return 0
+
+    from backend.algo.research.intraday_15m_mis_bakeoff.universe import (
+        load_fno_universe,
+    )
+
+    if args.dry_run:
+        tickers = ["RELIANCE.NS", "HDFCBANK.NS", "INFY.NS"]
+        date_min = date(2026, 1, 1)
+        date_max = date(2026, 1, 14)
+        train_fit_end = date(2026, 1, 7)
+        train_val_end = date(2026, 1, 10)
+    else:
+        tickers = load_fno_universe()
+        if args.tickers_cap is not None:
+            tickers = tickers[: args.tickers_cap]
+        date_min = date(2025, 11, 17)
+        date_max = date(2026, 5, 21)
+        # train_fit ends 20 days before train_val.
+        train_fit_end_ts = pd.Timestamp(args.train_end) - pd.Timedelta(days=20)
+        train_fit_end = train_fit_end_ts.date()
+        train_val_end = args.train_end
+
+    out = run_real(
+        tickers=tickers,
+        date_min=date_min,
+        date_max=date_max,
+        train_fit_end=train_fit_end,
+        train_val_end=train_val_end,
+        threshold=args.threshold,
+        seeds=seeds,
+        output_dir=args.out,
+    )
     sys.stdout.write(json.dumps(out, default=str, indent=2) + "\n")
     return 0
 

@@ -37,7 +37,8 @@ def _load_features_eav(
         "FROM intraday_features "
         f"WHERE ticker IN ({placeholders}) "
         f"  AND interval_sec = {interval_sec} "
-        f"  AND bar_date BETWEEN DATE '{date_min}' AND DATE '{date_max}' "
+        f"  AND CAST(bar_date AS DATE) BETWEEN DATE '{date_min}'"
+        f" AND DATE '{date_max}' "
         "  AND feature_set_version = "
         "    (SELECT MAX(feature_set_version) FROM intraday_features)"
     )
@@ -61,7 +62,8 @@ def _load_bars(
         "FROM intraday_bars "
         f"WHERE ticker IN ({placeholders}) "
         f"  AND interval_sec = {interval_sec} "
-        f"  AND bar_date BETWEEN DATE '{date_min}' AND DATE '{date_max}' "
+        f"  AND CAST(bar_date AS DATE) BETWEEN DATE '{date_min}'"
+        f" AND DATE '{date_max}' "
     )
     return query_iceberg_df("stocks.intraday_bars", sql)
 
@@ -72,16 +74,15 @@ def _load_regime_overlay(date_min: date, date_max: date) -> pd.DataFrame:
     sql = (
         "SELECT bar_date, regime_label "
         "FROM regime_history "
-        f"WHERE bar_date BETWEEN DATE '{date_min}' AND DATE '{date_max}'"
+        f"WHERE CAST(bar_date AS DATE) BETWEEN DATE '{date_min}'"
+        f" AND DATE '{date_max}'"
     )
     return query_iceberg_df("stocks.regime_history", sql)
 
 
 def _is_in_session(ts_ns: int) -> bool:
     """09:15 IST <= bar_open_ts < 15:00 IST."""
-    ts = datetime.fromtimestamp(
-        ts_ns / 1e9, tz=timezone.utc
-    ).astimezone(_IST)
+    ts = datetime.fromtimestamp(ts_ns / 1e9, tz=timezone.utc).astimezone(_IST)
     return time(9, 15) <= ts.time() < time(15, 0)
 
 
@@ -122,10 +123,14 @@ def load_research_frame(
     and ``regime_label`` joined from ``stocks.regime_history``.
     """
     eav = _load_features_eav(
-        tickers=tickers, date_min=date_min, date_max=date_max,
+        tickers=tickers,
+        date_min=date_min,
+        date_max=date_max,
     )
     bars = _load_bars(
-        tickers=tickers, date_min=date_min, date_max=date_max,
+        tickers=tickers,
+        date_min=date_min,
+        date_max=date_max,
     )
 
     if eav.empty or bars.empty:
@@ -140,8 +145,17 @@ def load_research_frame(
     wide.columns.name = None
 
     df = wide.merge(
-        bars[["ticker", "bar_open_ts_ns",
-              "open", "high", "low", "close", "volume"]],
+        bars[
+            [
+                "ticker",
+                "bar_open_ts_ns",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+            ]
+        ],
         on=["ticker", "bar_open_ts_ns"],
         how="inner",
     )
@@ -150,11 +164,29 @@ def load_research_frame(
         df = df[_session_mask(df["bar_open_ts_ns"])].copy()
     df = _drop_warmup(df, n_bars=drop_warmup_bars)
 
+    # bar_date comes back as VARCHAR (pandas StringDtype or object) from
+    # the Iceberg/DuckDB scan; coerce to Python date so downstream
+    # comparisons (e.g. <= date(...)) work without surprises.
+    if "bar_date" in df.columns and pd.api.types.is_string_dtype(
+        df["bar_date"]
+    ):
+        df["bar_date"] = pd.to_datetime(
+            df["bar_date"], format="%Y-%m-%d"
+        ).dt.date
+
     try:
         regime = _load_regime_overlay(date_min, date_max)
         if not regime.empty:
+            if "bar_date" in regime.columns and pd.api.types.is_string_dtype(
+                regime["bar_date"]
+            ):
+                regime["bar_date"] = pd.to_datetime(
+                    regime["bar_date"], format="%Y-%m-%d"
+                ).dt.date
             df = df.merge(
-                regime, on="bar_date", how="left",
+                regime,
+                on="bar_date",
+                how="left",
                 suffixes=("", "_regime"),
             )
     except Exception:
