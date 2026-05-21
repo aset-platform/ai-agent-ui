@@ -535,6 +535,61 @@ def run_real(
     (output_dir / "run_summary.json").write_text(
         json.dumps(summary, default=str, indent=2)
     )
+
+    # Build SHAP aggregates + write the full report bundle.
+    import shap as _shap_lib
+
+    from backend.algo.research.intraday_15m_mis_bakeoff.shap_eval import (
+        aggregate_per_feature,
+        bucket_features,
+    )
+    from backend.algo.research.intraday_15m_mis_bakeoff import (
+        report as rpt,
+    )
+
+    sv_primary = _shap_lib.TreeExplainer(
+        primary_model
+    ).shap_values(X_test)
+    sv_list = (
+        sv_primary
+        if isinstance(sv_primary, list)
+        else [sv_primary[..., k] for k in range(3)]
+    )
+    aggregated = aggregate_per_feature(
+        sv_list, feature_names=feature_names,
+    )
+    bucketed = bucket_features(aggregated)
+
+    rpt.plot_shap_summary(
+        sv_list[2], X_test, "LONG",
+        output_dir / "shap_long.png",
+    )
+    rpt.plot_shap_summary(
+        sv_list[0], X_test, "SHORT",
+        output_dir / "shap_short.png",
+    )
+    rpt.plot_two_sided_ranking(
+        aggregated, output_dir / "feature_ranking.png",
+    )
+    rpt.write_feature_ranking_csv(bucketed, output_dir)
+    rpt.write_class_balance(label_dist, output_dir)
+    rpt.write_run_metadata(
+        output_dir=output_dir,
+        summary=summary,
+        hyperparams=XGB_PARAMS,
+        threshold=threshold,
+        fno_csv_path=(
+            Path(__file__).parent / "fno_200.csv"
+        ),
+    )
+    rpt.write_report_md(
+        summary=summary,
+        aggregated=aggregated,
+        bucketed=bucketed,
+        stable_features=set(stability["stable"]),
+        output_dir=output_dir,
+    )
+
     return summary
 
 
