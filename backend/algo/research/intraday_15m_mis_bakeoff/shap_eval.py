@@ -11,7 +11,6 @@ import pandas as pd
 BUCKET_LONG_SIDE = "long_side"
 BUCKET_SHORT_SIDE = "short_side"
 BUCKET_SYMMETRIC = "symmetric"
-BUCKET_INTERACTION_ONLY = "interaction_only"
 
 
 def aggregate_per_feature(
@@ -75,16 +74,20 @@ def bucket_features(agg: pd.DataFrame) -> pd.DataFrame:
 def compute_stable_features(
     rankings_per_seed: list[set[str]],
     *,
-    min_overlap: int = 6,
     mostly_overlap: int = 4,
 ) -> dict[str, set[str]]:
     """Gate 5 — intersection + mostly-overlap sets across seeds.
 
     Args:
         rankings_per_seed: Per-seed top-K feature sets (same K).
-        min_overlap: Reserved for caller-side gate logic.
         mostly_overlap: Min seeds (out of N) a feature must appear
             in to land in ``mostly_stable``.
+
+    Returns:
+        ``stable``: features that appear in ALL seeds (strict intersection).
+        ``mostly_stable``: features that appear in at least
+        ``mostly_overlap`` seeds.  Callers apply their own gate
+        threshold on ``len(result["stable"])``.
     """
     if not rankings_per_seed:
         return {"stable": set(), "mostly_stable": set()}

@@ -76,6 +76,9 @@ def test_stable_features_intersection_across_seeds():
         {"f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7"},
         {"f0", "f1", "f2", "f3", "f4", "f5", "f6", "f8"},
     ]
-    result = compute_stable_features(rankings_per_seed, min_overlap=6)
+    result = compute_stable_features(rankings_per_seed)
     assert result["stable"] == {"f0", "f1", "f2", "f3", "f4", "f5", "f6"}
+    # f7 appears in 2/5 seeds — below mostly_overlap=4 default.
     assert "f7" not in result["mostly_stable"]
+    # f0-f6 appear in 5/5 seeds — strictly above the threshold.
+    assert {"f0", "f1", "f2", "f3", "f4", "f5", "f6"} <= result["mostly_stable"]
