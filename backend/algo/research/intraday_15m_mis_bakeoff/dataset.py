@@ -85,6 +85,16 @@ def _is_in_session(ts_ns: int) -> bool:
     return time(9, 15) <= ts.time() < time(15, 0)
 
 
+def _session_mask(ts_ns_series: pd.Series) -> pd.Series:
+    """Boolean mask: True if bar_open_ts is within 09:15-15:00 IST.
+
+    Vectorized — operates on the whole series at once.
+    """
+    dt = pd.to_datetime(ts_ns_series, utc=True).dt.tz_convert(_IST)
+    t = dt.dt.time
+    return (t >= time(9, 15)) & (t < time(15, 0))
+
+
 def _drop_warmup(df: pd.DataFrame, n_bars: int = 8) -> pd.DataFrame:
     """Drop the first *n_bars* of each (ticker, bar_date).
 
@@ -137,7 +147,7 @@ def load_research_frame(
     )
 
     if enforce_session_hours:
-        df = df[df["bar_open_ts_ns"].apply(_is_in_session)].copy()
+        df = df[_session_mask(df["bar_open_ts_ns"])].copy()
     df = _drop_warmup(df, n_bars=drop_warmup_bars)
 
     try:
