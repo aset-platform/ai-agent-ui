@@ -99,7 +99,7 @@ def write_run_metadata(
     metadata = {
         "git_commit": _git_commit(),
         "dirty_tree": _git_dirty(),
-        "started_at_ist": datetime.now(timezone.utc).isoformat(),
+        "started_at_utc": datetime.now(timezone.utc).isoformat(),
         "fno_universe_sha256": fno_sha,
         "hyperparams": hyperparams,
         "threshold_used": threshold,
