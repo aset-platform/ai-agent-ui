@@ -250,6 +250,10 @@ class UniverseFilter(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ticker_type: list[Literal["stock", "etf"]] = Field(min_length=1)
     market: Literal["india", "us", "all"] = "india"
+    # ASETPLTFRM — when True, the backtest universe resolver
+    # intersects with the F&O 200 whitelist (live + paper rely
+    # on caps.allowed_tickers, not on this field).
+    is_fno: bool = False
 
 
 class UniverseScope(BaseModel):
