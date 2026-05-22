@@ -172,7 +172,9 @@ def main() -> None:  # noqa: D103 — standalone script, no public API
             label = regime_by_date.get(t.closed_at, "unknown")
             regime_trades[label].append(float(t.realised_pnl_inr))
     except Exception as exc:  # noqa: BLE001
-        logger.warning("regime history lookup failed: %s", exc)
+        logger.warning(
+            "regime history lookup failed: %s", exc, exc_info=True,
+        )
         regime_by_date = {}
 
     by_regime = []
