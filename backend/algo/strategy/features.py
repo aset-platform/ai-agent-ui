@@ -78,9 +78,22 @@ FEATURES: list[Feature] = [
         type="int",
         source="technical",
     ),
+    Feature(key="sma_5", label="SMA 5", type="float", source="technical"),
     Feature(key="sma_50", label="SMA 50", type="float", source="technical"),
     Feature(key="sma_200", label="SMA 200", type="float", source="technical"),
+    Feature(
+        key="distance_from_sma5",
+        label="Distance from SMA 5",
+        type="float",
+        source="technical",
+    ),
     Feature(key="rsi", label="RSI (14)", type="float", source="technical"),
+    Feature(
+        key="rsi_2",
+        label="RSI (2) — Connors 2-period",
+        type="float",
+        source="technical",
+    ),
     Feature(
         key="vwap",
         label="VWAP (intraday)",

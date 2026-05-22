@@ -1,0 +1,68 @@
+{
+  "id": "00000000-0000-0000-0000-000000000040",
+  "name": "RSI(2) Connors Daily v1 — Long-only mean reversion",
+  "universe": {
+    "type": "scope",
+    "scope": "discovery",
+    "filter": {
+      "ticker_type": ["stock"],
+      "market": "india"
+    }
+  },
+  "schedule": {
+    "type": "bar_close",
+    "interval": "1d",
+    "time": "15:25 IST"
+  },
+  "rebalance": {
+    "type": "daily",
+    "max_positions": 5
+  },
+  "product": "CNC",
+  "root": {
+    "type": "if",
+    "cond": {
+      "type": "and",
+      "operands": [
+        {
+          "type": "compare",
+          "left": {"feature": "rsi_2"},
+          "op": "<=",
+          "right": {"literal": 5}
+        },
+        {
+          "type": "compare",
+          "left": {"feature": "distance_from_sma200"},
+          "op": ">",
+          "right": {"literal": 0.0}
+        },
+        {
+          "type": "compare",
+          "left": {"feature": "stress_prob"},
+          "op": "<",
+          "right": {"literal": 0.5}
+        }
+      ]
+    },
+    "then": {"type": "set_target_weight", "weight": 0.20},
+    "else": {
+      "type": "if",
+      "cond": {
+        "type": "compare",
+        "left": {"feature": "distance_from_sma5"},
+        "op": ">",
+        "right": {"literal": 0.0}
+      },
+      "then": {"type": "exit", "scope": "this_symbol"},
+      "else": {"type": "hold"}
+    }
+  },
+  "risk": {
+    "per_trade": {"stop_loss_pct": 5.0, "max_qty": 10000},
+    "portfolio": {
+      "max_exposure_pct": 100.0,
+      "max_concentration_pct": 25.0
+    },
+    "daily": {"max_loss_pct": 5.0, "max_open_positions": 5}
+  }
+}
