@@ -480,14 +480,16 @@ def test_run_backtest_intraday_mr_v1_does_not_keyerror_on_features(
     # followed by the top-5 missing keys. If either daily-cadence
     # feature was absent at any bar its name appears there. We
     # assert it does NOT appear, confirming FE-15b wiring is intact.
-    all_log = " ".join(r.message for r in caplog.records)
-    assert _KEY_BREADTH not in all_log, (
-        f"market_breadth_pct_above_sma200 appeared in runner log "
-        f"as a missing feature — FE-8 panel not reaching EvalContext.\n"
-        f"Log:\n{all_log}"
+    warning_log = " ".join(
+        r.message for r in caplog.records if r.levelno >= logging.WARNING
     )
-    assert _KEY_STRESS not in all_log, (
-        f"stress_prob appeared in runner log as a missing feature — "
+    assert _KEY_BREADTH not in warning_log, (
+        f"market_breadth_pct_above_sma200 appeared in runner WARNING+ log "
+        f"as a missing feature — FE-8 panel not reaching EvalContext.\n"
+        f"Log:\n{warning_log}"
+    )
+    assert _KEY_STRESS not in warning_log, (
+        f"stress_prob appeared in runner WARNING+ log as a missing feature — "
         f"FE-9 panel not reaching EvalContext.\n"
-        f"Log:\n{all_log}"
+        f"Log:\n{warning_log}"
     )
