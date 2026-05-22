@@ -29,7 +29,7 @@
 | G1: Trade count | ≥ 200 | 600 trades | PASS |
 | G2: CAGR | ≥ 8% | 8.66% | PASS |
 | G3: Win rate (ex-stops) | ≥ 60% | 60.67% | PASS |
-| G4: Max drawdown | ≤ 15% | -24.26% | **FAIL** |
+| G4: Max drawdown | ≤ 15% | -24.26% [^1] | **FAIL** |
 | G5: Concentration | ≤ 20% in one name | DIACABS.NS at 101.22% | **FAIL** |
 
 ## Caveats and observations
@@ -60,6 +60,8 @@ DIACABS.NS (Dia Cables & Accessories) contributed 101.22% of total realised P&L,
 
 The drawdown of -24.26% exceeds the 15% gate significantly. The strategy holds positions for multiple bars when the exit signal (`distance_from_sma5 > 0`) has not fired, and the 5% stop-loss per trade with up to 5 concurrent positions means the portfolio drawdown can compound. The 2022 Nifty correction period likely accounts for a large portion of the drawdown.
 
+[^1]: G4 uses realized P&L only. Open-position MTM is excluded; true peak-to-trough including open marks is likely larger.
+
 ## Comparison to v4 baseline
 
 | | v4 (Bull Momentum, existing) | Connors RSI(2) v1 (this run) |
@@ -84,7 +86,11 @@ Two gates failed (G4 and G5). Per spec §6.4, the one-iteration tune rule does n
 
 ## Rationale
 
-The Connors RSI(2) strategy passes the statistical gates (trade count, CAGR, win rate) but fails on risk management criteria. The -24.26% max drawdown indicates the stop-loss / position sizing combination is insufficient to limit portfolio-level drawdown during trending bear phases. The G5 failure (DIACABS.NS at 101.22% concentration) suggests the universe contains low-liquidity counters that distort aggregate P&L statistics — a filter on minimum ADTV or minimum market-cap would be a prerequisite for any v2 attempt. The combination of these two failures suggests the strategy is not yet investable without further structural changes (e.g., tighter stops, ADTV filter, volatility-adjusted position sizing).
+A single ticker (DIACABS.NS) at 101.22% of total realized P&L means that name's wins exceeded every other ticker's contribution combined. The G3 win-rate pass at 60.67% likely reflects DIACABS-driven trades; the apparent edge is **unproven** on the broader universe, not merely "risky".
+
+The -24.26% max drawdown is a separate failure on risk management criteria. The stop-loss / position sizing combination is insufficient to limit portfolio-level drawdown during trending bear phases — the strategy holds positions for multiple bars until `distance_from_sma5 > 0` fires, and 5% stops across up to 5 concurrent positions allow portfolio drawdown to compound. The 2022 Nifty correction period likely accounts for a significant portion.
+
+The G5 failure (DIACABS.NS at 101.22% concentration) further suggests the universe contains low-liquidity counters that distort aggregate P&L statistics — a filter on minimum ADTV or minimum market-cap would be a prerequisite for any v2 attempt. The combination of these two failures, with the unproven-edge concern primary, means the strategy is not investable without further structural changes (e.g., ADTV filter, tighter stops, volatility-adjusted position sizing).
 
 ## Possible v2 directions (if research continues)
 
