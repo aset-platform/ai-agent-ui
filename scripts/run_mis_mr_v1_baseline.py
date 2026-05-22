@@ -40,8 +40,8 @@ USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 # Memory cap: full 209-ticker FNO universe needs ~27 GB for
 # intraday features (Python Decimal dict overhead). Docker
-# container has ~11 GB. Use a representative 75-ticker slice
-# that still exercises the full F&O universe coverage.
+# container has ~11 GB. Use a representative 50-ticker stride-4
+# slice that still exercises the full F&O universe coverage.
 # Set to 0 to use the full universe (OOM risk).
 UNIVERSE_CAP = 50
 
