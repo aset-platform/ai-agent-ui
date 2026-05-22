@@ -44,7 +44,7 @@ def compute_daily_features(
             are skipped defensively (the caller is responsible
             for synthesising UTC-midnight ns from ``bar.date``).
         sma_windows: SMA windows to emit. Defaults to
-            ``(20, 50, 100, 200)``.
+            ``(5, 20, 50, 100, 200)``.
         feature_set_version: Accepted for API parity with
             :func:`compute_intraday_features`; not embedded in
             the returned dict — the persister adds it on write.
