@@ -111,6 +111,20 @@ async def resolve_universe(
         markets=markets,
         ticker_types=ticker_types,
     )
+
+    is_fno = bool(getattr(filter_obj, "is_fno", False))
+    if is_fno:
+        from backend.algo.research.intraday_15m_mis_bakeoff.universe import (
+            load_fno_universe,
+        )
+        fno_set = set(load_fno_universe())
+        before = len(filtered)
+        filtered = [t for t in filtered if t in fno_set]
+        _logger.info(
+            "resolve_universe is_fno=True: %d -> %d after F&O intersect",
+            before, len(filtered),
+        )
+
     _logger.info(
         "resolve_universe scope=%s filter=(market=%s, "
         "ticker_type=%s) → %d candidates → %d after filter",
