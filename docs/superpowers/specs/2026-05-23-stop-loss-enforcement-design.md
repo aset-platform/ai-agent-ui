@@ -1,19 +1,29 @@
-# Backtest Stop-Loss Enforcement Framework Fix — Design
+# Stop-Loss Enforcement Framework Fix — Design
 
 | | |
 |---|---|
-| Date | 2026-05-23 |
+| Date | 2026-05-23 (revised after deeper audit) |
 | Author | Abhay Kumar Singh |
 | Status | Draft (design only — no code) |
-| Scope | Add per-bar `stop_loss_pct` enforcement to the backtest runner. Paper + live runtimes are out of scope — they delegate to Kite's bracket-order API. |
-| Non-goals | Short-side stops, trailing stops, time-based / N-day timeouts, take-profit, Kite bracket-order emission, paper / live local enforcement |
+| Scope | Add per-bar `stop_loss_pct` enforcement to ALL THREE runtimes (backtest + paper + live). Each runtime reuses the same pure `stop_loss_monitor` module; runtime-specific glue translates triggers into exit orders with cadence-appropriate fill semantics. |
+| Non-goals | Short-side stops, trailing stops, time-based / N-day timeouts, take-profit, Kite bracket-order emission (deferred to v3 per `kite_client.py`) |
 | Predecessor | `docs/research/2026-05-23-rsi2-connors-stop3-final.md` — diagnosed the framework gap when the canonical Connors §6.4 G4 tune produced identical results before and after a `stop_loss_pct` template change |
+
+## Scope correction note
+
+An initial draft of this spec scoped the fix to **backtest only** on the assumption that paper + live runtimes delegated stop-loss enforcement to Kite's bracket-order API. Subsequent audit found that assumption is **wrong**:
+
+- `backend/algo/broker/kite_client.py` explicitly rejects bracket orders at the SDK boundary (`"SL/SLM/BO/CO are deferred to v3"`). Live orders carry no broker-side stop.
+- `backend/algo/paper/runtime.py` has zero `stop_loss` / `bracket` / `monitor` references — no local enforcement either.
+- Paper and live runtimes share the same `PositionTracker` and `_on_bar_close` lifecycle pattern as backtest — the integration shape is identical, just with different fill semantics.
+
+The revised scope below covers all three runtimes.
 
 ## 1. Motivation
 
 ### 1.1 The framework gap
 
-Today's `backend/algo/paper/risk_engine.py::RiskEngine.gate()` is the shared order-time gate used by backtest, paper, and live runners. It correctly enforces 5 of 6 risk fields declared on the AST:
+Today's `backend/algo/paper/risk_engine.py::RiskEngine.gate()` is the shared order-time gate used by all three runners. It correctly enforces 5 of 6 risk fields declared on the AST:
 
 | Field | Enforced today | How |
 |---|:---:|---|
@@ -22,36 +32,37 @@ Today's `backend/algo/paper/risk_engine.py::RiskEngine.gate()` is the shared ord
 | `max_open_positions` | ✅ | gate() blocks new entries past cap |
 | `max_concentration_pct` | ✅ | gate() blocks single-name over X% |
 | `max_exposure_pct` | ✅ | gate() may scale orders down |
-| **`stop_loss_pct`** | **❌** | **NOT enforced anywhere** |
+| **`stop_loss_pct`** | **❌** | **NOT enforced anywhere — in any runtime** |
 
-`stop_loss_pct` is declared in 11 existing strategy templates (v4 daily at 4%, MIS v1 at 2%, RSI(2) v1 at 3%, etc.) but no codepath consumes it. The field is documentation-only.
+`stop_loss_pct` is declared in 11 strategy templates (v4 daily at 4%, MIS v1 at 2%, RSI(2) v1 at 3%, etc.) but no codepath consumes it. The field is documentation-only across backtest, paper, and live.
 
-This was discovered during the RSI(2) Connors v1 backtest (`docs/research/2026-05-23-rsi2-connors-stop3-final.md`): applying spec §6.4's "tighten stop_loss_pct from 5% to 3%" G4-fail tune produced **byte-identical results** to the un-tuned run. Investigation traced the gap to `RiskEngine.gate()`, which is correctly scoped to order-time gating but has no per-bar position-monitor lifecycle.
+Discovered during the RSI(2) Connors v1 backtest (`docs/research/2026-05-23-rsi2-connors-stop3-final.md`): applying spec §6.4's "tighten stop_loss_pct from 5% to 3%" G4-fail tune produced byte-identical results to the un-tuned run.
 
-### 1.2 Why this is a `gate()` design boundary, not a `gate()` bug
+### 1.2 Why this is a `gate()` design boundary
 
-`gate()` sees **proposed signals** (new orders the strategy wants to place) and decides accept / reject / scale. A stop-loss is **not a gate** on a proposed order — it's a per-bar monitor that emits NEW exit signals when a held position crosses its loss threshold. Different lifecycle, different code path. Adding stop enforcement to `gate()` would muddle its responsibility; the correct fix is a new sibling module.
+`gate()` sees **proposed signals** and decides accept / reject / scale at order-time. A stop-loss is **not a gate** on a proposed order — it's a per-bar monitor that emits NEW exit signals when a held position crosses its loss threshold. Different lifecycle, different code path. Adding stop enforcement to `gate()` would muddle its responsibility; the correct fix is a new sibling module.
 
 ### 1.3 What this fix unlocks
 
-Once stop-loss is enforced in backtest:
+Once stop-loss is enforced across all three runtimes:
 
-- **RSI(2) Connors v1 can pass G4** (the only failing gate after ex-DIACABS sanity probe) and move to paper trading per its own promotion spec
-- **MIS v1's reported −18% return becomes diagnosable** — the rerun with stop_loss enforcement may show smaller losses, validating whether the strategy's underlying signal is dead vs whether it was just bleeding on unmanaged stops
-- **v4 daily (53.6% baseline) gets honest drawdown numbers** — currently its reported DD is the upper bound; with stops active it should compress
-- **Every future strategy template** stops being silently un-risk-managed in backtest
+- **RSI(2) Connors v1 can pass G4** (the only failing gate after ex-DIACABS sanity probe) and move to paper trading
+- **MIS v1's −18% return becomes diagnosable** — re-run with stop enforcement may show smaller losses, distinguishing strategy-dead vs unmanaged-bleed
+- **v4 daily (53.6% baseline) gets honest drawdown numbers**
+- **Paper-stage validation (P1-P5 gates) measures the real strategy** — currently paper P&L could diverge from backtest because both lack stops, but discrepancies between simulators and real broker behavior would have hidden it
+- **Live trading is materially safer** — strategy-defined stops are honored at the runtime layer until Kite bracket orders land in v3
 
-Paper and live runtimes already rely on Kite bracket orders for stop-loss enforcement, so no change there.
-
-## 2. Scope decisions (locked during brainstorm)
+## 2. Scope decisions (locked during brainstorm + audit)
 
 | Question | Decision | Why |
 |---|---|---|
 | Field scope | `stop_loss_pct` only | Audit confirmed 5 of 6 fields work today. Only this one missing. |
-| Runtime scope | Backtest only | Paper + live use Kite bracket-order API for stops. Documented convention; no local enforcement needed there. |
-| Stop semantics | Next-bar-open exit | Conservative; uses only OHLC we already have; matches Backtrader / Zipline convention. Triggers on close-on-close loss vs avg_price, fills at next bar's open. |
-| Long vs short | Long-only | AST framework is currently long-only (`SetTargetWeightNode.weight: Field(ge=0, le=1)`). Short-side stops queued for the same spec that adds short-side AST support. |
-| Trailing stops | Out of scope | v2 enhancement; static `stop_loss_pct` first, trailing later if needed. |
+| Runtime scope | **All 3 runtimes** (backtest + paper + live) | Audit found paper has no local enforcement and live's Kite client rejects bracket orders — all three need the same fix. |
+| Fill semantics — backtest | Next-bar-open | Conservative; uses OHLC only; matches Backtrader / Zipline; consistent with existing fill model |
+| Fill semantics — paper | Next-bar-open | Same as backtest for parity; paper is the backtest fill model running on live data feed |
+| Fill semantics — live | Immediate MARKET sell at trigger time | Real-time; can't wait for "next bar" — the broker will not be there |
+| Long vs short | Long-only | AST framework is currently long-only |
+| Trailing stops | Out of scope | Static stop first; trailing is a v2 |
 
 ## 3. Architecture
 
@@ -59,13 +70,31 @@ Paper and live runtimes already rely on Kite bracket orders for stop-loss enforc
 
 ```
 backend/algo/backtest/
-├── stop_loss_monitor.py            ← NEW: per-bar exit-signal emitter
-└── runner.py                        — modify per-bar loop: call monitor BEFORE AST eval
+├── stop_loss_monitor.py            ← NEW: pure trigger-detection function
+│                                     (shared by all 3 runtimes)
+├── runner.py                        — modify per-bar loop: call monitor BEFORE AST eval
+├── types.py                         — add exit_reason: str = "signal" field
+│                                     to OrderIntent + Fill + Position
+└── positions.py                     — _apply_sell stamps fill.exit_reason on close
+
+backend/algo/paper/
+└── runtime.py                       — same per-bar integration as backtest;
+                                       monitor in _on_bar_close before AST eval
+
+backend/algo/live/
+└── runtime.py                       — monitor in _on_bar_close; emit MARKET SELL
+                                       OrderIntent at trigger time (not next-bar-open)
 
 backend/algo/backtest/tests/
-├── test_stop_loss_monitor.py        ← NEW (unit tests, ~8)
-├── test_stop_loss_integration.py    ← NEW (runner integration, ~4)
-└── test_existing_strategies_smoke.py ← NEW (parametrized over 11 templates)
+├── test_stop_loss_monitor.py        ← NEW: 8 unit tests on the pure function
+├── test_stop_loss_integration.py    ← NEW: 4 backtest integration tests
+└── test_existing_strategies_smoke.py ← NEW: 11-template parametrized smoke
+
+backend/algo/paper/tests/
+└── test_stop_loss_paper_integration.py ← NEW: 2-3 paper integration tests
+
+backend/algo/live/tests/
+└── test_stop_loss_live_integration.py  ← NEW: 2-3 live integration tests (mocked Kite)
 ```
 
 Plus docs:
@@ -73,50 +102,50 @@ Plus docs:
 ```
 docs/superpowers/specs/
 └── 2026-05-23-stop-loss-enforcement-design.md   ← this spec
+
+docs/research/
+└── 2026-05-23-stop-loss-enforcement-impact.md    ← before/after triage report
 ```
 
 ### 3.2 What stays untouched
 
-- **`RiskEngine.gate()`** in `backend/algo/paper/risk_engine.py` — already correctly handles the other 5 risk fields. Stop-loss is a different lifecycle.
-- **AST schema** — `stop_loss_pct: float = Field(ge=0, le=50)` already exists on `RiskPerTrade`. No new field, no migration.
-- **Existing strategy templates** — all 11 already declare `stop_loss_pct`. Their enforcement just becomes real.
-- **Paper runtime** (`backend/algo/paper/runtime.py`) — Kite bracket orders handle stops at the broker.
-- **Live runtime** (`backend/algo/live/runtime.py`) — same.
+- **`RiskEngine.gate()`** — already correctly handles the other 5 risk fields. Stop-loss is a different lifecycle.
+- **AST schema** — `stop_loss_pct: float = Field(ge=0, le=50)` already exists. No new field, no migration.
+- **Existing strategy templates** — all 11 already declare `stop_loss_pct`. Enforcement was the missing piece.
 - **`algo.events.exit_reason` enum** — `"stop_loss"` already exists per `backend/algo/backtest/types.py:146`.
-- **PositionTracker** (`backend/algo/backtest/positions.py`) — `avg_price` weighted-cost-basis field already tracked. The monitor reads it.
+- **PositionTracker** — `avg_price` weighted-cost-basis field already tracked; monitor reads it.
 - **Promotion workflow** — no change.
 
-### 3.3 Where the monitor lives at runtime
+### 3.3 Per-runtime per-bar lifecycle
 
-The runner calls the monitor **before AST evaluation** per bar:
+All three runtimes share the same conceptual sequence per bar:
 
 ```
-for each bar in backtest:
-    1. NEW: stop_loss_monitor.check_stop_loss_triggers(...)
-       → for each triggered ticker, emit exit signal + add to skip_set
-    2. EXISTING: for ticker not in skip_set:
-         AST evaluator → propose signals → RiskEngine.gate() → fills
-    3. EXISTING: bar closes; positions updated; metrics aggregated
+1. Bar closes — new close values available
+2. closes_by_ticker populated for this bar
+3. NEW: stop_loss_monitor.check_stop_loss_triggers(...) runs HERE
+4. For each trigger: emit SELL OrderIntent tagged exit_reason="stop_loss"
+   - Backtest + Paper: fills at NEXT bar's open via SimBroker
+   - Live: fills immediately at MARKET via Kite at trigger time
+5. Stopped tickers skip AST evaluation on this bar
+6. AST eval per remaining ticker → propose signals → RiskEngine.gate filters
+7. Fills processed; PositionTracker.apply_fill records with correct exit_reason
 ```
 
-Precedence rationale: a stop-out is a hard risk event. The AST shouldn't get a chance to re-enter or modify a position on the same bar where the stop fires.
+Steps 1-3 + 5-7 are identical across runtimes. Step 4 differs in WHEN the fill lands (next-bar-open simulator vs immediate broker round-trip).
 
 ## 4. Module interface
 
 ### 4.1 `backend/algo/backtest/stop_loss_monitor.py`
 
 ```python
-"""Stop-loss monitor — per-bar exit-signal emitter.
+"""Stop-loss monitor — per-bar exit-trigger detector.
 
-Reads open positions from PositionTracker. At each bar, for each
-open position whose current close has dropped more than
-``stop_loss_pct`` below the position's average cost, emits an exit
-signal that fires at the NEXT bar's open.
+Pure function. Shared by backtest + paper + live runtimes. Each
+runtime translates triggers into runtime-appropriate exit orders.
 
 Long-only v1. Short-side positions are out of scope (the AST
 framework is currently long-only).
-
-Pure function. No I/O. Idempotent within a bar.
 """
 
 from __future__ import annotations
@@ -127,32 +156,36 @@ from decimal import Decimal
 
 @dataclass(frozen=True)
 class StopLossTrigger:
+    """One stopped-out position. Runtimes translate to SELL orders."""
+
     ticker: str
     avg_price: Decimal
     current_close: Decimal
-    loss_pct: Decimal       # negative number, e.g. Decimal("-4.5")
-    stop_loss_pct: Decimal  # the threshold that fired, e.g. Decimal("3.0")
+    loss_pct: Decimal       # negative, e.g. Decimal("-4.5")
+    stop_loss_pct: Decimal  # threshold that fired
 
 
 def check_stop_loss_triggers(
     *,
-    open_positions: dict[str, dict],   # ticker → {avg_price, qty, ...}
-    current_closes: dict[str, Decimal], # ticker → close at this bar
-    stop_loss_pct: float,              # from strategy.risk.per_trade.stop_loss_pct
+    open_positions: dict[str, dict],   # ticker → {"qty", "avg_price"}
+    current_closes: dict[str, Decimal],
+    stop_loss_pct: float,
 ) -> list[StopLossTrigger]:
     """Return triggers for positions whose loss exceeds the threshold.
 
-    For each open long position:
-        loss_pct = (close - avg_price) / avg_price * 100
-        if loss_pct <= -stop_loss_pct  →  trigger
+    For each open long position with avg_price > 0 and a
+    current_close available::
 
-    Returns empty list if stop_loss_pct == 0 (feature disabled).
-    Returns empty list for tickers with no current close (data gap;
-    safer to skip the trigger than to fabricate one).
+        loss_pct = (current_close - avg_price) / avg_price * 100
+        trigger if loss_pct <= -stop_loss_pct
+
+    Returns empty list if stop_loss_pct == 0 (feature disabled)
+    or no positions breach. Skips tickers with missing closes
+    (data gap; don't fabricate triggers).
     """
 ```
 
-That's the full public surface — one dataclass, one pure function. ~50 lines including docstring + body.
+That's the full public surface — one dataclass, one pure function. ~70 LOC.
 
 ### 4.2 Trigger formula
 
@@ -163,176 +196,252 @@ loss_pct = (current_close - avg_price) / avg_price * 100
 trigger if loss_pct <= -stop_loss_pct
 ```
 
-Concrete: with `stop_loss_pct=3.0`, `avg_price=100`, position triggers when `current_close <= 97.0`. Uses **close-on-close** loss measurement (not intra-bar low) per the locked "next-bar-open exit" semantics.
+Concrete: `stop_loss_pct=3.0`, `avg_price=100`, position triggers when `current_close <= 97.0`. Close-on-close loss (not intra-bar low) per the locked fill semantics for backtest/paper. Live uses the same trigger formula but acts immediately on the trigger.
 
 Defensive guards:
-- `avg_price == 0`: no trigger (shouldn't happen for an open position)
-- `stop_loss_pct == 0`: feature disabled, no triggers ever
-- ticker in `open_positions` but absent from `current_closes`: skip (data gap; don't fabricate)
+- `avg_price == 0`: no trigger
+- `stop_loss_pct == 0`: feature disabled
+- ticker in `open_positions` but absent from `current_closes`: skip (no fabrication)
 
-### 4.3 Integration in `runner.py`
+### 4.3 Backtest runner integration
 
-Conceptual insertion in the per-bar loop:
+In `backend/algo/backtest/runner.py`'s per-bar loop, insert BEFORE the per-ticker AST eval:
 
 ```python
-# NEW: before AST eval, emit stop-loss exits for breaching positions.
+open_pos = pt.open_positions()
+open_pos_dicts = {
+    t: {"qty": p.qty, "avg_price": p.avg_price}
+    for t, p in open_pos.items()
+}
 stop_triggers = check_stop_loss_triggers(
-    open_positions=positions.snapshot(),
-    current_closes={t: bar_close_for(t) for t in tickers},
-    stop_loss_pct=strategy.risk.per_trade.stop_loss_pct,
+    open_positions=open_pos_dicts,
+    current_closes=closes_by_ticker,
+    stop_loss_pct=float(strategy.risk.per_trade.stop_loss_pct),
 )
 skip_tickers: set[str] = set()
 for trig in stop_triggers:
-    exit_signals.append(make_exit_signal(
+    intent = OrderIntent(
         ticker=trig.ticker,
-        reason="stop_loss",
-        fill_at_next_bar_open=True,
-    ))
+        side="SELL",
+        qty=open_pos[trig.ticker].qty,
+        intent_emitted_at=current_date,
+        intent_emitted_ts_ns=current_ts_ns,
+        exit_reason="stop_loss",
+    )
+    broker.submit(intent)   # standard SimBroker fill at next-bar-open
     skip_tickers.add(trig.ticker)
 
-# EXISTING: per-ticker AST eval (skipping tickers in skip_tickers)
+# AST eval skips stopped tickers.
 for ticker in tickers - skip_tickers:
     ... existing flow ...
 ```
 
-Per-ticker precedence on bar N:
-- **Stop triggered**: emit exit (reason="stop_loss"), AST skipped for this ticker on bar N
-- **Bar N+1**: fill at open price, position closed
-- **Bar N+2**: AST evaluates normally; ticker is flat so it checks entry conditions
+### 4.4 Paper runtime integration
 
-### 4.4 Multi-lot positions
-
-`PositionTracker` already maintains weighted-average cost basis (`avg_price` field on `PositionState`; verified by reading `positions.py`: `new_avg = (existing.avg_price * existing.qty + fill.fill_price * fill.qty) / total_qty`). The stop-loss monitor reads `avg_price` directly — no special handling for scale-ins.
-
-### 4.5 Exit-signal shape
+`backend/algo/paper/runtime.py::_on_bar_close()` already iterates per-ticker after each bar close. Insert the monitor call at the top of `_on_bar_close` (or equivalent — implementation plan grep-locates):
 
 ```python
-ExitSignal(
-    ticker=trig.ticker,
-    exit_reason="stop_loss",   # already a documented exit_reason value
-                                # (backend/algo/backtest/types.py:146)
-    fill_at="next_bar_open",
-    ...existing fill metadata...
-)
+def _on_bar_close(self, bar_date, closes_by_ticker, ...):
+    # NEW: stop-loss monitor first
+    open_pos = self._positions.open_positions()
+    triggers = check_stop_loss_triggers(
+        open_positions={t: {"qty": p.qty, "avg_price": p.avg_price}
+                        for t, p in open_pos.items()},
+        current_closes=closes_by_ticker,
+        stop_loss_pct=float(
+            self._strategy.risk.per_trade.stop_loss_pct
+        ),
+    )
+    skip_tickers: set[str] = set()
+    for trig in triggers:
+        intent = OrderIntent(
+            ticker=trig.ticker,
+            side="SELL",
+            qty=open_pos[trig.ticker].qty,
+            intent_emitted_at=bar_date,
+            exit_reason="stop_loss",
+        )
+        # Paper's SimBroker fills at next-bar-open same as backtest.
+        self._broker.submit(intent)
+        skip_tickers.add(trig.ticker)
+    # Existing per-ticker eval skips stopped tickers.
+    ...
 ```
 
-`"stop_loss"` is already in the documented `exit_reason` enum. The triage script's win-rate formula (`scripts/run_rsi2_connors_baseline.py`, mirrored in `scripts/run_mis_mr_v1_baseline.py`) already excludes `exit_reason == "stop_loss"` from the denominator — exactly the right behavior, since stop-outs are risk events, not signal-driven exits.
+Fill semantics: **next-bar-open**, identical to backtest. Paper is a simulator — preserves backtest's deterministic fill model.
+
+### 4.5 Live runtime integration
+
+`backend/algo/live/runtime.py::_on_bar_close()` is the same shape as paper's, but the exit must fill in real time. Insert at the top:
+
+```python
+def _on_bar_close(self, bar_date, closes_by_ticker, ...):
+    # NEW: stop-loss monitor — emit MARKET SELL immediately
+    open_pos = self._positions.open_positions()
+    triggers = check_stop_loss_triggers(
+        open_positions={t: {"qty": p.qty, "avg_price": p.avg_price}
+                        for t, p in open_pos.items()},
+        current_closes=closes_by_ticker,
+        stop_loss_pct=float(
+            self._strategy.risk.per_trade.stop_loss_pct
+        ),
+    )
+    skip_tickers: set[str] = set()
+    for trig in triggers:
+        # Live: submit MARKET SELL to Kite immediately. The
+        # broker fills at the next available market price.
+        # No "next bar" — the live runtime acts in real time.
+        self._kite_client.place_order(
+            ticker=trig.ticker,
+            side="SELL",
+            qty=open_pos[trig.ticker].qty,
+            order_type="MARKET",
+            product=self._strategy.product,  # CNC or MIS
+            exit_reason="stop_loss",  # propagated to algo.events
+        )
+        # Update position locally with the expected fill so the
+        # rest of _on_bar_close sees an updated position state.
+        # The actual fill confirmation comes back via the postback
+        # webhook and PositionTracker.apply_fill is called at that
+        # point (existing reconciliation flow).
+        skip_tickers.add(trig.ticker)
+    # Existing eval skips stopped tickers (no race: AST sees the
+    # in-flight stop-out and stays out).
+    ...
+```
+
+The exact `kite_client.place_order` signature may differ — implementation plan grep-confirms. Key requirements:
+- Submit MARKET SELL (not LIMIT) — fills immediately at market
+- Pass `exit_reason="stop_loss"` through to the order metadata so it lands in `algo.events`
+- Don't wait for fill confirmation before continuing the bar — the postback handler updates `PositionTracker` async (same as today's exit signals)
+
+### 4.6 Multi-lot positions
+
+`PositionTracker` already uses weighted-average cost basis (`avg_price`). Stop-loss reads it directly. No special handling for scale-ins.
+
+### 4.7 Exit-signal shape
+
+All three runtimes emit `OrderIntent(side="SELL", exit_reason="stop_loss", ...)` (backtest + paper) or `kite_client.place_order(..., exit_reason="stop_loss")` (live). The exit_reason propagates to `Fill` → `PositionTracker._apply_sell` → closed `Position`, ending up in `algo.events.exit_reason`. Triage scripts already exclude `exit_reason == "stop_loss"` from win-rate denominators.
 
 ## 5. Test plan
 
-### 5.1 Three layers of coverage
+### 5.1 Layered coverage across all 3 runtimes
 
 | Layer | Tests | Catches |
 |---|:---:|---|
-| Unit — pure function | ~8 | Math correctness; threshold boundary; missing data; disabled feature; multi-lot avg-cost |
-| Integration — runner per-bar | ~4 | Precedence; AST skip-list correctness; `exit_reason="stop_loss"` lands; fill at next-bar-open |
-| Regression smoke — all templates | 1 parametrized over 11 templates | All existing templates still parse + produce a non-empty `BacktestSummary` with stop-loss now active |
+| Unit — pure function | 8 | Trigger math; threshold boundary; missing data; disabled feature; multi-position independence |
+| Backtest integration | 4 | Runner precedence; AST skip; next-bar-open fill; `exit_reason="stop_loss"` |
+| **Paper integration** | 2-3 | Same as backtest but via paper runtime's `_on_bar_close` path |
+| **Live integration** | 2-3 | Monitor → MARKET SELL via Kite (mocked); `exit_reason` plumbing; real-time semantics |
+| Regression smoke | 1 parametrized × 11 | All existing templates parse cleanly with the new `exit_reason` field |
+| Propagation | 4 | `exit_reason` threads through OrderIntent → Fill → Position |
 
-Total ~13 tests. Runtime under 90s combined.
+Total: ~22 tests across 5 files. Runtime under 2 minutes combined.
 
 ### 5.2 Unit tests (`test_stop_loss_monitor.py`)
 
-| # | Test name | Asserts |
+8 tests covering the pure function. See plan Task 1 for the verbatim test code.
+
+| # | Test | Asserts |
 |---|---|---|
-| 1 | `test_trigger_when_loss_exceeds_threshold` | avg=100, close=96, stop=3.0 → trigger emitted, loss_pct=-4.0 |
-| 2 | `test_no_trigger_when_loss_below_threshold` | avg=100, close=98, stop=3.0 → empty list |
-| 3 | `test_trigger_at_exact_boundary_is_inclusive` | avg=100, close=97, stop=3.0 → trigger (using `<=` semantics) |
-| 4 | `test_no_trigger_when_position_gains` | avg=100, close=105, stop=3.0 → empty list |
-| 5 | `test_disabled_when_stop_loss_pct_zero` | stop=0.0 → empty list regardless of position state |
-| 6 | `test_skip_ticker_with_no_current_close` | open_positions has X but current_closes doesn't → empty (no fabrication) |
-| 7 | `test_skip_position_with_zero_avg_price` | avg=0 (defensive guard) → empty |
-| 8 | `test_multi_position_independence` | 3 tickers, only 1 breaches → exactly 1 trigger, correct ticker |
+| 1 | `test_trigger_when_loss_exceeds_threshold` | avg=100, close=96, stop=3.0 → trigger, loss_pct=-4.0 |
+| 2 | `test_no_trigger_when_loss_below_threshold` | avg=100, close=98, stop=3.0 → empty |
+| 3 | `test_trigger_at_exact_boundary_is_inclusive` | avg=100, close=97, stop=3.0 → trigger (≤ semantics) |
+| 4 | `test_no_trigger_when_position_gains` | avg=100, close=105, stop=3.0 → empty |
+| 5 | `test_disabled_when_stop_loss_pct_zero` | stop=0.0 → empty list regardless |
+| 6 | `test_skip_ticker_with_no_current_close` | data gap → skip, no fabrication |
+| 7 | `test_skip_position_with_zero_avg_price` | defensive guard against div-by-zero |
+| 8 | `test_multi_position_independence` | 3 tickers, only 1 breaches → exactly 1 trigger |
 
-All tests use hand-built dicts. No fixtures, no I/O. Total runtime < 0.1s.
+### 5.3 Backtest integration (`test_stop_loss_integration.py`)
 
-### 5.3 Integration tests (`test_stop_loss_integration.py`)
+4 tests against the runner with hand-built bar fixtures.
 
-| # | Test name | Asserts |
+| # | Test | Asserts |
 |---|---|---|
-| 1 | `test_stop_loss_emits_exit_signal_in_runner` | 10-bar fixture: position opens at bar 2 (price 100), price drops 4% by bar 5 with stop=3.0 → exit signal at bar 5 close, fills at bar 6 open |
-| 2 | `test_stop_loss_skips_ast_for_stopped_ticker_same_bar` | Confirm AST is NOT evaluated for the stopped ticker on the stop bar (spy/counter on the AST evaluator) |
-| 3 | `test_stop_loss_exit_lands_with_correct_exit_reason` | After fill: recorded event has `exit_reason="stop_loss"`, distinguishable from `"signal"` |
-| 4 | `test_no_stop_loss_when_pct_zero` | Strategy with `stop_loss_pct=0`: same fixture produces NO stop events even on a -10% bar |
+| 1 | `test_stop_loss_emits_exit_at_breach_bar` | 10-bar fixture, drop -4% by bar 5 with stop=3.0 → exit signal at bar 5 close, fills at bar 6 open |
+| 2 | `test_stop_loss_skips_ast_for_stopped_ticker` | AST not re-evaluated for stopped ticker same bar (proxy: full-qty close, no partial reduction) |
+| 3 | `test_stop_loss_exit_reason_lands_in_events` | Recorded position has `exit_reason="stop_loss"` |
+| 4 | `test_no_stop_loss_when_pct_zero` | Same fixture with stop=0 produces no stop events even on a -10% bar |
 
-Use the existing `BacktestRequest` + `run_backtest()` plumbing with hand-built bar data — same pattern as existing intraday/daily backtest tests (e.g. `backend/algo/backtest/tests/test_runner.py` or sibling files).
+### 5.4 Paper integration (`test_stop_loss_paper_integration.py`)
 
-### 5.4 Regression smoke (`test_existing_strategies_smoke.py`)
+2-3 tests against paper runtime's `_on_bar_close`:
 
-```python
-@pytest.mark.parametrize("template", [
-    "bull_momentum_daily_swing_v4",   # the 53.6% v4 baseline
-    "rsi2_connors_daily_v1",          # this session's strategy
-    "regime_sideways_meanrev_quality_v2",
-    "regime_bull_momentum",
-    "regime_bear_defensive_lowvol",
-    "mis_intraday_meanrev_long_v1",   # MIS v1 from PR #230
-    "sector_rotation_monthly",
-    "bull_momentum_15m_swing",
-    "bull_momentum_daily_swing",      # legacy v1
-    "bull_momentum_daily_swing_v3",   # legacy v3
-    "regime_sideways_meanrev_quality", # legacy
-])
-def test_template_runs_short_backtest_without_crashing(template):
-    """All 11 templates parse, run a 30-day micro-backtest on 3
-    tickers without crashing, and emit a BacktestSummary with at
-    least the expected fields (final_nav_inr, trade_list).
+| # | Test | Asserts |
+|---|---|---|
+| 1 | `test_paper_stop_loss_emits_sell_order_intent` | Open position via paper, drop close past threshold → SELL OrderIntent emitted with `exit_reason="stop_loss"` |
+| 2 | `test_paper_stop_loss_fills_at_next_bar_open` | Same as backtest: fill date = bar after trigger |
+| 3 | `test_paper_stop_loss_records_to_algo_events` (optional) | If algo.events writes are exercised in paper tests, confirm the exit_reason value lands |
 
-    Regression guard — does NOT assert on metric values.
-    """
-```
+### 5.5 Live integration (`test_stop_loss_live_integration.py`)
 
-Single parametrized test, 11 cases. Each runs a tiny 30-day × 3-ticker backtest (RELIANCE.NS, HDFCBANK.NS, INFY.NS) — completes in < 60s total. Asserts only that the runner doesn't crash and produces a populated `BacktestSummary`. Numerical changes are EXPECTED and documented in the PR description, not gated as test assertions.
+2-3 tests with mocked Kite client:
 
-### 5.5 Expected metric changes on existing strategies (informational, NOT test assertions)
+| # | Test | Asserts |
+|---|---|---|
+| 1 | `test_live_stop_loss_calls_kite_market_sell` | Mock `kite_client.place_order`; trigger fires; assert called with `order_type="MARKET"`, `side="SELL"`, correct qty |
+| 2 | `test_live_stop_loss_propagates_exit_reason` | Mocked Kite call includes `exit_reason="stop_loss"` in the order metadata |
+| 3 | `test_live_stop_loss_skips_ast_for_stopped_ticker` | Same precedence guarantee as backtest/paper |
 
-The implementation plan should re-run two strategies after the framework lands and capture before/after triage tables. This is documentation, not test gating:
+### 5.6 Propagation tests (`test_exit_reason_propagation.py`)
 
-**v4 daily (`bull_momentum_daily_swing_v4`, stop_loss_pct=4.0):**
+4 tests covering the `exit_reason` field threading through OrderIntent → Fill → Position. See plan Task 2 for verbatim test code.
 
-| | Before (no enforcement) | After (4% stop active) |
+### 5.7 Regression smoke (`test_existing_strategies_smoke.py`)
+
+One parametrized test over all 11 existing templates. Asserts each template still parses + has `stop_loss_pct >= 0` post-schema-change. Does NOT assert metric values (those legitimately change; impact captured separately in §6).
+
+### 5.8 Expected metric impact (informational, NOT test assertions)
+
+Post-implementation, the plan re-runs RSI(2) Connors v1 + v4 daily and captures before/after numbers in `docs/research/2026-05-23-stop-loss-enforcement-impact.md`:
+
+**RSI(2) Connors v1 (ex-DIACABS, stop_loss_pct=3.0):**
+
+| Gate | Before (no enforcement) | After (3% stop active) |
 |---|---:|---:|
-| Win rate | 53.6% | TBD by re-run |
+| G1: Trade count | 988 | TBD |
+| G2: CAGR | 8.44% | TBD |
+| G3: Win rate (ex-stops) | 62.85% | TBD |
+| G4: Max DD | -19.89% | **TBD — must come under 15% to unblock paper promotion** |
+| G5: Concentration | 12.62% | TBD |
+
+**v4 daily (bull_momentum_daily_swing_v4, stop_loss_pct=4.0):**
+
+| Metric | Before | After |
+|---|---:|---:|
+| Win rate | 53.6% | TBD |
 | Max DD | TBD | TBD (likely lower) |
 | Trade count | TBD | TBD (likely higher — stops add exits) |
 | CAGR | TBD | TBD |
-
-**RSI(2) Connors v1 ex-DIACABS (stop_loss_pct=3.0):**
-
-| | Before (no enforcement, ex-DIACABS) | After (3% stop active, ex-DIACABS) |
-|---|---:|---:|
-| G3 win rate | 62.85% | TBD |
-| G4 max DD | -19.89% | **TBD — must come under 15% to unblock paper promotion** |
-| G2 CAGR | 8.44% | TBD |
-
-These re-runs go in the PR description. If the RSI(2) post-fix run lands G4 under 15%, the strategy graduates to paper per its own promotion spec — closing the loop on the user-facing motivation for this framework fix.
-
-### 5.6 What we deliberately DON'T test
-
-- Specific metric values for any pre-existing strategy (their numbers will change; that's the bugfix)
-- Live runtime / Kite bracket-order interaction (out of scope per Section 2's runtime decision)
-- Stop-loss with `take_profit_pct` (no such field in the AST schema)
-- Performance regression (overhead is one dict-lookup + one Decimal divide per open position per bar; imperceptible)
 
 ## 6. Promotion & rollout
 
 ### 6.1 Promotion path
 
-No strategy-promotion lifecycle changes. This is a framework fix; the framework ships when the PR merges to `dev`. Existing strategies that have `stop_loss_pct > 0` immediately start having stops enforced in subsequent backtests.
+No strategy-promotion lifecycle changes. Framework ships when the PR merges to `dev`. Existing strategies with `stop_loss_pct > 0` immediately get stops enforced in subsequent backtest, paper, and live sessions.
 
 ### 6.2 Backwards-compatibility
 
 Fully backwards-compatible:
 
-- Strategies with `stop_loss_pct: 0` (or not set, since `Field(ge=0)` allows zero) get no enforcement (`check_stop_loss_triggers` returns `[]`).
-- Strategies with `stop_loss_pct > 0` (all 11 existing templates) get stops enforced. Their next backtest produces different (more honest) metrics.
-- Stored `algo.runs` / `algo.events` rows from past backtests are unaffected — they don't get re-run.
-- The PR description should explicitly list the 11 affected templates and recommend a one-time re-baseline of any that are gated for promotion (today: RSI(2) v1; future: any new strategy).
+- Strategies with `stop_loss_pct: 0` get no enforcement.
+- Strategies with `stop_loss_pct > 0` (all 11 templates) get stops enforced in all three runtimes.
+- Stored `algo.runs` / `algo.events` rows from past backtests are unaffected.
+- `OrderIntent.exit_reason: str = "signal"` default keeps existing AST-emit code unchanged.
 
-### 6.3 Communication to operators (if applicable)
+### 6.3 Live-runtime safety note
 
-A short note in the strategy templates README:
+Live trading currently uses MARKET / LIMIT orders only (Kite client blocks BO/SL/SLM/CO orders). Until this fix lands, live strategies are unprotected by stop-loss — they rely entirely on the strategy AST's own exit conditions or daily-kill triggers. **This is a meaningful safety gap in current live operations.** The fix closes it without waiting for Kite bracket-order support in v3.
 
-> Backtests after 2026-05-XX include per-bar `stop_loss_pct` enforcement at next-bar-open semantics. Re-baseline any strategy whose backtest result drove a promotion decision before that date.
+### 6.4 Operator communication
+
+A short note in `backend/algo/strategy/templates/README.md`:
+
+> Strategies with `stop_loss_pct > 0` now have stops enforced in
+> backtest, paper, AND live runtimes (after 2026-05-23). Local
+> enforcement via per-bar position monitor; broker-side bracket
+> orders are deferred to a future Kite client v3.
 
 ## 7. Non-goals (explicit out-of-scope)
 
@@ -340,8 +449,7 @@ A short note in the strategy templates README:
 - Trailing stops (static stop first)
 - Time-based / N-day timeouts (separate AST-level concern)
 - Take-profit enforcement (no `take_profit_pct` field)
-- Bracket-order emission to Kite (paper + live trust broker brackets)
-- Paper / live runtime local enforcement (broker handles it)
+- Kite bracket-order emission (deferred to v3 per kite_client.py)
 - Refactoring `RiskEngine.gate()` (correctly scoped to order-time gating)
 - Adding new `exit_reason` values (`"stop_loss"` already exists)
 - AST schema changes (`stop_loss_pct` already declared)
@@ -354,5 +462,6 @@ A short note in the strategy templates README:
 - v4 daily baseline template: `backend/algo/strategy/templates/bull_momentum_daily_swing_v4.json`
 - Existing risk engine: `backend/algo/paper/risk_engine.py::RiskEngine.gate()`
 - Position tracker: `backend/algo/backtest/positions.py::PositionTracker` (provides `avg_price`)
-- AST risk schema: `backend/algo/strategy/ast.py::RiskPerTrade` (where `stop_loss_pct` lives)
-- Project memory: `feedback_runtime_feature_three_runtimes` — applicable principle ("wire features through ALL runtimes"); here only backtest needs the fix because paper/live use broker-side stops
+- AST risk schema: `backend/algo/strategy/ast.py::RiskPerTrade`
+- Kite client v2 SDK constraints: `backend/algo/broker/kite_client.py` (blocks BO/SL/SLM/CO)
+- Project memory: `feedback_runtime_feature_three_runtimes` — applicable principle ("wire features through ALL runtimes") — this spec is the canonical case
