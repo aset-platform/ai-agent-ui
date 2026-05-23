@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 from datetime import date, datetime, timezone
@@ -460,16 +461,33 @@ def verify_or_backup(
     }
 
 
+# Match canonical full-snapshot directory names ONLY
+# (``backup-YYYY-MM-DD``).  Per-table fallback dirs created
+# by ``backup_table()`` use the form
+# ``backup-YYYY-MM-DD-<ns>-<name>`` and must NOT compete
+# with full snapshots for the rotation keep-slots — the
+# legacy lexicographic sort wiped a freshly-rsynced full
+# snapshot on 2026-05-23 because the per-table cruft from
+# the same day outranked it (ASCII ``-`` > end-of-string).
+_FULL_SNAPSHOT_NAME_RE = re.compile(
+    r"^backup-\d{4}-\d{2}-\d{2}$",
+)
+
+
 def _rotate_backups(
     root: Path,
     keep: int,
 ) -> None:
-    """Remove oldest backups beyond keep limit."""
+    """Remove oldest CANONICAL full-snapshot backups beyond
+    ``keep`` limit.  Per-table fallback dirs are left alone
+    (managed by ``scripts/cleanup_per_table_backups.py``).
+    """
     dirs = sorted(
         [
             d
             for d in root.iterdir()
-            if d.is_dir() and d.name.startswith("backup-")
+            if d.is_dir()
+            and _FULL_SNAPSHOT_NAME_RE.match(d.name)
         ],
         reverse=True,
     )
