@@ -7,6 +7,7 @@ the runner exposes a library entry point but no CLI binary.
 Outputs:
     /tmp/rsi2_connors_baseline.log    — full log
     /tmp/rsi2_triage.json             — G1-G5 metrics for the report
+    /tmp/<tag>_triage.json            — when --tag is overridden
 
 Usage (inside the backend container)::
 
@@ -18,10 +19,19 @@ Run from the host::
     docker compose exec -T backend \
         python /app/scripts/run_rsi2_connors_baseline.py \
         2>&1 | tee /tmp/rsi2_baseline.log
+
+Sanity re-run excluding one or more tickers::
+
+    docker compose exec -T backend \
+        python /app/scripts/run_rsi2_connors_baseline.py \
+        --exclude "DIACABS.NS" \
+        --tag "rsi2-connors-daily-ex-diacabs" \
+        2>&1 | tee /tmp/rsi2_ex_diacabs.log
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
@@ -41,7 +51,7 @@ _logger = logging.getLogger("rsi2_baseline")
 PERIOD_START = date(2022, 1, 1)
 PERIOD_END = date(2026, 5, 21)
 NAV_INR = 1_000_000
-TAG = "rsi2-connors-daily-baseline"
+_DEFAULT_TAG = "rsi2-connors-daily-baseline"
 TEMPLATE_NAME = "rsi2_connors_daily_v1"
 
 # Deterministic run-user UUID — system operator sentinel, not a real
@@ -49,12 +59,42 @@ TEMPLATE_NAME = "rsi2_connors_daily_v1"
 _SYSTEM_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="RSI(2) Connors Daily v1 baseline backtest runner."
+    )
+    parser.add_argument(
+        "--exclude",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated tickers to remove from the universe "
+            "before backtest (e.g. 'DIACABS.NS,INFY.NS')."
+        ),
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        default=_DEFAULT_TAG,
+        help=(
+            "Run tag used for algo.runs and output filename. "
+            "Defaults to 'rsi2-connors-daily-baseline'. "
+            "Override to distinguish sanity re-runs."
+        ),
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = _parse_args()
+    tag: str = args.tag
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
+    _logger.info("Tag: %s", tag)
     _logger.info("Loading template %s", TEMPLATE_NAME)
 
     from backend.algo.strategy.ast import parse_strategy
@@ -94,7 +134,21 @@ def main() -> None:
     tickers = asyncio.run(
         resolve_universe(user=system_user, strategy=strategy)
     )
-    _logger.info("Universe size: %d tickers", len(tickers))
+    _logger.info("Universe size before exclusions: %d tickers", len(tickers))
+
+    if args.exclude:
+        exclude_set = {
+            t.strip() for t in args.exclude.split(",") if t.strip()
+        }
+        before = len(tickers)
+        tickers = [t for t in tickers if t not in exclude_set]
+        _logger.info(
+            "Excluding %d ticker(s): %s  (%d -> %d)",
+            len(exclude_set),
+            sorted(exclude_set),
+            before,
+            len(tickers),
+        )
 
     if not tickers:
         _logger.error(
@@ -102,6 +156,8 @@ def main() -> None:
             "Check _scoped_tickers + stock_master data."
         )
         sys.exit(1)
+
+    _logger.info("Effective universe size: %d tickers", len(tickers))
 
     # Build a BacktestRequest for the daily cadence.
     from backend.algo.backtest.types import BacktestRequest
@@ -115,11 +171,12 @@ def main() -> None:
     )
 
     _logger.info(
-        "Invoking run_backtest %s -> %s  NAV=₹%s  universe=%d tickers",
+        "Invoking run_backtest %s -> %s  NAV=₹%s  universe=%d tickers  tag=%s",
         PERIOD_START,
         PERIOD_END,
         NAV_INR,
         len(tickers),
+        tag,
     )
 
     from backend.algo.backtest.runner import run_backtest
@@ -212,11 +269,16 @@ def main() -> None:
     # ----------------------------------------------------------------
     # Gate evaluation
     # ----------------------------------------------------------------
+    excluded_tickers = sorted(
+        {t.strip() for t in args.exclude.split(",") if t.strip()}
+    ) if args.exclude else []
+
     result = {
-        "tag": TAG,
+        "tag": tag,
         "period_start": PERIOD_START.isoformat(),
         "period_end": PERIOD_END.isoformat(),
         "universe_size": len(tickers),
+        "excluded_tickers": excluded_tickers,
         "initial_capital_inr": NAV_INR,
         "final_equity_inr": round(final_nav, 2),
         "trades": int(n_trades),
@@ -265,7 +327,15 @@ def main() -> None:
         },
     }
 
-    out_path = Path("/tmp/rsi2_triage.json")
+    # Use a tag-derived filename so baseline and sanity re-runs don't
+    # overwrite each other.  Baseline (default tag) keeps the original
+    # path for backward compatibility.
+    if tag == _DEFAULT_TAG:
+        out_path = Path("/tmp/rsi2_triage.json")
+    else:
+        safe_tag = tag.replace("/", "_").replace(" ", "_")
+        out_path = Path(f"/tmp/{safe_tag}_triage.json")
+
     out_path.write_text(json.dumps(result, indent=2, default=str))
     _logger.info("Triage written to %s", out_path)
     _logger.info("Triage JSON:\n%s", json.dumps(result, indent=2, default=str))
