@@ -2809,10 +2809,7 @@ def execute_iceberg_maintenance(
     ``shared/architecture/iceberg-orphan-sweep-design``
     for the safety algorithm + recovery procedure.
     """
-    from backend.maintenance.backup import (
-        backup_table,
-        run_backup,
-    )
+    from backend.maintenance.backup import run_backup
     from backend.maintenance.iceberg_maintenance import (
         ALL_TABLES,
         cleanup_orphans_v2,
@@ -2886,24 +2883,29 @@ def execute_iceberg_maintenance(
     backup_path: str | None = None
     try:
         if scoped:
-            paths: list[str] = []
-            for t in tables:
-                try:
-                    paths.append(backup_table(t))
-                except FileNotFoundError:
-                    # Table not yet written — nothing to
-                    # back up. Not fatal: compact_table will
-                    # also no-op below.
-                    _logger.info(
-                        "[maint] %s: no on-disk data, "
-                        "skipping per-table backup",
-                        t,
-                    )
-            backup_path = "; ".join(paths) if paths else "<none>"
-            _logger.info(
-                "[maint] Per-table backups complete: %d " "table(s)",
-                len(paths),
+            from backend.maintenance.backup import (
+                verify_or_backup,
             )
+
+            result = verify_or_backup(tables)
+            if result["mode"] == "verified":
+                backup_path = result["snapshot"]
+                _logger.info(
+                    "[maint] Verified today's snapshot "
+                    "covers %d scoped table(s) — skipping "
+                    "per-table backup",
+                    len(tables),
+                )
+            else:
+                paths = result["paths"]
+                backup_path = (
+                    "; ".join(paths) if paths else "<none>"
+                )
+                _logger.info(
+                    "[maint] Snapshot stale/missing — "
+                    "per-table backup of %d table(s)",
+                    len(tables),
+                )
         else:
             backup_path = run_backup()
             _logger.info(
