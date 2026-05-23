@@ -3719,10 +3719,20 @@ def execute_daily_features_daily_compute(
 
     Reads daily ``stocks.ohlcv`` rows for the Nifty 500 universe
     over a configurable write window with warmup tail, computes
-    the 18 daily features defined in the FE-15 spec, and writes
-    them to ``stocks.intraday_features`` at ``interval_sec=86400``
-    via the NaN-replaceable upsert in
+    every daily feature the engine emits (21 as of 2026-05-23
+    — auto-discovered, not whitelisted), and writes them to
+    ``stocks.intraday_features`` at ``interval_sec=86400`` via
+    the NaN-replaceable upsert in
     :mod:`backend.algo.jobs.daily_features_daily_compute`.
+
+    Auto-discovered means: when
+    :func:`backend.algo.features.daily_engine.compute_daily_features`
+    gains a new ``feats[KEY] = ...`` emit line, the next nightly
+    run automatically persists it without code changes here. The
+    persistence path iterates ``feats.items()`` and writes every
+    non-NaN numeric value — no allow-list. ASETPLTFRM-432
+    (rsi_2 / sma_5 / distance_from_sma5 added by PR #231) landed
+    via this implicit pass-through.
 
     Sync + pipeline-compatible wrapper. Standalone scheduled
     job — not chained into the Intraday Bars Daily Pipeline

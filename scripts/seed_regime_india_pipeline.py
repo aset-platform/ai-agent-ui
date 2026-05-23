@@ -76,15 +76,17 @@ STEPS = [
         "job_name": "Compute Daily Factors",
     },
     {
-        # FE-15a (ASETPLTFRM-419) — daily-cadence feature
-        # compute. Reads stocks.ohlcv, writes the 18 daily
-        # features (ema_*, sma_*, rsi_*, atr_14, bb_width,
-        # gap_pct, volume_spike, etc.) into
-        # stocks.intraday_features at interval_sec=86400.
-        # Sequenced AFTER compute_daily_factors so the daily
-        # factor library is already populated when feature
-        # backfill kicks off; the two jobs are otherwise
-        # independent.
+        # FE-15a (ASETPLTFRM-419) — daily-cadence feature compute.
+        # Reads stocks.ohlcv and writes every feature the engine
+        # emits (21 as of 2026-05-23 — auto-discovered, no
+        # whitelist) into stocks.intraday_features at
+        # interval_sec=86400. Sequenced AFTER compute_daily_factors
+        # so the daily factor library is already populated when
+        # feature backfill kicks off; the two jobs are otherwise
+        # independent. ASETPLTFRM-432 (rsi_2 / sma_5 /
+        # distance_from_sma5) landed transparently via this auto-
+        # discovery — when daily_engine gains a new
+        # feats[KEY] = ... line, the next nightly run persists it.
         "step_order": 4,
         "job_type": "daily_features_daily_compute",
         "job_name": "Compute Daily Features (1d)",
