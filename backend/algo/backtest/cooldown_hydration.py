@@ -114,7 +114,7 @@ def load_recent_failed_exits(
             f"          '$.exit_reason'), "
             f"      json_extract_string(payload_json, "
             f"          '$.reason')"
-            f"  ) IN ('time_stop', 'stop_loss') "
+            f"  ) IN ('time_stop', 'stop_loss', 'regime_exit') "
             f"GROUP BY ticker",
             [str(user_id), str(strategy_id), cutoff],
         )

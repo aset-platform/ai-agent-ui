@@ -33,6 +33,9 @@ from backend.algo.backtest.sim_broker import (
     SimBroker,
 )
 from backend.algo.backtest.cooldown_monitor import in_cooldown
+from backend.algo.backtest.regime_exit_monitor import (
+    check_regime_exit_triggers,
+)
 from backend.algo.backtest.stop_loss_monitor import (
     check_stop_loss_triggers,
 )
@@ -333,6 +336,9 @@ def run_backtest(
     # repeat-offender cooldown gate. Surfaced in the run-summary
     # log line so operators can see the gate's impact.
     cooldown_skip_count = 0
+    # ASETPLTFRM-435 v4 — cumulative count of positions force-
+    # closed by the mid-trade regime exit monitor.
+    regime_exit_count = 0
     # Day-bucket realised P&L so RiskEngine.daily_loss_cap fires
     # on intra-day drawdown, not cumulative-from-start. Reset at
     # the top of each bar_date.
@@ -580,6 +586,103 @@ def run_backtest(
                 trig.holding_days,
                 trig.max_holding_days,
             )
+
+        # ASETPLTFRM-435 v4 — mid-trade regime exit. Re-evaluates
+        # the strategy's mid_trade_regime_check condition against
+        # the current bar's market features. If the condition is
+        # False, force-close ALL open positions at next-bar-open
+        # (same fill semantics as stop_loss / time_stop) with
+        # exit_reason="regime_exit". No-op if the field is None.
+        mtre_check = getattr(
+            strategy, "mid_trade_regime_check", None,
+        )
+        if mtre_check is not None:
+            open_for_regime = pt.open_positions()
+            if open_for_regime:
+                # Assemble market-only features for the bar — same
+                # sources the entry-time regime gate uses. Skip
+                # per-ticker / factor inputs (regime check should
+                # only reference market-level features).
+                market_feats: dict[str, Decimal] = {}
+                _mr = market_regime.get(bar_date)
+                market_feats["nifty_above_sma200"] = (
+                    _mr if _mr is not None else Decimal("0")
+                )
+                _mt = market_trend.get(bar_date)
+                market_feats["nifty_30d_return_pct"] = (
+                    _mt if _mt is not None else Decimal("0")
+                )
+                _rr = regime_by_date.get(bar_date)
+                if _rr:
+                    # regime_by_date returns dict with regime_label
+                    # + stress_prob; merge in directly.
+                    market_feats.update(_rr)
+                mtre_triggers = check_regime_exit_triggers(
+                    open_positions={
+                        t: {"qty": p.qty}
+                        for t, p in open_for_regime.items()
+                        if t not in stop_loss_skip
+                    },
+                    bar_date=bar_date,
+                    market_features=market_feats,
+                    regime_check=mtre_check.model_dump(
+                        by_alias=True,
+                    ),
+                )
+                for trig in mtre_triggers:
+                    existing = open_for_regime.get(trig.ticker)
+                    if existing is None or existing.qty <= 0:
+                        continue
+                    re_intent = OrderIntent(
+                        ticker=trig.ticker,
+                        side="SELL",
+                        qty=existing.qty,
+                        intent_emitted_at=bar_date,
+                        intent_emitted_ts_ns=ts_ns,
+                        exit_reason="regime_exit",
+                    )
+                    try:
+                        re_fill = sim.execute(re_intent)
+                    except NoBarAvailableError:
+                        re_fill = None
+                    if re_fill is None:
+                        continue
+                    pt.apply_fill(re_fill)
+                    total_fees += re_fill.fees_inr
+                    fee_rates_version = re_fill.fee_rates_version
+                    events.append(
+                        event_row(
+                            session_id=session_id,
+                            user_id=user_id,
+                            strategy_id=strategy.id,
+                            mode="backtest",
+                            type_="order_filled",
+                            payload={
+                                "ticker": re_fill.ticker,
+                                "side": re_fill.side,
+                                "qty": re_fill.qty,
+                                "fill_price": str(
+                                    re_fill.fill_price,
+                                ),
+                                "fill_date": (
+                                    re_fill.fill_date.isoformat()
+                                ),
+                                "fees_inr": str(re_fill.fees_inr),
+                                "fee_rates_version": (
+                                    re_fill.fee_rates_version
+                                ),
+                                "exit_reason": "regime_exit",
+                            },
+                        )
+                    )
+                    stop_loss_skip.add(trig.ticker)
+                    regime_exit_count += 1
+                if mtre_triggers:
+                    _logger.debug(
+                        "regime_exit force-closed %d positions on "
+                        "%s",
+                        len(mtre_triggers), bar_date.isoformat(),
+                    )
 
         # ASETPLTFRM-434 Exp.2 — cooldown gate input. The function
         # is pure; we hoist the closed-positions snapshot once per
@@ -1022,13 +1125,14 @@ def run_backtest(
     _logger.info(
         "backtest run %s: closed=%d trades, "
         "risk-rejected=%d signals, scaled=%d signals, "
-        "cooldown-skips=%d, "
+        "cooldown-skips=%d, regime-exits=%d, "
         "feature-key-errors=%s",
         run_id,
         len(closed),
         rejected_count,
         scaled_count,
         cooldown_skip_count,
+        regime_exit_count,
         sorted(
             _key_err_counts.items(),
             key=lambda x: -x[1],

@@ -188,6 +188,75 @@ describe("StrategyLeversPanel", () => {
     expect(mhd.value).toBe("5");
   });
 
+  it("cooldown_after_failed_exit_days defaults to blank and patches null on clear", () => {
+    render(<Stateful initial={_ast()} />);
+    const cd = screen.getByTestId(
+      "lever-risk-cooldown-days",
+    ) as HTMLInputElement;
+    expect(cd.value).toBe("");
+    fireEvent.change(cd, { target: { value: "7" } });
+    expect(cd.value).toBe("7");
+    fireEvent.change(cd, { target: { value: "" } });
+    expect(cd.value).toBe("");
+  });
+
+  it("loads cooldown_after_failed_exit_days from existing AST value", () => {
+    const a = _ast();
+    a.risk = {
+      ...a.risk,
+      per_trade: {
+        ...(a.risk as unknown as { per_trade: object }).per_trade,
+        cooldown_after_failed_exit_days: 14,
+      },
+    } as unknown as StrategyAst["risk"];
+    render(<StrategyLeversPanel ast={a} onChange={vi.fn()} />);
+    const cd = screen.getByTestId(
+      "lever-risk-cooldown-days",
+    ) as HTMLInputElement;
+    expect(cd.value).toBe("14");
+  });
+
+  it("mid_trade_regime_check toggle is off by default", () => {
+    render(<StrategyLeversPanel ast={_ast()} onChange={vi.fn()} />);
+    const cb = screen.getByTestId(
+      "lever-mid-trade-regime-check-toggle",
+    ) as HTMLInputElement;
+    expect(cb.checked).toBe(false);
+  });
+
+  it("mid_trade_regime_check toggle sets canonical condition + clears to null", () => {
+    const onChange = vi.fn();
+    render(
+      <StrategyLeversPanel ast={_ast()} onChange={onChange} />,
+    );
+    const cb = screen.getByTestId(
+      "lever-mid-trade-regime-check-toggle",
+    ) as HTMLInputElement;
+    // Turn on — should patch a populated condition tree
+    fireEvent.click(cb);
+    expect(onChange).toHaveBeenCalled();
+    const patched = onChange.mock.calls[0][0] as unknown as {
+      mid_trade_regime_check: Record<string, unknown> | null;
+    };
+    expect(patched.mid_trade_regime_check).not.toBeNull();
+    expect(patched.mid_trade_regime_check?.type).toBe("and");
+  });
+
+  it("mid_trade_regime_check toggle reflects pre-set value in AST", () => {
+    const a = _ast() as unknown as StrategyAst & {
+      mid_trade_regime_check?: Record<string, unknown> | null;
+    };
+    a.mid_trade_regime_check = {
+      type: "and",
+      operands: [],
+    };
+    render(<StrategyLeversPanel ast={a} onChange={vi.fn()} />);
+    const cb = screen.getByTestId(
+      "lever-mid-trade-regime-check-toggle",
+    ) as HTMLInputElement;
+    expect(cb.checked).toBe(true);
+  });
+
   it("collapses + expands via the toggle button", () => {
     const onChange = vi.fn();
     render(
