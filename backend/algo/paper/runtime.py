@@ -36,8 +36,15 @@ from backend.algo.backtest.event_writer import (
 )
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 from backend.algo.backtest.positions import PositionTracker
+from backend.algo.backtest.cooldown_hydration import (
+    load_recent_failed_exits,
+)
+from backend.algo.backtest.cooldown_monitor import in_cooldown
 from backend.algo.backtest.stop_loss_monitor import (
     check_stop_loss_triggers,
+)
+from backend.algo.backtest.time_stop_monitor import (
+    check_time_stop_triggers,
 )
 
 # REGIME-2a — pre-computed nightly factor library overlay.
@@ -134,6 +141,33 @@ class PaperRuntime:
                 "silent-skip every bar)",
                 exc,
             )
+
+        # ASETPLTFRM-436 — hydrate the cooldown gate from
+        # algo.events at session start. Paper sessions accumulate
+        # failed-exit history over time; on restart we re-load
+        # it here. ``in_cooldown`` reads this list — same pure
+        # function as backtest, different data source.
+        self._cooldown_history: list = []
+        cd_days = getattr(
+            getattr(strategy.risk, "per_trade", None),
+            "cooldown_after_failed_exit_days",
+            None,
+        )
+        if cd_days:
+            try:
+                self._cooldown_history = load_recent_failed_exits(
+                    user_id=user_id,
+                    strategy_id=strategy.id,
+                    cooldown_days=cd_days,
+                    as_of=datetime.now(timezone.utc).date(),
+                    runtime_mode="paper",
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning(
+                    "PaperRuntime: cooldown hydration failed "
+                    "(%s) — gate starts empty",
+                    exc,
+                )
 
         # REGIME-2a — per-ticker cached factor row for today.
         # Lazily populated on first sight of a ticker in
@@ -504,6 +538,14 @@ class PaperRuntime:
                     )
                 )
                 stop_loss_triggered = True
+                # ASETPLTFRM-436 — keep cooldown gate in sync.
+                from backend.algo.backtest.cooldown_hydration \
+                    import _HydratedClose
+                self._cooldown_history.append(_HydratedClose(
+                    ticker=trig.ticker,
+                    exit_reason="stop_loss",
+                    closed_at=bar_date_obj,
+                ))
                 # INFO (not DEBUG) — paper is a real-time simulator;
                 # operators need stops visible without flipping the
                 # log level.
@@ -520,6 +562,90 @@ class PaperRuntime:
         if stop_loss_triggered:
             # Same-bar skip: AST eval must NOT run for a ticker
             # that just stopped out — mirrors backtest semantics.
+            return 1
+
+        # ASETPLTFRM-436 — time-stop monitor (sibling to the
+        # stop-loss block above). Force-exits positions held
+        # >= max_holding_days. Mirrors backtest runner pattern.
+        time_stop_triggered = False
+        if existing_pos and existing_pos.qty > 0:
+            ts_triggers = check_time_stop_triggers(
+                open_positions={
+                    bar.ticker: {
+                        "qty": existing_pos.qty,
+                        "opened_at": existing_pos.opened_at,
+                    },
+                },
+                current_date=bar_date_obj,
+                max_holding_days=(
+                    self._strategy.risk.per_trade.max_holding_days
+                ),
+            )
+            for trig in ts_triggers:
+                ts_signal = Signal(
+                    signal_id=uuid4(),
+                    strategy_id=self._strategy.id,
+                    user_id=self._user_id,
+                    ticker=trig.ticker,
+                    side="SELL",
+                    qty=existing_pos.qty,
+                    emitted_at_ns=bar.bar_open_ts_ns,
+                    reason="time_stop",
+                )
+                try:
+                    ts_fill = self._broker.execute(
+                        signal=ts_signal,
+                        last_price=last_price,
+                        fill_date=bar_date_obj,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    _logger.error(
+                        "paper time_stop fill failed for %s: %s",
+                        trig.ticker, exc, exc_info=True,
+                    )
+                    continue
+                self._positions.apply_fill(ts_fill)
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="paper",
+                        type_="order_filled",
+                        payload={
+                            "ticker": ts_fill.ticker,
+                            "side": ts_fill.side,
+                            "qty": ts_fill.qty,
+                            "fill_price": str(ts_fill.fill_price),
+                            "fill_date": (
+                                ts_fill.fill_date.isoformat()
+                            ),
+                            "fees_inr": str(ts_fill.fees_inr),
+                            "fee_rates_version": (
+                                ts_fill.fee_rates_version
+                            ),
+                            "exit_reason": "time_stop",
+                        },
+                    )
+                )
+                # Keep the in-process cooldown history in sync
+                # so the gate fires on next-day re-entry attempts
+                # without waiting for the next algo.events flush.
+                from backend.algo.backtest.cooldown_hydration \
+                    import _HydratedClose
+                self._cooldown_history.append(_HydratedClose(
+                    ticker=trig.ticker,
+                    exit_reason="time_stop",
+                    closed_at=bar_date_obj,
+                ))
+                time_stop_triggered = True
+                _logger.info(
+                    "paper time_stop SELL %s qty=%d held=%d "
+                    "days (threshold=%d)",
+                    trig.ticker, existing_pos.qty,
+                    trig.holding_days, trig.max_holding_days,
+                )
+        if time_stop_triggered:
             return 1
 
         ctx = EvalContext(
@@ -547,6 +673,35 @@ class PaperRuntime:
             last_price=last_price,
         )
         if signal is None:
+            return 0
+
+        # ASETPLTFRM-436 — repeat-offender cooldown gate. Blocks
+        # NEW entries on a ticker with a recent failed exit
+        # (time_stop / stop_loss). Hydrated from algo.events at
+        # session start; kept in sync in-process as new failed
+        # exits land via stop_loss / time_stop above. Mirrors the
+        # backtest runner's pre-AST-eval position; here it lands
+        # post-AST because paper evaluates one ticker per bar (the
+        # AST eval is cheap and the cooldown skip is rare).
+        cd_days = (
+            self._strategy.risk.per_trade
+            .cooldown_after_failed_exit_days
+        )
+        if (
+            signal.side == "BUY"
+            and cd_days
+            and in_cooldown(
+                ticker=bar.ticker,
+                bar_date=bar_date_obj,
+                closed_positions=self._cooldown_history,
+                cooldown_days=cd_days,
+            )
+        ):
+            _logger.info(
+                "paper cooldown SKIP %s — recent failed exit "
+                "within %d days",
+                bar.ticker, cd_days,
+            )
             return 0
 
         # MIS "no new entries after T-1h" gate — same rule the
