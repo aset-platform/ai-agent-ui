@@ -32,6 +32,9 @@ from backend.algo.backtest.sim_broker import (
     NoBarAvailableError,
     SimBroker,
 )
+from backend.algo.backtest.stop_loss_monitor import (
+    check_stop_loss_triggers,
+)
 from backend.algo.backtest.types import (
     BacktestRequest,
     BacktestSummary,
@@ -416,7 +419,99 @@ def run_backtest(
         # IST clock-time for the MIS entry-cutoff gate. Daily
         # runs (ts_ns is None) return None and the gate no-ops.
         bar_ist_time = ist_time_from_ns(ts_ns) if is_intraday else None
+
+        # Stop-loss enforcement (universal v1, long-only). Run
+        # BEFORE per-ticker AST eval so an in-flight stop blocks
+        # any conflicting AST action on the same bar. The monitor
+        # is pure (see backend/algo/backtest/stop_loss_monitor.py);
+        # this loop translates triggers into SELL OrderIntents.
+        open_pos_now = pt.open_positions()
+        closes_this_bar: dict[str, Decimal] = {}
+        for _t, _blist in bars.items():
+            if is_intraday:
+                _cur = bars_by_ts.get(_t, {}).get(ts_ns)
+            else:
+                _cur = next(
+                    (b for b in _blist if b.date == bar_date),
+                    None,
+                )
+            if _cur is not None:
+                closes_this_bar[_t] = _cur.close
+        stop_triggers = check_stop_loss_triggers(
+            open_positions={
+                t: {"qty": p.qty, "avg_price": p.avg_price}
+                for t, p in open_pos_now.items()
+            },
+            current_closes=closes_this_bar,
+            stop_loss_pct=float(
+                strategy.risk.per_trade.stop_loss_pct
+            ),
+        )
+        stop_loss_skip: set[str] = set()
+        for trig in stop_triggers:
+            existing = open_pos_now.get(trig.ticker)
+            if existing is None or existing.qty <= 0:
+                continue
+            sl_intent = OrderIntent(
+                ticker=trig.ticker,
+                side="SELL",
+                qty=existing.qty,
+                intent_emitted_at=bar_date,
+                intent_emitted_ts_ns=ts_ns,
+                exit_reason="stop_loss",
+            )
+            try:
+                sl_fill = sim.execute(sl_intent)
+            except NoBarAvailableError:
+                sl_fill = None
+            if sl_fill is None:
+                continue
+            # SimBroker.execute() doesn't forward intent.exit_reason
+            # onto the Fill (defaults to "signal"). Stamp it here so
+            # PositionTracker.apply_fill() stamps the closed Position
+            # with exit_reason="stop_loss" — which is what the UI
+            # badge + trade_list filter both key off.
+            sl_fill = sl_fill.model_copy(
+                update={"exit_reason": "stop_loss"},
+            )
+            pt.apply_fill(sl_fill)
+            total_fees += sl_fill.fees_inr
+            fee_rates_version = sl_fill.fee_rates_version
+            events.append(
+                event_row(
+                    session_id=session_id,
+                    user_id=user_id,
+                    strategy_id=strategy.id,
+                    mode="backtest",
+                    type_="order_filled",
+                    payload={
+                        "ticker": sl_fill.ticker,
+                        "side": sl_fill.side,
+                        "qty": sl_fill.qty,
+                        "fill_price": str(sl_fill.fill_price),
+                        "fill_date": sl_fill.fill_date.isoformat(),
+                        "fees_inr": str(sl_fill.fees_inr),
+                        "fee_rates_version": (
+                            sl_fill.fee_rates_version
+                        ),
+                        "exit_reason": "stop_loss",
+                    },
+                )
+            )
+            stop_loss_skip.add(trig.ticker)
+            _logger.debug(
+                "stop_loss trigger %s avg=%.4f close=%.4f "
+                "loss=%.2f%% stop=%.2f%%",
+                trig.ticker,
+                float(trig.avg_price),
+                float(trig.current_close),
+                float(trig.loss_pct),
+                float(trig.stop_loss_pct),
+            )
+
         for ticker in universe:
+            if ticker in stop_loss_skip:
+                continue
             blist = bars.get(ticker)
             if not blist:
                 continue
