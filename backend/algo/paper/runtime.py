@@ -36,6 +36,9 @@ from backend.algo.backtest.event_writer import (
 )
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 from backend.algo.backtest.positions import PositionTracker
+from backend.algo.backtest.stop_loss_monitor import (
+    check_stop_loss_triggers,
+)
 
 # REGIME-2a — pre-computed nightly factor library overlay.
 from backend.algo.factors.repo import get_factors_window
@@ -439,6 +442,92 @@ class PaperRuntime:
                 (bar.ticker, bar_date_obj),
             ),
         )
+
+        # Stop-loss enforcement (universal v1, long-only). Run
+        # BEFORE per-ticker AST eval so an in-flight stop blocks
+        # any conflicting AST action on the same bar. The monitor
+        # is shared with the backtest runner; here we scope the
+        # check to ``bar.ticker`` since paper closes one ticker's
+        # bar at a time (other tickers' stops fire on their own
+        # bar-close events).
+        stop_loss_triggered = False
+        if existing_pos is not None and existing_pos.qty > 0:
+            sl_triggers = check_stop_loss_triggers(
+                open_positions={
+                    bar.ticker: {
+                        "qty": existing_pos.qty,
+                        "avg_price": existing_pos.avg_price,
+                    },
+                },
+                current_closes={bar.ticker: Decimal(str(bar.close))},
+                stop_loss_pct=float(
+                    self._strategy.risk.per_trade.stop_loss_pct
+                ),
+            )
+            for trig in sl_triggers:
+                sl_signal = Signal(
+                    strategy_id=self._strategy.id,
+                    user_id=self._user_id,
+                    ticker=trig.ticker,
+                    side="SELL",
+                    qty=existing_pos.qty,
+                    emitted_at_ns=bar.bar_open_ts_ns,
+                    reason="stop_loss",
+                )
+                sl_fill = self._broker.execute(
+                    signal=sl_signal,
+                    last_price=last_price,
+                    fill_date=bar_date_obj,
+                )
+                # PaperBroker doesn't yet carry exit_reason through;
+                # stamp it on the Fill so PositionTracker._apply_sell
+                # records the closed Position with exit_reason=
+                # "stop_loss" (same UI badge contract as backtest).
+                sl_fill = sl_fill.model_copy(
+                    update={"exit_reason": "stop_loss"},
+                )
+                self._positions.apply_fill(sl_fill)
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="paper",
+                        type_="order_filled",
+                        payload={
+                            "ticker": sl_fill.ticker,
+                            "side": sl_fill.side,
+                            "qty": sl_fill.qty,
+                            "fill_price": str(sl_fill.fill_price),
+                            "fill_date": (
+                                sl_fill.fill_date.isoformat()
+                            ),
+                            "fees_inr": str(sl_fill.fees_inr),
+                            "fee_rates_version": (
+                                sl_fill.fee_rates_version
+                            ),
+                            "exit_reason": "stop_loss",
+                        },
+                    )
+                )
+                stop_loss_triggered = True
+                # INFO (not DEBUG) — paper is a real-time simulator;
+                # operators need stops visible without flipping the
+                # log level.
+                _logger.info(
+                    "paper stop_loss SELL %s qty=%d avg=%.4f "
+                    "close=%.4f loss=%.2f%% threshold=%.2f%%",
+                    trig.ticker,
+                    existing_pos.qty,
+                    float(trig.avg_price),
+                    float(trig.current_close),
+                    float(trig.loss_pct),
+                    float(trig.stop_loss_pct),
+                )
+        if stop_loss_triggered:
+            # Same-bar skip: AST eval must NOT run for a ticker
+            # that just stopped out — mirrors backtest semantics.
+            return 1
 
         ctx = EvalContext(
             ticker=bar.ticker,
