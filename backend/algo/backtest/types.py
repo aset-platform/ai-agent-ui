@@ -109,6 +109,11 @@ class OrderIntent(BaseModel):
     # SimBroker fills at the NEXT intraday bar's open (not next
     # calendar day's open). Daily strategies leave this None.
     intent_emitted_ts_ns: int | None = None
+    # exit_reason tag — propagates through Fill to Position.
+    # "signal" (AST), "stop_loss", "mis_square_off",
+    # "period_end_mtm". Default "signal" keeps existing AST-emit
+    # code backwards-compat.
+    exit_reason: str = "signal"
 
 
 class Fill(BaseModel):
@@ -128,6 +133,10 @@ class Fill(BaseModel):
     # epoch timestamp of the fill bar's open. ``None`` for daily
     # fills.
     fill_ts_ns: int | None = None
+    # Propagated from the originating OrderIntent. Defaults to
+    # "signal" so AST-emitted intents that don't set the field
+    # serialise as ordinary strategy exits.
+    exit_reason: str = "signal"
 
 
 class Position(BaseModel):
