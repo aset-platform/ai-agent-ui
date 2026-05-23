@@ -75,6 +75,39 @@ async def run_backtest_job(
             strategy=strategy,
         )
 
+        # ASETPLTFRM-433 — drop tickers whose OHLCV history is
+        # shorter than the longest indicator warmup window the
+        # strategy references. Without this filter the runner
+        # would silently skip those (ticker, bar) combos via the
+        # KeyError catch at runner.py:647-651 (Feature not in
+        # context). Pre-filtering closes that hole at the
+        # universe layer.
+        from backend.algo.backtest.universe import (
+            filter_warmup_eligible,
+        )
+        from backend.algo.strategy.feature_warmup import (
+            compute_strategy_warmup_days,
+        )
+
+        warmup_days = compute_strategy_warmup_days(
+            strategy.root.model_dump(by_alias=True),
+        )
+        pre_warmup_count = len(universe)
+        universe = filter_warmup_eligible(
+            universe,
+            period_start=request.period_start,
+            warmup_days=warmup_days,
+        )
+        _logger.info(
+            "backtest %s: warmup_filter dropped %d tickers "
+            "(warmup=%d bars, period_start=%s) → %d remain",
+            run_id,
+            pre_warmup_count - len(universe),
+            warmup_days,
+            request.period_start.isoformat(),
+            len(universe),
+        )
+
         # ASETPLTFRM-400 slice 3 — auto-derive ``interval_sec`` from
         # the strategy's ``schedule.interval``. The UI/API client
         # doesn't have to pass ``interval_sec`` explicitly: an MIS
