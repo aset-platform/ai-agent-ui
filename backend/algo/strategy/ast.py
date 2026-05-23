@@ -250,6 +250,14 @@ class UniverseFilter(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ticker_type: list[Literal["stock", "etf"]] = Field(min_length=1)
     market: Literal["india", "us", "all"] = "india"
+    # ASETPLTFRM-430 Exp.1 — liquidity floor. None disables.
+    # Checked against algo.universe_snapshot.adtv_inr_60d (latest
+    # snapshot at backtest start). Tickers below the floor are
+    # dropped before AST evaluation. v1 post-fix triage found low-
+    # float names (APOLLO.NS, DIACABS.NS) dominate P&L via repeated
+    # stop-then-re-enter cycles; min_adtv_inr removes them at the
+    # universe layer.
+    min_adtv_inr: float | None = Field(default=None, ge=0)
 
 
 class UniverseScope(BaseModel):

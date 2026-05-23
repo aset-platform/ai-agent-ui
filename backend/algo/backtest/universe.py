@@ -36,6 +36,31 @@ def _registry_meta() -> dict[str, dict[str, Any]]:
     return StockRepository().get_all_registry()
 
 
+def _load_snapshot_adtv() -> dict[str, float]:
+    """Latest algo.universe_snapshot keyed by ticker → adtv_inr_60d.
+
+    ASETPLTFRM-430 Exp.1 — used by min_adtv_inr filter. Picks the
+    most recent rebalance_date in the snapshot table; returns
+    {ticker: adtv_inr_60d}. Empty dict if no snapshot exists yet
+    (caller treats as feature-disabled).
+    """
+    from backend.db.duckdb_engine import query_iceberg_table
+    rows = query_iceberg_table(
+        "algo.universe_snapshot",
+        "SELECT rebalance_date, ticker, adtv_inr_60d "
+        "FROM universe_snapshot",
+        [],
+    )
+    if not rows:
+        return {}
+    latest = max(r["rebalance_date"] for r in rows)
+    return {
+        r["ticker"]: float(r["adtv_inr_60d"] or 0.0)
+        for r in rows
+        if r["rebalance_date"] == latest
+    }
+
+
 def _apply_filter(
     tickers: Iterable[str],
     *,
@@ -111,10 +136,32 @@ async def resolve_universe(
         markets=markets,
         ticker_types=ticker_types,
     )
+
+    # ASETPLTFRM-430 Exp.1 — liquidity floor against latest
+    # algo.universe_snapshot.adtv_inr_60d. Tickers absent from the
+    # snapshot are treated as below-floor (excluded) when the filter
+    # is active — the snapshot defines the curated liquid universe.
+    min_adtv = getattr(filter_obj, "min_adtv_inr", None)
+    pre_adtv_count = len(filtered)
+    if min_adtv is not None and min_adtv > 0:
+        snapshot_adtv = _load_snapshot_adtv()
+        if snapshot_adtv:
+            filtered = [
+                t for t in filtered
+                if snapshot_adtv.get(t, 0.0) >= min_adtv
+            ]
+        else:
+            _logger.warning(
+                "min_adtv_inr=%s set but universe_snapshot is "
+                "empty — ADTV filter skipped",
+                min_adtv,
+            )
+
     _logger.info(
         "resolve_universe scope=%s filter=(market=%s, "
-        "ticker_type=%s) → %d candidates → %d after filter",
-        scope, raw_market, raw_types,
-        len(candidates), len(filtered),
+        "ticker_type=%s, min_adtv_inr=%s) → %d candidates → "
+        "%d after type/market filter → %d after ADTV filter",
+        scope, raw_market, raw_types, min_adtv,
+        len(candidates), pre_adtv_count, len(filtered),
     )
     return filtered
