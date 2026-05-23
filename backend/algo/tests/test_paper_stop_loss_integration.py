@@ -15,7 +15,9 @@ from decimal import Decimal
 from uuid import uuid4
 
 from backend.algo.backtest.types import Fill
+from backend.algo.paper.broker import PaperBroker
 from backend.algo.paper.runtime import PaperRuntime
+from backend.algo.paper.types import Signal
 from backend.algo.stream.types import Bar
 from backend.algo.strategy.ast import parse_strategy
 
@@ -220,3 +222,44 @@ def test_paper_stop_loss_no_trigger_when_above_threshold():
         r for r in runtime._events if r["type"] == "signal_generated"
     ]
     assert len(signals) >= 1
+
+
+def test_paper_broker_forwards_signal_reason_to_fill():
+    """PaperBroker.execute() carries Signal.reason into the returned
+    Fill.exit_reason — closes the workaround gap so the runtime no
+    longer needs to model_copy the stamp."""
+    broker = PaperBroker(fee_as_of=datetime(2026, 4, 1).date())
+    signal = Signal(
+        strategy_id=uuid4(),
+        user_id=uuid4(),
+        ticker="FAKE.NS",
+        side="SELL",
+        qty=10,
+        emitted_at_ns=0,
+        reason="stop_loss",
+    )
+    fill = broker.execute(
+        signal=signal,
+        last_price=Decimal("100"),
+        fill_date=datetime(2026, 1, 2).date(),
+    )
+    assert fill.exit_reason == "stop_loss"
+
+
+def test_paper_broker_defaults_to_signal_when_reason_is_none():
+    """Signal.reason=None → Fill.exit_reason='signal' (default)."""
+    broker = PaperBroker(fee_as_of=datetime(2026, 4, 1).date())
+    signal = Signal(
+        strategy_id=uuid4(),
+        user_id=uuid4(),
+        ticker="FAKE.NS",
+        side="BUY",
+        qty=5,
+        emitted_at_ns=0,
+    )
+    fill = broker.execute(
+        signal=signal,
+        last_price=Decimal("100"),
+        fill_date=datetime(2026, 1, 2).date(),
+    )
+    assert fill.exit_reason == "signal"

@@ -479,13 +479,6 @@ class PaperRuntime:
                     last_price=last_price,
                     fill_date=bar_date_obj,
                 )
-                # PaperBroker doesn't yet carry exit_reason through;
-                # stamp it on the Fill so PositionTracker._apply_sell
-                # records the closed Position with exit_reason=
-                # "stop_loss" (same UI badge contract as backtest).
-                sl_fill = sl_fill.model_copy(
-                    update={"exit_reason": "stop_loss"},
-                )
                 self._positions.apply_fill(sl_fill)
                 self._events.append(
                     event_row(
