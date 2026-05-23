@@ -298,6 +298,16 @@ class RiskPerTrade(BaseModel):
     # the price-stop on mean-reversion strategies whose edge lives
     # in a fixed reversion window (Connors RSI(2) at 2-5 days).
     max_holding_days: int | None = Field(default=None, ge=1, le=365)
+    # ASETPLTFRM-434 Exp.2 — repeat-offender entry gate. None
+    # disables. When set, the runner skips new entries on a ticker
+    # whose most recent closed position had exit_reason in
+    # {time_stop, stop_loss} AND closed_at within N calendar days
+    # of the current bar. Addresses the "broken-thesis ticker
+    # gets re-entered every few days" pattern seen in v2 (APOLLO
+    # at 4 time-stop losses, 0 signal exits).
+    cooldown_after_failed_exit_days: int | None = Field(
+        default=None, ge=1, le=365,
+    )
 
 
 class RiskPortfolio(BaseModel):

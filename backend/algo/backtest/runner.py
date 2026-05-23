@@ -32,6 +32,7 @@ from backend.algo.backtest.sim_broker import (
     NoBarAvailableError,
     SimBroker,
 )
+from backend.algo.backtest.cooldown_monitor import in_cooldown
 from backend.algo.backtest.stop_loss_monitor import (
     check_stop_loss_triggers,
 )
@@ -328,6 +329,10 @@ def run_backtest(
     # references vs genuinely-not-yet-computed factors. Logged in
     # the run summary line, capped at top 5.
     _key_err_counts: dict[str, int] = {}
+    # ASETPLTFRM-434 — cumulative count of entries skipped by the
+    # repeat-offender cooldown gate. Surfaced in the run-summary
+    # log line so operators can see the gate's impact.
+    cooldown_skip_count = 0
     # Day-bucket realised P&L so RiskEngine.daily_loss_cap fires
     # on intra-day drawdown, not cumulative-from-start. Reset at
     # the top of each bar_date.
@@ -576,8 +581,31 @@ def run_backtest(
                 trig.max_holding_days,
             )
 
+        # ASETPLTFRM-434 Exp.2 — cooldown gate input. The function
+        # is pure; we hoist the closed-positions snapshot once per
+        # outer bar so the per-ticker loop is O(1) per call (the
+        # in_cooldown scan walks the list anyway, but reading the
+        # snapshot inside the loop avoids a stale-during-iteration
+        # surprise if the loop ever mutates pt._closed mid-bar).
+        cooldown_days = strategy.risk.per_trade.cooldown_after_failed_exit_days
+        closed_for_cooldown = (
+            pt.closed_positions() if cooldown_days else []
+        )
+
         for ticker in universe:
             if ticker in stop_loss_skip:
+                continue
+            # ASETPLTFRM-434 Exp.2 — pre-AST repeat-offender gate.
+            # When set, skip entries on tickers whose most recent
+            # failed exit (time_stop / stop_loss) is within the
+            # configured cooldown window.
+            if cooldown_days and in_cooldown(
+                ticker=ticker,
+                bar_date=bar_date,
+                closed_positions=closed_for_cooldown,
+                cooldown_days=cooldown_days,
+            ):
+                cooldown_skip_count += 1
                 continue
             blist = bars.get(ticker)
             if not blist:
@@ -994,11 +1022,13 @@ def run_backtest(
     _logger.info(
         "backtest run %s: closed=%d trades, "
         "risk-rejected=%d signals, scaled=%d signals, "
+        "cooldown-skips=%d, "
         "feature-key-errors=%s",
         run_id,
         len(closed),
         rejected_count,
         scaled_count,
+        cooldown_skip_count,
         sorted(
             _key_err_counts.items(),
             key=lambda x: -x[1],
