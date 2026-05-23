@@ -21,6 +21,7 @@ from backend.routes import (
     _admin_backup_contents_impl,
     _admin_backups_health_impl,
     _admin_backups_list_impl,
+    _is_full_snapshot_dir_name,
 )
 
 
@@ -104,26 +105,25 @@ async def test_admin_health_reports_warehouse_size_from_manifest(
 
 @pytest.mark.asyncio
 async def test_admin_list_filters_per_table_dirs(tmp_path):
+    """Per-table backup dirs MUST be filtered out of the list."""
     full_date = "2026-05-23"
     _seed_full_snapshot(
         tmp_path,
         full_date,
         tables=[("stocks.ohlcv", 50.0)],
     )
+    # Legacy per-table cruft that should be hidden
     _seed_per_table_dir(tmp_path, "2026-05-22", "stocks-ohlcv")
 
     response = await _admin_backups_list_impl(
         backup_root=str(tmp_path),
     )
-
     dates = [b["date"] for b in response["backups"]]
-    assert full_date in dates
-    # Per-table dir's date field would be the suffixed
-    # "2026-05-22-stocks-ohlcv" — assert it's absent.
-    assert not any(
-        d.startswith("2026-05-22-") for d in dates
+    assert len(dates) == 1
+    assert all(
+        _is_full_snapshot_dir_name(d) for d in dates
     )
-    assert all("-stocks-" not in d for d in dates)
+    assert dates == [full_date]
 
 
 @pytest.mark.asyncio

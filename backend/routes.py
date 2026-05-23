@@ -95,10 +95,21 @@ def _completed_epoch(latest: dict, fallback_path) -> float:
                 ).timestamp()
             )
         except Exception:
-            pass
+            _logger.debug(
+                "_completed_epoch: completed_iso=%r "
+                "unparseable, falling back to stat()",
+                completed_iso,
+                exc_info=True,
+            )
     try:
         return fallback_path.stat().st_mtime
     except Exception:
+        _logger.debug(
+            "_completed_epoch: stat() failed on %s, "
+            "falling back to now()",
+            fallback_path,
+            exc_info=True,
+        )
         return _t.time()
 
 
@@ -224,6 +235,9 @@ async def _admin_backups_health_impl(
         "backup_count": len(backups),
         "table_count": table_count,
         "warehouse_size_mb": warehouse_size_mb,
+        # Back-compat: current BackupHealthPanel reads size_mb;
+        # keep both keys in sync until Task 6 migrates the UI.
+        "size_mb": warehouse_size_mb,
         "has_catalog": has_catalog,
     }
     if _c2 and backup_root is None:
