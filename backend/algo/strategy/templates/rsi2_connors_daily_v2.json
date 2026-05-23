@@ -1,6 +1,6 @@
 {
   "id": "00000000-0000-0000-0000-000000000041",
-  "name": "RSI(2) Connors Daily v2 \u2014 Long-only mean reversion + ADTV filter",
+  "name": "RSI(2) Connors Daily v2 \u2014 mean reversion + ADTV + time-stop + regime gate",
   "universe": {
     "type": "scope",
     "scope": "discovery",
@@ -55,6 +55,26 @@
           "op": "<",
           "right": {
             "literal": 0.5
+          }
+        },
+        {
+          "type": "compare",
+          "left": {
+            "feature": "nifty_above_sma200"
+          },
+          "op": ">=",
+          "right": {
+            "literal": 1
+          }
+        },
+        {
+          "type": "compare",
+          "left": {
+            "feature": "nifty_30d_return_pct"
+          },
+          "op": ">",
+          "right": {
+            "literal": -5.0
           }
         }
       ]
