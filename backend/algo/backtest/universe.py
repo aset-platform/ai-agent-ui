@@ -46,7 +46,7 @@ def _load_snapshot_adtv() -> dict[str, float]:
     """
     from backend.db.duckdb_engine import query_iceberg_table
     rows = query_iceberg_table(
-        "algo.universe_snapshot",
+        "stocks.universe_snapshot",
         "SELECT rebalance_date, ticker, adtv_inr_60d "
         "FROM universe_snapshot",
         [],
