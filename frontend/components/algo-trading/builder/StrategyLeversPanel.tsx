@@ -6,8 +6,9 @@
  * "knobs" most users actually want to tweak between runs:
  *
  *   • Universe scope, market, ticker_type
+ *   • Universe filter: min_adtv_inr, is_fno (optional)
  *   • Rebalance.max_positions
- *   • Risk → per_trade (stop_loss_pct, max_qty)
+ *   • Risk → per_trade (stop_loss_pct, max_qty, max_holding_days)
  *   • Risk → portfolio (max_exposure_pct, max_concentration_pct)
  *   • Risk → daily (max_loss_pct, max_open_positions)
  *
@@ -41,6 +42,8 @@ interface Props {
 type UniverseFilter = {
   ticker_type: string[];
   market: string;
+  min_adtv_inr?: number | null;
+  is_fno?: boolean;
 };
 type Universe = {
   type: "scope";
@@ -48,7 +51,11 @@ type Universe = {
   filter: UniverseFilter;
 };
 type Rebalance = { type: "daily"; max_positions: number };
-type RiskPerTrade = { stop_loss_pct: number; max_qty: number };
+type RiskPerTrade = {
+  stop_loss_pct: number;
+  max_qty: number;
+  max_holding_days?: number | null;
+};
 type RiskPortfolio = {
   max_exposure_pct: number;
   max_concentration_pct: number;
@@ -239,6 +246,33 @@ export function StrategyLeversPanel({ ast, onChange }: Props) {
                 })}
               </div>
             </Field>
+            <OptionalNumberField
+              label="Min ADTV (₹/day)"
+              value={universe.filter.min_adtv_inr ?? null}
+              onChange={(v) =>
+                patchFilter({ min_adtv_inr: v })
+              }
+              min={0}
+              step={1000000}
+              testId="lever-universe-min-adtv-inr"
+              hint="Liquidity floor against stocks.universe_snapshot.adtv_inr_60d (latest snapshot). Blank disables."
+            />
+            <Field
+              label="F&O 200 universe"
+              hint="Backtest intersects with the F&O 200 whitelist. Paper/live require caps.allowed_tickers pre-population."
+            >
+              <label className="flex items-center gap-1 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(universe.filter.is_fno)}
+                  onChange={(e) =>
+                    patchFilter({ is_fno: e.target.checked })
+                  }
+                  data-testid="lever-universe-is-fno"
+                />
+                Restrict to F&O 200
+              </label>
+            </Field>
           </Group>
 
           <Group title="Rebalance">
@@ -277,6 +311,18 @@ export function StrategyLeversPanel({ ast, onChange }: Props) {
               max={100000}
               testId="lever-risk-max-qty"
               hint="Per-fill share cap. Hits as MAX_QTY rejection."
+            />
+            <OptionalNumberField
+              label="Max holding days"
+              value={risk.per_trade.max_holding_days ?? null}
+              onChange={(v) =>
+                patchRisk("per_trade", { max_holding_days: v })
+              }
+              min={1}
+              max={365}
+              step={1}
+              testId="lever-risk-max-holding-days"
+              hint="Force-exit after N calendar days. Blank disables. Pairs well with stop_loss_pct=0 for mean-reversion strategies."
             />
           </Group>
 
@@ -410,6 +456,57 @@ function NumberField({
         step={step}
         onChange={(e) => {
           const v = Number(e.target.value);
+          if (Number.isNaN(v)) return;
+          if (min !== undefined && v < min) return;
+          if (max !== undefined && v > max) return;
+          onChange(v);
+        }}
+        data-testid={testId}
+        className="rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-2 py-1 text-sm"
+      />
+    </Field>
+  );
+}
+
+// Mirrors NumberField but treats blank input as null (feature
+// disabled). Used for optional risk fields (max_holding_days) and
+// optional universe filters (min_adtv_inr) where None on the
+// Pydantic side means "no filter".
+function OptionalNumberField({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+  step = 1,
+  hint,
+  testId,
+}: {
+  label: string;
+  value: number | null;
+  onChange: (v: number | null) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  hint?: string;
+  testId?: string;
+}) {
+  return (
+    <Field label={label} hint={hint}>
+      <input
+        type="number"
+        value={value ?? ""}
+        min={min}
+        max={max}
+        step={step}
+        placeholder="(disabled)"
+        onChange={(e) => {
+          const raw = e.target.value;
+          if (raw === "") {
+            onChange(null);
+            return;
+          }
+          const v = Number(raw);
           if (Number.isNaN(v)) return;
           if (min !== undefined && v < min) return;
           if (max !== undefined && v > max) return;
