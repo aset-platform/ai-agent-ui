@@ -122,8 +122,8 @@ async def _admin_backups_list_impl(
     with ``age_hours``, ``has_catalog``, ``table_count``,
     ``has_manifest``.
     """
-    from pathlib import Path
     import time as _t
+    from pathlib import Path
 
     from cache import get_cache
 
@@ -171,8 +171,8 @@ async def _admin_backups_health_impl(
     list_backups ``size_mb`` for legacy backups without a
     manifest.
     """
-    from pathlib import Path
     import time as _t
+    from pathlib import Path
 
     from cache import get_cache
 
