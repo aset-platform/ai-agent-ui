@@ -1,0 +1,64 @@
+{
+  "id": "00000000-0000-0000-0000-000000000030",
+  "name": "MIS Intraday MR v1 — Long-only F&O",
+  "universe": {
+    "type": "scope",
+    "scope": "discovery",
+    "filter": {
+      "ticker_type": ["stock"],
+      "market": "india",
+      "is_fno": true
+    }
+  },
+  "schedule": {
+    "type": "bar_close",
+    "interval": "15m",
+    "time": "15:00 IST"
+  },
+  "rebalance": {
+    "type": "daily",
+    "max_positions": 8
+  },
+  "product": "MIS",
+  "square_off_time": "15:14 IST",
+  "entry_cutoff_time": "13:45 IST",
+  "root": {
+    "type": "if",
+    "cond": {
+      "type": "and",
+      "operands": [
+        {"type": "compare",
+         "left": {"feature": "market_breadth_pct_above_sma200"},
+         "op": ">=", "right": {"literal": 0.50}},
+        {"type": "compare",
+         "left": {"feature": "stress_prob"},
+         "op": "<=", "right": {"literal": 0.40}},
+        {"type": "between",
+         "value": {"feature": "minutes_since_open"},
+         "low": {"literal": 30}, "high": {"literal": 270}}
+      ]
+    },
+    "then": {
+      "type": "if",
+      "cond": {
+        "type": "and",
+        "operands": [
+          {"type": "compare",
+           "left": {"feature": "rsi_5"},
+           "op": "<=", "right": {"literal": 25}},
+          {"type": "compare",
+           "left": {"feature": "gap_pct"},
+           "op": ">=", "right": {"literal": -1.5}}
+        ]
+      },
+      "then": {"type": "set_target_weight", "weight": 0.05},
+      "else": {"type": "exit", "scope": "this_symbol"}
+    },
+    "else": {"type": "exit", "scope": "this_symbol"}
+  },
+  "risk": {
+    "per_trade": {"stop_loss_pct": 2.0, "max_qty": 1000},
+    "portfolio": {"max_exposure_pct": 40.0, "max_concentration_pct": 8.0},
+    "daily": {"max_loss_pct": 3.0, "max_open_positions": 8}
+  }
+}

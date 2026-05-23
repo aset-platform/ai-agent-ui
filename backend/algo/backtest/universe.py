@@ -138,9 +138,10 @@ async def resolve_universe(
     )
 
     # ASETPLTFRM-430 Exp.1 — liquidity floor against latest
-    # algo.universe_snapshot.adtv_inr_60d. Tickers absent from the
-    # snapshot are treated as below-floor (excluded) when the filter
-    # is active — the snapshot defines the curated liquid universe.
+    # stocks.universe_snapshot.adtv_inr_60d. Tickers absent from
+    # the snapshot are treated as below-floor (excluded) when the
+    # filter is active — the snapshot defines the curated liquid
+    # universe.
     min_adtv = getattr(filter_obj, "min_adtv_inr", None)
     pre_adtv_count = len(filtered)
     if min_adtv is not None and min_adtv > 0:
@@ -156,6 +157,22 @@ async def resolve_universe(
                 "empty — ADTV filter skipped",
                 min_adtv,
             )
+
+    # ASETPLTFRM — F&O 200 intersect for MIS strategies. Applied
+    # after the ADTV floor so an F&O-restricted strategy with
+    # min_adtv_inr also honors the liquidity floor.
+    is_fno = bool(getattr(filter_obj, "is_fno", False))
+    if is_fno:
+        from backend.algo.research.intraday_15m_mis_bakeoff.universe import (
+            load_fno_universe,
+        )
+        fno_set = set(load_fno_universe())
+        before = len(filtered)
+        filtered = [t for t in filtered if t in fno_set]
+        _logger.info(
+            "resolve_universe is_fno=True: %d -> %d after F&O intersect",
+            before, len(filtered),
+        )
 
     _logger.info(
         "resolve_universe scope=%s filter=(market=%s, "
