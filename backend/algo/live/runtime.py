@@ -44,8 +44,16 @@ from backend.algo.attribution.payload import (
 from backend.algo.backtest.event_writer import event_row, flush_events
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 from backend.algo.backtest.positions import PositionTracker
+from backend.algo.backtest.cooldown_hydration import (
+    _HydratedClose,
+    load_recent_failed_exits,
+)
+from backend.algo.backtest.cooldown_monitor import in_cooldown
 from backend.algo.backtest.stop_loss_monitor import (
     check_stop_loss_triggers,
+)
+from backend.algo.backtest.time_stop_monitor import (
+    check_time_stop_triggers,
 )
 from backend.algo.broker.kite_client import KiteClient
 
@@ -258,6 +266,34 @@ class LiveRuntime:
                 "LiveRuntime: regime cache load failed: %s",
                 exc,
             )
+
+        # ASETPLTFRM-436 — hydrate the cooldown gate from
+        # algo.events at session start. Live runtime restarts wipe
+        # in-memory state; the durable source for "ticker T had a
+        # failed exit at date D" is the order_filled_live event
+        # payload reason field. Same pure in_cooldown function as
+        # backtest, different data origin.
+        self._cooldown_history: list = []
+        cd_days = getattr(
+            getattr(strategy.risk, "per_trade", None),
+            "cooldown_after_failed_exit_days",
+            None,
+        )
+        if cd_days:
+            try:
+                self._cooldown_history = load_recent_failed_exits(
+                    user_id=user_id,
+                    strategy_id=strategy.id,
+                    cooldown_days=cd_days,
+                    as_of=datetime.now(timezone.utc).date(),
+                    runtime_mode="live",
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning(
+                    "LiveRuntime: cooldown hydration failed "
+                    "(%s) — gate starts empty",
+                    exc,
+                )
 
         # REGIME-2a — per-ticker cached factor row, lazy-loaded
         # on first sight of a ticker (same rationale as
@@ -1140,6 +1176,61 @@ class LiveRuntime:
                 # Propagate _submit_order's actual return value so the
                 # per-bar fill counter is correctly attributed on
                 # submission failure (e.g. LTP staleness, Kite error).
+                # Keep in-process cooldown history in sync so the
+                # gate fires on next-day re-entry attempts without
+                # waiting for the next algo.events flush.
+                self._cooldown_history.append(_HydratedClose(
+                    ticker=trig.ticker,
+                    exit_reason="stop_loss",
+                    closed_at=bar_date_obj,
+                ))
+                return fill_count
+
+        # ASETPLTFRM-436 — time-stop monitor (sibling to the
+        # stop-loss block above). Same shape, different trigger
+        # (holding_days >= max_holding_days). Submits IMMEDIATE
+        # LIMIT SELL via _submit_order on the standard rails;
+        # in_flight_entry["reason"]="time_stop" flows to the
+        # order_filled_live event payload.
+        if existing_pos is not None and existing_pos.qty > 0:
+            ts_triggers = check_time_stop_triggers(
+                open_positions={
+                    bar.ticker: {
+                        "qty": existing_pos.qty,
+                        "opened_at": existing_pos.opened_at,
+                    },
+                },
+                current_date=bar_date_obj,
+                max_holding_days=(
+                    self._strategy.risk.per_trade.max_holding_days
+                ),
+            )
+            for trig in ts_triggers:
+                ts_signal = Signal(
+                    strategy_id=self._strategy.id,
+                    user_id=self._user_id,
+                    ticker=trig.ticker,
+                    side="SELL",
+                    qty=existing_pos.qty,
+                    emitted_at_ns=bar.bar_open_ts_ns,
+                    reason="time_stop",
+                )
+                _logger.info(
+                    "live time_stop SELL %s qty=%d held=%d "
+                    "days (threshold=%d)",
+                    trig.ticker, existing_pos.qty,
+                    trig.holding_days, trig.max_holding_days,
+                )
+                fill_count = await self._submit_order(
+                    signal=ts_signal,
+                    last_price=last_price,
+                    last_price_ts=last_price_ts,
+                )
+                self._cooldown_history.append(_HydratedClose(
+                    ticker=trig.ticker,
+                    exit_reason="time_stop",
+                    closed_at=bar_date_obj,
+                ))
                 return fill_count
 
         ctx = EvalContext(
@@ -1163,6 +1254,32 @@ class LiveRuntime:
             last_price=last_price,
         )
         if signal is None:
+            return 0
+
+        # ASETPLTFRM-436 — repeat-offender cooldown gate. Blocks
+        # NEW entries on a ticker with a recent failed exit
+        # (time_stop / stop_loss). Hydrated from algo.events at
+        # session start; kept in sync in-process as new failed
+        # exits land above.
+        cd_days = (
+            self._strategy.risk.per_trade
+            .cooldown_after_failed_exit_days
+        )
+        if (
+            signal.side == "BUY"
+            and cd_days
+            and in_cooldown(
+                ticker=bar.ticker,
+                bar_date=bar_date_obj,
+                closed_positions=self._cooldown_history,
+                cooldown_days=cd_days,
+            )
+        ):
+            _logger.info(
+                "live cooldown SKIP %s — recent failed exit "
+                "within %d days",
+                bar.ticker, cd_days,
+            )
             return 0
 
         # MIS "no new entries after T-1h" gate — shared helper so
