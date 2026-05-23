@@ -382,8 +382,10 @@ def verify_or_backup(
         otherwise.
 
     The fallback path swallows ``FileNotFoundError`` (table
-    never written) the same way the legacy scoped-maintenance
-    branch does — log + continue.
+    never written) — same "skip + carry on" behaviour as the
+    legacy scoped-maintenance branch in
+    ``iceberg_maintenance``, but additionally logs the skip
+    at INFO so admins can see which tables were absent.
     """
     from backend.maintenance.backup_manifest import (
         read_manifest,
@@ -394,7 +396,13 @@ def verify_or_backup(
     snapshot_root = root / f"backup-{today}"
 
     manifest = read_manifest(snapshot_root)
-    if manifest is not None:
+    if manifest is None:
+        _logger.debug(
+            "[verify_or_backup] no manifest at %s — "
+            "falling back to per-table backup",
+            snapshot_root,
+        )
+    else:
         created_iso = manifest.get("created_at", "")
         try:
             created_at = datetime.fromisoformat(
@@ -402,6 +410,12 @@ def verify_or_backup(
             )
         except ValueError:
             created_at = None
+            _logger.debug(
+                "[verify_or_backup] manifest at %s has "
+                "unparseable created_at=%r — falling back",
+                snapshot_root,
+                created_iso,
+            )
         if created_at is not None:
             age_h = (
                 datetime.now(timezone.utc) - created_at
@@ -415,6 +429,19 @@ def verify_or_backup(
                     "snapshot": str(snapshot_root),
                     "paths": [],
                 }
+            missing = sorted(set(tables) - listed)
+            if age_h > max_age_h:
+                _logger.debug(
+                    "[verify_or_backup] manifest age %.1fh > "
+                    "max %.1fh — falling back",
+                    age_h, max_age_h,
+                )
+            if missing:
+                _logger.debug(
+                    "[verify_or_backup] manifest missing "
+                    "tables %s — falling back",
+                    missing,
+                )
 
     paths: list[str] = []
     for t in tables:
