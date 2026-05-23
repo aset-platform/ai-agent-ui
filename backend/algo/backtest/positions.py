@@ -64,6 +64,7 @@ class PositionTracker:
                 "closed_at": fill.fill_date,
                 "closed_at_ts_ns": fill.fill_ts_ns,
                 "realised_pnl_inr": realised,
+                "exit_reason": fill.exit_reason,
             })
             self._closed.append(closed)
             del self._open[fill.ticker]
@@ -79,6 +80,7 @@ class PositionTracker:
                 closed_at=fill.fill_date,
                 closed_at_ts_ns=fill.fill_ts_ns,
                 realised_pnl_inr=realised,
+                exit_reason=fill.exit_reason,
             ))
             self._open[fill.ticker] = existing.model_copy(update={
                 "qty": existing.qty - sell_qty,

@@ -54,4 +54,5 @@ class PaperBroker:
             fill_date=fill_date,
             fees_inr=breakdown.total_inr,
             fee_rates_version=breakdown.rates_version,
+            exit_reason=signal.reason or "signal",
         )
