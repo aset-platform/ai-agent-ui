@@ -53,7 +53,7 @@ def test_template_exit_is_distance_from_sma5_cross_up(template_dict):
 
 def test_template_risk_caps_are_conservative(template_dict):
     s = parse_strategy(template_dict)
-    assert s.risk.per_trade.stop_loss_pct == 5.0
+    assert s.risk.per_trade.stop_loss_pct == 3.0
     assert s.risk.portfolio.max_exposure_pct == 100.0
     assert s.risk.portfolio.max_concentration_pct == 25.0
     assert s.risk.daily.max_loss_pct == 5.0
