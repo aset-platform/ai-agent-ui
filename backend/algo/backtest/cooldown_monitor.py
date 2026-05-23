@@ -28,7 +28,12 @@ from typing import Iterable, Protocol
 # Exit reasons that put a ticker in cooldown. ``signal`` (clean
 # AST-emitted exit) is the only winner shape; everything else
 # represents a thesis failure.
-_FAILED_EXIT_REASONS = frozenset({"time_stop", "stop_loss"})
+# ASETPLTFRM-435 v4 — ``regime_exit`` joins the failed set: if
+# we force-closed a position because the market regime turned,
+# re-entering it next bar is the same broken thesis.
+_FAILED_EXIT_REASONS = frozenset({
+    "time_stop", "stop_loss", "regime_exit",
+})
 
 
 class _ClosedPositionLike(Protocol):

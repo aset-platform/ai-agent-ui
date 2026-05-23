@@ -369,6 +369,17 @@ class Strategy(BaseModel):
     # leaves it None. Honoured by backtest, paper, dry-run, and
     # live runtimes — see backend/algo/runtime/intraday_window.py.
     entry_cutoff_time: str | None = None
+    # ASETPLTFRM-435 v4 — mid-trade regime exit. None disables.
+    # When set, the runner re-evaluates this condition tree every
+    # bar against market-level features (regime_label, stress_prob,
+    # nifty_above_sma200, nifty_30d_return_pct, vix_close, ...).
+    # If the condition evaluates False, ALL open positions are
+    # force-exited at next-bar-open (backtest/paper) or immediate
+    # LIMIT SELL (live) with exit_reason="regime_exit". Mirrors
+    # the entry-time regime gate but applied to held positions —
+    # closes the cluster-decay failure mode where v3 entries land
+    # on a bullish day and decay together when the regime flips.
+    mid_trade_regime_check: ConditionNode | None = Field(default=None)
 
     @model_validator(mode="after")
     def _root_must_be_actionable(self) -> "Strategy":
