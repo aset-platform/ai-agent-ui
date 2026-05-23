@@ -108,3 +108,59 @@ Operator notes:
 - Helper: `backend/algo/strategy/feature_warmup.py`
 - Filter: `backend/algo/backtest/universe.py::filter_warmup_eligible`
 - Hook: `backend/algo/backtest/job.py`
+
+---
+
+## Mid-trade regime exit (2026-05-23, ASETPLTFRM-435) — RESEARCH OPT-IN ONLY
+
+The `Strategy.mid_trade_regime_check` AST field re-evaluates a
+condition tree against per-bar market features and force-closes
+ALL open positions with `exit_reason="regime_exit"` when the
+condition turns False. Sibling to the entry-time regime gate,
+but applied to held positions.
+
+### Default: OFF
+
+The field defaults to `null` in the schema. Production templates
+(v1, v2, v3, all `regime_*`, all `bull_momentum_*`, etc.) do NOT
+set this field — their backtest / paper / live workflows are
+completely unaffected by ASETPLTFRM-435. The runner's per-bar
+mid-trade-exit block is gated by `if mtre_check is not None`
+which is False for every production template, so the block is
+zero-cost when off.
+
+### When to enable
+
+Only for strategy classes where **regime-hostile = thesis broken**:
+
+- Trend-following (regime turns bear → trend's over, exit)
+- Breakout (regime turns bear → no breakouts coming, exit)
+- Momentum (similar logic)
+
+### When NOT to enable (this is the trap)
+
+Mean-reversion strategies have the OPPOSITE thesis — regime-hostile
+days are when the strategy's edge lives. RSI(2) Connors v4 documented
+this empirically (CAGR 8.95% → 1.16%, max DD -14.63% → -16.60%,
+net return +45.6% → +5.18% — three datapoints, all negative). The
+regression test `test_mid_trade_regime_opt_in.py` enforces this:
+
+- A template with the field set MUST include `research` in its
+  filename — forcing a deliberate opt-in by the strategy author
+- The repo-wide guard refuses to ship any new template that
+  silently enables the field
+
+### Reference
+
+The only template with the field set is
+`rsi2_connors_daily_v4_research_regime_exit.json`, which exists
+solely to demonstrate / reproduce the negative result. v3 stays
+the production paper-promotion candidate.
+
+### Implementation
+
+- AST: `Strategy.mid_trade_regime_check: ConditionNode | None`
+- Pure module: `backend/algo/backtest/regime_exit_monitor.py`
+- Runner integration: `backend/algo/backtest/runner.py` (gated by
+  `if mtre_check is not None`)
+- Triage: `docs/research/2026-05-23-rsi2-connors-v4-experiments.md`

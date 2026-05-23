@@ -8,9 +8,12 @@
  *   • Universe scope, market, ticker_type
  *   • Universe filter: min_adtv_inr, is_fno (optional)
  *   • Rebalance.max_positions
- *   • Risk → per_trade (stop_loss_pct, max_qty, max_holding_days)
+ *   • Risk → per_trade (stop_loss_pct, max_qty,
+ *     max_holding_days, cooldown_after_failed_exit_days)
  *   • Risk → portfolio (max_exposure_pct, max_concentration_pct)
  *   • Risk → daily (max_loss_pct, max_open_positions)
+ *   • Mid-trade regime exit (research opt-in toggle —
+ *     mid_trade_regime_check)
  *
  * Reads + writes the same StrategyAst object the builder uses,
  * so toggling a lever immediately reflects in the JSON pane.
@@ -31,6 +34,29 @@ import {
 const SCOPES = ["discovery", "watchlist", "portfolio"] as const;
 const MARKETS = ["india", "us", "all"] as const;
 const TICKER_TYPES = ["stock", "etf"] as const;
+
+// ASETPLTFRM-435 — canonical mid-trade regime exit condition.
+// Mirrors the v4 research template (rsi2_connors_daily_v4_research_
+// regime_exit.json) and the entry-time regime gate v3 uses: don't
+// hold positions when NIFTY is below SMA200 OR has lost >5% in
+// the last 30 days. Power users can override via the JSON pane.
+const DEFAULT_MID_TRADE_REGIME_CHECK: ConditionNode = {
+  type: "and",
+  operands: [
+    {
+      type: "compare",
+      left: { feature: "nifty_above_sma200" },
+      op: ">=",
+      right: { literal: 1 },
+    },
+    {
+      type: "compare",
+      left: { feature: "nifty_30d_return_pct" },
+      op: ">",
+      right: { literal: -5.0 },
+    },
+  ],
+};
 
 interface Props {
   ast: StrategyAst;
@@ -55,7 +81,14 @@ type RiskPerTrade = {
   stop_loss_pct: number;
   max_qty: number;
   max_holding_days?: number | null;
+  cooldown_after_failed_exit_days?: number | null;
 };
+// ConditionNode shape used by mid_trade_regime_check. The schema
+// is recursive — at TS level we treat it as Record<string,unknown>
+// since the lever UI toggles between null and a canonical default
+// rather than letting users edit the tree directly. Power users
+// who want a different threshold edit via the JSON pane.
+type ConditionNode = Record<string, unknown>;
 type RiskPortfolio = {
   max_exposure_pct: number;
   max_concentration_pct: number;
@@ -324,6 +357,22 @@ export function StrategyLeversPanel({ ast, onChange }: Props) {
               testId="lever-risk-max-holding-days"
               hint="Force-exit after N calendar days. Blank disables. Pairs well with stop_loss_pct=0 for mean-reversion strategies."
             />
+            <OptionalNumberField
+              label="Cooldown after failed exit (days)"
+              value={
+                risk.per_trade.cooldown_after_failed_exit_days ?? null
+              }
+              onChange={(v) =>
+                patchRisk("per_trade", {
+                  cooldown_after_failed_exit_days: v,
+                })
+              }
+              min={1}
+              max={365}
+              step={1}
+              testId="lever-risk-cooldown-days"
+              hint="Skip new entries on tickers with a recent stop_loss / time_stop / regime_exit within N days. Blank disables. Sweet spot 7–14 days for RSI(2) v3."
+            />
           </Group>
 
           <Group title="Risk · portfolio">
@@ -379,6 +428,39 @@ export function StrategyLeversPanel({ ast, onChange }: Props) {
               max={50}
               testId="lever-risk-max-open-positions"
             />
+          </Group>
+
+          {/* ASETPLTFRM-435 — opt-in research primitive.
+              See backend/algo/strategy/templates/README.md for
+              why mid-trade regime exit is anti-thesis for mean-
+              reversion strategies (RSI(2) v4 negative result). */}
+          <Group title="Mid-trade regime exit (research opt-in)">
+            <Field
+              label="Enable mid-trade regime exit"
+              hint="WARNING: anti-thesis for mean-reversion strategies (RSI(2)-style). Only enable on trend-following / breakout strategies where regime-hostile = thesis broken. v4 triage documents the negative result on RSI(2). Power users: edit the condition tree via the JSON pane."
+            >
+              <label className="flex items-center gap-1 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={
+                    (ast as { mid_trade_regime_check?: unknown })
+                      .mid_trade_regime_check != null
+                  }
+                  onChange={(e) =>
+                    patch({
+                      mid_trade_regime_check: (
+                        e.target.checked
+                          ? DEFAULT_MID_TRADE_REGIME_CHECK
+                          : null
+                      ),
+                    } as Partial<StrategyAst>)
+                  }
+                  data-testid="lever-mid-trade-regime-check-toggle"
+                />
+                Force-close all positions when NIFTY regime turns
+                hostile
+              </label>
+            </Field>
           </Group>
         </div>
       )}
