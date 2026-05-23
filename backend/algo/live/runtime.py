@@ -44,6 +44,9 @@ from backend.algo.attribution.payload import (
 from backend.algo.backtest.event_writer import event_row, flush_events
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 from backend.algo.backtest.positions import PositionTracker
+from backend.algo.backtest.stop_loss_monitor import (
+    check_stop_loss_triggers,
+)
 from backend.algo.broker.kite_client import KiteClient
 
 # REGIME-2a — pre-computed nightly factor library overlay.
@@ -1071,6 +1074,74 @@ class LiveRuntime:
         )
 
         existing_pos = self._positions.open_positions().get(bar.ticker)
+
+        # Stop-loss enforcement (universal v1, long-only). Run BEFORE
+        # per-ticker AST eval so an in-flight stop blocks any
+        # conflicting AST action on the same bar. Live differs from
+        # backtest/paper: the SELL is submitted IMMEDIATELY through
+        # KiteClient.place_order via _submit_order — no next-bar-open
+        # delay. ``signal.reason="stop_loss"`` flows through
+        # _submit_order → in_flight_entry["reason"] → Kite postback
+        # → order_filled_live event payload (spec §4.5). Kite v2
+        # rejects naked MARKET / bracket orders so _submit_order
+        # uses an aggressive LIMIT priced at ``last_price`` with a
+        # liquidity-bucket-driven slippage buffer — same path the
+        # AST-driven SELL takes.
+        #
+        # IMPORTANT: SL submissions bypass _pre_trade_check
+        # (kill_switch, max_inr, max_orders, allowed_tickers)
+        # intentionally — stops must fire to bleed risk even when
+        # the strategy is otherwise gated. Position-tracker realism
+        # + LTP-staleness guard inside _submit_order remain in force.
+        if existing_pos is not None and existing_pos.qty > 0:
+            sl_triggers = check_stop_loss_triggers(
+                open_positions={
+                    bar.ticker: {
+                        "qty": existing_pos.qty,
+                        "avg_price": existing_pos.avg_price,
+                    },
+                },
+                current_closes={
+                    bar.ticker: Decimal(str(bar.close)),
+                },
+                stop_loss_pct=float(
+                    self._strategy.risk.per_trade.stop_loss_pct
+                ),
+            )
+            for trig in sl_triggers:
+                sl_signal = Signal(
+                    strategy_id=self._strategy.id,
+                    user_id=self._user_id,
+                    ticker=trig.ticker,
+                    side="SELL",
+                    qty=existing_pos.qty,
+                    emitted_at_ns=bar.bar_open_ts_ns,
+                    reason="stop_loss",
+                )
+                # INFO (not DEBUG) — live is real money; operators
+                # need stops visible without flipping the log level.
+                _logger.info(
+                    "live stop_loss SELL %s qty=%d avg=%.4f "
+                    "close=%.4f loss=%.2f%% threshold=%.2f%%",
+                    trig.ticker,
+                    existing_pos.qty,
+                    float(trig.avg_price),
+                    float(trig.current_close),
+                    float(trig.loss_pct),
+                    float(trig.stop_loss_pct),
+                )
+                fill_count = await self._submit_order(
+                    signal=sl_signal,
+                    last_price=last_price,
+                    last_price_ts=last_price_ts,
+                )
+                # Same-bar skip: AST eval MUST NOT run for a ticker
+                # that just stopped out — mirrors backtest / paper.
+                # Propagate _submit_order's actual return value so the
+                # per-bar fill counter is correctly attributed on
+                # submission failure (e.g. LTP staleness, Kite error).
+                return fill_count
+
         ctx = EvalContext(
             ticker=bar.ticker,
             bar_date=bar_date_obj,
