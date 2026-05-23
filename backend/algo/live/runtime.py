@@ -1087,6 +1087,12 @@ class LiveRuntime:
         # uses an aggressive LIMIT priced at ``last_price`` with a
         # liquidity-bucket-driven slippage buffer — same path the
         # AST-driven SELL takes.
+        #
+        # IMPORTANT: SL submissions bypass _pre_trade_check
+        # (kill_switch, max_inr, max_orders, allowed_tickers)
+        # intentionally — stops must fire to bleed risk even when
+        # the strategy is otherwise gated. Position-tracker realism
+        # + LTP-staleness guard inside _submit_order remain in force.
         if existing_pos is not None and existing_pos.qty > 0:
             sl_triggers = check_stop_loss_triggers(
                 open_positions={
@@ -1124,14 +1130,17 @@ class LiveRuntime:
                     float(trig.loss_pct),
                     float(trig.stop_loss_pct),
                 )
-                await self._submit_order(
+                fill_count = await self._submit_order(
                     signal=sl_signal,
                     last_price=last_price,
                     last_price_ts=last_price_ts,
                 )
                 # Same-bar skip: AST eval MUST NOT run for a ticker
                 # that just stopped out — mirrors backtest / paper.
-                return 1
+                # Propagate _submit_order's actual return value so the
+                # per-bar fill counter is correctly attributed on
+                # submission failure (e.g. LTP staleness, Kite error).
+                return fill_count
 
         ctx = EvalContext(
             ticker=bar.ticker,

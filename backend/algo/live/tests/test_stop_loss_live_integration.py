@@ -360,3 +360,33 @@ async def test_live_stop_loss_no_trigger_when_loss_below_threshold():
     assert sell_calls == []
     in_flight_reasons = [e["reason"] for e in runtime._in_flight]
     assert "stop_loss" not in in_flight_reasons
+
+
+@pytest.mark.asyncio
+async def test_live_stop_loss_propagates_submit_order_return_value():
+    """When _submit_order returns 0 (e.g. LTP staleness or place_order
+    failure), _on_bar_close also returns 0 — preserves the per-bar
+    fill counter semantics. Without this, an SL submission failure
+    would be silently counted as 1 successful fill."""
+    runtime, _kite = _make_runtime(stop_loss_pct=5, buy_qty=5)
+    _seed_open_position(
+        runtime,
+        ticker="FAKE.NS",
+        qty=10,
+        avg_price=Decimal("100"),
+    )
+    _seed_bar_history(runtime, ticker="FAKE.NS", close=94.0)
+
+    # Patch _submit_order to simulate a failure (returns 0).
+    runtime._submit_order = AsyncMock(return_value=0)
+
+    bar = _make_bar(close=94.0)  # -6% — trips the 5% stop.
+    result = await runtime._on_bar_close(
+        bar=bar,
+        last_price=Decimal("94"),
+    )
+
+    # SL path was entered (one _submit_order call) but it returned 0,
+    # so _on_bar_close must propagate 0 — not the previous hard-coded 1.
+    assert runtime._submit_order.await_count == 1
+    assert result == 0
