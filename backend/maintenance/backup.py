@@ -360,6 +360,79 @@ def list_backups(
     return backups
 
 
+def verify_or_backup(
+    tables: list[str],
+    *,
+    max_age_h: float = 24.0,
+    backup_root: str | None = None,
+) -> dict:
+    """Check today's snapshot covers ``tables``; fall back
+    to per-table ``backup_table()`` if not.
+
+    Returns:
+        ``{"mode": "verified",
+           "snapshot": "<path>",
+           "paths": []}``
+        when the manifest is fresh AND lists every requested
+        table.
+
+        ``{"mode": "fallback_per_table",
+           "snapshot": None,
+           "paths": [<per-table-backup-paths>]}``
+        otherwise.
+
+    The fallback path swallows ``FileNotFoundError`` (table
+    never written) the same way the legacy scoped-maintenance
+    branch does — log + continue.
+    """
+    from backend.maintenance.backup_manifest import (
+        read_manifest,
+    )
+
+    root = Path(backup_root or BACKUP_ROOT)
+    today = date.today().isoformat()
+    snapshot_root = root / f"backup-{today}"
+
+    manifest = read_manifest(snapshot_root)
+    if manifest is not None:
+        created_iso = manifest.get("created_at", "")
+        try:
+            created_at = datetime.fromisoformat(
+                created_iso.replace("Z", "+00:00"),
+            )
+        except ValueError:
+            created_at = None
+        if created_at is not None:
+            age_h = (
+                datetime.now(timezone.utc) - created_at
+            ).total_seconds() / 3600
+            listed = {
+                t["id"] for t in manifest.get("tables", [])
+            }
+            if age_h <= max_age_h and set(tables) <= listed:
+                return {
+                    "mode": "verified",
+                    "snapshot": str(snapshot_root),
+                    "paths": [],
+                }
+
+    paths: list[str] = []
+    for t in tables:
+        try:
+            paths.append(backup_table(t))
+        except FileNotFoundError:
+            _logger.info(
+                "[verify_or_backup] %s: no on-disk data, "
+                "skipping per-table backup",
+                t,
+            )
+    return {
+        "mode": "fallback_per_table",
+        "snapshot": None,
+        "paths": paths,
+    }
+
+
 def _rotate_backups(
     root: Path,
     keep: int,
