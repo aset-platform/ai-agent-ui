@@ -82,6 +82,17 @@ def _parse_args() -> argparse.Namespace:
             "Override to distinguish sanity re-runs."
         ),
     )
+    parser.add_argument(
+        "--template",
+        type=str,
+        default=TEMPLATE_NAME,
+        help=(
+            "Strategy template stem to load from "
+            "backend/algo/strategy/templates/. Defaults to "
+            "'rsi2_connors_daily_v1'. Use 'rsi2_connors_daily_v2' "
+            "to run the ASETPLTFRM-430 ADTV-filtered variant."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -94,8 +105,10 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
+    template_name: str = args.template
+
     _logger.info("Tag: %s", tag)
-    _logger.info("Loading template %s", TEMPLATE_NAME)
+    _logger.info("Loading template %s", template_name)
 
     from backend.algo.strategy.ast import parse_strategy
 
@@ -105,7 +118,7 @@ def main() -> None:
         / "algo"
         / "strategy"
         / "templates"
-        / f"{TEMPLATE_NAME}.json"
+        / f"{template_name}.json"
     )
     if not template_path.exists():
         _logger.error("Template not found: %s", template_path)

@@ -1,11 +1,13 @@
 {
   "id": "00000000-0000-0000-0000-000000000041",
-  "name": "RSI(2) Connors Daily v2 — Long-only mean reversion + ADTV filter",
+  "name": "RSI(2) Connors Daily v2 \u2014 Long-only mean reversion + ADTV filter",
   "universe": {
     "type": "scope",
     "scope": "discovery",
     "filter": {
-      "ticker_type": ["stock"],
+      "ticker_type": [
+        "stock"
+      ],
       "market": "india",
       "min_adtv_inr": 50000000
     }
@@ -27,43 +29,74 @@
       "operands": [
         {
           "type": "compare",
-          "left": {"feature": "rsi_2"},
+          "left": {
+            "feature": "rsi_2"
+          },
           "op": "<=",
-          "right": {"literal": 5}
+          "right": {
+            "literal": 5
+          }
         },
         {
           "type": "compare",
-          "left": {"feature": "distance_from_sma200"},
+          "left": {
+            "feature": "distance_from_sma200"
+          },
           "op": ">",
-          "right": {"literal": 0.0}
+          "right": {
+            "literal": 0.0
+          }
         },
         {
           "type": "compare",
-          "left": {"feature": "stress_prob"},
+          "left": {
+            "feature": "stress_prob"
+          },
           "op": "<",
-          "right": {"literal": 0.5}
+          "right": {
+            "literal": 0.5
+          }
         }
       ]
     },
-    "then": {"type": "set_target_weight", "weight": 0.20},
+    "then": {
+      "type": "set_target_weight",
+      "weight": 0.2
+    },
     "else": {
       "type": "if",
       "cond": {
         "type": "compare",
-        "left": {"feature": "distance_from_sma5"},
+        "left": {
+          "feature": "distance_from_sma5"
+        },
         "op": ">",
-        "right": {"literal": 0.0}
+        "right": {
+          "literal": 0.0
+        }
       },
-      "then": {"type": "exit", "scope": "this_symbol"},
-      "else": {"type": "hold"}
+      "then": {
+        "type": "exit",
+        "scope": "this_symbol"
+      },
+      "else": {
+        "type": "hold"
+      }
     }
   },
   "risk": {
-    "per_trade": {"stop_loss_pct": 3.0, "max_qty": 10000},
+    "per_trade": {
+      "stop_loss_pct": 0.0,
+      "max_qty": 10000,
+      "max_holding_days": 5
+    },
     "portfolio": {
       "max_exposure_pct": 100.0,
       "max_concentration_pct": 25.0
     },
-    "daily": {"max_loss_pct": 5.0, "max_open_positions": 5}
+    "daily": {
+      "max_loss_pct": 5.0,
+      "max_open_positions": 5
+    }
   }
 }

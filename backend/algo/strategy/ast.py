@@ -289,6 +289,12 @@ class RiskPerTrade(BaseModel):
     model_config = ConfigDict(extra="forbid")
     stop_loss_pct: float = Field(ge=0, le=50)
     max_qty: int = Field(ge=1, le=1_000_000)
+    # ASETPLTFRM-430 Exp.3 — time-based exit. None disables.
+    # Force-exit a position at the next bar's open after it has
+    # been held for N calendar days. Complements (or replaces)
+    # the price-stop on mean-reversion strategies whose edge lives
+    # in a fixed reversion window (Connors RSI(2) at 2-5 days).
+    max_holding_days: int | None = Field(default=None, ge=1, le=365)
 
 
 class RiskPortfolio(BaseModel):

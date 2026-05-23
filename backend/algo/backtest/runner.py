@@ -35,6 +35,9 @@ from backend.algo.backtest.sim_broker import (
 from backend.algo.backtest.stop_loss_monitor import (
     check_stop_loss_triggers,
 )
+from backend.algo.backtest.time_stop_monitor import (
+    check_time_stop_triggers,
+)
 from backend.algo.backtest.types import (
     BacktestRequest,
     BacktestSummary,
@@ -503,6 +506,74 @@ def run_backtest(
                 float(trig.current_close),
                 float(trig.loss_pct),
                 float(trig.stop_loss_pct),
+            )
+
+        # Time-based stop (ASETPLTFRM-430 Exp.3). Same pattern as
+        # the price stop above but triggers on holding_days
+        # exceeding strategy.risk.per_trade.max_holding_days. For
+        # mean-reversion strategies whose reversion window is fixed
+        # (Connors RSI(2) at 2-5 days); fires AFTER the window
+        # without truncating the price action inside it.
+        time_triggers = check_time_stop_triggers(
+            open_positions={
+                t: {"qty": p.qty, "opened_at": p.opened_at}
+                for t, p in open_pos_now.items()
+                if t not in stop_loss_skip
+            },
+            current_date=bar_date,
+            max_holding_days=(
+                strategy.risk.per_trade.max_holding_days
+            ),
+        )
+        for trig in time_triggers:
+            existing = open_pos_now.get(trig.ticker)
+            if existing is None or existing.qty <= 0:
+                continue
+            ts_intent = OrderIntent(
+                ticker=trig.ticker,
+                side="SELL",
+                qty=existing.qty,
+                intent_emitted_at=bar_date,
+                intent_emitted_ts_ns=ts_ns,
+                exit_reason="time_stop",
+            )
+            try:
+                ts_fill = sim.execute(ts_intent)
+            except NoBarAvailableError:
+                ts_fill = None
+            if ts_fill is None:
+                continue
+            pt.apply_fill(ts_fill)
+            total_fees += ts_fill.fees_inr
+            fee_rates_version = ts_fill.fee_rates_version
+            events.append(
+                event_row(
+                    session_id=session_id,
+                    user_id=user_id,
+                    strategy_id=strategy.id,
+                    mode="backtest",
+                    type_="order_filled",
+                    payload={
+                        "ticker": ts_fill.ticker,
+                        "side": ts_fill.side,
+                        "qty": ts_fill.qty,
+                        "fill_price": str(ts_fill.fill_price),
+                        "fill_date": ts_fill.fill_date.isoformat(),
+                        "fees_inr": str(ts_fill.fees_inr),
+                        "fee_rates_version": (
+                            ts_fill.fee_rates_version
+                        ),
+                        "exit_reason": "time_stop",
+                    },
+                )
+            )
+            stop_loss_skip.add(trig.ticker)
+            _logger.debug(
+                "time_stop trigger %s held=%d days "
+                "(threshold=%d)",
+                trig.ticker,
+                trig.holding_days,
+                trig.max_holding_days,
             )
 
         for ticker in universe:
