@@ -53,7 +53,7 @@ DEFAULT_WARMUP_BARS = 400
 def compute_indicators(
     bars: list[BarData],
     *,
-    sma_windows: Iterable[int] = (20, 50, 200),
+    sma_windows: Iterable[int] = (5, 20, 50, 200),
 ) -> dict[object, dict[str, Decimal]]:
     """Per-(date) feature map for a single ticker's bar series.
 
@@ -61,15 +61,29 @@ def compute_indicators(
     Returns a dict keyed by ``date`` (the bar's ``BarData.date``)
     so callers can look up features per (ticker, bar_date) at
     runtime.
+
+    Features emitted (beyond sma_N and golden_cross_days_ago):
+        - ``rsi`` / ``rsi_14``  — Wilder RSI(14) (original)
+        - ``rsi_5``             — Wilder RSI(5)
+        - ``rsi_2``             — Wilder RSI(2); Connors mean-rev
+        - ``distance_from_sma5``— (close - sma_5) / sma_5; exit
+          signal for Connors strategy
     """
     if not bars:
         return {}
 
     closes = [b.close for b in bars]
+    # Ensure sma_5 is always computed even if caller overrides
+    # sma_windows (distance_from_sma5 needs it).
+    sma_windows_t = tuple(sma_windows)
+    if 5 not in sma_windows_t:
+        sma_windows_t = (5,) + sma_windows_t
     sma_series: dict[int, list[Decimal | None]] = {
-        w: _rolling_sma(closes, w) for w in sma_windows
+        w: _rolling_sma(closes, w) for w in sma_windows_t
     }
     rsi_series = _wilder_rsi(closes, 14)
+    rsi_5_series = _wilder_rsi(closes, 5)
+    rsi_2_series = _wilder_rsi(closes, 2)
     vwap_series = _vwap_intraday(bars)
 
     # golden_cross_days_ago tracking — distance since the most
@@ -86,7 +100,7 @@ def compute_indicators(
             "today_ltp": bar.close,
             "today_vol": Decimal(bar.volume),
         }
-        for w in sma_windows:
+        for w in sma_windows_t:
             v = sma_series[w][i]
             if v is not None:
                 feats[f"sma_{w}"] = v
@@ -94,6 +108,19 @@ def compute_indicators(
         if rsi_v is not None:
             feats["rsi"] = rsi_v
             feats["rsi_14"] = rsi_v
+        rsi5_v = rsi_5_series[i]
+        if rsi5_v is not None:
+            feats["rsi_5"] = rsi5_v
+        rsi2_v = rsi_2_series[i]
+        if rsi2_v is not None:
+            feats["rsi_2"] = rsi2_v
+        # distance_from_sma5 = (close - sma_5) / sma_5.
+        # Connors exit condition: price crossed back above SMA(5).
+        sma5_v = sma_series[5][i]
+        if sma5_v is not None and sma5_v != 0:
+            feats["distance_from_sma5"] = (
+                Decimal(str(bar.close)) - sma5_v
+            ) / sma5_v
         vwap_v = vwap_series[i]
         if vwap_v is not None:
             feats["vwap"] = vwap_v

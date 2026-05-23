@@ -151,8 +151,8 @@ def test_emits_all_spec_features_on_well_warmed_series():
     assert not missing, f"missing features on tail: {missing}"
 
 
-def test_sma_windows_default_to_20_50_100_200():
-    assert DEFAULT_DAILY_SMA_WINDOWS == (20, 50, 100, 200)
+def test_sma_windows_default_to_5_20_50_100_200():
+    assert DEFAULT_DAILY_SMA_WINDOWS == (5, 20, 50, 100, 200)
 
 
 def test_rsi_14_and_rsi_5_both_emitted():
@@ -227,3 +227,92 @@ def test_volume_spike_is_binary():
     assert spikes, "expected at least one volume_spike value"
     for v in spikes:
         assert v in (0, 1, Decimal("0"), Decimal("1"))
+
+
+def test_compute_daily_features_emits_rsi_2():
+    """rsi_2 emitted with at least 2 prior closes available."""
+    # Build a 250-bar series so RSI / SMAs all settle.
+    # Alternating up/down so RSI is neither 0 nor 100.
+    closes = [100.0]
+    for i in range(1, 250):
+        delta = 0.5 if i % 2 == 0 else -0.4
+        closes.append(closes[-1] + delta)
+    series = [
+        BarData(
+            ticker="TEST.NS",
+            date=date.fromordinal(date(2025, 1, 1).toordinal() + i),
+            open=Decimal(str(c)),
+            high=Decimal(str(c + 0.1)),
+            low=Decimal(str(c - 0.1)),
+            close=Decimal(str(c)),
+            volume=1000,
+            bar_open_ts_ns=_utc_midnight_ns(
+                date.fromordinal(date(2025, 1, 1).toordinal() + i)
+            ),
+        )
+        for i, c in enumerate(closes)
+    ]
+    out = compute_daily_features(series)
+    # Last bar should have rsi_2 emitted.
+    last_key = max(out.keys())
+    feats = out[last_key]
+    assert "rsi_2" in feats, f"rsi_2 missing; got keys {sorted(feats.keys())}"
+    assert 0 <= float(feats["rsi_2"]) <= 100
+
+
+def test_compute_daily_features_emits_sma_5():
+    """sma_5 emitted once at least 5 closes are available."""
+    closes = [100.0 + i * 0.1 for i in range(250)]
+    series = [
+        BarData(
+            ticker="TEST.NS",
+            date=date.fromordinal(date(2025, 1, 1).toordinal() + i),
+            open=Decimal(str(c)),
+            high=Decimal(str(c + 0.1)),
+            low=Decimal(str(c - 0.1)),
+            close=Decimal(str(c)),
+            volume=1000,
+            bar_open_ts_ns=_utc_midnight_ns(
+                date.fromordinal(date(2025, 1, 1).toordinal() + i)
+            ),
+        )
+        for i, c in enumerate(closes)
+    ]
+    out = compute_daily_features(series)
+    last_key = max(out.keys())
+    feats = out[last_key]
+    assert "sma_5" in feats
+    # sma_5 of monotonic series = average of last 5 closes.
+    expected = sum(closes[-5:]) / 5
+    assert abs(float(feats["sma_5"]) - expected) < 1e-6
+
+
+def test_compute_daily_features_emits_distance_from_sma5():
+    """distance_from_sma5 = (close - sma_5) / sma_5."""
+    # Build a clean ramp so close > sma_5 is unambiguous.
+    closes = [100.0 + i for i in range(250)]
+    series = [
+        BarData(
+            ticker="TEST.NS",
+            date=date.fromordinal(date(2025, 1, 1).toordinal() + i),
+            open=Decimal(str(c)),
+            high=Decimal(str(c + 0.1)),
+            low=Decimal(str(c - 0.1)),
+            close=Decimal(str(c)),
+            volume=1000,
+            bar_open_ts_ns=_utc_midnight_ns(
+                date.fromordinal(date(2025, 1, 1).toordinal() + i)
+            ),
+        )
+        for i, c in enumerate(closes)
+    ]
+    out = compute_daily_features(series)
+    last_key = max(out.keys())
+    feats = out[last_key]
+    assert "distance_from_sma5" in feats
+    sma5 = float(feats["sma_5"])
+    close = float(closes[-1])
+    expected = (close - sma5) / sma5
+    assert abs(float(feats["distance_from_sma5"]) - expected) < 1e-6
+    # Ramp guarantees close > sma_5 → positive distance.
+    assert float(feats["distance_from_sma5"]) > 0

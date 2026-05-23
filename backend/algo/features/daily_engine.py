@@ -27,7 +27,7 @@ from backend.algo.features import primitives as p
 from backend.algo.features.types import TickerFeaturePanel
 from backend.algo.features.version import FEATURE_SET_VERSION
 
-DEFAULT_DAILY_SMA_WINDOWS: tuple[int, ...] = (20, 50, 100, 200)
+DEFAULT_DAILY_SMA_WINDOWS: tuple[int, ...] = (5, 20, 50, 100, 200)
 
 
 def compute_daily_features(
@@ -44,7 +44,7 @@ def compute_daily_features(
             are skipped defensively (the caller is responsible
             for synthesising UTC-midnight ns from ``bar.date``).
         sma_windows: SMA windows to emit. Defaults to
-            ``(20, 50, 100, 200)``.
+            ``(5, 20, 50, 100, 200)``.
         feature_set_version: Accepted for API parity with
             :func:`compute_intraday_features`; not embedded in
             the returned dict — the persister adds it on write.
@@ -80,6 +80,7 @@ def compute_daily_features(
     }
     rsi_14 = p.wilder_rsi(closes, 14)
     rsi_5 = p.wilder_rsi(closes, 5)
+    rsi_2 = p.wilder_rsi(closes, 2)
     ema_20 = p.ema(closes, 20)
     ema_50 = p.ema(closes, 50)
     ema_20_slope = p.series_slope_n_bar(ema_20, 5)
@@ -104,6 +105,14 @@ def compute_daily_features(
             if v is not None:
                 feats[f"sma_{w}"] = v
 
+        # distance_from_sma5 = (close - sma_5) / sma_5.
+        # Skip-emit if sma_5 not yet warm.
+        sma5 = feats.get("sma_5")
+        if sma5 is not None:
+            feats["distance_from_sma5"] = (
+                Decimal(str(bar.close)) - sma5
+            ) / sma5
+
         # RSI family.
         rsi_v = rsi_14[i]
         if rsi_v is not None:
@@ -111,6 +120,9 @@ def compute_daily_features(
         rsi5_v = rsi_5[i]
         if rsi5_v is not None:
             feats["rsi_5"] = rsi5_v
+        rsi2_v = rsi_2[i]
+        if rsi2_v is not None:
+            feats["rsi_2"] = rsi2_v
 
         # EMA family + slope.
         ema20_v = ema_20[i]

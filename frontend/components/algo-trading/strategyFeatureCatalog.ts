@@ -31,9 +31,12 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "away_from_52week_high", label: "Away from 52w high (%)", type: "float", source: "ohlcv" },
   // Technical
   { key: "golden_cross_days_ago", label: "Golden cross (days ago)", type: "int", source: "technical" },
+  { key: "sma_5", label: "SMA 5", type: "float", source: "technical" },
   { key: "sma_50", label: "SMA 50", type: "float", source: "technical" },
   { key: "sma_200", label: "SMA 200", type: "float", source: "technical" },
+  { key: "rsi_2", label: "RSI (2) — Connors 2-period", type: "float", source: "technical" },
   { key: "rsi", label: "RSI (14)", type: "float", source: "technical" },
+  { key: "distance_from_sma5", label: "Distance from SMA 5", type: "float", source: "technical" },
   { key: "vwap", label: "VWAP (intraday)", type: "float", source: "technical" },
   { key: "nifty_above_sma200", label: "NIFTY > SMA200 regime (1/0)", type: "int", source: "technical" },
   { key: "nifty_30d_return_pct", label: "NIFTY 30-day return %", type: "float", source: "technical" },

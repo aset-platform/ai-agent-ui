@@ -250,6 +250,13 @@ class UniverseFilter(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ticker_type: list[Literal["stock", "etf"]] = Field(min_length=1)
     market: Literal["india", "us", "all"] = "india"
+    # ASETPLTFRM-430 Exp.1 — liquidity floor. None disables.
+    # Checked against stocks.universe_snapshot.adtv_inr_60d
+    # (latest snapshot at backtest start). Tickers below the floor
+    # are dropped before AST evaluation. v1 post-fix triage found
+    # low-float names dominate P&L via repeated stop-then-re-enter
+    # cycles; min_adtv_inr removes them at the universe layer.
+    min_adtv_inr: float | None = Field(default=None, ge=0)
     # ASETPLTFRM — when True, the backtest universe resolver
     # intersects with the F&O 200 whitelist (live + paper rely
     # on caps.allowed_tickers, not on this field).
@@ -285,6 +292,12 @@ class RiskPerTrade(BaseModel):
     model_config = ConfigDict(extra="forbid")
     stop_loss_pct: float = Field(ge=0, le=50)
     max_qty: int = Field(ge=1, le=1_000_000)
+    # ASETPLTFRM-430 Exp.3 — time-based exit. None disables.
+    # Force-exit a position at the next bar's open after it has
+    # been held for N calendar days. Complements (or replaces)
+    # the price-stop on mean-reversion strategies whose edge lives
+    # in a fixed reversion window (Connors RSI(2) at 2-5 days).
+    max_holding_days: int | None = Field(default=None, ge=1, le=365)
 
 
 class RiskPortfolio(BaseModel):
