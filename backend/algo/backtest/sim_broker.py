@@ -196,5 +196,6 @@ class SimBroker:
             fill_date=next_bar.date,
             fees_inr=breakdown.total_inr,
             fee_rates_version=breakdown.rates_version,
+            exit_reason=intent.exit_reason,
             fill_ts_ns=next_bar.bar_open_ts_ns,
         )

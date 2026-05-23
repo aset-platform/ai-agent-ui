@@ -466,14 +466,10 @@ def run_backtest(
                 sl_fill = None
             if sl_fill is None:
                 continue
-            # SimBroker.execute() doesn't forward intent.exit_reason
-            # onto the Fill (defaults to "signal"). Stamp it here so
-            # PositionTracker.apply_fill() stamps the closed Position
-            # with exit_reason="stop_loss" — which is what the UI
-            # badge + trade_list filter both key off.
-            sl_fill = sl_fill.model_copy(
-                update={"exit_reason": "stop_loss"},
-            )
+            # SimBroker.execute() forwards intent.exit_reason onto
+            # the Fill, so sl_fill already carries
+            # exit_reason="stop_loss" for the UI badge +
+            # trade_list filter.
             pt.apply_fill(sl_fill)
             total_fees += sl_fill.fees_inr
             fee_rates_version = sl_fill.fee_rates_version
