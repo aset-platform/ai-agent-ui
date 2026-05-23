@@ -17,6 +17,7 @@ Backward-compat: if the strategy passes a bare object (no
 from __future__ import annotations
 
 import logging
+from datetime import date, timedelta
 from typing import Any, Iterable
 
 from auth.models import UserContext
@@ -34,6 +35,71 @@ def _registry_meta() -> dict[str, dict[str, Any]]:
     Iceberg."""
     from stocks.repository import StockRepository
     return StockRepository().get_all_registry()
+
+
+def _load_ticker_first_bars(
+    tickers: list[str],
+) -> dict[str, date]:
+    """Earliest OHLCV bar per ticker as ``{ticker: date}``.
+
+    ASETPLTFRM-433. Used by ``filter_warmup_eligible`` to drop
+    tickers whose OHLCV history is too short for the strategy's
+    longest indicator warmup window.
+
+    Returns an empty dict on Iceberg miss (tested isolation).
+    Tickers absent from OHLCV are absent from the returned dict
+    too — the caller treats them as warmup-ineligible.
+    """
+    if not tickers:
+        return {}
+    from backend.db.duckdb_engine import query_iceberg_table
+    rows = query_iceberg_table(
+        "stocks.ohlcv",
+        "SELECT ticker, MIN(date) AS first_bar "
+        "FROM ohlcv GROUP BY ticker",
+        [],
+    )
+    keep = set(tickers)
+    return {
+        r["ticker"]: r["first_bar"]
+        for r in rows
+        if r["ticker"] in keep and r["first_bar"] is not None
+    }
+
+
+def filter_warmup_eligible(
+    tickers: list[str],
+    *,
+    period_start: date,
+    warmup_days: int,
+) -> list[str]:
+    """Drop tickers whose earliest OHLCV bar is too recent.
+
+    ASETPLTFRM-433. A ticker is *warmup-eligible* when its first
+    available bar lands on or before ``period_start - warmup_days``
+    (calendar days, not trading — over-estimates a touch but the
+    quantum's irrelevant past 200 days).
+
+    ``warmup_days == 0`` → no-op (every ticker passes; cheaper than
+    skipping the call). Tickers absent from the OHLCV table are
+    dropped — the runner has no bars to feed indicators anyway.
+    """
+    if warmup_days <= 0:
+        return list(tickers)
+    first_bars = _load_ticker_first_bars(tickers)
+    if not first_bars:
+        _logger.warning(
+            "filter_warmup_eligible: OHLCV first-bar map empty — "
+            "skipping warmup filter (warmup_days=%d)",
+            warmup_days,
+        )
+        return list(tickers)
+    cutoff = period_start - timedelta(days=warmup_days)
+    return [
+        t for t in tickers
+        if first_bars.get(t) is not None
+        and first_bars[t] <= cutoff
+    ]
 
 
 def _load_snapshot_adtv() -> dict[str, float]:

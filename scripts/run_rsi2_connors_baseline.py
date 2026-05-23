@@ -129,7 +129,13 @@ def main() -> None:
 
     _logger.info("Resolving universe (broad NSE stock registry)")
     from auth.models.response import UserContext
-    from backend.algo.backtest.universe import resolve_universe
+    from backend.algo.backtest.universe import (
+        filter_warmup_eligible,
+        resolve_universe,
+    )
+    from backend.algo.strategy.feature_warmup import (
+        compute_strategy_warmup_days,
+    )
     import asyncio
 
     # Use superuser context so the discovery scope returns the full
@@ -148,6 +154,24 @@ def main() -> None:
         resolve_universe(user=system_user, strategy=strategy)
     )
     _logger.info("Universe size before exclusions: %d tickers", len(tickers))
+
+    # ASETPLTFRM-433 — mirror the job.py warmup filter so CLI runs
+    # match UI / API runs (eliminates "Feature not in context"
+    # silent skips on recent IPOs).
+    warmup_days = compute_strategy_warmup_days(
+        strategy.root.model_dump(by_alias=True),
+    )
+    pre = len(tickers)
+    tickers = filter_warmup_eligible(
+        tickers,
+        period_start=PERIOD_START,
+        warmup_days=warmup_days,
+    )
+    _logger.info(
+        "Warmup filter dropped %d tickers (warmup=%d bars, "
+        "period_start=%s)",
+        pre - len(tickers), warmup_days, PERIOD_START.isoformat(),
+    )
 
     if args.exclude:
         exclude_set = {

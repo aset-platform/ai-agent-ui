@@ -68,3 +68,43 @@ For MIS strategies that need to be restricted to liquid F&O underlyings:
 
 The F&O list is a static quarterly snapshot. Refresh it when NSE rebalances
 the F&O list — see `backend/algo/research/intraday_15m_mis_bakeoff/README.md`.
+
+---
+
+## Universe warmup filter (2026-05-23, ASETPLTFRM-433)
+
+The backtest job pre-filters the universe to tickers whose OHLCV
+history covers `period_start - max_warmup_days`. The max warmup is
+computed by walking the strategy AST and looking up each
+referenced feature's required prior-bar count
+(`sma_200` → 200, `rsi_14` → 14, `distance_from_sma5` → 5, etc.).
+
+Without this filter the runner would catch `KeyError: Feature not
+in context: X` and silently `continue` on the (ticker, bar) combo —
+no entry decision, no exit decision. For long-running positions on
+tickers with later-arriving features that would mean the AST exit
+branch can't fire either, trapping the position.
+
+After the filter lands, `feature-key-errors=[]` should be near-zero
+on every backtest. Residual non-zero counts are usually OHLCV gaps
+mid-history (corporate action holidays, delisted-then-relisted
+tickers) — track via the runner's tally log line.
+
+Operator notes:
+
+- **Backtest**: filter runs in `backend/algo/backtest/job.py` after
+  `resolve_universe`. Logged: `warmup_filter dropped N tickers
+  (warmup=K bars, period_start=YYYY-MM-DD)`.
+- **Paper / live**: NOT filtered. Paper/live pre-load history per
+  ticker via `_bars_by_ticker`; in-process indicator compute
+  handles short-history tickers differently (NaN values rather
+  than KeyError). Track separately if it becomes an issue.
+- **Strategies with `regime_label` / `stress_prob` / `nifty_*`
+  only** (no per-ticker indicators) have warmup=0 and pass every
+  ticker through.
+
+### Implementation references
+
+- Helper: `backend/algo/strategy/feature_warmup.py`
+- Filter: `backend/algo/backtest/universe.py::filter_warmup_eligible`
+- Hook: `backend/algo/backtest/job.py`
