@@ -155,7 +155,17 @@ function GateLight({
 function GateStrip({ aggregate }: { aggregate: WalkForwardAggregate }) {
   const gates = aggregate.gates_passed || {};
   const dsr = aggregate.dsr ?? "—";
-  const pbo = aggregate.pbo ?? "—";
+  // Backend deliberately returns null for PBO on single-
+  // strategy walk-forward runs (no parameter sweep to overfit
+  // to — PBO is mathematically undefined and the 5-gate
+  // evaluator auto-passes it). Surface that explicitly in
+  // the tooltip instead of a bare em-dash that looks like
+  // missing data.
+  const pboRaw = aggregate.pbo;
+  const pboCurrent =
+    pboRaw == null
+      ? "N/A (single-strategy run — no parameter sweep)"
+      : String(pboRaw);
   const recoveryMo = aggregate.recovery_months ?? 0;
   const maxDd = aggregate.avg_max_drawdown_pct;
   // Each tooltip = "definition · current value". Definitions
@@ -212,7 +222,12 @@ function GateStrip({ aggregate }: { aggregate: WalkForwardAggregate }) {
         "parameter underperforms out-of-sample.\n\n" +
         "≤ 0.30 = robust; higher means the backtest is " +
         "likely overfit.\n\n" +
-        `Current: ${pbo}`
+        "PBO requires a PARAMETER SWEEP (multiple " +
+        "strategy variants) to compare. A single-" +
+        "strategy walk-forward has nothing to overfit " +
+        "to, so PBO is mathematically undefined and the " +
+        "gate auto-passes.\n\n" +
+        `Current: ${pboCurrent}`
       } />
     ),
   };
