@@ -215,6 +215,38 @@ async def run_sweep_job(
         )
         await session.commit()
 
+    # Stamp initial summary_json so subsequent GETs see a
+    # valid SweepResult shape with the swept_field and
+    # values immediately, instead of an undefined pending
+    # blob that crashes the frontend's progress panel.
+    initial_result = SweepResult(
+        run_id=sweep_run_id,
+        base_strategy_id=config.base_strategy_id,
+        swept_field=config.swept_field,
+        swept_values=list(config.swept_values),
+        variants=[],
+        cross_variant_pbo=None,
+        returns_matrix_shape=(0, 0),
+        winner_variant_index=None,
+        started_at=datetime.now(timezone.utc),
+        completed_at=None,
+        status="running",
+    )
+    from sqlalchemy import text as _sa_text_init
+    async with factory_fn() as session:
+        await session.execute(
+            _sa_text_init(
+                "UPDATE algo.runs SET "
+                "summary_json = CAST(:sj AS jsonb) "
+                "WHERE id = :id",
+            ),
+            {
+                "id": sweep_run_id,
+                "sj": initial_result.model_dump_json(),
+            },
+        )
+        await session.commit()
+
     variant_outcomes: list[
         tuple[int, Any, UUID, str, str | None]
     ] = []

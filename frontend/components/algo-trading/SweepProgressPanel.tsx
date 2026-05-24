@@ -20,7 +20,8 @@ export function SweepProgressPanel({ sweepRunId }: Props) {
     );
   }
 
-  const total = run.swept_values.length;
+  const sweptValues = run.swept_values ?? [];
+  const total = sweptValues.length;
   const completed = run.variants.filter(
     (v) => v.status === "completed",
   ).length;
@@ -52,7 +53,7 @@ export function SweepProgressPanel({ sweepRunId }: Props) {
         />
       </div>
       <ul className="text-xs space-y-1">
-        {run.swept_values.map((v, i) => {
+        {sweptValues.map((v, i) => {
           const variant = run.variants[i];
           if (!variant) {
             return (
