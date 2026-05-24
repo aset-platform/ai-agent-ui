@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 from datetime import date, datetime, timezone
@@ -360,16 +361,133 @@ def list_backups(
     return backups
 
 
+def verify_or_backup(
+    tables: list[str],
+    *,
+    max_age_h: float = 24.0,
+    backup_root: str | None = None,
+) -> dict:
+    """Check today's snapshot covers ``tables``; fall back
+    to per-table ``backup_table()`` if not.
+
+    Returns:
+        ``{"mode": "verified",
+           "snapshot": "<path>",
+           "paths": []}``
+        when the manifest is fresh AND lists every requested
+        table.
+
+        ``{"mode": "fallback_per_table",
+           "snapshot": None,
+           "paths": [<per-table-backup-paths>]}``
+        otherwise.
+
+    The fallback path swallows ``FileNotFoundError`` (table
+    never written) — same "skip + carry on" behaviour as the
+    legacy scoped-maintenance branch in
+    ``iceberg_maintenance``, but additionally logs the skip
+    at INFO so admins can see which tables were absent.
+    """
+    from backend.maintenance.backup_manifest import (
+        read_manifest,
+    )
+
+    root = Path(backup_root or BACKUP_ROOT)
+    today = date.today().isoformat()
+    snapshot_root = root / f"backup-{today}"
+
+    manifest = read_manifest(snapshot_root)
+    if manifest is None:
+        _logger.debug(
+            "[verify_or_backup] no manifest at %s — "
+            "falling back to per-table backup",
+            snapshot_root,
+        )
+    else:
+        created_iso = manifest.get("created_at", "")
+        try:
+            created_at = datetime.fromisoformat(
+                created_iso.replace("Z", "+00:00"),
+            )
+        except ValueError:
+            created_at = None
+            _logger.debug(
+                "[verify_or_backup] manifest at %s has "
+                "unparseable created_at=%r — falling back",
+                snapshot_root,
+                created_iso,
+            )
+        if created_at is not None:
+            age_h = (
+                datetime.now(timezone.utc) - created_at
+            ).total_seconds() / 3600
+            listed = {
+                t["id"] for t in manifest.get("tables", [])
+            }
+            if age_h <= max_age_h and set(tables) <= listed:
+                return {
+                    "mode": "verified",
+                    "snapshot": str(snapshot_root),
+                    "paths": [],
+                }
+            missing = sorted(set(tables) - listed)
+            if age_h > max_age_h:
+                _logger.debug(
+                    "[verify_or_backup] manifest age %.1fh > "
+                    "max %.1fh — falling back",
+                    age_h, max_age_h,
+                )
+            if missing:
+                _logger.debug(
+                    "[verify_or_backup] manifest missing "
+                    "tables %s — falling back",
+                    missing,
+                )
+
+    paths: list[str] = []
+    for t in tables:
+        try:
+            paths.append(backup_table(t))
+        except FileNotFoundError:
+            _logger.info(
+                "[verify_or_backup] %s: no on-disk data, "
+                "skipping per-table backup",
+                t,
+            )
+    return {
+        "mode": "fallback_per_table",
+        "snapshot": None,
+        "paths": paths,
+    }
+
+
+# Match canonical full-snapshot directory names ONLY
+# (``backup-YYYY-MM-DD``).  Per-table fallback dirs created
+# by ``backup_table()`` use the form
+# ``backup-YYYY-MM-DD-<ns>-<name>`` and must NOT compete
+# with full snapshots for the rotation keep-slots — the
+# legacy lexicographic sort wiped a freshly-rsynced full
+# snapshot on 2026-05-23 because the per-table cruft from
+# the same day outranked it (ASCII ``-`` > end-of-string).
+_FULL_SNAPSHOT_NAME_RE = re.compile(
+    r"^backup-\d{4}-\d{2}-\d{2}$",
+)
+
+
 def _rotate_backups(
     root: Path,
     keep: int,
 ) -> None:
-    """Remove oldest backups beyond keep limit."""
+    """Remove oldest CANONICAL full-snapshot backups beyond
+    ``keep`` limit.  Per-table fallback dirs are left alone
+    (managed by ``scripts/cleanup_per_table_backups.py``).
+    """
     dirs = sorted(
         [
             d
             for d in root.iterdir()
-            if d.is_dir() and d.name.startswith("backup-")
+            if d.is_dir()
+            and _FULL_SNAPSHOT_NAME_RE.match(d.name)
         ],
         reverse=True,
     )

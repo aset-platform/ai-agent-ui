@@ -172,3 +172,56 @@ def test_backup_table_passes_through_timeout_kwarg(tmp_path):
         c for c in mrun.call_args_list if c.args and "rsync" in c.args[0][0]
     )
     assert rsync_call.kwargs["timeout"] == 42
+
+
+# ────────────────────────────────────────────────────────────────
+# _rotate_backups — full-snapshot filter
+# ────────────────────────────────────────────────────────────────
+
+
+def test_rotate_backups_ignores_per_table_dirs(tmp_path):
+    """Rotation must not consider per-table fallback dirs
+    when deciding which full snapshots to keep — otherwise
+    a freshly-rsynced full snapshot can be rotated out by
+    yesterday's per-table cruft (2026-05-23 incident)."""
+    from backend.maintenance.backup import _rotate_backups
+
+    # Three full snapshots — old, middle, newest
+    (tmp_path / "backup-2026-05-21").mkdir()
+    (tmp_path / "backup-2026-05-22").mkdir()
+    (tmp_path / "backup-2026-05-23").mkdir()
+    # Per-table fallback dirs that lexicographically sort
+    # AFTER backup-2026-05-23 (because "-" > end-of-string)
+    (tmp_path / "backup-2026-05-23-stocks-ohlcv").mkdir()
+    (tmp_path / "backup-2026-05-23-algo-events").mkdir()
+
+    _rotate_backups(tmp_path, keep=2)
+
+    # Newest two full snapshots survive
+    assert (tmp_path / "backup-2026-05-23").exists()
+    assert (tmp_path / "backup-2026-05-22").exists()
+    # Oldest full snapshot rotated out
+    assert not (tmp_path / "backup-2026-05-21").exists()
+    # Per-table dirs untouched
+    assert (tmp_path / "backup-2026-05-23-stocks-ohlcv").exists()
+    assert (tmp_path / "backup-2026-05-23-algo-events").exists()
+
+
+def test_rotate_backups_pre_existing_full_snapshots_still_work(
+    tmp_path,
+):
+    """Plain rotation behaviour preserved when no per-table
+    dirs are present."""
+    from backend.maintenance.backup import _rotate_backups
+
+    (tmp_path / "backup-2026-05-20").mkdir()
+    (tmp_path / "backup-2026-05-21").mkdir()
+    (tmp_path / "backup-2026-05-22").mkdir()
+    (tmp_path / "backup-2026-05-23").mkdir()
+
+    _rotate_backups(tmp_path, keep=2)
+
+    assert (tmp_path / "backup-2026-05-23").exists()
+    assert (tmp_path / "backup-2026-05-22").exists()
+    assert not (tmp_path / "backup-2026-05-21").exists()
+    assert not (tmp_path / "backup-2026-05-20").exists()
