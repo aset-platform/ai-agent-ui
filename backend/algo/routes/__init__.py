@@ -30,6 +30,9 @@ from backend.algo.routes.paper import create_paper_router
 from backend.algo.routes.performance import (
     create_performance_router,
 )
+from backend.algo.routes.portfolio import (
+    create_portfolio_router,
+)
 from backend.algo.routes.regime import create_regime_router
 from backend.algo.routes.replay import create_replay_router
 from backend.algo.routes.shap_analysis import (
@@ -68,6 +71,7 @@ __all__ = [
     "create_ltp_router",
     "create_paper_router",
     "create_performance_router",
+    "create_portfolio_router",
     "create_regime_router",
     "create_replay_router",
     "create_shap_analysis_router",
