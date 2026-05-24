@@ -143,6 +143,25 @@ class UserRepository:
                 s, user_id, ticker,
             )
 
+    async def bulk_link_tickers(
+        self,
+        user_id: str,
+        tickers: list[str],
+        source: str = "bulk_csv",
+    ) -> tuple[list[str], list[str]]:
+        async with self._session_scope() as s:
+            return await ticker_repo.bulk_link_tickers(
+                s, user_id, tickers, source,
+            )
+
+    async def unlink_all_tickers(
+        self, user_id: str,
+    ) -> int:
+        async with self._session_scope() as s:
+            return await ticker_repo.unlink_all_tickers(
+                s, user_id,
+            )
+
     async def get_all_user_tickers(
         self,
     ) -> dict[str, list[str]]:

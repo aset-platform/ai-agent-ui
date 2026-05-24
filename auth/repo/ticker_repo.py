@@ -78,3 +78,76 @@ async def get_all_user_tickers(
     for ut in result.scalars().all():
         mapping.setdefault(ut.user_id, []).append(ut.ticker)
     return mapping
+
+
+async def bulk_link_tickers(
+    session: AsyncSession,
+    user_id: str,
+    tickers: list[str],
+    source: str = "bulk_csv",
+) -> tuple[list[str], list[str]]:
+    """Bulk-insert tickers for a user.
+
+    Returns (added, already_linked). Tickers MUST be
+    pre-validated + pre-normalised (upper-case, trimmed).
+
+    One round-trip: INSERT INTO auth.user_tickers
+    (user_id, ticker, linked_at, source) VALUES …
+    ON CONFLICT (user_id, ticker) DO NOTHING
+    RETURNING ticker.
+    """
+    if not tickers:
+        return ([], [])
+
+    from sqlalchemy.dialects.postgresql import insert
+
+    now = datetime.now(timezone.utc)
+    rows = [
+        {
+            "user_id": user_id,
+            "ticker": t,
+            "linked_at": now,
+            "source": source,
+        }
+        for t in tickers
+    ]
+    stmt = (
+        insert(UserTicker)
+        .values(rows)
+        .on_conflict_do_nothing(
+            index_elements=["user_id", "ticker"],
+        )
+        .returning(UserTicker.ticker)
+    )
+    result = await session.execute(stmt)
+    await session.commit()
+    inserted = [row[0] for row in result.all()]
+    inserted_set = set(inserted)
+    already = [t for t in tickers if t not in inserted_set]
+    log.info(
+        "Bulk-linked %d new (skipped %d) for user %s",
+        len(inserted), len(already), user_id,
+    )
+    return (inserted, already)
+
+
+async def unlink_all_tickers(
+    session: AsyncSession,
+    user_id: str,
+) -> int:
+    """Unlink every ticker for a user.
+
+    Returns the count of rows deleted.
+    """
+    result = await session.execute(
+        delete(UserTicker).where(
+            UserTicker.user_id == user_id,
+        ),
+    )
+    await session.commit()
+    removed = result.rowcount or 0
+    log.info(
+        "Unlinked all %d tickers for user %s",
+        removed, user_id,
+    )
+    return removed
