@@ -41,14 +41,14 @@ from uuid import UUID, uuid4
 from backend.algo.attribution.payload import (
     attribution_payload_extension as _attribution_payload_extension,
 )
-from backend.algo.backtest.event_writer import event_row, flush_events
-from backend.algo.backtest.evaluator import EvalContext, Evaluator
-from backend.algo.backtest.positions import PositionTracker
 from backend.algo.backtest.cooldown_hydration import (
     _HydratedClose,
     load_recent_failed_exits,
 )
 from backend.algo.backtest.cooldown_monitor import in_cooldown
+from backend.algo.backtest.evaluator import EvalContext, Evaluator
+from backend.algo.backtest.event_writer import event_row, flush_events
+from backend.algo.backtest.positions import PositionTracker
 from backend.algo.backtest.stop_loss_monitor import (
     check_stop_loss_triggers,
 )
@@ -59,6 +59,7 @@ from backend.algo.broker.kite_client import KiteClient
 
 # REGIME-2a — pre-computed nightly factor library overlay.
 from backend.algo.factors.repo import get_factors_window
+
 # FE-15b — shared per-bar feature assembly (consistent across
 # backtest/paper/live/dry-run runtimes).
 from backend.algo.features.per_bar import (
@@ -75,9 +76,9 @@ from backend.algo.paper.types import AccountState, Signal
 
 # REGIME-4 — vol-target / Kelly sizer (legacy modes bypass).
 from backend.algo.sizing.composer import SizingContext, compose_qty
+from backend.algo.strategy.ast import Strategy
 from backend.algo.stream.resampler import Resampler
 from backend.algo.stream.sources import TickSource
-from backend.algo.strategy.ast import Strategy
 
 _logger = logging.getLogger(__name__)
 
@@ -242,9 +243,13 @@ class LiveRuntime:
         self._market_regime: dict[Any, Decimal] = {}
         self._market_trend: dict[Any, Decimal] = {}
         try:
-            from datetime import date as _date, timedelta
+            from datetime import date as _date
+            from datetime import timedelta
+
             from backend.algo.backtest.indicators import (
                 compute_market_regime as _cmr,
+            )
+            from backend.algo.backtest.indicators import (
                 compute_market_trend_strength as _cmts,
             )
 
@@ -485,6 +490,7 @@ class LiveRuntime:
         self._regime_loaded = True
         try:
             from datetime import timedelta as _td
+
             from backend.algo.regime.repo import get_regime_history
 
             rh_rows = get_regime_history(
@@ -541,7 +547,9 @@ class LiveRuntime:
             )
 
     def _ensure_daily_overlay_cache(
-        self, ticker: str, bar_date_obj: date,
+        self,
+        ticker: str,
+        bar_date_obj: date,
     ) -> None:
         """FE-15b — lazy load daily-cadence features
         (``interval_sec=86400``) for ``ticker`` so the AST can
@@ -587,7 +595,8 @@ class LiveRuntime:
                 "LiveRuntime: daily overlay load for %s failed: "
                 "%s — strategies referencing _1d keys will "
                 "silent-skip until backfill catches up",
-                ticker, exc,
+                ticker,
+                exc,
             )
 
     # ----------------------------------------------------------
@@ -922,12 +931,13 @@ class LiveRuntime:
             )
         except Exception:  # noqa: BLE001
             pass
+        from datetime import datetime, timezone
+
         from backend.algo.backtest.indicators import compute_indicators
         from backend.algo.backtest.types import BarData as _BackBar
         from backend.algo.live.daily_bar_warmup import (
             preload_daily_bars,
         )
-        from datetime import datetime, timezone
 
         bar_date_obj = datetime.fromtimestamp(
             bar.bar_open_ts_ns / 1_000_000_000,
@@ -1179,11 +1189,13 @@ class LiveRuntime:
                 # Keep in-process cooldown history in sync so the
                 # gate fires on next-day re-entry attempts without
                 # waiting for the next algo.events flush.
-                self._cooldown_history.append(_HydratedClose(
-                    ticker=trig.ticker,
-                    exit_reason="stop_loss",
-                    closed_at=bar_date_obj,
-                ))
+                self._cooldown_history.append(
+                    _HydratedClose(
+                        ticker=trig.ticker,
+                        exit_reason="stop_loss",
+                        closed_at=bar_date_obj,
+                    )
+                )
                 return fill_count
 
         # ASETPLTFRM-436 — time-stop monitor (sibling to the
@@ -1218,19 +1230,23 @@ class LiveRuntime:
                 _logger.info(
                     "live time_stop SELL %s qty=%d held=%d "
                     "days (threshold=%d)",
-                    trig.ticker, existing_pos.qty,
-                    trig.holding_days, trig.max_holding_days,
+                    trig.ticker,
+                    existing_pos.qty,
+                    trig.holding_days,
+                    trig.max_holding_days,
                 )
                 fill_count = await self._submit_order(
                     signal=ts_signal,
                     last_price=last_price,
                     last_price_ts=last_price_ts,
                 )
-                self._cooldown_history.append(_HydratedClose(
-                    ticker=trig.ticker,
-                    exit_reason="time_stop",
-                    closed_at=bar_date_obj,
-                ))
+                self._cooldown_history.append(
+                    _HydratedClose(
+                        ticker=trig.ticker,
+                        exit_reason="time_stop",
+                        closed_at=bar_date_obj,
+                    )
+                )
                 return fill_count
 
         ctx = EvalContext(
@@ -1261,10 +1277,7 @@ class LiveRuntime:
         # (time_stop / stop_loss). Hydrated from algo.events at
         # session start; kept in sync in-process as new failed
         # exits land above.
-        cd_days = (
-            self._strategy.risk.per_trade
-            .cooldown_after_failed_exit_days
-        )
+        cd_days = self._strategy.risk.per_trade.cooldown_after_failed_exit_days
         if (
             signal.side == "BUY"
             and cd_days
@@ -1276,9 +1289,9 @@ class LiveRuntime:
             )
         ):
             _logger.info(
-                "live cooldown SKIP %s — recent failed exit "
-                "within %d days",
-                bar.ticker, cd_days,
+                "live cooldown SKIP %s — recent failed exit " "within %d days",
+                bar.ticker,
+                cd_days,
             )
             return 0
 
@@ -1375,13 +1388,14 @@ class LiveRuntime:
             "orders_count_today": len(positions_open),
         }
 
-        decision = pre_trade_check(
+        decision = await pre_trade_check(
             signal=signal,
             caps=current_caps,
             day_state=day_state,
             account=account,
             strategy_risk=self._strategy.risk.model_dump(),
             last_price=last_price,
+            user_id=self._user_id,
         )
 
         if decision.outcome == "reject":

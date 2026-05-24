@@ -1,10 +1,11 @@
 """Pydantic models + enums shared across the paper-trading runtime."""
+
 from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -33,10 +34,12 @@ class RejectReason(str, Enum):
     LIVE_INR_CAP = "live_inr_cap"
     LIVE_ORDERS_PER_DAY_CAP = "live_orders_per_day_cap"
     LIVE_NOT_ENABLED = "live_not_enabled"
+    LIVE_BUDGET_CAP = "live_budget_cap"
 
 
 class Signal(BaseModel):
     """A strategy-emitted intent, before the risk gate."""
+
     model_config = ConfigDict(extra="forbid")
 
     signal_id: UUID = Field(default_factory=uuid4)
@@ -60,6 +63,7 @@ class AccountState(BaseModel):
 
     All values are in INR. ``open_positions`` is keyed by ticker.
     """
+
     model_config = ConfigDict(extra="forbid")
 
     user_id: UUID
@@ -80,6 +84,7 @@ class RiskDecision(BaseModel):
     - ``outcome="scale"``  → scale qty down to ``adjusted_qty``.
     - ``outcome="reject"`` → drop the signal; ``reason`` populated.
     """
+
     model_config = ConfigDict(extra="forbid")
 
     outcome: Literal["accept", "scale", "reject"]
@@ -87,10 +92,12 @@ class RiskDecision(BaseModel):
     reason: RejectReason | None = None
     threshold: Decimal | None = None
     observed_value: Decimal | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class KillSwitchState(BaseModel):
     """Row shape for GET /v1/algo/kill-switch."""
+
     model_config = ConfigDict(extra="forbid")
 
     user_id: UUID
