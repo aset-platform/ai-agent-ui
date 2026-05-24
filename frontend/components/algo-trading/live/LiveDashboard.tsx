@@ -10,6 +10,7 @@ import {
 } from "@/hooks/useStrategies";
 
 import { AttributionPanel } from "../AttributionPanel";
+import { BudgetPanel } from "../BudgetPanel";
 import { LiveSafetyBeltsForm } from "../LiveSafetyBeltsForm";
 import { RegimeHistoryChart } from "../RegimeHistoryChart";
 import { RegimeWidget } from "../RegimeWidget";
@@ -84,6 +85,7 @@ export function LiveDashboard() {
 
   return (
     <div className="space-y-3" data-testid="live-dashboard">
+      <BudgetPanel />
       {/* Row 1 — Strategy picker · Regime · Panic Close.
           Top of page per user feedback: these are the controls
           the trader reaches for first. The picker is the single
