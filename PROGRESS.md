@@ -2,6 +2,44 @@
 
 ---
 
+### 2026-05-24 — Watchlist bulk ops + universe binding (Epic C)
+
+Two-part epic closing out the algo trading dashboard arc
+(A budget reservation → B portfolio tab → C bulk ops +
+universe).
+
+**Bulk ops** — new ⋮ overflow menu in the dashboard
+WatchlistWidget. Bulk-add via CSV upload (`POST
+/v1/users/me/tickers/bulk` multipart, hard cap 5000 rows,
+per-row diagnostic with added/skipped/errors). Remove-all
+via typed "REMOVE ALL" confirmation (`DELETE
+/v1/users/me/tickers/all`). Both endpoints invalidate
+`cache:dash:watchlist:{user_id}` on success.
+
+**Universe binding** — new `_scoped_tickers_for_strategy`
+sibling helper at `backend/insights_routes.py` injects
+algo-held positions (derived from `algo.events`) into the
+`watchlist` scope. Only `resolve_universe` in
+`backend/algo/backtest/universe.py` switches to the new
+helper; insights tabs (Risk, Sectors, Dividends,
+Piotroski, Targets) keep calling `_scoped_tickers`
+unchanged. Closes the silent footgun where an algo opens
+a Kite position the strategy could never iterate to.
+
+`open_algo_positions(user_id)` reads `algo.events` (BUY
+fills minus SELLs, since 2024-01-01), 60s Redis cache,
+fail-open on read failure.
+
+Out of scope (v1): CSV bulk-remove, text-area paste,
+portfolio bulk import, multi-select table view, dedicated
+/watchlist page, async/job-id flow, extension to insights
+tabs.
+
+Spec: `docs/superpowers/specs/2026-05-24-watchlist-bulk-ops-universe-binding-design.md`
+Plan: `docs/superpowers/plans/2026-05-24-watchlist-bulk-ops-universe-binding.md`
+
+---
+
 ### 2026-05-24 — Algo Portfolio dashboard tab (Epic B)
 
 New "Algo" tab in the dashboard's WatchlistWidget showing
