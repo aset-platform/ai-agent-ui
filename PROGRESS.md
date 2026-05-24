@@ -2,6 +2,47 @@
 
 ---
 
+### 2026-05-24 — Walk-forward parameter sweep (1D, Option B)
+
+Shipped Option B parameter sweep on top of walk-forward CV.
+User picks a saved strategy + one tunable field (curated
+whitelist of 7) + a list of values; engine runs a full
+walk-forward per value and reports per-variant metrics
+(Sharpe-ranked) plus a cross-variant PBO (Bailey-de Prado
+CSCV).
+
+Three-level row tree in `algo.runs` (sweep → walkforward →
+backtest). Serial execution; AST mutated in memory only.
+Failure-tolerant: a variant crash skips that row and the
+sweep completes if ≥ 2 variants survive.
+
+PRs shipped (one slice each, 9 total):
+- migration + Pydantic types (`sweep_types.py`)
+- whitelist + validators (`sweep_whitelist.py`, 7 fields)
+- _mutate_ast helper (`sweep.py`)
+- PBO aggregation primitives (`sweep_pbo.py`)
+- serial sweep runner + repo extensions
+- HTTP routes (POST /run + GET /runs + /fields)
+- frontend types + hooks + sub-tab scaffolding
+- SweepForm + SweepProgressPanel
+- Results table + PBO badge + promote modal + E2E
+
+Deferred to v2:
+- Grid (multi-param) sweep
+- Parallel variant execution
+- AST-path escape hatch
+- Equity-curve overlay (Block C placeholder shipped)
+- Mid-run cancellation
+- Auto-promotion to paper (winner promotion currently
+  clones the base strategy; user manually edits the
+  cooldown to the winner's value via Strategies tab —
+  v2 will patch the AST automatically)
+
+Spec: `docs/superpowers/specs/2026-05-24-walkforward-parameter-sweep-design.md`
+Plan: `docs/superpowers/plans/2026-05-24-walkforward-parameter-sweep.md`
+
+---
+
 ## 2026-05-18 — 13 commits + 9 Jira tickets across iceberg design, strategy backtest, scheduler bugfix
 
 Marathon Sprint 11 session. **13 commits on `feature/admin-universe-snapshot-tab`**,

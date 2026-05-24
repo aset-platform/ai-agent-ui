@@ -439,4 +439,22 @@ export const FE = {
   algoDryRunArmBtn: "dryrun-arm-button",
   // algoPaperTab — defined earlier at the top-level entry,
   // re-use the existing constant.
+
+  sweepSubTab: "sweep-sub-tab",
+  sweepForm: "sweep-form",
+  sweepBaseStrategySelect: "sweep-base-strategy-select",
+  sweepPeriodFrom: "sweep-period-from",
+  sweepPeriodTo: "sweep-period-to",
+  sweepTrainDays: "sweep-train-days",
+  sweepTestDays: "sweep-test-days",
+  sweepStepDays: "sweep-step-days",
+  sweepFieldSelect: "sweep-field-select",
+  sweepValuesInput: "sweep-values-input",
+  sweepRegimeStratified: "sweep-regime-stratified",
+  sweepSubmit: "sweep-submit",
+  sweepProgressPanel: "sweep-progress-panel",
+  sweepResultsTable: "sweep-results-table",
+  sweepPboBadge: "sweep-pbo-badge",
+  sweepPromoteWinnerButton: "sweep-promote-winner-button",
+  sweepPromoteModal: "sweep-promote-modal",
 } as const;
