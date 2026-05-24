@@ -95,3 +95,13 @@ def test_validate_rejects_wrong_type_for_int_field():
         validate_swept_values(
             "cooldown_days", [7, "seven"],
         )
+
+
+def test_validate_rejects_bool_for_int_field():
+    """``True``/``False`` are int subclasses in Python —
+    coercer must reject them or the whitelist would happily
+    accept ``[True, False]`` as ``[1, 0]``."""
+    with pytest.raises(ValueError, match="not a valid int"):
+        validate_swept_values(
+            "cooldown_days", [True, False],
+        )
