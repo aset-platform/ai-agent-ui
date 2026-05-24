@@ -33,6 +33,7 @@ _CACHE_TTL_S = 5
 def _session_factory():
     """Lazy import — avoid circular dep with db.engine."""
     from backend.db.engine import get_session_factory
+
     return get_session_factory()
 
 
@@ -47,6 +48,7 @@ def _cache_keys(user_id: UUID) -> tuple[str, str, str]:
 def _invalidate_cache(user_id: UUID) -> None:
     try:
         from backend.cache import get_cache
+
         c = get_cache()
         if c:
             c.invalidate_exact(*_cache_keys(user_id))
@@ -70,6 +72,7 @@ async def _build_kite_for_user(user_id: UUID):
     from backend.algo.broker.credentials_repo import (
         BrokerCredentialsRepo,
     )
+
     creds_repo = BrokerCredentialsRepo()
     factory = _session_factory()
     async with factory() as session:
@@ -106,7 +109,7 @@ async def _algo_filled_events_for_user(
 ) -> list[dict[str, Any]]:
     """Return the user's open-position cost-basis events.
 
-    TODO: wire to algo.events FILL rows (subtract matching
+    TODO(Task 5): wire to algo.events FILL rows (subtract matching
     SELLs). For now returns []; tests mock this function so
     the helper still works with full coverage.
     """
@@ -118,7 +121,8 @@ async def load_user_budget(user_id: UUID) -> UserBudget:
     factory = _session_factory()
     async with factory() as session:
         return await repo.get_user_budget(
-            session, user_id=user_id,
+            session,
+            user_id=user_id,
         )
 
 
@@ -128,6 +132,7 @@ async def sum_open_position_cost(user_id: UUID) -> Decimal:
     Cache: 5s per user; invalidated on reservation inserts.
     """
     from backend.cache import get_cache
+
     c = get_cache()
     key = _cache_keys(user_id)[0]
     if c:
@@ -150,6 +155,7 @@ async def sum_active_reservations(
     user_id: UUID,
 ) -> Decimal:
     from backend.cache import get_cache
+
     c = get_cache()
     key = _cache_keys(user_id)[1]
     if c:
@@ -161,7 +167,8 @@ async def sum_active_reservations(
     factory = _session_factory()
     async with factory() as session:
         total = await repo.sum_active_reservations(
-            session, user_id=user_id,
+            session,
+            user_id=user_id,
         )
     if c:
         c.set(key, str(total), ttl=_CACHE_TTL_S)
@@ -174,6 +181,7 @@ async def fetch_kite_available_cash(
     """kite.margins.equity.available.cash; Decimal('inf')
     on Kite error (fail-open)."""
     from backend.cache import get_cache
+
     c = get_cache()
     key = _cache_keys(user_id)[2]
     if c:
@@ -183,16 +191,14 @@ async def fetch_kite_available_cash(
 
     try:
         margins = await _kite_margins_for_user(user_id)
-        cash = (
-            margins.get("equity", {})
-            .get("available", {})
-            .get("cash", 0)
-        )
+        cash = margins.get("equity", {}).get("available", {}).get("cash", 0)
         out = Decimal(str(cash))
     except Exception as exc:  # noqa: BLE001
         _logger.warning(
             "kite margins fetch failed for user=%s: %s",
-            user_id, exc, exc_info=True,
+            user_id,
+            exc,
+            exc_info=True,
         )
         return Decimal("inf")
 
@@ -246,12 +252,17 @@ async def transition(
     error_text: str | None = None,
 ) -> None:
     """Append a new state-event row, inheriting unchanged
-    fields from the previous row of this reservation_id."""
+    fields from the previous row of this reservation_id.
+
+    Concurrent transitions from the same prev row are tolerated
+    by the append-only event log -- the latest insert wins.
+    """
     repo = BudgetRepo()
     factory = _session_factory()
     async with factory() as session:
         prev = await repo.get_current_state(
-            session, reservation_id=reservation_id,
+            session,
+            reservation_id=reservation_id,
         )
         if prev is None:
             _logger.error(
@@ -269,18 +280,12 @@ async def transition(
             qty=prev.qty,
             reserved_inr=prev.reserved_inr,
             filled_qty=(
-                filled_qty
-                if filled_qty is not None
-                else prev.filled_qty
+                filled_qty if filled_qty is not None else prev.filled_qty
             ),
             filled_inr=(
-                filled_inr
-                if filled_inr is not None
-                else prev.filled_inr
+                filled_inr if filled_inr is not None else prev.filled_inr
             ),
-            kite_order_id=(
-                kite_order_id or prev.kite_order_id
-            ),
+            kite_order_id=(kite_order_id or prev.kite_order_id),
             transitioned_at=datetime.now(timezone.utc),
             metadata=prev.metadata,
             error_text=error_text,

@@ -30,12 +30,15 @@ async def test_load_user_budget_returns_default_when_missing():
     fake_repo.get_user_budget = AsyncMock(
         return_value=UserBudget(user_id=uuid4()),
     )
-    with patch(
-        "backend.algo.live.budget.BudgetRepo",
-        return_value=fake_repo,
-    ), patch(
-        "backend.algo.live.budget._session_factory",
-    ) as factory:
+    with (
+        patch(
+            "backend.algo.live.budget.BudgetRepo",
+            return_value=fake_repo,
+        ),
+        patch(
+            "backend.algo.live.budget._session_factory",
+        ) as factory,
+    ):
         factory.return_value.__aenter__ = AsyncMock(
             return_value=MagicMock(),
         )
@@ -52,6 +55,7 @@ async def test_fetch_kite_available_cash_returns_inf_on_error(
     monkeypatch,
 ):
     """Kite API error -> Decimal('inf') (fail-open)."""
+
     async def boom(*args, **kwargs):
         raise RuntimeError("kite down")
 
@@ -86,14 +90,18 @@ async def test_fetch_kite_available_cash_reads_equity_cash(
 async def test_reserve_inserts_pending_event_and_invalidates_cache():
     fake_repo = MagicMock()
     fake_repo.insert_reservation_event = AsyncMock()
-    with patch(
-        "backend.algo.live.budget.BudgetRepo",
-        return_value=fake_repo,
-    ), patch(
-        "backend.algo.live.budget._session_factory",
-    ) as factory, patch(
-        "backend.algo.live.budget._invalidate_cache",
-    ) as inv:
+    with (
+        patch(
+            "backend.algo.live.budget.BudgetRepo",
+            return_value=fake_repo,
+        ),
+        patch(
+            "backend.algo.live.budget._session_factory",
+        ) as factory,
+        patch(
+            "backend.algo.live.budget._invalidate_cache",
+        ) as inv,
+    ):
         factory.return_value.__aenter__ = AsyncMock(
             return_value=MagicMock(commit=AsyncMock()),
         )
@@ -123,19 +131,24 @@ async def test_transition_inserts_new_state_row():
             strategy_id=uuid4(),
             state=ReservationState.PENDING,
             ticker="INFY.NS",
-            side="BUY", qty=50,
+            side="BUY",
+            qty=50,
             reserved_inr=Decimal("7500.00"),
             transitioned_at=datetime.now(timezone.utc),
         ),
     )
     fake_repo.insert_reservation_event = AsyncMock()
-    with patch(
-        "backend.algo.live.budget.BudgetRepo",
-        return_value=fake_repo,
-    ), patch(
-        "backend.algo.live.budget._session_factory",
-    ) as factory, patch(
-        "backend.algo.live.budget._invalidate_cache",
+    with (
+        patch(
+            "backend.algo.live.budget.BudgetRepo",
+            return_value=fake_repo,
+        ),
+        patch(
+            "backend.algo.live.budget._session_factory",
+        ) as factory,
+        patch(
+            "backend.algo.live.budget._invalidate_cache",
+        ),
     ):
         factory.return_value.__aenter__ = AsyncMock(
             return_value=MagicMock(commit=AsyncMock()),
@@ -149,9 +162,7 @@ async def test_transition_inserts_new_state_row():
             kite_order_id="kite-99",
         )
     fake_repo.insert_reservation_event.assert_awaited_once()
-    call_args = (
-        fake_repo.insert_reservation_event.await_args
-    )
+    call_args = fake_repo.insert_reservation_event.await_args
     new_row = call_args.args[1]
     assert new_row.state == ReservationState.SUBMITTED
     assert new_row.kite_order_id == "kite-99"
@@ -163,6 +174,7 @@ async def test_sum_open_position_cost_returns_zero_by_default(
 ):
     """sum_open_position_cost reads from algo.events. Empty
     history -> zero."""
+
     async def fake_events(_uid):
         return []
 
@@ -182,12 +194,15 @@ async def test_sum_active_reservations_passthrough(
     fake_repo.sum_active_reservations = AsyncMock(
         return_value=Decimal("8500.00"),
     )
-    with patch(
-        "backend.algo.live.budget.BudgetRepo",
-        return_value=fake_repo,
-    ), patch(
-        "backend.algo.live.budget._session_factory",
-    ) as factory:
+    with (
+        patch(
+            "backend.algo.live.budget.BudgetRepo",
+            return_value=fake_repo,
+        ),
+        patch(
+            "backend.algo.live.budget._session_factory",
+        ) as factory,
+    ):
         factory.return_value.__aenter__ = AsyncMock(
             return_value=MagicMock(),
         )
