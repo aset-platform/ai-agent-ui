@@ -2682,6 +2682,78 @@ _HOT_ICEBERG_TABLES = (
 )
 
 
+@register_job("backups_daily")
+def execute_backups_daily(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> None:
+    """Once-a-day full warehouse snapshot + manifest write.
+
+    Replaces per-pipeline ``backup_table()`` calls. Runs at
+    00:30 IST via the ``Backups Daily`` pipeline (seeded by
+    ``scripts/seed_backups_daily_pipeline.py``).
+
+    Steps:
+
+    1. ``run_backup()``  — rsync warehouse → ``backup-YYYY-MM-DD/``
+       + copy catalog.db + rotate (keep MAX_BACKUPS=2).
+    2. ``build_manifest()`` walks the snapshot, returns the
+       summary dict.
+    3. ``write_manifest()`` atomically writes manifest.json
+       at the snapshot root.
+
+    Fail-closed: any exception aborts the job; the manifest is
+    not written, so step-0 verify_or_backup() will see "stale"
+    and fall back to per-table backup on the next pipeline run.
+    """
+    import time
+    from pathlib import Path
+
+    from backend.maintenance.backup import run_backup
+    from backend.maintenance.backup_manifest import (
+        build_manifest,
+        write_manifest,
+    )
+
+    _logger.info("[backups_daily] starting full snapshot")
+    t0 = time.monotonic()
+    snapshot_path = run_backup()
+    elapsed = int(time.monotonic() - t0)
+    _logger.info(
+        "[backups_daily] rsync complete in %ds: %s",
+        elapsed,
+        snapshot_path,
+    )
+
+    manifest = build_manifest(
+        Path(snapshot_path),
+        created_by="backups_daily",
+        rsync_duration_s=elapsed,
+    )
+    write_manifest(Path(snapshot_path), manifest)
+    _logger.info(
+        "[backups_daily] manifest written: %d tables, " "warehouse %.1f MB",
+        len(manifest["tables"]),
+        manifest["warehouse_size_mb"],
+    )
+
+    if repo is not None:
+        try:
+            repo.update_scheduler_run(
+                run_id,
+                {
+                    "tickers_done": len(manifest["tables"]),
+                    "tickers_total": len(manifest["tables"]),
+                },
+            )
+        except Exception:
+            pass
+
+
 @register_job("iceberg_maintenance")
 def execute_iceberg_maintenance(
     scope: str,
@@ -2737,10 +2809,7 @@ def execute_iceberg_maintenance(
     ``shared/architecture/iceberg-orphan-sweep-design``
     for the safety algorithm + recovery procedure.
     """
-    from backend.maintenance.backup import (
-        backup_table,
-        run_backup,
-    )
+    from backend.maintenance.backup import run_backup
     from backend.maintenance.iceberg_maintenance import (
         ALL_TABLES,
         cleanup_orphans_v2,
@@ -2814,24 +2883,29 @@ def execute_iceberg_maintenance(
     backup_path: str | None = None
     try:
         if scoped:
-            paths: list[str] = []
-            for t in tables:
-                try:
-                    paths.append(backup_table(t))
-                except FileNotFoundError:
-                    # Table not yet written — nothing to
-                    # back up. Not fatal: compact_table will
-                    # also no-op below.
-                    _logger.info(
-                        "[maint] %s: no on-disk data, "
-                        "skipping per-table backup",
-                        t,
-                    )
-            backup_path = "; ".join(paths) if paths else "<none>"
-            _logger.info(
-                "[maint] Per-table backups complete: %d " "table(s)",
-                len(paths),
+            from backend.maintenance.backup import (
+                verify_or_backup,
             )
+
+            result = verify_or_backup(tables)
+            if result["mode"] == "verified":
+                backup_path = result["snapshot"]
+                _logger.info(
+                    "[maint] Verified today's snapshot "
+                    "covers %d scoped table(s) — skipping "
+                    "per-table backup",
+                    len(tables),
+                )
+            else:
+                paths = result["paths"]
+                backup_path = (
+                    "; ".join(paths) if paths else "<none>"
+                )
+                _logger.info(
+                    "[maint] Snapshot stale/missing — "
+                    "per-table backup of %d table(s)",
+                    len(tables),
+                )
         else:
             backup_path = run_backup()
             _logger.info(
