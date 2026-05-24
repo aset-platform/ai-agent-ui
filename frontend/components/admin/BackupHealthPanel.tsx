@@ -34,7 +34,11 @@ interface BackupHealth {
   age_hours: number | null;
   backup_count: number;
   has_catalog: boolean;
+  // size_mb retained for back-compat; warehouse_size_mb is the
+  // new aggregate-from-manifest field the SIZE tile prefers.
   size_mb?: number;
+  warehouse_size_mb?: number;
+  table_count?: number;
 }
 
 // Render an ISO 8601 UTC timestamp in IST via the shared helper
@@ -243,7 +247,7 @@ export function BackupHealthPanel() {
       {health && health.status !== "missing" && (
         <div
           className="grid grid-cols-2
-            sm:grid-cols-4 gap-3"
+            sm:grid-cols-3 lg:grid-cols-5 gap-3"
         >
           <div
             className="rounded-lg border
@@ -308,11 +312,14 @@ export function BackupHealthPanel() {
                 text-gray-800 dark:text-gray-100
                 mt-0.5"
             >
-              {health.size_mb != null
-                ? health.size_mb >= 1024
-                  ? `${(health.size_mb / 1024).toFixed(1)} GB`
-                  : `${health.size_mb.toFixed(0)} MB`
-                : "\u2014"}
+              {(() => {
+                const v =
+                  health.warehouse_size_mb ?? health.size_mb;
+                if (v == null) return "\u2014";
+                return v >= 1024
+                  ? `${(v / 1024).toFixed(1)} GB`
+                  : `${v.toFixed(0)} MB`;
+              })()}
             </p>
           </div>
           <div
@@ -345,6 +352,25 @@ export function BackupHealthPanel() {
                   Missing
                 </span>
               )}
+            </p>
+          </div>
+          <div
+            className="rounded-lg border
+              border-gray-200 dark:border-gray-700
+              p-3"
+          >
+            <p
+              className="text-[10px] uppercase
+                tracking-wider text-gray-400"
+            >
+              Tables
+            </p>
+            <p
+              className="text-sm font-semibold
+                text-gray-800 dark:text-gray-100
+                mt-0.5"
+            >
+              {health.table_count ?? "—"}
             </p>
           </div>
         </div>

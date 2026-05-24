@@ -43,6 +43,59 @@ Plan: `docs/superpowers/plans/2026-05-24-walkforward-parameter-sweep.md`
 
 ---
 
+### 2026-05-23 — Backup redesign (manifest-driven daily snapshot)
+
+Replaced ASETPLTFRM-418's per-pipeline per-table backup loop
+with one nightly `backups_daily` job at 00:30 IST that writes
+`backup-YYYY-MM-DD/{warehouse,catalog.db,manifest.json}`.
+Pipelines call a new `verify_or_backup()` helper — if today's
+manifest is fresh (<24h) and covers their scoped tables they
+skip the backup; otherwise they fall back to the old per-table
+loop (safety rail preserved).
+
+Admin Backup Health card now reads `warehouse_size_mb` and
+`table_count` from the manifest — the SIZE tile was previously
+stuck at 0 MB because the query read whichever single per-table
+dir sorted first. New TABLES tile counts tables in the latest
+snapshot. Browse drill-down reads `manifest.tables[]`. Legacy
+`size_mb` field retained as an alias for back-compat with any
+cached or in-flight clients.
+
+Disk reclaimed: ~5–6 GB (legacy per-table cruft cleaned up by
+`scripts/cleanup_per_table_backups.py`). CPU saved: ~5 minutes/
+day of redundant rsync (~30 per-table calls → 1 full snapshot +
+verify checks).
+
+Discovered + fixed a latent rotation bug as part of this work:
+`_rotate_backups()` had been sorting ALL `backup-*` dirs
+reverse-lex and keeping the top 2, so per-table dirs from the
+same day outranked the canonical full snapshot (ASCII `-` >
+end-of-string) and rotation could delete a freshly-rsynced full
+snapshot. Now filters to canonical `backup-YYYY-MM-DD` dirs
+only; per-table cleanup is owned by the new cleanup script.
+
+The manifest format is the contract for the cloud (S3)
+migration in the next two weeks: same fields, different storage
+backend.
+
+Shipped slices:
+
+- PR 1: manifest writer / reader module (`backup_manifest.py`) — `57c1df8`
+- PR 2: `backups_daily` scheduler job — `a8fdc98`
+- PR 3: `verify_or_backup` helper — `62cfe33` + `3569885`
+- PR 4: pipeline step-0 refactor — `1fba20a`
+- PR 5: admin endpoints + helper lift — `3804839` + `3aff24a`
+- PR 6: BackupHealthPanel SIZE + TABLES tiles — `01ca311`
+- PR 7: cleanup migration script — `7b2faa7`
+- Rotation bugfix (discovered during operational rollout) — `8872076`
+- Scheduler seed at 00:30 IST — `2e0e7f0`
+- isort polish on new function-local imports — `7dc4552`
+
+Spec: `docs/superpowers/specs/2026-05-23-backup-redesign-design.md`
+Plan: `docs/superpowers/plans/2026-05-23-backup-redesign.md`
+
+---
+
 ## 2026-05-18 — 13 commits + 9 Jira tickets across iceberg design, strategy backtest, scheduler bugfix
 
 Marathon Sprint 11 session. **13 commits on `feature/admin-universe-snapshot-tab`**,

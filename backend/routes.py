@@ -59,6 +59,288 @@ def _iso_utc(ts) -> str | None:
         return str(ts) if ts else None
 
 
+# Admin backup helpers (module-level for testability).
+# These were lifted out of ``setup_admin_routes`` so they can be
+# unit-tested without spinning up an HTTP harness. The three
+# ``_admin_backups_*`` route handlers inside ``create_app`` now
+# delegate to these implementations.
+
+import re as _re
+
+_FULL_SNAPSHOT_DATE_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _is_full_snapshot_dir_name(date_field: str) -> bool:
+    """True iff *date_field* is a bare ``YYYY-MM-DD`` (full
+    snapshot), not a suffixed per-table dir like
+    ``2026-05-22-stocks-ohlcv``."""
+    return bool(_FULL_SNAPSHOT_DATE_RE.match(date_field or ""))
+
+
+def _completed_epoch(latest: dict, fallback_path) -> float:
+    """Best-effort UTC epoch from a ``list_backups`` row.
+
+    Prefers ``completed_at`` (ISO 8601 with ``Z``); falls back
+    to the directory mtime; finally returns ``time.time()``.
+    """
+    import time as _t
+    from datetime import datetime
+
+    completed_iso = latest.get("completed_at")
+    if completed_iso:
+        try:
+            return (
+                datetime.fromisoformat(
+                    completed_iso.replace("Z", "+00:00"),
+                ).timestamp()
+            )
+        except Exception:
+            _logger.debug(
+                "_completed_epoch: completed_iso=%r "
+                "unparseable, falling back to stat()",
+                completed_iso,
+                exc_info=True,
+            )
+    try:
+        return fallback_path.stat().st_mtime
+    except Exception:
+        _logger.debug(
+            "_completed_epoch: stat() failed on %s, "
+            "falling back to now()",
+            fallback_path,
+            exc_info=True,
+        )
+        return _t.time()
+
+
+async def _admin_backups_list_impl(
+    backup_root=None,
+) -> dict:
+    """Implementation for GET ``/admin/backups``.
+
+    Filters out per-table fallback dirs and enriches each row
+    with ``age_hours``, ``has_catalog``, ``table_count``,
+    ``has_manifest``.
+    """
+    import time as _t
+    from pathlib import Path
+
+    from cache import get_cache
+
+    _c = get_cache()
+    _bk = "cache:admin:backups-list:v2"
+    if _c and backup_root is None:
+        _h = _c.get(_bk)
+        if _h:
+            return json.loads(_h)
+
+    from backend.maintenance.backup import list_backups
+    from backend.maintenance.backup_manifest import read_manifest
+
+    backups = [
+        b for b in list_backups(backup_root)
+        if _is_full_snapshot_dir_name(b.get("date", ""))
+    ]
+    now = _t.time()
+    for b in backups:
+        bp = Path(b["path"])
+        completed_epoch = _completed_epoch(b, bp)
+        age_h = (now - completed_epoch) / 3600
+        b["age_hours"] = round(age_h, 1)
+        b["has_catalog"] = (bp / "catalog.db").exists()
+        m = read_manifest(bp)
+        if m is not None:
+            b["table_count"] = len(m.get("tables", []))
+            b["has_manifest"] = True
+        else:
+            b["table_count"] = 0
+            b["has_manifest"] = False
+    result = {"backups": backups}
+    if _c and backup_root is None:
+        _c.set(_bk, json.dumps(result), 120)
+    return result
+
+
+async def _admin_backups_health_impl(
+    backup_root=None,
+) -> dict:
+    """Implementation for GET ``/admin/backups/health``.
+
+    Reads ``manifest.json`` for ``warehouse_size_mb``,
+    ``table_count``, ``catalog_present``. Falls back to the
+    list_backups ``size_mb`` for legacy backups without a
+    manifest.
+    """
+    import time as _t
+    from pathlib import Path
+
+    from cache import get_cache
+
+    _c2 = get_cache()
+    _bk2 = "cache:admin:backups-health:v2"
+    if _c2 and backup_root is None:
+        _h2 = _c2.get(_bk2)
+        if _h2:
+            return json.loads(_h2)
+
+    from backend.maintenance.backup import list_backups
+    from backend.maintenance.backup_manifest import read_manifest
+
+    backups = [
+        b for b in list_backups(backup_root)
+        if _is_full_snapshot_dir_name(b.get("date", ""))
+    ]
+    if not backups:
+        return {
+            "status": "missing",
+            "latest_date": None,
+            "completed_at": None,
+            "age_hours": None,
+            "backup_count": 0,
+            "table_count": 0,
+            "warehouse_size_mb": None,
+            "has_catalog": False,
+        }
+
+    latest = backups[0]
+    bp = Path(latest["path"])
+    now_ = _t.time()
+    completed_epoch = _completed_epoch(latest, bp)
+    age_h = (now_ - completed_epoch) / 3600
+
+    if age_h < 24:
+        status = "healthy"
+    elif age_h < 72:
+        status = "stale"
+    else:
+        status = "critical"
+
+    manifest = read_manifest(bp)
+    if manifest is not None:
+        warehouse_size_mb = manifest.get("warehouse_size_mb")
+        table_count = len(manifest.get("tables", []))
+        has_catalog = bool(
+            manifest.get("catalog_present", False),
+        )
+    else:
+        warehouse_size_mb = latest.get("size_mb")
+        table_count = 0
+        has_catalog = (bp / "catalog.db").exists()
+
+    result = {
+        "status": status,
+        "latest_date": latest["date"],
+        "completed_at": latest.get("completed_at"),
+        "age_hours": round(age_h, 1),
+        "backup_count": len(backups),
+        "table_count": table_count,
+        "warehouse_size_mb": warehouse_size_mb,
+        # Back-compat: current BackupHealthPanel reads size_mb;
+        # keep both keys in sync until Task 6 migrates the UI.
+        "size_mb": warehouse_size_mb,
+        "has_catalog": has_catalog,
+    }
+    if _c2 and backup_root is None:
+        _c2.set(_bk2, json.dumps(result), 120)
+    return result
+
+
+async def _admin_backup_contents_impl(
+    date_str: str,
+    backup_root=None,
+) -> dict:
+    """Implementation for GET
+    ``/admin/backups/{date}/contents``.
+
+    Returns manifest-derived ``tables`` when present;
+    falls back to the legacy filesystem walk for backups
+    without a manifest.
+    """
+    from pathlib import Path
+
+    from backend.maintenance.backup import BACKUP_ROOT
+    from backend.maintenance.backup_manifest import read_manifest
+
+    root = Path(backup_root) if backup_root else Path(BACKUP_ROOT)
+    bp = root / f"backup-{date_str}"
+    if not bp.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No backup for {date_str}",
+        )
+
+    manifest = read_manifest(bp)
+    if manifest is not None:
+        tables = [
+            {
+                "name": t["id"],
+                "partitions": t.get("partition_count", 0),
+                "files": t.get("file_count", 0),
+                "size_mb": t.get("size_mb", 0.0),
+            }
+            for t in manifest.get("tables", [])
+        ]
+        return {
+            "date": date_str,
+            "tables": tables,
+            "catalog_present": bool(
+                manifest.get("catalog_present", False),
+            ),
+        }
+
+    # Legacy fallback — filesystem walk for pre-manifest
+    # backups.
+    warehouse = bp / "warehouse"
+    if not warehouse.exists():
+        warehouse = bp  # legacy format
+
+    tables_legacy: list[dict] = []
+    stocks_dir = warehouse / "stocks"
+    if stocks_dir.exists():
+        import subprocess as _sp
+
+        for tbl_dir in sorted(stocks_dir.iterdir()):
+            if not tbl_dir.is_dir():
+                continue
+            data_dir = tbl_dir / "data"
+            parts = 0
+            files = 0
+            size_mb = 0.0
+            if data_dir.exists():
+                parts = sum(
+                    1
+                    for d in data_dir.iterdir()
+                    if d.is_dir()
+                )
+                try:
+                    r = _sp.run(
+                        ["du", "-sk", str(data_dir)],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    if r.returncode == 0:
+                        kb = int(r.stdout.split()[0])
+                        size_mb = kb / 1024.0
+                except Exception:
+                    pass
+                files = parts or 1
+            tables_legacy.append(
+                {
+                    "name": f"stocks.{tbl_dir.name}",
+                    "partitions": parts,
+                    "files": files,
+                    "size_mb": round(size_mb, 1),
+                }
+            )
+
+    return {
+        "date": date_str,
+        "tables": tables_legacy,
+        "catalog_present": (bp / "catalog.db").exists(),
+    }
+
+
 def create_app(
     agent_registry,
     executor,
@@ -3719,239 +4001,18 @@ def create_app(
 
     async def _admin_backups_list():
         """GET /admin/backups — list backups."""
-        from cache import get_cache
-
-        _c = get_cache()
-        _bk = "cache:admin:backups-list"
-        if _c:
-            _h = _c.get(_bk)
-            if _h:
-                import json
-
-                return json.loads(_h)
-
-        from backend.maintenance.backup import (
-            list_backups,
-        )
-
-        backups = list_backups()
-        now = __import__("time").time()
-        for b in backups:
-            from datetime import datetime
-            from pathlib import Path
-
-            bp = Path(b["path"])
-            # Age is computed from the directory's
-            # actual completion time (mtime), not from
-            # the date-folder name's midnight — naive
-            # parsing of "2026-04-25" interpreted in
-            # local TZ caused "9h ago" at 09:00 IST
-            # for a backup taken 1.5h earlier.
-            # `list_backups` exposes mtime as the UTC
-            # ISO string `completed_at`; fall back to
-            # a fresh stat() if the upstream caller
-            # didn't populate it.
-            completed_iso = b.get("completed_at")
-            completed_epoch = None
-            if completed_iso:
-                try:
-                    completed_epoch = (
-                        datetime.fromisoformat(
-                            completed_iso.replace(
-                                "Z", "+00:00",
-                            ),
-                        ).timestamp()
-                    )
-                except Exception:
-                    pass
-            if completed_epoch is None:
-                try:
-                    completed_epoch = (
-                        bp.stat().st_mtime
-                    )
-                except Exception:
-                    completed_epoch = now
-            age_h = (now - completed_epoch) / 3600
-            b["age_hours"] = round(age_h, 1)
-            b["has_catalog"] = (
-                bp / "catalog.db"
-            ).exists()
-        result = {"backups": backups}
-        if _c:
-            import json
-
-            _c.set(_bk, json.dumps(result), 120)
-        return result
+        return await _admin_backups_list_impl()
 
     async def _admin_backups_health():
         """GET /admin/backups/health."""
-        from cache import get_cache
-
-        _c2 = get_cache()
-        _bk2 = "cache:admin:backups-health"
-        if _c2:
-            _h2 = _c2.get(_bk2)
-            if _h2:
-                import json
-
-                return json.loads(_h2)
-
-        from backend.maintenance.backup import (
-            list_backups,
-        )
-
-        backups = list_backups()
-        if not backups:
-            return {
-                "status": "missing",
-                "latest_date": None,
-                "age_hours": None,
-                "backup_count": 0,
-                "has_catalog": False,
-            }
-
-        latest = backups[0]
-        from datetime import datetime
-        from pathlib import Path
-
-        bp = Path(latest["path"])
-        now_ = __import__("time").time()
-        # Pull the actual mtime-based completion time
-        # from list_backups — the prior implementation
-        # parsed the folder-name date as naive midnight
-        # which gave "9h ago" at 09:00 IST for a backup
-        # taken 1.5h earlier (ASETPLTFRM-337).
-        completed_iso = latest.get("completed_at")
-        completed_epoch = None
-        if completed_iso:
-            try:
-                completed_epoch = (
-                    datetime.fromisoformat(
-                        completed_iso.replace(
-                            "Z", "+00:00",
-                        ),
-                    ).timestamp()
-                )
-            except Exception:
-                pass
-        if completed_epoch is None:
-            try:
-                completed_epoch = (
-                    bp.stat().st_mtime
-                )
-            except Exception:
-                completed_epoch = now_
-        age_h = (now_ - completed_epoch) / 3600
-        has_cat = (bp / "catalog.db").exists()
-
-        if age_h < 24:
-            status = "healthy"
-        elif age_h < 72:
-            status = "stale"
-        else:
-            status = "critical"
-
-        result = {
-            "status": status,
-            "latest_date": latest["date"],
-            "completed_at": completed_iso,
-            "age_hours": round(age_h, 1),
-            "backup_count": len(backups),
-            "has_catalog": has_cat,
-            "size_mb": latest["size_mb"],
-        }
-        if _c2:
-            import json
-
-            _c2.set(
-                _bk2, json.dumps(result), 120,
-            )
-        return result
+        return await _admin_backups_health_impl()
 
     async def _admin_backup_contents(
         request: Request,
     ):
         """GET /admin/backups/{date}/contents."""
         dt = request.path_params["date"]
-        from pathlib import Path
-
-        from backend.maintenance.backup import (
-            BACKUP_ROOT,
-        )
-
-        bp = Path(BACKUP_ROOT) / f"backup-{dt}"
-        if not bp.exists():
-            raise HTTPException(
-                status_code=404,
-                detail=f"No backup for {dt}",
-            )
-
-        warehouse = bp / "warehouse"
-        if not warehouse.exists():
-            warehouse = bp  # legacy format
-
-        tables: list[dict] = []
-        stocks_dir = warehouse / "stocks"
-        if stocks_dir.exists():
-            import subprocess as _sp
-
-            for tbl_dir in sorted(
-                stocks_dir.iterdir(),
-            ):
-                if not tbl_dir.is_dir():
-                    continue
-                data_dir = tbl_dir / "data"
-                parts = 0
-                files = 0
-                size_mb = 0.0
-                if data_dir.exists():
-                    parts = sum(
-                        1
-                        for d in data_dir.iterdir()
-                        if d.is_dir()
-                    )
-                    # Use du for fast size
-                    try:
-                        r = _sp.run(
-                            [
-                                "du", "-sk",
-                                str(data_dir),
-                            ],
-                            capture_output=True,
-                            text=True,
-                            timeout=5,
-                        )
-                        if r.returncode == 0:
-                            kb = int(
-                                r.stdout.split()[
-                                    0
-                                ],
-                            )
-                            size_mb = kb / 1024.0
-                    except Exception:
-                        pass
-                    # Approx file count from
-                    # partitions (1 file/part
-                    # after compaction)
-                    files = parts or 1
-                tables.append({
-                    "name": (
-                        f"stocks.{tbl_dir.name}"
-                    ),
-                    "partitions": parts,
-                    "files": files,
-                    "size_mb": round(
-                        size_mb, 1,
-                    ),
-                })
-
-        return {
-            "date": dt,
-            "tables": tables,
-            "catalog_present": (
-                bp / "catalog.db"
-            ).exists(),
-        }
+        return await _admin_backup_contents_impl(dt)
 
     admin_router.add_api_route(
         "/admin/backups",
