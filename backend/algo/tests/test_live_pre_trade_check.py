@@ -3,18 +3,49 @@
 Each of the 9 caps MUST have a breach test (reject) and a
 pass test (accept / scale).  That is 18 cases minimum.
 """
+
 from __future__ import annotations
 
 from decimal import Decimal
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 
+from backend.algo.live.budget_types import UserBudget
 from backend.algo.live.safety import (
     LiveRejectReason,
     pre_trade_check,
 )
 from backend.algo.paper.types import AccountState, RejectReason, Signal
+
+
+@pytest.fixture(autouse=True)
+def _mock_budget_helpers(monkeypatch):
+    """Auto-mock Cap 0 budget helpers — these tests target caps
+    1-9, so Cap 0 must always pass (effectively infinite headroom).
+    """
+    monkeypatch.setattr(
+        "backend.algo.live.safety.load_user_budget",
+        AsyncMock(
+            return_value=UserBudget(
+                user_id=uuid4(),
+                allocated_inr=Decimal("10000000000"),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.algo.live.safety.sum_open_position_cost",
+        AsyncMock(return_value=Decimal("0")),
+    )
+    monkeypatch.setattr(
+        "backend.algo.live.safety.sum_active_reservations",
+        AsyncMock(return_value=Decimal("0")),
+    )
+    monkeypatch.setattr(
+        "backend.algo.live.safety.fetch_kite_available_cash",
+        AsyncMock(return_value=Decimal("inf")),
+    )
 
 
 def _signal(
@@ -96,27 +127,30 @@ def _risk(
 # Cap 1: Kill switch
 # ----------------------------------------------------------------
 
+
 class TestCap1KillSwitch:
-    def test_kill_switch_armed_rejects(self):
-        d = pre_trade_check(
+    async def test_kill_switch_armed_rejects(self):
+        d = await pre_trade_check(
             signal=_signal(),
             caps=_caps(),
             day_state=_day_state(),
             account=_account(kill_switch=True),
             strategy_risk=_risk(),
             last_price=Decimal("2000"),
+            user_id=uuid4(),
         )
         assert d.outcome == "reject"
         assert d.reason == RejectReason.KILL_SWITCH
 
-    def test_kill_switch_disarmed_passes_this_cap(self):
-        d = pre_trade_check(
+    async def test_kill_switch_disarmed_passes_this_cap(self):
+        d = await pre_trade_check(
             signal=_signal(),
             caps=_caps(),
             day_state=_day_state(),
             account=_account(kill_switch=False),
             strategy_risk=_risk(),
             last_price=Decimal("2000"),
+            user_id=uuid4(),
         )
         # Not kill-switch rejected; may pass or fail other caps
         assert d.reason != RejectReason.KILL_SWITCH
@@ -126,39 +160,43 @@ class TestCap1KillSwitch:
 # Cap 2: Allowed tickers
 # ----------------------------------------------------------------
 
+
 class TestCap2AllowedTickers:
-    def test_ticker_not_in_allow_list_rejects(self):
-        d = pre_trade_check(
+    async def test_ticker_not_in_allow_list_rejects(self):
+        d = await pre_trade_check(
             signal=_signal(ticker="WIPRO.NS"),
             caps=_caps(allowed_tickers=["RELIANCE.NS"]),
             day_state=_day_state(),
             account=_account(),
             strategy_risk=_risk(),
             last_price=Decimal("500"),
+            user_id=uuid4(),
         )
         assert d.outcome == "reject"
         assert d.reason.value == LiveRejectReason.LIVE_TICKER_NOT_ALLOWED
 
-    def test_empty_allow_list_rejects_everything(self):
-        d = pre_trade_check(
+    async def test_empty_allow_list_rejects_everything(self):
+        d = await pre_trade_check(
             signal=_signal(ticker="RELIANCE.NS"),
             caps=_caps(allowed_tickers=[]),
             day_state=_day_state(),
             account=_account(),
             strategy_risk=_risk(),
             last_price=Decimal("2000"),
+            user_id=uuid4(),
         )
         assert d.outcome == "reject"
         assert d.reason.value == LiveRejectReason.LIVE_TICKER_NOT_ALLOWED
 
-    def test_ticker_in_allow_list_passes_this_cap(self):
-        d = pre_trade_check(
+    async def test_ticker_in_allow_list_passes_this_cap(self):
+        d = await pre_trade_check(
             signal=_signal(ticker="RELIANCE.NS"),
             caps=_caps(allowed_tickers=["RELIANCE.NS"]),
             day_state=_day_state(),
             account=_account(),
             strategy_risk=_risk(),
             last_price=Decimal("2000"),
+            user_id=uuid4(),
         )
         assert d.reason is None or (
             d.reason.value != LiveRejectReason.LIVE_TICKER_NOT_ALLOWED
@@ -169,78 +207,82 @@ class TestCap2AllowedTickers:
 # Cap 3: max_orders_per_day
 # ----------------------------------------------------------------
 
+
 class TestCap3MaxOrdersPerDay:
     """Exposure semantics: ``orders_count_today`` is the count of
     currently-open legs. Only BUYs opening a NEW ticker can push it
     higher, so cap-rejects only fire for that case.
     """
 
-    def test_at_limit_rejects_new_position_buy(self):
-        d = pre_trade_check(
+    async def test_at_limit_rejects_new_position_buy(self):
+        d = await pre_trade_check(
             signal=_signal(ticker="RELIANCE.NS", side="BUY"),
             caps=_caps(max_orders=5),
             day_state=_day_state(orders=5),
             account=_account(),
             strategy_risk=_risk(),
             last_price=Decimal("100"),
+            user_id=uuid4(),
         )
         assert d.outcome == "reject"
-        assert (
-            d.reason.value == LiveRejectReason.LIVE_ORDERS_PER_DAY_CAP
-        )
+        assert d.reason.value == LiveRejectReason.LIVE_ORDERS_PER_DAY_CAP
 
-    def test_below_limit_passes_this_cap(self):
-        d = pre_trade_check(
+    async def test_below_limit_passes_this_cap(self):
+        d = await pre_trade_check(
             signal=_signal(),
             caps=_caps(max_orders=10),
             day_state=_day_state(orders=3),
             account=_account(),
             strategy_risk=_risk(),
             last_price=Decimal("100"),
+            user_id=uuid4(),
         )
         assert d.reason is None or (
             d.reason.value != LiveRejectReason.LIVE_ORDERS_PER_DAY_CAP
         )
 
-    def test_sell_bypasses_cap_even_at_limit(self):
+    async def test_sell_bypasses_cap_even_at_limit(self):
         # Closing a leg should NEVER be cap-rejected here —
         # SELLs reduce the open-leg count rather than raise it.
-        d = pre_trade_check(
+        d = await pre_trade_check(
             signal=_signal(ticker="RELIANCE.NS", side="SELL"),
             caps=_caps(max_orders=5),
             day_state=_day_state(orders=5),
             account=_account(open_positions={"RELIANCE.NS": 10}),
             strategy_risk=_risk(),
             last_price=Decimal("100"),
+            user_id=uuid4(),
         )
         assert d.reason is None or (
             d.reason.value != LiveRejectReason.LIVE_ORDERS_PER_DAY_CAP
         )
 
-    def test_buy_add_to_existing_ticker_bypasses_cap(self):
+    async def test_buy_add_to_existing_ticker_bypasses_cap(self):
         # Adding to an existing position doesn't raise the open-leg
         # count, so cap 3 must not fire even at the limit.
-        d = pre_trade_check(
+        d = await pre_trade_check(
             signal=_signal(ticker="RELIANCE.NS", side="BUY"),
             caps=_caps(max_orders=5),
             day_state=_day_state(orders=5),
             account=_account(open_positions={"RELIANCE.NS": 10}),
             strategy_risk=_risk(),
             last_price=Decimal("100"),
+            user_id=uuid4(),
         )
         assert d.reason is None or (
             d.reason.value != LiveRejectReason.LIVE_ORDERS_PER_DAY_CAP
         )
 
-    def test_zero_cap_means_unlimited(self):
+    async def test_zero_cap_means_unlimited(self):
         # max_orders=0 means no cap (same as PaperRuntime semantics)
-        d = pre_trade_check(
+        d = await pre_trade_check(
             signal=_signal(),
             caps=_caps(max_orders=0),
             day_state=_day_state(orders=9999),
             account=_account(),
             strategy_risk=_risk(),
             last_price=Decimal("100"),
+            user_id=uuid4(),
         )
         assert d.reason is None or (
             d.reason.value != LiveRejectReason.LIVE_ORDERS_PER_DAY_CAP
@@ -251,63 +293,68 @@ class TestCap3MaxOrdersPerDay:
 # Cap 4: max_inr
 # ----------------------------------------------------------------
 
+
 class TestCap4MaxInr:
     """Exposure semantics: ``cumulative_inr_today`` is the currently
     committed notional via this strategy's open positions. SELLs
     free capital and must bypass this cap; BUYs add and are gated.
     """
 
-    def test_order_exceeds_remaining_inr_rejects(self):
+    async def test_order_exceeds_remaining_inr_rejects(self):
         # max_inr=10000, committed=9500, BUY=2000 > headroom=500
-        d = pre_trade_check(
+        d = await pre_trade_check(
             signal=_signal(qty=10),  # 10 * 200 = 2000
             caps=_caps(max_inr=Decimal("10000")),
             day_state=_day_state(cum_inr=Decimal("9500")),
             account=_account(),
             strategy_risk=_risk(),
             last_price=Decimal("200"),
+            user_id=uuid4(),
         )
         assert d.outcome == "reject"
         assert d.reason.value == LiveRejectReason.LIVE_INR_CAP
 
-    def test_order_within_headroom_passes(self):
+    async def test_order_within_headroom_passes(self):
         # max_inr=10000, committed=0, BUY=2000 < 10000
-        d = pre_trade_check(
+        d = await pre_trade_check(
             signal=_signal(qty=10),
             caps=_caps(max_inr=Decimal("10000")),
             day_state=_day_state(cum_inr=Decimal("0")),
             account=_account(),
             strategy_risk=_risk(),
             last_price=Decimal("200"),
+            user_id=uuid4(),
         )
         assert d.reason is None or (
             d.reason.value != LiveRejectReason.LIVE_INR_CAP
         )
 
-    def test_sell_bypasses_cap_even_when_committed_at_max(self):
+    async def test_sell_bypasses_cap_even_when_committed_at_max(self):
         # Square-off must NEVER be rejected by the exposure cap —
         # otherwise the user cannot release the very budget the cap
         # is protecting.
-        d = pre_trade_check(
+        d = await pre_trade_check(
             signal=_signal(ticker="RELIANCE.NS", side="SELL", qty=10),
             caps=_caps(max_inr=Decimal("10000")),
             day_state=_day_state(cum_inr=Decimal("10000")),
             account=_account(open_positions={"RELIANCE.NS": 10}),
             strategy_risk=_risk(),
             last_price=Decimal("200"),
+            user_id=uuid4(),
         )
         assert d.reason is None or (
             d.reason.value != LiveRejectReason.LIVE_INR_CAP
         )
 
-    def test_zero_cap_means_unlimited_inr(self):
-        d = pre_trade_check(
+    async def test_zero_cap_means_unlimited_inr(self):
+        d = await pre_trade_check(
             signal=_signal(qty=1000),
             caps=_caps(max_inr=Decimal("0")),
             day_state=_day_state(cum_inr=Decimal("0")),
             account=_account(),
             strategy_risk=_risk(),
             last_price=Decimal("50000"),
+            user_id=uuid4(),
         )
         assert d.reason is None or (
             d.reason.value != LiveRejectReason.LIVE_INR_CAP
@@ -318,27 +365,30 @@ class TestCap4MaxInr:
 # Cap 5: per-trade max_qty
 # ----------------------------------------------------------------
 
+
 class TestCap5MaxQty:
-    def test_qty_over_cap_rejects(self):
-        d = pre_trade_check(
+    async def test_qty_over_cap_rejects(self):
+        d = await pre_trade_check(
             signal=_signal(qty=101),
             caps=_caps(),
             day_state=_day_state(),
             account=_account(),
             strategy_risk=_risk(max_qty=100),
             last_price=Decimal("100"),
+            user_id=uuid4(),
         )
         assert d.outcome == "reject"
         assert d.reason == RejectReason.MAX_QTY
 
-    def test_qty_at_cap_passes(self):
-        d = pre_trade_check(
+    async def test_qty_at_cap_passes(self):
+        d = await pre_trade_check(
             signal=_signal(qty=100),
             caps=_caps(),
             day_state=_day_state(),
             account=_account(),
             strategy_risk=_risk(max_qty=100),
             last_price=Decimal("100"),
+            user_id=uuid4(),
         )
         assert d.reason != RejectReason.MAX_QTY
 
@@ -347,10 +397,11 @@ class TestCap5MaxQty:
 # Cap 6: daily max_loss_pct
 # ----------------------------------------------------------------
 
+
 class TestCap6DailyLossCap:
-    def test_at_daily_loss_cap_rejects(self):
+    async def test_at_daily_loss_cap_rejects(self):
         # 5% of 100000 = 5000 loss cap; daily_loss=5000
-        d = pre_trade_check(
+        d = await pre_trade_check(
             signal=_signal(),
             caps=_caps(),
             day_state=_day_state(),
@@ -360,12 +411,13 @@ class TestCap6DailyLossCap:
             ),
             strategy_risk=_risk(max_loss_pct=5),
             last_price=Decimal("100"),
+            user_id=uuid4(),
         )
         assert d.outcome == "reject"
         assert d.reason == RejectReason.DAILY_LOSS_CAP
 
-    def test_below_daily_loss_cap_passes(self):
-        d = pre_trade_check(
+    async def test_below_daily_loss_cap_passes(self):
+        d = await pre_trade_check(
             signal=_signal(),
             caps=_caps(),
             day_state=_day_state(),
@@ -375,6 +427,7 @@ class TestCap6DailyLossCap:
             ),
             strategy_risk=_risk(max_loss_pct=5),
             last_price=Decimal("100"),
+            user_id=uuid4(),
         )
         assert d.reason != RejectReason.DAILY_LOSS_CAP
 
@@ -383,13 +436,14 @@ class TestCap6DailyLossCap:
 # Cap 7: daily max_open_positions
 # ----------------------------------------------------------------
 
+
 class TestCap7MaxOpenPositions:
-    def test_at_max_open_positions_rejects_new_buy(self):
+    async def test_at_max_open_positions_rejects_new_buy(self):
         positions = {
             "RELIANCE.NS": 10,
             "TCS.NS": 5,
         }
-        d = pre_trade_check(
+        d = await pre_trade_check(
             # Signal for a NEW ticker (INFY.NS not in positions)
             signal=_signal(ticker="INFY.NS"),
             caps=_caps(allowed_tickers=["INFY.NS", "RELIANCE.NS"]),
@@ -397,19 +451,21 @@ class TestCap7MaxOpenPositions:
             account=_account(open_positions=positions),
             strategy_risk=_risk(max_open=2),
             last_price=Decimal("1500"),
+            user_id=uuid4(),
         )
         assert d.outcome == "reject"
         assert d.reason == RejectReason.MAX_OPEN_POSITIONS
 
-    def test_sell_not_blocked_by_open_position_cap(self):
+    async def test_sell_not_blocked_by_open_position_cap(self):
         positions = {"RELIANCE.NS": 10, "TCS.NS": 5}
-        d = pre_trade_check(
+        d = await pre_trade_check(
             signal=_signal(side="SELL"),
             caps=_caps(),
             day_state=_day_state(),
             account=_account(open_positions=positions),
             strategy_risk=_risk(max_open=1),
             last_price=Decimal("2000"),
+            user_id=uuid4(),
         )
         # SELL always skips portfolio caps → accept
         assert d.outcome == "accept"
@@ -419,29 +475,32 @@ class TestCap7MaxOpenPositions:
 # Cap 8: portfolio max_concentration_pct
 # ----------------------------------------------------------------
 
+
 class TestCap8ConcentrationCap:
-    def test_concentration_breach_rejects(self):
+    async def test_concentration_breach_rejects(self):
         # 10 * 2000 = 20000 notional; equity=50000 → 40% > 30%
-        d = pre_trade_check(
+        d = await pre_trade_check(
             signal=_signal(qty=10),
             caps=_caps(),
             day_state=_day_state(),
             account=_account(equity=Decimal("50000")),
             strategy_risk=_risk(max_conc=30),
             last_price=Decimal("2000"),
+            user_id=uuid4(),
         )
         assert d.outcome == "reject"
         assert d.reason == RejectReason.POSITION_CAP
 
-    def test_within_concentration_passes(self):
+    async def test_within_concentration_passes(self):
         # 1 * 100 = 100 notional; equity=100000 → 0.1% < 30%
-        d = pre_trade_check(
+        d = await pre_trade_check(
             signal=_signal(qty=1),
             caps=_caps(),
             day_state=_day_state(),
             account=_account(equity=Decimal("100000")),
             strategy_risk=_risk(max_conc=30),
             last_price=Decimal("100"),
+            user_id=uuid4(),
         )
         assert d.reason != RejectReason.POSITION_CAP
 
@@ -450,12 +509,13 @@ class TestCap8ConcentrationCap:
 # Cap 9: portfolio max_exposure_pct (may scale)
 # ----------------------------------------------------------------
 
+
 class TestCap9ExposureCap:
-    def test_exposure_breach_scales_down(self):
+    async def test_exposure_breach_scales_down(self):
         # Equity=10000, cap=50% → cap_inr=5000.
         # Existing exposure=4000, requesting 2000 → over by 1000.
         # headroom=1000, last_price=100 → scaled_qty=10.
-        d = pre_trade_check(
+        d = await pre_trade_check(
             signal=_signal(qty=20),  # 20 * 100 = 2000
             caps=_caps(),
             day_state=_day_state(),
@@ -465,13 +525,14 @@ class TestCap9ExposureCap:
             ),
             strategy_risk=_risk(max_exp=50),
             last_price=Decimal("100"),
+            user_id=uuid4(),
         )
         assert d.outcome == "scale"
         assert d.adjusted_qty == 10
 
-    def test_no_headroom_at_all_rejects(self):
+    async def test_no_headroom_at_all_rejects(self):
         # Already at cap; no room for any new order
-        d = pre_trade_check(
+        d = await pre_trade_check(
             signal=_signal(qty=1),
             caps=_caps(),
             day_state=_day_state(),
@@ -481,6 +542,7 @@ class TestCap9ExposureCap:
             ),
             strategy_risk=_risk(max_exp=50),
             last_price=Decimal("100"),
+            user_id=uuid4(),
         )
         assert d.outcome == "reject"
         assert d.reason == RejectReason.EXPOSURE_CAP
@@ -490,10 +552,11 @@ class TestCap9ExposureCap:
 # Short-circuit order: allowed_tickers BEFORE inr cap
 # ----------------------------------------------------------------
 
+
 class TestShortCircuitOrdering:
-    def test_unknown_ticker_rejected_before_inr_cap(self):
+    async def test_unknown_ticker_rejected_before_inr_cap(self):
         """Cap 2 (allowed_tickers) fires before Cap 4 (max_inr)."""
-        d = pre_trade_check(
+        d = await pre_trade_check(
             signal=_signal(ticker="UNKNOWN.NS"),
             caps=_caps(
                 allowed_tickers=["RELIANCE.NS"],
@@ -503,18 +566,20 @@ class TestShortCircuitOrdering:
             account=_account(),
             strategy_risk=_risk(),
             last_price=Decimal("2000"),
+            user_id=uuid4(),
         )
         assert d.reason.value == LiveRejectReason.LIVE_TICKER_NOT_ALLOWED
 
-    def test_kill_switch_before_ticker_check(self):
+    async def test_kill_switch_before_ticker_check(self):
         """Cap 1 (kill switch) fires before Cap 2 (allowed_tickers)."""
-        d = pre_trade_check(
+        d = await pre_trade_check(
             signal=_signal(ticker="UNKNOWN.NS"),
             caps=_caps(allowed_tickers=[]),
             day_state=_day_state(),
             account=_account(kill_switch=True),
             strategy_risk=_risk(),
             last_price=Decimal("2000"),
+            user_id=uuid4(),
         )
         assert d.reason == RejectReason.KILL_SWITCH
 
@@ -523,9 +588,10 @@ class TestShortCircuitOrdering:
 # Full-pass: all caps pass → accept
 # ----------------------------------------------------------------
 
+
 class TestFullPass:
-    def test_all_caps_pass_returns_accept(self):
-        d = pre_trade_check(
+    async def test_all_caps_pass_returns_accept(self):
+        d = await pre_trade_check(
             signal=_signal(ticker="RELIANCE.NS", qty=5),
             caps=_caps(
                 max_inr=Decimal("1000000"),
@@ -533,7 +599,8 @@ class TestFullPass:
                 allowed_tickers=["RELIANCE.NS"],
             ),
             day_state=_day_state(
-                cum_inr=Decimal("0"), orders=0,
+                cum_inr=Decimal("0"),
+                orders=0,
             ),
             account=_account(
                 kill_switch=False,
@@ -547,5 +614,6 @@ class TestFullPass:
                 max_exp=90,
             ),
             last_price=Decimal("2000"),
+            user_id=uuid4(),
         )
         assert d.outcome == "accept"

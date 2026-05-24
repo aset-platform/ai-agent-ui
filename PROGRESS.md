@@ -2,6 +2,42 @@
 
 ---
 
+### 2026-05-24 — Algo order budget reservation (Epic A)
+
+Shipped user-pool budget reservation ("ticketing") layer for
+live algo trading. Every BUY order reserves notional against
+`algo.user_budget.allocated_inr`; reservations stack in
+`algo.budget_reservations` (append-only event log) with
+states PENDING → SUBMITTED → FILLED / REJECTED / CANCELLED /
+PARTIAL / PARTIAL_CANCELLED / TIMEOUT.
+
+New Cap 0 in `safety.py:pre_trade_check()` runs before
+existing caps — uses `min(internal_headroom, kite_available_cash)`
+so manual trades + T+1 settlement holds + MIS auto-square-off
+lag naturally reduce algo headroom. Fail-open on Kite,
+fail-closed on internal.
+
+New BudgetPanel at top of Live tab — Allocated / Open
+positions / Pending / Available tiles + Kite wallet strip +
+active reservations table with force-release + reservation
+history modal. Empty-state CTA prompts allocation when
+allocated_inr=0.
+
+Commits (8 slices on `feature/algo-order-budget-reservation`):
+1. migration + Pydantic types
+2. BudgetRepo
+3. cached helpers + reserve/transition API
+4. Cap 0 in safety.py + RejectReason
+5. reconciliation + runtime.py wiring
+6. HTTP routes
+7. frontend types + hooks + BudgetPanel shell
+8. allocation modal + reservations table + history + E2E + PR
+
+Spec: `docs/superpowers/specs/2026-05-24-algo-order-budget-reservation-design.md`
+Plan: `docs/superpowers/plans/2026-05-24-algo-order-budget-reservation.md`
+
+---
+
 ### 2026-05-24 — Walk-forward parameter sweep (1D, Option B)
 
 Shipped Option B parameter sweep on top of walk-forward CV.

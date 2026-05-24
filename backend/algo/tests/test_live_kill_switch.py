@@ -9,6 +9,7 @@ Verifies:
 5. Held positions are NOT affected by kill switch.
 6. Kill-switch latency budget: kill-check + pre_trade_check < 50ms p99.
 """
+
 from __future__ import annotations
 
 import time
@@ -22,10 +23,10 @@ from backend.algo.live.runtime import LiveNotEnabledError, LiveRuntime
 from backend.algo.live.safety import pre_trade_check
 from backend.algo.paper.types import AccountState, RejectReason, Signal
 
-
 # ----------------------------------------------------------------
 # Default-OFF test
 # ----------------------------------------------------------------
+
 
 class TestDefaultOff:
     def test_runtime_raises_when_not_enabled(self):
@@ -60,8 +61,10 @@ class TestDefaultOff:
         }
         with patch("backend.algo.broker.kite_client.KiteConnect"):
             from backend.algo.broker.kite_client import KiteClient
+
             kite = KiteClient(
-                api_key="k", access_token="t",
+                api_key="k",
+                access_token="t",
             )
         rt = LiveRuntime(
             strategy=MagicMock(id=uuid4(), name="test"),
@@ -81,8 +84,9 @@ class TestDefaultOff:
 # Kill switch via pre_trade_check
 # ----------------------------------------------------------------
 
+
 class TestKillSwitchStopsOrder:
-    def test_kill_switch_armed_rejects_all_signals(self):
+    async def test_kill_switch_armed_rejects_all_signals(self):
         """When kill_switch_active=True the first check rejects."""
         from datetime import date
 
@@ -105,7 +109,7 @@ class TestKillSwitchStopsOrder:
             open_position_count=0,
             kill_switch_active=True,  # armed
         )
-        decision = pre_trade_check(
+        decision = await pre_trade_check(
             signal=signal,
             caps={
                 "max_inr": Decimal("100000"),
@@ -118,9 +122,12 @@ class TestKillSwitchStopsOrder:
             },
             account=account,
             strategy_risk={
-                "per_trade": {}, "daily": {}, "portfolio": {},
+                "per_trade": {},
+                "daily": {},
+                "portfolio": {},
             },
             last_price=Decimal("2000"),
+            user_id=uuid4(),
         )
         assert decision.outcome == "reject"
         assert decision.reason == RejectReason.KILL_SWITCH
@@ -129,6 +136,7 @@ class TestKillSwitchStopsOrder:
 # ----------------------------------------------------------------
 # cancel_in_flight_orders
 # ----------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 class TestCancelInFlight:
@@ -201,8 +209,12 @@ class TestCancelInFlight:
             None,
         ]
 
-        caps = {"live_orders_enabled": True, "max_inr": 0,
-                "max_orders_per_day": 0, "allowed_tickers": []}
+        caps = {
+            "live_orders_enabled": True,
+            "max_inr": 0,
+            "max_orders_per_day": 0,
+            "allowed_tickers": [],
+        }
         with patch(
             "backend.algo.live.runtime.flush_events",
         ):
@@ -221,14 +233,18 @@ class TestCancelInFlight:
                 {
                     "kite_order_id": "FAIL_001",
                     "status": "submitted",
-                    "symbol": "A", "side": "BUY", "qty": 1,
+                    "symbol": "A",
+                    "side": "BUY",
+                    "qty": 1,
                     "submitted_at": "now",
                     "internal_order_id": str(uuid4()),
                 },
                 {
                     "kite_order_id": "OK_002",
                     "status": "submitted",
-                    "symbol": "B", "side": "BUY", "qty": 1,
+                    "symbol": "B",
+                    "side": "BUY",
+                    "qty": 1,
                     "submitted_at": "now",
                     "internal_order_id": str(uuid4()),
                 },
@@ -240,9 +256,9 @@ class TestCancelInFlight:
     async def test_kill_does_not_auto_flatten_positions(self):
         """Cancelling in-flight orders must NOT close existing
         positions.  Positions stay open after kill."""
-        from backend.algo.backtest.types import Fill
-
         import datetime
+
+        from backend.algo.backtest.types import Fill
 
         caps_repo = AsyncMock()
         caps_repo.update_in_flight = AsyncMock()
@@ -250,8 +266,12 @@ class TestCancelInFlight:
         mock_kite = MagicMock()
         mock_kite.cancel_order = MagicMock()
 
-        caps = {"live_orders_enabled": True, "max_inr": 0,
-                "max_orders_per_day": 0, "allowed_tickers": []}
+        caps = {
+            "live_orders_enabled": True,
+            "max_inr": 0,
+            "max_orders_per_day": 0,
+            "allowed_tickers": [],
+        }
         with patch(
             "backend.algo.live.runtime.flush_events",
         ):
@@ -268,6 +288,7 @@ class TestCancelInFlight:
             )
             # Apply a real fill to create an open position
             from decimal import Decimal as D
+
             fill = Fill(
                 intent_id=uuid4(),
                 ticker="RELIANCE.NS",
@@ -286,7 +307,8 @@ class TestCancelInFlight:
                     "kite_order_id": "K001",
                     "status": "submitted",
                     "symbol": "RELIANCE",
-                    "side": "BUY", "qty": 5,
+                    "side": "BUY",
+                    "qty": 5,
                     "submitted_at": "now",
                     "internal_order_id": str(uuid4()),
                 },
@@ -300,8 +322,9 @@ class TestCancelInFlight:
 # Latency budget test (kill-switch hot path)
 # ----------------------------------------------------------------
 
+
 class TestKillSwitchLatencyBudget:
-    def test_kill_check_and_pre_trade_under_50ms_p99(self):
+    async def test_kill_check_and_pre_trade_under_50ms_p99(self):
         """Kill-check + pre_trade_check chain must complete in
         < 50ms p99 over 100 iterations (hot path only — no I/O)."""
         from datetime import date
@@ -336,16 +359,18 @@ class TestKillSwitchLatencyBudget:
         }
         risk = {"per_trade": {}, "daily": {}, "portfolio": {}}
 
+        user_id = uuid4()
         timings_ns: list[int] = []
         for _ in range(100):
             t0 = time.perf_counter_ns()
-            pre_trade_check(
+            await pre_trade_check(
                 signal=signal,
                 caps=caps,
                 day_state=day_state,
                 account=account,
                 strategy_risk=risk,
                 last_price=Decimal("2000"),
+                user_id=user_id,
             )
             timings_ns.append(time.perf_counter_ns() - t0)
 
@@ -354,6 +379,5 @@ class TestKillSwitchLatencyBudget:
         p99_ms = p99_ns / 1_000_000
         # Budget: < 50ms (hot path, no I/O)
         assert p99_ms < 50, (
-            f"Kill-check p99 was {p99_ms:.2f}ms "
-            f"— budget is 50ms"
+            f"Kill-check p99 was {p99_ms:.2f}ms " f"— budget is 50ms"
         )

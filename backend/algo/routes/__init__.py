@@ -5,6 +5,7 @@ from backend.algo.routes.attribution import (
 )
 from backend.algo.routes.backtest import create_backtest_router
 from backend.algo.routes.broker import create_broker_router
+from backend.algo.routes.budget import create_budget_router
 from backend.algo.routes.drift import create_drift_router
 from backend.algo.routes.daily_factor_coverage import (
     create_daily_factor_coverage_router,
@@ -54,6 +55,7 @@ __all__ = [
     "create_attribution_router",
     "create_backtest_router",
     "create_broker_router",
+    "create_budget_router",
     "create_drift_router",
     "create_daily_factor_coverage_router",
     "create_factors_router",
