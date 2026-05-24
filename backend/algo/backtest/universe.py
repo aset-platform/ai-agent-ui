@@ -21,7 +21,9 @@ from datetime import date, timedelta
 from typing import Any, Iterable
 
 from auth.models import UserContext
-from backend.insights_routes import _scoped_tickers
+from backend.insights_routes import (
+    _scoped_tickers_for_strategy,
+)
 from backend.market_utils import detect_market
 
 _logger = logging.getLogger(__name__)
@@ -182,7 +184,9 @@ async def resolve_universe(
     """
     raw = getattr(strategy.universe, "scope", "watchlist")
     scope = raw if raw in _VALID_SCOPES else "watchlist"
-    candidates = await _scoped_tickers(user=user, scope=scope)
+    candidates = await _scoped_tickers_for_strategy(
+        user=user, scope=scope,
+    )
 
     filter_obj = getattr(strategy.universe, "filter", None)
     if filter_obj is None:

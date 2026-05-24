@@ -211,6 +211,30 @@ async def _get_user_tickers(user: UserContext) -> list[str]:
     return await _scoped_tickers(user, "watchlist")
 
 
+async def _scoped_tickers_for_strategy(
+    user: UserContext,
+    scope: TickerScope,
+) -> list[str]:
+    """Like :func:`_scoped_tickers` but injects algo-held
+    positions into the ``watchlist`` scope so a strategy with
+    ``universe.scope=watchlist`` can always iterate over
+    (and exit) positions it currently holds.
+
+    Other scopes delegate verbatim — the algo runtime is the
+    only caller that needs the injection. Insights tabs keep
+    calling :func:`_scoped_tickers` directly.
+    """
+    base = await _scoped_tickers(user, scope)
+    if scope != "watchlist":
+        return base
+    # Lazy import to avoid a cycle when this module loads.
+    from backend.algo.live.open_positions import (
+        open_algo_positions,
+    )
+    algo_held = await open_algo_positions(user.user_id)
+    return _dedup(base, sorted(algo_held))
+
+
 def _get_company_info_df(
     stock_repo,
     tickers: list[str] | None = None,
