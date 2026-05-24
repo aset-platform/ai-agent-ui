@@ -55,7 +55,7 @@ def _sweep_fields_impl() -> dict:
 async def _sweep_start_impl(
     *,
     body: SweepConfig,
-    user_id: UUID,
+    user: UserContext,
     background_tasks: BackgroundTasks,
 ) -> dict:
     """POST /v1/algo/sweep/run handler body.
@@ -74,6 +74,7 @@ async def _sweep_start_impl(
             status_code=400, detail=str(exc),
         ) from exc
 
+    user_id = UUID(user.user_id)
     factory = get_session_factory()
     async with factory() as session:
         strategy = await get_strategy(
@@ -85,11 +86,8 @@ async def _sweep_start_impl(
             detail="Base strategy not found",
         )
 
-    uc = UserContext(
-        user_id=str(user_id), email="", role="pro",
-    )
     universe = await resolve_universe(
-        user=uc, strategy=strategy,
+        user=user, strategy=strategy,
     )
 
     repo = BacktestRunsRepo()
@@ -223,7 +221,7 @@ def create_sweep_router() -> APIRouter:
     ):
         return await _sweep_start_impl(
             body=body,
-            user_id=UUID(user.user_id),
+            user=user,
             background_tasks=background_tasks,
         )
 

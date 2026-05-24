@@ -29,6 +29,17 @@ def test_sweep_fields_returns_whitelist():
         assert "max_value" in f
 
 
+def _fake_user() -> "UserContext":
+    """Lazy import to avoid touching pydantic at module
+    import time."""
+    from auth.models import UserContext
+    return UserContext(
+        user_id=str(uuid4()),
+        email="test@example.com",
+        role="superuser",
+    )
+
+
 @pytest.mark.asyncio
 async def test_sweep_start_validates_whitelist_field():
     """Unknown field → 400."""
@@ -48,10 +59,9 @@ async def test_sweep_start_validates_whitelist_field():
         "swept_values": [1, 2, 3],
     })
 
-    user_id = uuid4()
     with pytest.raises(HTTPException) as exc:
         await _sweep_start_impl(
-            body=body, user_id=user_id,
+            body=body, user=_fake_user(),
             background_tasks=MagicMock(),
         )
     assert exc.value.status_code == 400
@@ -79,8 +89,42 @@ async def test_sweep_start_rejects_single_value():
     })
     with pytest.raises(HTTPException) as exc:
         await _sweep_start_impl(
-            body=body, user_id=uuid4(),
+            body=body, user=_fake_user(),
             background_tasks=MagicMock(),
         )
     assert exc.value.status_code == 400
     assert "at least 2" in str(exc.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_sweep_get_returns_404_when_missing():
+    """GET /runs/{id} → 404 when no row matches."""
+    from fastapi import HTTPException
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from backend.algo.routes.sweep import _sweep_get_impl
+
+    fake_session = AsyncMock()
+    fake_result = MagicMock()
+    fake_result.mappings.return_value.first.return_value = (
+        None
+    )
+    fake_session.execute = AsyncMock(
+        return_value=fake_result,
+    )
+    fake_factory = MagicMock()
+    fake_factory.return_value.__aenter__ = AsyncMock(
+        return_value=fake_session,
+    )
+    fake_factory.return_value.__aexit__ = AsyncMock(
+        return_value=None,
+    )
+
+    with patch(
+        "backend.algo.routes.sweep.get_session_factory",
+        return_value=fake_factory,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await _sweep_get_impl(
+                run_id=uuid4(), user_id=uuid4(),
+            )
+    assert exc.value.status_code == 404
