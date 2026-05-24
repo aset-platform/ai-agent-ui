@@ -168,6 +168,71 @@ def _windowsummary_to_backtestsummary(
     )
 
 
+async def _stamp_partial_progress(
+    factory_fn: Any,
+    *,
+    sweep_run_id: UUID,
+    config: SweepConfig,
+    variant_outcomes: list[
+        tuple[int, Any, UUID, str, str | None]
+    ],
+) -> None:
+    """Write a partial SweepResult to summary_json so the
+    frontend progress panel shows live per-variant status
+    as variants complete/fail. Variants that haven't run
+    yet are absent from the variants list — the frontend
+    iterates swept_values and shows "queued" for missing
+    indices.
+    """
+    from decimal import Decimal
+    from sqlalchemy import text as _sa_text
+
+    variants_partial: list[SweepVariantSummary] = []
+    for idx, value, wf_id, status, err in variant_outcomes:
+        variants_partial.append(
+            SweepVariantSummary(
+                variant_index=idx,
+                swept_value=value,
+                walkforward_run_id=wf_id,
+                avg_pnl_pct=Decimal("0"),
+                avg_win_rate_pct=Decimal("0"),
+                avg_max_drawdown_pct=Decimal("0"),
+                sharpe=Decimal("0"),
+                dsr=Decimal("0"),
+                n_trades=0,
+                status=status,
+                error_text=err,
+            ),
+        )
+
+    partial = SweepResult(
+        run_id=sweep_run_id,
+        base_strategy_id=config.base_strategy_id,
+        swept_field=config.swept_field,
+        swept_values=list(config.swept_values),
+        variants=variants_partial,
+        cross_variant_pbo=None,
+        returns_matrix_shape=(0, 0),
+        winner_variant_index=None,
+        started_at=datetime.now(timezone.utc),
+        completed_at=None,
+        status="running",
+    )
+    async with factory_fn() as session:
+        await session.execute(
+            _sa_text(
+                "UPDATE algo.runs SET "
+                "summary_json = CAST(:sj AS jsonb) "
+                "WHERE id = :id",
+            ),
+            {
+                "id": sweep_run_id,
+                "sj": partial.model_dump_json(),
+            },
+        )
+        await session.commit()
+
+
 async def run_sweep_job(
     *,
     sweep_run_id: UUID,
@@ -312,6 +377,19 @@ async def run_sweep_job(
             variant_outcomes.append(
                 (idx, value, child.run_id, "failed",
                  str(exc)[:500]),
+            )
+        # NEW: stamp incremental progress so the UI updates
+        try:
+            await _stamp_partial_progress(
+                factory_fn,
+                sweep_run_id=sweep_run_id,
+                config=config,
+                variant_outcomes=variant_outcomes,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "sweep partial-progress stamp failed: %s",
+                exc, exc_info=True,
             )
 
     # Aggregate variants — wrap in try/except so any

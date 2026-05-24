@@ -338,7 +338,15 @@ export function WalkForwardSubTab() {
   const [regimeStratified, setRegimeStratified] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formErr, setFormErr] = useState<string | null>(null);
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(
+    () => {
+      if (typeof window === "undefined") return null;
+      const params = new URLSearchParams(
+        window.location.search,
+      );
+      return params.get("walkforward_id");
+    },
+  );
 
   const effectiveRunId =
     activeRunId ?? history[0]?.run_id ?? null;

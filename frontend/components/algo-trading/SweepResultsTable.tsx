@@ -28,11 +28,11 @@ export function SweepResultsTable({ run }: Props) {
 
   return (
     <div
-      className="rounded-md border"
+      className="rounded-md border border-slate-200 dark:border-slate-700 overflow-hidden"
       data-testid="sweep-results-table"
     >
       <table className="w-full text-xs">
-        <thead className="bg-slate-50 dark:bg-slate-800">
+        <thead className="bg-slate-50 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700">
           <tr>
             <th className="px-3 py-1.5 text-left">Rank</th>
             <th className="px-3 py-1.5 text-left">Value</th>
@@ -84,6 +84,7 @@ export function SweepResultsTable({ run }: Props) {
                   <a
                     href={
                       `/algo-trading/strategies?tab=backtest`
+                      + `&subtab=walkforward`
                       + `&walkforward_id=`
                       + v.walkforward_run_id
                     }
@@ -98,7 +99,7 @@ export function SweepResultsTable({ run }: Props) {
         </tbody>
       </table>
       {run.winner_variant_index !== null && (
-        <div className="p-3 border-t">
+        <div className="p-3 border-t border-slate-200 dark:border-slate-700">
           <button
             type="button"
             onClick={() => setPromoteOpen(true)}

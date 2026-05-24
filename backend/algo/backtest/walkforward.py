@@ -169,6 +169,7 @@ class WindowSummary(BaseModel):
     total_pnl_pct: Decimal | None = None
     win_rate_pct: Decimal | None = None
     max_drawdown_pct: Decimal | None = None
+    total_trades: int = 0   # NEW — used by sweep aggregator
     equity_curve: list[dict[str, Any]] = Field(
         default_factory=list,
     )
@@ -795,6 +796,7 @@ async def run_walkforward_job(
                 total_pnl_pct=s.total_pnl_pct,
                 win_rate_pct=s.win_rate_pct,
                 max_drawdown_pct=s.max_drawdown_pct,
+                total_trades=s.total_trades,
                 equity_curve=[
                     {
                         "bar_date": ep.bar_date.isoformat(),

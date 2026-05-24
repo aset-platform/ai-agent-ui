@@ -17,7 +17,24 @@ import { WalkForwardSubTab } from "./WalkForwardSubTab";
 type SubTab = "single" | "walkforward" | "parameter_sweep";
 
 export function BacktestTab() {
-  const [subTab, setSubTab] = useState<SubTab>("single");
+  // Honor ?subtab=walkforward (or parameter_sweep) so the
+  // Sweep results table's "View →" link can deep-link into
+  // the Walk-forward CV sub-tab.
+  const [subTab, setSubTab] = useState<SubTab>(() => {
+    if (typeof window === "undefined") return "single";
+    const params = new URLSearchParams(
+      window.location.search,
+    );
+    const fromUrl = params.get("subtab");
+    if (
+      fromUrl === "walkforward"
+      || fromUrl === "parameter_sweep"
+      || fromUrl === "single"
+    ) {
+      return fromUrl;
+    }
+    return "single";
+  });
   const { rows: history } = useBacktestRuns();
   const [activeRunId, setActiveRunId] = useState<string | null>(
     null,

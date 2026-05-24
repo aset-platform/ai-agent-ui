@@ -314,3 +314,15 @@ async def test_sweep_aggregates_real_summary_shape(
         if "UPDATE" in str(c[0][0])
     ]
     assert len(update_calls) >= 1
+
+    # Verify total_trades is summed from window dicts
+    # (Issue 1 fix — n_trades was always 0 before)
+    import json
+    final = update_calls[-1]
+    sj_str = final[0][1]["sj"]
+    sj_obj = json.loads(sj_str)
+    for v in sj_obj["variants"]:
+        assert v["n_trades"] == 18, (
+            f"expected 18 trades per variant "
+            f"(10+8 from fixture), got {v['n_trades']}"
+        )
