@@ -1507,6 +1507,7 @@ class LiveRuntime:
         slippage_bps = _slippage.bps_for(bucket)
         spread_bps = Decimal(slippage_bps)
         BPS_DENOM = Decimal("10000")
+        limit_price: Decimal | None = None
         if last_price and last_price > 0:
             buffer = last_price * spread_bps / BPS_DENOM
             limit_price = (
@@ -1557,7 +1558,7 @@ class LiveRuntime:
                 "internal_order_id": internal_order_id,
                 "limit_price": (
                     str(limit_price)
-                    if "limit_price" in dir()
+                    if limit_price is not None
                     else None
                 ),
             },

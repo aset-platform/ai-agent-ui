@@ -55,17 +55,47 @@ async def run_reconciliation_job(
 ) -> dict[str, Any]:
     """Entry point for the scheduler.
 
-    1. Skip if market is not open (09:15–15:30 IST, Mon–Fri).
-    2. Find all users with open positions.
-    3. Reconcile each user's positions against the broker.
+    1. Sweep budget reservations FIRST — runs every tick,
+       independent of market hours or open positions, because
+       PENDING (>120s) and SUBMITTED (>5min) timeouts must
+       release reserved capital and surface stuck orders
+       even when markets are closed.
+    2. Skip per-user drift reconcile if market is not open
+       (09:15–15:30 IST, Mon–Fri).
+    3. Find all users with open positions.
+    4. Reconcile each user's positions against the broker.
 
     Returns a summary dict.
     """
+    # Budget reservation reconciliation — unconditional, once
+    # per tick, user-id agnostic (scans the entire
+    # algo.budget_reservations active set). Must run BEFORE
+    # market-hours and no-open-positions early returns so the
+    # 120s PENDING + 300s SUBMITTED timeouts cannot stall
+    # outside RTH.
+    budget_summary: dict | None = None
+    try:
+        from backend.algo.live.budget_reconciliation import (
+            reconcile as budget_reconcile,
+        )
+        await budget_reconcile()
+        budget_summary = {"ok": True}
+    except Exception as exc:
+        _logger.warning(
+            "algo_reconciliation: budget reconcile failed: %s",
+            exc, exc_info=True,
+        )
+        budget_summary = {"ok": False, "error": str(exc)}
+
     if not is_market_open_ist():
         _logger.debug(
             "algo_reconciliation: market closed — skip",
         )
-        return {"skipped": True, "reason": "market_closed"}
+        return {
+            "skipped": True,
+            "reason": "market_closed",
+            "budget": budget_summary,
+        }
 
     users = await _users_with_open_positions()
     if not users:
@@ -76,6 +106,7 @@ async def run_reconciliation_job(
             "skipped": False,
             "users_reconciled": 0,
             "summaries": [],
+            "budget": budget_summary,
         }
 
     summaries: list[dict] = []
@@ -95,20 +126,6 @@ async def run_reconciliation_job(
                 "error": str(exc),
             })
 
-    # Budget reservation reconciliation — once per tick,
-    # user-id agnostic (scans the entire algo.budget_reservations
-    # active set).
-    try:
-        from backend.algo.live.budget_reconciliation import (
-            reconcile as budget_reconcile,
-        )
-        await budget_reconcile()
-    except Exception as exc:
-        _logger.warning(
-            "algo_reconciliation: budget reconcile failed: %s",
-            exc, exc_info=True,
-        )
-
     _logger.info(
         "algo_reconciliation: reconciled %d users",
         len(users),
@@ -117,4 +134,5 @@ async def run_reconciliation_job(
         "skipped": False,
         "users_reconciled": len(users),
         "summaries": summaries,
+        "budget": budget_summary,
     }
