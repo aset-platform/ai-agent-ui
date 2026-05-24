@@ -177,3 +177,60 @@ async def test_list_reservations_active_only_by_default():
         )
     assert len(out["reservations"]) == 1
     assert out["reservations"][0]["state"] == "SUBMITTED"
+
+
+@pytest.mark.asyncio
+async def test_list_reservations_history_preserves_metadata_dict():
+    """history mode must NOT stringify the metadata JSONB."""
+    repo = MagicMock()
+    fake_row = {
+        "reservation_id": uuid4(),
+        "user_id": uuid4(),
+        "strategy_id": uuid4(),
+        "state": "FILLED",
+        "ticker": "INFY.NS",
+        "side": "BUY",
+        "qty": 50,
+        "reserved_inr": Decimal("7500"),
+        "filled_qty": 50,
+        "filled_inr": Decimal("7500"),
+        "kite_order_id": "kite-1",
+        "transitioned_at": dt.datetime.now(dt.timezone.utc),
+        "metadata": {"internal_order_id": "abc"},
+        "error_text": None,
+    }
+    fake_mappings = MagicMock()
+    fake_mappings.all = MagicMock(return_value=[fake_row])
+    fake_result = MagicMock()
+    fake_result.mappings = MagicMock(return_value=fake_mappings)
+    fake_session = MagicMock()
+    fake_session.execute = AsyncMock(return_value=fake_result)
+    with (
+        patch(
+            "backend.algo.routes.budget.BudgetRepo",
+            return_value=repo,
+        ),
+        patch(
+            "backend.algo.routes.budget._session_factory",
+        ) as factory,
+    ):
+        factory.return_value.return_value.__aenter__ = AsyncMock(
+            return_value=fake_session,
+        )
+        factory.return_value.return_value.__aexit__ = AsyncMock(
+            return_value=None,
+        )
+        out = await _list_reservations_impl(
+            user_id=uuid4(),
+            include_history=True,
+        )
+    assert len(out["reservations"]) == 1
+    row = out["reservations"][0]
+    # metadata MUST stay a dict, not Python repr
+    assert isinstance(row["metadata"], dict)
+    assert row["metadata"]["internal_order_id"] == "abc"
+    # qty stays int
+    assert row["qty"] == 50
+    # transitioned_at is ISO-8601 string
+    assert isinstance(row["transitioned_at"], str)
+    assert "T" in row["transitioned_at"]

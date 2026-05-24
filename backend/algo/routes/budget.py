@@ -103,6 +103,28 @@ async def _put_allocation_impl(
     return out
 
 
+def _serialize_history_row(r) -> dict:
+    """JSON-friendly row dict for the history endpoint.
+
+    Stringifies UUIDs, Decimals, and datetimes; leaves
+    primitives + the JSONB metadata column as-is so the
+    UI doesn't have to re-parse Python repr.
+    """
+    out: dict = {}
+    for k, v in dict(r).items():
+        if v is None:
+            out[k] = None
+        elif k == "metadata":
+            out[k] = v if isinstance(v, dict) else {}
+        elif k == "transitioned_at":
+            out[k] = v.isoformat() if hasattr(v, "isoformat") else str(v)
+        elif k in ("qty", "filled_qty"):
+            out[k] = int(v)
+        else:
+            out[k] = str(v)
+    return out
+
+
 async def _list_reservations_impl(
     *,
     user_id: UUID,
@@ -132,9 +154,7 @@ async def _list_reservations_impl(
             )
             rows = result.mappings().all()
             return {
-                "reservations": [
-                    {k: str(v) for k, v in dict(r).items()} for r in rows
-                ],
+                "reservations": [_serialize_history_row(r) for r in rows],
             }
         else:
             active = await repo.list_active_reservations(
