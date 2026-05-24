@@ -88,9 +88,12 @@ export function SweepResultsTable({ run }: Props) {
                       + `&walkforward_id=`
                       + v.walkforward_run_id
                     }
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="text-indigo-600 underline"
+                    title="Opens in a new tab so the sweep results stay open"
                   >
-                    View →
+                    View ↗
                   </a>
                 </td>
               </tr>
