@@ -608,15 +608,27 @@ export function WalkForwardSubTab() {
   const [regimeStratified, setRegimeStratified] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formErr, setFormErr] = useState<string | null>(null);
+  // Initial state matches SSR (null); we hydrate from
+  // ?walkforward_id=… in an effect AFTER mount.
+  // queueMicrotask + cancel flag satisfies the
+  // react-hooks/set-state-in-effect rule per CLAUDE.md §5.3.
   const [activeRunId, setActiveRunId] = useState<string | null>(
-    () => {
-      if (typeof window === "undefined") return null;
+    null,
+  );
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
       const params = new URLSearchParams(
         window.location.search,
       );
-      return params.get("walkforward_id");
-    },
-  );
+      const fromUrl = params.get("walkforward_id");
+      if (fromUrl) setActiveRunId(fromUrl);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const effectiveRunId =
     activeRunId ?? history[0]?.run_id ?? null;

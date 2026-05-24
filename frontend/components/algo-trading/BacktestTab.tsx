@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   useBacktestRun,
@@ -17,24 +17,32 @@ import { WalkForwardSubTab } from "./WalkForwardSubTab";
 type SubTab = "single" | "walkforward" | "parameter_sweep";
 
 export function BacktestTab() {
-  // Honor ?subtab=walkforward (or parameter_sweep) so the
-  // Sweep results table's "View →" link can deep-link into
-  // the Walk-forward CV sub-tab.
-  const [subTab, setSubTab] = useState<SubTab>(() => {
-    if (typeof window === "undefined") return "single";
-    const params = new URLSearchParams(
-      window.location.search,
-    );
-    const fromUrl = params.get("subtab");
-    if (
-      fromUrl === "walkforward"
-      || fromUrl === "parameter_sweep"
-      || fromUrl === "single"
-    ) {
-      return fromUrl;
-    }
-    return "single";
-  });
+  // Initial state matches SSR (no `window`); we sync from
+  // ?subtab=... in an effect AFTER hydration to avoid the
+  // SSR/client class-mismatch the active-tab pill produces.
+  // queueMicrotask + cancel flag satisfies the
+  // react-hooks/set-state-in-effect rule per CLAUDE.md §5.3.
+  const [subTab, setSubTab] = useState<SubTab>("single");
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      const params = new URLSearchParams(
+        window.location.search,
+      );
+      const fromUrl = params.get("subtab");
+      if (
+        fromUrl === "walkforward"
+        || fromUrl === "parameter_sweep"
+        || fromUrl === "single"
+      ) {
+        setSubTab(fromUrl);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const { rows: history } = useBacktestRuns();
   const [activeRunId, setActiveRunId] = useState<string | null>(
     null,
