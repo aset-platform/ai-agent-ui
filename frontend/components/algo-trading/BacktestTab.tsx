@@ -11,9 +11,10 @@ import { BacktestEquityCurve } from "./BacktestEquityCurve";
 import { BacktestRunForm } from "./BacktestRunForm";
 import { BacktestSummaryCards } from "./BacktestSummaryCards";
 import { BacktestTradeTable } from "./BacktestTradeTable";
+import { SweepSubTab } from "./SweepSubTab";
 import { WalkForwardSubTab } from "./WalkForwardSubTab";
 
-type SubTab = "single" | "walkforward";
+type SubTab = "single" | "walkforward" | "parameter_sweep";
 
 export function BacktestTab() {
   const [subTab, setSubTab] = useState<SubTab>("single");
@@ -35,6 +36,7 @@ export function BacktestTab() {
           [
             { id: "single", label: "Single run" },
             { id: "walkforward", label: "Walk-forward CV" },
+            { id: "parameter_sweep", label: "Parameter sweep" },
           ] as const
         ).map(({ id, label }) => (
           <button
@@ -121,6 +123,9 @@ export function BacktestTab() {
 
       {/* ── Walk-forward CV ────────────────────────────────── */}
       {subTab === "walkforward" && <WalkForwardSubTab />}
+
+      {/* ── Parameter sweep ────────────────────────────────── */}
+      {subTab === "parameter_sweep" && <SweepSubTab />}
     </div>
   );
 }
