@@ -4,36 +4,66 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import text
 
 from backend.algo.live.budget_repo import BudgetRepo
 from backend.algo.live.budget_types import (
     BudgetReservation,
     ReservationState,
-    UserBudget,
 )
 from db.engine import disposable_pg_session
 
 
 @pytest.fixture
 async def session():
-    # disposable_pg_session() yields a NullPool-backed session
-    # bound to the current event loop — required because each
-    # pytest-asyncio test gets a fresh loop and the cached
-    # get_session_factory() engine would leak loop-bound
-    # asyncpg futures across tests.
+    """Yield a NullPool-backed async session + an explicit
+    teardown that DELETEs every (user_id) the test touched.
+
+    Why not SAVEPOINT-rollback? The "join into external
+    transaction" recipe relies on ``Session.commit()``
+    releasing the inner SAVEPOINT (not the outer transaction).
+    Under :class:`AsyncSession` driving asyncpg through
+    ``disposable_pg_session()``, ``await session.commit()``
+    commits the outermost transaction and the test rows
+    survive the fixture rollback. The savepoint pattern was
+    tried first (see PR review on commit eb56067) — rows
+    leaked anyway, so we fall back to explicit teardown.
+
+    Tests append the ``user_id`` they wrote to
+    ``tracked_user_ids``; the fixture's teardown then deletes
+    those rows from both budget tables so the suite is
+    idempotent.
+    """
+    tracked_user_ids: list[UUID] = []
     async with disposable_pg_session() as s:
-        yield s
-        await s.rollback()
+        s.tracked_user_ids = tracked_user_ids  # type: ignore[attr-defined]
+        try:
+            yield s
+        finally:
+            for uid in tracked_user_ids:
+                await s.execute(
+                    text(
+                        "DELETE FROM algo.budget_reservations "
+                        "WHERE user_id = :u"
+                    ),
+                    {"u": uid},
+                )
+                await s.execute(
+                    text("DELETE FROM algo.user_budget " "WHERE user_id = :u"),
+                    {"u": uid},
+                )
+            await s.commit()
 
 
 @pytest.mark.asyncio
 async def test_get_user_budget_default_when_missing(session):
     repo = BudgetRepo()
     out = await repo.get_user_budget(
-        session, user_id=uuid4(),
+        session,
+        user_id=uuid4(),
     )
     assert out.allocated_inr == Decimal("0")
     assert out.enabled is False
@@ -43,6 +73,7 @@ async def test_get_user_budget_default_when_missing(session):
 async def test_upsert_user_budget_roundtrip(session):
     repo = BudgetRepo()
     uid = uuid4()
+    session.tracked_user_ids.append(uid)
     await repo.upsert_user_budget(
         session,
         user_id=uid,
@@ -60,6 +91,7 @@ async def test_insert_reservation_row(session):
     repo = BudgetRepo()
     res_id = uuid4()
     uid = uuid4()
+    session.tracked_user_ids.append(uid)
     await repo.insert_reservation_event(
         session,
         BudgetReservation(
@@ -76,7 +108,8 @@ async def test_insert_reservation_row(session):
     )
     await session.commit()
     current = await repo.get_current_state(
-        session, reservation_id=res_id,
+        session,
+        reservation_id=res_id,
     )
     assert current.state == ReservationState.PENDING
     assert current.reserved_inr == Decimal("7500.00")
@@ -88,6 +121,7 @@ async def test_current_state_returns_latest(session):
     repo = BudgetRepo()
     res_id = uuid4()
     uid = uuid4()
+    session.tracked_user_ids.append(uid)
     sid = uuid4()
     base = dict(
         reservation_id=res_id,
@@ -104,7 +138,12 @@ async def test_current_state_returns_latest(session):
             **base,
             state=ReservationState.PENDING,
             transitioned_at=datetime(
-                2026, 5, 24, 10, 0, 0,
+                2026,
+                5,
+                24,
+                10,
+                0,
+                0,
                 tzinfo=timezone.utc,
             ),
         ),
@@ -115,7 +154,12 @@ async def test_current_state_returns_latest(session):
             **base,
             state=ReservationState.SUBMITTED,
             transitioned_at=datetime(
-                2026, 5, 24, 10, 0, 5,
+                2026,
+                5,
+                24,
+                10,
+                0,
+                5,
                 tzinfo=timezone.utc,
             ),
             kite_order_id="kite-123",
@@ -123,7 +167,8 @@ async def test_current_state_returns_latest(session):
     )
     await session.commit()
     current = await repo.get_current_state(
-        session, reservation_id=res_id,
+        session,
+        reservation_id=res_id,
     )
     assert current.state == ReservationState.SUBMITTED
     assert current.kite_order_id == "kite-123"
@@ -134,6 +179,7 @@ async def test_sum_active_reservations(session):
     """Only ACTIVE_STATES contribute; terminal excluded."""
     repo = BudgetRepo()
     uid = uuid4()
+    session.tracked_user_ids.append(uid)
     sid = uuid4()
 
     # Active reservation: SUBMITTED, no fill
@@ -145,7 +191,8 @@ async def test_sum_active_reservations(session):
             strategy_id=sid,
             state=ReservationState.SUBMITTED,
             ticker="A.NS",
-            side="BUY", qty=10,
+            side="BUY",
+            qty=10,
             reserved_inr=Decimal("1000.00"),
             transitioned_at=datetime.now(timezone.utc),
         ),
@@ -160,7 +207,8 @@ async def test_sum_active_reservations(session):
             strategy_id=sid,
             state=ReservationState.FILLED,
             ticker="B.NS",
-            side="BUY", qty=20,
+            side="BUY",
+            qty=20,
             reserved_inr=Decimal("2000.00"),
             filled_qty=20,
             filled_inr=Decimal("2000.00"),
@@ -169,6 +217,7 @@ async def test_sum_active_reservations(session):
     )
     await session.commit()
     total = await repo.sum_active_reservations(
-        session, user_id=uid,
+        session,
+        user_id=uid,
     )
     assert total == Decimal("1000.00")  # only the SUBMITTED row

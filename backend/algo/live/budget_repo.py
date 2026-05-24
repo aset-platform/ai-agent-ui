@@ -112,7 +112,7 @@ class BudgetRepo:
                 "fi": res.filled_inr,
                 "koi": res.kite_order_id,
                 "ta": res.transitioned_at,
-                "md": json.dumps(res.metadata or {}),
+                "md": json.dumps(res.metadata),
                 "et": res.error_text,
             },
         )
@@ -154,9 +154,7 @@ class BudgetRepo:
         """Sum reserved_inr - filled_inr across reservations
         whose CURRENT state ∈ ACTIVE_STATES.
         """
-        active = ",".join(
-            f"'{s.value}'" for s in ACTIVE_STATES
-        )
+        active = ",".join(f"'{s.value}'" for s in ACTIVE_STATES)
         result = await session.execute(
             text(
                 "WITH latest AS ( "
@@ -177,7 +175,7 @@ class BudgetRepo:
         row = result.mappings().first()
         if row is None or row["total"] is None:
             return Decimal("0")
-        return Decimal(str(row["total"]))
+        return Decimal(row["total"])
 
     async def list_active_reservations(
         self,
@@ -187,9 +185,10 @@ class BudgetRepo:
     ) -> list[BudgetReservation]:
         """All active reservation rows (latest state per
         reservation_id, filtered to ACTIVE_STATES)."""
-        active = ",".join(
-            f"'{s.value}'" for s in ACTIVE_STATES
-        )
+        # NOTE: Active-state filter applied Python-side at the
+        # bottom of this method (see ACTIVE_STATES check below);
+        # SQL returns the latest event per reservation_id and we
+        # discard non-active states after model construction.
         result = await session.execute(
             text(
                 "SELECT DISTINCT ON (reservation_id) "
