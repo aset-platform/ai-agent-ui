@@ -4158,6 +4158,7 @@ def create_app(
         create_ltp_router,
         create_paper_router,
         create_performance_router,
+        create_portfolio_router,
         create_regime_router,
         create_replay_router,
         create_strategies_router,
@@ -4220,6 +4221,10 @@ def create_app(
     )
     app.include_router(
         create_budget_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_portfolio_router(),
         prefix="/v1",
     )
     app.include_router(

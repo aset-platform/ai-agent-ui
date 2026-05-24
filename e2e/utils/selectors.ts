@@ -121,6 +121,10 @@ export const FE = {
     `dashboard-watchlist-refresh-${t}`,
   dashboardAddStockBtn: "dashboard-add-stock-btn",
   dashboardForecastWidget: "dashboard-forecast-widget",
+  dashboardWatchlistTabAlgo: "dashboard-watchlist-tab-algo",
+  dashboardAlgoPositionsTable: "dashboard-algo-positions-table",
+  dashboardAlgoPositionsEmpty: "dashboard-algo-positions-empty",
+  dashboardAlgoPositionsCta: "dashboard-algo-positions-cta",
 
   // ── Insights ─────────────────────────────────────
   insightsTab: (id: string) => `insights-tab-${id}`,

@@ -362,6 +362,10 @@ export default function DashboardClient({
             openTransactions(ticker)
           }
           onDeleteStock={(ticker) => openDelete(ticker)}
+          algoTabEnabled={
+            profile?.role === "pro"
+            || profile?.role === "superuser"
+          }
         />
         <AnalysisSignalsWidget
           data={selectedAnalysis}
