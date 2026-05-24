@@ -155,3 +155,162 @@ async def test_sweep_continues_when_one_variant_fails(
     assert call_count["n"] == 4
     # Variant 2's walkforward row marked failed
     assert repo.mark_failed.await_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_sweep_aggregates_real_summary_shape(
+    monkeypatch,
+):
+    """The aggregation phase reads each variant's
+    summary_json from PG. Verify run_sweep_job handles the
+    actual WalkForwardResult shape (window_summaries as
+    list[dict], aggregate as nested dict) without crashing.
+
+    Variant rows have realistic summary_json payloads with
+    aggregate metrics + window_summaries (each with an
+    equity_curve list of dicts)."""
+
+    async def fake_wf(**kwargs):
+        return None  # No-op; real summary set via mock below
+
+    monkeypatch.setattr(
+        "backend.algo.backtest.sweep.run_walkforward_job",
+        fake_wf,
+    )
+
+    cfg = SweepConfig(
+        base_strategy_id=uuid4(),
+        period_start=date(2025, 1, 1),
+        period_end=date(2025, 6, 1),
+        swept_field="cooldown_days",
+        swept_values=[7, 14],
+    )
+    fake_strategy = MagicMock()
+    fake_strategy.risk.per_trade \
+        .cooldown_after_failed_exit_days = 7
+
+    # Realistic summary_json fixtures for 2 variants —
+    # mirrors what walkforward.py persists: nested
+    # `aggregate` dict + `window_summaries` of dicts
+    # whose `equity_curve` is a list[dict].
+    def _variant_summary(seed_id):
+        return {
+            "aggregate": {
+                "avg_pnl_pct": "1.23",
+                "avg_win_rate_pct": "55.0",
+                "avg_max_drawdown_pct": "4.5",
+                "dsr": "0.5",
+            },
+            "window_summaries": [
+                {
+                    "test_start": "2025-02-01",
+                    "test_end": "2025-02-28",
+                    "total_pnl_pct": "1.0",
+                    "win_rate_pct": "60.0",
+                    "max_drawdown_pct": "3.0",
+                    "total_trades": 10,
+                    "equity_curve": [
+                        {
+                            "bar_date": "2025-02-01",
+                            "equity_inr": "100000",
+                        },
+                        {
+                            "bar_date": "2025-02-15",
+                            "equity_inr": "101000",
+                        },
+                        {
+                            "bar_date": "2025-02-28",
+                            "equity_inr": "101000",
+                        },
+                    ],
+                },
+                {
+                    "test_start": "2025-03-01",
+                    "test_end": "2025-03-31",
+                    "total_pnl_pct": "0.5",
+                    "win_rate_pct": "50.0",
+                    "max_drawdown_pct": "2.5",
+                    "total_trades": 8,
+                    "equity_curve": [
+                        {
+                            "bar_date": "2025-03-01",
+                            "equity_inr": "100000",
+                        },
+                        {
+                            "bar_date": "2025-03-15",
+                            "equity_inr": "100500",
+                        },
+                        {
+                            "bar_date": "2025-03-31",
+                            "equity_inr": "100500",
+                        },
+                    ],
+                },
+            ],
+        }
+
+    fake_session = AsyncMock()
+    fake_factory = MagicMock()
+    fake_factory.return_value.__aenter__ = AsyncMock(
+        return_value=fake_session,
+    )
+    fake_factory.return_value.__aexit__ = AsyncMock(
+        return_value=None,
+    )
+
+    # Track variant IDs we created
+    variant_ids = [uuid4(), uuid4()]
+    create_pending_call = {"n": 0}
+
+    async def fake_create_pending(*args, **kwargs):
+        idx = create_pending_call["n"]
+        create_pending_call["n"] += 1
+        return MagicMock(run_id=variant_ids[idx])
+
+    with patch(
+        "backend.algo.backtest.sweep._session_factory",
+        return_value=fake_factory,
+    ), patch(
+        "backend.algo.backtest.sweep.BacktestRunsRepo",
+    ) as RepoCls:
+        repo = RepoCls.return_value
+        repo.create_pending = AsyncMock(
+            side_effect=fake_create_pending,
+        )
+        repo.mark_running = AsyncMock()
+        repo.mark_failed = AsyncMock()
+        repo.list_children_of_sweep = AsyncMock(
+            return_value=[
+                {
+                    "id": variant_ids[0],
+                    "status": "completed",
+                    "summary_json": _variant_summary(0),
+                    "error_text": None,
+                },
+                {
+                    "id": variant_ids[1],
+                    "status": "completed",
+                    "summary_json": _variant_summary(1),
+                    "error_text": None,
+                },
+            ],
+        )
+
+        # Should NOT raise. Should complete the sweep.
+        await run_sweep_job(
+            sweep_run_id=uuid4(),
+            user_id=uuid4(),
+            config=cfg,
+            base_strategy=fake_strategy,
+            universe=["TICKER1.NS"],
+        )
+
+    # No mark_failed call (both variants completed)
+    assert repo.mark_failed.await_count == 0
+    # Final UPDATE happened (session.execute called
+    # with the UPDATE that writes summary_json)
+    update_calls = [
+        c for c in fake_session.execute.call_args_list
+        if "UPDATE" in str(c[0][0])
+    ]
+    assert len(update_calls) >= 1
