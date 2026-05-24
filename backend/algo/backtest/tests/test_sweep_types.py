@@ -7,6 +7,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from backend.algo.backtest.sweep_types import (
     SweepConfig,
@@ -32,7 +33,7 @@ def test_sweep_config_minimal_valid():
 
 
 def test_sweep_config_rejects_extra_fields():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SweepConfig(
             base_strategy_id=uuid4(),
             period_start=date(2025, 1, 1),
