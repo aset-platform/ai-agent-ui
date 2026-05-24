@@ -68,6 +68,13 @@ from backend.algo.features.per_bar import (
 )
 from backend.algo.live import slippage as _slippage
 from backend.algo.live.order_timeout import _OrderTimeoutWatcher
+from backend.algo.live.budget import (
+    reserve as budget_reserve,
+)
+from backend.algo.live.budget import (
+    transition as budget_transition,
+)
+from backend.algo.live.budget_types import ReservationState
 from backend.algo.live.safety import (
     LiveRejectReason,
     pre_trade_check,
@@ -1529,6 +1536,32 @@ class LiveRuntime:
         # for every strategy that existed before ASETPLTFRM-387.
         # Intraday MIS strategies route here with product="MIS".
         product_code = self._strategy.product
+
+        # Budget reservation — append-only audit lifecycle.
+        # Reserves on BUY + SELL so the ledger captures full
+        # context (Cap 0 gating runs separately in safety.py;
+        # this is the audit trail).
+        order_cost = (
+            Decimal(signal.qty) * last_price
+            if last_price and last_price > 0
+            else Decimal("0")
+        )
+        reservation_id = await budget_reserve(
+            user_id=self._user_id,
+            strategy_id=self._strategy.id,
+            ticker=signal.ticker,
+            side=signal.side,
+            qty=signal.qty,
+            reserved_inr=order_cost,
+            metadata={
+                "internal_order_id": internal_order_id,
+                "limit_price": (
+                    str(limit_price)
+                    if "limit_price" in dir()
+                    else None
+                ),
+            },
+        )
         try:
             kite_order_id = await asyncio.to_thread(
                 self._kite.place_order,
@@ -1586,7 +1619,27 @@ class LiveRuntime:
                 signal.qty,
                 rejection_reason,
             )
+            # Mark the reservation REJECTED — wrapped so a
+            # budget-audit failure doesn't shadow the original
+            # Kite SDK error path.
+            try:
+                await budget_transition(
+                    reservation_id=reservation_id,
+                    new_state=ReservationState.REJECTED,
+                    error_text=str(exc)[:500],
+                )
+            except Exception:  # noqa: BLE001
+                _logger.exception(
+                    "budget transition on Kite error failed",
+                )
             return 0
+
+        # Reservation now carries the broker-assigned id.
+        await budget_transition(
+            reservation_id=reservation_id,
+            new_state=ReservationState.SUBMITTED,
+            kite_order_id=kite_order_id,
+        )
 
         is_dry = kite_order_id.startswith("DRY_")
 

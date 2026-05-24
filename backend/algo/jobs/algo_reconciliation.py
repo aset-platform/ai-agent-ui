@@ -95,6 +95,20 @@ async def run_reconciliation_job(
                 "error": str(exc),
             })
 
+    # Budget reservation reconciliation — once per tick,
+    # user-id agnostic (scans the entire algo.budget_reservations
+    # active set).
+    try:
+        from backend.algo.live.budget_reconciliation import (
+            reconcile as budget_reconcile,
+        )
+        await budget_reconcile()
+    except Exception as exc:
+        _logger.warning(
+            "algo_reconciliation: budget reconcile failed: %s",
+            exc, exc_info=True,
+        )
+
     _logger.info(
         "algo_reconciliation: reconciled %d users",
         len(users),
