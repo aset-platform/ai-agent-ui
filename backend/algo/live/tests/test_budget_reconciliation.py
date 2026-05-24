@@ -28,19 +28,21 @@ async def test_pending_timeout_at_120s():
         strategy_id=uuid4(),
         state=ReservationState.PENDING,
         ticker="INFY.NS",
-        side="BUY", qty=50,
+        side="BUY",
+        qty=50,
         reserved_inr=Decimal("7500.00"),
-        transitioned_at=(
-            datetime.now(timezone.utc) - timedelta(seconds=121)
-        ),
+        transitioned_at=(datetime.now(timezone.utc) - timedelta(seconds=121)),
     )
-    with patch(
-        "backend.algo.live.budget_reconciliation._list_pending",
-        AsyncMock(return_value=[pending]),
-    ), patch(
-        "backend.algo.live.budget_reconciliation.transition",
-        AsyncMock(),
-    ) as mock_trans:
+    with (
+        patch(
+            "backend.algo.live.budget_reconciliation._list_pending",
+            AsyncMock(return_value=[pending]),
+        ),
+        patch(
+            "backend.algo.live.budget_reconciliation.transition",
+            AsyncMock(),
+        ) as mock_trans,
+    ):
         await reconcile_pending_timeouts()
     mock_trans.assert_awaited_once()
     kwargs = mock_trans.await_args.kwargs
@@ -55,19 +57,21 @@ async def test_pending_under_120s_not_timed_out():
         strategy_id=uuid4(),
         state=ReservationState.PENDING,
         ticker="INFY.NS",
-        side="BUY", qty=50,
+        side="BUY",
+        qty=50,
         reserved_inr=Decimal("7500.00"),
-        transitioned_at=(
-            datetime.now(timezone.utc) - timedelta(seconds=30)
-        ),
+        transitioned_at=(datetime.now(timezone.utc) - timedelta(seconds=30)),
     )
-    with patch(
-        "backend.algo.live.budget_reconciliation._list_pending",
-        AsyncMock(return_value=[pending]),
-    ), patch(
-        "backend.algo.live.budget_reconciliation.transition",
-        AsyncMock(),
-    ) as mock_trans:
+    with (
+        patch(
+            "backend.algo.live.budget_reconciliation._list_pending",
+            AsyncMock(return_value=[pending]),
+        ),
+        patch(
+            "backend.algo.live.budget_reconciliation.transition",
+            AsyncMock(),
+        ) as mock_trans,
+    ):
         await reconcile_pending_timeouts()
     mock_trans.assert_not_awaited()
 
@@ -80,7 +84,8 @@ async def test_submitted_complete_transitions_to_filled():
         strategy_id=uuid4(),
         state=ReservationState.SUBMITTED,
         ticker="INFY.NS",
-        side="BUY", qty=50,
+        side="BUY",
+        qty=50,
         reserved_inr=Decimal("7500.00"),
         kite_order_id="kite-99",
         transitioned_at=datetime.now(timezone.utc),
@@ -93,14 +98,17 @@ async def test_submitted_complete_transitions_to_filled():
             "average_price": "150.00",
         }
 
-    with patch(
-        "backend.algo.live.budget_reconciliation"
-        "._fetch_kite_order_status",
-        fake_kite_status,
-    ), patch(
-        "backend.algo.live.budget_reconciliation.transition",
-        AsyncMock(),
-    ) as mock_trans:
+    with (
+        patch(
+            "backend.algo.live.budget_reconciliation"
+            "._fetch_kite_order_status",
+            fake_kite_status,
+        ),
+        patch(
+            "backend.algo.live.budget_reconciliation.transition",
+            AsyncMock(),
+        ) as mock_trans,
+    ):
         await reconcile_one(submitted)
     mock_trans.assert_awaited_once()
     kwargs = mock_trans.await_args.kwargs
@@ -117,7 +125,8 @@ async def test_submitted_partial_transitions_to_partial():
         strategy_id=uuid4(),
         state=ReservationState.SUBMITTED,
         ticker="INFY.NS",
-        side="BUY", qty=100,
+        side="BUY",
+        qty=100,
         reserved_inr=Decimal("10000.00"),
         kite_order_id="kite-99",
         transitioned_at=datetime.now(timezone.utc),
@@ -130,14 +139,17 @@ async def test_submitted_partial_transitions_to_partial():
             "average_price": "100.00",
         }
 
-    with patch(
-        "backend.algo.live.budget_reconciliation"
-        "._fetch_kite_order_status",
-        fake_kite_status,
-    ), patch(
-        "backend.algo.live.budget_reconciliation.transition",
-        AsyncMock(),
-    ) as mock_trans:
+    with (
+        patch(
+            "backend.algo.live.budget_reconciliation"
+            "._fetch_kite_order_status",
+            fake_kite_status,
+        ),
+        patch(
+            "backend.algo.live.budget_reconciliation.transition",
+            AsyncMock(),
+        ) as mock_trans,
+    ):
         await reconcile_one(submitted)
     mock_trans.assert_awaited_once()
     kwargs = mock_trans.await_args.kwargs
@@ -154,7 +166,8 @@ async def test_submitted_cancelled_transitions_to_cancelled():
         strategy_id=uuid4(),
         state=ReservationState.SUBMITTED,
         ticker="INFY.NS",
-        side="BUY", qty=50,
+        side="BUY",
+        qty=50,
         reserved_inr=Decimal("7500.00"),
         kite_order_id="kite-99",
         transitioned_at=datetime.now(timezone.utc),
@@ -163,14 +176,17 @@ async def test_submitted_cancelled_transitions_to_cancelled():
     async def fake_kite_status(uid, koi):
         return {"status": "CANCELLED"}
 
-    with patch(
-        "backend.algo.live.budget_reconciliation"
-        "._fetch_kite_order_status",
-        fake_kite_status,
-    ), patch(
-        "backend.algo.live.budget_reconciliation.transition",
-        AsyncMock(),
-    ) as mock_trans:
+    with (
+        patch(
+            "backend.algo.live.budget_reconciliation"
+            "._fetch_kite_order_status",
+            fake_kite_status,
+        ),
+        patch(
+            "backend.algo.live.budget_reconciliation.transition",
+            AsyncMock(),
+        ) as mock_trans,
+    ):
         await reconcile_one(submitted)
     mock_trans.assert_awaited_once()
     kwargs = mock_trans.await_args.kwargs

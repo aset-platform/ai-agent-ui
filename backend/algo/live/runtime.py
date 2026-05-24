@@ -1557,9 +1557,7 @@ class LiveRuntime:
             metadata={
                 "internal_order_id": internal_order_id,
                 "limit_price": (
-                    str(limit_price)
-                    if limit_price is not None
-                    else None
+                    str(limit_price) if limit_price is not None else None
                 ),
             },
         )
@@ -1636,11 +1634,25 @@ class LiveRuntime:
             return 0
 
         # Reservation now carries the broker-assigned id.
-        await budget_transition(
-            reservation_id=reservation_id,
-            new_state=ReservationState.SUBMITTED,
-            kite_order_id=kite_order_id,
-        )
+        # Wrapped so a DB blip after a successful Kite order
+        # doesn't bubble up and leave the order un-recorded
+        # in in_flight. Degraded state (ledger PENDING with
+        # kite_order_id=NULL) heals via the T+120s PENDING
+        # timeout reconciliation path — log loudly.
+        try:
+            await budget_transition(
+                reservation_id=reservation_id,
+                new_state=ReservationState.SUBMITTED,
+                kite_order_id=kite_order_id,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "budget transition on Kite success failed — "
+                "reservation %s, kite order %s — "
+                "reconciliation loop will heal",
+                reservation_id,
+                kite_order_id,
+            )
 
         is_dry = kite_order_id.startswith("DRY_")
 

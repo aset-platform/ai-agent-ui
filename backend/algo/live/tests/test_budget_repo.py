@@ -221,3 +221,51 @@ async def test_sum_active_reservations(session):
         user_id=uid,
     )
     assert total == Decimal("1000.00")  # only the SUBMITTED row
+
+
+@pytest.mark.asyncio
+async def test_sum_active_reservations_excludes_sells(session):
+    """SELL reservations are audit-only; do not deduct from
+    BUY headroom."""
+    repo = BudgetRepo()
+    uid = uuid4()
+    sid = uuid4()
+
+    # BUY reservation: SUBMITTED, no fill — counts
+    await repo.insert_reservation_event(
+        session,
+        BudgetReservation(
+            reservation_id=uuid4(),
+            user_id=uid,
+            strategy_id=sid,
+            state=ReservationState.SUBMITTED,
+            ticker="A.NS",
+            side="BUY",
+            qty=10,
+            reserved_inr=Decimal("1000.00"),
+            transitioned_at=datetime.now(timezone.utc),
+        ),
+    )
+    # SELL reservation: SUBMITTED, no fill — should NOT count
+    await repo.insert_reservation_event(
+        session,
+        BudgetReservation(
+            reservation_id=uuid4(),
+            user_id=uid,
+            strategy_id=sid,
+            state=ReservationState.SUBMITTED,
+            ticker="B.NS",
+            side="SELL",
+            qty=20,
+            reserved_inr=Decimal("3000.00"),
+            transitioned_at=datetime.now(timezone.utc),
+        ),
+    )
+    session.tracked_user_ids.append(uid)
+    await session.commit()
+
+    total = await repo.sum_active_reservations(
+        session,
+        user_id=uid,
+    )
+    assert total == Decimal("1000.00")  # only BUY counted

@@ -14,10 +14,10 @@ This module only contains the *async* implementation logic;
 the ``@register_job`` entry point lives in ``executor.py``
 because that module owns the ``JOB_EXECUTORS`` registry.
 """
+
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -30,8 +30,6 @@ from backend.algo.live.reconciliation import (
 from backend.db.engine import disposable_pg_session
 
 _logger = logging.getLogger(__name__)
-
-UTC = timezone.utc
 
 
 async def _users_with_open_positions() -> list[UUID]:
@@ -78,12 +76,14 @@ async def run_reconciliation_job(
         from backend.algo.live.budget_reconciliation import (
             reconcile as budget_reconcile,
         )
+
         await budget_reconcile()
         budget_summary = {"ok": True}
     except Exception as exc:
         _logger.warning(
             "algo_reconciliation: budget reconcile failed: %s",
-            exc, exc_info=True,
+            exc,
+            exc_info=True,
         )
         budget_summary = {"ok": False, "error": str(exc)}
 
@@ -121,10 +121,12 @@ async def run_reconciliation_job(
                 exc,
                 exc_info=True,
             )
-            summaries.append({
-                "user_id": str(user_id),
-                "error": str(exc),
-            })
+            summaries.append(
+                {
+                    "user_id": str(user_id),
+                    "error": str(exc),
+                }
+            )
 
     _logger.info(
         "algo_reconciliation: reconciled %d users",

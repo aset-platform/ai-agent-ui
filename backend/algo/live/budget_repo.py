@@ -152,15 +152,19 @@ class BudgetRepo:
         user_id: UUID,
     ) -> Decimal:
         """Sum reserved_inr - filled_inr across reservations
-        whose CURRENT state ∈ ACTIVE_STATES.
+        whose CURRENT state ∈ ACTIVE_STATES and side = 'BUY'.
+
+        SELL reservations are written for audit history only and
+        must NOT deduct from BUY headroom in safety.py — they free
+        capital rather than consume it.
         """
         active = ",".join(f"'{s.value}'" for s in ACTIVE_STATES)
         result = await session.execute(
             text(
                 "WITH latest AS ( "
                 "  SELECT DISTINCT ON (reservation_id) "
-                "    reservation_id, state, reserved_inr, "
-                "    filled_inr "
+                "    reservation_id, state, side, "
+                "    reserved_inr, filled_inr "
                 "  FROM algo.budget_reservations "
                 "  WHERE user_id = :uid "
                 "  ORDER BY reservation_id, "
@@ -168,7 +172,8 @@ class BudgetRepo:
                 ") "
                 "SELECT COALESCE(SUM("
                 "  reserved_inr - filled_inr), 0) AS total "
-                f"FROM latest WHERE state IN ({active})"
+                f"FROM latest WHERE state IN ({active}) "
+                "AND side = 'BUY'"
             ),
             {"uid": user_id},
         )

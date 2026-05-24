@@ -64,8 +64,7 @@ async def _list_pending() -> list[BudgetReservation]:
     return out
 
 
-async def _list_submitted_and_partial(
-) -> list[BudgetReservation]:
+async def _list_submitted_and_partial() -> list[BudgetReservation]:
     factory = _session_factory()
     async with factory() as session:
         result = await session.execute(
@@ -94,14 +93,16 @@ async def _list_submitted_and_partial(
 
 
 async def _fetch_kite_order_status(
-    user_id: UUID, kite_order_id: str,
+    user_id: UUID,
+    kite_order_id: str,
 ) -> dict[str, Any] | None:
     """Pull the latest leg of a Kite order's history. None on
     error or when creds are missing/expired."""
     try:
         kc = await _build_kite_for_user(user_id)
         history = await asyncio.to_thread(
-            kc._kc.order_history, kite_order_id,
+            kc._kc.order_history,
+            kite_order_id,
         )
         if not history:
             return None
@@ -109,7 +110,10 @@ async def _fetch_kite_order_status(
     except Exception as exc:  # noqa: BLE001
         _logger.warning(
             "kite order_history failed user=%s order=%s: %s",
-            user_id, kite_order_id, exc, exc_info=True,
+            user_id,
+            kite_order_id,
+            exc,
+            exc_info=True,
         )
         return None
 
@@ -121,14 +125,19 @@ async def reconcile_pending_timeouts() -> None:
     pending = await _list_pending()
     for res in pending:
         if res.transitioned_at < threshold:
-            await transition(
-                reservation_id=res.reservation_id,
-                new_state=ReservationState.TIMEOUT,
-                error_text=(
-                    f"PENDING timeout > "
-                    f"{PENDING_TIMEOUT_S}s"
-                ),
-            )
+            try:
+                await transition(
+                    reservation_id=res.reservation_id,
+                    new_state=ReservationState.TIMEOUT,
+                    error_text=(f"PENDING timeout > " f"{PENDING_TIMEOUT_S}s"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logger.error(
+                    "PENDING-timeout transition failed " "res=%s: %s",
+                    res.reservation_id,
+                    exc,
+                    exc_info=True,
+                )
 
 
 async def reconcile_one(res: BudgetReservation) -> None:
@@ -142,7 +151,8 @@ async def reconcile_one(res: BudgetReservation) -> None:
     )
 
     status_row = await _fetch_kite_order_status(
-        res.user_id, res.kite_order_id,
+        res.user_id,
+        res.kite_order_id,
     )
     if status_row is None:
         if res.transitioned_at < threshold:
@@ -157,9 +167,7 @@ async def reconcile_one(res: BudgetReservation) -> None:
             )
         return
 
-    kite_status = (
-        str(status_row.get("status", "")).upper()
-    )
+    kite_status = str(status_row.get("status", "")).upper()
     filled_qty = int(
         status_row.get("filled_quantity", 0) or 0,
     )
@@ -179,9 +187,7 @@ async def reconcile_one(res: BudgetReservation) -> None:
         if filled_qty > 0:
             await transition(
                 reservation_id=res.reservation_id,
-                new_state=(
-                    ReservationState.PARTIAL_CANCELLED
-                ),
+                new_state=(ReservationState.PARTIAL_CANCELLED),
                 filled_qty=filled_qty,
                 filled_inr=filled_inr,
             )
@@ -195,8 +201,7 @@ async def reconcile_one(res: BudgetReservation) -> None:
             reservation_id=res.reservation_id,
             new_state=ReservationState.REJECTED,
             error_text=str(
-                status_row.get("status_message", "")
-                or "rejected",
+                status_row.get("status_message", "") or "rejected",
             )[:500],
         )
     elif kite_status == "OPEN" and filled_qty > 0:
@@ -225,7 +230,9 @@ async def reconcile_submitted() -> None:
         except Exception as exc:  # noqa: BLE001
             _logger.error(
                 "budget reconcile_one failed res=%s: %s",
-                res.reservation_id, exc, exc_info=True,
+                res.reservation_id,
+                exc,
+                exc_info=True,
             )
 
 
