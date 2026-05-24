@@ -67,10 +67,12 @@ function AggCard({
   label,
   value,
   tone,
+  tip,
 }: {
   label: string;
   value: string;
   tone?: "good" | "bad";
+  tip?: string;
 }) {
   const cls =
     tone === "good"
@@ -79,7 +81,14 @@ function AggCard({
         ? "text-rose-600 dark:text-rose-400"
         : "text-slate-900 dark:text-slate-100";
   return (
-    <div className="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2">
+    <div
+      className={
+        "rounded-md border border-slate-200 dark:border-slate-700 " +
+        "bg-white dark:bg-slate-900 px-3 py-2" +
+        (tip ? " cursor-help" : "")
+      }
+      title={tip}
+    >
       <div className="text-xs text-slate-500 dark:text-slate-400">
         {label}
       </div>
@@ -135,12 +144,42 @@ function GateStrip({ aggregate }: { aggregate: WalkForwardAggregate }) {
   const pbo = aggregate.pbo ?? "—";
   const recoveryMo = aggregate.recovery_months ?? 0;
   const maxDd = aggregate.avg_max_drawdown_pct;
+  // Each tooltip = "definition · current value". Definitions
+  // mirror Bailey-de Prado conventions (DSR, PBO) and the
+  // strategy-promotion gates encoded server-side.
   const titles: Record<string, string> = {
-    max_dd_ok: `Max DD: ${maxDd}%`,
-    recovery_ok: `Recovery: ${recoveryMo}mo`,
-    per_regime_non_neg: "All regimes non-negative",
-    dsr_ok: `DSR: ${dsr}`,
-    pbo_ok: `PBO: ${pbo}`,
+    max_dd_ok:
+      "Max DD — Maximum drawdown (peak-to-trough equity " +
+      "loss) across all walk-forward windows. " +
+      "Gate passes when ≤ 15%.\n\n" +
+      `Current: ${maxDd}%`,
+    recovery_ok:
+      "Recovery — Months it took the equity curve to " +
+      "reclaim its prior peak after the worst drawdown. " +
+      "Gate passes when ≤ 6 months.\n\n" +
+      `Current: ${recoveryMo}mo`,
+    per_regime_non_neg:
+      "Per-regime ≥ 0 — Average return in EACH regime " +
+      "(BULL / SIDEWAYS / BEAR) must be non-negative. " +
+      "Catches strategies that lose money in one regime " +
+      "but a long-period average hides it.\n\n" +
+      "Current: all regimes non-negative",
+    dsr_ok:
+      "DSR — Deflated Sharpe Ratio (Bailey & López de " +
+      "Prado, 2014). Adjusts the observed Sharpe down to " +
+      "account for sample size, skew, kurtosis, and the " +
+      "number of trials. A value ≥ 0.95 means the Sharpe " +
+      "is statistically distinguishable from zero at " +
+      "≥ 95% confidence. < 0.95 = could be luck.\n\n" +
+      `Current: ${dsr}`,
+    pbo_ok:
+      "PBO — Probability of Backtest Overfitting (Bailey " +
+      "et al., 2017). Combinatorially Symmetric Cross-" +
+      "Validation estimate of how often the in-sample " +
+      "best parameter underperforms out-of-sample. " +
+      "≤ 0.30 = robust; higher means the backtest is " +
+      "likely overfit.\n\n" +
+      `Current: ${pbo}`,
   };
   return (
     <div
@@ -163,6 +202,41 @@ function GateStrip({ aggregate }: { aggregate: WalkForwardAggregate }) {
   );
 }
 
+const PER_REGIME_HEADER_TIPS: Record<string, string> = {
+  Regime:
+    "Market regime label (BULL / SIDEWAYS / BEAR) from the " +
+    "nightly regime classifier. Each row aggregates the " +
+    "test-side bars where today's regime matched.",
+  Days:
+    "Number of test-side bars (trading days) in the " +
+    "walk-forward run that were classified as this regime. " +
+    "Imbalance here is normal — Indian markets sit in " +
+    "SIDEWAYS most of the time.",
+  "Return %":
+    "Cumulative % return across all bars in this regime. " +
+    "Can read as 0.00 when the combined equity curve " +
+    "(windows reset to starting capital between folds) " +
+    "happens to net out — use Sharpe / Hit % to judge edge " +
+    "per regime, not Return %.",
+  Sharpe:
+    "Annualised Sharpe ratio of daily returns restricted " +
+    "to this regime. Risk-free assumed = 0 for INR / NSE.",
+  Sortino:
+    "Sortino ratio — like Sharpe but only penalises " +
+    "downside volatility. Better proxy when returns are " +
+    "skewed (asymmetric strategies, options-like payoffs).",
+  "Max DD %":
+    "Largest peak-to-trough equity drop restricted to bars " +
+    "in this regime. Useful for sizing per-regime risk " +
+    "caps.",
+  "Hit %":
+    "Fraction of bars in this regime where the strategy's " +
+    "PnL was positive. 0.50 = coin flip; > 0.55 starts " +
+    "looking like an edge; < 0.45 in a regime usually " +
+    "means avoid trading there.",
+};
+
+
 function PerRegimeGrid({ rows }: {
   rows: NonNullable<WalkForwardAggregate["per_regime"]>;
 }) {
@@ -180,7 +254,12 @@ function PerRegimeGrid({ rows }: {
             ].map((h) => (
               <th
                 key={h}
-                className="px-2 py-1.5 text-left font-medium text-slate-600 dark:text-slate-300"
+                className={
+                  "px-2 py-1.5 text-left font-medium " +
+                  "text-slate-600 dark:text-slate-300 " +
+                  (PER_REGIME_HEADER_TIPS[h] ? "cursor-help" : "")
+                }
+                title={PER_REGIME_HEADER_TIPS[h]}
               >
                 {h}
               </th>
@@ -217,24 +296,65 @@ function AggregateCards({ agg }: { agg: WalkForwardAggregate }) {
         label="Avg PnL %"
         value={fmtPct(agg.avg_pnl_pct)}
         tone={pnlPositive ? "good" : "bad"}
+        tip={
+          "Average % return across all completed " +
+          "out-of-sample test windows. A flat horizontal " +
+          "equity-curve segment at the start of capital " +
+          "means that window opened zero trades — common " +
+          "when the strategy's entry gate (e.g. NIFTY " +
+          "regime filter) shut it off for the period."
+        }
       />
       <AggCard
         label="Avg Win Rate"
         value={fmtPct(agg.avg_win_rate_pct)}
+        tip={
+          "Average % of trades closed at positive PnL " +
+          "across windows. For mean-reversion strategies " +
+          "30-50% is typical; for trend-following 25-40% " +
+          "is normal. Hit rate alone isn't an edge — pair " +
+          "with Avg PnL %."
+        }
       />
       <AggCard
         label="Avg Max DD"
         value={fmtPct(agg.avg_max_drawdown_pct)}
         tone="bad"
+        tip={
+          "Average maximum drawdown (peak-to-trough " +
+          "equity loss) across windows. The Max DD " +
+          "quality gate looks at the WORST single window, " +
+          "not this average."
+        }
       />
-      <AggCard label="Std PnL %" value={fmtPct(agg.std_pnl_pct)} />
+      <AggCard
+        label="Std PnL %"
+        value={fmtPct(agg.std_pnl_pct)}
+        tip={
+          "Standard deviation of per-window PnL %. Higher " +
+          "= more variable across windows = less reliable " +
+          "edge. Feeds into the DSR calculation."
+        }
+      />
       <AggCard
         label="Windows"
         value={String(agg.window_count)}
+        tip={
+          "Total number of train/test folds generated by " +
+          "the (period, train_days, test_days, step_days) " +
+          "configuration. More windows = more statistical " +
+          "power, but each window is shorter."
+        }
       />
       <AggCard
         label="Completed"
         value={`${agg.completed_count}/${agg.window_count}`}
+        tip={
+          "Windows that ran to completion. A window can " +
+          "be skipped if its train slice fails the " +
+          "regime-stratified filter (when enabled) or if " +
+          "data was unavailable for that period."
+        }
       />
     </div>
   );
@@ -257,11 +377,58 @@ function WindowTable({
         <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
           <tr>
             <th className="px-3 py-1.5 text-left">#</th>
-            <th className="px-3 py-1.5 text-left">Test period</th>
-            <th className="px-3 py-1.5 text-right">PnL %</th>
-            <th className="px-3 py-1.5 text-right">Win rate</th>
-            <th className="px-3 py-1.5 text-right">Max DD</th>
-            <th className="px-3 py-1.5 text-left">Status</th>
+            <th
+              className="px-3 py-1.5 text-left cursor-help"
+              title={
+                "Out-of-sample test slice for this fold " +
+                "(start → end inclusive). Distinct from the " +
+                "train slice that preceded it."
+              }
+            >
+              Test period
+            </th>
+            <th
+              className="px-3 py-1.5 text-right cursor-help"
+              title={
+                "% return for this window's test slice. A " +
+                "row showing exactly 0.00% almost always " +
+                "means zero trades fired (entry gate " +
+                "closed) — the equity curve is dead flat at " +
+                "starting capital."
+              }
+            >
+              PnL %
+            </th>
+            <th
+              className="px-3 py-1.5 text-right cursor-help"
+              title={
+                "% of closed trades in this window that " +
+                "finished at positive PnL. Empty / dash " +
+                "when the window had zero trades."
+              }
+            >
+              Win rate
+            </th>
+            <th
+              className="px-3 py-1.5 text-right cursor-help"
+              title={
+                "Peak-to-trough equity loss within this " +
+                "window. The Max DD quality gate looks at " +
+                "the WORST single window, not the average."
+              }
+            >
+              Max DD
+            </th>
+            <th
+              className="px-3 py-1.5 text-left cursor-help"
+              title={
+                "completed = ran to end, failed = engine " +
+                "error, skipped = window didn't satisfy " +
+                "regime-stratified filter (when enabled)."
+              }
+            >
+              Status
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -303,13 +470,20 @@ function WindowTable({
 function Field({
   label,
   children,
+  tip,
 }: {
   label: string;
   children: React.ReactNode;
+  tip?: string;
 }) {
   return (
-    <label className="flex flex-col gap-1 text-xs text-slate-600 dark:text-slate-400">
-      <span>{label}</span>
+    <label
+      className="flex flex-col gap-1 text-xs text-slate-600 dark:text-slate-400"
+      title={tip}
+    >
+      <span className={tip ? "cursor-help" : undefined}>
+        {label}
+      </span>
       {children}
     </label>
   );
@@ -453,7 +627,17 @@ export function WalkForwardSubTab() {
             data-testid="walkforward-period-end"
           />
         </Field>
-        <Field label="Train days">
+        <Field
+          label="Train days"
+          tip={
+            "Length of the in-sample training slice per " +
+            "fold. The strategy's parameters are evaluated " +
+            "(not re-fitted — our walk-forward is " +
+            "parameter-fixed) over this window, then " +
+            "tested on the next 'Test days'. 60-180 days " +
+            "is typical for daily strategies."
+          }
+        >
           <input
             type="number"
             min={1}
@@ -464,7 +648,16 @@ export function WalkForwardSubTab() {
             data-testid="walkforward-train-days"
           />
         </Field>
-        <Field label="Test days">
+        <Field
+          label="Test days"
+          tip={
+            "Length of the out-of-sample test slice " +
+            "immediately following the train slice. PnL " +
+            "and Sharpe for the window are measured here. " +
+            "Shorter test = more windows = more " +
+            "statistical power but noisier per-window."
+          }
+        >
           <input
             type="number"
             min={1}
@@ -475,7 +668,16 @@ export function WalkForwardSubTab() {
             data-testid="walkforward-test-days"
           />
         </Field>
-        <Field label="Step days">
+        <Field
+          label="Step days"
+          tip={
+            "How far the (train, test) window slides " +
+            "forward between folds. Step = Test days → " +
+            "non-overlapping folds (cleanest). Step < Test " +
+            "days → overlapping folds (more windows, " +
+            "correlated, weaker independence assumption)."
+          }
+        >
           <input
             type="number"
             min={1}
