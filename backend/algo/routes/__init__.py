@@ -37,6 +37,9 @@ from backend.algo.routes.shap_analysis import (
 from backend.algo.routes.strategies import (
     create_strategies_router,
 )
+from backend.algo.routes.sweep import (
+    create_sweep_router,
+)
 from backend.algo.routes.universe_snapshot import (
     create_universe_snapshot_router,
 )
@@ -67,6 +70,7 @@ __all__ = [
     "create_replay_router",
     "create_shap_analysis_router",
     "create_strategies_router",
+    "create_sweep_router",
     "create_universe_snapshot_router",
     "create_walkforward_router",
     "create_webhooks_router",
