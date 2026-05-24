@@ -9,6 +9,7 @@ import type { PortfolioHolding } from "@/hooks/usePortfolio";
 import { useLtpBatch } from "@/hooks/useLtpBatch";
 import { WidgetSkeleton } from "./WidgetSkeleton";
 import { WidgetError } from "./WidgetError";
+import { AlgoPositionsTab } from "./algo/AlgoPositionsTab";
 
 const PAGE_SIZE = 10;
 
@@ -23,6 +24,7 @@ interface WatchlistWidgetProps {
   onAddStock?: () => void;
   onViewStock?: (ticker: string) => void;
   onDeleteStock?: (ticker: string) => void;
+  algoTabEnabled?: boolean;
 }
 
 /** Map ISO currency code to display symbol. */
@@ -74,7 +76,7 @@ function Sparkline({
 
 type RefreshState = "idle" | "pending" | "success" | "error";
 
-type WidgetTab = "portfolio" | "watchlist";
+type WidgetTab = "portfolio" | "watchlist" | "algo";
 
 export function WatchlistWidget({
   data,
@@ -86,6 +88,7 @@ export function WatchlistWidget({
   onAddStock,
   onViewStock,
   onDeleteStock,
+  algoTabEnabled = false,
 }: WatchlistWidgetProps) {
   const [activeTab, setActiveTab] =
     useState<WidgetTab>("portfolio");
@@ -266,6 +269,19 @@ export function WatchlistWidget({
           >
             Watchlist
           </button>
+          {algoTabEnabled && (
+            <button
+              data-testid="dashboard-watchlist-tab-algo"
+              onClick={() => setActiveTab("algo")}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                activeTab === "algo"
+                  ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
+                  : "text-gray-500 dark:text-gray-400"
+              }`}
+            >
+              Algo
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {activeTab === "portfolio" && onAddStock && (
@@ -284,7 +300,9 @@ export function WatchlistWidget({
           <span className="text-xs text-gray-400 dark:text-gray-500">
             {activeTab === "portfolio"
               ? `${portfolio.length} stock${portfolio.length !== 1 ? "s" : ""}`
-              : `${tickers.length} ticker${tickers.length !== 1 ? "s" : ""}`}
+              : activeTab === "watchlist"
+              ? `${tickers.length} ticker${tickers.length !== 1 ? "s" : ""}`
+              : "live"}
           </span>
         </div>
       </div>
@@ -726,6 +744,11 @@ export function WatchlistWidget({
         )}
         </>
       ))}
+
+      {/* Algo tab */}
+      {activeTab === "algo" && (
+        <AlgoPositionsTab onSelectTicker={onSelectTicker} />
+      )}
     </div>
   );
 }
