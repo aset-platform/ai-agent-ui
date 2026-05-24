@@ -476,4 +476,17 @@ export const FE = {
   budgetAllocationBelowCommittedWarning: "budget-allocation-below-committed-warning",
   budgetReservationHistoryLink: "budget-reservation-history-link",
   budgetReservationHistoryModal: "budget-reservation-history-modal",
+
+  // Watchlist bulk ops (Epic C)
+  dashboardWatchlistOverflowButton:
+    "dashboard-watchlist-overflow-button",
+  dashboardWatchlistOverflowMenu:
+    "dashboard-watchlist-overflow-menu",
+  dashboardWatchlistBulkAddItem:
+    "dashboard-watchlist-bulk-add-item",
+  dashboardWatchlistRemoveAllItem:
+    "dashboard-watchlist-remove-all-item",
+  bulkAddTickersModal: "bulk-add-tickers-modal",
+  bulkAddTickersFileInput: "bulk-add-tickers-file-input",
+  removeAllTickersModal: "remove-all-tickers-modal",
 } as const;

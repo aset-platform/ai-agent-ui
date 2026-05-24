@@ -10,6 +10,9 @@ import { useLtpBatch } from "@/hooks/useLtpBatch";
 import { WidgetSkeleton } from "./WidgetSkeleton";
 import { WidgetError } from "./WidgetError";
 import { AlgoPositionsTab } from "./algo/AlgoPositionsTab";
+import { BulkAddTickersModal } from "./BulkAddTickersModal";
+import { RemoveAllTickersModal } from "./RemoveAllTickersModal";
+import { WatchlistOverflowMenu } from "./WatchlistOverflowMenu";
 
 const PAGE_SIZE = 10;
 
@@ -93,6 +96,8 @@ export function WatchlistWidget({
   const [activeTab, setActiveTab] =
     useState<WidgetTab>("portfolio");
   const [page, setPage] = useState(1);
+  const [bulkAddOpen, setBulkAddOpen] = useState(false);
+  const [removeAllOpen, setRemoveAllOpen] = useState(false);
 
   // Per-ticker refresh state
   const [refreshing, setRefreshing] = useState<
@@ -296,6 +301,12 @@ export function WatchlistWidget({
                 <line x1="5" y1="12" x2="19" y2="12" />
               </svg>
             </button>
+          )}
+          {activeTab === "watchlist" && (
+            <WatchlistOverflowMenu
+              onBulkAdd={() => setBulkAddOpen(true)}
+              onRemoveAll={() => setRemoveAllOpen(true)}
+            />
           )}
           <span className="text-xs text-gray-400 dark:text-gray-500">
             {activeTab === "portfolio"
@@ -748,6 +759,24 @@ export function WatchlistWidget({
       {/* Algo tab */}
       {activeTab === "algo" && (
         <AlgoPositionsTab onSelectTicker={onSelectTicker} />
+      )}
+
+      {bulkAddOpen && (
+        <BulkAddTickersModal
+          onClose={() => setBulkAddOpen(false)}
+          onUploaded={() => {
+            onRefresh?.();
+          }}
+        />
+      )}
+      {removeAllOpen && (
+        <RemoveAllTickersModal
+          currentCount={data.value?.tickers?.length ?? 0}
+          onClose={() => setRemoveAllOpen(false)}
+          onRemoved={() => {
+            onRefresh?.();
+          }}
+        />
       )}
     </div>
   );
