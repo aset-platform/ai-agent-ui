@@ -10,14 +10,16 @@ Endpoints
 - ``DELETE /users/me/tickers/{ticker}`` — unlink a ticker
 """
 
+import csv as _csv
+import io
 import logging
 import threading
 import uuid
 from datetime import date
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from pydantic import BaseModel, ConfigDict, Field
 
 # validation.py is in backend/ which is on sys.path
 from validation import validate_ticker
@@ -282,6 +284,214 @@ async def unlink_ticker(
         normalised,
     )
     return {"detail": "unlinked"}
+
+
+# ---------------------------------------------------------------
+# Bulk ticker operations (CSV upload + unlink all)
+# ---------------------------------------------------------------
+
+
+class BulkTickerErrorRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    row: int
+    ticker: str
+    reason: str
+
+
+class BulkTickerResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    added: list[str]
+    skipped_already_linked: list[str]
+    errors: list[BulkTickerErrorRow]
+    total_rows: int
+
+
+class UnlinkAllRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm: str
+
+
+class UnlinkAllResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    removed: int
+
+
+_BULK_ROW_CAP = 5000
+
+
+def _invalidate_watchlist_cache(user_id: str) -> None:
+    """Best-effort invalidation of the dashboard watchlist
+    cache key for this user. Failures are non-fatal — the
+    TTL will eventually expire the stale entry."""
+    try:
+        from cache import get_cache
+        c = get_cache()
+        if c is not None:
+            c.invalidate(
+                f"cache:dash:watchlist:{user_id}",
+            )
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "watchlist cache invalidate failed",
+            exc_info=True,
+        )
+
+
+async def _bulk_link_impl(
+    *,
+    user_id: str,
+    csv_bytes: bytes,
+    filename: str,
+) -> BulkTickerResponse:
+    """Pure async impl. Parses the CSV, normalises, validates,
+    delegates to repo.bulk_link_tickers, builds per-row report.
+    """
+    try:
+        text = csv_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"CSV must be UTF-8: {exc}",
+        ) from exc
+
+    reader = _csv.reader(io.StringIO(text))
+    try:
+        header = next(reader)
+    except StopIteration as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="empty CSV",
+        ) from exc
+
+    header_lc = [h.strip().lower() for h in header]
+    if "ticker" not in header_lc:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "missing required column 'ticker' "
+                f"(found: {header_lc})"
+            ),
+        )
+    ticker_col = header_lc.index("ticker")
+
+    # Pre-scan row count to enforce the cap before
+    # allocating large structures.
+    rows_raw = list(reader)
+    if len(rows_raw) > _BULK_ROW_CAP:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"CSV exceeds {_BULK_ROW_CAP}-row limit; "
+                "please split it and try again."
+            ),
+        )
+
+    valid: list[str] = []
+    errors: list[BulkTickerErrorRow] = []
+    seen_in_batch: set[str] = set()
+    # CSV row indices are 1-based and include the header,
+    # so data rows start at index 2.
+    for i, row in enumerate(rows_raw, start=2):
+        if not row or ticker_col >= len(row):
+            errors.append(BulkTickerErrorRow(
+                row=i, ticker="", reason="empty row",
+            ))
+            continue
+        raw = (row[ticker_col] or "").strip()
+        if not raw:
+            errors.append(BulkTickerErrorRow(
+                row=i, ticker="", reason="empty ticker",
+            ))
+            continue
+        norm = raw.upper()
+        err = validate_ticker(norm)
+        if err is not None:
+            errors.append(BulkTickerErrorRow(
+                row=i, ticker=raw, reason=err,
+            ))
+            continue
+        if norm in seen_in_batch:
+            errors.append(BulkTickerErrorRow(
+                row=i, ticker=raw,
+                reason="duplicate in batch",
+            ))
+            continue
+        seen_in_batch.add(norm)
+        valid.append(norm)
+
+    repo = _helpers._get_repo()
+    added, already_linked = await repo.bulk_link_tickers(
+        user_id, valid, source="bulk_csv",
+    )
+    _invalidate_watchlist_cache(user_id)
+
+    _logger.info(
+        "bulk_link user=%s file=%s added=%d skipped=%d "
+        "errors=%d",
+        user_id, filename,
+        len(added), len(already_linked), len(errors),
+    )
+    return BulkTickerResponse(
+        added=added,
+        skipped_already_linked=already_linked,
+        errors=errors,
+        total_rows=len(rows_raw),
+    )
+
+
+async def _unlink_all_impl(
+    *,
+    user_id: str,
+    confirm: str,
+) -> UnlinkAllResponse:
+    """Pure async impl. Enforces the literal confirm phrase."""
+    if confirm != "REMOVE ALL":
+        raise HTTPException(
+            status_code=400,
+            detail="confirmation phrase mismatch",
+        )
+    repo = _helpers._get_repo()
+    removed = await repo.unlink_all_tickers(user_id)
+    _invalidate_watchlist_cache(user_id)
+    _logger.info(
+        "unlink_all user=%s removed=%d",
+        user_id, removed,
+    )
+    return UnlinkAllResponse(removed=removed)
+
+
+@router.post(
+    "/tickers/bulk",
+    response_model=BulkTickerResponse,
+)
+async def bulk_link_tickers(
+    file: UploadFile = File(...),
+    user: UserContext = Depends(get_current_user),
+) -> BulkTickerResponse:
+    """Bulk-link tickers from a CSV file. Returns a per-row
+    report — added, already-linked, errors."""
+    body = await file.read()
+    return await _bulk_link_impl(
+        user_id=user.user_id,
+        csv_bytes=body,
+        filename=file.filename or "upload.csv",
+    )
+
+
+@router.delete(
+    "/tickers/all",
+    response_model=UnlinkAllResponse,
+)
+async def unlink_all_tickers(
+    body: UnlinkAllRequest,
+    user: UserContext = Depends(get_current_user),
+) -> UnlinkAllResponse:
+    """Unlink every ticker for the current user. Requires
+    body.confirm == "REMOVE ALL" (case-sensitive)."""
+    return await _unlink_all_impl(
+        user_id=user.user_id,
+        confirm=body.confirm,
+    )
 
 
 # ---------------------------------------------------------------
