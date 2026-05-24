@@ -4,11 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 from zoneinfo import ZoneInfo
-
-import pytest
 
 from backend.algo.routes.portfolio import (
     AlgoPositionRow,
@@ -41,20 +38,21 @@ def test_algo_position_row_minimal_valid():
 
 def test_days_held_returns_zero_for_today_ist():
     # An entry_ts in today's IST date (e.g. now) → 0 days held.
-    today_ist_midnight_utc = (
+    today_ist_10am_as_utc = (
         datetime.now(_IST)
         .replace(hour=10, minute=0, second=0, microsecond=0)
         .astimezone(timezone.utc)
     )
-    assert _days_held(today_ist_midnight_utc) == 0
+    assert _days_held(today_ist_10am_as_utc) == 0
 
 
 def test_days_held_returns_three_for_three_ist_days_ago():
     # 3 IST calendar days ago (any time of day) → 3.
     ts = (
-        datetime.now(_IST)
-        - timedelta(days=3)
-    ).replace(hour=10, minute=0).astimezone(timezone.utc)
+        (datetime.now(_IST) - timedelta(days=3))
+        .replace(hour=10, minute=0)
+        .astimezone(timezone.utc)
+    )
     assert _days_held(ts) == 3
 
 

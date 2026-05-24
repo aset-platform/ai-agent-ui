@@ -9,27 +9,24 @@ augmented with days_held + t1_pending flags.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from datetime import date, datetime, timezone
+from datetime import datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
-
-from auth.dependencies import pro_or_superuser
-from auth.models import UserContext
 
 _logger = logging.getLogger(__name__)
 
 _IST = ZoneInfo("Asia/Kolkata")
 
-# Lookback window for joining algo.events attribution.
-# 365+ days covers any CNC overnight position that has been
-# held since the launch of v1 algo trading. Plenty of margin.
+# Lookback floor for joining algo.events attribution.
+# 2024-01-01 covers any CNC overnight position opened
+# since the v1 algo trading launch (~17 months); plenty
+# of margin to attribute the oldest still-held position
+# without scanning the entire algo.events Iceberg table.
 _ATTRIBUTION_SINCE = "2024-01-01"
 
 # Redis cache TTL (matches the existing
