@@ -3,6 +3,9 @@
 import { useState } from "react";
 import { useSweepRun } from "@/hooks/useSweepRuns";
 
+import { SweepForm } from "./SweepForm";
+import { SweepProgressPanel } from "./SweepProgressPanel";
+
 export function SweepSubTab() {
   const [activeSweepId, setActiveSweepId] = useState<
     string | null
@@ -15,39 +18,32 @@ export function SweepSubTab() {
 
   return (
     <div className="space-y-4" data-testid="sweep-sub-tab">
-      {/* Placeholder shell — child components arrive in
-          Tasks 8-9. For now we render a stub so the
-          parent + routing work end-to-end. */}
       {(activeSweepId == null || isDone) && (
-        <div
-          className="rounded-md border border-slate-200 dark:border-slate-700 p-4 text-sm text-slate-500"
-          data-testid="sweep-form-placeholder"
-        >
-          Parameter sweep form coming in next slice.
-          {activeSweepId && (
-            <p className="mt-2 text-xs">
-              Last sweep status: {run?.status}
-            </p>
-          )}
-        </div>
+        <SweepForm onStarted={setActiveSweepId} />
       )}
       {activeSweepId && !isDone && (
+        <SweepProgressPanel sweepRunId={activeSweepId} />
+      )}
+      {/* Results UI (Block A/B/C) arrives in Task 9 — for
+          now, when run.status === "completed" we just show
+          a status line. */}
+      {run && run.status === "completed" && (
         <div
-          className="rounded-md border p-4 text-sm"
-          data-testid="sweep-progress-placeholder"
+          className="rounded-md border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/30 p-4 text-sm"
+          data-testid="sweep-results-placeholder"
         >
-          Sweep in progress (id: {activeSweepId}).
+          Sweep complete. Results table + PBO badge arrive
+          in next slice.
         </div>
       )}
-      {/* setActiveSweepId is reserved for next slice */}
-      <button
-        type="button"
-        className="hidden"
-        data-testid="sweep-set-active-id-stub"
-        onClick={() => setActiveSweepId("test-id")}
-      >
-        stub
-      </button>
+      {run && run.status === "failed" && (
+        <div
+          className="rounded-md border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700"
+          data-testid="sweep-failed-state"
+        >
+          Sweep failed: {run.error_text ?? "unknown error"}
+        </div>
+      )}
     </div>
   );
 }
