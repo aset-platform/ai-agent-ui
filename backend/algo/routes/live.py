@@ -484,26 +484,22 @@ async def _strategy_name_lookup(
 async def _fetch_strategy_attribution(
     user_id: UUID,
     symbols: list[str],
+    *,
+    since_date: str | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """For each symbol, find today's first live BUY fill in
-    ``algo.events`` and return the originating strategy + the
-    entry reason carried in the event payload.
+    """For each symbol, find the first live BUY fill in
+    ``algo.events`` since ``since_date`` (default: today IST).
 
-    ``algo.events`` has no top-level ``tradingsymbol`` / ``side`` /
-    ``product`` columns — those live inside ``payload_json``. We
-    therefore fetch all of today's live fills for the user, then
-    filter + extract in Python. Returns an empty dict on Iceberg
-    read failure (drift logic still works via the cheap ledger
-    check downstream).
-
-    Join is symbol-only (not ``(symbol, product)``): the runtime
-    currently emits ``payload.product = None`` on every fill, so
-    a (sym, product) key would never match a Kite CNC position.
+    Pass ``since_date=None`` (default) to preserve today-only
+    behavior for the existing LiveDashboard positions endpoint.
+    Pass a YYYY-MM-DD string (e.g. ``"2024-01-01"``) to widen
+    the lookback — used by the dashboard Algo tab to attribute
+    CNC overnight holdings opened on prior trading days.
     """
     if not symbols:
         return {}
     wanted_symbols = set(symbols)
-    today_ist = _ist_midnight_str()
+    cutoff_date = since_date or _ist_midnight_str()
     try:
         rows = await asyncio.to_thread(
             query_iceberg_table,
@@ -516,7 +512,7 @@ async def _fetch_strategy_attribution(
             "  AND type = 'order_filled_live' "
             "  AND ts_date >= ? "
             "ORDER BY ts_ns ASC",
-            [str(user_id), today_ist],
+            [str(user_id), cutoff_date],
         )
     except Exception:  # noqa: BLE001
         _logger.warning(
