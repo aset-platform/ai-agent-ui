@@ -12,6 +12,7 @@ import {
   REGIME_LABELS,
   type RegimeLabel,
 } from "@/lib/types/algoStrategy";
+import { InfoTooltip } from "@/components/common/InfoTooltip";
 
 const ACTIVE_BG: Record<RegimeLabel, string> = {
   bull: "bg-emerald-500 text-white border-emerald-500",
@@ -53,46 +54,34 @@ export function RegimeApplicabilityChips({
         <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
           Applicable regimes
         </span>
-        <span
-          tabIndex={0}
-          role="button"
-          aria-label="What does this do?"
-          data-testid="regime-applicability-info"
-          title={
-            "Two independent layers gate a strategy by " +
-            "regime — this chip selector is LAYER 1.\n\n" +
-            "──────────────────────────────────────\n" +
-            "LAYER 1 — Applicable regimes (these chips)\n" +
-            "──────────────────────────────────────\n" +
-            "Where:  metadata on the strategy row\n" +
-            "Scope:  LIVE picker only\n" +
-            "Effect: strategy is hidden from the live " +
-            "selector when today's regime ∉ this set\n" +
-            "Backtest: NOT affected — runs every day\n" +
-            "Paper:    NOT affected — runs every day\n" +
-            "Default:  empty = regime-agnostic\n\n" +
-            "──────────────────────────────────────\n" +
-            "LAYER 2 — regime_label in the AST\n" +
-            "──────────────────────────────────────\n" +
-            "Where:  a compare node inside entry/exit " +
-            "conditions in the JSON\n" +
-            "Scope:  backtest + paper + live\n" +
-            "Effect: hard-gates the rule, e.g.\n" +
-            "        regime_label == \"BULL\"  OR\n" +
-            "        regime_label == \"SIDEWAYS\"\n" +
-            "How to add: edit the JSON pane, or load a " +
-            "template that already has it " +
-            "(regime_bull_momentum, " +
-            "regime_sideways_meanrev_quality).\n\n" +
-            "Note: v3 RSI(2) approximates regime via " +
-            "numeric proxies (nifty_above_sma200, " +
-            "nifty_30d_return_pct) in its entry gate — " +
-            "no explicit regime_label node needed."
-          }
-          className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold text-slate-500 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-700"
+        <InfoTooltip
+          label="How regime filters work"
+          widthClass="w-80"
         >
-          ?
-        </span>
+          <span className="whitespace-pre-line">
+            {"Two independent layers gate a strategy by " +
+              "regime — these chips are LAYER 1.\n\n" +
+              "LAYER 1 — Applicable regimes (these " +
+              "chips)\n" +
+              "  • Stored as metadata on the strategy\n" +
+              "  • LIVE picker only — hidden from live " +
+              "selector when today's regime ∉ this set\n" +
+              "  • Backtest + paper: NOT affected\n" +
+              "  • Empty = regime-agnostic (default)\n\n" +
+              "LAYER 2 — regime_label in the AST\n" +
+              "  • Compare node inside entry/exit JSON\n" +
+              "  • Scope: backtest + paper + live\n" +
+              "  • Hard-gates the rule, e.g.\n" +
+              "      regime_label == \"BULL\"  OR\n" +
+              "      regime_label == \"SIDEWAYS\"\n" +
+              "  • Add via JSON pane or a regime-* " +
+              "template\n\n" +
+              "v3 RSI(2) note: approximates regime via " +
+              "numeric proxies (nifty_above_sma200, " +
+              "nifty_30d_return_pct) in its entry gate — " +
+              "no explicit regime_label node needed."}
+          </span>
+        </InfoTooltip>
         {mismatched && (
           <span
             className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-800 dark:bg-amber-950/50 dark:text-amber-200"
@@ -126,9 +115,9 @@ export function RegimeApplicabilityChips({
         })}
       </div>
       <p className="text-[10px] text-slate-400 dark:text-slate-500">
-        Live picker only — doesn&apos;t change the AST. Empty =
-        regime-agnostic. Hover the{" "}
-        <span className="font-semibold">?</span> for details.
+        Live picker only — doesn&apos;t change the AST.
+        Empty = regime-agnostic. Hover the{" "}
+        <span className="font-semibold">i</span> for details.
       </p>
     </div>
   );
