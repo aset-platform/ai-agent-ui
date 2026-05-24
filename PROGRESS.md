@@ -2,6 +2,36 @@
 
 ---
 
+### 2026-05-24 — Algo Portfolio dashboard tab (Epic B)
+
+New "Algo" tab in the dashboard's WatchlistWidget showing
+currently-open algo-attributed positions (intraday MIS +
+overnight CNC) with Symbol / Qty / Avg / LTP / PnL% /
+Strategy / Days-held columns. Pro/superuser gated;
+general users don't see the tab.
+
+Backend: GET /v1/algo/portfolio/positions runs Kite
+positions() + holdings() in parallel, joins
+_fetch_strategy_attribution (extended with a since_date
+kwarg so CNC overnight positions opened on prior days stay
+attributed), drops bare Kite rows, sorts by pnl_inr DESC.
+60 s Redis cache, TTL-only invalidation, fail-open on
+missing/expired Kite creds.
+
+Frontend: useAlgoPositions SWR hook polls 5 s / 60 s per
+market_open. Empty-state amber card with deep link to
+/algo-trading/strategies?tab=live.
+
+Out of scope (v1): closed positions, slide-over detail,
+group-by-strategy subtotals, multi-broker, multi-currency,
+sortable headers, CSV download, pagination, per-row close
+buttons.
+
+Spec: `docs/superpowers/specs/2026-05-24-algo-portfolio-tab-design.md`
+Plan: `docs/superpowers/plans/2026-05-24-algo-portfolio-tab.md`
+
+---
+
 ### 2026-05-24 — Algo order budget reservation (Epic A)
 
 Shipped user-pool budget reservation ("ticketing") layer for
