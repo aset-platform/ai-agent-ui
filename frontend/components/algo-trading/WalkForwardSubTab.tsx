@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import {
   startWalkForwardRun,
@@ -11,11 +11,21 @@ import {
   type WindowSummary,
 } from "@/hooks/useWalkForwardRuns";
 import { useStrategies } from "@/hooks/useStrategies";
+import { InfoTooltip } from "@/components/common/InfoTooltip";
 
 import {
   WalkForwardEquityCurves,
   type WindowCurve,
 } from "./WalkForwardEquityCurves";
+
+// Re-usable tooltip content wrapper. The tooltip body is just
+// text with newlines — render with whitespace-pre-line so the
+// definition is readable.
+function TipBody({ text }: { text: string }) {
+  return (
+    <span className="whitespace-pre-line">{text}</span>
+  );
+}
 
 function computeAggregate(
   rows: WindowSummary[],
@@ -67,10 +77,12 @@ function AggCard({
   label,
   value,
   tone,
+  tip,
 }: {
   label: string;
   value: string;
   tone?: "good" | "bad";
+  tip?: ReactNode;
 }) {
   const cls =
     tone === "good"
@@ -79,9 +91,20 @@ function AggCard({
         ? "text-rose-600 dark:text-rose-400"
         : "text-slate-900 dark:text-slate-100";
   return (
-    <div className="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2">
-      <div className="text-xs text-slate-500 dark:text-slate-400">
-        {label}
+    <div
+      className={
+        "rounded-md border border-slate-200 " +
+        "dark:border-slate-700 bg-white dark:bg-slate-900 " +
+        "px-3 py-2"
+      }
+    >
+      <div className="flex items-center text-xs text-slate-500 dark:text-slate-400">
+        <span>{label}</span>
+        {tip && (
+          <InfoTooltip label={`What is ${label}?`}>
+            {tip}
+          </InfoTooltip>
+        )}
       </div>
       <div className={`text-lg font-semibold ${cls}`}>{value}</div>
     </div>
@@ -98,12 +121,12 @@ const GATE_KEYS = [
 ] as const;
 
 function GateLight({
-  k, label, passed, title,
+  k, label, passed, tip,
 }: {
   k: string;
   label: string;
   passed: boolean | undefined;
-  title: string;
+  tip: ReactNode;
 }) {
   const cls = passed === undefined
     ? "bg-slate-300 dark:bg-slate-600"
@@ -119,12 +142,12 @@ function GateLight({
     <div
       className="flex items-center gap-1.5"
       data-testid={`walkforward-gate-light-${k}`}
-      title={title}
     >
       <span className={`inline-block h-2.5 w-2.5 rounded-full ${cls}`} />
       <span className={`text-[11px] font-medium ${text}`}>
         {label}
       </span>
+      <InfoTooltip label={`What is ${label}?`}>{tip}</InfoTooltip>
     </div>
   );
 }
@@ -132,15 +155,81 @@ function GateLight({
 function GateStrip({ aggregate }: { aggregate: WalkForwardAggregate }) {
   const gates = aggregate.gates_passed || {};
   const dsr = aggregate.dsr ?? "—";
-  const pbo = aggregate.pbo ?? "—";
+  // Backend deliberately returns null for PBO on single-
+  // strategy walk-forward runs (no parameter sweep to overfit
+  // to — PBO is mathematically undefined and the 5-gate
+  // evaluator auto-passes it). Surface that explicitly in
+  // the tooltip instead of a bare em-dash that looks like
+  // missing data.
+  const pboRaw = aggregate.pbo;
+  const pboCurrent =
+    pboRaw == null
+      ? "N/A (single-strategy run — no parameter sweep)"
+      : String(pboRaw);
   const recoveryMo = aggregate.recovery_months ?? 0;
   const maxDd = aggregate.avg_max_drawdown_pct;
-  const titles: Record<string, string> = {
-    max_dd_ok: `Max DD: ${maxDd}%`,
-    recovery_ok: `Recovery: ${recoveryMo}mo`,
-    per_regime_non_neg: "All regimes non-negative",
-    dsr_ok: `DSR: ${dsr}`,
-    pbo_ok: `PBO: ${pbo}`,
+  // Each tooltip = "definition · current value". Definitions
+  // mirror Bailey-de Prado conventions (DSR, PBO) and the
+  // strategy-promotion gates encoded server-side.
+  const titles: Record<string, ReactNode> = {
+    max_dd_ok: (
+      <TipBody text={
+        "Max DD — Maximum drawdown (peak-to-trough " +
+        "equity loss) across all walk-forward " +
+        "windows.\n\n" +
+        "Gate passes when ≤ 15%.\n\n" +
+        `Current: ${maxDd}%`
+      } />
+    ),
+    recovery_ok: (
+      <TipBody text={
+        "Recovery — Months it took the equity curve to " +
+        "reclaim its prior peak after the worst " +
+        "drawdown.\n\n" +
+        "Gate passes when ≤ 6 months.\n\n" +
+        `Current: ${recoveryMo}mo`
+      } />
+    ),
+    per_regime_non_neg: (
+      <TipBody text={
+        "Per-regime ≥ 0 — Average return in EACH regime " +
+        "(BULL / SIDEWAYS / BEAR) must be non-" +
+        "negative.\n\n" +
+        "Catches strategies that lose money in one " +
+        "regime but a long-period average hides it.\n\n" +
+        "Current: all regimes non-negative"
+      } />
+    ),
+    dsr_ok: (
+      <TipBody text={
+        "DSR — Deflated Sharpe Ratio " +
+        "(Bailey & López de Prado, 2014).\n\n" +
+        "Adjusts the observed Sharpe down to account " +
+        "for sample size, skew, kurtosis, and the " +
+        "number of trials.\n\n" +
+        "≥ 0.95 means the Sharpe is statistically " +
+        "distinguishable from zero at ≥ 95% confidence. " +
+        "< 0.95 = could be luck.\n\n" +
+        `Current: ${dsr}`
+      } />
+    ),
+    pbo_ok: (
+      <TipBody text={
+        "PBO — Probability of Backtest Overfitting " +
+        "(Bailey et al., 2017).\n\n" +
+        "Combinatorially Symmetric Cross-Validation " +
+        "estimate of how often the in-sample best " +
+        "parameter underperforms out-of-sample.\n\n" +
+        "≤ 0.30 = robust; higher means the backtest is " +
+        "likely overfit.\n\n" +
+        "PBO requires a PARAMETER SWEEP (multiple " +
+        "strategy variants) to compare. A single-" +
+        "strategy walk-forward has nothing to overfit " +
+        "to, so PBO is mathematically undefined and the " +
+        "gate auto-passes.\n\n" +
+        `Current: ${pboCurrent}`
+      } />
+    ),
   };
   return (
     <div
@@ -156,12 +245,54 @@ function GateStrip({ aggregate }: { aggregate: WalkForwardAggregate }) {
           k={key}
           label={label}
           passed={gates[key]}
-          title={titles[key]}
+          tip={titles[key]}
         />
       ))}
     </div>
   );
 }
+
+const PER_REGIME_HEADER_TIPS: Record<string, string> = {
+  Regime:
+    "Market regime label (BULL / SIDEWAYS / BEAR) from " +
+    "the nightly regime classifier.\n\n" +
+    "Each row aggregates the test-side bars where the " +
+    "regime matched.",
+  Days:
+    "Number of test-side bars (trading days) in the " +
+    "walk-forward run that were classified as this " +
+    "regime.\n\n" +
+    "Imbalance is normal — Indian markets sit in " +
+    "SIDEWAYS most of the time.",
+  "Return %":
+    "Cumulative % return across all bars in this " +
+    "regime.\n\n" +
+    "Can read as 0.00 because the combined equity curve " +
+    "resets to starting capital between folds — windows " +
+    "net out. Use Sharpe / Hit % to judge edge per " +
+    "regime, not Return %.",
+  Sharpe:
+    "Annualised Sharpe ratio of daily returns " +
+    "restricted to this regime.\n\n" +
+    "Risk-free assumed = 0 for INR / NSE.",
+  Sortino:
+    "Sortino ratio — like Sharpe but only penalises " +
+    "downside volatility.\n\n" +
+    "Better proxy when returns are skewed (asymmetric " +
+    "strategies, options-like payoffs).",
+  "Max DD %":
+    "Largest peak-to-trough equity drop restricted to " +
+    "bars in this regime.\n\n" +
+    "Useful for sizing per-regime risk caps.",
+  "Hit %":
+    "Fraction of bars in this regime where the " +
+    "strategy's PnL was positive.\n\n" +
+    "0.50 = coin flip.\n" +
+    "> 0.55 starts looking like an edge.\n" +
+    "< 0.45 in a regime usually means avoid trading " +
+    "there.",
+};
+
 
 function PerRegimeGrid({ rows }: {
   rows: NonNullable<WalkForwardAggregate["per_regime"]>;
@@ -182,7 +313,14 @@ function PerRegimeGrid({ rows }: {
                 key={h}
                 className="px-2 py-1.5 text-left font-medium text-slate-600 dark:text-slate-300"
               >
-                {h}
+                <span className="inline-flex items-center">
+                  {h}
+                  {PER_REGIME_HEADER_TIPS[h] && (
+                    <InfoTooltip label={`What is ${h}?`}>
+                      <TipBody text={PER_REGIME_HEADER_TIPS[h]} />
+                    </InfoTooltip>
+                  )}
+                </span>
               </th>
             ))}
           </tr>
@@ -217,24 +355,82 @@ function AggregateCards({ agg }: { agg: WalkForwardAggregate }) {
         label="Avg PnL %"
         value={fmtPct(agg.avg_pnl_pct)}
         tone={pnlPositive ? "good" : "bad"}
+        tip={
+          <TipBody text={
+            "Average % return across all completed " +
+            "out-of-sample test windows.\n\n" +
+            "A flat horizontal equity-curve segment at " +
+            "the starting capital means that window " +
+            "opened zero trades — common when the " +
+            "strategy's entry gate (e.g. NIFTY regime " +
+            "filter) shut it off for the period."
+          } />
+        }
       />
       <AggCard
         label="Avg Win Rate"
         value={fmtPct(agg.avg_win_rate_pct)}
+        tip={
+          <TipBody text={
+            "Average % of trades closed at positive PnL " +
+            "across windows.\n\n" +
+            "Mean-reversion: 30–50% is typical.\n" +
+            "Trend-following: 25–40% is normal.\n\n" +
+            "Hit rate alone isn't an edge — pair with " +
+            "Avg PnL %."
+          } />
+        }
       />
       <AggCard
         label="Avg Max DD"
         value={fmtPct(agg.avg_max_drawdown_pct)}
         tone="bad"
+        tip={
+          <TipBody text={
+            "Average maximum drawdown (peak-to-trough " +
+            "equity loss) across windows.\n\n" +
+            "The Max DD quality gate looks at the WORST " +
+            "single window, not this average."
+          } />
+        }
       />
-      <AggCard label="Std PnL %" value={fmtPct(agg.std_pnl_pct)} />
+      <AggCard
+        label="Std PnL %"
+        value={fmtPct(agg.std_pnl_pct)}
+        tip={
+          <TipBody text={
+            "Standard deviation of per-window PnL %.\n\n" +
+            "Higher = more variable across windows = " +
+            "less reliable edge.\n\n" +
+            "Feeds into the DSR calculation."
+          } />
+        }
+      />
       <AggCard
         label="Windows"
         value={String(agg.window_count)}
+        tip={
+          <TipBody text={
+            "Total train/test folds generated by the " +
+            "(period, train_days, test_days, step_days) " +
+            "config.\n\n" +
+            "More windows = more statistical power, but " +
+            "each window is shorter."
+          } />
+        }
       />
       <AggCard
         label="Completed"
         value={`${agg.completed_count}/${agg.window_count}`}
+        tip={
+          <TipBody text={
+            "Windows that ran to completion.\n\n" +
+            "A window is skipped if its train slice " +
+            "fails the regime-stratified filter (when " +
+            "enabled) or if data was unavailable for the " +
+            "period."
+          } />
+        }
       />
     </div>
   );
@@ -257,11 +453,76 @@ function WindowTable({
         <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
           <tr>
             <th className="px-3 py-1.5 text-left">#</th>
-            <th className="px-3 py-1.5 text-left">Test period</th>
-            <th className="px-3 py-1.5 text-right">PnL %</th>
-            <th className="px-3 py-1.5 text-right">Win rate</th>
-            <th className="px-3 py-1.5 text-right">Max DD</th>
-            <th className="px-3 py-1.5 text-left">Status</th>
+            <th className="px-3 py-1.5 text-left">
+              <span className="inline-flex items-center">
+                Test period
+                <InfoTooltip label="What is Test period?">
+                  <TipBody text={
+                    "Out-of-sample test slice for this " +
+                    "fold (start → end inclusive).\n\n" +
+                    "Distinct from the train slice that " +
+                    "preceded it."
+                  } />
+                </InfoTooltip>
+              </span>
+            </th>
+            <th className="px-3 py-1.5 text-right">
+              <span className="inline-flex items-center justify-end">
+                PnL %
+                <InfoTooltip label="What is PnL %?">
+                  <TipBody text={
+                    "% return for this window's test " +
+                    "slice.\n\n" +
+                    "A row showing exactly 0.00% almost " +
+                    "always means zero trades fired " +
+                    "(entry gate closed) — the equity " +
+                    "curve is dead flat at starting " +
+                    "capital."
+                  } />
+                </InfoTooltip>
+              </span>
+            </th>
+            <th className="px-3 py-1.5 text-right">
+              <span className="inline-flex items-center justify-end">
+                Win rate
+                <InfoTooltip label="What is Win rate?">
+                  <TipBody text={
+                    "% of closed trades in this window " +
+                    "that finished at positive PnL.\n\n" +
+                    "Empty / dash when the window had " +
+                    "zero trades."
+                  } />
+                </InfoTooltip>
+              </span>
+            </th>
+            <th className="px-3 py-1.5 text-right">
+              <span className="inline-flex items-center justify-end">
+                Max DD
+                <InfoTooltip label="What is Max DD?">
+                  <TipBody text={
+                    "Peak-to-trough equity loss within " +
+                    "this window.\n\n" +
+                    "The Max DD quality gate looks at the " +
+                    "WORST single window, not the " +
+                    "average."
+                  } />
+                </InfoTooltip>
+              </span>
+            </th>
+            <th className="px-3 py-1.5 text-left">
+              <span className="inline-flex items-center">
+                Status
+                <InfoTooltip label="What is Status?">
+                  <TipBody text={
+                    "completed = ran to end.\n" +
+                    "failed = engine error.\n" +
+                    "skipped = window didn't satisfy the " +
+                    "regime-stratified filter (when " +
+                    "enabled)."
+                  } />
+                </InfoTooltip>
+              </span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -303,13 +564,22 @@ function WindowTable({
 function Field({
   label,
   children,
+  tip,
 }: {
   label: string;
   children: React.ReactNode;
+  tip?: ReactNode;
 }) {
   return (
     <label className="flex flex-col gap-1 text-xs text-slate-600 dark:text-slate-400">
-      <span>{label}</span>
+      <span className="flex items-center">
+        {label}
+        {tip && (
+          <InfoTooltip label={`What is ${label}?`}>
+            {tip}
+          </InfoTooltip>
+        )}
+      </span>
       {children}
     </label>
   );
@@ -338,7 +608,27 @@ export function WalkForwardSubTab() {
   const [regimeStratified, setRegimeStratified] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formErr, setFormErr] = useState<string | null>(null);
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  // Initial state matches SSR (null); we hydrate from
+  // ?walkforward_id=… in an effect AFTER mount.
+  // queueMicrotask + cancel flag satisfies the
+  // react-hooks/set-state-in-effect rule per CLAUDE.md §5.3.
+  const [activeRunId, setActiveRunId] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      const params = new URLSearchParams(
+        window.location.search,
+      );
+      const fromUrl = params.get("walkforward_id");
+      if (fromUrl) setActiveRunId(fromUrl);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const effectiveRunId =
     activeRunId ?? history[0]?.run_id ?? null;
@@ -445,7 +735,21 @@ export function WalkForwardSubTab() {
             data-testid="walkforward-period-end"
           />
         </Field>
-        <Field label="Train days">
+        <Field
+          label="Train days"
+          tip={
+            <TipBody text={
+              "Length of the in-sample training slice " +
+              "per fold.\n\n" +
+              "The strategy's parameters are evaluated " +
+              "(not re-fitted — our walk-forward is " +
+              "parameter-fixed) over this window, then " +
+              "tested on the next 'Test days'.\n\n" +
+              "60–180 days is typical for daily " +
+              "strategies."
+            } />
+          }
+        >
           <input
             type="number"
             min={1}
@@ -456,7 +760,19 @@ export function WalkForwardSubTab() {
             data-testid="walkforward-train-days"
           />
         </Field>
-        <Field label="Test days">
+        <Field
+          label="Test days"
+          tip={
+            <TipBody text={
+              "Length of the out-of-sample test slice " +
+              "immediately after the train slice.\n\n" +
+              "PnL and Sharpe for the window are measured " +
+              "here.\n\n" +
+              "Shorter test = more windows = more " +
+              "statistical power, but noisier per-window."
+            } />
+          }
+        >
           <input
             type="number"
             min={1}
@@ -467,7 +783,20 @@ export function WalkForwardSubTab() {
             data-testid="walkforward-test-days"
           />
         </Field>
-        <Field label="Step days">
+        <Field
+          label="Step days"
+          tip={
+            <TipBody text={
+              "How far the (train, test) window slides " +
+              "forward between folds.\n\n" +
+              "Step = Test days → non-overlapping folds " +
+              "(cleanest).\n\n" +
+              "Step < Test days → overlapping folds " +
+              "(more windows, correlated, weaker " +
+              "independence assumption)."
+            } />
+          }
+        >
           <input
             type="number"
             min={1}
@@ -491,7 +820,6 @@ export function WalkForwardSubTab() {
         </Field>
         <label
           className="inline-flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300"
-          title="When ON, each fold's train slice must contain every regime (BULL/SIDEWAYS/BEAR) present in the full period. Useful for regime-specific strategies; defaults OFF because Indian markets sit in SIDEWAYS most of the time and stratification can filter every fold."
         >
           <input
             type="checkbox"
@@ -500,6 +828,24 @@ export function WalkForwardSubTab() {
             data-testid="walkforward-regime-stratified"
           />
           Regime-stratified
+          <InfoTooltip label="What is Regime-stratified?">
+            <TipBody text={
+              "When ON, each fold's TRAIN slice must " +
+              "contain ≥ 1 day of every regime present " +
+              "in the full period " +
+              "(BULL / SIDEWAYS / BEAR).\n\n" +
+              "Useful for parameter-fitted strategies " +
+              "where training on one regime causes " +
+              "overfitting.\n\n" +
+              "Defaults OFF: Indian markets sit in " +
+              "SIDEWAYS most of the time and the strict " +
+              "filter can drop EVERY fold on short " +
+              "periods (you'd see 'No window data yet'). " +
+              "For parameter-fixed strategies like " +
+              "RSI(2) v3, leave it OFF and read the " +
+              "per-regime breakdown instead."
+            } />
+          </InfoTooltip>
         </label>
         <button
           type="submit"

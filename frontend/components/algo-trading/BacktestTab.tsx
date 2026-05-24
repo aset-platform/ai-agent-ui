@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   useBacktestRun,
@@ -11,12 +11,38 @@ import { BacktestEquityCurve } from "./BacktestEquityCurve";
 import { BacktestRunForm } from "./BacktestRunForm";
 import { BacktestSummaryCards } from "./BacktestSummaryCards";
 import { BacktestTradeTable } from "./BacktestTradeTable";
+import { SweepSubTab } from "./SweepSubTab";
 import { WalkForwardSubTab } from "./WalkForwardSubTab";
 
-type SubTab = "single" | "walkforward";
+type SubTab = "single" | "walkforward" | "parameter_sweep";
 
 export function BacktestTab() {
+  // Initial state matches SSR (no `window`); we sync from
+  // ?subtab=... in an effect AFTER hydration to avoid the
+  // SSR/client class-mismatch the active-tab pill produces.
+  // queueMicrotask + cancel flag satisfies the
+  // react-hooks/set-state-in-effect rule per CLAUDE.md §5.3.
   const [subTab, setSubTab] = useState<SubTab>("single");
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      const params = new URLSearchParams(
+        window.location.search,
+      );
+      const fromUrl = params.get("subtab");
+      if (
+        fromUrl === "walkforward"
+        || fromUrl === "parameter_sweep"
+        || fromUrl === "single"
+      ) {
+        setSubTab(fromUrl);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const { rows: history } = useBacktestRuns();
   const [activeRunId, setActiveRunId] = useState<string | null>(
     null,
@@ -35,6 +61,7 @@ export function BacktestTab() {
           [
             { id: "single", label: "Single run" },
             { id: "walkforward", label: "Walk-forward CV" },
+            { id: "parameter_sweep", label: "Parameter sweep" },
           ] as const
         ).map(({ id, label }) => (
           <button
@@ -121,6 +148,9 @@ export function BacktestTab() {
 
       {/* ── Walk-forward CV ────────────────────────────────── */}
       {subTab === "walkforward" && <WalkForwardSubTab />}
+
+      {/* ── Parameter sweep ────────────────────────────────── */}
+      {subTab === "parameter_sweep" && <SweepSubTab />}
     </div>
   );
 }

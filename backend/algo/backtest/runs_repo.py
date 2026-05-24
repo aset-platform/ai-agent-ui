@@ -35,6 +35,7 @@ class BacktestRunsRepo:
         period_end: date,
         mode: str = "backtest",
         parent_walkforward_id: UUID | None = None,
+        parent_sweep_id: UUID | None = None,
         window_start: date | None = None,
         window_end: date | None = None,
     ) -> BacktestRun:
@@ -45,17 +46,19 @@ class BacktestRunsRepo:
                 "INSERT INTO algo.runs ("
                 "id, strategy_id, user_id, mode, status, "
                 "period_start, period_end, started_at, "
-                "parent_walkforward_id, window_start, window_end"
+                "parent_walkforward_id, parent_sweep_id, "
+                "window_start, window_end"
                 ") VALUES ("
                 ":id, :sid, :uid, :mode, 'pending', "
                 ":ps, :pe, :sa, "
-                ":pwf_id, :ws, :we)"
+                ":pwf_id, :psw_id, :ws, :we)"
             ),
             {
                 "id": run_id, "sid": strategy_id, "uid": user_id,
                 "mode": mode,
                 "ps": period_start, "pe": period_end, "sa": now,
                 "pwf_id": parent_walkforward_id,
+                "psw_id": parent_sweep_id,
                 "ws": window_start,
                 "we": window_end,
             },
@@ -66,6 +69,68 @@ class BacktestRunsRepo:
             period_start=period_start, period_end=period_end,
             started_at=now,
         )
+
+    async def create_pending_sweep(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: UUID,
+        base_strategy_id: UUID,
+        period_start: date,
+        period_end: date,
+    ) -> BacktestRun:
+        """Create the sweep parent row (mode='sweep').
+
+        Strategy FK points at the BASE strategy. Variants
+        are tracked by parent_sweep_id on their child
+        walkforward rows.
+        """
+        run_id = uuid4()
+        now = datetime.now(timezone.utc)
+        await session.execute(
+            text(
+                "INSERT INTO algo.runs ("
+                "id, strategy_id, user_id, mode, status, "
+                "period_start, period_end, started_at"
+                ") VALUES ("
+                ":id, :sid, :uid, 'sweep', 'pending', "
+                ":ps, :pe, :sa)"
+            ),
+            {
+                "id": run_id, "sid": base_strategy_id,
+                "uid": user_id,
+                "ps": period_start, "pe": period_end,
+                "sa": now,
+            },
+        )
+        return BacktestRun(
+            run_id=run_id,
+            strategy_id=base_strategy_id,
+            status="pending",
+            period_start=period_start,
+            period_end=period_end,
+            started_at=now,
+        )
+
+    async def list_children_of_sweep(
+        self,
+        session: AsyncSession,
+        *,
+        sweep_run_id: UUID,
+    ) -> list[dict[str, Any]]:
+        """Variant walkforward rows owned by a sweep."""
+        result = await session.execute(
+            text(
+                "SELECT id, status, summary_json, "
+                "error_text "
+                "FROM algo.runs "
+                "WHERE parent_sweep_id = :sid "
+                "  AND mode = 'walkforward' "
+                "ORDER BY started_at"
+            ),
+            {"sid": sweep_run_id},
+        )
+        return [dict(r) for r in result.mappings().all()]
 
     async def mark_running(
         self, session: AsyncSession, *, run_id: UUID,

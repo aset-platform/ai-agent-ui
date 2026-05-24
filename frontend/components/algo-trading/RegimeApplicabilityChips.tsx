@@ -12,6 +12,7 @@ import {
   REGIME_LABELS,
   type RegimeLabel,
 } from "@/lib/types/algoStrategy";
+import { InfoTooltip } from "@/components/common/InfoTooltip";
 
 const ACTIVE_BG: Record<RegimeLabel, string> = {
   bull: "bg-emerald-500 text-white border-emerald-500",
@@ -53,6 +54,34 @@ export function RegimeApplicabilityChips({
         <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
           Applicable regimes
         </span>
+        <InfoTooltip
+          label="How regime filters work"
+          widthClass="w-80"
+        >
+          <span className="whitespace-pre-line">
+            {"Two independent layers gate a strategy by " +
+              "regime — these chips are LAYER 1.\n\n" +
+              "LAYER 1 — Applicable regimes (these " +
+              "chips)\n" +
+              "  • Stored as metadata on the strategy\n" +
+              "  • LIVE picker only — hidden from live " +
+              "selector when today's regime ∉ this set\n" +
+              "  • Backtest + paper: NOT affected\n" +
+              "  • Empty = regime-agnostic (default)\n\n" +
+              "LAYER 2 — regime_label in the AST\n" +
+              "  • Compare node inside entry/exit JSON\n" +
+              "  • Scope: backtest + paper + live\n" +
+              "  • Hard-gates the rule, e.g.\n" +
+              "      regime_label == \"BULL\"  OR\n" +
+              "      regime_label == \"SIDEWAYS\"\n" +
+              "  • Add via JSON pane or a regime-* " +
+              "template\n\n" +
+              "v3 RSI(2) note: approximates regime via " +
+              "numeric proxies (nifty_above_sma200, " +
+              "nifty_30d_return_pct) in its entry gate — " +
+              "no explicit regime_label node needed."}
+          </span>
+        </InfoTooltip>
         {mismatched && (
           <span
             className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-800 dark:bg-amber-950/50 dark:text-amber-200"
@@ -86,8 +115,9 @@ export function RegimeApplicabilityChips({
         })}
       </div>
       <p className="text-[10px] text-slate-400 dark:text-slate-500">
-        Empty = regime-agnostic (default). Filtered in the live
-        selector by current regime ∩ this set.
+        Live picker only — doesn&apos;t change the AST.
+        Empty = regime-agnostic. Hover the{" "}
+        <span className="font-semibold">i</span> for details.
       </p>
     </div>
   );
