@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision = "2026_05_24_budget"
 down_revision = "2026_05_24_sweep"
@@ -89,7 +90,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "metadata",
-            sa.dialects.postgresql.JSONB(),
+            postgresql.JSONB(),
             nullable=False,
             server_default=sa.text("'{}'::jsonb"),
         ),
@@ -97,6 +98,10 @@ def upgrade() -> None:
         schema="algo",
     )
 
+    # KEEP IN SYNC with ACTIVE_STATES in
+    # backend/algo/live/budget_types.py — if new active
+    # states are added there, this partial index must be
+    # rebuilt to include them.
     op.create_index(
         "idx_budget_res_active",
         "budget_reservations",
