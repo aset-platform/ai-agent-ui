@@ -1072,3 +1072,28 @@ def delete_portfolio_holding(
         ).start()
 
     return {"detail": "deleted"}
+
+
+# ── Route ordering fix ───────────────────────────────
+# FastAPI dispatches by registration order. The bulk
+# routes (POST /tickers/bulk, DELETE /tickers/all) are
+# defined further down this file than the single-ticker
+# wildcards (POST /tickers, DELETE /tickers/{ticker}),
+# so without this hoist the wildcard DELETE catches the
+# literal path "all" and silently no-ops the bulk remove.
+# Move the specific bulk paths to the front of the route
+# list so they win the match.
+def _hoist_bulk_routes() -> None:
+    # router.path includes the router's prefix ("/users/me"),
+    # so match on the suffix to stay decoupled from the prefix.
+    bulk_suffixes = ("/tickers/bulk", "/tickers/all")
+    bulk = [
+        r for r in router.routes
+        if getattr(r, "path", "").endswith(bulk_suffixes)
+    ]
+    for r in bulk:
+        router.routes.remove(r)
+    router.routes[0:0] = bulk
+
+
+_hoist_bulk_routes()
