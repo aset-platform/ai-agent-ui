@@ -47,6 +47,7 @@ export type LiveTabId =
   | "positions"
   | "holdings"
   | "postbacks"
+  | "budget"
   | "settings";
 
 export const LIVE_TAB_LABELS: Record<LiveTabId, string> = {
@@ -54,6 +55,7 @@ export const LIVE_TAB_LABELS: Record<LiveTabId, string> = {
   positions: "Positions",
   holdings: "Holdings",
   postbacks: "Postbacks",
+  budget: "Budget",
   settings: "Settings",
 };
 
@@ -62,5 +64,6 @@ export const LIVE_TAB_ORDER: LiveTabId[] = [
   "positions",
   "holdings",
   "postbacks",
+  "budget",
   "settings",
 ];

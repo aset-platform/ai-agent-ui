@@ -190,7 +190,20 @@ export function BudgetPanel() {
                       `budget-reservation-row-${r.reservation_id}`
                     }
                   >
-                    <td className="px-2 py-1">{r.ticker}</td>
+                    <td className="px-2 py-1">
+                      <span>{r.ticker}</span>
+                      {r.metadata?.mode === "paper" && (
+                        <span
+                          data-testid={
+                            `budget-reservation-row-${r.reservation_id}-paper-badge`
+                          }
+                          className="ml-1 inline-block rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 text-[10px] font-semibold uppercase px-1 py-0.5 align-middle"
+                          title="Paper-mode reservation (audit-only — does not deduct from real-money headroom)"
+                        >
+                          PAPER
+                        </span>
+                      )}
+                    </td>
                     <td className="px-2 py-1">{r.side}</td>
                     <td className="px-2 py-1 text-right">
                       {r.qty}

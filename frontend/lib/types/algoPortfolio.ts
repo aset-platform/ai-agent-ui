@@ -14,6 +14,10 @@ export interface AlgoPositionView {
   entry_ts: string | null;
   days_held: number;
   t1_pending: boolean;
+  // "live" = Kite-held; "paper" = synthesized from
+  // mode='paper' algo.events fills. Defaults to "live"
+  // when older backends omit the field.
+  source?: "live" | "paper";
 }
 
 export interface AlgoPositionsResponse {

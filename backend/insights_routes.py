@@ -231,7 +231,14 @@ async def _scoped_tickers_for_strategy(
     from backend.algo.live.open_positions import (
         open_algo_positions,
     )
-    algo_held = await open_algo_positions(user.user_id)
+    # Include paper-mode positions too: a paper backtest /
+    # paper-trading run also needs to iterate to positions it
+    # currently holds so exit signals can fire on the next
+    # bar. Live-only would silently drop paper-held tickers
+    # from the universe.
+    algo_held = await open_algo_positions(
+        user.user_id, modes=("live", "paper"),
+    )
     return _dedup(base, sorted(algo_held))
 
 

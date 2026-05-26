@@ -67,6 +67,100 @@ from backend.algo.strategy.ast import Strategy
 _logger = logging.getLogger(__name__)
 
 
+def _emit_paper_budget_lifecycle(  # noqa: ANN001
+    *,
+    user_id,
+    strategy_id,
+    fill,
+) -> None:
+    """Fire-and-forget budget reservation lifecycle for a
+    paper-mode fill.
+
+    Writes three event-log rows in close succession:
+    ``reserve()`` → ``transition(SUBMITTED)`` →
+    ``transition(FILLED)``. Reservation metadata stamps
+    ``mode="paper"`` so the active-headroom math (Cap 0 in
+    live ``pre_trade_check``) can scope ``mode='live'`` and
+    paper rows are audit-only — they appear in the dashboard
+    BudgetPanel reservations table with a "PAPER" badge but
+    do NOT deduct from real-money headroom.
+
+    Paper runtime's ``run()`` is an async coroutine but the
+    per-bar fill paths run synchronously inside it. We
+    schedule the budget coroutine on the SAME event loop
+    (``loop.create_task``) — spawning a fresh thread +
+    ``asyncio.run`` would bind the PG factory to a new loop
+    and trip the "Future attached to a different loop"
+    bug (see ``pg-nullpool-sync-async-bridge`` memory).
+
+    Errors are logged via the task's done-callback; they
+    never propagate up the fill path.
+    """
+    import asyncio
+    from decimal import Decimal as _Dec
+
+    async def _run() -> None:
+        from backend.algo.live.budget import (
+            reserve,
+            transition,
+        )
+        from backend.algo.live.budget_types import (
+            ReservationState,
+        )
+
+        qty_i = int(getattr(fill, "qty", 0) or 0)
+        price = _Dec(str(
+            getattr(fill, "fill_price", 0) or 0,
+        ))
+        reserved_inr = _Dec(qty_i) * price
+        res_id = await reserve(
+            user_id=user_id,
+            strategy_id=strategy_id,
+            ticker=str(getattr(fill, "ticker", "")),
+            side=str(getattr(fill, "side", "")),
+            qty=qty_i,
+            reserved_inr=reserved_inr,
+            metadata={"mode": "paper"},
+        )
+        await transition(
+            reservation_id=res_id,
+            new_state=ReservationState.SUBMITTED,
+            kite_order_id=f"paper-{res_id}",
+        )
+        await transition(
+            reservation_id=res_id,
+            new_state=ReservationState.FILLED,
+            filled_qty=qty_i,
+            filled_inr=reserved_inr,
+        )
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # Defensive: paper runtime is always inside an event
+        # loop, but if somehow it isn't, skip the budget write
+        # rather than blowing up the fill path.
+        _logger.warning(
+            "paper budget lifecycle skipped — no running loop",
+        )
+        return
+
+    task = loop.create_task(_run())
+
+    def _log_done(t: asyncio.Task) -> None:
+        try:
+            exc = t.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is not None:
+            _logger.warning(
+                "paper budget lifecycle write failed",
+                exc_info=exc,
+            )
+
+    task.add_done_callback(_log_done)
+
+
 def _features_for_bar(bar) -> dict[str, Decimal]:  # noqa: ANN001
     """Minimal fallback feature map. The runtime augments this
     with rolling indicators (SMAs, golden_cross_days_ago) on
@@ -514,6 +608,11 @@ class PaperRuntime:
                     fill_date=bar_date_obj,
                 )
                 self._positions.apply_fill(sl_fill)
+                _emit_paper_budget_lifecycle(
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    fill=sl_fill,
+                )
                 self._events.append(
                     event_row(
                         session_id=self._session_id,
@@ -605,6 +704,11 @@ class PaperRuntime:
                     )
                     continue
                 self._positions.apply_fill(ts_fill)
+                _emit_paper_budget_lifecycle(
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    fill=ts_fill,
+                )
                 self._events.append(
                     event_row(
                         session_id=self._session_id,
@@ -809,6 +913,11 @@ class PaperRuntime:
             fill_date=bar_date_obj,
         )
         self._positions.apply_fill(fill)
+        _emit_paper_budget_lifecycle(
+            user_id=self._user_id,
+            strategy_id=self._strategy.id,
+            fill=fill,
+        )
         self._events.append(
             event_row(
                 session_id=self._session_id,

@@ -175,6 +175,7 @@ async def _list_reservations_impl(
                 "filled_inr": str(r.filled_inr),
                 "kite_order_id": r.kite_order_id,
                 "transitioned_at": (r.transitioned_at.isoformat()),
+                "metadata": r.metadata or {},
             }
             for r in active
         ],
