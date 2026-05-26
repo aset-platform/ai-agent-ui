@@ -74,7 +74,11 @@ _dc_with_ngrok() {
 
 # Get container status for a service (Up, Exited, etc.)
 _dc_status() {
-    _dc ps --format '{{.Name}}|{{.Status}}|{{.Health}}' \
+    # `ps -a` surfaces Created / Exited states. Without `-a`
+    # docker compose only shows running containers and the
+    # status table renders "not created" for a container
+    # that's actually in Created or Exited state.
+    _dc ps -a --format '{{.Name}}|{{.Status}}|{{.Health}}' \
         2>/dev/null | grep "$1" | head -1
 }
 
@@ -223,6 +227,29 @@ do_start() {
 
     # Wait for frontend container
     sleep 3
+
+    # Resume any service stuck in Created/Exited state. This
+    # happens when `up -d --build` returns before a slow build
+    # finishes its post-build start step, or when a
+    # depends_on healthcheck races with the parent service's
+    # transition to healthy. Symptom: container exists but
+    # never reaches Running. Fix: explicit `start` per stuck
+    # service; report which ones we resumed.
+    local stuck=()
+    for s in postgres redis backend frontend docs; do
+        local raw
+        raw=$(_dc_status "$s" | cut -d'|' -f2)
+        if [[ -n "$raw" ]] && ! echo "$raw" | grep -q "Up"; then
+            stuck+=("$s")
+        fi
+    done
+    if (( ${#stuck[@]} > 0 )); then
+        echo "  Resuming stuck services: ${stuck[*]}"
+        for s in "${stuck[@]}"; do
+            _dc start "$s" 2>&1 | sed 's/^/    /'
+        done
+        sleep 3
+    fi
 
     _print_table
 
