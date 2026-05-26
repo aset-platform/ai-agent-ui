@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo } from "react";
 
+import { BudgetPanel } from "@/components/algo-trading/BudgetPanel";
 import { HoldingsTab } from "@/components/algo-trading/live/HoldingsTab";
 import { LiveDashboard } from "@/components/algo-trading/live/LiveDashboard";
 import { LiveHeaderStrip } from "@/components/algo-trading/live/LiveHeaderStrip";
@@ -51,6 +52,8 @@ export default function LiveClient() {
         return <HoldingsTab />;
       case "postbacks":
         return <KitePostbackPanel />;
+      case "budget":
+        return <BudgetPanel />;
       case "settings":
         return <LiveSettingsTab />;
     }
