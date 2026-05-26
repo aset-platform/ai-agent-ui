@@ -72,6 +72,44 @@ class PaperSupervisor:
             kill_switch_active=kill_switch_active,
         )
         task = asyncio.create_task(runtime.run(source))
+        # Surface completion + uncaught exceptions. Default
+        # asyncio behavior is to log on GC which usually fires
+        # AFTER list_active reaps the task — silent failures
+        # are common otherwise. Tag log lines with the user +
+        # strategy so they're greppable.
+        _uid_tag = str(user_id)
+        _sid_tag = str(strategy.id)
+
+        def _on_done(t: asyncio.Task) -> None:
+            try:
+                if t.cancelled():
+                    _logger.info(
+                        "PaperSupervisor: run cancelled "
+                        "user=%s strat=%s",
+                        _uid_tag, _sid_tag,
+                    )
+                    return
+                exc = t.exception()
+                if exc is not None:
+                    _logger.error(
+                        "PaperSupervisor: run raised "
+                        "user=%s strat=%s",
+                        _uid_tag, _sid_tag, exc_info=exc,
+                    )
+                    return
+                fills = t.result()
+                _logger.info(
+                    "PaperSupervisor: run completed "
+                    "user=%s strat=%s fills=%s",
+                    _uid_tag, _sid_tag, fills,
+                )
+            except Exception:  # noqa: BLE001
+                _logger.warning(
+                    "PaperSupervisor: done callback failed",
+                    exc_info=True,
+                )
+
+        task.add_done_callback(_on_done)
         self._runs[key] = {
             "user_id": user_id,
             "strategy_id": strategy.id,
