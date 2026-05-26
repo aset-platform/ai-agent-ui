@@ -33,4 +33,8 @@ export interface BudgetReservationView {
   filled_inr: string;
   kite_order_id: string | null;
   transitioned_at: string;
+  // metadata is JSONB on the backend; we surface only the
+  // fields the UI consumes. `mode='paper'` marks audit-only
+  // rows that do NOT deduct from Cap 0 headroom.
+  metadata?: { mode?: "live" | "paper" } & Record<string, unknown>;
 }

@@ -157,6 +157,11 @@ class BudgetRepo:
         SELL reservations are written for audit history only and
         must NOT deduct from BUY headroom in safety.py — they free
         capital rather than consume it.
+
+        Paper-mode reservations (``metadata->>'mode' = 'paper'``)
+        are likewise excluded: they exist for UX visibility on
+        the BudgetPanel (badged "PAPER") but must NOT deduct
+        from real-money Cap 0 headroom.
         """
         active = ",".join(f"'{s.value}'" for s in ACTIVE_STATES)
         result = await session.execute(
@@ -164,7 +169,7 @@ class BudgetRepo:
                 "WITH latest AS ( "
                 "  SELECT DISTINCT ON (reservation_id) "
                 "    reservation_id, state, side, "
-                "    reserved_inr, filled_inr "
+                "    reserved_inr, filled_inr, metadata "
                 "  FROM algo.budget_reservations "
                 "  WHERE user_id = :uid "
                 "  ORDER BY reservation_id, "
@@ -173,7 +178,9 @@ class BudgetRepo:
                 "SELECT COALESCE(SUM("
                 "  reserved_inr - filled_inr), 0) AS total "
                 f"FROM latest WHERE state IN ({active}) "
-                "AND side = 'BUY'"
+                "AND side = 'BUY' "
+                "AND COALESCE(metadata->>'mode', 'live') "
+                "    <> 'paper'"
             ),
             {"uid": user_id},
         )
