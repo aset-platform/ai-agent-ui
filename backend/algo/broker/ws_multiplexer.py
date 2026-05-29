@@ -419,23 +419,15 @@ class KiteWsMultiplexer:
                     q = self._queues.get(sid)
                     if q is None:
                         continue
-                    if q.full():
-                        # Drop oldest to make room.
-                        try:
-                            q.get_nowait()
-                        except asyncio.QueueEmpty:
-                            pass
-                        _logger.warning(
-                            "ws_backpressure_drop user=%s "
-                            "strategy=%s token=%s",
-                            self._user_id, sid, tok,
-                        )
-                        loop.call_soon_threadsafe(
-                            self._record_backpressure_event,
-                            sid, tok,
-                        )
+                    # on_ticks runs on the KiteTicker WS thread, but
+                    # asyncio.Queue is NOT thread-safe — every queue op
+                    # MUST happen on the loop thread. Do the full-check,
+                    # drop-oldest, and put atomically in one scheduled
+                    # callback so a stalled drain (e.g. during the Kite
+                    # historical warmup) yields a graceful backpressure
+                    # drop, never an uncaught QueueFull traceback.
                     loop.call_soon_threadsafe(
-                        q.put_nowait, tick,
+                        self._enqueue_tick, q, tick, sid, tok,
                     )
 
         def on_connect(ws, _resp):
@@ -689,6 +681,34 @@ class KiteWsMultiplexer:
                 "ws event flush failed", exc_info=True,
             )
             self._ws_events = []
+
+    def _enqueue_tick(self, q, tick, sid, tok) -> None:
+        """Push a tick onto a subscriber queue. Runs on the loop
+        thread (scheduled via call_soon_threadsafe) so all queue ops
+        are thread-safe.
+
+        On a full queue: drop the oldest item to make room and retry;
+        if still full, drop the incoming tick. Either path records a
+        backpressure event rather than raising QueueFull.
+        """
+        try:
+            q.put_nowait(tick)
+            return
+        except asyncio.QueueFull:
+            pass
+        try:
+            q.get_nowait()  # drop oldest
+        except asyncio.QueueEmpty:
+            pass
+        try:
+            q.put_nowait(tick)
+        except asyncio.QueueFull:
+            pass  # drop newest as a last resort
+        _logger.warning(
+            "ws_backpressure_drop user=%s strategy=%s token=%s",
+            self._user_id, sid, tok,
+        )
+        self._record_backpressure_event(sid, tok)
 
     def _record_backpressure_event(
         self, strategy_id: UUID, token: int,
