@@ -210,6 +210,11 @@ class LiveRuntime:
         self._evaluator = Evaluator()
         self._resampler = Resampler(intervals=(60,))
         self._positions = PositionTracker()
+        # Daily eval-gate: cache the entry decision computed on the last
+        # CLOSED bar, keyed by (ticker, closed_date). The closed-bar
+        # signal is fixed for the day, so this avoids re-running
+        # compute_indicators on every intraday tick-bar while flat.
+        self._closed_entry_cache: dict[tuple[str, date], dict | None] = {}
         self._session_id = uuid4()
         self._events: list[dict[str, Any]] = []
         self._in_flight: list[dict[str, Any]] = []
@@ -1068,31 +1073,14 @@ class LiveRuntime:
                 }
             )
 
-        # ASETPLTFRM-383 — eval-time gate. Before MIN_EVAL_TIME_IST,
-        # ticks update today's bar but no strategy eval fires. Lets
-        # the daily candle stabilise before we act on it. Override
-        # ``ALGO_DAILY_MIN_EVAL_TIME_IST`` for smoke testing.
-        #
-        # ASETPLTFRM-390 — gate is daily-only. Intraday cadences
-        # (5m / 1m) want to fire on every closed bar from market
-        # open at 09:15 IST; gating them on the daily-candle-stabilise
-        # cutoff would silence the entire morning session and defeat
-        # the purpose of running an intraday strategy. The env var
-        # name is ALGO_DAILY_MIN_EVAL_TIME_IST precisely because the
-        # constraint is daily-specific.
-        # Replay drains historical ticks, so wall-clock has no relation
-        # to the replayed bars — the daily-candle-stabilise cutoff would
-        # wrongly silence the whole replay before 14:30 IST. Enforce the
-        # gate only for real-time sources (live-WS, incl. live-WS
-        # dry-run, where the candle really is still forming).
-        if (
-            self._strategy.schedule.interval == "1d"
-            and not self._is_replay
-        ):
-            now_ist_t = datetime.now(IST).time()
-            if now_ist_t < _MIN_EVAL_TIME_IST:
-                return 0
-
+        # ASETPLTFRM-383 (revised) — the daily eval-time gate is now
+        # applied to the ENTRY DECISION only (see below, after the AST
+        # eval), NOT as a blanket pre-eval skip. Indicators, features
+        # and exits MUST run on every bar so stop-loss / time-stop fire
+        # on time and a completed-bar entry can be acted on immediately.
+        # The 14:30 IST cutoff (ALGO_DAILY_MIN_EVAL_TIME_IST) only
+        # defers a BUY that appears solely on today's still-forming
+        # candle; replay is exempt (wall-clock is meaningless there).
         ind_map = compute_indicators(history)
         # FE-10 — emit per-ticker intraday features to
         # ``stocks.intraday_features`` for the bar that just
@@ -1297,6 +1285,36 @@ class LiveRuntime:
             bar_date_ns=bar.bar_open_ts_ns,
             last_price=last_price,
         )
+
+        # ASETPLTFRM-383 (revised) — daily entry timing. The canonical
+        # daily entry is the LAST CLOSED bar: if the strategy fires on
+        # history[:-1] (excluding today's still-forming candle) we act
+        # immediately, regardless of wall-clock — matches Paper /
+        # backtest and covers a signal already valid 1-2 days back that
+        # still holds. A BUY that appears ONLY on today's forming candle
+        # is premature until _MIN_EVAL_TIME_IST (14:30 IST). Exits are
+        # never gated (stop-loss / time-stop handled above; a
+        # discretionary SELL flows through unchanged below).
+        is_flat = existing_pos is None or existing_pos.qty <= 0
+        daily_realtime = (
+            self._strategy.schedule.interval == "1d"
+            and not self._is_replay
+        )
+        last_bar_is_today = (
+            len(history) >= 2 and history[-1].date == bar_date_obj
+        )
+        if daily_realtime and is_flat and last_bar_is_today:
+            closed_entry = self._eval_entry_on_closed_bar(
+                history, bar, last_price,
+            )
+            if closed_entry is not None and closed_entry.side == "BUY":
+                # Completed-bar entry — act now (not premature).
+                signal = closed_entry
+            elif signal is not None and signal.side == "BUY":
+                # Entry exists only on today's still-forming candle.
+                if datetime.now(IST).time() < _MIN_EVAL_TIME_IST:
+                    return 0
+
         if signal is None:
             return 0
 
@@ -2090,6 +2108,78 @@ class LiveRuntime:
             equity_curve=[],
         )
         return compose_qty(qty_spec, ctx)
+
+    def _eval_entry_on_closed_bar(
+        self,
+        history: list,
+        bar: Any,
+        last_price: Decimal,
+    ) -> Signal | None:
+        """Evaluate the strategy ENTRY on the last CLOSED daily bar
+        (``history[:-1]`` — excludes today's still-forming candle).
+
+        Returns the resulting Signal (typically BUY) or None. Used by
+        the daily eval-time gate to tell a completed-bar entry (act
+        now) from a today-forming-only entry (premature until 14:30
+        IST). Always evaluated flat (open_qty=0); callers only invoke
+        it when there is no open position.
+        """
+        from backend.algo.backtest.indicators import compute_indicators
+
+        closed = history[:-1]
+        if not closed:
+            return None
+        closed_date = closed[-1].date
+        cache_key = (bar.ticker, closed_date)
+        if cache_key in self._closed_entry_cache:
+            action = self._closed_entry_cache[cache_key]
+        else:
+            ind_map = compute_indicators(closed)
+            # Idempotent lazy cache loads (already warmed for today,
+            # which covers the prior day, but keep them explicit).
+            self._ensure_factor_cache(bar.ticker, closed_date)
+            self._ensure_regime_cache(closed_date)
+            self._ensure_daily_overlay_cache(bar.ticker, closed_date)
+            features = assemble_per_bar_features(
+                bar_feats=ind_map.get(
+                    closed_date,
+                    {
+                        "today_ltp": closed[-1].close,
+                        "today_vol": Decimal(closed[-1].volume),
+                    },
+                ),
+                market_regime=self._market_regime.get(closed_date),
+                market_trend=self._market_trend.get(closed_date),
+                factor_row=self._factor_cache.get(
+                    (bar.ticker, closed_date),
+                ),
+                regime_row=self._regime_by_date.get(closed_date),
+                daily_overlay=self._daily_overlay_cache.get(
+                    (bar.ticker, closed_date),
+                ),
+            )
+            ctx = EvalContext(
+                ticker=bar.ticker,
+                bar_date=closed_date,
+                features=features,
+                open_qty=0,
+            )
+            try:
+                action = self._evaluator.eval_node(
+                    self._strategy.root.model_dump(by_alias=True),
+                    ctx,
+                )
+            except KeyError:
+                action = None
+            self._closed_entry_cache[cache_key] = action
+        if action is None:
+            return None
+        return self._action_to_signal(
+            action,
+            ticker=bar.ticker,
+            bar_date_ns=bar.bar_open_ts_ns,
+            last_price=last_price,
+        )
 
     def _action_to_signal(
         self,
