@@ -1309,10 +1309,21 @@ class LiveRuntime:
             )
             if closed_entry is not None and closed_entry.side == "BUY":
                 # Completed-bar entry — act now (not premature).
+                _logger.info(
+                    "daily entry on last CLOSED bar — acting now "
+                    "(not premature): ticker=%s",
+                    bar.ticker,
+                )
                 signal = closed_entry
             elif signal is not None and signal.side == "BUY":
                 # Entry exists only on today's still-forming candle.
                 if datetime.now(IST).time() < _MIN_EVAL_TIME_IST:
+                    _logger.info(
+                        "daily entry premature (today-forming only) "
+                        "— deferring %s until %s IST",
+                        bar.ticker,
+                        _MIN_EVAL_TIME_IST.strftime("%H:%M"),
+                    )
                     return 0
 
         if signal is None:
