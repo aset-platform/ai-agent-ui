@@ -209,7 +209,7 @@ do_start() {
     # Wait for backend health
     echo "  Waiting for backend health check..."
     local attempt=0
-    while (( attempt < 30 )); do
+    while (( attempt < 90 )); do
         local code
         code=$(curl -s -o /dev/null -w "%{http_code}" \
             --max-time 2 "http://localhost:8181/v1/health" \
@@ -221,8 +221,8 @@ do_start() {
         sleep 2
         (( attempt++ ))
     done
-    if (( attempt >= 30 )); then
-        echo -e "  ${Y}Backend not responding after 60s — check logs${N}"
+    if (( attempt >= 90 )); then
+        echo -e "  ${Y}Backend not responding after 180s — check logs${N}"
     fi
 
     # Wait for frontend container
