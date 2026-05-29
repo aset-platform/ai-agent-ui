@@ -79,6 +79,10 @@ instruction.txt
 .serena/memories/session/
 .serena/memories/personal/
 
+# Claude — selective ignore (commands are tracked; local
+# helper scripts are not)
+.claude/scripts/
+
 # Backend runtime data (deny-list, etc.)
 backend/data/
 
