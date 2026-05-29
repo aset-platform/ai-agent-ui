@@ -262,7 +262,11 @@ async def test_running_bar_updated_in_place_not_appended() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pre_gate_skips_eval_but_updates_bar() -> None:
+async def test_today_only_entry_gated_pre_cutoff() -> None:
+    """A BUY that appears ONLY on today's still-forming candle is
+    premature before the 14:30 IST cutoff: no order is submitted,
+    though the bar is still updated. (Closed-bar eval = HOLD.)
+    """
     today = date.today()
     payload = {
         "ITC.NS": _series(
@@ -277,19 +281,28 @@ async def test_pre_gate_skips_eval_but_updates_bar() -> None:
         "ITC.NS", today,
         open_=300, high=302, low=299, close=301, volume=500,
     )
+
+    def _by_date(_node, ctx):
+        # BUY only on today's forming bar; HOLD on the closed bar.
+        if ctx.bar_date == today:
+            return {"type": "buy", "qty": {"shares": 10}}
+        return {"type": "hold"}
+
+    submit_spy = AsyncMock(return_value=1)
     # Gate set to 23:59 → effectively closed for the duration.
     with patch(
         "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
         _time(23, 59),
     ):
-        eval_spy = MagicMock()
-        with patch.object(runtime._evaluator, "eval_node", eval_spy):
+        with patch.object(
+            runtime._evaluator, "eval_node", side_effect=_by_date,
+        ), patch.object(runtime, "_submit_order", submit_spy):
             result = await runtime._on_bar_close(
                 bar=bar, last_price=Decimal("301"),
             )
 
     assert result == 0
-    eval_spy.assert_not_called()
+    submit_spy.assert_not_called()
     # Bar STILL updated despite gate (visible on Live panel).
     running = runtime._bars_by_ticker["ITC.NS"][-1]
     assert running.date == today
@@ -302,7 +315,11 @@ async def test_pre_gate_skips_eval_but_updates_bar() -> None:
 
 
 @pytest.mark.asyncio
-async def test_post_gate_invokes_evaluator() -> None:
+async def test_evaluator_runs_for_today_and_closed_bar() -> None:
+    """Eval is no longer blanket-skipped pre-cutoff: it runs for
+    today's bar AND (when flat) the last closed bar, so a completed-
+    bar entry can be detected. Both return HOLD here → no order.
+    """
     today = date.today()
     payload = {
         "ITC.NS": _series(
@@ -322,11 +339,13 @@ async def test_post_gate_invokes_evaluator() -> None:
     ):
         eval_spy = MagicMock(return_value={"type": "hold"})
         with patch.object(runtime._evaluator, "eval_node", eval_spy):
-            await runtime._on_bar_close(
+            result = await runtime._on_bar_close(
                 bar=bar, last_price=Decimal("301"),
             )
 
-    assert eval_spy.call_count == 1
+    assert result == 0
+    # today's bar + the last-closed-bar entry check.
+    assert eval_spy.call_count == 2
 
 
 # ---------------------------------------------------------------
@@ -383,37 +402,49 @@ async def test_intraday_strategy_bypasses_pre_gate_skip() -> None:
 
 
 @pytest.mark.asyncio
-async def test_daily_strategy_still_gated_after_carve_out() -> None:
-    """Backwards-compat invariant: existing daily strategies keep
-    being gated by the pre-14:30 cutoff. Pins the unchanged path.
+async def test_eval_entry_on_closed_bar_buy_and_hold() -> None:
+    """_eval_entry_on_closed_bar evaluates the entry on history[:-1]
+    (the last CLOSED bar, excluding today's forming candle) and
+    returns a BUY signal when the closed bar fires, else None. This
+    is what lets a completed-bar entry act immediately (not gated).
     """
     today = date.today()
-    payload = {
-        "ITC.NS": _series(
-            "ITC.NS", today - timedelta(days=1), 250,
-        ),
-    }
-    runtime = _make_runtime(
-        allowed_tickers=["ITC.NS"], preload_payload=payload,
-    )
-    # Strategy defaults to interval="1d" via _make_runtime fixture.
-    assert runtime._strategy.schedule.interval == "1d"
+    bar = _minute_bar("ITC.NS", today, close=301, volume=10)
 
-    bar = _minute_bar(
-        "ITC.NS", today, close=301, volume=10,
-    )
-    with patch(
-        "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
-        _time(23, 59),
+    def _runtime_with_today_bar():
+        rt = _make_runtime(
+            allowed_tickers=["ITC.NS"],
+            preload_payload={
+                "ITC.NS": _series(
+                    "ITC.NS", today - timedelta(days=1), 250,
+                ),
+            },
+        )
+        hist = list(rt._bars_by_ticker["ITC.NS"])
+        # Append a synthetic still-forming today bar so history[:-1]
+        # is the closed series the helper must evaluate.
+        hist.append(hist[-1].model_copy(update={"date": today}))
+        return rt, hist
+
+    rt_buy, hist_buy = _runtime_with_today_bar()
+    with patch.object(
+        rt_buy._evaluator, "eval_node",
+        return_value={"type": "buy", "qty": {"shares": 10}},
     ):
-        eval_spy = MagicMock()
-        with patch.object(runtime._evaluator, "eval_node", eval_spy):
-            result = await runtime._on_bar_close(
-                bar=bar, last_price=Decimal("301"),
-            )
+        sig = rt_buy._eval_entry_on_closed_bar(
+            hist_buy, bar, Decimal("301"),
+        )
+    assert sig is not None and sig.side == "BUY"
 
-    assert result == 0
-    eval_spy.assert_not_called()
+    rt_hold, hist_hold = _runtime_with_today_bar()
+    with patch.object(
+        rt_hold._evaluator, "eval_node",
+        return_value={"type": "hold"},
+    ):
+        sig2 = rt_hold._eval_entry_on_closed_bar(
+            hist_hold, bar, Decimal("301"),
+        )
+    assert sig2 is None
 
 
 # ---------------------------------------------------------------

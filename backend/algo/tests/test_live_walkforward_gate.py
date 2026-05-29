@@ -156,7 +156,11 @@ class TestLiveCapsDefaultState:
                 user_id=__import__("uuid").uuid4(),
                 initial_capital_inr=Decimal("100000"),
                 fee_as_of=__import__("datetime").date.today(),
-                kite=MagicMock(),
+                # Real-money attempt: the live-enabled gate only
+                # applies when dry_run is False (a bare MagicMock would
+                # expose a truthy dry_run and be treated as a gate-
+                # exempt dry-run rehearsal).
+                kite=MagicMock(dry_run=False),
                 caps=caps,
                 run_id=__import__("uuid").uuid4(),
                 caps_repo=MagicMock(),

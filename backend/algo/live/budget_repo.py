@@ -189,6 +189,52 @@ class BudgetRepo:
             return Decimal("0")
         return Decimal(row["total"])
 
+    async def sum_open_position_cost(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: UUID,
+    ) -> Decimal:
+        """Net cost basis of open positions from the FILLED
+        reservation ledger:
+
+            Σ(FILLED BUY filled_inr) − Σ(FILLED SELL filled_inr)
+
+        floored at 0. Excludes paper-mode rows. This is an
+        approximation used for Cap 0 headroom (allocated −
+        open_pos_cost − active_reserved); it nets sell proceeds
+        against cost basis, which is good enough to keep a filled
+        position consuming budget until it is closed. Falls back to
+        ``reserved_inr`` when ``filled_inr`` was not populated.
+        """
+        result = await session.execute(
+            text(
+                "WITH latest AS ( "
+                "  SELECT DISTINCT ON (reservation_id) "
+                "    reservation_id, state, side, "
+                "    reserved_inr, filled_inr, metadata "
+                "  FROM algo.budget_reservations "
+                "  WHERE user_id = :uid "
+                "  ORDER BY reservation_id, "
+                "           transitioned_at DESC "
+                ") "
+                "SELECT COALESCE(SUM(CASE WHEN side = 'BUY' "
+                "  THEN COALESCE(NULLIF(filled_inr, 0), "
+                "               reserved_inr) "
+                "  ELSE -COALESCE(NULLIF(filled_inr, 0), "
+                "                reserved_inr) END), 0) AS total "
+                "FROM latest WHERE state = 'FILLED' "
+                "AND COALESCE(metadata->>'mode', 'live') "
+                "    <> 'paper'"
+            ),
+            {"uid": user_id},
+        )
+        row = result.mappings().first()
+        if row is None or row["total"] is None:
+            return Decimal("0")
+        total = Decimal(row["total"])
+        return total if total > Decimal("0") else Decimal("0")
+
     async def list_active_reservations(
         self,
         session: AsyncSession,

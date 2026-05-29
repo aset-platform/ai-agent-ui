@@ -140,12 +140,13 @@ async def sum_open_position_cost(user_id: UUID) -> Decimal:
         if cached is not None:
             return Decimal(cached)
 
-    events = await _algo_filled_events_for_user(user_id)
-    total = Decimal("0")
-    for ev in events:
-        qty = int(ev.get("qty", 0))
-        price = Decimal(str(ev.get("entry_price", "0")))
-        total += Decimal(qty) * price
+    repo = BudgetRepo()
+    factory = _session_factory()
+    async with factory() as session:
+        total = await repo.sum_open_position_cost(
+            session,
+            user_id=user_id,
+        )
     if c:
         c.set(key, str(total), ttl=_CACHE_TTL_S)
     return total

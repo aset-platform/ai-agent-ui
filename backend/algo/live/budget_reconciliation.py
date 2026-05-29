@@ -145,6 +145,13 @@ async def reconcile_one(res: BudgetReservation) -> None:
     if res.kite_order_id is None:
         return
 
+    # Synthetic dry-run orders have no Kite counterpart — querying
+    # order_history for them only fails (and spams a traceback every
+    # tick). The LiveRuntime synthetic-fill path already transitions
+    # these reservations to FILLED, so skip them here entirely.
+    if res.kite_order_id.startswith("DRY_"):
+        return
+
     now = datetime.now(timezone.utc)
     threshold = now - timedelta(
         seconds=SUBMITTED_HARD_TIMEOUT_S,

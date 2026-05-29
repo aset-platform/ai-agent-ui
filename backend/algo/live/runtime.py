@@ -172,13 +172,19 @@ class LiveRuntime:
         initial_capital_inr: Decimal,
         fee_as_of: Any,
         kite: KiteClient,
-        caps: dict[str, Any],
+        caps: dict[str, Any] | None,
         run_id: UUID,
         caps_repo: Any,
         kill_switch_repo: Any,
         ticker_to_token: dict[str, int] | None = None,
     ) -> None:
-        if not caps.get("live_orders_enabled"):
+        dry_run = bool(getattr(kite, "dry_run", False))
+        caps = caps or {}
+        # Dry-run is the rehearsal step that runs BEFORE live-mode
+        # caps are enabled, so the live-enabled gate only applies to
+        # real-money (non-dry-run) runtimes. A missing live_caps row
+        # (caps=None) is normal for a strategy never promoted to live.
+        if not dry_run and not caps.get("live_orders_enabled"):
             raise LiveNotEnabledError(
                 f"Live trading is disabled for "
                 f"user={user_id} strategy={strategy.id}. "
@@ -191,7 +197,11 @@ class LiveRuntime:
         # Stamped on EVERY event payload below so the frontend can
         # filter the events timeline into paper / dry-run / live
         # segments without joining back to algo.runs.
-        self._dry_run: bool = bool(getattr(kite, "dry_run", False))
+        self._dry_run: bool = dry_run
+        # Set True in run() when the tick source is a replay fixture.
+        # Gates the daily eval-time cutoff (wall-clock is meaningless
+        # for replayed historical bars).
+        self._is_replay: bool = False
         self._caps = caps
         self._run_id = run_id
         self._caps_repo = caps_repo
@@ -200,6 +210,11 @@ class LiveRuntime:
         self._evaluator = Evaluator()
         self._resampler = Resampler(intervals=(60,))
         self._positions = PositionTracker()
+        # Daily eval-gate: cache the entry decision computed on the last
+        # CLOSED bar, keyed by (ticker, closed_date). The closed-bar
+        # signal is fixed for the day, so this avoids re-running
+        # compute_indicators on every intraday tick-bar while flat.
+        self._closed_entry_cache: dict[tuple[str, date], dict | None] = {}
         self._session_id = uuid4()
         self._events: list[dict[str, Any]] = []
         self._in_flight: list[dict[str, Any]] = []
@@ -737,6 +752,9 @@ class LiveRuntime:
 
     async def run(self, source: TickSource) -> int:
         """Drain the tick source. Returns fill count."""
+        from backend.algo.stream.sources import ReplayTickSource
+
+        self._is_replay = isinstance(source, ReplayTickSource)
         fills = 0
         last_price_per_ticker: dict[str, Decimal] = {}
         # PR #1 (order-safety) — track per-ticker last-tick arrival
@@ -1055,23 +1073,14 @@ class LiveRuntime:
                 }
             )
 
-        # ASETPLTFRM-383 — eval-time gate. Before MIN_EVAL_TIME_IST,
-        # ticks update today's bar but no strategy eval fires. Lets
-        # the daily candle stabilise before we act on it. Override
-        # ``ALGO_DAILY_MIN_EVAL_TIME_IST`` for smoke testing.
-        #
-        # ASETPLTFRM-390 — gate is daily-only. Intraday cadences
-        # (5m / 1m) want to fire on every closed bar from market
-        # open at 09:15 IST; gating them on the daily-candle-stabilise
-        # cutoff would silence the entire morning session and defeat
-        # the purpose of running an intraday strategy. The env var
-        # name is ALGO_DAILY_MIN_EVAL_TIME_IST precisely because the
-        # constraint is daily-specific.
-        if self._strategy.schedule.interval == "1d":
-            now_ist_t = datetime.now(IST).time()
-            if now_ist_t < _MIN_EVAL_TIME_IST:
-                return 0
-
+        # ASETPLTFRM-383 (revised) — the daily eval-time gate is now
+        # applied to the ENTRY DECISION only (see below, after the AST
+        # eval), NOT as a blanket pre-eval skip. Indicators, features
+        # and exits MUST run on every bar so stop-loss / time-stop fire
+        # on time and a completed-bar entry can be acted on immediately.
+        # The 14:30 IST cutoff (ALGO_DAILY_MIN_EVAL_TIME_IST) only
+        # defers a BUY that appears solely on today's still-forming
+        # candle; replay is exempt (wall-clock is meaningless there).
         ind_map = compute_indicators(history)
         # FE-10 — emit per-ticker intraday features to
         # ``stocks.intraday_features`` for the bar that just
@@ -1276,6 +1285,47 @@ class LiveRuntime:
             bar_date_ns=bar.bar_open_ts_ns,
             last_price=last_price,
         )
+
+        # ASETPLTFRM-383 (revised) — daily entry timing. The canonical
+        # daily entry is the LAST CLOSED bar: if the strategy fires on
+        # history[:-1] (excluding today's still-forming candle) we act
+        # immediately, regardless of wall-clock — matches Paper /
+        # backtest and covers a signal already valid 1-2 days back that
+        # still holds. A BUY that appears ONLY on today's forming candle
+        # is premature until _MIN_EVAL_TIME_IST (14:30 IST). Exits are
+        # never gated (stop-loss / time-stop handled above; a
+        # discretionary SELL flows through unchanged below).
+        is_flat = existing_pos is None or existing_pos.qty <= 0
+        daily_realtime = (
+            self._strategy.schedule.interval == "1d"
+            and not self._is_replay
+        )
+        last_bar_is_today = (
+            len(history) >= 2 and history[-1].date == bar_date_obj
+        )
+        if daily_realtime and is_flat and last_bar_is_today:
+            closed_entry = self._eval_entry_on_closed_bar(
+                history, bar, last_price,
+            )
+            if closed_entry is not None and closed_entry.side == "BUY":
+                # Completed-bar entry — act now (not premature).
+                _logger.info(
+                    "daily entry on last CLOSED bar — acting now "
+                    "(not premature): ticker=%s",
+                    bar.ticker,
+                )
+                signal = closed_entry
+            elif signal is not None and signal.side == "BUY":
+                # Entry exists only on today's still-forming candle.
+                if datetime.now(IST).time() < _MIN_EVAL_TIME_IST:
+                    _logger.info(
+                        "daily entry premature (today-forming only) "
+                        "— deferring %s until %s IST",
+                        bar.ticker,
+                        _MIN_EVAL_TIME_IST.strftime("%H:%M"),
+                    )
+                    return 0
+
         if signal is None:
             return 0
 
@@ -1403,6 +1453,7 @@ class LiveRuntime:
             strategy_risk=self._strategy.risk.model_dump(),
             last_price=last_price,
             user_id=self._user_id,
+            dry_run=self._dry_run,
         )
 
         if decision.outcome == "reject":
@@ -1706,6 +1757,7 @@ class LiveRuntime:
                     qty=signal.qty,
                     fill_price=last_price,
                     in_flight_entry=in_flight_entry,
+                    reservation_id=reservation_id,
                 ),
                 name=f"dry_fill_{kite_order_id}",
             )
@@ -1745,6 +1797,7 @@ class LiveRuntime:
         qty: int,
         fill_price: Decimal,
         in_flight_entry: dict,
+        reservation_id: UUID | None = None,
     ) -> None:
         """Simulate a Kite fill for dry-run mode.
 
@@ -1754,6 +1807,11 @@ class LiveRuntime:
         3. Emits an ``order_filled_live`` event with
            ``dry_run: true`` in the payload.
         4. Marks the in-flight entry as filled.
+        5. Transitions the budget reservation to FILLED — Kite has
+           no record of a synthetic ``DRY_`` order, so the
+           reconciliation loop can never advance it; without this
+           the reservation stays SUBMITTED and its capital is never
+           released back to the user-pool headroom.
         """
         await asyncio.sleep(self._DRY_FILL_DELAY_S)
 
@@ -1845,6 +1903,27 @@ class LiveRuntime:
             )
         )
         self._flush_events_now()
+
+        # Release the budget reservation: a synthetic DRY_ order has no
+        # Kite counterpart, so reconciliation cannot advance it. Mark it
+        # FILLED here so its reserved capital leaves active_reserved and
+        # (for BUYs) is picked up by open_pos_cost. Best-effort: a budget
+        # ledger blip must not shadow the fill itself.
+        if reservation_id is not None:
+            try:
+                await budget_transition(
+                    reservation_id=reservation_id,
+                    new_state=ReservationState.FILLED,
+                    filled_qty=qty,
+                    filled_inr=Decimal(qty) * fill_price,
+                )
+            except Exception:  # noqa: BLE001
+                _logger.exception(
+                    "synthetic_fill: budget FILLED transition failed "
+                    "for reservation=%s kite_order_id=%s",
+                    reservation_id,
+                    kite_order_id,
+                )
 
         # ASETPLTFRM-402 / FE-5 — per-fill feature snapshot.
         # Live synthetic fills (and real Kite postback fills
@@ -2040,6 +2119,78 @@ class LiveRuntime:
             equity_curve=[],
         )
         return compose_qty(qty_spec, ctx)
+
+    def _eval_entry_on_closed_bar(
+        self,
+        history: list,
+        bar: Any,
+        last_price: Decimal,
+    ) -> Signal | None:
+        """Evaluate the strategy ENTRY on the last CLOSED daily bar
+        (``history[:-1]`` — excludes today's still-forming candle).
+
+        Returns the resulting Signal (typically BUY) or None. Used by
+        the daily eval-time gate to tell a completed-bar entry (act
+        now) from a today-forming-only entry (premature until 14:30
+        IST). Always evaluated flat (open_qty=0); callers only invoke
+        it when there is no open position.
+        """
+        from backend.algo.backtest.indicators import compute_indicators
+
+        closed = history[:-1]
+        if not closed:
+            return None
+        closed_date = closed[-1].date
+        cache_key = (bar.ticker, closed_date)
+        if cache_key in self._closed_entry_cache:
+            action = self._closed_entry_cache[cache_key]
+        else:
+            ind_map = compute_indicators(closed)
+            # Idempotent lazy cache loads (already warmed for today,
+            # which covers the prior day, but keep them explicit).
+            self._ensure_factor_cache(bar.ticker, closed_date)
+            self._ensure_regime_cache(closed_date)
+            self._ensure_daily_overlay_cache(bar.ticker, closed_date)
+            features = assemble_per_bar_features(
+                bar_feats=ind_map.get(
+                    closed_date,
+                    {
+                        "today_ltp": closed[-1].close,
+                        "today_vol": Decimal(closed[-1].volume),
+                    },
+                ),
+                market_regime=self._market_regime.get(closed_date),
+                market_trend=self._market_trend.get(closed_date),
+                factor_row=self._factor_cache.get(
+                    (bar.ticker, closed_date),
+                ),
+                regime_row=self._regime_by_date.get(closed_date),
+                daily_overlay=self._daily_overlay_cache.get(
+                    (bar.ticker, closed_date),
+                ),
+            )
+            ctx = EvalContext(
+                ticker=bar.ticker,
+                bar_date=closed_date,
+                features=features,
+                open_qty=0,
+            )
+            try:
+                action = self._evaluator.eval_node(
+                    self._strategy.root.model_dump(by_alias=True),
+                    ctx,
+                )
+            except KeyError:
+                action = None
+            self._closed_entry_cache[cache_key] = action
+        if action is None:
+            return None
+        return self._action_to_signal(
+            action,
+            ticker=bar.ticker,
+            bar_date_ns=bar.bar_open_ts_ns,
+            last_price=last_price,
+        )
 
     def _action_to_signal(
         self,
