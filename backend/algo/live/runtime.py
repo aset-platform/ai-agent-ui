@@ -172,13 +172,19 @@ class LiveRuntime:
         initial_capital_inr: Decimal,
         fee_as_of: Any,
         kite: KiteClient,
-        caps: dict[str, Any],
+        caps: dict[str, Any] | None,
         run_id: UUID,
         caps_repo: Any,
         kill_switch_repo: Any,
         ticker_to_token: dict[str, int] | None = None,
     ) -> None:
-        if not caps.get("live_orders_enabled"):
+        dry_run = bool(getattr(kite, "dry_run", False))
+        caps = caps or {}
+        # Dry-run is the rehearsal step that runs BEFORE live-mode
+        # caps are enabled, so the live-enabled gate only applies to
+        # real-money (non-dry-run) runtimes. A missing live_caps row
+        # (caps=None) is normal for a strategy never promoted to live.
+        if not dry_run and not caps.get("live_orders_enabled"):
             raise LiveNotEnabledError(
                 f"Live trading is disabled for "
                 f"user={user_id} strategy={strategy.id}. "
@@ -191,7 +197,11 @@ class LiveRuntime:
         # Stamped on EVERY event payload below so the frontend can
         # filter the events timeline into paper / dry-run / live
         # segments without joining back to algo.runs.
-        self._dry_run: bool = bool(getattr(kite, "dry_run", False))
+        self._dry_run: bool = dry_run
+        # Set True in run() when the tick source is a replay fixture.
+        # Gates the daily eval-time cutoff (wall-clock is meaningless
+        # for replayed historical bars).
+        self._is_replay: bool = False
         self._caps = caps
         self._run_id = run_id
         self._caps_repo = caps_repo
@@ -737,6 +747,9 @@ class LiveRuntime:
 
     async def run(self, source: TickSource) -> int:
         """Drain the tick source. Returns fill count."""
+        from backend.algo.stream.sources import ReplayTickSource
+
+        self._is_replay = isinstance(source, ReplayTickSource)
         fills = 0
         last_price_per_ticker: dict[str, Decimal] = {}
         # PR #1 (order-safety) — track per-ticker last-tick arrival
@@ -1067,7 +1080,15 @@ class LiveRuntime:
         # the purpose of running an intraday strategy. The env var
         # name is ALGO_DAILY_MIN_EVAL_TIME_IST precisely because the
         # constraint is daily-specific.
-        if self._strategy.schedule.interval == "1d":
+        # Replay drains historical ticks, so wall-clock has no relation
+        # to the replayed bars — the daily-candle-stabilise cutoff would
+        # wrongly silence the whole replay before 14:30 IST. Enforce the
+        # gate only for real-time sources (live-WS, incl. live-WS
+        # dry-run, where the candle really is still forming).
+        if (
+            self._strategy.schedule.interval == "1d"
+            and not self._is_replay
+        ):
             now_ist_t = datetime.now(IST).time()
             if now_ist_t < _MIN_EVAL_TIME_IST:
                 return 0
@@ -1403,6 +1424,7 @@ class LiveRuntime:
             strategy_risk=self._strategy.risk.model_dump(),
             last_price=last_price,
             user_id=self._user_id,
+            dry_run=self._dry_run,
         )
 
         if decision.outcome == "reject":
@@ -1706,6 +1728,7 @@ class LiveRuntime:
                     qty=signal.qty,
                     fill_price=last_price,
                     in_flight_entry=in_flight_entry,
+                    reservation_id=reservation_id,
                 ),
                 name=f"dry_fill_{kite_order_id}",
             )
@@ -1745,6 +1768,7 @@ class LiveRuntime:
         qty: int,
         fill_price: Decimal,
         in_flight_entry: dict,
+        reservation_id: UUID | None = None,
     ) -> None:
         """Simulate a Kite fill for dry-run mode.
 
@@ -1754,6 +1778,11 @@ class LiveRuntime:
         3. Emits an ``order_filled_live`` event with
            ``dry_run: true`` in the payload.
         4. Marks the in-flight entry as filled.
+        5. Transitions the budget reservation to FILLED — Kite has
+           no record of a synthetic ``DRY_`` order, so the
+           reconciliation loop can never advance it; without this
+           the reservation stays SUBMITTED and its capital is never
+           released back to the user-pool headroom.
         """
         await asyncio.sleep(self._DRY_FILL_DELAY_S)
 
@@ -1845,6 +1874,27 @@ class LiveRuntime:
             )
         )
         self._flush_events_now()
+
+        # Release the budget reservation: a synthetic DRY_ order has no
+        # Kite counterpart, so reconciliation cannot advance it. Mark it
+        # FILLED here so its reserved capital leaves active_reserved and
+        # (for BUYs) is picked up by open_pos_cost. Best-effort: a budget
+        # ledger blip must not shadow the fill itself.
+        if reservation_id is not None:
+            try:
+                await budget_transition(
+                    reservation_id=reservation_id,
+                    new_state=ReservationState.FILLED,
+                    filled_qty=qty,
+                    filled_inr=Decimal(qty) * fill_price,
+                )
+            except Exception:  # noqa: BLE001
+                _logger.exception(
+                    "synthetic_fill: budget FILLED transition failed "
+                    "for reservation=%s kite_order_id=%s",
+                    reservation_id,
+                    kite_order_id,
+                )
 
         # ASETPLTFRM-402 / FE-5 — per-fill feature snapshot.
         # Live synthetic fills (and real Kite postback fills

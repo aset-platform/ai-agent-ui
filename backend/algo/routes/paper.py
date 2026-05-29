@@ -570,12 +570,31 @@ def create_paper_router() -> APIRouter:
                     kill_switch_repo=ks_for_runtime,
                     ticker_to_token=ticker_to_token,
                 )
-            except LiveNotEnabledError as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
-            except RuntimeError as exc:
-                raise HTTPException(
-                    status_code=409, detail=str(exc),
-                )
+            except Exception as exc:
+                # The run row was marked 'running' before the runtime
+                # was built. If construction throws, roll it back to
+                # 'failed' (with the error) so it doesn't linger as a
+                # zombie 'running' row that blocks future starts.
+                try:
+                    async with factory() as _fs:
+                        await runs_repo.mark_failed(
+                            _fs, run_id=run_id, error_text=str(exc),
+                        )
+                        await _fs.commit()
+                except Exception:  # noqa: BLE001
+                    _logger.exception(
+                        "start_run: could not mark run %s failed",
+                        run_id,
+                    )
+                if isinstance(exc, LiveNotEnabledError):
+                    raise HTTPException(
+                        status_code=400, detail=str(exc),
+                    )
+                if isinstance(exc, RuntimeError):
+                    raise HTTPException(
+                        status_code=409, detail=str(exc),
+                    )
+                raise
             return row
 
         try:

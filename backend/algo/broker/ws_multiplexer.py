@@ -94,6 +94,11 @@ class KiteWsMultiplexer:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._connected = False
         self._closed = False
+        # Set when the WS upgrade is rejected with a non-retryable
+        # auth error (403 — expired/invalid Kite token). Reconnecting
+        # cannot fix it, so we halt the reconnect loop and require a
+        # fresh Zerodha login rather than hammering Kite forever.
+        self._auth_failed = False
         self._reconnect_task: asyncio.Task | None = None
         self._backoff_s: float = _MIN_BACKOFF_S
 
@@ -466,16 +471,36 @@ class KiteWsMultiplexer:
 
         def on_close(_ws, code, reason):
             self._connected = False
+            reason_str = str(reason)
             _logger.warning(
                 "KiteWsMultiplexer: disconnected user=%s "
                 "code=%s reason=%s",
-                self._user_id, code, reason,
+                self._user_id, code, reason_str,
             )
             loop.call_soon_threadsafe(
                 self._emit_ws_event,
                 "ws_disconnected",
-                {"code": code, "reason": str(reason)},
+                {"code": code, "reason": reason_str},
             )
+            # A 403 on the WS upgrade means the access token is
+            # expired/invalid — non-retryable. Halt reconnects and
+            # tear down so we stop hammering Kite; a fresh Zerodha
+            # login spawns a new multiplexer.
+            if "403" in reason_str or "Forbidden" in reason_str:
+                self._auth_failed = True
+                _logger.error(
+                    "KiteWsMultiplexer: non-retryable auth failure "
+                    "(403) user=%s — halting reconnect; reconnect "
+                    "Zerodha to resume",
+                    self._user_id,
+                )
+                loop.call_soon_threadsafe(
+                    self._emit_ws_event,
+                    "ws_auth_failed",
+                    {"code": code, "reason": reason_str},
+                )
+                loop.call_soon_threadsafe(self._disconnect_kt)
+                return
             if not self._closed:
                 loop.call_soon_threadsafe(
                     self._trigger_reconnect,
@@ -506,7 +531,7 @@ class KiteWsMultiplexer:
 
     def _trigger_reconnect(self) -> None:
         """Schedule reconnect from the event loop thread."""
-        if self._closed:
+        if self._closed or self._auth_failed:
             return
         if (
             self._reconnect_task is None
@@ -518,7 +543,7 @@ class KiteWsMultiplexer:
 
     async def _schedule_reconnect(self) -> None:
         """Exponential-backoff reconnect loop."""
-        while not self._closed:
+        while not self._closed and not self._auth_failed:
             backoff = self._backoff_s
             _logger.info(
                 "KiteWsMultiplexer: reconnecting in %.1fs user=%s",

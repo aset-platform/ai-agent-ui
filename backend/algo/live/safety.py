@@ -112,6 +112,7 @@ async def pre_trade_check(
     strategy_risk: dict[str, Any],
     last_price: Decimal,
     user_id: UUID,
+    dry_run: bool = False,
 ) -> RiskDecision:
     """Apply all 9 caps and return the risk verdict.
 
@@ -143,7 +144,15 @@ async def pre_trade_check(
         user_budget = await load_user_budget(user_id)
         open_pos_cost = await sum_open_position_cost(user_id)
         active_reserved = await sum_active_reservations(user_id)
-        kite_available = await fetch_kite_available_cash(user_id)
+        # Dry-run moves no real money, so the real-Kite available-cash
+        # cap is meaningless — and actively blocks the rehearsal when
+        # the broker account is empty or its token is expired. Gate on
+        # the internal (allocated_inr) budget only in dry-run.
+        kite_available = (
+            Decimal("Infinity")
+            if dry_run
+            else await fetch_kite_available_cash(user_id)
+        )
 
         internal_headroom = (
             user_budget.allocated_inr - open_pos_cost - active_reserved
