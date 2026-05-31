@@ -12,6 +12,7 @@
 
 import { useState } from "react";
 
+import { StockAnalysisLink } from "./StockAnalysisLink";
 import { SwingMethodologyPanel } from "./SwingMethodologyPanel";
 import { SwingRegimePills } from "./SwingRegimePills";
 import { useSwingSetups } from "@/hooks/useSwingSetups";
@@ -186,9 +187,19 @@ export function SwingSetupsTab() {
                       key={c.key as string}
                       className="px-3 py-2 text-slate-800 dark:text-slate-100"
                     >
-                      {c.fmt
-                        ? c.fmt(row[c.key])
-                        : String(row[c.key] ?? "—")}
+                      {c.key === "ticker" ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <StockAnalysisLink
+                            ticker={row.ticker}
+                            testId={`swing-chart-link-${row.ticker}`}
+                          />
+                          <span className="font-mono">{String(row.ticker)}</span>
+                        </span>
+                      ) : (
+                        c.fmt
+                          ? c.fmt(row[c.key])
+                          : String(row[c.key] ?? "—")
+                      )}
                     </td>
                   ))}
                 </tr>

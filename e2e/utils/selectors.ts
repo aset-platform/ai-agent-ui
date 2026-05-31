@@ -261,6 +261,7 @@ export const FE = {
   swingMethodologyToggle: "swing-methodology-toggle",
   swingMethodologyNotes: "swing-methodology-notes",
   swingTable: "swing-table",
+  swingChartLink: (t: string) => `swing-chart-link-${t}`,
   swingEmpty: "swing-empty",
   swingLoading: "swing-loading",
   swingError: "swing-error",
