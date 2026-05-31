@@ -51,6 +51,7 @@ import {
 
 import { ActiveFilterChips } from "./ActiveFilterChips";
 import { FilterDropdown } from "./FilterDropdown";
+import { StockAnalysisLink } from "./StockAnalysisLink";
 import {
   FUND_FILTER_CATALOG,
   TECH_FILTER_CATALOG,
@@ -75,29 +76,6 @@ function goldenCrossState(
 ): "recent" | "established" | null {
   if (row.golden_cross_days_ago == null) return null;
   return row.golden_cross_days_ago <= 10 ? "recent" : "established";
-}
-
-function stockAnalysisUrl(ticker: string): string {
-  return `/analytics/analysis?ticker=${encodeURIComponent(ticker)}&tab=analysis`;
-}
-
-function ChartIcon() {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="h-3.5 w-3.5 flex-shrink-0"
-      aria-hidden="true"
-    >
-      <polyline points="1,12 5,7 8,9 12,4 15,6" />
-      <polyline points="12,4 15,4 15,7" />
-    </svg>
-  );
 }
 
 const STALE_REASON_LABEL: Record<StaleReason, string> = {
@@ -489,16 +467,10 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
                         >
                           {col.key === "ticker" ? (
                             <span className="inline-flex items-center gap-1.5">
-                              <a
-                                href={stockAnalysisUrl(row.ticker)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                title="Open stock analysis chart"
-                                data-testid={`aa-chart-link-${row.ticker}`}
-                                className="text-indigo-500 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 transition-colors"
-                              >
-                                <ChartIcon />
-                              </a>
+                              <StockAnalysisLink
+                                ticker={row.ticker}
+                                testId={`aa-chart-link-${row.ticker}`}
+                              />
                               <span className="font-mono">{text}</span>
                               {gcState === "recent" && (
                                 <span
