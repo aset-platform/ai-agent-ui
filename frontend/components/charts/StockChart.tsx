@@ -55,6 +55,7 @@ export interface IndicatorRow {
   sma_50: number | null;
   sma_200: number | null;
   rsi_14: number | null;
+  rsi_2: number | null;
   macd: number | null;
   macd_signal: number | null;
   macd_hist: number | null;
@@ -270,6 +271,7 @@ export function StockChart({
       bollinger: visibleIndicators.bollinger,
       volume: visibleIndicators.volume,
       rsi: visibleIndicators.rsi,
+      rsi2: visibleIndicators.rsi2,
       macd: visibleIndicators.macd,
       supportResistance: visibleIndicators.supportResistance,
     }),
@@ -279,6 +281,7 @@ export function StockChart({
       visibleIndicators.bollinger,
       visibleIndicators.volume,
       visibleIndicators.rsi,
+      visibleIndicators.rsi2,
       visibleIndicators.macd,
       visibleIndicators.supportResistance,
     ],
@@ -636,6 +639,47 @@ export function StockChart({
       });
       rsiSeries.createPriceLine({
         price: 30,
+        color: "rgba(251,191,36,0.5)",
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: "",
+      });
+    }
+
+    // ── Pane 3b: RSI (2) ───────────────────────
+
+    if (vis.rsi2) {
+      const rsi2Pane = chart.addPane();
+      subPanes.push(rsi2Pane);
+      const rsi2Series = rsi2Pane.addSeries(
+        LineSeries,
+        {
+          color: "#ec4899",
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: true,
+          title: "",
+        },
+      );
+      rsi2Series.setData(
+        filterNull(
+          aggIndicators.map((d) => ({
+            time: toTime(d.date),
+            value: d.rsi_2,
+          })),
+        ),
+      );
+      rsi2Series.createPriceLine({
+        price: 90,
+        color: "rgba(251,191,36,0.5)",
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: "",
+      });
+      rsi2Series.createPriceLine({
+        price: 10,
         color: "rgba(251,191,36,0.5)",
         lineWidth: 1,
         lineStyle: 2,
