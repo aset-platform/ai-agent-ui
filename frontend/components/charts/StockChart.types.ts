@@ -10,6 +10,7 @@ export interface IndicatorVisibility {
   bollinger: boolean;
   volume: boolean;
   rsi: boolean;
+  rsi2: boolean;
   macd: boolean;
   supportResistance: boolean;
 }
@@ -20,6 +21,7 @@ export const DEFAULT_INDICATORS: IndicatorVisibility = {
   bollinger: false,
   volume: false,
   rsi: true,
+  rsi2: false,
   macd: true,
   supportResistance: false,
 };

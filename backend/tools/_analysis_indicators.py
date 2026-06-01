@@ -49,6 +49,7 @@ def _calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     ).ema_indicator()
 
     df["RSI_14"] = ta.momentum.RSIIndicator(close=close, window=14).rsi()
+    df["RSI_2"] = ta.momentum.RSIIndicator(close=close, window=2).rsi()
 
     macd_obj = ta.trend.MACD(close=close)
     df["MACD"] = macd_obj.macd()

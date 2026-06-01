@@ -1212,6 +1212,7 @@ def create_dashboard_router() -> APIRouter:
                     ),
                     ema_20=_safe(row.get("EMA_20")),
                     rsi_14=_safe(row.get("RSI_14")),
+                    rsi_2=_safe(row.get("RSI_2")),
                     macd=_safe(row.get("MACD")),
                     macd_signal=_safe(
                         row.get("MACD_Signal"),

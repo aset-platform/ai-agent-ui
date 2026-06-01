@@ -850,6 +850,53 @@ class TestChartIndicators:
             2580.0,
         ]
 
+    @patch("tools._analysis_movement._analyse_price_movement")
+    @patch("tools._analysis_shared.compute_indicators")
+    @patch("dashboard_routes.get_cache")
+    def test_rsi_2_in_response(
+        self,
+        mock_cache_fn,
+        mock_compute,
+        mock_movement,
+        client,
+    ):
+        """rsi_2 is surfaced per IndicatorPoint."""
+        mock_compute.return_value = pd.DataFrame(
+            [
+                {
+                    "Close": 2500.0,
+                    "SMA_50": None,
+                    "SMA_200": None,
+                    "EMA_20": None,
+                    "RSI_14": 55.0,
+                    "RSI_2": 87.3,
+                    "MACD": None,
+                    "MACD_Signal": None,
+                    "MACD_Hist": None,
+                    "BB_Upper": None,
+                    "BB_Lower": None,
+                }
+            ],
+            index=pd.DatetimeIndex(["2024-01-01"]),
+        )
+        mock_movement.return_value = {
+            "support_levels": [],
+            "resistance_levels": [],
+        }
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache_fn.return_value = cache
+
+        resp = client.get(
+            "/v1/dashboard/chart/indicators?ticker=RELIANCE.NS",
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data"][0]["rsi_2"] == 87.3
+        # Sanity: rsi_14 still flows through untouched.
+        assert body["data"][0]["rsi_14"] == 55.0
+
     @patch(
         "tools._analysis_movement._analyse_price_movement",
     )

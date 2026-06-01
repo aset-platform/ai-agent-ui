@@ -102,6 +102,7 @@ describe("StockChart S/R price lines", () => {
           bollinger: false,
           volume: false,
           rsi: false,
+          rsi2: false,
           macd: false,
           supportResistance: true,
         }}
@@ -131,6 +132,7 @@ describe("StockChart S/R price lines", () => {
           bollinger: false,
           volume: false,
           rsi: false,
+          rsi2: false,
           macd: false,
           supportResistance: false,
         }}
@@ -159,6 +161,7 @@ describe("StockChart S/R price lines", () => {
           bollinger: false,
           volume: false,
           rsi: false,
+          rsi2: false,
           macd: false,
           supportResistance: true,
         }}
