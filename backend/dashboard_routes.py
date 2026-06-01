@@ -17,10 +17,12 @@ import threading
 
 from cache import (
     TTL_HERO,
+    TTL_MARKET_LIVE,
     TTL_STABLE,
     TTL_VOLATILE,
     get_cache,
 )
+import dashboard_kite_overlay
 from dashboard_models import (
     AnalysisResponse,
     CompareMetric,
@@ -65,6 +67,7 @@ from fastapi import APIRouter, Depends, Query, Response
 import auth.endpoints.helpers as _helpers
 from auth.dependencies import get_current_user
 from auth.models import UserContext
+from market_hours import is_market_open
 from market_utils import detect_market
 
 _logger = logging.getLogger(__name__)
@@ -1134,6 +1137,27 @@ def create_dashboard_router() -> APIRouter:
                 subset=["date"], keep="last",
             )
 
+        # ── Live Kite overlay (NSE market hours only) ──
+        is_live = False
+        if (
+            is_market_open()
+            and detect_market(t_upper) == "india"
+        ):
+            quote = await (
+                dashboard_kite_overlay._try_kite_quote(
+                    user, t_upper,
+                )
+            )
+            if quote is not None:
+                from datetime import date as _date
+                today_ist = _date.today()
+                df = (
+                    dashboard_kite_overlay._splice_today_bar(
+                        df, quote, today_ist,
+                    )
+                )
+                is_live = True
+
         points: list[OHLCVPoint] = []
         for _, row in df.iterrows():
             points.append(
@@ -1150,11 +1174,17 @@ def create_dashboard_router() -> APIRouter:
         result = OHLCVResponse(
             ticker=t_upper,
             data=points,
+            is_live=is_live,
+        )
+        live_cache_key = (
+            f"cache:chart:ohlcv:{user.user_id}:{t_upper}"
+            if is_live
+            else cache_key
         )
         cache.set(
-            cache_key,
+            live_cache_key,
             result.model_dump_json(),
-            TTL_STABLE,
+            TTL_MARKET_LIVE if is_live else TTL_STABLE,
         )
         return result
 
@@ -1513,7 +1543,7 @@ def create_dashboard_router() -> APIRouter:
             cache = get_cache()
             for pattern in [
                 "cache:dash:*",
-                f"cache:chart:ohlcv:{t}",
+                f"cache:chart:ohlcv:*{t}",   # glob: shared + per-user
                 f"cache:chart:indicators:{t}",
                 f"cache:chart:forecast:{t}:*",
                 "cache:insights:*",
