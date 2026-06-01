@@ -1087,3 +1087,202 @@ class TestChartForecastSeries:
         data = resp.json()
         assert data["data"] == []
         assert data["horizon_months"] == 9
+
+
+# ---------------------------------------------------------------
+# Chart: OHLCV Live Overlay (Kite today-bar)
+# ---------------------------------------------------------------
+
+
+class TestChartOHLCVLiveOverlay:
+    """GET /v1/dashboard/chart/ohlcv — Kite live overlay (market hours)."""
+
+    def _mock_repo_returns_one_row(self, mock_repo_fn):
+        repo = MagicMock()
+        repo.get_ohlcv.return_value = pd.DataFrame(
+            [
+                {
+                    "date": "2026-06-01",
+                    "open": 2868.0, "high": 2870.0,
+                    "low": 2867.0, "close": 2869.0,
+                    "volume": 50_000,
+                },
+            ],
+        )
+        mock_repo_fn.return_value = repo
+        return repo
+
+    def _mock_cache(self, mock_cache_fn):
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache_fn.return_value = cache
+        return cache
+
+    @patch(
+        "dashboard_kite_overlay._try_kite_quote",
+        new_callable=AsyncMock,
+    )
+    @patch("dashboard_routes.is_market_open")
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_live_path_sets_is_live_true(
+        self,
+        mock_repo_fn,
+        mock_cache_fn,
+        mock_market_open,
+        mock_kite,
+        client,
+    ):
+        mock_market_open.return_value = True
+        mock_kite.return_value = {
+            "open": 2870.0, "high": 2895.3,
+            "low": 2861.5, "close": 2882.1,
+            "last_price": 2884.4, "volume": 1_842_900,
+            "last_trade_time": None,
+        }
+        self._mock_repo_returns_one_row(mock_repo_fn)
+        cache = self._mock_cache(mock_cache_fn)
+
+        resp = client.get(
+            "/v1/dashboard/chart/ohlcv?ticker=RELIANCE.NS",
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["is_live"] is True
+        # cache key includes user_id; TTL is TTL_MARKET_LIVE (30).
+        assert cache.set.call_count == 1
+        cache_key = cache.set.call_args.args[0]
+        ttl = cache.set.call_args.args[2]
+        assert "RELIANCE.NS" in cache_key
+        assert cache_key != "cache:chart:ohlcv:RELIANCE.NS"
+        assert ttl == 30
+
+    @patch(
+        "dashboard_kite_overlay._try_kite_quote",
+        new_callable=AsyncMock,
+    )
+    @patch("dashboard_routes.is_market_open")
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_market_closed_skips_overlay(
+        self,
+        mock_repo_fn,
+        mock_cache_fn,
+        mock_market_open,
+        mock_kite,
+        client,
+    ):
+        mock_market_open.return_value = False
+        self._mock_repo_returns_one_row(mock_repo_fn)
+        cache = self._mock_cache(mock_cache_fn)
+
+        resp = client.get(
+            "/v1/dashboard/chart/ohlcv?ticker=RELIANCE.NS",
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["is_live"] is False
+        mock_kite.assert_not_called()
+        # shared cache key + TTL_STABLE (300)
+        cache_key = cache.set.call_args.args[0]
+        ttl = cache.set.call_args.args[2]
+        assert cache_key == "cache:chart:ohlcv:RELIANCE.NS"
+        assert ttl == 300
+
+    @patch(
+        "dashboard_kite_overlay._try_kite_quote",
+        new_callable=AsyncMock,
+    )
+    @patch("dashboard_routes.is_market_open")
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_us_ticker_skips_overlay(
+        self,
+        mock_repo_fn,
+        mock_cache_fn,
+        mock_market_open,
+        mock_kite,
+        client,
+    ):
+        mock_market_open.return_value = True
+        self._mock_repo_returns_one_row(mock_repo_fn)
+        self._mock_cache(mock_cache_fn)
+
+        resp = client.get(
+            "/v1/dashboard/chart/ohlcv?ticker=AAPL",
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["is_live"] is False
+        mock_kite.assert_not_called()
+
+    @patch(
+        "dashboard_kite_overlay._try_kite_quote",
+        new_callable=AsyncMock,
+    )
+    @patch("dashboard_routes.is_market_open")
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_kite_returns_none_falls_back(
+        self,
+        mock_repo_fn,
+        mock_cache_fn,
+        mock_market_open,
+        mock_kite,
+        client,
+    ):
+        mock_market_open.return_value = True
+        mock_kite.return_value = None
+        self._mock_repo_returns_one_row(mock_repo_fn)
+        cache = self._mock_cache(mock_cache_fn)
+
+        resp = client.get(
+            "/v1/dashboard/chart/ohlcv?ticker=RELIANCE.NS",
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["is_live"] is False
+        # Live-eligible request (market open + Indian ticker): uses
+        # per-user key + TTL_MARKET_LIVE even though Kite returned
+        # None and is_live is False — cache key is gated by
+        # live_eligible, not by overlay success.
+        cache_key = cache.set.call_args.args[0]
+        ttl = cache.set.call_args.args[2]
+        assert cache_key != "cache:chart:ohlcv:RELIANCE.NS"
+        assert "RELIANCE.NS" in cache_key
+        assert ttl == 30
+
+    @patch(
+        "dashboard_kite_overlay._try_kite_quote",
+        new_callable=AsyncMock,
+    )
+    @patch("dashboard_routes.is_market_open")
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_read_uses_per_user_key_for_indian_ticker_during_market_hours(
+        self,
+        mock_repo_fn,
+        mock_cache_fn,
+        mock_market_open,
+        mock_kite,
+        client,
+    ):
+        """Cache READ for an Indian ticker during market hours MUST
+        target the per-user key, not the shared key. Otherwise user A
+        (Kite) inherits user B's is_live=false payload (Bug #1)."""
+        mock_market_open.return_value = True
+        self._mock_repo_returns_one_row(mock_repo_fn)
+        cache = self._mock_cache(mock_cache_fn)
+
+        client.get(
+            "/v1/dashboard/chart/ohlcv?ticker=RELIANCE.NS",
+        )
+
+        # The single cache.get must be against the per-user key,
+        # not the shared key.
+        assert cache.get.call_count == 1
+        read_key = cache.get.call_args.args[0]
+        assert read_key != "cache:chart:ohlcv:RELIANCE.NS"
+        assert "RELIANCE.NS" in read_key

@@ -561,6 +561,65 @@ class KiteClient:
             out.pop()
         return out[-n_bars:]
 
+    def quote(
+        self,
+        tickers: list[tuple[str, int]],
+    ) -> dict[str, dict]:
+        """Fetch live OHLC + LTP + volume for one or more NSE tickers.
+
+        Calls pykiteconnect ``kc.quote(["NSE:RELIANCE", …])`` and
+        returns ``{ticker: {open, high, low, close, last_price,
+        volume, last_trade_time}}`` keyed by our internal ticker
+        (e.g. ``"RELIANCE.NS"``, not ``"NSE:RELIANCE"``).
+
+        Parameters
+        ----------
+        tickers : list[tuple[str, int]]
+            ``(ticker, instrument_token)`` pairs. ``instrument_token``
+            is unused by ``kc.quote()`` (which keys on symbol strings)
+            but the signature mirrors ``fetch_intraday_historical`` so
+            callers resolve tokens the same way via ``InstrumentsRepo``.
+
+        Raises
+        ------
+        RuntimeError
+            No access_token set; caller must complete OAuth.
+        Exception
+            Any Kite SDK error is re-raised — caller silently falls
+            back to yfinance.
+        """
+        if self._access_token is None:
+            raise RuntimeError(
+                "quote requires an access_token; complete the OAuth"
+                " handshake first.",
+            )
+        self._hist_throttle()
+        keys = [
+            f"NSE:{t.removesuffix('.NS').removesuffix('.BO')}"
+            for t, _ in tickers
+        ]
+        raw = self._kc.quote(keys)
+        out: dict[str, dict] = {}
+        for (ticker, _), key in zip(tickers, keys):
+            row = raw.get(key)
+            if row is None:
+                continue
+            ohlc = row.get("ohlc") or {}
+            out[ticker] = {
+                "open": float(ohlc.get("open", 0) or 0),
+                "high": float(ohlc.get("high", 0) or 0),
+                "low": float(ohlc.get("low", 0) or 0),
+                "close": float(ohlc.get("close", 0) or 0),
+                "last_price": float(
+                    row.get("last_price", 0) or 0,
+                ),
+                "volume": int(row.get("volume", 0) or 0),
+                "last_trade_time": row.get(
+                    "last_trade_time",
+                ),
+            }
+        return out
+
     def fetch_intraday_historical_window(
         self,
         *,

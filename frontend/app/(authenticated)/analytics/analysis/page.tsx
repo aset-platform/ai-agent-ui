@@ -281,6 +281,8 @@ function AnalysisTab({
 
   useEffect(() => {
     let cancelled = false;
+    let liveTimer: ReturnType<typeof setTimeout> | null = null;
+
     void Promise.resolve().then(() => {
       if (cancelled) return;
       setLoading(true);
@@ -290,13 +292,27 @@ function AnalysisTab({
     });
 
     const q = encodeURIComponent(ticker);
-    Promise.all([
-      apiFetch(
-        `${API_URL}/dashboard/chart/ohlcv?ticker=${q}`,
-      ).then((r) => {
+
+    const fetchOhlcv = async () => {
+      try {
+        const r = await apiFetch(
+          `${API_URL}/dashboard/chart/ohlcv?ticker=${q}`,
+        );
         if (!r.ok) throw new Error(`OHLCV: HTTP ${r.status}`);
-        return r.json() as Promise<OHLCVResponse>;
-      }),
+        const o = (await r.json()) as OHLCVResponse;
+        if (cancelled) return;
+        setOhlcv(o);
+        if (o.is_live) {
+          liveTimer = setTimeout(fetchOhlcv, 30_000);
+        }
+      } catch (e) {
+        if (!cancelled) setError(String(e));
+      }
+    };
+
+    // Initial load: OHLCV + indicators in parallel.
+    Promise.all([
+      fetchOhlcv(),
       apiFetch(
         `${API_URL}/dashboard/chart/indicators?ticker=${q}`,
       ).then((r) => {
@@ -306,9 +322,8 @@ function AnalysisTab({
         return r.json() as Promise<IndicatorsResponse>;
       }),
     ])
-      .then(([o, ind]) => {
+      .then(([_, ind]) => {
         if (cancelled) return;
-        setOhlcv(o);
         setIndicators(ind);
         setSupportLevels(
           Array.isArray(ind?.support_levels)
@@ -330,6 +345,7 @@ function AnalysisTab({
 
     return () => {
       cancelled = true;
+      if (liveTimer) clearTimeout(liveTimer);
     };
   }, [ticker]);
 
@@ -453,6 +469,16 @@ function AnalysisTab({
           <span className="font-semibold text-gray-900 dark:text-gray-100">
             {ticker}
           </span>
+          {ohlcv?.is_live && (
+            <span
+              data-testid="stock-analysis-live-pill"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+              title="Live from Kite — updated every 30s during market hours"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              LIVE
+            </span>
+          )}
           <span
             ref={crosshairRef}
             className="text-gray-600 dark:text-gray-300"
@@ -587,6 +613,8 @@ function ForecastTab({
 
   useEffect(() => {
     let cancelled = false;
+    let liveTimer: ReturnType<typeof setTimeout> | null = null;
+
     void Promise.resolve().then(() => {
       if (cancelled) return;
       setLoading(true);
@@ -594,13 +622,28 @@ function ForecastTab({
     });
 
     const q = encodeURIComponent(ticker);
-    Promise.all([
-      apiFetch(
-        `${API_URL}/dashboard/chart/ohlcv?ticker=${q}`,
-      ).then((r) => {
+
+    const fetchOhlcv = async () => {
+      try {
+        const r = await apiFetch(
+          `${API_URL}/dashboard/chart/ohlcv?ticker=${q}`,
+        );
         if (!r.ok) throw new Error(`OHLCV: HTTP ${r.status}`);
-        return r.json() as Promise<OHLCVResponse>;
-      }),
+        const o = (await r.json()) as OHLCVResponse;
+        if (cancelled) return;
+        setOhlcv(o);
+        if (o.is_live) {
+          liveTimer = setTimeout(fetchOhlcv, 30_000);
+        }
+      } catch (e) {
+        if (!cancelled) setError(String(e));
+      }
+    };
+
+    // Initial load: OHLCV + forecast series + summary + backtest
+    // in parallel.
+    Promise.all([
+      fetchOhlcv(),
       apiFetch(
         `${API_URL}/dashboard/chart/forecast-series?ticker=${q}&horizon=9`,
       ).then((r) => {
@@ -624,9 +667,8 @@ function ForecastTab({
         return r.json() as Promise<ForecastBacktestResponse>;
       }).catch(() => null),
     ])
-      .then(([o, fs, sum, bt]) => {
+      .then(([_, fs, sum, bt]) => {
         if (cancelled) return;
-        setOhlcv(o);
         setSeries(fs);
         setBacktest(bt);
         const match = sum.forecasts.find(
@@ -645,6 +687,7 @@ function ForecastTab({
 
     return () => {
       cancelled = true;
+      if (liveTimer) clearTimeout(liveTimer);
     };
   }, [ticker]);
 
@@ -784,6 +827,16 @@ function ForecastTab({
                 </span>
               )}
             </h3>
+            {ohlcv?.is_live && (
+              <span
+                data-testid="stock-analysis-live-pill"
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                title="Live from Kite — updated every 30s during market hours"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                LIVE
+              </span>
+            )}
             {summary?.confidence_components?.badge && (
               <span
                 className={`

@@ -209,6 +209,7 @@ class OHLCVResponse(BaseModel):
     data: list[OHLCVPoint] = Field(
         default_factory=list,
     )
+    is_live: bool = False
 
 
 class IndicatorPoint(BaseModel):

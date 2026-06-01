@@ -47,7 +47,7 @@ class TestIsMarketOpen:
     def _call(self, fake_now: datetime) -> bool:
         from market_routes import _is_market_open
 
-        with patch("market_routes.datetime") as mock_dt:
+        with patch("market_hours.datetime") as mock_dt:
             mock_dt.now.return_value = fake_now
             return _is_market_open()
 

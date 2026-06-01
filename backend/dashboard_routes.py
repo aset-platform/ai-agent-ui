@@ -14,13 +14,16 @@ import asyncio
 import logging
 import os
 import threading
+from datetime import datetime
 
 from cache import (
     TTL_HERO,
+    TTL_MARKET_LIVE,
     TTL_STABLE,
     TTL_VOLATILE,
     get_cache,
 )
+import dashboard_kite_overlay
 from dashboard_models import (
     AnalysisResponse,
     CompareMetric,
@@ -65,6 +68,7 @@ from fastapi import APIRouter, Depends, Query, Response
 import auth.endpoints.helpers as _helpers
 from auth.dependencies import get_current_user
 from auth.models import UserContext
+from market_hours import IST, is_market_open
 from market_utils import detect_market
 
 _logger = logging.getLogger(__name__)
@@ -1100,7 +1104,24 @@ def create_dashboard_router() -> APIRouter:
         )
         cache = get_cache()
         t_upper = ticker.upper()
-        cache_key = f"cache:chart:ohlcv:{t_upper}"
+
+        # Choose cache key + TTL based on whether this request is
+        # eligible for the live Kite overlay. Per-user key isolates
+        # users with different overlay outcomes; non-overlay paths
+        # keep the existing shared key + TTL_STABLE behavior.
+        live_eligible = (
+            is_market_open()
+            and detect_market(t_upper) == "india"
+        )
+        if live_eligible:
+            cache_key = (
+                f"cache:chart:ohlcv:{user.user_id}:{t_upper}"
+            )
+            cache_ttl = TTL_MARKET_LIVE
+        else:
+            cache_key = f"cache:chart:ohlcv:{t_upper}"
+            cache_ttl = TTL_STABLE
+
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -1134,6 +1155,23 @@ def create_dashboard_router() -> APIRouter:
                 subset=["date"], keep="last",
             )
 
+        # ── Live Kite overlay (NSE market hours only) ──
+        is_live = False
+        if live_eligible:
+            quote = await (
+                dashboard_kite_overlay._try_kite_quote(
+                    user, t_upper,
+                )
+            )
+            if quote is not None:
+                today_ist = datetime.now(IST).date()
+                df = (
+                    dashboard_kite_overlay._splice_today_bar(
+                        df, quote, today_ist,
+                    )
+                )
+                is_live = True
+
         points: list[OHLCVPoint] = []
         for _, row in df.iterrows():
             points.append(
@@ -1150,11 +1188,12 @@ def create_dashboard_router() -> APIRouter:
         result = OHLCVResponse(
             ticker=t_upper,
             data=points,
+            is_live=is_live,
         )
         cache.set(
             cache_key,
             result.model_dump_json(),
-            TTL_STABLE,
+            cache_ttl,
         )
         return result
 
@@ -1513,7 +1552,7 @@ def create_dashboard_router() -> APIRouter:
             cache = get_cache()
             for pattern in [
                 "cache:dash:*",
-                f"cache:chart:ohlcv:{t}",
+                f"cache:chart:ohlcv:*{t}",   # glob: shared + per-user
                 f"cache:chart:indicators:{t}",
                 f"cache:chart:forecast:{t}:*",
                 "cache:insights:*",

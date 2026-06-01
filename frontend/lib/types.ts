@@ -211,6 +211,7 @@ export interface OHLCVPoint {
 export interface OHLCVResponse {
   ticker: string;
   data: OHLCVPoint[];
+  is_live?: boolean;
 }
 
 export interface IndicatorPoint {
