@@ -34,6 +34,7 @@ TTL_HERO = 10  # /dashboard/home aggregate — keep tight
 TTL_VOLATILE = 60  # watchlist, llm-usage
 TTL_STABLE = 300  # charts, insights, registry
 TTL_ADMIN = 30  # tier-health, metrics
+TTL_MARKET_LIVE = 30  # per-user chart overlay during NSE market hours
 
 
 class CacheService:
