@@ -219,6 +219,7 @@ export interface IndicatorPoint {
   sma_200: number | null;
   ema_20: number | null;
   rsi_14: number | null;
+  rsi_2: number | null;
   macd: number | null;
   macd_signal: number | null;
   macd_hist: number | null;
