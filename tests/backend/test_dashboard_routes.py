@@ -1244,8 +1244,45 @@ class TestChartOHLCVLiveOverlay:
         assert resp.status_code == 200
         body = resp.json()
         assert body["is_live"] is False
-        # User-fallback path: shared key + TTL_STABLE.
+        # Live-eligible request (market open + Indian ticker): uses
+        # per-user key + TTL_MARKET_LIVE even though Kite returned
+        # None and is_live is False — cache key is gated by
+        # live_eligible, not by overlay success.
         cache_key = cache.set.call_args.args[0]
         ttl = cache.set.call_args.args[2]
-        assert cache_key == "cache:chart:ohlcv:RELIANCE.NS"
-        assert ttl == 300
+        assert cache_key != "cache:chart:ohlcv:RELIANCE.NS"
+        assert "RELIANCE.NS" in cache_key
+        assert ttl == 30
+
+    @patch(
+        "dashboard_kite_overlay._try_kite_quote",
+        new_callable=AsyncMock,
+    )
+    @patch("dashboard_routes.is_market_open")
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_read_uses_per_user_key_for_indian_ticker_during_market_hours(
+        self,
+        mock_repo_fn,
+        mock_cache_fn,
+        mock_market_open,
+        mock_kite,
+        client,
+    ):
+        """Cache READ for an Indian ticker during market hours MUST
+        target the per-user key, not the shared key. Otherwise user A
+        (Kite) inherits user B's is_live=false payload (Bug #1)."""
+        mock_market_open.return_value = True
+        self._mock_repo_returns_one_row(mock_repo_fn)
+        cache = self._mock_cache(mock_cache_fn)
+
+        client.get(
+            "/v1/dashboard/chart/ohlcv?ticker=RELIANCE.NS",
+        )
+
+        # The single cache.get must be against the per-user key,
+        # not the shared key.
+        assert cache.get.call_count == 1
+        read_key = cache.get.call_args.args[0]
+        assert read_key != "cache:chart:ohlcv:RELIANCE.NS"
+        assert "RELIANCE.NS" in read_key
