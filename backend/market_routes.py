@@ -14,7 +14,6 @@ import time
 from datetime import datetime
 
 import httpx
-import pytz
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -23,10 +22,9 @@ from auth.dependencies import get_current_user
 from backend.db.engine import get_session_factory
 from backend.db.models.market_index import MarketIndex
 from cache import get_cache
+from market_hours import IST, is_market_open as _is_market_open  # noqa: F401
 
 _logger = logging.getLogger(__name__)
-
-IST = pytz.timezone("Asia/Kolkata")
 
 _CACHE_KEY = "market:indices"
 _TTL_MARKET_OPEN = 30
@@ -40,18 +38,6 @@ _YAHOO_STALE_SECONDS = 300
 _nse_client: httpx.AsyncClient | None = None
 _yahoo_client: httpx.AsyncClient | None = None
 _yahoo_crumb: str | None = None
-
-
-def _is_market_open() -> bool:
-    """True if IST is Mon-Fri 09:00-15:30."""
-    now = datetime.now(IST)
-    if now.weekday() >= 5:
-        return False
-    open_t = now.replace(hour=9, minute=0, second=0, microsecond=0)
-    close_t = now.replace(
-        hour=15, minute=30, second=0, microsecond=0,
-    )
-    return open_t <= now <= close_t
 
 
 async def _needs_seed_today() -> bool:
