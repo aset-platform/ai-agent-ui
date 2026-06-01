@@ -134,6 +134,7 @@ const INDICATOR_OPTIONS: {
   { key: "bollinger", label: "Bollinger Bands" },
   { key: "volume", label: "Volume" },
   { key: "rsi", label: "RSI (14)" },
+  { key: "rsi2", label: "RSI (2)" },
   { key: "macd", label: "MACD" },
   { key: "supportResistance", label: "Support/Resistance" },
 ];
@@ -371,6 +372,7 @@ function AnalysisTab({
         sma_50: d.sma_50,
         sma_200: d.sma_200,
         rsi_14: d.rsi_14,
+        rsi_2: d.rsi_2,
         macd: d.macd,
         macd_signal: d.macd_signal,
         macd_hist: d.macd_hist,
