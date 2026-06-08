@@ -121,6 +121,77 @@ def _create_view(
     return view_name
 
 
+def _is_stale_metadata_error(exc: Exception) -> bool:
+    """True if a read failed because cached Iceberg metadata
+    points at files an orphan-sweep / snapshot-expiry removed.
+
+    Two modes, both surfaced by DuckDB as ``IO Error``:
+
+    * Missing snapshot manifest-list / manifest avro
+      (``snap-*.avro`` referenced by a *superseded but still
+      present* ``metadata.json`` — so the ``os.path.exists``
+      guard in :func:`_resolve_metadata` does not fire). This
+      is the ASETPLTFRM-429 invalidate-skip race.
+    * Missing ``metadata.json`` itself.
+
+    The cache is process-local, so out-of-process writers
+    (pipeline CLI) advancing the table never invalidate a
+    long-lived reader's cache — hence the read-side self-heal.
+    """
+    msg = str(exc)
+    return (
+        "No files found that match the pattern" in msg
+        or "Cannot open file" in msg
+    )
+
+
+def _run_with_heal(
+    table_names: list[str],
+    tolerate_missing: bool,
+    runner,
+):
+    """Create views + run *runner(conn)*, self-healing once
+    on a stale-metadata-cache read failure.
+
+    On a stale read (see :func:`_is_stale_metadata_error`),
+    invalidate the cached metadata path for every table and
+    retry once — the re-resolve globs the filesystem and
+    picks the current (healthy) ``metadata.json``.
+
+    Args:
+        table_names: Iceberg tables to expose as views.
+        tolerate_missing: If True, skip tables with no
+            metadata (JOIN queries); else propagate.
+        runner: Callable ``(conn) -> result`` that executes
+            the query and fully materializes the result
+            before returning (connection closed afterwards).
+    """
+    for attempt in range(2):
+        conn = get_connection()
+        try:
+            for tn in table_names:
+                try:
+                    _create_view(conn, tn)
+                except FileNotFoundError:
+                    if not tolerate_missing:
+                        raise
+            return runner(conn)
+        except Exception as exc:
+            if attempt == 0 and _is_stale_metadata_error(exc):
+                log.warning(
+                    "Stale Iceberg read for %s (%s); "
+                    "invalidating cache and retrying",
+                    ", ".join(table_names),
+                    exc,
+                )
+                for tn in table_names:
+                    invalidate_metadata(tn)
+                continue
+            raise
+        finally:
+            conn.close()
+
+
 def query_iceberg_multi(
     table_names: list[str],
     sql: str,
@@ -141,16 +212,9 @@ def query_iceberg_multi(
     Returns:
         List of dicts (column_name: value)
     """
-    conn = get_connection()
-    try:
-        for tn in table_names:
-            try:
-                _create_view(conn, tn)
-            except FileNotFoundError:
-                pass
-        result = conn.execute(
-            sql, params or [],
-        )
+
+    def _runner(conn):
+        result = conn.execute(sql, params or [])
         columns = [
             desc[0] for desc in result.description
         ]
@@ -158,8 +222,8 @@ def query_iceberg_multi(
             dict(zip(columns, row))
             for row in result.fetchall()
         ]
-    finally:
-        conn.close()
+
+    return _run_with_heal(table_names, True, _runner)
 
 
 def query_iceberg_table(
@@ -177,14 +241,16 @@ def query_iceberg_table(
     Returns:
         List of dicts (column_name: value)
     """
-    conn = get_connection()
-    try:
-        _create_view(conn, table_name)
+
+    def _runner(conn):
         result = conn.execute(sql, params or [])
         columns = [desc[0] for desc in result.description]
-        return [dict(zip(columns, row)) for row in result.fetchall()]
-    finally:
-        conn.close()
+        return [
+            dict(zip(columns, row))
+            for row in result.fetchall()
+        ]
+
+    return _run_with_heal([table_name], False, _runner)
 
 
 def query_iceberg_df(
@@ -200,9 +266,7 @@ def query_iceberg_df(
     """
     import pandas as pd  # noqa: F811
 
-    conn = get_connection()
-    try:
-        _create_view(conn, table_name)
+    def _runner(conn):
         result = conn.execute(sql, params or [])
         try:
             df = result.fetchdf()
@@ -232,5 +296,5 @@ def query_iceberg_df(
                 continue  # keep as timestamp
             df[col] = df[col].dt.date
         return df
-    finally:
-        conn.close()
+
+    return _run_with_heal([table_name], False, _runner)
