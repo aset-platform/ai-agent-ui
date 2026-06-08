@@ -158,3 +158,120 @@ def test_run_with_heal_non_stale_error_not_retried(monkeypatch):
         eng._run_with_heal(["stocks.ohlcv"], False, runner)
     assert calls["n"] == 1  # not retried
     assert invalidated == []
+
+
+# --- Proactive manifest-list guard in _resolve_metadata ---
+# (ASETPLTFRM-429)
+#
+# A cached metadata.json that still EXISTS on disk but whose current
+# snapshot's manifest-list avro was deleted by the orphan sweep must
+# be treated as stale and re-resolved — not returned. This prevents
+# the doomed scan before it happens (the _run_with_heal retry is the
+# reactive backstop).
+
+import json  # noqa: E402
+
+
+def test_uri_to_local_path_collapses_slashes():
+    from backend.db.duckdb_engine import _uri_to_local_path
+
+    assert (
+        _uri_to_local_path("file:////Users/x/snap-1.avro")
+        == "/Users/x/snap-1.avro"
+    )
+    assert (
+        _uri_to_local_path("file:///tmp/snap-2.avro")
+        == "/tmp/snap-2.avro"
+    )
+    assert _uri_to_local_path("/already/local") == "/already/local"
+
+
+def _write_table(tmp_path, version, snap_id, snap_filename):
+    """Build a metadata.json (+ its snap avro) for stocks.ohlcv
+    under *tmp_path* and return (metadata_path, snap_path)."""
+    meta_dir = tmp_path / "stocks" / "ohlcv" / "metadata"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    snap_path = meta_dir / snap_filename
+    snap_path.write_text("avro-bytes")
+    meta_path = meta_dir / f"{version}-uuid.metadata.json"
+    meta_path.write_text(
+        json.dumps(
+            {
+                "current-snapshot-id": snap_id,
+                "snapshots": [
+                    {
+                        "snapshot-id": snap_id,
+                        "manifest-list": f"file://{snap_path}",
+                    }
+                ],
+            }
+        )
+    )
+    return str(meta_path), snap_path
+
+
+def test_resolve_reresolves_when_manifest_list_deleted(
+    tmp_path, monkeypatch,
+):
+    """Cache hit whose metadata.json exists but manifest-list was
+    deleted -> drop stale entry, re-glob to the current metadata."""
+    import backend.db.duckdb_engine as eng
+
+    old_meta, old_snap = _write_table(
+        tmp_path, "03000", 111, "snap-111.avro",
+    )
+    new_meta, _new_snap = _write_table(
+        tmp_path, "03001", 222, "snap-222.avro",
+    )
+    monkeypatch.setattr(eng, "ICEBERG_WAREHOUSE", tmp_path)
+    eng.invalidate_metadata()
+    # Poison: cache the OLD (soon-stale) metadata + its manifest.
+    eng._meta_cache["stocks.ohlcv"] = (old_meta, str(old_snap))
+    # Orphan sweep deletes the old snapshot's manifest-list.
+    old_snap.unlink()
+
+    resolved = eng._resolve_metadata("stocks.ohlcv")
+    assert resolved == new_meta  # re-resolved to current
+    eng.invalidate_metadata()
+
+
+def test_resolve_cache_hit_short_circuits_glob(
+    tmp_path, monkeypatch,
+):
+    """A healthy cached entry is returned without globbing — even
+    when a newer metadata.json exists on disk."""
+    import backend.db.duckdb_engine as eng
+
+    good_meta, good_snap = _write_table(
+        tmp_path, "03000", 111, "snap-111.avro",
+    )
+    # A newer file exists; a glob would pick it.
+    _write_table(tmp_path, "03001", 222, "snap-222.avro")
+    monkeypatch.setattr(eng, "ICEBERG_WAREHOUSE", tmp_path)
+    eng.invalidate_metadata()
+    eng._meta_cache["stocks.ohlcv"] = (good_meta, str(good_snap))
+
+    resolved = eng._resolve_metadata("stocks.ohlcv")
+    assert resolved == good_meta  # cache hit, not the newer file
+    eng.invalidate_metadata()
+
+
+def test_resolve_populates_manifest_list_in_cache(
+    tmp_path, monkeypatch,
+):
+    """A cold resolve records the current snapshot's manifest-list
+    path alongside the metadata path."""
+    import backend.db.duckdb_engine as eng
+
+    meta, snap = _write_table(
+        tmp_path, "03000", 111, "snap-111.avro",
+    )
+    monkeypatch.setattr(eng, "ICEBERG_WAREHOUSE", tmp_path)
+    eng.invalidate_metadata()
+
+    resolved = eng._resolve_metadata("stocks.ohlcv")
+    assert resolved == meta
+    cached_meta, cached_ml = eng._meta_cache["stocks.ohlcv"]
+    assert cached_meta == meta
+    assert cached_ml == str(snap)
+    eng.invalidate_metadata()
