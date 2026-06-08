@@ -2,6 +2,36 @@
 
 ---
 
+### 2026-06-08 — fix(duckdb): self-heal stale snapshot reads (ASETPLTFRM-429)
+
+Daily Compute Analytics - India failed for all 802 tickers
+in ~0.6s: `IO Error: No files found ... snap-…avro`. Root
+cause was NOT weekend/holiday gap handling — the long-lived
+backend's process-local `_meta_cache` held a *superseded but
+still-present* `stocks.ohlcv` metadata.json (`03755-…`, Jun 5)
+whose current snapshot's manifest-list avro had since been
+deleted by the orphan sweep. b51e80c's `os.path.exists` guard
+never fired (the metadata.json file still existed), and
+out-of-process pipeline writers that advanced the table to
+`03777` could not invalidate the reader's cache.
+
+Fix in `backend/db/duckdb_engine.py`: generalized the
+self-heal from "metadata.json missing" to "scan failed on a
+stale cached snapshot". New `_is_stale_metadata_error` (matches
+`No files found that match the pattern` / `Cannot open file`)
++ `_run_with_heal(table_names, tolerate_missing, runner)` shared
+by all three query entrypoints — on a stale read it invalidates
+the cached path for every table, re-resolves via filesystem glob
+(→ latest healthy metadata), and retries exactly once. Public
+signatures unchanged. Verified in-container by poisoning the
+cache with the exact `03755` path and confirming the read heals
+and reconverges to `03777`. 6 new tests in
+`tests/backend/test_duckdb.py` (8 pass). Immediate remediation
+was a backend restart (clears the cache). Underlying orphan-sweep
+ordering race stays tracked in ASETPLTFRM-429.
+
+---
+
 ### 2026-05-24 — Watchlist bulk ops + universe binding (Epic C)
 
 Two-part epic closing out the algo trading dashboard arc
