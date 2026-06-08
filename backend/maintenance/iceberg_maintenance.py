@@ -142,6 +142,14 @@ DATE_COLUMNS: dict[str, str] = {
 
 MAX_RETENTION_YEARS = 11
 SNAPSHOT_KEEP = 5
+# Never expire a snapshot younger than this, regardless of
+# ``SNAPSHOT_KEEP``. High-commit tables (stocks.ohlcv takes ~13
+# commits/day) burn through 5 snapshots in hours, so a pure count
+# floor would expire a morning snapshot by evening and delete its
+# manifest-list out from under a daily reader's metadata cache
+# (ASETPLTFRM-429). 48h covers any reader cache populated
+# "yesterday". → reader-side guard in db/duckdb_engine.py.
+SNAPSHOT_MIN_AGE_HOURS = 48
 
 
 def _get_catalog():
@@ -856,10 +864,47 @@ def _read_catalog_metadata_location(
     return row[0] if row else None
 
 
+def _snapshots_to_expire(
+    snapshots: list,
+    retain_count: int,
+    min_age_ms: int,
+    now_ms: int,
+) -> list[int]:
+    """Snapshot ids safe to expire.
+
+    Keeps the latest ``retain_count`` snapshots by timestamp AND
+    every snapshot younger than ``min_age_ms`` — so the sweep never
+    deletes files for a snapshot recent enough to still sit in a
+    daily reader's metadata cache (ASETPLTFRM-429). Returns the
+    complement (oldest snapshots beyond both floors).
+
+    Args:
+        snapshots: PyIceberg ``Snapshot`` objects (need
+            ``snapshot_id`` + ``timestamp_ms``).
+        retain_count: count floor — newest N always kept.
+        min_age_ms: age floor — anything younger is kept.
+        now_ms: current epoch in ms (caller-supplied for testability).
+    """
+    ordered = sorted(
+        snapshots,
+        key=lambda s: s.timestamp_ms,
+        reverse=True,
+    )
+    keep = {s.snapshot_id for s in ordered[:retain_count]}
+    cutoff_ms = now_ms - min_age_ms
+    for s in ordered:
+        if s.timestamp_ms >= cutoff_ms:
+            keep.add(s.snapshot_id)
+    return [
+        s.snapshot_id for s in ordered if s.snapshot_id not in keep
+    ]
+
+
 def cleanup_orphans_v2(
     table_name: str,
     *,
     retain_snapshots: int = SNAPSHOT_KEEP,
+    retain_snapshot_min_age_hours: int = SNAPSHOT_MIN_AGE_HOURS,
     mtime_grace_minutes: int = 30,
     dry_run: bool = False,
     skip_backup: bool = False,
@@ -877,14 +922,20 @@ def cleanup_orphans_v2(
     0. Mandatory backup (fail-closed) — unless
        ``skip_backup=True`` (tests only).
     1. Expire old snapshots, keeping the latest
-       ``retain_snapshots`` by ``timestamp_ms``.
+       ``retain_snapshots`` by ``timestamp_ms`` AND every
+       snapshot younger than ``retain_snapshot_min_age_hours``
+       (ASETPLTFRM-429: never delete files for a snapshot recent
+       enough to still be in a daily reader's metadata cache).
     2. Build the Iceberg-authoritative referenced set =
        ``inspect.all_files()`` ∪ ``inspect.all_manifests()``.
     3. Add the catalog's current ``metadata_location``
        pointer (the file PyIceberg loads on open).
-    4. Add the last ``retain_snapshots + 5`` metadata.json
-       files in the chain so a recent ``UPDATE
-       metadata_location`` rollback is still possible.
+    4. Add the last ``max(retain_snapshots, kept) + 5``
+       metadata.json files in the chain so a recent ``UPDATE
+       metadata_location`` rollback is still possible — and so we
+       never retain *more* metadata.json files than live snapshots
+       (which would leave "poison" metadata pointing at expired
+       snapshots).
     5. Walk the table dir for parquet + avro +
        ``*.metadata.json``.
     6. Filter to candidates: not in referenced AND mtime
@@ -898,7 +949,11 @@ def cleanup_orphans_v2(
 
     Args:
         table_name: e.g. ``"stocks.ohlcv"``.
-        retain_snapshots: latest N snapshots to keep.
+        retain_snapshots: latest N snapshots to keep (count floor).
+        retain_snapshot_min_age_hours: never expire a snapshot
+            younger than this (age floor). Guards against
+            count-floor-only expiry deleting hours-old snapshots
+            still referenced by reader caches (ASETPLTFRM-429).
         mtime_grace_minutes: skip files newer than this.
             Default 30 covers a sentiment/forecast batch.
         dry_run: when True, returns the would-delete list
@@ -971,16 +1026,27 @@ def cleanup_orphans_v2(
     catalog = _get_catalog()
     tbl = catalog.load_table(table_name)
 
-    # Step 1 — expire old snapshots, keep latest N.
+    # Step 1 — expire old snapshots, keep latest N + anything
+    # younger than the age floor (ASETPLTFRM-429).
     snapshots = sorted(
         list(tbl.metadata.snapshots),
         key=lambda s: s.timestamp_ms,
         reverse=True,
     )
-    keep_ids = {s.snapshot_id for s in snapshots[:retain_snapshots]}
-    expire_ids = [
-        s.snapshot_id for s in snapshots if s.snapshot_id not in keep_ids
-    ]
+    now_ms = int(time.time() * 1000)
+    min_age_ms = retain_snapshot_min_age_hours * 3600 * 1000
+    expire_ids = _snapshots_to_expire(
+        snapshots,
+        retain_snapshots,
+        min_age_ms,
+        now_ms,
+    )
+    expire_set = set(expire_ids)
+    keep_ids = {
+        s.snapshot_id
+        for s in snapshots
+        if s.snapshot_id not in expire_set
+    }
     if expire_ids:
         try:
             (tbl.maintenance.expire_snapshots().by_ids(expire_ids).commit())
@@ -1061,7 +1127,9 @@ def cleanup_orphans_v2(
     )
     referenced.add(catalog_pointer_norm)
 
-    # Step 4 — last (N+5) metadata.json files in chain.
+    # Step 4 — recent metadata.json files in chain. Keep at least
+    # as many as live snapshots (+5 rollback buffer) so we never
+    # retain "poison" metadata.json pointing at expired snapshots.
     metadata_dir = table_dir / "metadata"
     if metadata_dir.exists():
         chain = sorted(
@@ -1069,7 +1137,8 @@ def cleanup_orphans_v2(
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
-        for p in chain[: retain_snapshots + 5]:
+        meta_keep = max(retain_snapshots, len(keep_ids)) + 5
+        for p in chain[:meta_keep]:
             referenced.add(_normalize_uri(str(p)))
 
     result["referenced_count"] = len(referenced)

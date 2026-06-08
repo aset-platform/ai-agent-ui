@@ -2,6 +2,39 @@
 
 ---
 
+### 2026-06-08 — fix(iceberg): kill the stale-snapshot disease at source (ASETPLTFRM-429)
+
+Source-side root cause of the recurring `IO Error: No files found
+... snap-*.avro` / `*-m0.avro` read failures. Two cooperating bugs:
+(1) `cleanup_orphans_v2` expired snapshots by **count only**
+(`SNAPSHOT_KEEP=5`); on `stocks.ohlcv` (~13 commits/day) 5 snapshots
+span only hours, so a 10:05 snapshot was expired by evening and its
+manifest-list deleted out from under daily reader caches. (2) Step 4
+retained more metadata.json files (`N+5`) than live snapshots (`N`),
+deliberately preserving "poison" metadata pointing at expired
+snapshots — which `os.path.exists` self-heal can't catch.
+
+Two fixes (stacked on the PR #255 read-side self-heal):
+- **Source** (`iceberg_maintenance.py`): `SNAPSHOT_MIN_AGE_HOURS=48`
+  age floor. New `_snapshots_to_expire(snapshots, retain_count,
+  min_age_ms, now_ms)` keeps latest N ∪ {younger than 48h}.
+  `cleanup_orphans_v2` gains `retain_snapshot_min_age_hours` kwarg.
+  Step 4 metadata.json retention aligned to
+  `max(retain_snapshots, kept) + 5` so it never keeps poison files.
+- **Reader** (`duckdb_engine.py`): `_resolve_metadata` now caches
+  `(metadata_path, manifest_list_path)` and treats a cache entry as
+  stale if the current snapshot's manifest-list avro is gone — not
+  just the metadata.json. Proactively re-resolves before the doomed
+  scan (the #255 `_run_with_heal` retry stays as the reactive
+  backstop). New `_uri_to_local_path` + `_current_manifest_list`.
+
+8 new tests (4 retention-floor + 4 reader-guard); 16 pass in
+test_duckdb.py + test_snapshot_retention_floor.py. flake8 clean. Two
+pre-existing test_scoped_maintenance.py failures are unrelated
+(backup_table mocking) — present on parent, not introduced here.
+
+---
+
 ### 2026-06-08 — fix(duckdb): self-heal stale snapshot reads (ASETPLTFRM-429)
 
 Daily Compute Analytics - India failed for all 802 tickers

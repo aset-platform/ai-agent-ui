@@ -1,5 +1,6 @@
 """DuckDB in-process query engine for Iceberg tables."""
 
+import json
 import logging
 import os
 import threading
@@ -12,9 +13,13 @@ log = logging.getLogger(__name__)
 
 _extensions_installed = False
 
-# Metadata cache: table_name → metadata JSON path.
-# Avoids filesystem glob on every query (~30ms each).
-_meta_cache: dict[str, str] = {}
+# Metadata cache: table_name → (metadata JSON path, current
+# snapshot's manifest-list local path | None). Avoids the
+# filesystem glob on every query (~30ms each). The manifest-list
+# path is tracked so a cache hit can cheaply detect a snapshot the
+# orphan sweep expired out from under us (ASETPLTFRM-429) — see
+# :func:`_resolve_metadata`.
+_meta_cache: dict[str, tuple[str, str | None]] = {}
 _meta_lock = threading.Lock()
 
 
@@ -57,26 +62,68 @@ def invalidate_metadata(
             _meta_cache.clear()
 
 
+def _uri_to_local_path(uri: str) -> str:
+    """Convert an Iceberg ``file://`` URI to a local path.
+
+    PyIceberg/DuckDB emit ``file:////Users/...`` (empty authority
+    + absolute path). Collapse any number of leading slashes to a
+    single one so :func:`os.path.exists` works.
+    """
+    path = uri
+    if path.startswith("file:"):
+        path = path[len("file:"):]
+    return "/" + path.lstrip("/")
+
+
+def _current_manifest_list(metadata_path: str) -> str | None:
+    """Local path of the current snapshot's manifest-list avro.
+
+    Returns ``None`` if the table has no current snapshot or the
+    metadata.json can't be parsed (the caller then falls back to a
+    metadata.json-only existence check).
+    """
+    try:
+        with open(metadata_path) as fh:
+            meta = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    csid = meta.get("current-snapshot-id")
+    if csid is None:
+        return None
+    for snap in meta.get("snapshots", []):
+        if snap.get("snapshot-id") == csid:
+            ml = snap.get("manifest-list")
+            return _uri_to_local_path(ml) if ml else None
+    return None
+
+
 def _resolve_metadata(table_name: str) -> str | None:
     """Find the latest Iceberg metadata JSON path.
 
     Caches the result in-memory. Invalidated by
     :func:`invalidate_metadata` after writes.
+
+    A cached entry is healthy only if BOTH the metadata.json AND
+    the current snapshot's manifest-list it points at still exist.
+    The orphan sweep can expire a snapshot — deleting its
+    manifest-list / manifests — while the superseded metadata.json
+    file survives, so an ``os.path.exists`` check on the
+    metadata.json alone is insufficient (ASETPLTFRM-429). When the
+    manifest-list is gone we drop the stale entry and re-resolve to
+    the current (healthy) metadata via the filesystem glob.
     """
     with _meta_lock:
         cached = _meta_cache.get(table_name)
-    if cached and os.path.exists(cached):
-        return cached
     if cached:
-        # Cached path was pruned (orphan sweep / metadata
-        # rotation) without invalidate_metadata firing.
-        # Self-heal by dropping the stale entry and
-        # re-resolving from the filesystem.
+        meta_path, manifest_list = cached
+        if os.path.exists(meta_path) and (
+            manifest_list is None or os.path.exists(manifest_list)
+        ):
+            return meta_path
         log.warning(
-            "Stale metadata cache for %s (%s missing); "
-            "re-resolving",
+            "Stale metadata cache for %s (%s); re-resolving",
             table_name,
-            cached,
+            meta_path,
         )
         with _meta_lock:
             _meta_cache.pop(table_name, None)
@@ -95,7 +142,10 @@ def _resolve_metadata(table_name: str) -> str | None:
         return None
     result = str(metadata_files[0])
     with _meta_lock:
-        _meta_cache[table_name] = result
+        _meta_cache[table_name] = (
+            result,
+            _current_manifest_list(result),
+        )
     return result
 
 
