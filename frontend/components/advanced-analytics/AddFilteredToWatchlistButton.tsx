@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAddToWatchlist } from "@/hooks/useAddToWatchlist";
 
 interface Props {
@@ -16,6 +16,13 @@ export function AddFilteredToWatchlistButton(
   const { submit, submitting } = useAddToWatchlist();
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
 
   async function handleClick() {
     setBusy(true);
@@ -40,7 +47,8 @@ export function AddFilteredToWatchlistButton(
       setMsg(e instanceof Error ? e.message : "Add failed");
     } finally {
       setBusy(false);
-      window.setTimeout(() => setMsg(null), 6000);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => setMsg(null), 6000);
     }
   }
 

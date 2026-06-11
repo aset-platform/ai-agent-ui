@@ -263,11 +263,9 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
 
   const fetchFilteredTickers = useCallback(async (): Promise<string[]> => {
     const params = new URLSearchParams({
-      sort_dir: sortDir,
       market,
       ticker_type: tickerType,
     });
-    if (sortKey) params.set("sort_key", sortKey);
     if (search) params.set("search", search);
     if (tech.length > 0) params.set("tech", [...tech].sort().join(","));
     if (fund.length > 0) params.set("fund", [...fund].sort().join(","));
@@ -277,7 +275,7 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
     if (!r.ok) throw new Error(`Failed to load tickers: ${r.status}`);
     const data = (await r.json()) as ReportTickersResponse;
     return data.tickers;
-  }, [sortDir, sortKey, market, tickerType, search, tech, fund, report]);
+  }, [market, tickerType, search, tech, fund, report]);
 
   const totalPages = value
     ? Math.max(1, Math.ceil(value.total / DEFAULT_PAGE_SIZE))
