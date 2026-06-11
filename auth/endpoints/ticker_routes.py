@@ -342,12 +342,19 @@ async def _bulk_link_tickers(
     user_id: str,
     rows: list[tuple[int, str]],
     source: str,
-    total_rows: int,
+    label: str | None = None,
 ) -> BulkTickerResponse:
     """Validate + dedupe (row_number, raw_ticker) pairs, link via
     repo, invalidate the watchlist cache, build the per-row report.
     Shared by the CSV (``_bulk_link_impl``) and JSON
-    (``bulk_add_tickers``) entry points."""
+    (``bulk_add_tickers``) entry points.
+
+    Blank or short raw values are reported with
+    ``reason="empty ticker"`` (the prior CSV path's
+    ``"empty row"`` sentinel is intentionally merged into
+    this).
+    """
+    total_rows = len(rows)
     valid: list[str] = []
     errors: list[BulkTickerErrorRow] = []
     seen_in_batch: set[str] = set()
@@ -355,7 +362,8 @@ async def _bulk_link_tickers(
         raw = (raw_val or "").strip()
         if not raw:
             errors.append(BulkTickerErrorRow(
-                row=row_num, ticker="", reason="empty ticker",
+                row=row_num, ticker="",
+                reason="empty ticker",
             ))
             continue
         norm = raw.upper()
@@ -380,8 +388,9 @@ async def _bulk_link_tickers(
     )
     _invalidate_watchlist_cache(user_id)
     _logger.info(
-        "bulk_link user=%s source=%s added=%d skipped=%d errors=%d",
-        user_id, source,
+        "bulk_link user=%s source=%s label=%s"
+        " added=%d skipped=%d errors=%d",
+        user_id, source, label,
         len(added), len(already_linked), len(errors),
     )
     return BulkTickerResponse(
@@ -454,7 +463,7 @@ async def _bulk_link_impl(
         user_id=user_id,
         rows=rows,
         source="bulk_csv",
-        total_rows=len(rows_raw),
+        label=filename,
     )
 
 

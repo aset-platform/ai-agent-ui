@@ -18,14 +18,16 @@ async def test_bulk_link_tickers_dedupes_and_validates():
             (3, "ITC.NS"),    # repo reports already-linked
             (4, "tcs.ns"),    # in-batch dup -> error
             (5, ""),          # empty -> error
+            (6, "!BAD"),      # invalid ticker -> error
         ]
         resp = await tr._bulk_link_tickers(
-            user_id="u1", rows=rows, source="bulk_json", total_rows=5,
+            user_id="u1", rows=rows, source="bulk_json",
         )
     sent = repo.bulk_link_tickers.await_args.args[1]
     assert sent == ["TCS.NS", "INFY.NS", "ITC.NS"]
     assert resp.added == ["TCS.NS", "INFY.NS"]
     assert resp.skipped_already_linked == ["ITC.NS"]
     assert "duplicate in batch" in {e.reason for e in resp.errors}
-    assert resp.total_rows == 5
+    assert "!BAD" in [e.ticker for e in resp.errors]
+    assert resp.total_rows == 6
     inval.assert_called_once_with("u1")
