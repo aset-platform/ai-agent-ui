@@ -353,7 +353,7 @@ export default function DashboardClient({
         portfolioHoldingsCount={
           filteredPortfolio.length
         }
-        liveMeta={livePortfolio.meta}
+        liveMeta={filteredLiveMeta}
       />
 
       {/* ── Portfolio Analytics Grid (Sprint 6) ────── */}
