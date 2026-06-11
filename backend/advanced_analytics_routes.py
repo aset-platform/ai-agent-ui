@@ -48,7 +48,6 @@ from io import StringIO
 from typing import Any, Literal
 
 import pandas as pd
-from pydantic import BaseModel
 from advanced_analytics_filters import (
     FUND_KEYS,
     TECH_KEYS,
@@ -56,9 +55,9 @@ from advanced_analytics_filters import (
     passes_bundle_filters,
 )
 from advanced_analytics_models import (
+    ESTABLISHED_CROSS_DAYS,
     AdvancedReportResponse,
     AdvancedRow,
-    ESTABLISHED_CROSS_DAYS,
     StaleTicker,
     SwingMethodology,
     SwingSetupsResponse,
@@ -79,6 +78,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from insights_routes import _get_stock_repo, _scoped_tickers
 from market_utils import detect_market
+from pydantic import BaseModel
 
 from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
@@ -1603,8 +1603,6 @@ async def _stream_export(
 async def _export_tickers(
     user: UserContext,
     report: ReportName,
-    sort_key: str | None,
-    sort_dir: str,
     market: MarketFilter,
     ticker_type: TickerTypeFilter,
     search: str,
@@ -1613,7 +1611,8 @@ async def _export_tickers(
 ) -> ReportTickersResponse:
     """Full filtered ticker list for the report (JSON), capped at
     ``_MAX_EXPORT_ROWS``. Mirrors ``_stream_export``'s filter
-    pipeline minus sort/CSV serialisation.
+    pipeline minus CSV serialisation — including the hard top-50
+    slice for ``top-50-delivery-by-qty``.
     """
     needle = search.strip().upper()
     tech_keys = parse_filter_csv(tech, TECH_KEYS, "tech")
@@ -1636,6 +1635,21 @@ async def _export_tickers(
             if passes_bundle_filters(r, tech_keys, fund_keys)
         ]
     rows = [r for r in rows if _passes_filter(r, report)]
+
+    # Apply the same sort + hard cap as _stream_export /
+    # _apply_sort_paginate so the ticker list matches exactly
+    # what the table and CSV export show.
+    use_key, use_dir = _DEFAULT_SORT[report]
+    rows.sort(
+        key=lambda r: (
+            getattr(r, use_key) is None,
+            getattr(r, use_key) or 0,
+        ),
+        reverse=use_dir == "desc",
+    )
+    if report == "top-50-delivery-by-qty":
+        rows = rows[:50]
+
     total = len(rows)
     tickers = [r.ticker for r in rows][:_MAX_EXPORT_ROWS]
     return ReportTickersResponse(
@@ -1783,8 +1797,6 @@ def create_advanced_analytics_router() -> APIRouter:
     def _make_tickers_endpoint(report: ReportName):
         async def _handler(
             user: UserContext = Depends(pro_or_superuser),
-            sort_key: str | None = Query(None),
-            sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
             market: str = Query("all", pattern="^(all|india|us)$"),
             ticker_type: str = Query(
                 "all", pattern="^(all|stock|etf)$"
@@ -1805,8 +1817,6 @@ def create_advanced_analytics_router() -> APIRouter:
                 return await _export_tickers(
                     user,
                     report,
-                    sort_key,
-                    sort_dir,
                     market,  # type: ignore[arg-type]
                     ticker_type,  # type: ignore[arg-type]
                     search,

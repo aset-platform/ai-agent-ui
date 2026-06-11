@@ -742,3 +742,61 @@ def test_tickers_endpoint_total_reflects_untruncated_count(
     assert r.status_code == 200
     body = r.json()
     assert body["total"] >= len(body["tickers"])
+
+
+# ---------------------------------------------------------------
+# Fix: top-50 hard-slice fidelity in _export_tickers (Fix 1)
+# ---------------------------------------------------------------
+
+
+def test_tickers_top50_report_hard_capped_at_50(
+    monkeypatch: pytest.MonkeyPatch,
+    app,
+):
+    """For top-50-delivery-by-qty, _export_tickers must return at
+    most 50 tickers even when >50 rows pass the _passes_filter gate.
+
+    We mock _cached_full_rows to return 60 qualifying rows (all with
+    today_dv > 0 so they pass ``_passes_filter``).  The endpoint
+    must cap at 50 and set total=50.
+    """
+    from fastapi.testclient import TestClient
+
+    from auth.dependencies import pro_or_superuser
+    from auth.models import UserContext
+    from backend.advanced_analytics_routes import AdvancedRow
+
+    # Build 60 rows, each with a distinct ticker and today_dv > 0.
+    def _make_row(i: int) -> AdvancedRow:
+        return AdvancedRow(
+            ticker=f"T{i:03d}.NS",
+            today_dv=float(60 - i),  # distinct delivery qty
+        )
+
+    sixty_rows = [_make_row(i) for i in range(60)]
+
+    async def _fake_cached_full_rows(user, as_of):
+        return sixty_rows
+
+    monkeypatch.setattr(aar, "_cached_full_rows", _fake_cached_full_rows)
+    # _filter_tickers must keep all rows (market="all", type="all")
+    monkeypatch.setattr(aar, "_filter_tickers", lambda tickers, m, t: tickers)
+
+    app.dependency_overrides[pro_or_superuser] = lambda: UserContext(
+        user_id="user-top50-test",
+        email="top50@test",
+        role="superuser",
+    )
+    client = TestClient(app)
+    r = client.get(
+        "/v1/advanced-analytics/top-50-delivery-by-qty/tickers"
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 50, (
+        f"expected total=50 (post top-50 slice), got {body['total']}"
+    )
+    assert len(body["tickers"]) == 50, (
+        f"expected 50 tickers, got {len(body['tickers'])}"
+    )
+    assert body["capped"] is False  # 50 <= _MAX_EXPORT_ROWS (10_000)
