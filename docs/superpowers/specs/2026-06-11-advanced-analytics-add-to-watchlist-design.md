@@ -1,7 +1,7 @@
 # Advanced Analytics → "Add to Watchlist" — Design
 
 **Date:** 2026-06-11
-**Status:** Approved (pending spec review)
+**Status:** Approved
 **Author:** Abhay Kumar Singh
 
 ## 1. Problem & context
@@ -15,18 +15,17 @@ connectivity:
   `min_adtv_inr=50M`) → ~701 candidate tickers.
 - But **paper live-WS deliberately ignores `discovery`** and only
   subscribes to the user's **watchlist ∪ holdings** (~37 tickers)
-  — `backend/algo/routes/paper.py:122-137` ("subscribing to
-  thousands of NSE tokens is impractical").
+  — `backend/algo/routes/paper.py:122-137`.
 - RSI(2) Connors v3 only enters on **RSI(2) ≤ 5** + market-health
   gates. With ~37 watched tickers instead of the 701-strong liquid
   universe, an entry almost never fires → 0 paper fills.
 
-Confirmed at runtime: WS is flowing (785 `cache:ltp` keys); a paper
-run on 2026-06-11 12:48 completed with `fills=0`.
+Confirmed at runtime: WS flowing (785 `cache:ltp` keys); a paper run
+on 2026-06-11 12:48 completed with `fills=0`.
 
 **Goal:** let the user grow the paper pool by appending tickers that
-match their own advanced-analytics filters to their watchlist —
-which is exactly the set paper live-WS subscribes to.
+match their own advanced-analytics filters to their watchlist — the
+exact set paper live-WS subscribes to.
 
 ## 2. Scope
 
@@ -35,158 +34,216 @@ In scope:
   Analytics result-table tab.
 - It appends **all rows matching the current filter** (not just the
   visible page) to the user's watchlist, **deduped server-side**.
-- A JSON-list variant of the existing bulk-add endpoint.
+- A JSON-list variant of the bulk-add endpoint.
+- A JSON tickers endpoint on advanced-analytics (the button's source
+  of the full filtered ticker list).
 
 Out of scope:
 - No strategy-specific candidate store; no change to how paper
-  resolves its universe (it keeps using watchlist ∪ holdings).
-- No RSI(2)-specific ranking — the user curates via the existing
-  per-tab filters. (Whichever tab/filter they choose defines
-  "most probable candidates".)
+  resolves its universe (still watchlist ∪ holdings).
+- No RSI(2)-specific ranking — the user's per-tab filters define the
+  candidates.
 - No change to the discovery universe (`stocks.universe_snapshot`).
 
 ## 3. Approach (chosen)
 
-**Client reuses the export's full-filtered fetch → new JSON bulk
-endpoint.** The button lives beside the existing
-`DownloadCsvButton` in the shared `AdvancedAnalyticsTable`. On click
-it runs the same full-filtered fetch the CSV export already performs
-(report endpoint + current filters, capped at
-`FILTER_EXPORT_ROW_CAP`), extracts the `ticker` column, and POSTs
-the list to a new JSON variant of `/tickers/bulk`. Reuses two proven
-paths (export fetch + `_bulk_link_impl` dedupe), one shared
-component → appears on all tabs, minimal coupling.
+Two thin endpoints + one shared button:
 
-Rejected: a server-side `{report, filters}` endpoint — couples
-`auth/ticker_routes` to the advanced-analytics report module and
-duplicates filter plumbing for no real benefit.
+1. The advanced-analytics CSV export is a **server-side file
+   download** (`triggerCsvDownload`), and the JSON report endpoint
+   caps `page_size ≤ 200` — so the client cannot get the full
+   filtered ticker list from existing JSON APIs. Add a sibling
+   **`GET /advanced-analytics/{report}/tickers`** that reuses the
+   export's full-set filter pipeline and returns the ticker list as
+   JSON (capped at `FILTER_EXPORT_ROW_CAP`).
+2. Add a **`POST /users/me/tickers/bulk-add`** JSON variant of the
+   existing CSV bulk-add — same server-side dedupe via the shared
+   `_bulk_link_tickers` core.
+3. A shared button in `AdvancedAnalyticsTable` (→ all tabs) calls
+   `GET …/tickers` then `POST …/bulk-add`, and shows inline
+   added/skipped feedback.
+
+Rejected: a single `POST …/{report}/add-to-watchlist` (Approach B) —
+couples the watchlist module to advanced-analytics. Keeping the
+watchlist endpoint generic ("add these tickers") is cleaner.
 
 ## 4. Backend design
 
-`auth/endpoints/ticker_routes.py`:
+### 4.1 `auth/endpoints/ticker_routes.py` — JSON bulk-add
 
-1. **Refactor** `_bulk_link_impl` to extract a ticker-list core:
+1. **Refactor for DRY.** Extract the validate/dedupe loop and the
+   repo-link/cache/report tail (currently inside `_bulk_link_impl`,
+   lines 389-439) into a shared core:
    ```
    async def _bulk_link_tickers(
-       *, user_id: str, tickers: list[str],
+       *, user_id: str, rows: list[tuple[int, str]],
+       source: str, total_rows: int,
    ) -> BulkTickerResponse
    ```
-   It performs normalize → validate → `repo.bulk_link_tickers` →
-   per-row report (added / skipped_already_linked / in-batch dup /
-   errors), enforcing the existing 5000-row cap. The current CSV
-   route (`bulk_link_tickers`, `POST /tickers/bulk`) parses the CSV
-   then calls this core — **behavior unchanged**.
+   `rows` is `(row_number, raw_ticker)` pairs. It normalises
+   (`.upper()`), validates (`validate_ticker`), drops in-batch
+   duplicates (`reason="duplicate in batch"`), calls
+   `repo.bulk_link_tickers(user_id, valid, source=source)`,
+   `_invalidate_watchlist_cache(user_id)`, logs, and returns
+   `BulkTickerResponse`. `_bulk_link_impl` (CSV) builds
+   `rows=[(i, raw) ...]` (1-based incl. header → data starts at 2)
+   then calls this core — **CSV behaviour unchanged**.
 
-2. **New route**:
+2. **Request model + route:**
    ```
-   POST /v1/users/me/tickers/bulk-add
-   body: { "tickers": ["RELIANCE.NS", ...] }   # BulkAddRequest
-   resp: BulkTickerResponse                     # added/skipped/errors
+   class BulkAddRequest(BaseModel):
+       model_config = ConfigDict(extra="forbid")
+       tickers: list[str]
+
+   @router.post("/tickers/bulk-add", response_model=BulkTickerResponse)
+   async def bulk_add_tickers(
+       body: BulkAddRequest,
+       user: UserContext = Depends(get_current_user),
+   ) -> BulkTickerResponse:
+       if not body.tickers:
+           raise HTTPException(400, "tickers list is empty")
+       if len(body.tickers) > _BULK_ROW_CAP:
+           raise HTTPException(413, f"exceeds {_BULK_ROW_CAP}-row limit")
+       rows = list(enumerate(body.tickers, start=1))
+       return await _bulk_link_tickers(
+           user_id=user.user_id, rows=rows,
+           source="bulk_json", total_rows=len(body.tickers),
+       )
    ```
-   Validates non-empty + <= 5000, calls `_bulk_link_tickers`,
-   invalidates `cache:dash:watchlist:{user_id}` (mirrors the CSV
-   route's invalidation).
 
-3. **Route hoist:** add `/tickers/bulk-add` to the
-   `bulk_suffixes` tuple in `_hoist_bulk_routes()` so it sits above
-   the `/{ticker}` wildcard (§#248 regression guard).
+3. **Hoist:** add `/tickers/bulk-add` to the `bulk_suffixes` tuple
+   in `_hoist_bulk_routes()` so it sits above `/{ticker}` (§#248).
 
-Dedupe semantics (already implemented in the impl/repo): tickers
-already linked → `skipped_already_linked`; duplicates within the
-batch → dropped (`reason="duplicate in batch"`); invalid/unknown →
-`errors`.
+### 4.2 `backend/advanced_analytics_routes.py` — JSON tickers endpoint
+
+Add `_export_tickers(...)` mirroring `_stream_export` up to the
+filtered `rows` list (reuse `_cached_full_rows`, `_filter_tickers`,
+`passes_bundle_filters`, `_passes_filter`, search-needle, sort), but
+return JSON instead of CSV:
+```
+class ReportTickersResponse(BaseModel):
+    tickers: list[str]
+    total: int
+    capped: bool
+
+# in create_router(): for report in REPORTS:
+router.add_api_route(
+    path=f"/{report}/tickers",
+    endpoint=_make_tickers_endpoint(report),  # pro_or_superuser, same filter Query params as _make_endpoint MINUS page/page_size/columns
+    methods=["GET"],
+    response_model=ReportTickersResponse,
+    name=f"advanced_analytics_{report.replace('-','_')}_tickers",
+)
+```
+`_export_tickers` caps at `FILTER_EXPORT_ROW_CAP`: `capped =
+len(rows) > CAP`; `tickers = [r.ticker for r in rows][:CAP]`;
+`total = len(rows)`.
 
 ## 5. Frontend design
 
-`frontend/components/advanced-analytics/AdvancedAnalyticsTable.tsx`
-(shared by all tabs):
+`frontend/components/advanced-analytics/AdvancedAnalyticsTable.tsx`:
 
-- New `AddFilteredToWatchlistButton`, placed next to
-  `DownloadCsvButton`, gated by the same row-cap / empty-result
-  guard the export uses. `data-testid="aa-add-to-watchlist"`
-  (§5.14). Disabled (with tooltip) when the filtered set is empty
-  or exceeds the cap.
+- New `AddFilteredToWatchlistButton` placed beside the existing
+  `DownloadCsvButton`, gated by the same `csvDisabled` /
+  `FILTER_EXPORT_ROW_CAP` guard. `data-testid="aa-add-to-watchlist"`.
+- A `handleAddToWatchlist` callback mirrors `handleCsv` (same filter
+  params) but hits `GET …/{report}/tickers`, then passes the ticker
+  list to the hook.
 - New hook `frontend/hooks/useAddToWatchlist.ts`:
-  `addToWatchlist(tickers: string[]) => Promise<{added, skipped}>`
-  via `apiFetch` POST to `/users/me/tickers/bulk-add` (API_URL,
-  versioned). On success: toast
-  `Added {added} · skipped {skipped} already in watchlist`, then
-  revalidate the watchlist SWR key (`useDashboardHome` /
-  `cache:dash:watchlist`).
-- The button fetches the full filtered ticker list using the same
-  report query + filters the export uses (reuse the export helper /
-  full-fetch path), maps `row.ticker`, dedupes client-side for
-  payload hygiene, and sends to the hook.
+  ```
+  function useAddToWatchlist(): {
+    submit: (tickers: string[]) => Promise<BulkTickerResponse>;
+    submitting: boolean;
+    result: BulkTickerResponse | null;
+    error: string | null;
+    reset: () => void;
+  }
+  ```
+  `apiFetch` POST `${API_URL}/users/me/tickers/bulk-add` with
+  `{tickers}`. Reuses `BulkTickerResponse` from
+  `@/lib/types/bulkTickers`.
+- **Inline feedback (no global toast — none exists):** after submit,
+  show a transient inline message next to the button —
+  `Added {added} · {skipped} already in watchlist` (errors count if
+  > 0) — `data-testid="aa-add-to-watchlist-result"`, auto-clears
+  after ~6s. Mirrors `BulkAddTickersModal`'s result display.
+- On success, revalidate the watchlist via SWR (mutate the
+  dashboard-home / watchlist key) so the dashboard reflects the new
+  tickers.
 
-Because the button is in the shared table, it appears on all tabs
-(current-day-upmove, previous-day-breakout, mom/wow-volume-delivery,
-two/three-day-scan, top-50-delivery, swing-setups) automatically.
+Shared table → button appears on all tabs (current-day-upmove,
+previous-day-breakout, mom/wow-volume-delivery, two/three-day-scan,
+top-50-delivery, swing-setups).
 
 ## 6. Data flow
 
 ```
-[Advanced Analytics tab + user filters]
-        |  click "Add to Watchlist"
-        v
-full-filtered fetch (report + filters, capped)
-        |  ticker[]
-        v
-POST /v1/users/me/tickers/bulk-add { tickers }
-        |  _bulk_link_tickers -> repo.bulk_link_tickers (dedupe)
-        v
+[Advanced Analytics tab + filters] click "Add to Watchlist"
+   │
+   ▼  GET /v1/advanced-analytics/{report}/tickers?<filters>
+ReportTickersResponse { tickers, total, capped }
+   │  tickers[]
+   ▼  POST /v1/users/me/tickers/bulk-add { tickers }
+_bulk_link_tickers → repo.bulk_link_tickers (dedupe)
+   │  invalidate cache:dash:watchlist:{user_id}
+   ▼
 BulkTickerResponse { added, skipped_already_linked, errors }
-        |  invalidate cache:dash:watchlist:{user_id}
-        v
-toast (added / skipped) + watchlist SWR revalidate
-        |
-        v
-watchlist U holdings grows -> paper live-WS subscribes to more
-tickers -> RSI(2) Connors v3 has more candidates to trigger on
+   │  inline "Added N · M already in watchlist" + watchlist revalidate
+   ▼
+watchlist ∪ holdings grows → paper live-WS subscribes to more
+tickers → RSI(2) Connors v3 has more candidates to trigger on
 ```
 
 ## 7. Error handling
 
-- Empty filtered set → button disabled, tooltip "No rows match the
-  current filter".
-- Over `FILTER_EXPORT_ROW_CAP` → reuse the existing "tighten
-  filters" disabled-state/message.
-- Backend: empty `tickers` → 400; > 5000 → 400; invalid tickers →
-  reported per-row in `errors` (not a hard failure).
-- Network/5xx → error toast; no partial client state.
+- Empty filtered set / over cap → button disabled, reuse the
+  export's `csvDisabled` + tooltip.
+- `GET …/tickers` returns `capped=true` → still proceed with the
+  capped list; inline note "(capped at N)".
+- Backend bulk-add: empty `tickers` → 400; > 5000 → 413; invalid
+  tickers → per-row `errors` (not a hard failure).
+- Network/5xx → inline error message; no partial client state.
 
 ## 8. Testing
 
-Backend (`tests/`):
+Backend (`tests/backend/`):
 - `_bulk_link_tickers` unit: dedupe vs existing, in-batch dups,
-  invalid ticker → errors, cap enforcement.
-- `POST /tickers/bulk-add` route: happy (added), all-already-linked
-  (skipped), empty (400), and confirms `cache:dash:watchlist`
-  invalidation.
+  invalid ticker → errors, cap.
+- `POST /tickers/bulk-add`: happy (added), all-already-linked
+  (skipped), empty → 400, invalidates `cache:dash:watchlist`.
+- `GET /advanced-analytics/{report}/tickers`: returns filtered
+  ticker list; respects filters; caps at `FILTER_EXPORT_ROW_CAP`
+  with `capped=true`.
 
 Frontend:
 - vitest for `useAddToWatchlist` (success → counts; error path).
-- E2E (POM, §5.14): click `aa-add-to-watchlist` on one tab, assert
-  the success toast. Reuse `general-user` storage-state fixture.
+- E2E (POM, §5.14): click `aa-add-to-watchlist` on a tab, assert the
+  inline result. Reuse `superuser` storage-state (advanced-analytics
+  is pro/superuser-gated).
 
 ## 9. Files touched
 
-- `auth/endpoints/ticker_routes.py` — refactor + new route + hoist.
-- `tests/backend/test_ticker_routes*.py` (or nearest existing) —
-  backend tests.
+- `auth/endpoints/ticker_routes.py` — refactor + `BulkAddRequest` +
+  route + hoist.
+- `backend/advanced_analytics_routes.py` — `ReportTickersResponse` +
+  `_export_tickers` + `/{report}/tickers` routes.
+- `tests/backend/test_ticker_routes.py` (or nearest) + advanced-
+  analytics route test — backend tests.
 - `frontend/components/advanced-analytics/AdvancedAnalyticsTable.tsx`
-  — button mount.
+  — button + handler.
 - `frontend/components/advanced-analytics/AddFilteredToWatchlistButton.tsx`
   — new component.
 - `frontend/hooks/useAddToWatchlist.ts` — new hook.
-- `e2e/` — POM + spec; `e2e/utils/selectors.ts` testid registry.
-- `frontend/lib/types*` — `BulkAddRequest` / response types if not
-  already present.
+- `frontend/lib/types/advancedAnalytics.ts` — `ReportTickersResponse`.
+- `e2e/utils/selectors.ts` + a POM + spec.
 
 ## 10. Risks / notes
 
-- The new route MUST be hoisted above `/{ticker}` or it 404s
-  (regression #248). Covered in §4, item 3.
-- Keep the watchlist 5000-cap; large filtered sets are capped by
-  `FILTER_EXPORT_ROW_CAP` client-side anyway.
+- `/tickers/bulk-add` MUST be hoisted above `/{ticker}` or it 404s
+  (regression #248). §4.1 item 3.
+- `/{report}/tickers` route name must not collide with the existing
+  `/{report}` and `/{report}/export` — distinct suffix, fine.
+- Watchlist 5000-cap kept; `FILTER_EXPORT_ROW_CAP` caps the source
+  list too.
 - This grows the *paper* pool; a paper run must still be (re)started
-  after appending for the new tickers to be subscribed.
+  after appending for new tickers to be subscribed.
