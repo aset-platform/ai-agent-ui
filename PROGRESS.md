@@ -2,6 +2,36 @@
 
 ---
 
+### 2026-06-11 — feat: Add to Watchlist from Advanced Analytics filters
+
+**Why:** RSI(2) Connors Daily v3 paper trading produced 0 fills. Diagnosed:
+paper live-WS subscribes only to watchlist ∪ holdings (~37), not the
+strategy's `discovery` universe (701), so RSI(2)≤5 entries almost never
+fire. The lever the user controls is the watchlist — so let users grow it
+from their own Advanced Analytics filters.
+
+**Built** (branch `feature/aa-add-to-watchlist`, subagent-driven per
+`docs/superpowers/plans/2026-06-11-advanced-analytics-add-to-watchlist.md`):
+- Backend: extracted shared `_bulk_link_tickers` core from the CSV bulk-add
+  (CSV behaviour unchanged); new `POST /v1/users/me/tickers/bulk-add` (JSON
+  list, server-side dedupe); hoisted above the `/{ticker}` wildcard (#248).
+- Backend: `GET /v1/advanced-analytics/{report}/tickers` — full filtered
+  ticker list reusing the CSV export's filter pipeline (top-50 hard-cap
+  honored; capped at `_MAX_EXPORT_ROWS`); pro/superuser-gated.
+- Frontend: `useAddToWatchlist` hook + shared `AddFilteredToWatchlistButton`
+  in `AdvancedAnalyticsTable` (→ all tabs), filter parity with the export,
+  inline added/skipped feedback (no global toast lib), reuses the export's
+  disabled/cap guards.
+- E2E: extended `AdvancedAnalyticsPage` POM + `aa-add-to-watchlist.spec.ts`
+  (named to dodge the project's `/analytics.*\.spec\.ts/` testIgnore).
+
+66 backend tests + 2 frontend unit + E2E green; flake8/eslint clean. Each
+task spec+quality reviewed; final holistic review = ready to merge.
+Reminder: a paper run must be (re)started after growing the watchlist for
+new tickers to be subscribed.
+
+---
+
 ### 2026-06-11 — fix(dashboard): portfolio-tab analysis + scoped live chips (PR #258)
 
 Three dashboard fixes (bundled into PR #258 per request):
