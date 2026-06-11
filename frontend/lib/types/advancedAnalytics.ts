@@ -195,3 +195,9 @@ export type FilterBundleId = "tech" | "fund";
 
 /** Hard cap mirrored from backend ``_MAX_EXPORT_ROWS``. */
 export const FILTER_EXPORT_ROW_CAP = 10_000;
+
+export interface ReportTickersResponse {
+  tickers: string[];
+  total: number;
+  capped: boolean;
+}
