@@ -45,16 +45,28 @@ interface Holding {
   gain_loss_pct: number;
 }
 
+/** Live-overlay status — drives the source chip. Same shape as
+ *  Hero / Sector Allocation. Omit (or total_count 0) to fall back
+ *  to the "N assets · scroll" hint. */
+export interface AssetLiveMeta {
+  live_count: number;
+  eod_count: number;
+  unknown_count: number;
+  total_count: number;
+}
+
 interface Props {
   holdings: Holding[];
   loading: boolean;
   error: string | null;
+  liveMeta?: AssetLiveMeta;
 }
 
 export function AssetPerformanceWidget({
   holdings,
   loading,
   error,
+  liveMeta,
 }: Props) {
   const isDark = useDarkMode();
 
@@ -159,11 +171,37 @@ export function AssetPerformanceWidget({
         <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">
           Asset Performance
         </h3>
-        {overflowing && (
+        {liveMeta && liveMeta.total_count > 0 ? (
+          <span
+            data-testid="asset-performance-live-chip"
+            className={
+              "inline-flex items-center gap-1 rounded-full "
+              + "px-2 py-0.5 text-[10px] font-medium uppercase "
+              + "tracking-wide "
+              + (liveMeta.live_count > 0
+                ? "bg-emerald-50 text-emerald-700 "
+                  + "dark:bg-emerald-950/40 dark:text-emerald-300"
+                : "bg-slate-100 text-slate-600 "
+                  + "dark:bg-slate-800 dark:text-slate-400")
+            }
+            title={
+              `Live LTP: ${liveMeta.live_count} · `
+              + `EOD close: ${liveMeta.eod_count} · `
+              + `Unknown: ${liveMeta.unknown_count}`
+              + (overflowing ? " · scroll for more" : "")
+            }
+          >
+            {liveMeta.live_count > 0
+              ? `● live · ${liveMeta.live_count}/`
+                + `${liveMeta.total_count}`
+              : `● eod close · ${liveMeta.eod_count}/`
+                + `${liveMeta.total_count}`}
+          </span>
+        ) : overflowing ? (
           <span className="text-[11px] text-gray-400 dark:text-gray-500">
             {holdings.length} assets · scroll
           </span>
-        )}
+        ) : null}
       </div>
       <div
         className="px-3 py-2 overflow-y-auto"

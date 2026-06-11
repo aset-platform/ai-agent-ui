@@ -450,7 +450,27 @@ def create_dashboard_router() -> APIRouter:
 
         repo = _helpers._get_repo()
         stock_repo = _get_stock_repo()
-        tickers = await repo.get_user_tickers(user.user_id)
+        # Watchlist UNION portfolio holdings — a holding selected
+        # on the Portfolio tab isn't necessarily watchlisted, and
+        # scoping to the watchlist alone left Analysis Signals
+        # empty ("No analysis data yet") for portfolio-only stocks.
+        watch_tickers = await repo.get_user_tickers(user.user_id)
+        try:
+            holdings_df = stock_repo.get_portfolio_holdings(
+                user.user_id,
+            )
+            holding_tickers = (
+                holdings_df["ticker"].unique().tolist()
+                if not holdings_df.empty
+                else []
+            )
+        except Exception:
+            # Holdings lookup must never break the watchlist
+            # analysis path — degrade to watchlist-only.
+            holding_tickers = []
+        tickers = sorted(
+            set(watch_tickers) | set(holding_tickers),
+        )
 
         if not tickers:
             return AnalysisResponse()

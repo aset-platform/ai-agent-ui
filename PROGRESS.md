@@ -2,6 +2,79 @@
 
 ---
 
+### 2026-06-11 — fix(dashboard): portfolio-tab analysis + scoped live chips (PR #258)
+
+Three dashboard fixes (bundled into PR #258 per request):
+1. **Analysis Signals empty on Portfolio tab** — `get_analysis_latest`
+   scoped to watchlist only (`get_user_tickers`); a portfolio holding that
+   isn't watchlisted (e.g. AHLUCONT.NS) had no analysis row → "No analysis
+   data yet". Fix: ticker set = watchlist ∪ portfolio holdings (holdings
+   fetch guarded → degrades to watchlist-only on error). analysis_summary
+   already has rows for holdings, so the widget now populates.
+2. **Sector Allocation chip "13/18"** — chip used the global `livePortfolio.meta`
+   (all 18 holdings incl. 5 US, not live while US market closed) while the
+   pie is india-filtered (13). Added `computeLiveMeta` scoped to the
+   visible (market-filtered) holdings so the denominator matches (→ 13/13).
+3. **Asset Performance chip** — replaced the "N assets · scroll" hint with
+   the same live/eod chip (`asset-performance-live-chip`), scoped meta.
+
+Backend: `dashboard_routes.get_analysis_latest`. Frontend: `computeLiveMeta`
+in `lib/liveAllocation.ts`; `DashboardClient` passes scoped `filteredLiveMeta`
+to both widgets; `AssetPerformanceWidget` gains `liveMeta` + chip. Tests: 3
+new vitest (computeLiveMeta) + new backend `test_includes_portfolio_holdings`;
+also made the pre-existing-broken `TestAnalysis::test_empty`/`test_with_data`
+hermetic (they read real Iceberg/cache, contrary to the file's "all mocked"
+contract). Needs backend restart + `redis-cli FLUSHALL` to take effect (cache
+:dash:analysis). Hero chip left as global 18 intentionally (whole-portfolio).
+
+---
+
+### 2026-06-11 — feat(dashboard): live Sector Allocation overlay (bundled into PR #258)
+
+Sector Allocation donut was the last static-EOD widget on the dashboard
+(Hero + Asset Performance already live). Wired it to the same live LTP map
+(`useLivePortfolioTotals.liveByTicker`, Kite live → OHLCV-close →
+holding.current_price) via a pure `lib/liveAllocation.ts` helper:
+recomputes per-sector value = Σ(live price × qty), re-derives weights +
+total, keeps a sector's server value when none of its tickers price live,
+and returns the base unchanged until the LTP batch resolves. Widget gains
+the same live/eod chip as Hero (`sector-allocation-live-chip`). Frontend
+only — no backend/endpoint change. 7 vitest cases; eslint + (changed-file)
+tsc clean. Per the user's request this rides on the Kite-WS PR branch (#258)
+rather than a separate PR. Modest value (allocation ratios drift slowly
+intraday); main win is dashboard consistency.
+
+---
+
+### 2026-06-11 — fix(algo): rebuild Kite WS multiplexer on Zerodha re-login after 403
+
+Homepage scorecards + watchlist widget showed stale (EOD-close) prices
+during market hours despite a "connected" Zerodha account. Live LTP for
+both flows through `/v1/algo/ltp/batch`, which serves live values only
+from Redis `cache:ltp:*` keys written by the `KiteWsMultiplexer` WS.
+
+Root cause: on a non-retryable 403 (daily token expiry) the multiplexer
+sets `_auth_failed=True` and tears down the socket (PR #250) but never
+sets `_closed`. `ws_registry.get_or_create_multiplexer` reused-vs-rebuilt
+only on `_closed`, so every subsequent `broker.callback` (Zerodha
+re-login) was handed back the halted instance holding the **stale**
+token — the fresh token was silently dropped, the WS never reconnected,
+`cache:ltp:*` stayed empty, and the homepage served EOD close until a
+backend restart cleared the process-local registry. Log evidence (user
+60d30496): created+799/799+connected 06-09; 403 06-10; re-logins 06-10
+10:17 & 06-11 09:17 both `registered 0/799` with no `created multiplexer`
+and no connect; 0 `cache:ltp` keys mid-session.
+
+Fix: `get_or_create_multiplexer` rebuilds (close + recreate with the new
+token) when the cached mux is `_closed` OR `auth_failed`; added public
+`KiteWsMultiplexer.auth_failed` accessor. 3 regression tests
+(`test_ws_registry_rebuild_on_auth_failed.py`); 11 pass across the ws
+registry/reconnect suites. flake8 clean (excl. a pre-existing unused
+`asyncio` import). Immediate remediation: backend restart + reconnect
+Zerodha once. (No new Jira ticket filed — not requested.)
+
+---
+
 ### 2026-06-08 — fix(iceberg): kill the stale-snapshot disease at source (ASETPLTFRM-429)
 
 Source-side root cause of the recurring `IO Error: No files found

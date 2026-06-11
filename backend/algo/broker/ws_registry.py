@@ -51,10 +51,31 @@ async def get_or_create_multiplexer(
 
     The caller is responsible for calling ``subscribe()`` after
     obtaining the multiplexer.
+
+    A cached multiplexer is reused only if it is healthy. One that
+    is closed OR has hit a non-retryable 403 (``auth_failed``) holds
+    a stale access token and will never reconnect — reusing it makes
+    a fresh Zerodha login a silent no-op (the new token is dropped),
+    leaving live LTPs dead until a process restart. Tear such an
+    instance down and rebuild with the new token.
     """
     mux = _registry.get(user_id)
-    if mux is not None and not mux._closed:
+    if mux is not None and not mux._closed and not mux.auth_failed:
         return mux
+    if mux is not None:
+        _logger.info(
+            "ws_registry: discarding stale multiplexer "
+            "user=%s (closed=%s auth_failed=%s)",
+            user_id, mux._closed, mux.auth_failed,
+        )
+        try:
+            await mux.close()
+        except Exception:
+            _logger.warning(
+                "ws_registry: error closing stale multiplexer "
+                "user=%s", user_id, exc_info=True,
+            )
+        _registry.pop(user_id, None)
     mux = KiteWsMultiplexer(
         user_id=user_id,
         api_key=api_key,

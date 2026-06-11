@@ -266,12 +266,22 @@ class TestForecasts:
 class TestAnalysis:
     """GET /v1/dashboard/analysis/latest."""
 
-    @patch(
-        "dashboard_routes._helpers._get_repo",
-    )
-    def test_empty(self, mock_repo, client):
-        """No linked tickers -> empty analyses."""
-        mock_repo.return_value.get_user_tickers = AsyncMock(return_value=[])
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    @patch("dashboard_routes._helpers._get_repo")
+    def test_empty(
+        self, mock_repo, mock_stock_repo, mock_cache, client,
+    ):
+        """No linked tickers + no holdings -> empty analyses."""
+        no_cache = MagicMock()
+        no_cache.get.return_value = None
+        mock_cache.return_value = no_cache
+        mock_repo.return_value.get_user_tickers = AsyncMock(
+            return_value=[],
+        )
+        mock_stock_repo.return_value.get_portfolio_holdings.return_value = (
+            pd.DataFrame()
+        )
 
         resp = client.get(
             "/v1/dashboard/analysis/latest",
@@ -281,6 +291,8 @@ class TestAnalysis:
         data = resp.json()
         assert data["analyses"] == []
 
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._duckdb_read")
     @patch("dashboard_routes._get_stock_repo")
     @patch(
         "dashboard_routes._helpers._get_repo",
@@ -289,11 +301,19 @@ class TestAnalysis:
         self,
         mock_user_repo,
         mock_stock_repo,
+        mock_duckdb,
+        mock_cache,
         client,
     ):
         """Analysis row with RSI signal."""
+        no_cache = MagicMock()
+        no_cache.get.return_value = None
+        mock_cache.return_value = no_cache
         mock_user_repo.return_value.get_user_tickers = AsyncMock(
             return_value=["AAPL"]
+        )
+        mock_stock_repo.return_value.get_portfolio_holdings.return_value = (
+            pd.DataFrame()
         )
 
         df = pd.DataFrame(
@@ -317,8 +337,7 @@ class TestAnalysis:
             ]
         )
 
-        repo_inst = mock_stock_repo.return_value
-        repo_inst.get_dashboard_analysis.return_value = df
+        mock_duckdb.return_value = df
 
         resp = client.get(
             "/v1/dashboard/analysis/latest",
@@ -334,6 +353,70 @@ class TestAnalysis:
         assert sig["name"] == "RSI 14"
         assert sig["signal"] == "Bullish"
         assert analysis["sharpe_ratio"] == 1.23
+
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._duckdb_read")
+    @patch("dashboard_routes._get_stock_repo")
+    @patch("dashboard_routes._helpers._get_repo")
+    def test_includes_portfolio_holdings(
+        self,
+        mock_user_repo,
+        mock_stock_repo,
+        mock_duckdb,
+        mock_cache,
+        client,
+    ):
+        """A portfolio holding that isn't watchlisted is still
+        analysed — the ticker set is watchlist UNION holdings."""
+        no_cache = MagicMock()
+        no_cache.get.return_value = None
+        mock_cache.return_value = no_cache
+
+        mock_user_repo.return_value.get_user_tickers = AsyncMock(
+            return_value=["TCS.NS"],  # watchlist only
+        )
+        mock_stock_repo.return_value.get_portfolio_holdings.return_value = (
+            pd.DataFrame(
+                {"ticker": ["AHLUCONT.NS"], "quantity": [10]},
+            )
+        )
+
+        captured: dict = {}
+
+        def _fake_read(table, sql):
+            captured["sql"] = sql
+            return pd.DataFrame(
+                [
+                    {
+                        "ticker": "AHLUCONT.NS",
+                        "analysis_date": "2026-06-11",
+                        "rsi_signal": "Bullish",
+                        "rsi_14": 30.0,
+                        "macd_signal_text": None,
+                        "macd": None,
+                        "sma_50_signal": None,
+                        "sma_50": None,
+                        "sma_200_signal": None,
+                        "sma_200": None,
+                        "sharpe_ratio": 1.0,
+                        "annualized_return_pct": 5.0,
+                        "annualized_volatility_pct": 10.0,
+                        "max_drawdown_pct": -3.0,
+                    },
+                ],
+            )
+
+        mock_duckdb.side_effect = _fake_read
+
+        resp = client.get("/v1/dashboard/analysis/latest")
+
+        assert resp.status_code == 200
+        # Both the watchlist ticker and the (non-watchlisted)
+        # holding reached the analysis query.
+        assert "AHLUCONT.NS" in captured["sql"]
+        assert "TCS.NS" in captured["sql"]
+        tickers = [a["ticker"] for a in resp.json()["analyses"]]
+        assert "AHLUCONT.NS" in tickers
 
 
 # ---------------------------------------------------------------
