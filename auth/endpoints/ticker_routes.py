@@ -306,6 +306,11 @@ class BulkTickerResponse(BaseModel):
     total_rows: int
 
 
+class BulkAddRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tickers: list[str]
+
+
 class UnlinkAllRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     confirm: str
@@ -503,6 +508,31 @@ async def bulk_link_tickers(
         user_id=user.user_id,
         csv_bytes=body,
         filename=file.filename or "upload.csv",
+    )
+
+
+@router.post(
+    "/tickers/bulk-add",
+    response_model=BulkTickerResponse,
+)
+async def bulk_add_tickers(
+    body: BulkAddRequest,
+    user: UserContext = Depends(get_current_user),
+) -> BulkTickerResponse:
+    """Bulk-link tickers from a JSON list (e.g. an Advanced
+    Analytics filtered set). Server-side dedupe; per-row report."""
+    if not body.tickers:
+        raise HTTPException(status_code=400, detail="tickers list is empty")
+    if len(body.tickers) > _BULK_ROW_CAP:
+        raise HTTPException(
+            status_code=413,
+            detail=f"exceeds {_BULK_ROW_CAP}-row limit",
+        )
+    rows = list(enumerate(body.tickers, start=1))
+    return await _bulk_link_tickers(
+        user_id=user.user_id,
+        rows=rows,
+        source="bulk_json",
     )
 
 
@@ -1114,7 +1144,7 @@ def delete_portfolio_holding(
 def _hoist_bulk_routes() -> None:
     # router.path includes the router's prefix ("/users/me"),
     # so match on the suffix to stay decoupled from the prefix.
-    bulk_suffixes = ("/tickers/bulk", "/tickers/all")
+    bulk_suffixes = ("/tickers/bulk", "/tickers/bulk-add", "/tickers/all")
     bulk = [
         r for r in router.routes
         if getattr(r, "path", "").endswith(bulk_suffixes)
