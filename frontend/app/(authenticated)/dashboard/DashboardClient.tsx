@@ -21,10 +21,15 @@ import type {
   WatchlistResponse,
   ForecastsResponse,
   AnalysisResponse,
+  AllocationResponse,
   DashboardHomeResponse,
 } from "@/lib/types";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { useLivePortfolioTotals } from "@/hooks/useLivePortfolioTotals";
+import {
+  overlayLiveAllocation,
+  shouldOverlayAllocation,
+} from "@/lib/liveAllocation";
 import { useRegistry } from "@/hooks/useDashboardData";
 import {
   useDashboardHome,
@@ -220,6 +225,36 @@ export default function DashboardClient({
     portfolioData.holdings, portfolioData.totals,
   );
 
+  // Live overlay for the sector-allocation donut: recompute
+  // sector weights from the SAME live LTP map the Hero uses, so
+  // the pie tracks intraday moves instead of a static EOD
+  // snapshot. Falls back to the server allocation until the LTP
+  // batch resolves (shouldOverlayAllocation guard).
+  const liveSectorAllocation = useMemo<
+    DashboardData<AllocationResponse>
+  >(() => {
+    const base = sectorAllocation.value;
+    if (
+      !base
+      || !shouldOverlayAllocation(
+        livePortfolio.loading,
+        livePortfolio.liveByTicker,
+      )
+    ) {
+      return sectorAllocation;
+    }
+    const qtyByTicker: Record<string, number> = {};
+    for (const h of filteredPortfolio) {
+      qtyByTicker[h.ticker] = h.quantity;
+    }
+    return {
+      ...sectorAllocation,
+      value: overlayLiveAllocation(
+        base, livePortfolio.liveByTicker, qtyByTicker,
+      ),
+    };
+  }, [sectorAllocation, livePortfolio, filteredPortfolio]);
+
   // Auto-select first PORTFOLIO ticker on load.
   // Portfolio is the default tab, so its top ticker
   // should drive signals + forecast widgets. Defer
@@ -310,7 +345,8 @@ export default function DashboardClient({
       {/* ── Portfolio Analytics Grid (Sprint 6) ────── */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 md:gap-6">
         <SectorAllocationWidget
-          data={sectorAllocation}
+          data={liveSectorAllocation}
+          liveMeta={livePortfolio.meta}
         />
         <AssetPerformanceWidget
           holdings={filteredPortfolio.map((h) => {

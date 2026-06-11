@@ -2,6 +2,23 @@
 
 ---
 
+### 2026-06-11 — feat(dashboard): live Sector Allocation overlay (bundled into PR #258)
+
+Sector Allocation donut was the last static-EOD widget on the dashboard
+(Hero + Asset Performance already live). Wired it to the same live LTP map
+(`useLivePortfolioTotals.liveByTicker`, Kite live → OHLCV-close →
+holding.current_price) via a pure `lib/liveAllocation.ts` helper:
+recomputes per-sector value = Σ(live price × qty), re-derives weights +
+total, keeps a sector's server value when none of its tickers price live,
+and returns the base unchanged until the LTP batch resolves. Widget gains
+the same live/eod chip as Hero (`sector-allocation-live-chip`). Frontend
+only — no backend/endpoint change. 7 vitest cases; eslint + (changed-file)
+tsc clean. Per the user's request this rides on the Kite-WS PR branch (#258)
+rather than a separate PR. Modest value (allocation ratios drift slowly
+intraday); main win is dashboard consistency.
+
+---
+
 ### 2026-06-11 — fix(algo): rebuild Kite WS multiplexer on Zerodha re-login after 403
 
 Homepage scorecards + watchlist widget showed stale (EOD-close) prices
