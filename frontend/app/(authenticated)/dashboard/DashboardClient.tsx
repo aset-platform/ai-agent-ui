@@ -29,6 +29,7 @@ import { useLivePortfolioTotals } from "@/hooks/useLivePortfolioTotals";
 import {
   overlayLiveAllocation,
   shouldOverlayAllocation,
+  computeLiveMeta,
 } from "@/lib/liveAllocation";
 import { useRegistry } from "@/hooks/useDashboardData";
 import {
@@ -255,6 +256,19 @@ export default function DashboardClient({
     };
   }, [sectorAllocation, livePortfolio, filteredPortfolio]);
 
+  // Live/eod chip meta scoped to the VISIBLE (market-filtered)
+  // holdings — so the denominator matches the pie / bar list
+  // instead of every holding across markets. Drives the source
+  // chip on Sector Allocation + Asset Performance.
+  const filteredLiveMeta = useMemo(
+    () =>
+      computeLiveMeta(
+        filteredPortfolio.map((h) => h.ticker),
+        livePortfolio.liveByTicker,
+      ),
+    [filteredPortfolio, livePortfolio.liveByTicker],
+  );
+
   // Auto-select first PORTFOLIO ticker on load.
   // Portfolio is the default tab, so its top ticker
   // should drive signals + forecast widgets. Defer
@@ -346,7 +360,7 @@ export default function DashboardClient({
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 md:gap-6">
         <SectorAllocationWidget
           data={liveSectorAllocation}
-          liveMeta={livePortfolio.meta}
+          liveMeta={filteredLiveMeta}
         />
         <AssetPerformanceWidget
           holdings={filteredPortfolio.map((h) => {
@@ -365,6 +379,7 @@ export default function DashboardClient({
           })}
           loading={portfolioData.loading}
           error={null}
+          liveMeta={filteredLiveMeta}
         />
         <RecommendationsWidget
           data={recommendations}

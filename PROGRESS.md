@@ -2,6 +2,33 @@
 
 ---
 
+### 2026-06-11 — fix(dashboard): portfolio-tab analysis + scoped live chips (PR #258)
+
+Three dashboard fixes (bundled into PR #258 per request):
+1. **Analysis Signals empty on Portfolio tab** — `get_analysis_latest`
+   scoped to watchlist only (`get_user_tickers`); a portfolio holding that
+   isn't watchlisted (e.g. AHLUCONT.NS) had no analysis row → "No analysis
+   data yet". Fix: ticker set = watchlist ∪ portfolio holdings (holdings
+   fetch guarded → degrades to watchlist-only on error). analysis_summary
+   already has rows for holdings, so the widget now populates.
+2. **Sector Allocation chip "13/18"** — chip used the global `livePortfolio.meta`
+   (all 18 holdings incl. 5 US, not live while US market closed) while the
+   pie is india-filtered (13). Added `computeLiveMeta` scoped to the
+   visible (market-filtered) holdings so the denominator matches (→ 13/13).
+3. **Asset Performance chip** — replaced the "N assets · scroll" hint with
+   the same live/eod chip (`asset-performance-live-chip`), scoped meta.
+
+Backend: `dashboard_routes.get_analysis_latest`. Frontend: `computeLiveMeta`
+in `lib/liveAllocation.ts`; `DashboardClient` passes scoped `filteredLiveMeta`
+to both widgets; `AssetPerformanceWidget` gains `liveMeta` + chip. Tests: 3
+new vitest (computeLiveMeta) + new backend `test_includes_portfolio_holdings`;
+also made the pre-existing-broken `TestAnalysis::test_empty`/`test_with_data`
+hermetic (they read real Iceberg/cache, contrary to the file's "all mocked"
+contract). Needs backend restart + `redis-cli FLUSHALL` to take effect (cache
+:dash:analysis). Hero chip left as global 18 intentionally (whole-portfolio).
+
+---
+
 ### 2026-06-11 — feat(dashboard): live Sector Allocation overlay (bundled into PR #258)
 
 Sector Allocation donut was the last static-EOD widget on the dashboard

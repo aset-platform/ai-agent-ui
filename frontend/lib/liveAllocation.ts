@@ -20,6 +20,42 @@ export interface LivePrice {
   source: string;
 }
 
+export interface LiveMetaCounts {
+  live_count: number;
+  eod_count: number;
+  unknown_count: number;
+  total_count: number;
+}
+
+/**
+ * Classify a set of tickers against the live LTP map into
+ * live / eod / unknown counts — for the source chip on the
+ * Sector Allocation + Asset Performance widgets. Scoped to the
+ * tickers actually shown (the market-filtered holdings), so the
+ * denominator matches the visible list rather than every holding
+ * across markets.
+ */
+export function computeLiveMeta(
+  tickers: readonly string[],
+  liveByTicker: Record<string, LivePrice>,
+): LiveMetaCounts {
+  let live = 0;
+  let eod = 0;
+  let unknown = 0;
+  for (const ticker of tickers) {
+    const entry = liveByTicker[ticker];
+    if (entry?.source === "live_ltp") live += 1;
+    else if (entry) eod += 1;
+    else unknown += 1;
+  }
+  return {
+    live_count: live,
+    eod_count: eod,
+    unknown_count: unknown,
+    total_count: tickers.length,
+  };
+}
+
 /**
  * True when a live overlay is worth applying — we have at least
  * one resolved live/eod price. Otherwise the caller shows the

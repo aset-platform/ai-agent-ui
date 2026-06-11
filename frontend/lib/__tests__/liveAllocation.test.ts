@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  computeLiveMeta,
   overlayLiveAllocation,
   shouldOverlayAllocation,
 } from "../liveAllocation";
@@ -89,5 +90,50 @@ describe("overlayLiveAllocation", () => {
       currency: "INR",
     };
     expect(overlayLiveAllocation(empty, {}, {})).toBe(empty);
+  });
+});
+
+describe("computeLiveMeta", () => {
+  it("classifies live / eod / unknown over the given tickers", () => {
+    const live = {
+      "TCS.NS": { price: 1, source: "live_ltp" },
+      "INFY.NS": { price: 1, source: "live_ltp" },
+      "AAPL": { price: 1, source: "ohlcv_close" },
+      // "TSLA" intentionally absent -> unknown
+    };
+    const meta = computeLiveMeta(
+      ["TCS.NS", "INFY.NS", "AAPL", "TSLA"],
+      live,
+    );
+    expect(meta).toEqual({
+      live_count: 2,
+      eod_count: 1,
+      unknown_count: 1,
+      total_count: 4,
+    });
+  });
+
+  it("denominator is the scoped ticker count, not the map size", () => {
+    // 13 visible india tickers all live; 5 US holdings in the
+    // map but NOT in the scoped list -> total stays 13.
+    const live: Record<string, { price: number; source: string }> = {};
+    const india = Array.from({ length: 13 }, (_, i) => `IN${i}.NS`);
+    for (const t of india) live[t] = { price: 1, source: "live_ltp" };
+    for (const t of ["AAPL", "MSFT", "NFLX", "PLTR", "TSLA"]) {
+      live[t] = { price: 1, source: "ohlcv_close" };
+    }
+    const meta = computeLiveMeta(india, live);
+    expect(meta.total_count).toBe(13);
+    expect(meta.live_count).toBe(13);
+    expect(meta.eod_count).toBe(0);
+  });
+
+  it("handles an empty ticker list", () => {
+    expect(computeLiveMeta([], {})).toEqual({
+      live_count: 0,
+      eod_count: 0,
+      unknown_count: 0,
+      total_count: 0,
+    });
   });
 });
