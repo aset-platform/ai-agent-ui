@@ -2,6 +2,35 @@
 
 ---
 
+### 2026-06-11 — fix(algo): rebuild Kite WS multiplexer on Zerodha re-login after 403
+
+Homepage scorecards + watchlist widget showed stale (EOD-close) prices
+during market hours despite a "connected" Zerodha account. Live LTP for
+both flows through `/v1/algo/ltp/batch`, which serves live values only
+from Redis `cache:ltp:*` keys written by the `KiteWsMultiplexer` WS.
+
+Root cause: on a non-retryable 403 (daily token expiry) the multiplexer
+sets `_auth_failed=True` and tears down the socket (PR #250) but never
+sets `_closed`. `ws_registry.get_or_create_multiplexer` reused-vs-rebuilt
+only on `_closed`, so every subsequent `broker.callback` (Zerodha
+re-login) was handed back the halted instance holding the **stale**
+token — the fresh token was silently dropped, the WS never reconnected,
+`cache:ltp:*` stayed empty, and the homepage served EOD close until a
+backend restart cleared the process-local registry. Log evidence (user
+60d30496): created+799/799+connected 06-09; 403 06-10; re-logins 06-10
+10:17 & 06-11 09:17 both `registered 0/799` with no `created multiplexer`
+and no connect; 0 `cache:ltp` keys mid-session.
+
+Fix: `get_or_create_multiplexer` rebuilds (close + recreate with the new
+token) when the cached mux is `_closed` OR `auth_failed`; added public
+`KiteWsMultiplexer.auth_failed` accessor. 3 regression tests
+(`test_ws_registry_rebuild_on_auth_failed.py`); 11 pass across the ws
+registry/reconnect suites. flake8 clean (excl. a pre-existing unused
+`asyncio` import). Immediate remediation: backend restart + reconnect
+Zerodha once. (No new Jira ticket filed — not requested.)
+
+---
+
 ### 2026-06-08 — fix(iceberg): kill the stale-snapshot disease at source (ASETPLTFRM-429)
 
 Source-side root cause of the recurring `IO Error: No files found

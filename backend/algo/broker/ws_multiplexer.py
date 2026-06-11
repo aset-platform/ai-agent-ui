@@ -282,6 +282,16 @@ class KiteWsMultiplexer:
         return self._connected
 
     @property
+    def auth_failed(self) -> bool:
+        """True once a non-retryable 403 halted this multiplexer.
+
+        Such an instance holds a stale access token and will not
+        reconnect — the registry must rebuild a fresh multiplexer
+        (with a new token) rather than hand this one back.
+        """
+        return self._auth_failed
+
+    @property
     def subscriber_count(self) -> int:
         return len(self._queues)
 
