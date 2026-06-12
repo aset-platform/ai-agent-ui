@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useBuildReplayFixture } from "@/hooks/useBuildReplayFixture";
 
 interface Props {
   onBulkAdd: () => void;
@@ -12,6 +13,7 @@ export function WatchlistOverflowMenu(
 ) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const { submit, submitting, result, error } = useBuildReplayFixture();
 
   useEffect(() => {
     if (!open) return;
@@ -89,7 +91,30 @@ export function WatchlistOverflowMenu(
           >
             Remove all…
           </button>
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={() => {
+              setOpen(false);
+              submit();
+            }}
+            data-testid="watchlist-build-fixture"
+            className="block w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {submitting ? "Building…" : "Build RSI(2) replay fixture"}
+          </button>
         </div>
+      )}
+      {(result || error) && (
+        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 max-w-[11rem] break-words">
+          {error
+            ? error
+            : result && result.n_trigger_dates === 0
+              ? "No oversold (RSI2≤5) setups in the lookback window"
+              : result
+                ? `Built ${result.filename} · ${result.n_tickers} tickers · ${result.n_trigger_dates} trigger dates`
+                : null}
+        </p>
       )}
     </div>
   );

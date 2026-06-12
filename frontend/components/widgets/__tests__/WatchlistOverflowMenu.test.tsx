@@ -2,6 +2,15 @@ import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { WatchlistOverflowMenu } from "../WatchlistOverflowMenu";
 
+vi.mock("@/hooks/useBuildReplayFixture", () => ({
+  useBuildReplayFixture: () => ({
+    submit: vi.fn(),
+    submitting: false,
+    result: null,
+    error: null,
+  }),
+}));
+
 afterEach(() => cleanup());
 
 describe("WatchlistOverflowMenu", () => {
