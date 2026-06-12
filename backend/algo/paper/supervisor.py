@@ -259,22 +259,46 @@ _FIXTURES_ROOT = Path(
 _USER_FIXTURES_ROOT = (Path(APP_HOME) / "fixtures").resolve()
 
 
-def build_replay_source(fixture_path: str) -> ReplayTickSource:
-    """Validate the path lives inside an allowed fixtures root
-    (committed CI dir OR the per-user generated dir) so users
-    can't read arbitrary files via the API."""
+def build_replay_source(
+    fixture_path: str, user_id: str | None = None,
+) -> ReplayTickSource:
+    """Validate the fixture path lives inside an allowed root.
+
+    CI fixtures (_FIXTURES_ROOT) are public; user fixtures
+    (_USER_FIXTURES_ROOT) are scoped to the caller — only
+    ``<user_id>.jsonl`` is accessible, preventing cross-tenant
+    access (IDOR).
+    """
+    in_scope = False
     for root in (_FIXTURES_ROOT, _USER_FIXTURES_ROOT):
         candidate = (root / fixture_path).resolve()
-        if not str(candidate).startswith(str(root)):
+        if not candidate.is_relative_to(root):
             continue
+        # Path is under this root — now check per-root scope rules.
+        if root == _USER_FIXTURES_ROOT and (
+            user_id is None or candidate.name != f"{user_id}.jsonl"
+        ):
+            # Path targets another user's file — reject immediately
+            # (IDOR). Do NOT fall through to CI root so that a
+            # cross-tenant path cannot be laundered via the CI check.
+            raise ValueError(
+                "fixture_path outside allowed roots / scope: "
+                f"{fixture_path}"
+            )
+        # Passed scope check for this root.
+        in_scope = True
         if candidate.exists():
             return ReplayTickSource(candidate, pace="fast")
-    raise FileNotFoundError(
-        f"fixture not found under allowed roots: {fixture_path}"
-    )
+    if not in_scope:
+        raise ValueError(
+            f"fixture_path outside allowed roots / scope: {fixture_path}"
+        )
+    raise FileNotFoundError(fixture_path)
 
 
-def list_replay_fixtures() -> list[dict[str, Any]]:
+def list_replay_fixtures(
+    user_id: str | None = None,
+) -> list[dict[str, Any]]:
     """Enumerate ``*.jsonl`` files in the fixtures dirs with
     summary stats (tick count, distinct tickers). Powers the
     start-run form's fixture dropdown — same validation as
@@ -283,46 +307,59 @@ def list_replay_fixtures() -> list[dict[str, Any]]:
 
     Files from the committed CI dir are tagged ``"source": "ci"``;
     user-generated files (``<APP_HOME>/fixtures/<user_id>.jsonl``)
-    are tagged ``"source": "user"``.
+    are tagged ``"source": "user"``. The user root is scoped to
+    the caller's own file only — other users' fixtures are not
+    enumerated (IDOR prevention).
     """
     import json
 
     out: list[dict[str, Any]] = []
-    roots = [
-        (_FIXTURES_ROOT, "ci"),
-        (_USER_FIXTURES_ROOT, "user"),
-    ]
-    for root, source_tag in roots:
-        if not root.exists():
+
+    # CI root: all *.jsonl are public / shared.
+    ci_paths = (
+        sorted(_FIXTURES_ROOT.glob("*.jsonl"))
+        if _FIXTURES_ROOT.exists()
+        else []
+    )
+
+    # User root: only the caller's own <user_id>.jsonl.
+    user_paths = (
+        sorted(_USER_FIXTURES_ROOT.glob(f"{user_id}.jsonl"))
+        if (user_id is not None and _USER_FIXTURES_ROOT.exists())
+        else []
+    )
+
+    for path, source_tag in (
+        [(p, "ci") for p in ci_paths]
+        + [(p, "user") for p in user_paths]
+    ):
+        n_ticks = 0
+        tickers: set[str] = set()
+        try:
+            with path.open(encoding="utf-8") as fh:
+                for line in fh:
+                    s = line.strip()
+                    if not s or s.startswith("#"):
+                        continue
+                    n_ticks += 1
+                    try:
+                        obj = json.loads(s)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    t = obj.get("ticker")
+                    if isinstance(t, str):
+                        tickers.add(t)
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "list_replay_fixtures: failed to read %s", path,
+            )
             continue
-        for path in sorted(root.glob("*.jsonl")):
-            n_ticks = 0
-            tickers: set[str] = set()
-            try:
-                with path.open(encoding="utf-8") as fh:
-                    for line in fh:
-                        s = line.strip()
-                        if not s or s.startswith("#"):
-                            continue
-                        n_ticks += 1
-                        try:
-                            obj = json.loads(s)
-                        except Exception:  # noqa: BLE001
-                            continue
-                        t = obj.get("ticker")
-                        if isinstance(t, str):
-                            tickers.add(t)
-            except Exception:  # noqa: BLE001
-                _logger.exception(
-                    "list_replay_fixtures: failed to read %s", path,
-                )
-                continue
-            out.append({
-                "path": path.name,
-                "n_ticks": n_ticks,
-                "distinct_tickers": len(tickers),
-                "sample_tickers": sorted(tickers)[:5],
-                "size_bytes": path.stat().st_size,
-                "source": source_tag,
-            })
+        out.append({
+            "path": path.name,
+            "n_ticks": n_ticks,
+            "distinct_tickers": len(tickers),
+            "sample_tickers": sorted(tickers)[:5],
+            "size_bytes": path.stat().st_size,
+            "source": source_tag,
+        })
     return out

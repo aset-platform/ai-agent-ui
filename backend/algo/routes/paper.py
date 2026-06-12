@@ -372,7 +372,9 @@ def create_paper_router() -> APIRouter:
                     detail="fixture_path required for source=replay",
                 )
             try:
-                source = build_replay_source(body.fixture_path)
+                source = build_replay_source(
+                    body.fixture_path, user_id=user.user_id,
+                )
             except FileNotFoundError as exc:
                 raise HTTPException(
                     status_code=400, detail=str(exc),
@@ -648,7 +650,7 @@ def create_paper_router() -> APIRouter:
         from backend.algo.paper.supervisor import (
             list_replay_fixtures,
         )
-        return list_replay_fixtures()
+        return list_replay_fixtures(user_id=user.user_id)
 
     @router.get("/strategies/{strategy_id}/summary")
     async def paper_session_summary(

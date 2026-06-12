@@ -133,9 +133,44 @@ def test_build_replay_source_allows_user_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(sup, "_USER_FIXTURES_ROOT", tmp_path.resolve())
     (tmp_path / "u1.jsonl").write_text(
         '{"ticker":"X.NS","ts_ns":0,"ltp":1.0,"volume":1}\n')
-    assert sup.build_replay_source("u1.jsonl") is not None
+    assert sup.build_replay_source("u1.jsonl", user_id="u1") is not None
+
+
+def test_build_replay_source_rejects_other_users_fixture(
+    tmp_path, monkeypatch
+):
+    """Cross-tenant access must be blocked (IDOR)."""
+    ci_root = tmp_path / "ci"
+    ci_root.mkdir()
+    user_root = tmp_path / "users"
+    user_root.mkdir()
+    monkeypatch.setattr(sup, "_FIXTURES_ROOT", ci_root.resolve())
+    monkeypatch.setattr(sup, "_USER_FIXTURES_ROOT", user_root.resolve())
+    (user_root / "other.jsonl").write_text(
+        '{"ticker":"X.NS","ts_ns":0,"ltp":1.0,"volume":1}\n')
+    with pytest.raises(ValueError):
+        sup.build_replay_source("other.jsonl", user_id="u1")
 
 
 def test_build_replay_source_rejects_traversal():
-    with pytest.raises((ValueError, FileNotFoundError)):
+    with pytest.raises(ValueError):
         sup.build_replay_source("../../../../etc/passwd")
+
+
+def test_list_replay_fixtures_scopes_user_dir(tmp_path, monkeypatch):
+    """list_replay_fixtures must expose only the caller's file,
+    not other users' files in the user fixtures root."""
+    monkeypatch.setattr(sup, "_USER_FIXTURES_ROOT", tmp_path.resolve())
+    monkeypatch.setattr(
+        sup, "_FIXTURES_ROOT", tmp_path / "_ci_empty_nonexistent",
+    )
+    (tmp_path / "u1.jsonl").write_text(
+        '{"ticker":"X.NS","ts_ns":0,"ltp":1.0,"volume":1}\n')
+    (tmp_path / "other.jsonl").write_text(
+        '{"ticker":"Y.NS","ts_ns":0,"ltp":2.0,"volume":1}\n')
+
+    result = sup.list_replay_fixtures(user_id="u1")
+
+    names = [r["path"] for r in result]
+    assert "u1.jsonl" in names
+    assert "other.jsonl" not in names
