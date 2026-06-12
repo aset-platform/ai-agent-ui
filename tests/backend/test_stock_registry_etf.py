@@ -52,3 +52,4 @@ def test_detect_ticker_type_nse():
     assert _detect_ticker_type("SKYGOLD.NS") == "stock"
     assert _detect_ticker_type("MOIL.NS") == "stock"
     assert _detect_ticker_type("^NSEI") == "index"
+    assert _detect_ticker_type("HDFCGOLD.BO") == "etf"

@@ -87,9 +87,6 @@ async def _backfill() -> None:
         len(to_reclassify),
         sorted(to_reclassify),
     )
-    _logger.info("Reclassified tickers:")
-    for t in sorted(to_reclassify):
-        _logger.info("  %s", t)
 
 
 def main() -> None:
