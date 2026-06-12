@@ -58,4 +58,33 @@ export class DashboardHomePage extends BasePage {
   forecastWidget(): Locator {
     return this.tid(FE.dashboardForecastWidget);
   }
+
+  /** The watchlist ⋮ overflow trigger button. */
+  watchlistOverflowBtn(): Locator {
+    return this.tid(FE.dashboardWatchlistOverflowButton);
+  }
+
+  /** The overflow dropdown menu. */
+  watchlistOverflowMenu(): Locator {
+    return this.tid(FE.dashboardWatchlistOverflowMenu);
+  }
+
+  /** Open the watchlist ⋮ overflow menu. */
+  async openWatchlistOverflow(): Promise<void> {
+    await this.watchlistOverflowBtn().click();
+    await this.watchlistOverflowMenu().waitFor({
+      state: "visible",
+      timeout: 5_000,
+    });
+  }
+
+  /** "Build RSI(2) replay fixture" menu item. */
+  buildFixtureItem(): Locator {
+    return this.tid(FE.watchlistBuildFixture);
+  }
+
+  /** Inline result message shown after the fixture build. */
+  buildFixtureResult(): Locator {
+    return this.tid(FE.watchlistBuildFixtureResult);
+  }
 }

@@ -106,7 +106,10 @@ export function WatchlistOverflowMenu(
         </div>
       )}
       {(result || error) && (
-        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 max-w-[11rem] break-words">
+        <p
+          data-testid="watchlist-build-fixture-result"
+          className="mt-1 text-xs text-gray-500 dark:text-gray-400 max-w-[11rem] break-words"
+        >
           {error
             ? error
             : result && result.n_trigger_dates === 0

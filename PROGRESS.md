@@ -2,6 +2,56 @@
 
 ---
 
+### 2026-06-12 — feat: Paper Replay Fixture Builder (branch `feature/aa-add-to-watchlist`)
+
+**Why:** Paper-replay runs were producing 0 fills because the built-in
+fixture loader defaulted to scanning the full `discovery` universe without
+targeting dates where the user's own watchlist tickers actually hit the
+RSI(2)≤5 + gate conditions. Users needed a way to generate a replay
+fixture seeded from their own holdings + watchlist, hitting only dates
+where the strategy's v3 entry AST would have fired — so a paper replay
+actually fills on realistic positions.
+
+**Built:**
+- `backend/algo/paper/fixture_builder.py` — drift-free trigger scan:
+  `_entry_fires()` evaluates the exact strategy entry AST via
+  `Evaluator.eval_node`; `_assembled_features_by_date()` mirrors
+  `PaperRuntime._on_bar_close` feature assembly (bar_feats, market_regime,
+  market_trend, factor_row, regime_row); `build_universe_fixture()` scans
+  the user's holdings + watchlist tickers over `lookback_days`, writes
+  JSONL fixture, returns `FixtureBuildResult`.
+- **Security hardening**: per-caller fixture directory scoped to
+  `<APP_HOME>/fixtures/<user_id>.jsonl` (path constructed server-side;
+  user-controlled input never interpolated into filesystem paths; IDOR
+  and path-traversal enumeration prevented).
+- `POST /v1/algo/paper/fixtures/build` — FastAPI endpoint; requires auth;
+  calls `build_universe_fixture(current_user.id, lookback_days)`.
+- `frontend/hooks/useBuildReplayFixture.ts` — `apiFetch` wrapper; state:
+  `submitting`, `result`, `error`.
+- `frontend/components/widgets/WatchlistOverflowMenu.tsx` — "Build RSI(2)
+  replay fixture" menu item (`data-testid="watchlist-build-fixture"`);
+  inline result paragraph with `data-testid="watchlist-build-fixture-result"`.
+- E2E: extended `DashboardHomePage` POM with `openWatchlistOverflow()`,
+  `buildFixtureItem()`, `buildFixtureResult()`; added
+  `watchlistBuildFixture` + `watchlistBuildFixtureResult` to `FE` selectors;
+  `e2e/tests/frontend/watchlist-build-fixture.spec.ts` (2 tests, all green).
+
+**Manual smoke (user 60d30496, build_universe_fixture):**
+```
+lookback  60 -> n_tickers=68  n_trigger_dates=0   n_ticks=0    (no RSI2<=5 in last 60d — real-data outcome, not a bug)
+lookback 120 -> n_tickers=68  n_trigger_dates=4   n_ticks=12   trigger_tickers=['ADANIPORTS.NS','CRAFTSMAN.NS','DELHIVERY.NS']
+lookback 250 -> n_tickers=68  n_trigger_dates=63  n_ticks=189  trigger_tickers=[35 tickers incl. RELIANCE.NS, INFY.NS, HINDUNILVR.NS ...]
+```
+Default 60-day window finds 0 trigger dates (market has not seen RSI2<=5
+oversold setups in user's universe in the past 2 months). Use
+`lookback_days=120` or `lookback_days=250` to get fills; the next paper run
+started after building the fixture will replay those dates.
+
+Note: build takes ~26s (68 tickers x Iceberg feature panel loading);
+E2E spec uses `test.slow()` (90s budget) + 60s `toContainText` timeout.
+
+---
+
 ### 2026-06-11 — feat: Add to Watchlist from Advanced Analytics filters
 
 **Why:** RSI(2) Connors Daily v3 paper trading produced 0 fills. Diagnosed:

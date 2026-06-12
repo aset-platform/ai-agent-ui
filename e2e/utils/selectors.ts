@@ -483,6 +483,8 @@ export const FE = {
   aaAddToWatchlistResult: "aa-add-to-watchlist-result",
 
   // Watchlist bulk ops (Epic C)
+  watchlistBuildFixture: "watchlist-build-fixture",
+  watchlistBuildFixtureResult: "watchlist-build-fixture-result",
   dashboardWatchlistOverflowButton:
     "dashboard-watchlist-overflow-button",
   dashboardWatchlistOverflowMenu:
