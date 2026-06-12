@@ -17,7 +17,7 @@ export function useBuildReplayFixture() {
   const [error, setError] = useState<string | null>(null);
 
   const submit = useCallback(
-    async (lookbackDays = 60): Promise<BuildFixtureResult> => {
+    async (lookbackDays = 180): Promise<BuildFixtureResult> => {
       setSubmitting(true);
       setError(null);
       setResult(null);
