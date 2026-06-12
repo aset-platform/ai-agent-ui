@@ -1,12 +1,21 @@
 import json
 from datetime import date
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 import backend.algo.paper.fixture_builder as fb
 import backend.algo.paper.supervisor as sup
-from backend.algo.paper.fixture_builder import _entry_fires
+from auth.dependencies import pro_or_superuser
+from auth.models import UserContext
+from backend.algo.paper.fixture_builder import (
+    FixtureBuildResult,
+    _entry_fires,
+)
+from backend.algo.routes.paper import create_paper_router
 from backend.algo.stream.types import Tick
 
 _COND = {"type": "and", "operands": [
@@ -174,3 +183,114 @@ def test_list_replay_fixtures_scopes_user_dir(tmp_path, monkeypatch):
     names = [r["path"] for r in result]
     assert "u1.jsonl" in names
     assert "other.jsonl" not in names
+
+
+# ---------------------------------------------------------------------------
+# Task 5: POST /v1/algo/paper/fixtures/build endpoint
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def endpoint_app():
+    app = FastAPI()
+    app.include_router(create_paper_router(), prefix="/v1")
+    app.dependency_overrides[pro_or_superuser] = lambda: UserContext(
+        user_id="00000000-0000-0000-0000-000000000001",
+        email="t@t",
+        role="superuser",
+    )
+    return app
+
+
+def test_build_fixture_endpoint_happy(monkeypatch, endpoint_app):
+    """POST /fixtures/build returns 200 with fixture metadata."""
+    fake_result = FixtureBuildResult(
+        filename="00000000-0000-0000-0000-000000000001.jsonl",
+        n_tickers=3,
+        n_trigger_dates=5,
+        n_ticks=120,
+        trigger_tickers=["SBIN.NS", "INFY.NS", "TCS.NS"],
+    )
+    with patch(
+        "backend.algo.paper.fixture_builder.build_universe_fixture",
+        return_value=fake_result,
+    ):
+        client = TestClient(endpoint_app)
+        r = client.post("/v1/algo/paper/fixtures/build", json={})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["filename"] == fake_result.filename
+    assert body["n_tickers"] == 3
+    assert body["n_trigger_dates"] == 5
+    assert body["n_ticks"] == 120
+    assert body["trigger_tickers"] == ["SBIN.NS", "INFY.NS", "TCS.NS"]
+
+
+def test_build_fixture_endpoint_custom_lookback(
+    monkeypatch, endpoint_app,
+):
+    """lookback_days is forwarded to build_universe_fixture."""
+    fake_result = FixtureBuildResult(
+        filename="00000000-0000-0000-0000-000000000001.jsonl",
+        n_tickers=1,
+        n_trigger_dates=2,
+        n_ticks=10,
+        trigger_tickers=["HDFCBANK.NS"],
+    )
+    captured = {}
+
+    def _stub(user_id, *, lookback_days):
+        captured["lookback_days"] = lookback_days
+        return fake_result
+
+    with patch(
+        "backend.algo.paper.fixture_builder.build_universe_fixture",
+        side_effect=_stub,
+    ):
+        client = TestClient(endpoint_app)
+        r = client.post(
+            "/v1/algo/paper/fixtures/build",
+            json={"lookback_days": 90},
+        )
+    assert r.status_code == 200
+    assert captured["lookback_days"] == 90
+
+
+def test_build_fixture_endpoint_empty_universe_400(
+    monkeypatch, endpoint_app,
+):
+    """Empty universe raises HTTPException(400) surfaced by FastAPI."""
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    with patch(
+        "backend.algo.paper.fixture_builder.build_universe_fixture",
+        side_effect=FastAPIHTTPException(
+            status_code=400,
+            detail="No universe tickers found",
+        ),
+    ):
+        client = TestClient(endpoint_app)
+        r = client.post("/v1/algo/paper/fixtures/build", json={})
+    assert r.status_code == 400
+
+
+def test_build_fixture_endpoint_rejects_out_of_range_lookback(
+    endpoint_app,
+):
+    """lookback_days outside [5, 250] yields 422 validation error."""
+    client = TestClient(endpoint_app)
+    r = client.post(
+        "/v1/algo/paper/fixtures/build",
+        json={"lookback_days": 999},
+    )
+    assert r.status_code == 422
+
+
+def test_build_fixture_endpoint_rejects_extra_fields(endpoint_app):
+    """Extra fields are forbidden (ConfigDict extra='forbid')."""
+    client = TestClient(endpoint_app)
+    r = client.post(
+        "/v1/algo/paper/fixtures/build",
+        json={"lookback_days": 30, "unknown_field": "bad"},
+    )
+    assert r.status_code == 422

@@ -6,10 +6,11 @@ Slice 8c: POST /runs (start), DELETE /runs/{strategy_id} (stop),
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import (
@@ -19,13 +20,25 @@ from fastapi import (
     Query,
     Response,
 )
-from pydantic import BaseModel, Field
-from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field
 
 from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
 
 _logger = logging.getLogger(__name__)
+
+
+class BuildFixtureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lookback_days: int = Field(60, ge=5, le=250)
+
+
+class BuildFixtureResponse(BaseModel):
+    filename: str
+    n_tickers: int
+    n_trigger_dates: int
+    n_ticks: int
+    trigger_tickers: list[str]
 
 
 class StartRunRequest(BaseModel):
@@ -178,8 +191,6 @@ async def _build_live_ws_source(
         queue=queue,
         mux=mux,
     )
-
-
 
 
 def create_paper_router() -> APIRouter:
@@ -651,6 +662,40 @@ def create_paper_router() -> APIRouter:
             list_replay_fixtures,
         )
         return list_replay_fixtures(user_id=user.user_id)
+
+    @router.post(
+        "/fixtures/build", response_model=BuildFixtureResponse,
+    )
+    async def build_fixture(
+        body: BuildFixtureRequest,
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> BuildFixtureResponse:
+        """Build a replay fixture from the user's universe.
+
+        Scans the last ``lookback_days`` of OHLCV + feature data
+        for each ticker in the user's watchlist / portfolio,
+        identifies entry-condition trigger dates, synthesises
+        intra-day tick streams for each, and writes a JSONL
+        fixture file under the user's fixture directory.
+
+        Raises 400 when no universe tickers are found.
+        Builder runs in a thread (sync Iceberg/PG I/O).
+        """
+        from backend.algo.paper.fixture_builder import (
+            build_universe_fixture,
+        )
+        res = await asyncio.to_thread(
+            build_universe_fixture,
+            user.user_id,
+            lookback_days=body.lookback_days,
+        )
+        return BuildFixtureResponse(
+            filename=res.filename,
+            n_tickers=res.n_tickers,
+            n_trigger_dates=res.n_trigger_dates,
+            n_ticks=res.n_ticks,
+            trigger_tickers=res.trigger_tickers,
+        )
 
     @router.get("/strategies/{strategy_id}/summary")
     async def paper_session_summary(
