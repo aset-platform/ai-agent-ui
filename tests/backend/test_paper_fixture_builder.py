@@ -2,7 +2,10 @@ import json
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 import backend.algo.paper.fixture_builder as fb
+import backend.algo.paper.supervisor as sup
 from backend.algo.paper.fixture_builder import _entry_fires
 from backend.algo.stream.types import Tick
 
@@ -119,3 +122,20 @@ def test_build_universe_fixture_skips_none_close(tmp_path, monkeypatch):
     assert res.n_ticks == 0
     assert res.n_trigger_dates == 0
     assert res.trigger_tickers == []
+
+
+# ---------------------------------------------------------------------------
+# Task 4: replay loader user-dir allowlist
+# ---------------------------------------------------------------------------
+
+
+def test_build_replay_source_allows_user_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(sup, "_USER_FIXTURES_ROOT", tmp_path.resolve())
+    (tmp_path / "u1.jsonl").write_text(
+        '{"ticker":"X.NS","ts_ns":0,"ltp":1.0,"volume":1}\n')
+    assert sup.build_replay_source("u1.jsonl") is not None
+
+
+def test_build_replay_source_rejects_traversal():
+    with pytest.raises((ValueError, FileNotFoundError)):
+        sup.build_replay_source("../../../../etc/passwd")
