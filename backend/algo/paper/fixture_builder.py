@@ -9,11 +9,15 @@ Drift-free: the trigger scan evaluates the SAME strategy AST
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
+
+from fastapi import HTTPException
 
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
 
@@ -151,6 +155,8 @@ def _assembled_features_by_date(
         )
 
     # ── 4. Daily bar features panel (rsi_2 etc.) ──────────────────
+    # NOTE: rsi_2 from Iceberg is steady-state; a cold replay may
+    # miss the first 1-2 dates while RSI(2) warms (3 bars).
     try:
         panel = load_intraday_features_window(
             tickers=[ticker],
@@ -172,12 +178,12 @@ def _assembled_features_by_date(
 
     # ── 5. Assemble one features dict per date ────────────────────
     out: dict[date, dict[str, Any]] = {}
-    for bar_date in sorted(by_ts.keys()):
+    for bar_ts_ns in sorted(by_ts.keys()):
         # Reverse bar_open_ts_ns → calendar date (UTC midnight).
         bar_date_obj = datetime.fromtimestamp(
-            bar_date / 1_000_000_000, tz=timezone.utc,
+            bar_ts_ns / 1_000_000_000, tz=timezone.utc,
         ).date()
-        bar_feats = by_ts[bar_date]
+        bar_feats = by_ts[bar_ts_ns]
         features = assemble_per_bar_features(
             bar_feats=bar_feats,
             market_regime=market_regime.get(bar_date_obj),
@@ -221,3 +227,228 @@ class FixtureBuildResult:
     n_trigger_dates: int
     n_ticks: int
     trigger_tickers: list[str]
+
+
+# ── Fixture I/O helpers ───────────────────────────────────────────
+
+_NS = 1_000_000_000
+# 09:15 IST = 03:45 UTC  (offset from midnight UTC)
+_SESSION_OPEN_SECS = 3 * 3600 + 45 * 60
+
+
+def _user_fixtures_dir() -> Path:
+    """Return (and create) the per-user fixtures directory."""
+    from backend.paths import APP_HOME
+
+    d = APP_HOME / "fixtures"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _synth_ticks(
+    ticker: str,
+    dt: date,
+    close: float,
+    volume: int,
+) -> list[dict]:
+    """Synthesise 3 ticks that form a complete 1-min bar on ``dt``.
+
+    All ticks carry ``ltp=close`` so the resampled bar's close equals
+    the Iceberg OHLCV close for ``dt``.  The last-first span is 90s
+    (> 60s) so a 1-min bucketer always closes the bar.  Timestamps are
+    in the IST cash-session window (09:15 IST == 03:45 UTC) so the
+    resampled bar's date equals ``dt`` under any UTC-aligned bucketer.
+    """
+    base = _utc_midnight_ns(dt) + _SESSION_OPEN_SECS * _NS
+    offsets = (0, 30, 90)   # last-first = 90 s > 60 s → 1-min bar closes
+    vol = max(1, int(volume) // len(offsets))
+    return [
+        {
+            "ticker": ticker,
+            "ts_ns": base + o * _NS,
+            "ltp": float(close),
+            "volume": vol,
+        }
+        for o in offsets
+    ]
+
+
+# ── Universe + strategy helpers ───────────────────────────────────
+
+def _resolve_universe(user_id: str) -> list[str]:
+    """Return holdings (qty > 0) ∪ watchlist, India only, deduped, sorted.
+
+    Runs synchronously via the NullPool bridge
+    (``stocks.repository._run_pg``) — safe to call from
+    ``asyncio.to_thread`` or scheduler threads.
+    """
+    from backend.db.models.user_ticker import UserTicker
+    from sqlalchemy import select
+    from stocks.repository import _pg_session, _run_pg
+
+    # ── watchlist (auth.user_tickers) ────────────────────────────
+    def _watchlist_call():
+        async def _q():
+            async with _pg_session() as s:
+                result = await s.execute(
+                    select(UserTicker.ticker).where(
+                        UserTicker.user_id == user_id,
+                    )
+                )
+                return [row[0] for row in result.all()]
+        return _q
+
+    try:
+        watchlist: list[str] = _run_pg(_watchlist_call())
+    except Exception:
+        _logger.warning(
+            "[fixture_builder] watchlist load failed for user=%s",
+            user_id,
+            exc_info=True,
+        )
+        watchlist = []
+
+    # ── holdings (stocks.portfolio_transactions) ──────────────────
+    holdings: list[str] = []
+    try:
+        from tools._stock_shared import _require_repo
+
+        repo = _require_repo()
+        holdings_df = repo.get_portfolio_holdings(user_id)
+        if not holdings_df.empty:
+            mask = holdings_df["quantity"].astype(float) > 0
+            holdings = holdings_df.loc[mask, "ticker"].tolist()
+    except Exception:
+        _logger.warning(
+            "[fixture_builder] holdings load failed for user=%s",
+            user_id,
+            exc_info=True,
+        )
+
+    # ── merge, filter India only, dedup, sort ────────────────────
+    combined = set(watchlist) | set(holdings)
+    india = sorted(
+        t for t in combined
+        if t.endswith((".NS", ".BO"))
+    )
+    return india
+
+
+def _entry_cond_for_v3() -> dict:
+    """Return the entry-condition AST node for the v3 template.
+
+    Loads ``rsi2_connors_daily_v3.json`` via the template loader so
+    the fixture scan uses exactly the same condition the live strategy
+    evaluates.
+    """
+    from backend.algo.strategy.templates.loader import load_template
+
+    strategy = load_template("rsi2_connors_daily_v3")
+    # strategy.root is the IfNode; .cond is the entry condition
+    # type: ignore[union-attr]
+    return strategy.root.cond.model_dump(mode="json")
+
+
+def _close_for(
+    ticker: str,
+    dt: date,
+) -> tuple[float | None, int]:
+    """Return ``(close, volume)`` for ``ticker`` on ``dt`` from Iceberg.
+
+    Returns ``(None, 0)`` when no row is present.
+    """
+    from backend.db.duckdb_engine import query_iceberg_df
+
+    _OHLCV = "stocks.ohlcv"
+    try:
+        df = query_iceberg_df(
+            _OHLCV,
+            "SELECT close, volume FROM ohlcv"
+            " WHERE ticker = ? AND date = ?",
+            [ticker, dt],
+        )
+        if df.empty:
+            return (None, 0)
+        row = df.dropna(subset=["close"])
+        if row.empty:
+            return (None, 0)
+        return (float(row.iloc[-1]["close"]), int(row.iloc[-1]["volume"] or 0))
+    except Exception:
+        _logger.warning(
+            "[fixture_builder] OHLCV lookup failed "
+            "ticker=%s dt=%s",
+            ticker,
+            dt,
+            exc_info=True,
+        )
+        return (None, 0)
+
+
+# ── Public entrypoint ─────────────────────────────────────────────
+
+def build_universe_fixture(
+    user_id: str,
+    *,
+    lookback_days: int = 60,
+    max_dates_per_ticker: int = 2,
+) -> FixtureBuildResult:
+    """Build a replay JSONL fixture for *user_id*'s universe.
+
+    Scans the last ``lookback_days`` for dates where the v3 entry
+    condition fires against assembled features, synthesises 3 ticks
+    per trigger date, writes them to
+    ``<APP_HOME>/fixtures/<user_id>.jsonl``, and returns a summary.
+
+    Raises:
+        HTTPException 400: when the user has no India tickers.
+    """
+    end = date.today()
+    start = end - timedelta(days=lookback_days)
+    tickers = _resolve_universe(user_id)
+    if not tickers:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Add tickers to your watchlist or holdings first."
+            ),
+        )
+    cond = _entry_cond_for_v3()
+    all_ticks: list[dict] = []
+    trigger_tickers: list[str] = []
+    n_dates = 0
+    for tk in tickers:
+        dates = _scan_trigger_dates(
+            tk,
+            cond,
+            start,
+            end,
+            max_dates=max_dates_per_ticker,
+        )
+        if not dates:
+            continue
+        trigger_tickers.append(tk)
+        for dt in dates:
+            close, volume = _close_for(tk, dt)
+            if close is None or close <= 0:
+                continue
+            n_dates += 1
+            all_ticks.extend(_synth_ticks(tk, dt, close, volume))
+
+    all_ticks.sort(key=lambda t: t["ts_ns"])
+    out = _user_fixtures_dir() / f"{user_id}.jsonl"
+    with out.open("w", encoding="utf-8") as fh:
+        fh.write(
+            f"# fixture_builder user={user_id}"
+            f" tickers={len(trigger_tickers)}"
+            f" dates={n_dates}\n"
+        )
+        for t in all_ticks:
+            fh.write(json.dumps(t) + "\n")
+
+    return FixtureBuildResult(
+        filename=out.name,
+        n_tickers=len(tickers),
+        n_trigger_dates=n_dates,
+        n_ticks=len(all_ticks),
+        trigger_tickers=trigger_tickers,
+    )

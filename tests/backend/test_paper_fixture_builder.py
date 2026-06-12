@@ -1,8 +1,10 @@
+import json
 from datetime import date
 from decimal import Decimal
 
 import backend.algo.paper.fixture_builder as fb
 from backend.algo.paper.fixture_builder import _entry_fires
+from backend.algo.stream.types import Tick
 
 _COND = {"type": "and", "operands": [
     {"type": "compare", "op": "<=", "left": {"feature": "rsi_2"},
@@ -61,3 +63,43 @@ def test_scan_respects_max_dates(monkeypatch):
         "TCS.NS", _COND, d1, d3, max_dates=2,
     )
     assert out == [d2, d3]  # most-recent 2
+
+
+def test_synth_ticks_close_a_bar():
+    ticks = fb._synth_ticks("TCS.NS", date(2026, 6, 2),
+                            close=3500.0, volume=120)
+    assert len(ticks) >= 2
+    for t in ticks:
+        Tick.model_validate(t)
+    span = ticks[-1]["ts_ns"] - ticks[0]["ts_ns"]
+    assert span >= 60 * 1_000_000_000
+    assert all(t["ticker"] == "TCS.NS" and t["ltp"] == 3500.0
+               for t in ticks)
+
+
+def test_build_universe_fixture_writes_jsonl(tmp_path, monkeypatch):
+    monkeypatch.setattr(fb, "_user_fixtures_dir", lambda: tmp_path)
+    monkeypatch.setattr(fb, "_resolve_universe", lambda uid: ["TCS.NS"])
+    monkeypatch.setattr(fb, "_entry_cond_for_v3",
+                        lambda: {"type": "compare", "op": "<=",
+                                 "left": {"feature": "rsi_2"},
+                                 "right": {"literal": 5}})
+    monkeypatch.setattr(fb, "_scan_trigger_dates",
+                        lambda t, c, s, e, *, max_dates: [date(2026, 6, 2)])
+    monkeypatch.setattr(fb, "_close_for", lambda t, dt: (3500.0, 100))
+    res = fb.build_universe_fixture("u1", lookback_days=30)
+    assert res.n_tickers == 1 and res.n_trigger_dates == 1
+    assert res.n_ticks >= 2
+    out = tmp_path / "u1.jsonl"
+    lines = [ln for ln in out.read_text().splitlines()
+             if ln.strip() and not ln.startswith("#")]
+    Tick.model_validate(json.loads(lines[0]))
+
+
+def test_build_universe_fixture_empty_universe_400(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+    monkeypatch.setattr(fb, "_resolve_universe", lambda uid: [])
+    with pytest.raises(HTTPException) as ei:
+        fb.build_universe_fixture("u1")
+    assert ei.value.status_code == 400
