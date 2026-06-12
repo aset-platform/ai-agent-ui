@@ -1,4 +1,7 @@
+from datetime import date
 from decimal import Decimal
+
+import backend.algo.paper.fixture_builder as fb
 from backend.algo.paper.fixture_builder import _entry_fires
 
 _COND = {"type": "and", "operands": [
@@ -33,3 +36,28 @@ def test_entry_fires_false_rsi_high():
 
 def test_entry_fires_false_missing_feature():
     assert _entry_fires(_COND, {}) is False  # KeyError swallowed
+
+
+def test_scan_picks_only_firing_dates(monkeypatch):
+    d1, d2 = date(2026, 6, 2), date(2026, 6, 3)
+    monkeypatch.setattr(
+        fb, "_assembled_features_by_date",
+        lambda ticker, start, end: {d1: _f(rsi=3), d2: _f(rsi=40)},
+    )
+    out = fb._scan_trigger_dates(
+        "TCS.NS", _COND, date(2026, 6, 1), date(2026, 6, 4),
+        max_dates=2,
+    )
+    assert out == [d1]
+
+
+def test_scan_respects_max_dates(monkeypatch):
+    d1, d2, d3 = date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 3)
+    monkeypatch.setattr(
+        fb, "_assembled_features_by_date",
+        lambda t, s, e: {d1: _f(), d2: _f(), d3: _f()},
+    )
+    out = fb._scan_trigger_dates(
+        "TCS.NS", _COND, d1, d3, max_dates=2,
+    )
+    assert out == [d2, d3]  # most-recent 2
