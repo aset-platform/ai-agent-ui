@@ -20,6 +20,7 @@ export function useBuildReplayFixture() {
     async (lookbackDays = 60): Promise<BuildFixtureResult> => {
       setSubmitting(true);
       setError(null);
+      setResult(null);
       try {
         const r = await apiFetch(
           `${API_URL}/algo/paper/fixtures/build`,
