@@ -340,6 +340,11 @@ def _entry_cond_for_v3() -> dict:
     Loads ``rsi2_connors_daily_v3.json`` via the template loader so
     the fixture scan uses exactly the same condition the live strategy
     evaluates.
+
+    Uses the canonical v3 template AST. If a user has edited their
+    persisted strategy AST (algo.strategies.ast_json), this will not
+    reflect those edits — load via the strategy repo (get_strategy)
+    if per-user AST fidelity is needed.
     """
     from backend.algo.strategy.templates.loader import load_template
 
@@ -424,15 +429,16 @@ def build_universe_fixture(
             end,
             max_dates=max_dates_per_ticker,
         )
-        if not dates:
-            continue
-        trigger_tickers.append(tk)
+        emitted_for_tk = 0
         for dt in dates:
             close, volume = _close_for(tk, dt)
             if close is None or close <= 0:
                 continue
             n_dates += 1
+            emitted_for_tk += 1
             all_ticks.extend(_synth_ticks(tk, dt, close, volume))
+        if emitted_for_tk:
+            trigger_tickers.append(tk)
 
     all_ticks.sort(key=lambda t: t["ts_ns"])
     out = _user_fixtures_dir() / f"{user_id}.jsonl"

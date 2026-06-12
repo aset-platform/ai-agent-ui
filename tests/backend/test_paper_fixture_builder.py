@@ -103,3 +103,19 @@ def test_build_universe_fixture_empty_universe_400(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         fb.build_universe_fixture("u1")
     assert ei.value.status_code == 400
+
+
+def test_build_universe_fixture_skips_none_close(tmp_path, monkeypatch):
+    monkeypatch.setattr(fb, "_user_fixtures_dir", lambda: tmp_path)
+    monkeypatch.setattr(fb, "_resolve_universe", lambda uid: ["TCS.NS"])
+    monkeypatch.setattr(fb, "_entry_cond_for_v3",
+                        lambda: {"type": "compare", "op": "<=",
+                                 "left": {"feature": "rsi_2"},
+                                 "right": {"literal": 5}})
+    monkeypatch.setattr(fb, "_scan_trigger_dates",
+                        lambda t, c, s, e, *, max_dates: [date(2026, 6, 2)])
+    monkeypatch.setattr(fb, "_close_for", lambda t, dt: (None, 0))
+    res = fb.build_universe_fixture("u1", lookback_days=30)
+    assert res.n_ticks == 0
+    assert res.n_trigger_dates == 0
+    assert res.trigger_tickers == []
