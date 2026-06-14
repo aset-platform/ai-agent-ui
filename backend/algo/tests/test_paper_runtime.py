@@ -196,3 +196,52 @@ async def test_runtime_set_target_weight_action_produces_signals():
     # the first bar in a cycle).
     assert len(sigs) >= 1
     assert len(fills_ev) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Replay-of-historical regression: the lazy factor / regime caches must
+# extend through *today*, not the FIRST bar's date. A dense replay fixture
+# warms up ~420d before its trigger dates, so anchoring the cache window to
+# first_bar+1 left distance_from_sma200 / stress_prob absent at every
+# (later) trigger date → gated entries silent-skipped → 0 fills.
+# ---------------------------------------------------------------------------
+
+
+def _bare_runtime() -> PaperRuntime:
+    return PaperRuntime(
+        strategy=parse_strategy(_strategy_payload()),
+        user_id=uuid4(),
+        initial_capital_inr=Decimal("100000"),
+        fee_as_of=date(2026, 4, 1),
+    )
+
+
+def test_factor_cache_window_extends_to_today():
+    from datetime import timedelta
+    from unittest.mock import MagicMock
+
+    runtime = _bare_runtime()
+    old_first_bar = date.today() - timedelta(days=600)
+    spy = MagicMock(return_value=[])
+    with patch("backend.algo.paper.runtime.get_factors_window", spy):
+        runtime._ensure_factor_cache("TCS.NS", old_first_bar)
+    _tickers, start, end = spy.call_args.args
+    assert start == old_first_bar - timedelta(days=365)
+    # End MUST reach today+1 so historical-replay trigger dates resolve.
+    assert end == date.today() + timedelta(days=1)
+
+
+def test_regime_cache_window_extends_to_today():
+    from datetime import timedelta
+    from unittest.mock import MagicMock
+
+    runtime = _bare_runtime()
+    old_first_bar = date.today() - timedelta(days=600)
+    spy = MagicMock(return_value=[])
+    with patch(
+        "backend.algo.regime.repo.get_regime_history", spy,
+    ):
+        runtime._ensure_regime_cache(old_first_bar)
+    start, end = spy.call_args.args
+    assert start == old_first_bar - timedelta(days=365)
+    assert end == date.today() + timedelta(days=1)

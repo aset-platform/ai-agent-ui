@@ -35,13 +35,24 @@ panels). Second bug: `_synth_ticks` offsets `(0,30,90)` straddled two
 - Batched context loaders (`_load_market_panels`, `_load_factor_by_ticker`,
   `_load_regime_by_date`) loaded once per build (was per-ticker).
 
-**Verified (user 60d30496, lookback 180):** rebuilt fixture now dense —
+**Second bug — runtime cache window (`backend/algo/paper/runtime.py`):**
+After the dense fix, a fresh paper run STILL filled 0. `rsi_2` now
+resolved, but `_ensure_factor_cache` / `_ensure_regime_cache` lazily
+load over `[first_bar − 365d, first_bar + 1d]`, anchored to the FIRST
+bar seen. The dense fixture's first bar is ~600d in the past (warm-up),
+so the window `[2023-10 .. 2024-10]` ended >1yr BEFORE the trigger dates
+(Dec 2025–Feb 2026) → `distance_from_sma200` + `stress_prob` absent at
+every trigger → gated entry silent-skipped. Fix: window end now
+`max(first_bar, today) + 1d` (live runs unchanged; historical replay
+covered). Regression tests `test_factor_cache_window_extends_to_today` +
+`test_regime_cache_window_extends_to_today`.
+
+**Verified (user 60d30496, lookback 180):** rebuilt fixture dense —
 ~290–336 bars/ticker, 27,000 ticks (was 105), 29 trigger tickers / 49
-trigger dates. Runtime-faithful simulation (`Resampler(60) →
-compute_indicators` over accumulated history) confirms `rsi_2 ≤ 5`
-reproduces at every trigger date (e.g. ADANIPORTS 4.69, ADANIPOWER 0.98,
-SHRIPISTON 0.10). Tests: `test_paper_fixture_builder.py` (20) +
-`test_paper_supervisor.py` (7) all green; flake8 clean.
+trigger dates. **Real `PaperRuntime.run()` over the fixture → 152 fills**
+(251 signals → 152 order_filled). Tests: `test_paper_runtime.py` (7) +
+`test_paper_fixture_builder.py` (20) + `test_paper_supervisor.py` (7)
+all green.
 
 ---
 
