@@ -158,10 +158,12 @@ class BudgetRepo:
         must NOT deduct from BUY headroom in safety.py — they free
         capital rather than consume it.
 
-        Paper-mode reservations (``metadata->>'mode' = 'paper'``)
-        are likewise excluded: they exist for UX visibility on
-        the BudgetPanel (badged "PAPER") but must NOT deduct
-        from real-money Cap 0 headroom.
+        Only real-money LIVE reservations count
+        (``COALESCE(metadata->>'mode', 'live') = 'live'``). Paper- AND
+        dry-run-mode reservations are excluded: they exist for UX
+        visibility on the BudgetPanel (badged "PAPER" / "DRYRUN") but
+        must NOT deduct from real-money Cap 0 headroom — a rehearsal
+        must not consume the user's allocated budget.
         """
         active = ",".join(f"'{s.value}'" for s in ACTIVE_STATES)
         result = await session.execute(
@@ -180,7 +182,7 @@ class BudgetRepo:
                 f"FROM latest WHERE state IN ({active}) "
                 "AND side = 'BUY' "
                 "AND COALESCE(metadata->>'mode', 'live') "
-                "    <> 'paper'"
+                "    = 'live'"
             ),
             {"uid": user_id},
         )
@@ -200,7 +202,8 @@ class BudgetRepo:
 
             Σ(FILLED BUY filled_inr) − Σ(FILLED SELL filled_inr)
 
-        floored at 0. Excludes paper-mode rows. This is an
+        floored at 0. Counts only LIVE rows (paper + dry-run
+        excluded — rehearsals don't hold real capital). This is an
         approximation used for Cap 0 headroom (allocated −
         open_pos_cost − active_reserved); it nets sell proceeds
         against cost basis, which is good enough to keep a filled
@@ -225,7 +228,7 @@ class BudgetRepo:
                 "                reserved_inr) END), 0) AS total "
                 "FROM latest WHERE state = 'FILLED' "
                 "AND COALESCE(metadata->>'mode', 'live') "
-                "    <> 'paper'"
+                "    = 'live'"
             ),
             {"uid": user_id},
         )

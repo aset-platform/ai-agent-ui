@@ -2,6 +2,43 @@
 
 ---
 
+### 2026-06-14 — fix: dry-run reservations must not consume live budget (branch `feature/aa-add-to-watchlist`)
+
+**Why:** A dry-run (and paper) run hit `signal_rejected: live_budget_cap`
+on every BUY. Root cause: dry-run is recorded as `mode="live"`
+(`routes/paper.py:525`) and its budget reservations were stamped with NO
+`mode` in metadata (`live/runtime.py`), so `COALESCE(metadata->>'mode',
+'live')` defaulted to `'live'`. The headroom filter only excluded
+`'paper'` (`<> 'paper'`), so dry-run reservations counted against the
+user's `allocated_inr`. The dry-run simulated fill transitions the
+reservation to FILLED (never released), so each dry-run BUY permanently
+occupied real-money headroom. Stale dry-run artifacts from crashed
+2026-05-29 runs (15 FILLED ≈ ₹96k net + 30 orphaned PENDING/SUBMITTED ≈
+₹284k) exceeded the ₹100k allocation → negative headroom → every BUY
+rejected. (Paper mode was already correctly excluded — that's why the
+paper replay filled 128.)
+
+**Fixed:**
+- `live/runtime.py` — reservation metadata now stamps
+  `"mode": "dryrun" if self._dry_run else "live"`.
+- `live/budget_repo.py` — `sum_active_reservations` +
+  `sum_open_position_cost` headroom filters changed from
+  `<> 'paper'` to `= 'live'` (excludes BOTH paper and dryrun; only real
+  live orders/holdings/in-flight account against allocated_inr).
+- Regression tests `test_sum_active_reservations_excludes_dryrun` +
+  `test_sum_open_position_cost_excludes_dryrun`.
+- **Data cleanup:** re-tagged the 45 stale dry-run reservations
+  (reservation-ids carrying `DRY_*` kite order ids — no real-money rows
+  exist for this user) to `metadata.mode='dryrun'`. Live headroom inputs
+  restored `95992.65|283602.70 → 0|0`.
+
+Net behaviour (matches intended design): **only LIVE accounts holdings /
+placed / in-flight orders against the budget; paper + dry-run are
+budget-free.** 21 budget tests green. NOTE: requires a backend restart to
+take effect (running process holds the old in-proc filter).
+
+---
+
 ### 2026-06-14 — fix: dense-bar replay fixtures (branch `feature/aa-add-to-watchlist`)
 
 **Why:** After the 2026-06-12 Paper Replay Fixture Builder shipped, paper
