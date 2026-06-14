@@ -2,6 +2,49 @@
 
 ---
 
+### 2026-06-14 — fix: dense-bar replay fixtures (branch `feature/aa-add-to-watchlist`)
+
+**Why:** After the 2026-06-12 Paper Replay Fixture Builder shipped, paper
+replay STILL produced `fills=0`. Root cause: the builder emitted ticks
+only on the sparse trigger dates (≤2/ticker), but for a **daily**
+strategy the paper runtime computes `rsi_2` from `compute_indicators()`
+over the bar history it accumulates from the replayed ticks
+(`runtime._on_bar_close`), NOT from the Iceberg daily-overlay panel
+(`_ensure_daily_overlay_cache` is a no-op for `interval=="1d"`). With
+1–2 bars of history, `wilder_rsi(closes, 2)` never resolved → `rsi_2`
+key absent → `rsi_2 <= 5` never fired → 0 fills. `distance_from_sma200`
++ NIFTY gates were never the problem (date-keyed factor/regime/market
+panels). Second bug: `_synth_ticks` offsets `(0,30,90)` straddled two
+60s buckets → two zero-delta bars/date polluting the RSI series.
+
+**Fixed (`backend/algo/paper/fixture_builder.py` rewrite):**
+- `_dense_closes()` — ONE scoped Iceberg read (`ticker IN (...) AND date
+  BETWEEN ...`) of the whole universe across warm-up + scan window.
+- `_history_from_closes()` — flat `BarData` (O=H=L=C=close), identical
+  shape to the runtime's resampled fixture bars.
+- `_features_by_date()` — `rsi_2` now from `compute_indicators(history)`
+  (the runtime's exact path), other gates from date-keyed
+  factor/regime/market panels; `daily_overlay=None`. Drift-free by
+  construction: builder and runtime compute `rsi_2` from the same flat
+  close series.
+- `build_universe_fixture()` — emits a **dense** daily-bar series per
+  qualifying ticker from `_WARMUP_DAYS=420` before its earliest trigger
+  through its latest trigger.
+- `_synth_ticks()` offsets `(0,20,40)` — single 60s bucket → exactly one
+  bar/date.
+- Batched context loaders (`_load_market_panels`, `_load_factor_by_ticker`,
+  `_load_regime_by_date`) loaded once per build (was per-ticker).
+
+**Verified (user 60d30496, lookback 180):** rebuilt fixture now dense —
+~290–336 bars/ticker, 27,000 ticks (was 105), 29 trigger tickers / 49
+trigger dates. Runtime-faithful simulation (`Resampler(60) →
+compute_indicators` over accumulated history) confirms `rsi_2 ≤ 5`
+reproduces at every trigger date (e.g. ADANIPORTS 4.69, ADANIPOWER 0.98,
+SHRIPISTON 0.10). Tests: `test_paper_fixture_builder.py` (20) +
+`test_paper_supervisor.py` (7) all green; flake8 clean.
+
+---
+
 ### 2026-06-12 — feat: Paper Replay Fixture Builder (branch `feature/aa-add-to-watchlist`)
 
 **Why:** Paper-replay runs were producing 0 fills because the built-in

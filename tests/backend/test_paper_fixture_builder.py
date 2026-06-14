@@ -1,5 +1,5 @@
 import json
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -52,59 +52,91 @@ def test_entry_fires_false_missing_feature():
     assert _entry_fires(_COND, {}) is False  # KeyError swallowed
 
 
-def test_scan_picks_only_firing_dates(monkeypatch):
+# Simple rsi_2-only entry cond for build-flow tests.
+_RSI_ONLY = {"type": "compare", "op": "<=",
+             "left": {"feature": "rsi_2"}, "right": {"literal": 5}}
+
+
+def _patch_build_context(monkeypatch, tmp_path, *, rows, feats_by_date):
+    """Wire every external seam build_universe_fixture touches so the
+    test exercises the real scan + dense-emit + write path."""
+    monkeypatch.setattr(fb, "_user_fixtures_dir", lambda: tmp_path)
+    monkeypatch.setattr(fb, "_resolve_universe", lambda uid: ["TCS.NS"])
+    monkeypatch.setattr(fb, "_entry_cond_for_v3", lambda: _RSI_ONLY)
+    monkeypatch.setattr(fb, "_dense_closes",
+                        lambda tks, s, e: {"TCS.NS": rows} if rows else {})
+    monkeypatch.setattr(fb, "_load_market_panels", lambda s, e: ({}, {}))
+    monkeypatch.setattr(fb, "_load_factor_by_ticker", lambda tks, s, e: {})
+    monkeypatch.setattr(fb, "_load_regime_by_date", lambda s, e: {})
+    monkeypatch.setattr(fb, "_features_by_date",
+                        lambda history, **kw: feats_by_date)
+
+
+def test_scan_picks_only_firing_dates():
     d1, d2 = date(2026, 6, 2), date(2026, 6, 3)
-    monkeypatch.setattr(
-        fb, "_assembled_features_by_date",
-        lambda ticker, start, end: {d1: _f(rsi=3), d2: _f(rsi=40)},
-    )
-    out = fb._scan_trigger_dates(
-        "TCS.NS", _COND, date(2026, 6, 1), date(2026, 6, 4),
-        max_dates=2,
-    )
+    feats = {d1: _f(rsi=3), d2: _f(rsi=40)}
+    out = fb._scan_trigger_dates(_COND, feats, max_dates=2)
     assert out == [d1]
 
 
-def test_scan_respects_max_dates(monkeypatch):
+def test_scan_respects_max_dates():
     d1, d2, d3 = date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 3)
-    monkeypatch.setattr(
-        fb, "_assembled_features_by_date",
-        lambda t, s, e: {d1: _f(), d2: _f(), d3: _f()},
-    )
-    out = fb._scan_trigger_dates(
-        "TCS.NS", _COND, d1, d3, max_dates=2,
-    )
+    feats = {d1: _f(), d2: _f(), d3: _f()}
+    out = fb._scan_trigger_dates(_COND, feats, max_dates=2)
     assert out == [d2, d3]  # most-recent 2
 
 
-def test_synth_ticks_close_a_bar():
+def test_synth_ticks_form_single_bar():
+    """All ticks for a date MUST land in one 60s bucket so the
+    resampler emits exactly ONE bar per date (no zero-delta RSI
+    pollution from a spurious second bar)."""
     ticks = fb._synth_ticks("TCS.NS", date(2026, 6, 2),
                             close=3500.0, volume=120)
-    assert len(ticks) >= 2
+    assert len(ticks) == 3
     for t in ticks:
         Tick.model_validate(t)
     span = ticks[-1]["ts_ns"] - ticks[0]["ts_ns"]
-    assert span >= 60 * 1_000_000_000
+    assert span < 60 * 1_000_000_000
+    bucket = 60 * 1_000_000_000
+    assert len({t["ts_ns"] // bucket for t in ticks}) == 1
     assert all(t["ticker"] == "TCS.NS" and t["ltp"] == 3500.0
                for t in ticks)
 
 
-def test_build_universe_fixture_writes_jsonl(tmp_path, monkeypatch):
-    monkeypatch.setattr(fb, "_user_fixtures_dir", lambda: tmp_path)
-    monkeypatch.setattr(fb, "_resolve_universe", lambda uid: ["TCS.NS"])
-    monkeypatch.setattr(fb, "_entry_cond_for_v3",
-                        lambda: {"type": "compare", "op": "<=",
-                                 "left": {"feature": "rsi_2"},
-                                 "right": {"literal": 5}})
-    monkeypatch.setattr(fb, "_scan_trigger_dates",
-                        lambda t, c, s, e, *, max_dates: [date(2026, 6, 2)])
-    monkeypatch.setattr(fb, "_close_for", lambda t, dt: (3500.0, 100))
+def test_history_from_closes_is_flat():
+    rows = [(date(2026, 6, 1), 100.0, 10), (date(2026, 6, 2), 101.0, 20)]
+    hist = fb._history_from_closes("TCS.NS", rows)
+    assert len(hist) == 2
+    b = hist[1]
+    assert b.open == b.high == b.low == b.close == Decimal("101.0")
+    assert b.ticker == "TCS.NS" and b.volume == 20
+
+
+def test_build_universe_fixture_emits_dense_bars(tmp_path, monkeypatch):
+    """A firing trigger date emits a DENSE series of bars up to and
+    including the trigger — not just the trigger date — so the runtime
+    can recompute rsi_2 over real history."""
+    trigger = date.today() - timedelta(days=5)
+    rows = [
+        (trigger - timedelta(days=2), 100.0, 30),
+        (trigger - timedelta(days=1), 101.0, 30),
+        (trigger, 102.0, 30),
+        (trigger + timedelta(days=1), 103.0, 30),  # past latest → dropped
+    ]
+    _patch_build_context(
+        monkeypatch, tmp_path,
+        rows=rows, feats_by_date={trigger: {"rsi_2": Decimal(3)}},
+    )
     res = fb.build_universe_fixture("u1", lookback_days=30)
-    assert res.n_tickers == 1 and res.n_trigger_dates == 1
-    assert res.n_ticks >= 2
+    assert res.n_tickers == 1
+    assert res.n_trigger_dates == 1
+    assert res.trigger_tickers == ["TCS.NS"]
+    # 3 dense dates (<= trigger) × 3 ticks = 9; post-trigger row dropped.
+    assert res.n_ticks == 9
     out = tmp_path / "u1.jsonl"
     lines = [ln for ln in out.read_text().splitlines()
              if ln.strip() and not ln.startswith("#")]
+    assert len(lines) == 9
     Tick.model_validate(json.loads(lines[0]))
 
 
@@ -117,19 +149,28 @@ def test_build_universe_fixture_empty_universe_400(monkeypatch):
     assert ei.value.status_code == 400
 
 
-def test_build_universe_fixture_skips_none_close(tmp_path, monkeypatch):
-    monkeypatch.setattr(fb, "_user_fixtures_dir", lambda: tmp_path)
-    monkeypatch.setattr(fb, "_resolve_universe", lambda uid: ["TCS.NS"])
-    monkeypatch.setattr(fb, "_entry_cond_for_v3",
-                        lambda: {"type": "compare", "op": "<=",
-                                 "left": {"feature": "rsi_2"},
-                                 "right": {"literal": 5}})
-    monkeypatch.setattr(fb, "_scan_trigger_dates",
-                        lambda t, c, s, e, *, max_dates: [date(2026, 6, 2)])
-    monkeypatch.setattr(fb, "_close_for", lambda t, dt: (None, 0))
+def test_build_universe_fixture_no_rows_skips_ticker(tmp_path, monkeypatch):
+    """No OHLCV rows for a ticker → skipped, empty fixture."""
+    _patch_build_context(
+        monkeypatch, tmp_path, rows=[], feats_by_date={},
+    )
     res = fb.build_universe_fixture("u1", lookback_days=30)
     assert res.n_ticks == 0
     assert res.n_trigger_dates == 0
+    assert res.trigger_tickers == []
+
+
+def test_build_universe_fixture_no_triggers_empty(tmp_path, monkeypatch):
+    """Rows present but nothing fires → empty fixture (valid outcome)."""
+    trigger = date.today() - timedelta(days=5)
+    rows = [(trigger, 102.0, 30)]
+    _patch_build_context(
+        monkeypatch, tmp_path,
+        rows=rows, feats_by_date={trigger: {"rsi_2": Decimal(40)}},
+    )
+    res = fb.build_universe_fixture("u1", lookback_days=30)
+    assert res.n_trigger_dates == 0
+    assert res.n_ticks == 0
     assert res.trigger_tickers == []
 
 

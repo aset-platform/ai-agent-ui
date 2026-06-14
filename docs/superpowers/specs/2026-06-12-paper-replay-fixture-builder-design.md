@@ -198,3 +198,73 @@ Frontend:
   stay consistent between builder and runtime.
 - The generated fixture lives under `AI_AGENT_UI_HOME` (outside the repo),
   so no CI fixture is committed and determinism of existing tests holds.
+
+## 11. POST-SHIP BUG + FIX — RESOLVED 2026-06-14
+
+**STATUS: FIXED.** The dense-daily-bar rewrite landed in
+`backend/algo/paper/fixture_builder.py`. Rebuilt fixture is now dense
+(~290–336 bars/ticker, 27k ticks, 29 trigger tickers / 49 trigger
+dates vs the old 105 ticks). Runtime-faithful simulation
+(`Resampler(60) → compute_indicators` over accumulated flat-close
+history) confirms `rsi_2 ≤ 5` reproduces at **every** trigger date,
+so the v3 entry fires in replay. The original analysis below is kept
+for the record.
+
+---
+
+### Original analysis (paused 2026-06-12)
+
+**Symptom:** after building the fixture (105 ticks, 20 tickers, 21
+trigger dates 2025-12-16→2026-02-26), the 10:54 paper *replay* run
+completed in ~2s with `fills=0`, no `algo.events`.
+
+**Root cause (false premise in §3):** the spec assumed the runtime
+reads `rsi_2` from the daily-overlay panel (`lookup_daily_overlay`).
+It does NOT for a *daily* strategy. Tracing `runtime._on_bar_close`:
+- `rsi_2` ← `bar_feats` = `compute_indicators(self._bars_by_ticker[t])`
+  over the *accumulated replayed bar history* (`runtime.py:524,560`;
+  `per_bar.py:102 out.update(bar_feats)`; `indicators.py:27`).
+- `_ensure_daily_overlay_cache` is a **no-op** for `interval=="1d"`
+  (`runtime.py:364`) → overlay contributes nothing.
+- The fixture emits ticks ONLY on the sparse trigger dates (≤2/ticker)
+  → `wilder_rsi(closes,2)` never has enough closes → `rsi_2` absent →
+  `rsi_2<=5` never true → 0 fills. (Backtest works because it feeds
+  the FULL dense daily series into `compute_indicators`.)
+- `distance_from_sma200`, `stress_prob`, `nifty_above_sma200`,
+  `nifty_30d_return_pct` come from date-keyed caches (`factor_row` /
+  regime / market) — already correct regardless of history. So
+  **`rsi_2` is the ONLY history-dependent key in the v3 entry.**
+
+**Second drift bug:** `_synth_ticks` offsets `(0,30,90)` straddle two
+60s buckets → each date yields TWO bars with identical closes →
+zero-delta pollution of the RSI series. Need exactly one bar/date.
+
+**Agreed fix (user chose "Full SMA200 warmup ~420d"):** rewrite
+`build_universe_fixture` to emit a **dense daily-bar series** per
+qualifying ticker over `[earliest_trigger − _WARMUP_DAYS(=420) , end]`,
+using real `stocks.ohlcv` closes for every trading day, so
+`compute_indicators(history)` reproduces the real `rsi_2` on the
+trigger dates and the entry fires. (420d is a safe superset; `rsi_2`
+alone would converge in ~40 trading days since `distance_from_sma200`
+is date-keyed — `_WARMUP_DAYS` is a tunable constant.)
+
+**Implementation TODO (next session):**
+1. `fixture_builder.py`: add `_WARMUP_DAYS=420`; add batch
+   `_dense_closes(tickers,start,end)` — ONE scoped query
+   `WHERE ticker IN (...) AND date BETWEEN ? AND ?` (CLAUDE.md #1/#8,
+   never per-(ticker,date) like `_close_for`); change `_synth_ticks`
+   offsets to a single 60s bucket e.g. `(0,20,40)`; rewrite
+   `build_universe_fixture` to scan trigger dates → per-ticker dense
+   emission over `[t_earliest−_WARMUP_DAYS, t_latest]` sliced from one
+   batched read.
+2. Update/extend `tests/backend/test_paper_fixture_builder.py`
+   (the `_close_for` mock + `test_synth_ticks_close_a_bar` span≥60s
+   assertions will need updating for the new burst + dense flow).
+3. Keep `FixtureBuildResult` contract (frontend depends on
+   filename/n_tickers/n_trigger_dates); consider clearer result
+   wording (user found "68 tickers · 35 trigger dates" confusing).
+4. Restart backend, rebuild fixture from UI, re-run paper → expect
+   fills > 0 + `algo.events` rows for strat
+   `0b267c76-2ae9-4057-ae33-aafe3f7a96f5`.
+- Branch `feature/aa-add-to-watchlist` (PR #259). Fixture file:
+  `~/.ai-agent-ui/fixtures/60d30496-acb9-4530-8a4c-cf774c4934f4.jsonl`.
