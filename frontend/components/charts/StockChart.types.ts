@@ -5,6 +5,9 @@
 export type ChartInterval = "D" | "W" | "M";
 
 export interface IndicatorVisibility {
+  sma5: boolean;
+  sma10: boolean;
+  sma20: boolean;
   sma50: boolean;
   sma200: boolean;
   bollinger: boolean;
@@ -16,6 +19,11 @@ export interface IndicatorVisibility {
 }
 
 export const DEFAULT_INDICATORS: IndicatorVisibility = {
+  // Off by default — opt-in via the Indicators toggle so the
+  // price pane isn't cluttered with 5 overlapping MA lines.
+  sma5: false,
+  sma10: false,
+  sma20: false,
   sma50: true,
   sma200: true,
   bollinger: false,

@@ -53,3 +53,38 @@ class TestRSI2Column:
         df = _calculate_technical_indicators(_synthetic_ohlcv(50))
         assert "RSI_14" in df.columns
         assert "RSI_2" in df.columns
+
+
+class TestShortWindowSMAColumns:
+    """``_calculate_technical_indicators`` must emit SMA_5/10/20."""
+
+    def test_columns_present(self):
+        df = _calculate_technical_indicators(_synthetic_ohlcv(50))
+        assert {"SMA_5", "SMA_10", "SMA_20"}.issubset(
+            df.columns,
+        )
+
+    def test_warmup_is_nan(self):
+        # window=N needs N prior closes; row 0 has only 1.
+        df = _calculate_technical_indicators(_synthetic_ohlcv(50))
+        assert pd.isna(df["SMA_5"].iloc[0])
+        assert pd.isna(df["SMA_10"].iloc[0])
+        assert pd.isna(df["SMA_20"].iloc[0])
+
+    def test_matches_manual_rolling_mean(self):
+        """SMA_N must equal a plain rolling mean of Close."""
+        df = _calculate_technical_indicators(_synthetic_ohlcv(50))
+        expected_5 = df["Close"].rolling(window=5).mean()
+        expected_20 = df["Close"].rolling(window=20).mean()
+        pd.testing.assert_series_equal(
+            df["SMA_5"], expected_5, check_names=False,
+        )
+        pd.testing.assert_series_equal(
+            df["SMA_20"], expected_20, check_names=False,
+        )
+
+    def test_does_not_displace_existing_sma_columns(self):
+        """Regression: SMA_50/SMA_200 must remain present."""
+        df = _calculate_technical_indicators(_synthetic_ohlcv(50))
+        assert "SMA_50" in df.columns
+        assert "SMA_200" in df.columns
