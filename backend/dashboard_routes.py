@@ -1265,6 +1265,9 @@ def create_dashboard_router() -> APIRouter:
             points.append(
                 IndicatorPoint(
                     date=str(idx.date()),
+                    sma_5=_safe(row.get("SMA_5")),
+                    sma_10=_safe(row.get("SMA_10")),
+                    sma_20=_safe(row.get("SMA_20")),
                     sma_50=_safe(row.get("SMA_50")),
                     sma_200=_safe(
                         row.get("SMA_200"),

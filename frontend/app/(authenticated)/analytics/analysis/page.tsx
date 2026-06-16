@@ -129,6 +129,9 @@ const INDICATOR_OPTIONS: {
   key: keyof IndicatorVisibility;
   label: string;
 }[] = [
+  { key: "sma5", label: "SMA 5" },
+  { key: "sma10", label: "SMA 10" },
+  { key: "sma20", label: "SMA 20" },
   { key: "sma50", label: "SMA 50" },
   { key: "sma200", label: "SMA 200" },
   { key: "bollinger", label: "Bollinger Bands" },
@@ -385,6 +388,9 @@ function AnalysisTab({
     () =>
       indicators?.data.map((d) => ({
         date: d.date,
+        sma_5: d.sma_5,
+        sma_10: d.sma_10,
+        sma_20: d.sma_20,
         sma_50: d.sma_50,
         sma_200: d.sma_200,
         rsi_14: d.rsi_14,

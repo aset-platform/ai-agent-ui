@@ -2,7 +2,7 @@
 /**
  * Multi-pane stock chart using TradingView lightweight-charts.
  *
- * Pane 1: Candlestick + SMA 50/200 + Bollinger Bands
+ * Pane 1: Candlestick + SMA 5/10/20/50/200 + Bollinger Bands
  * Pane 2: Volume histogram
  * Pane 3: RSI (14) with 70/30 reference lines
  * Pane 4: MACD line + Signal + Histogram
@@ -52,6 +52,9 @@ export interface OHLCVRow {
 
 export interface IndicatorRow {
   date: string;
+  sma_5: number | null;
+  sma_10: number | null;
+  sma_20: number | null;
   sma_50: number | null;
   sma_200: number | null;
   rsi_14: number | null;
@@ -266,6 +269,9 @@ export function StockChart({
   // object identity changes triggering rebuilds.
   const vis = useMemo(
     () => ({
+      sma5: visibleIndicators.sma5,
+      sma10: visibleIndicators.sma10,
+      sma20: visibleIndicators.sma20,
       sma50: visibleIndicators.sma50,
       sma200: visibleIndicators.sma200,
       bollinger: visibleIndicators.bollinger,
@@ -276,6 +282,9 @@ export function StockChart({
       supportResistance: visibleIndicators.supportResistance,
     }),
     [
+      visibleIndicators.sma5,
+      visibleIndicators.sma10,
+      visibleIndicators.sma20,
       visibleIndicators.sma50,
       visibleIndicators.sma200,
       visibleIndicators.bollinger,
@@ -457,6 +466,75 @@ export function StockChart({
       series: ReturnType<typeof chart.addSeries>;
     };
     const overlaySeries: OverlaySeries[] = [];
+
+    if (vis.sma5) {
+      const sma5 = chart.addSeries(LineSeries, {
+        color: "#0ea5e9",
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        title: "",
+      });
+      sma5.setData(
+        filterNull(
+          aggIndicators.map((d) => ({
+            time: toTime(d.date),
+            value: d.sma_5,
+          })),
+        ),
+      );
+      overlaySeries.push({
+        name: "SMA 5",
+        color: "#0ea5e9",
+        series: sma5,
+      });
+    }
+
+    if (vis.sma10) {
+      const sma10 = chart.addSeries(LineSeries, {
+        color: "#6366f1",
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        title: "",
+      });
+      sma10.setData(
+        filterNull(
+          aggIndicators.map((d) => ({
+            time: toTime(d.date),
+            value: d.sma_10,
+          })),
+        ),
+      );
+      overlaySeries.push({
+        name: "SMA 10",
+        color: "#6366f1",
+        series: sma10,
+      });
+    }
+
+    if (vis.sma20) {
+      const sma20 = chart.addSeries(LineSeries, {
+        color: "#a855f7",
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        title: "",
+      });
+      sma20.setData(
+        filterNull(
+          aggIndicators.map((d) => ({
+            time: toTime(d.date),
+            value: d.sma_20,
+          })),
+        ),
+      );
+      overlaySeries.push({
+        name: "SMA 20",
+        color: "#a855f7",
+        series: sma20,
+      });
+    }
 
     if (vis.sma50) {
       const sma50 = chart.addSeries(LineSeries, {

@@ -97,6 +97,9 @@ describe("StockChart S/R price lines", () => {
         supportLevels={[80, 90, 95]}
         resistanceLevels={[120, 115, 110]}
         visibleIndicators={{
+          sma5: false,
+          sma10: false,
+          sma20: false,
           sma50: false,
           sma200: false,
           bollinger: false,
@@ -127,6 +130,9 @@ describe("StockChart S/R price lines", () => {
         supportLevels={[80, 90, 95]}
         resistanceLevels={[120, 115, 110]}
         visibleIndicators={{
+          sma5: false,
+          sma10: false,
+          sma20: false,
           sma50: false,
           sma200: false,
           bollinger: false,
@@ -156,6 +162,9 @@ describe("StockChart S/R price lines", () => {
         supportLevels={[80, 90, 95]}
         resistanceLevels={[120, 115, 110]}
         visibleIndicators={{
+          sma5: false,
+          sma10: false,
+          sma20: false,
           sma50: false,
           sma200: false,
           bollinger: false,

@@ -980,6 +980,58 @@ class TestChartIndicators:
         # Sanity: rsi_14 still flows through untouched.
         assert body["data"][0]["rsi_14"] == 55.0
 
+    @patch("tools._analysis_movement._analyse_price_movement")
+    @patch("tools._analysis_shared.compute_indicators")
+    @patch("dashboard_routes.get_cache")
+    def test_short_window_smas_in_response(
+        self,
+        mock_cache_fn,
+        mock_compute,
+        mock_movement,
+        client,
+    ):
+        """sma_5/sma_10/sma_20 are surfaced per IndicatorPoint."""
+        mock_compute.return_value = pd.DataFrame(
+            [
+                {
+                    "Close": 2500.0,
+                    "SMA_5": 2510.0,
+                    "SMA_10": 2495.0,
+                    "SMA_20": 2480.0,
+                    "SMA_50": 2470.0,
+                    "SMA_200": 2400.0,
+                    "EMA_20": None,
+                    "RSI_14": None,
+                    "MACD": None,
+                    "MACD_Signal": None,
+                    "MACD_Hist": None,
+                    "BB_Upper": None,
+                    "BB_Lower": None,
+                }
+            ],
+            index=pd.DatetimeIndex(["2024-01-01"]),
+        )
+        mock_movement.return_value = {
+            "support_levels": [],
+            "resistance_levels": [],
+        }
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache_fn.return_value = cache
+
+        resp = client.get(
+            "/v1/dashboard/chart/indicators?ticker=RELIANCE.NS",
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data"][0]["sma_5"] == 2510.0
+        assert body["data"][0]["sma_10"] == 2495.0
+        assert body["data"][0]["sma_20"] == 2480.0
+        # Sanity: sma_50/sma_200 still flow through untouched.
+        assert body["data"][0]["sma_50"] == 2470.0
+        assert body["data"][0]["sma_200"] == 2400.0
+
     @patch(
         "tools._analysis_movement._analyse_price_movement",
     )

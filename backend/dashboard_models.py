@@ -214,6 +214,9 @@ class OHLCVResponse(BaseModel):
 
 class IndicatorPoint(BaseModel):
     date: str
+    sma_5: float | None = None
+    sma_10: float | None = None
+    sma_20: float | None = None
     sma_50: float | None = None
     sma_200: float | None = None
     ema_20: float | None = None

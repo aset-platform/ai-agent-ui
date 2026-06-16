@@ -22,9 +22,9 @@ def _calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Add technical indicator columns to the OHLCV DataFrame.
 
     Adds the following columns in-place on a copy of ``df``:
-    ``SMA_50``, ``SMA_200``, ``EMA_20``, ``RSI_14``, ``MACD``,
-    ``MACD_Signal``, ``MACD_Hist``, ``BB_Upper``, ``BB_Middle``,
-    ``BB_Lower``, ``ATR_14``.
+    ``SMA_5``, ``SMA_10``, ``SMA_20``, ``SMA_50``, ``SMA_200``,
+    ``EMA_20``, ``RSI_14``, ``MACD``, ``MACD_Signal``, ``MACD_Hist``,
+    ``BB_Upper``, ``BB_Middle``, ``BB_Lower``, ``ATR_14``.
 
     Args:
         df: OHLCV DataFrame with ``Open``, ``High``, ``Low``, ``Close``
@@ -38,6 +38,15 @@ def _calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     high = df["High"]
     low = df["Low"]
 
+    df["SMA_5"] = ta.trend.SMAIndicator(
+        close=close, window=5
+    ).sma_indicator()
+    df["SMA_10"] = ta.trend.SMAIndicator(
+        close=close, window=10
+    ).sma_indicator()
+    df["SMA_20"] = ta.trend.SMAIndicator(
+        close=close, window=20
+    ).sma_indicator()
     df["SMA_50"] = ta.trend.SMAIndicator(
         close=close, window=50
     ).sma_indicator()

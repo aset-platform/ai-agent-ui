@@ -216,6 +216,9 @@ export interface OHLCVResponse {
 
 export interface IndicatorPoint {
   date: string;
+  sma_5: number | null;
+  sma_10: number | null;
+  sma_20: number | null;
   sma_50: number | null;
   sma_200: number | null;
   ema_20: number | null;
