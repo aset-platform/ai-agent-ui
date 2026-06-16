@@ -102,6 +102,16 @@ export class AdvancedAnalyticsPage extends BasePage {
     await this.tid(FE.advancedAnalyticsPrev(report)).click();
   }
 
+  /** "Add filtered tickers to watchlist" button. */
+  addToWatchlistBtn(): Locator {
+    return this.tid(FE.aaAddToWatchlist);
+  }
+
+  /** Result/feedback element rendered after the button is clicked. */
+  addToWatchlistResult(): Locator {
+    return this.tid(FE.aaAddToWatchlistResult);
+  }
+
   /** Navigate directly to the Swing Setups tab. */
   async gotoSwingSetups(): Promise<void> {
     await super.goto("/advanced-analytics?tab=swing-setups");

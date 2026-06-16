@@ -86,6 +86,55 @@ def _check_existing_data(ticker: str) -> dict:
         return None
 
 
+# Curated NSE ETF symbols (sans .NS/.BO) that are NOT caught by the
+# BEES/ETF suffix rule.  Gold/silver AMC ETFs, Motilal Oswal index
+# ETFs, SBI SETF*, Bharat-22, liquid, etc.  Extend as new ETFs list.
+_NSE_ETF_SYMBOLS: frozenset[str] = frozenset(
+    {
+        "GOLD1",
+        "GOLDCASE",
+        "GROWWGOLD",
+        "HDFCGOLD",
+        "HDFCSILVER",
+        "TATAGOLD",
+        "HDFCNIF100",
+        "HDFCNIFTY",
+        "LIQUID",
+        "MAFANG",
+        "MASPTOP50",
+        "MOGSEC",
+        "MOHEALTH",
+        "MOM100",
+        "MOM50",
+        "MON100",
+        "MONQ50",
+        "MOQUALITY",
+        "MOVALUE",
+        "NETFPHARMA",
+        "SETFNIF50",
+        "SETFNIFBK",
+        "SETFNN50",
+        "ABSLNN50ET",
+        "ICICIB22",
+        "LICNFNHGP",
+        "EQUAL50",
+    }
+)
+
+
+def _is_nse_etf(clean: str) -> bool:
+    """High-precision NSE ETF check on a symbol stripped of the
+    .NS/.BO suffix.  The BEES/ETF suffixes are exclusive to NSE
+    ETFs (no NSE equity ends in either); the rest are curated
+    exact matches to avoid false positives (e.g. SKYGOLD, MOIL
+    are stocks)."""
+    return (
+        clean.endswith("BEES")
+        or clean.endswith("ETF")
+        or clean in _NSE_ETF_SYMBOLS
+    )
+
+
 _etf_symbols: set[str] | None = None
 
 
@@ -131,7 +180,7 @@ def _load_etf_symbols() -> set[str]:
                 }
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # raises if no loop
             import concurrent.futures
 
             with concurrent.futures.ThreadPoolExecutor(
@@ -166,10 +215,19 @@ def _detect_ticker_type(ticker: str) -> str:
     if "=F" in ticker or ".NYB" in ticker:
         return "commodity"
 
-    # Check cached ETF symbols from stock_master
+    # NSE / BSE ETF classification — suffix + curated set.
+    # Checked BEFORE the PG-backed _load_etf_symbols() so that
+    # India ETFs are classified even when stock_master tags are
+    # absent.
     clean = ticker.replace(".NS", "").replace(
         ".BO", "",
     )
+    if (
+        ticker.endswith(".NS") or ticker.endswith(".BO")
+    ) and _is_nse_etf(clean):
+        return "etf"
+
+    # Check cached ETF symbols from stock_master (US ETFs).
     if clean in _load_etf_symbols():
         return "etf"
     return "stock"

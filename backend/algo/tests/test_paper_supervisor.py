@@ -140,13 +140,17 @@ async def test_list_active_filters_by_user():
 
 
 def test_build_replay_source_rejects_path_traversal():
-    with pytest.raises(ValueError, match="must live under"):
+    with pytest.raises(ValueError, match="outside allowed roots"):
         build_replay_source("../../etc/passwd")
 
 
 def test_build_replay_source_rejects_missing():
+    # Passing user_id so containment check passes (candidate name ==
+    # f"{user_id}.jsonl") but the file is absent → FileNotFoundError.
     with pytest.raises(FileNotFoundError):
-        build_replay_source("does_not_exist.jsonl")
+        build_replay_source(
+            "no-such-uuid.jsonl", user_id="no-such-uuid",
+        )
 
 
 def test_build_replay_source_accepts_valid_fixture():

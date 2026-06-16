@@ -644,3 +644,159 @@ def test_export_default_columns_load_succeeds(super_client):
     header = r.text.splitlines()[0]
     assert "Avg EMV Score" in header
     assert "Avg 14d EMV" in header
+
+
+# ---------------------------------------------------------------
+# /{report}/tickers endpoint (Add-to-Watchlist JSON list)
+# ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("report", REPORTS)
+def test_tickers_endpoint_returns_response_shape(
+    super_client: TestClient,
+    report: str,
+):
+    """Every /tickers endpoint returns ReportTickersResponse shape."""
+    r = super_client.get(f"/v1/advanced-analytics/{report}/tickers")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {"tickers", "total", "capped"} <= body.keys()
+    assert isinstance(body["tickers"], list)
+    assert isinstance(body["total"], int)
+    assert isinstance(body["capped"], bool)
+
+
+@pytest.mark.parametrize("report", REPORTS)
+def test_tickers_endpoint_returns_403_for_general_role(
+    general_client: TestClient,
+    report: str,
+):
+    r = general_client.get(f"/v1/advanced-analytics/{report}/tickers")
+    assert r.status_code == 403
+
+
+def test_tickers_endpoint_ticker_list_is_subset_of_universe(
+    super_client: TestClient,
+):
+    """Returned tickers are all from the seeded universe."""
+    r = super_client.get(
+        "/v1/advanced-analytics/top-50-delivery-by-qty/tickers"
+    )
+    assert r.status_code == 200
+    body = r.json()
+    universe = set(_seed_tickers())
+    for ticker in body["tickers"]:
+        assert ticker in universe, f"Unexpected ticker: {ticker}"
+
+
+def test_tickers_endpoint_search_filter_applied(
+    super_client: TestClient,
+):
+    """`?search=AAA` must limit returned tickers."""
+    r = super_client.get(
+        "/v1/advanced-analytics/top-50-delivery-by-qty/tickers?search=aaa"
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert all("AAA" in t for t in body["tickers"]), body["tickers"]
+
+
+def test_tickers_endpoint_not_capped_for_small_universe(
+    super_client: TestClient,
+):
+    """Seed universe is 3 tickers — well below cap, capped=False."""
+    r = super_client.get(
+        "/v1/advanced-analytics/top-50-delivery-by-qty/tickers"
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["capped"] is False
+
+
+def test_tickers_endpoint_capped_flag_set_when_cap_exceeded(
+    monkeypatch: pytest.MonkeyPatch,
+    super_client: TestClient,
+):
+    """Patch _MAX_EXPORT_ROWS to 1 → capped=True, list truncated."""
+    monkeypatch.setattr(aar, "_MAX_EXPORT_ROWS", 1)
+    r = super_client.get(
+        "/v1/advanced-analytics/top-50-delivery-by-qty/tickers"
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["capped"] is True
+    assert len(body["tickers"]) <= 1
+
+
+def test_tickers_endpoint_total_reflects_untruncated_count(
+    monkeypatch: pytest.MonkeyPatch,
+    super_client: TestClient,
+):
+    """total must be the full filtered count, not the capped slice."""
+    # Reduce cap to 1; if more than 1 ticker passes the filter,
+    # total > len(tickers).
+    monkeypatch.setattr(aar, "_MAX_EXPORT_ROWS", 1)
+    r = super_client.get(
+        "/v1/advanced-analytics/top-50-delivery-by-qty/tickers"
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] >= len(body["tickers"])
+
+
+# ---------------------------------------------------------------
+# Fix: top-50 hard-slice fidelity in _export_tickers (Fix 1)
+# ---------------------------------------------------------------
+
+
+def test_tickers_top50_report_hard_capped_at_50(
+    monkeypatch: pytest.MonkeyPatch,
+    app,
+):
+    """For top-50-delivery-by-qty, _export_tickers must return at
+    most 50 tickers even when >50 rows pass the _passes_filter gate.
+
+    We mock _cached_full_rows to return 60 qualifying rows (all with
+    today_dv > 0 so they pass ``_passes_filter``).  The endpoint
+    must cap at 50 and set total=50.
+    """
+    from fastapi.testclient import TestClient
+
+    from auth.dependencies import pro_or_superuser
+    from auth.models import UserContext
+    from backend.advanced_analytics_routes import AdvancedRow
+
+    # Build 60 rows, each with a distinct ticker and today_dv > 0.
+    def _make_row(i: int) -> AdvancedRow:
+        return AdvancedRow(
+            ticker=f"T{i:03d}.NS",
+            today_dv=float(60 - i),  # distinct delivery qty
+        )
+
+    sixty_rows = [_make_row(i) for i in range(60)]
+
+    async def _fake_cached_full_rows(user, as_of):
+        return sixty_rows
+
+    monkeypatch.setattr(aar, "_cached_full_rows", _fake_cached_full_rows)
+    # _filter_tickers must keep all rows (market="all", type="all")
+    monkeypatch.setattr(aar, "_filter_tickers", lambda tickers, m, t: tickers)
+
+    app.dependency_overrides[pro_or_superuser] = lambda: UserContext(
+        user_id="user-top50-test",
+        email="top50@test",
+        role="superuser",
+    )
+    client = TestClient(app)
+    r = client.get(
+        "/v1/advanced-analytics/top-50-delivery-by-qty/tickers"
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 50, (
+        f"expected total=50 (post top-50 slice), got {body['total']}"
+    )
+    assert len(body["tickers"]) == 50, (
+        f"expected 50 tickers, got {len(body['tickers'])}"
+    )
+    assert body["capped"] is False  # 50 <= _MAX_EXPORT_ROWS (10_000)

@@ -2,6 +2,177 @@
 
 ---
 
+### 2026-06-14 — fix: dry-run reservations must not consume live budget (branch `feature/aa-add-to-watchlist`)
+
+**Why:** A dry-run (and paper) run hit `signal_rejected: live_budget_cap`
+on every BUY. Root cause: dry-run is recorded as `mode="live"`
+(`routes/paper.py:525`) and its budget reservations were stamped with NO
+`mode` in metadata (`live/runtime.py`), so `COALESCE(metadata->>'mode',
+'live')` defaulted to `'live'`. The headroom filter only excluded
+`'paper'` (`<> 'paper'`), so dry-run reservations counted against the
+user's `allocated_inr`. The dry-run simulated fill transitions the
+reservation to FILLED (never released), so each dry-run BUY permanently
+occupied real-money headroom. Stale dry-run artifacts from crashed
+2026-05-29 runs (15 FILLED ≈ ₹96k net + 30 orphaned PENDING/SUBMITTED ≈
+₹284k) exceeded the ₹100k allocation → negative headroom → every BUY
+rejected. (Paper mode was already correctly excluded — that's why the
+paper replay filled 128.)
+
+**Fixed:**
+- `live/runtime.py` — reservation metadata now stamps
+  `"mode": "dryrun" if self._dry_run else "live"`.
+- `live/budget_repo.py` — `sum_active_reservations` +
+  `sum_open_position_cost` headroom filters changed from
+  `<> 'paper'` to `= 'live'` (excludes BOTH paper and dryrun; only real
+  live orders/holdings/in-flight account against allocated_inr).
+- Regression tests `test_sum_active_reservations_excludes_dryrun` +
+  `test_sum_open_position_cost_excludes_dryrun`.
+- **Data cleanup:** re-tagged the 45 stale dry-run reservations
+  (reservation-ids carrying `DRY_*` kite order ids — no real-money rows
+  exist for this user) to `metadata.mode='dryrun'`. Live headroom inputs
+  restored `95992.65|283602.70 → 0|0`.
+
+Net behaviour (matches intended design): **only LIVE accounts holdings /
+placed / in-flight orders against the budget; paper + dry-run are
+budget-free.** 21 budget tests green. NOTE: requires a backend restart to
+take effect (running process holds the old in-proc filter).
+
+---
+
+### 2026-06-14 — fix: dense-bar replay fixtures (branch `feature/aa-add-to-watchlist`)
+
+**Why:** After the 2026-06-12 Paper Replay Fixture Builder shipped, paper
+replay STILL produced `fills=0`. Root cause: the builder emitted ticks
+only on the sparse trigger dates (≤2/ticker), but for a **daily**
+strategy the paper runtime computes `rsi_2` from `compute_indicators()`
+over the bar history it accumulates from the replayed ticks
+(`runtime._on_bar_close`), NOT from the Iceberg daily-overlay panel
+(`_ensure_daily_overlay_cache` is a no-op for `interval=="1d"`). With
+1–2 bars of history, `wilder_rsi(closes, 2)` never resolved → `rsi_2`
+key absent → `rsi_2 <= 5` never fired → 0 fills. `distance_from_sma200`
++ NIFTY gates were never the problem (date-keyed factor/regime/market
+panels). Second bug: `_synth_ticks` offsets `(0,30,90)` straddled two
+60s buckets → two zero-delta bars/date polluting the RSI series.
+
+**Fixed (`backend/algo/paper/fixture_builder.py` rewrite):**
+- `_dense_closes()` — ONE scoped Iceberg read (`ticker IN (...) AND date
+  BETWEEN ...`) of the whole universe across warm-up + scan window.
+- `_history_from_closes()` — flat `BarData` (O=H=L=C=close), identical
+  shape to the runtime's resampled fixture bars.
+- `_features_by_date()` — `rsi_2` now from `compute_indicators(history)`
+  (the runtime's exact path), other gates from date-keyed
+  factor/regime/market panels; `daily_overlay=None`. Drift-free by
+  construction: builder and runtime compute `rsi_2` from the same flat
+  close series.
+- `build_universe_fixture()` — emits a **dense** daily-bar series per
+  qualifying ticker from `_WARMUP_DAYS=420` before its earliest trigger
+  through its latest trigger.
+- `_synth_ticks()` offsets `(0,20,40)` — single 60s bucket → exactly one
+  bar/date.
+- Batched context loaders (`_load_market_panels`, `_load_factor_by_ticker`,
+  `_load_regime_by_date`) loaded once per build (was per-ticker).
+
+**Second bug — runtime cache window (`backend/algo/paper/runtime.py`):**
+After the dense fix, a fresh paper run STILL filled 0. `rsi_2` now
+resolved, but `_ensure_factor_cache` / `_ensure_regime_cache` lazily
+load over `[first_bar − 365d, first_bar + 1d]`, anchored to the FIRST
+bar seen. The dense fixture's first bar is ~600d in the past (warm-up),
+so the window `[2023-10 .. 2024-10]` ended >1yr BEFORE the trigger dates
+(Dec 2025–Feb 2026) → `distance_from_sma200` + `stress_prob` absent at
+every trigger → gated entry silent-skipped. Fix: window end now
+`max(first_bar, today) + 1d` (live runs unchanged; historical replay
+covered). Regression tests `test_factor_cache_window_extends_to_today` +
+`test_regime_cache_window_extends_to_today`.
+
+**Verified (user 60d30496, lookback 180):** rebuilt fixture dense —
+~290–336 bars/ticker, 27,000 ticks (was 105), 29 trigger tickers / 49
+trigger dates. **Real `PaperRuntime.run()` over the fixture → 152 fills**
+(251 signals → 152 order_filled). Tests: `test_paper_runtime.py` (7) +
+`test_paper_fixture_builder.py` (20) + `test_paper_supervisor.py` (7)
+all green.
+
+---
+
+### 2026-06-12 — feat: Paper Replay Fixture Builder (branch `feature/aa-add-to-watchlist`)
+
+**Why:** Paper-replay runs were producing 0 fills because the built-in
+fixture loader defaulted to scanning the full `discovery` universe without
+targeting dates where the user's own watchlist tickers actually hit the
+RSI(2)≤5 + gate conditions. Users needed a way to generate a replay
+fixture seeded from their own holdings + watchlist, hitting only dates
+where the strategy's v3 entry AST would have fired — so a paper replay
+actually fills on realistic positions.
+
+**Built:**
+- `backend/algo/paper/fixture_builder.py` — drift-free trigger scan:
+  `_entry_fires()` evaluates the exact strategy entry AST via
+  `Evaluator.eval_node`; `_assembled_features_by_date()` mirrors
+  `PaperRuntime._on_bar_close` feature assembly (bar_feats, market_regime,
+  market_trend, factor_row, regime_row); `build_universe_fixture()` scans
+  the user's holdings + watchlist tickers over `lookback_days`, writes
+  JSONL fixture, returns `FixtureBuildResult`.
+- **Security hardening**: per-caller fixture directory scoped to
+  `<APP_HOME>/fixtures/<user_id>.jsonl` (path constructed server-side;
+  user-controlled input never interpolated into filesystem paths; IDOR
+  and path-traversal enumeration prevented).
+- `POST /v1/algo/paper/fixtures/build` — FastAPI endpoint; requires auth;
+  calls `build_universe_fixture(current_user.id, lookback_days)`.
+- `frontend/hooks/useBuildReplayFixture.ts` — `apiFetch` wrapper; state:
+  `submitting`, `result`, `error`.
+- `frontend/components/widgets/WatchlistOverflowMenu.tsx` — "Build RSI(2)
+  replay fixture" menu item (`data-testid="watchlist-build-fixture"`);
+  inline result paragraph with `data-testid="watchlist-build-fixture-result"`.
+- E2E: extended `DashboardHomePage` POM with `openWatchlistOverflow()`,
+  `buildFixtureItem()`, `buildFixtureResult()`; added
+  `watchlistBuildFixture` + `watchlistBuildFixtureResult` to `FE` selectors;
+  `e2e/tests/frontend/watchlist-build-fixture.spec.ts` (2 tests, all green).
+
+**Manual smoke (user 60d30496, build_universe_fixture):**
+```
+lookback  60 -> n_tickers=68  n_trigger_dates=0   n_ticks=0    (no RSI2<=5 in last 60d — real-data outcome, not a bug)
+lookback 120 -> n_tickers=68  n_trigger_dates=4   n_ticks=12   trigger_tickers=['ADANIPORTS.NS','CRAFTSMAN.NS','DELHIVERY.NS']
+lookback 250 -> n_tickers=68  n_trigger_dates=63  n_ticks=189  trigger_tickers=[35 tickers incl. RELIANCE.NS, INFY.NS, HINDUNILVR.NS ...]
+```
+Default 60-day window finds 0 trigger dates (market has not seen RSI2<=5
+oversold setups in user's universe in the past 2 months). Use
+`lookback_days=120` or `lookback_days=250` to get fills; the next paper run
+started after building the fixture will replay those dates.
+
+Note: build takes ~26s (68 tickers x Iceberg feature panel loading);
+E2E spec uses `test.slow()` (90s budget) + 60s `toContainText` timeout.
+
+---
+
+### 2026-06-11 — feat: Add to Watchlist from Advanced Analytics filters
+
+**Why:** RSI(2) Connors Daily v3 paper trading produced 0 fills. Diagnosed:
+paper live-WS subscribes only to watchlist ∪ holdings (~37), not the
+strategy's `discovery` universe (701), so RSI(2)≤5 entries almost never
+fire. The lever the user controls is the watchlist — so let users grow it
+from their own Advanced Analytics filters.
+
+**Built** (branch `feature/aa-add-to-watchlist`, subagent-driven per
+`docs/superpowers/plans/2026-06-11-advanced-analytics-add-to-watchlist.md`):
+- Backend: extracted shared `_bulk_link_tickers` core from the CSV bulk-add
+  (CSV behaviour unchanged); new `POST /v1/users/me/tickers/bulk-add` (JSON
+  list, server-side dedupe); hoisted above the `/{ticker}` wildcard (#248).
+- Backend: `GET /v1/advanced-analytics/{report}/tickers` — full filtered
+  ticker list reusing the CSV export's filter pipeline (top-50 hard-cap
+  honored; capped at `_MAX_EXPORT_ROWS`); pro/superuser-gated.
+- Frontend: `useAddToWatchlist` hook + shared `AddFilteredToWatchlistButton`
+  in `AdvancedAnalyticsTable` (→ all tabs), filter parity with the export,
+  inline added/skipped feedback (no global toast lib), reuses the export's
+  disabled/cap guards.
+- E2E: extended `AdvancedAnalyticsPage` POM + `aa-add-to-watchlist.spec.ts`
+  (named to dodge the project's `/analytics.*\.spec\.ts/` testIgnore).
+
+66 backend tests + 2 frontend unit + E2E green; flake8/eslint clean. Each
+task spec+quality reviewed; final holistic review = ready to merge.
+Reminder: a paper run must be (re)started after growing the watchlist for
+new tickers to be subscribed.
+
+---
+
 ### 2026-06-11 — fix(dashboard): portfolio-tab analysis + scoped live chips (PR #258)
 
 Three dashboard fixes (bundled into PR #258 per request):

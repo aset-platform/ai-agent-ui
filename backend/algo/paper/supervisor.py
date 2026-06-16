@@ -36,6 +36,7 @@ from uuid import UUID
 from backend.algo.paper.runtime import PaperRuntime
 from backend.algo.stream.sources import ReplayTickSource, TickSource
 from backend.algo.strategy.ast import Strategy
+from backend.paths import APP_HOME
 
 _logger = logging.getLogger(__name__)
 
@@ -255,34 +256,83 @@ _FIXTURES_ROOT = Path(
     "/app/backend/algo/tests/fixtures"
 ).resolve()
 
+_USER_FIXTURES_ROOT = (Path(APP_HOME) / "fixtures").resolve()
 
-def build_replay_source(fixture_path: str) -> ReplayTickSource:
-    """Helper for the routes layer — validates the path lives
-    inside the algo tests fixtures dir (so users can't read
-    arbitrary files via the API)."""
-    candidate = (_FIXTURES_ROOT / fixture_path).resolve()
-    if not str(candidate).startswith(str(_FIXTURES_ROOT)):
+
+def build_replay_source(
+    fixture_path: str, user_id: str | None = None,
+) -> ReplayTickSource:
+    """Validate the fixture path lives inside an allowed root.
+
+    CI fixtures (_FIXTURES_ROOT) are public; user fixtures
+    (_USER_FIXTURES_ROOT) are scoped to the caller — only
+    ``<user_id>.jsonl`` is accessible, preventing cross-tenant
+    access (IDOR).
+    """
+    in_scope = False
+    for root in (_FIXTURES_ROOT, _USER_FIXTURES_ROOT):
+        candidate = (root / fixture_path).resolve()
+        if not candidate.is_relative_to(root):
+            continue
+        # Path is under this root — now check per-root scope rules.
+        if root == _USER_FIXTURES_ROOT and (
+            user_id is None or candidate.name != f"{user_id}.jsonl"
+        ):
+            # Path targets another user's file — reject immediately
+            # (IDOR). Do NOT fall through to CI root so that a
+            # cross-tenant path cannot be laundered via the CI check.
+            raise ValueError(
+                "fixture_path outside allowed roots / scope: "
+                f"{fixture_path}"
+            )
+        # Passed scope check for this root.
+        in_scope = True
+        if candidate.exists():
+            return ReplayTickSource(candidate, pace="fast")
+    if not in_scope:
         raise ValueError(
-            f"fixture_path must live under {_FIXTURES_ROOT}",
+            f"fixture_path outside allowed roots / scope: {fixture_path}"
         )
-    if not candidate.exists():
-        raise FileNotFoundError(str(candidate))
-    return ReplayTickSource(candidate, pace="fast")
+    raise FileNotFoundError(fixture_path)
 
 
-def list_replay_fixtures() -> list[dict[str, Any]]:
-    """Enumerate ``*.jsonl`` files in the fixtures dir with
+def list_replay_fixtures(
+    user_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Enumerate ``*.jsonl`` files in the fixtures dirs with
     summary stats (tick count, distinct tickers). Powers the
     start-run form's fixture dropdown — same validation as
     build_replay_source so the dropdown can't show a path the
     POST /runs endpoint would reject.
+
+    Files from the committed CI dir are tagged ``"source": "ci"``;
+    user-generated files (``<APP_HOME>/fixtures/<user_id>.jsonl``)
+    are tagged ``"source": "user"``. The user root is scoped to
+    the caller's own file only — other users' fixtures are not
+    enumerated (IDOR prevention).
     """
     import json
 
-    if not _FIXTURES_ROOT.exists():
-        return []
     out: list[dict[str, Any]] = []
-    for path in sorted(_FIXTURES_ROOT.glob("*.jsonl")):
+
+    # CI root: all *.jsonl are public / shared.
+    ci_paths = (
+        sorted(_FIXTURES_ROOT.glob("*.jsonl"))
+        if _FIXTURES_ROOT.exists()
+        else []
+    )
+
+    # User root: only the caller's own <user_id>.jsonl.
+    user_paths = (
+        sorted(_USER_FIXTURES_ROOT.glob(f"{user_id}.jsonl"))
+        if (user_id is not None and _USER_FIXTURES_ROOT.exists())
+        else []
+    )
+
+    for path, source_tag in (
+        [(p, "ci") for p in ci_paths]
+        + [(p, "user") for p in user_paths]
+    ):
         n_ticks = 0
         tickers: set[str] = set()
         try:
@@ -310,5 +360,6 @@ def list_replay_fixtures() -> list[dict[str, Any]]:
             "distinct_tickers": len(tickers),
             "sample_tickers": sorted(tickers)[:5],
             "size_bytes": path.stat().st_size,
+            "source": source_tag,
         })
     return out

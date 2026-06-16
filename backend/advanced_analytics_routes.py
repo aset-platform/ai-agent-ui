@@ -55,9 +55,9 @@ from advanced_analytics_filters import (
     passes_bundle_filters,
 )
 from advanced_analytics_models import (
+    ESTABLISHED_CROSS_DAYS,
     AdvancedReportResponse,
     AdvancedRow,
-    ESTABLISHED_CROSS_DAYS,
     StaleTicker,
     SwingMethodology,
     SwingSetupsResponse,
@@ -78,6 +78,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from insights_routes import _get_stock_repo, _scoped_tickers
 from market_utils import detect_market
+from pydantic import BaseModel
 
 from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
@@ -1489,6 +1490,19 @@ def _csv_response(
     )
 
 
+class ReportTickersResponse(BaseModel):
+    """JSON response for ``/{report}/tickers``.
+
+    Returns the full filtered ticker list for a report (same
+    pipeline as the CSV export) capped at ``_MAX_EXPORT_ROWS``.
+    Used by the frontend "Add to Watchlist" button.
+    """
+
+    tickers: list[str]
+    total: int
+    capped: bool
+
+
 async def _stream_export(
     user: UserContext,
     report: ReportName,
@@ -1584,6 +1598,65 @@ async def _stream_export(
             exc_info=True,
         )
     return _csv_response(payload, report, as_of)
+
+
+async def _export_tickers(
+    user: UserContext,
+    report: ReportName,
+    market: MarketFilter,
+    ticker_type: TickerTypeFilter,
+    search: str,
+    tech: str,
+    fund: str,
+) -> ReportTickersResponse:
+    """Full filtered ticker list for the report (JSON), capped at
+    ``_MAX_EXPORT_ROWS``. Mirrors ``_stream_export``'s filter
+    pipeline minus CSV serialisation — including the hard top-50
+    slice for ``top-50-delivery-by-qty``.
+    """
+    needle = search.strip().upper()
+    tech_keys = parse_filter_csv(tech, TECH_KEYS, "tech")
+    fund_keys = parse_filter_csv(fund, FUND_KEYS, "fund")
+    as_of = _effective_trading_date()
+    full_rows = await _cached_full_rows(user, as_of)
+    keep = set(
+        _filter_tickers(
+            [r.ticker for r in full_rows],
+            market,
+            ticker_type,
+        )
+    )
+    rows = [r for r in full_rows if r.ticker in keep]
+    if needle:
+        rows = [r for r in rows if needle in r.ticker.upper()]
+    if tech_keys or fund_keys:
+        rows = [
+            r for r in rows
+            if passes_bundle_filters(r, tech_keys, fund_keys)
+        ]
+    rows = [r for r in rows if _passes_filter(r, report)]
+
+    # Apply the same sort + hard cap as _stream_export /
+    # _apply_sort_paginate so the ticker list matches exactly
+    # what the table and CSV export show.
+    use_key, use_dir = _DEFAULT_SORT[report]
+    rows.sort(
+        key=lambda r: (
+            getattr(r, use_key) is None,
+            getattr(r, use_key) or 0,
+        ),
+        reverse=use_dir == "desc",
+    )
+    if report == "top-50-delivery-by-qty":
+        rows = rows[:50]
+
+    total = len(rows)
+    tickers = [r.ticker for r in rows][:_MAX_EXPORT_ROWS]
+    return ReportTickersResponse(
+        tickers=tickers,
+        total=total,
+        capped=total > _MAX_EXPORT_ROWS,
+    )
 
 
 # ---------------------------------------------------------------
@@ -1719,6 +1792,65 @@ def create_advanced_analytics_router() -> APIRouter:
             endpoint=_make_export_endpoint(report),
             methods=["GET"],
             name=(f"advanced_analytics_" f"{report.replace('-', '_')}_export"),
+        )
+
+    def _make_tickers_endpoint(report: ReportName):
+        async def _handler(
+            user: UserContext = Depends(pro_or_superuser),
+            market: str = Query("all", pattern="^(all|india|us)$"),
+            ticker_type: str = Query(
+                "all", pattern="^(all|stock|etf)$"
+            ),
+            search: str = Query("", max_length=20),
+            tech: str = Query(
+                "",
+                max_length=200,
+                pattern="^[a-z0-9_,]*$",
+            ),
+            fund: str = Query(
+                "",
+                max_length=200,
+                pattern="^[a-z0-9_,]*$",
+            ),
+        ) -> ReportTickersResponse:
+            try:
+                return await _export_tickers(
+                    user,
+                    report,
+                    market,  # type: ignore[arg-type]
+                    ticker_type,  # type: ignore[arg-type]
+                    search,
+                    tech,
+                    fund,
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:
+                _logger.exception(
+                    "advanced_analytics %s tickers failed: %s",
+                    report,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        f"advanced_analytics {report} tickers failed"
+                    ),
+                )
+
+        _handler.__name__ = f"tickers_{report.replace('-', '_')}"
+        return _handler
+
+    for report in REPORTS:
+        router.add_api_route(
+            path=f"/{report}/tickers",
+            endpoint=_make_tickers_endpoint(report),
+            methods=["GET"],
+            response_model=ReportTickersResponse,
+            name=(
+                f"advanced_analytics_"
+                f"{report.replace('-', '_')}_tickers"
+            ),
         )
 
     # -------- Swing Setups --------

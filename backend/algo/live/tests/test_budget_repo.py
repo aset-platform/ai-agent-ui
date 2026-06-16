@@ -269,3 +269,99 @@ async def test_sum_active_reservations_excludes_sells(session):
         user_id=uid,
     )
     assert total == Decimal("1000.00")  # only BUY counted
+
+
+@pytest.mark.asyncio
+async def test_sum_active_reservations_excludes_dryrun(session):
+    """Dry-run reservations (metadata.mode='dryrun') are a rehearsal
+    and must NOT deduct from real-money Cap 0 headroom — only LIVE
+    rows count."""
+    repo = BudgetRepo()
+    uid = uuid4()
+    sid = uuid4()
+    session.tracked_user_ids.append(uid)
+
+    # LIVE BUY (untagged → defaults to live) — counts.
+    await repo.insert_reservation_event(
+        session,
+        BudgetReservation(
+            reservation_id=uuid4(),
+            user_id=uid,
+            strategy_id=sid,
+            state=ReservationState.SUBMITTED,
+            ticker="A.NS",
+            side="BUY",
+            qty=10,
+            reserved_inr=Decimal("1000.00"),
+            transitioned_at=datetime.now(timezone.utc),
+        ),
+    )
+    # DRY-RUN BUY — excluded.
+    await repo.insert_reservation_event(
+        session,
+        BudgetReservation(
+            reservation_id=uuid4(),
+            user_id=uid,
+            strategy_id=sid,
+            state=ReservationState.SUBMITTED,
+            ticker="B.NS",
+            side="BUY",
+            qty=20,
+            reserved_inr=Decimal("5000.00"),
+            transitioned_at=datetime.now(timezone.utc),
+            metadata={"mode": "dryrun"},
+        ),
+    )
+    await session.commit()
+
+    total = await repo.sum_active_reservations(session, user_id=uid)
+    assert total == Decimal("1000.00")  # dry-run excluded
+
+
+@pytest.mark.asyncio
+async def test_sum_open_position_cost_excludes_dryrun(session):
+    """A FILLED dry-run position must not occupy real-money budget."""
+    repo = BudgetRepo()
+    uid = uuid4()
+    sid = uuid4()
+    session.tracked_user_ids.append(uid)
+
+    # LIVE FILLED BUY — counts.
+    await repo.insert_reservation_event(
+        session,
+        BudgetReservation(
+            reservation_id=uuid4(),
+            user_id=uid,
+            strategy_id=sid,
+            state=ReservationState.FILLED,
+            ticker="A.NS",
+            side="BUY",
+            qty=10,
+            reserved_inr=Decimal("1000.00"),
+            filled_qty=10,
+            filled_inr=Decimal("1000.00"),
+            transitioned_at=datetime.now(timezone.utc),
+        ),
+    )
+    # DRY-RUN FILLED BUY — excluded.
+    await repo.insert_reservation_event(
+        session,
+        BudgetReservation(
+            reservation_id=uuid4(),
+            user_id=uid,
+            strategy_id=sid,
+            state=ReservationState.FILLED,
+            ticker="B.NS",
+            side="BUY",
+            qty=20,
+            reserved_inr=Decimal("9000.00"),
+            filled_qty=20,
+            filled_inr=Decimal("9000.00"),
+            transitioned_at=datetime.now(timezone.utc),
+            metadata={"mode": "dryrun"},
+        ),
+    )
+    await session.commit()
+
+    total = await repo.sum_open_position_cost(session, user_id=uid)
+    assert total == Decimal("1000.00")  # dry-run FILLED excluded

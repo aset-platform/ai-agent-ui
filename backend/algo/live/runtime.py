@@ -1610,6 +1610,11 @@ class LiveRuntime:
                 "limit_price": (
                     str(limit_price) if limit_price is not None else None
                 ),
+                # Tag dry-run reservations so the user-pool headroom
+                # math excludes them (mirrors paper). Only real live
+                # orders account against allocated_inr; dry-run is a
+                # rehearsal and must not consume the budget.
+                "mode": "dryrun" if self._dry_run else "live",
             },
         )
         try:

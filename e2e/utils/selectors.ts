@@ -478,7 +478,13 @@ export const FE = {
   budgetReservationHistoryLink: "budget-reservation-history-link",
   budgetReservationHistoryModal: "budget-reservation-history-modal",
 
+  // ── Advanced Analytics — Add to Watchlist ───────
+  aaAddToWatchlist: "aa-add-to-watchlist",
+  aaAddToWatchlistResult: "aa-add-to-watchlist-result",
+
   // Watchlist bulk ops (Epic C)
+  watchlistBuildFixture: "watchlist-build-fixture",
+  watchlistBuildFixtureResult: "watchlist-build-fixture-result",
   dashboardWatchlistOverflowButton:
     "dashboard-watchlist-overflow-button",
   dashboardWatchlistOverflowMenu:

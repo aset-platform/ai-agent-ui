@@ -35,6 +35,7 @@ import { useAdvancedAnalyticsReport } from "@/hooks/useAdvancedAnalyticsData";
 import { useFilterParams } from "@/hooks/useFilterParams";
 import { triggerCsvDownload } from "@/lib/triggerCsvDownload";
 import { useColumnSelection } from "@/lib/useColumnSelection";
+import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
 import {
   ADVANCED_REPORT_LABELS,
@@ -45,11 +46,13 @@ import {
   type AdvancedReportResponse,
   type AdvancedRow,
   type MarketFilter,
+  type ReportTickersResponse,
   type StaleReason,
   type TickerTypeFilter,
 } from "@/lib/types/advancedAnalytics";
 
 import { ActiveFilterChips } from "./ActiveFilterChips";
+import { AddFilteredToWatchlistButton } from "./AddFilteredToWatchlistButton";
 import { FilterDropdown } from "./FilterDropdown";
 import { StockAnalysisLink } from "./StockAnalysisLink";
 import {
@@ -258,6 +261,22 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
     report,
   ]);
 
+  const fetchFilteredTickers = useCallback(async (): Promise<string[]> => {
+    const params = new URLSearchParams({
+      market,
+      ticker_type: tickerType,
+    });
+    if (search) params.set("search", search);
+    if (tech.length > 0) params.set("tech", [...tech].sort().join(","));
+    if (fund.length > 0) params.set("fund", [...fund].sort().join(","));
+    const url =
+      `${API_URL}/advanced-analytics/${report}/tickers?${params.toString()}`;
+    const r = await apiFetch(url);
+    if (!r.ok) throw new Error(`Failed to load tickers: ${r.status}`);
+    const data = (await r.json()) as ReportTickersResponse;
+    return data.tickers;
+  }, [market, tickerType, search, tech, fund, report]);
+
   const totalPages = value
     ? Math.max(1, Math.ceil(value.total / DEFAULT_PAGE_SIZE))
     : 1;
@@ -363,6 +382,11 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
             onClick={handleCsv}
             disabled={csvDisabled}
             title={csvTooltip}
+          />
+          <AddFilteredToWatchlistButton
+            disabled={csvDisabled}
+            tooltip={csvTooltip}
+            fetchTickers={fetchFilteredTickers}
           />
         </div>
       </div>

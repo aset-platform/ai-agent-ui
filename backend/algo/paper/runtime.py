@@ -294,9 +294,15 @@ class PaperRuntime:
             from datetime import timedelta as _td
             from backend.algo.regime.repo import get_regime_history
 
+            # End at today+1 (not first_bar+1): a replay fixture warms
+            # up ~420d before its trigger dates, so the first bar can
+            # be far in the past. Anchoring the window to first_bar+1
+            # would miss every (later) trigger date — stress_prob would
+            # be absent and gated entries silent-skip. For live runs
+            # first_bar ≈ today, so the window is unchanged.
             rh_rows = get_regime_history(
                 bar_date_obj - _td(days=365),
-                bar_date_obj + _td(days=1),
+                max(bar_date_obj, date.today()) + _td(days=1),
             )
             for rh in rh_rows:
                 entry: dict[str, Any] = {
@@ -328,10 +334,15 @@ class PaperRuntime:
         try:
             from datetime import timedelta as _td
 
+            # End at today+1 (not first_bar+1) — see _ensure_regime_cache:
+            # a dense replay fixture's first bar precedes its trigger
+            # dates by ~420d, so anchoring to first_bar+1 would leave
+            # distance_from_sma200 (and other factor.* keys) absent at
+            # every trigger date. Live runs (first_bar ≈ today) unchanged.
             rows = get_factors_window(
                 [ticker],
                 bar_date_obj - _td(days=365),
-                bar_date_obj + _td(days=1),
+                max(bar_date_obj, date.today()) + _td(days=1),
             )
             for r in rows:
                 self._factor_cache[(r.ticker, r.bar_date)] = {

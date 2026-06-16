@@ -306,6 +306,11 @@ class BulkTickerResponse(BaseModel):
     total_rows: int
 
 
+class BulkAddRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tickers: list[str]
+
+
 class UnlinkAllRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     confirm: str
@@ -335,6 +340,70 @@ def _invalidate_watchlist_cache(user_id: str) -> None:
             "watchlist cache invalidate failed",
             exc_info=True,
         )
+
+
+async def _bulk_link_tickers(
+    *,
+    user_id: str,
+    rows: list[tuple[int, str]],
+    source: str,
+    label: str | None = None,
+) -> BulkTickerResponse:
+    """Validate + dedupe (row_number, raw_ticker) pairs, link via
+    repo, invalidate the watchlist cache, build the per-row report.
+    Shared by the CSV (``_bulk_link_impl``) and JSON
+    (``bulk_add_tickers``) entry points.
+
+    Blank or short raw values are reported with
+    ``reason="empty ticker"`` (the prior CSV path's
+    ``"empty row"`` sentinel is intentionally merged into
+    this).
+    """
+    total_rows = len(rows)
+    valid: list[str] = []
+    errors: list[BulkTickerErrorRow] = []
+    seen_in_batch: set[str] = set()
+    for row_num, raw_val in rows:
+        raw = (raw_val or "").strip()
+        if not raw:
+            errors.append(BulkTickerErrorRow(
+                row=row_num, ticker="",
+                reason="empty ticker",
+            ))
+            continue
+        norm = raw.upper()
+        err = validate_ticker(norm)
+        if err is not None:
+            errors.append(BulkTickerErrorRow(
+                row=row_num, ticker=raw, reason=err,
+            ))
+            continue
+        if norm in seen_in_batch:
+            errors.append(BulkTickerErrorRow(
+                row=row_num, ticker=raw,
+                reason="duplicate in batch",
+            ))
+            continue
+        seen_in_batch.add(norm)
+        valid.append(norm)
+
+    repo = _helpers._get_repo()
+    added, already_linked = await repo.bulk_link_tickers(
+        user_id, valid, source=source,
+    )
+    _invalidate_watchlist_cache(user_id)
+    _logger.info(
+        "bulk_link user=%s source=%s label=%s"
+        " added=%d skipped=%d errors=%d",
+        user_id, source, label,
+        len(added), len(already_linked), len(errors),
+    )
+    return BulkTickerResponse(
+        added=added,
+        skipped_already_linked=already_linked,
+        errors=errors,
+        total_rows=total_rows,
+    )
 
 
 async def _bulk_link_impl(
@@ -386,56 +455,20 @@ async def _bulk_link_impl(
             ),
         )
 
-    valid: list[str] = []
-    errors: list[BulkTickerErrorRow] = []
-    seen_in_batch: set[str] = set()
-    # CSV row indices are 1-based and include the header,
-    # so data rows start at index 2.
-    for i, row in enumerate(rows_raw, start=2):
-        if not row or ticker_col >= len(row):
-            errors.append(BulkTickerErrorRow(
-                row=i, ticker="", reason="empty row",
-            ))
-            continue
-        raw = (row[ticker_col] or "").strip()
-        if not raw:
-            errors.append(BulkTickerErrorRow(
-                row=i, ticker="", reason="empty ticker",
-            ))
-            continue
-        norm = raw.upper()
-        err = validate_ticker(norm)
-        if err is not None:
-            errors.append(BulkTickerErrorRow(
-                row=i, ticker=raw, reason=err,
-            ))
-            continue
-        if norm in seen_in_batch:
-            errors.append(BulkTickerErrorRow(
-                row=i, ticker=raw,
-                reason="duplicate in batch",
-            ))
-            continue
-        seen_in_batch.add(norm)
-        valid.append(norm)
-
-    repo = _helpers._get_repo()
-    added, already_linked = await repo.bulk_link_tickers(
-        user_id, valid, source="bulk_csv",
-    )
-    _invalidate_watchlist_cache(user_id)
-
-    _logger.info(
-        "bulk_link user=%s file=%s added=%d skipped=%d "
-        "errors=%d",
-        user_id, filename,
-        len(added), len(already_linked), len(errors),
-    )
-    return BulkTickerResponse(
-        added=added,
-        skipped_already_linked=already_linked,
-        errors=errors,
-        total_rows=len(rows_raw),
+    rows = [
+        (
+            i,
+            row[ticker_col]
+            if (row and ticker_col < len(row))
+            else "",
+        )
+        for i, row in enumerate(rows_raw, start=2)
+    ]
+    return await _bulk_link_tickers(
+        user_id=user_id,
+        rows=rows,
+        source="bulk_csv",
+        label=filename,
     )
 
 
@@ -475,6 +508,31 @@ async def bulk_link_tickers(
         user_id=user.user_id,
         csv_bytes=body,
         filename=file.filename or "upload.csv",
+    )
+
+
+@router.post(
+    "/tickers/bulk-add",
+    response_model=BulkTickerResponse,
+)
+async def bulk_add_tickers(
+    body: BulkAddRequest,
+    user: UserContext = Depends(get_current_user),
+) -> BulkTickerResponse:
+    """Bulk-link tickers from a JSON list (e.g. an Advanced
+    Analytics filtered set). Server-side dedupe; per-row report."""
+    if not body.tickers:
+        raise HTTPException(status_code=400, detail="tickers list is empty")
+    if len(body.tickers) > _BULK_ROW_CAP:
+        raise HTTPException(
+            status_code=413,
+            detail=f"exceeds {_BULK_ROW_CAP}-row limit",
+        )
+    rows = list(enumerate(body.tickers, start=1))
+    return await _bulk_link_tickers(
+        user_id=user.user_id,
+        rows=rows,
+        source="bulk_json",
     )
 
 
@@ -1086,7 +1144,7 @@ def delete_portfolio_holding(
 def _hoist_bulk_routes() -> None:
     # router.path includes the router's prefix ("/users/me"),
     # so match on the suffix to stay decoupled from the prefix.
-    bulk_suffixes = ("/tickers/bulk", "/tickers/all")
+    bulk_suffixes = ("/tickers/bulk", "/tickers/bulk-add", "/tickers/all")
     bulk = [
         r for r in router.routes
         if getattr(r, "path", "").endswith(bulk_suffixes)
