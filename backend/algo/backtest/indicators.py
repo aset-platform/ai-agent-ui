@@ -53,7 +53,7 @@ DEFAULT_WARMUP_BARS = 400
 def compute_indicators(
     bars: list[BarData],
     *,
-    sma_windows: Iterable[int] = (5, 20, 50, 200),
+    sma_windows: Iterable[int] = (5, 10, 20, 50, 200),
 ) -> dict[object, dict[str, Decimal]]:
     """Per-(date) feature map for a single ticker's bar series.
 
@@ -114,13 +114,21 @@ def compute_indicators(
         rsi2_v = rsi_2_series[i]
         if rsi2_v is not None:
             feats["rsi_2"] = rsi2_v
-        # distance_from_sma5 = (close - sma_5) / sma_5.
-        # Connors exit condition: price crossed back above SMA(5).
-        sma5_v = sma_series[5][i]
-        if sma5_v is not None and sma5_v != 0:
-            feats["distance_from_sma5"] = (
-                Decimal(str(bar.close)) - sma5_v
-            ) / sma5_v
+        # distance_from_sma{N} = (close - sma_N) / sma_N.
+        # distance_from_sma5: Connors exit — price crossed back
+        # above SMA(5). distance_from_sma20/50: same shape, used
+        # by mean-reversion exit boundaries / trend filters that
+        # need a faster read than the factor-library
+        # ``distance_from_sma200`` (daily batch job).
+        for dw in (5, 20, 50):
+            sma_dw = sma_series.get(dw)
+            if sma_dw is None:
+                continue
+            sma_dw_v = sma_dw[i]
+            if sma_dw_v is not None and sma_dw_v != 0:
+                feats[f"distance_from_sma{dw}"] = (
+                    Decimal(str(bar.close)) - sma_dw_v
+                ) / sma_dw_v
         vwap_v = vwap_series[i]
         if vwap_v is not None:
             feats["vwap"] = vwap_v
@@ -157,7 +165,7 @@ def compute_indicators(
 def compute_indicators_for_universe(
     bars_by_ticker: dict[str, list[BarData]],
     *,
-    sma_windows: Iterable[int] = (20, 50, 200),
+    sma_windows: Iterable[int] = (10, 20, 50, 200),
 ) -> dict[str, dict[object, dict[str, Decimal]]]:
     """Apply ``compute_indicators`` per-ticker. Output:
     ``{ticker: {bar_date: {feature: Decimal}}}``.
