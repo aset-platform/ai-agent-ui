@@ -488,23 +488,32 @@ class LiveRuntime:
         )
         return out
 
-    def _flush_events_now(self) -> None:
+    async def _flush_events_now(self) -> None:
         """Flush buffered events to algo.events immediately so
         the events panel sees signals + orders in real time.
         Without this the buffer only flushes at session end and
         the user-facing panel looks frozen during long live-ws
-        sessions. Cheap (single Iceberg commit per call); the
-        runtime emits ~1-10 events/minute typically."""
+        sessions.
+
+        Runs the Iceberg write in a thread so the asyncio event
+        loop is not blocked — each commit takes ~1-2 s of I/O
+        which would otherwise starve FastAPI health probes when
+        712 tickers fire simultaneously at bar close.
+        """
         if not self._events:
             return
+        rows = self._events[:]
+        self._events = []
         try:
-            flush_events(self._events)
-            self._events = []
+            await asyncio.to_thread(flush_events, rows)
         except Exception:  # noqa: BLE001
             _logger.warning(
-                "in-session flush failed — events will land at " "session end",
+                "in-session flush failed — events will land at "
+                "session end",
                 exc_info=True,
             )
+            # Re-buffer so events aren't lost on transient failure.
+            self._events = rows + self._events
 
     def _ensure_regime_cache(self, bar_date_obj: date) -> None:
         if self._regime_loaded:
@@ -918,7 +927,7 @@ class LiveRuntime:
                     "LiveRuntime: flushing %d events to " "algo.events",
                     len(self._events),
                 )
-                flush_events(self._events)
+                await asyncio.to_thread(flush_events, self._events)
                 self._events = []
             if hasattr(source, "stop"):
                 try:
@@ -1411,7 +1420,7 @@ class LiveRuntime:
                 },
             )
         )
-        self._flush_events_now()
+        await self._flush_events_now()
 
         # Fresh caps read — used for max_inr / max_orders_per_day
         # and the allow-list; the daily-counter columns on the row
@@ -1488,7 +1497,7 @@ class LiveRuntime:
                     },
                 )
             )
-            self._flush_events_now()
+            await self._flush_events_now()
             return 0
 
         effective_qty = (
@@ -1749,7 +1758,7 @@ class LiveRuntime:
         # link; the kite_client payload preserves all top-level
         # keys (kite_order_id / dry_run / side / qty / symbol)
         # that PaperEventsTimeline reads.
-        self._flush_events_now()
+        await self._flush_events_now()
 
         # Dry-run: spawn synthetic fill after short delay
         if is_dry:
@@ -1907,7 +1916,7 @@ class LiveRuntime:
                 },
             )
         )
-        self._flush_events_now()
+        await self._flush_events_now()
 
         # Release the budget reservation: a synthetic DRY_ order has no
         # Kite counterpart, so reconciliation cannot advance it. Mark it
@@ -2057,7 +2066,7 @@ class LiveRuntime:
 
         # Flush all accumulated events
         if self._events:
-            flush_events(self._events)
+            await asyncio.to_thread(flush_events, self._events)
             self._events = []
 
         return {"cancelled": cancelled, "failed": failed}
