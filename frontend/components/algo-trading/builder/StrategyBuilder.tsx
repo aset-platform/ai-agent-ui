@@ -61,6 +61,18 @@ export function StrategyBuilder({
     () => initial ?? TEMPLATES[0].ast,
   );
   const [name, setName] = useState(ast.name);
+
+  // Sync ast when initial loads after mount (SWR async fetch).
+  // Without this, the lazy useState initializer picks TEMPLATES[0]
+  // while loading, and the real strategy never replaces it — causing
+  // levers to show the template's knobs instead of the user's values.
+  useEffect(() => {
+    if (initial) {
+      setAst(initial);
+      setName(initial.name ?? "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initial?.id]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

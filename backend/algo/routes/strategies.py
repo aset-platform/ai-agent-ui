@@ -275,6 +275,14 @@ def create_strategies_router() -> APIRouter:
         try:
             strategy = parse_strategy(body.payload)
         except ValidationError as exc:
+            _logger.error(
+                "strategy PUT 400 for strategy_id=%s "
+                "payload_keys=%s errors=%s",
+                strategy_id,
+                list(body.payload.keys()) if isinstance(body.payload, dict)
+                else type(body.payload).__name__,
+                exc.errors(include_url=False),
+            )
             raise HTTPException(
                 status_code=400,
                 detail=_serialize_validation_errors(exc),
