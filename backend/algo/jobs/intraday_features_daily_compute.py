@@ -12,12 +12,12 @@ Reads the Nifty 500 universe's recent ``stocks.intraday_bars`` rows
 engine, and bulk-writes the resulting long-format feature rows to
 ``stocks.intraday_features`` via the same NaN-replaceable upsert
 pattern as :mod:`backend.algo.backtest.intraday_backfill` (scoped
-pre-delete on ``(ticker, year_month)`` for the touched batch, then
-:meth:`Table.append`).
+atomic COW :meth:`Table.overwrite` scoped to the incoming
+``(ticker, bar_date, interval_sec)`` cross-product).
 
-Re-runs of the same window are safe: the pre-delete is scoped to the
-incoming ``(ticker, year_month)`` tuples so re-emitted feature rows
-overwrite cleanly without growing the table.
+Re-runs of the same window are safe: the overwrite filter matches
+exactly the incoming rows, so re-emitted feature rows replace cleanly
+without accumulating extra parquet files.
 
 The :func:`backfill_features_window` helper exposes the same code
 path for ad-hoc / on-demand backfills used by FE-4's loader when a
@@ -293,19 +293,16 @@ def _write_features_batch(
 ) -> int:
     """NaN-replaceable upsert for one batch of feature rows.
 
-    Pre-deletes the cross-product of incoming ``(ticker,
-    bar_date)`` pairs at the given ``interval_sec`` set, then
-    appends. Scoped to the incoming batch — never wipes other
-    tickers / days. **Per-day** granularity is required because
-    the daily keeper fetches ``[yesterday, today]`` and a
-    coarser ``(ticker, year_month)`` scope would silently wipe
-    prior-day features from the same month on every daily run.
-    Returns the number of rows actually written.
+    Uses a copy-on-write ``overwrite(overwrite_filter=...)`` scoped
+    to the incoming ``(ticker, bar_date, interval_sec)`` cross-product.
+    Per-day granularity: only the batch's dates are replaced, so
+    prior-day features for the same month are preserved on re-run.
 
-    Mirrors the scoped-delete granularity used by the bars
-    writers (``intraday_backfill`` + ``index_intraday_backfill``)
-    so all three steps of the Intraday Bars Daily Pipeline keep
-    matching idempotency semantics on force re-run.
+    COW overwrite produces exactly 1 parquet file per affected
+    partition instead of the old delete()+append() two-step that
+    accumulated delete manifests + new data files on each daily run
+    (64k files incident on stocks.intraday_features, 2026-06-17).
+    Returns the number of rows actually written.
     """
     if not arrow_rows:
         return 0
@@ -323,23 +320,19 @@ def _write_features_batch(
 
         cat = _get_catalog()
         tbl = cat.load_table(INTRADAY_FEATURES_TABLE)
-        try:
-            tbl.delete(
-                And(
-                    In("ticker", tickers),
-                    In("bar_date", bar_dates),
-                    In("interval_sec", interval_secs),
-                ),
-            )
-        except Exception as exc:  # noqa: BLE001
-            # First-run / empty-partition pre-delete failure is
-            # benign — there is nothing to delete yet.
-            _logger.debug(
-                "intraday_features pre-delete skipped (%s): %s",
-                INTRADAY_FEATURES_TABLE,
-                exc,
-            )
-        tbl.append(arrow_tbl)
+        # Atomic COW overwrite: replaces exactly the
+        # (ticker, bar_date, interval_sec) cross-product
+        # in one snapshot instead of delete+append, which
+        # left orphan delete-files and accumulated parquet
+        # fragments over daily runs (64k files by 2026-06-17).
+        tbl.overwrite(
+            arrow_tbl,
+            overwrite_filter=And(
+                In("ticker", tickers),
+                In("bar_date", bar_dates),
+                In("interval_sec", interval_secs),
+            ),
+        )
 
     retry_iceberg_op(INTRADAY_FEATURES_TABLE, _do_upsert)
     invalidate_metadata(INTRADAY_FEATURES_TABLE)
