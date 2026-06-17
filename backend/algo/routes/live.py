@@ -722,7 +722,13 @@ async def _compute_strategy_commitment(
 
     for r in pos_rows:
         sym = r.get("tradingsymbol") or ""
-        if attr.get(sym, {}).get("strategy_id") != target:
+        attributed = attr.get(sym, {}).get("strategy_id")
+        # Accept: exact match, OR legacy events where the
+        # webhook wrote strategy_id=None (fixed in postback
+        # handler but existing rows are already stored).
+        if attributed is not None and attributed != target:
+            continue
+        if attributed is None and sym not in attr:
             continue
         qty = abs(int(r.get("quantity", 0)))
         avg = Decimal(str(r.get("average_price", 0) or 0))
@@ -731,7 +737,10 @@ async def _compute_strategy_commitment(
 
     for r in hold_rows:
         sym = r.get("tradingsymbol") or ""
-        if attr.get(sym, {}).get("strategy_id") != target:
+        attributed = attr.get(sym, {}).get("strategy_id")
+        if attributed is not None and attributed != target:
+            continue
+        if attributed is None and sym not in attr:
             continue
         qty = (
             int(r.get("quantity", 0))

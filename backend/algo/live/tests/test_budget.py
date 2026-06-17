@@ -72,10 +72,9 @@ async def test_fetch_kite_available_cash_reads_equity_cash(
     monkeypatch,
 ):
     async def fake_margins(_uid):
+        # kc.margins("equity") returns the segment directly, no "equity" wrapper
         return {
-            "equity": {
-                "available": {"cash": "78200.50"},
-            },
+            "available": {"cash": "78200.50"},
         }
 
     monkeypatch.setattr(

@@ -373,6 +373,22 @@ export interface ScreenerResponse {
   tags: string[];
 }
 
+export interface WatchlistStockRow {
+  ticker: string;
+  market: string;
+  close: number | null;
+  rsi_2: number | null;
+  sma_200: number | null;
+  sma_50: number | null;
+  sma_20: number | null;
+  sma_10: number | null;
+  sma_5: number | null;
+}
+
+export interface WatchlistStocksResponse {
+  stocks: WatchlistStockRow[];
+}
+
 export interface TargetRow {
   ticker: string;
   horizon_months: number | null;

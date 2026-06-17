@@ -43,8 +43,9 @@ async function fetcher(url: string): Promise<LiveCaps> {
 export function useLiveCaps(strategyId: string | null) {
   const key = strategyId ? capsKey(strategyId) : null;
   const { data, error, isLoading } = useSWR<LiveCaps>(key, fetcher, {
-    revalidateOnFocus: false,
-    dedupingInterval: 30_000,
+    revalidateOnFocus: true,
+    refreshInterval: 30_000,
+    dedupingInterval: 10_000,
   });
   return {
     caps: data ?? null,

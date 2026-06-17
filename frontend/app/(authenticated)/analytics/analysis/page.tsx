@@ -70,6 +70,8 @@ import type {
   TickerForecast,
   PortfolioPerformanceResponse,
   PortfolioForecastResponse,
+  WatchlistStockRow,
+  WatchlistStocksResponse,
 } from "@/lib/types";
 
 // ---------------------------------------------------------------
@@ -82,7 +84,8 @@ type TabId =
   | "compare"
   | "recommendations"
   | "portfolio"
-  | "portfolio-forecast";
+  | "portfolio-forecast"
+  | "watchlist-stocks";
 
 // ---------------------------------------------------------------
 // Helpers
@@ -2068,6 +2071,389 @@ function PortfolioForecastTab({
 }
 
 // ---------------------------------------------------------------
+// Tab: Watchlist Stocks
+// ---------------------------------------------------------------
+
+type Rsi2Filter = "lte5" | "lte10" | "gte80" | null;
+
+const PAGE_SIZE_OPTIONS_WL = [10, 25, 50] as const;
+const DEFAULT_WL_PAGE_SIZE = 25;
+
+function fmt(v: number | null, decimals = 2): string {
+  if (v == null) return "—";
+  return v.toFixed(decimals);
+}
+
+type MarketFilter = "india" | "us";
+
+function WatchlistStocksTab() {
+  const [data, setData] =
+    useState<WatchlistStocksResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [rsi2Filter, setRsi2Filter] =
+    useState<Rsi2Filter>(null);
+  const [market, setMarket] =
+    useState<MarketFilter>("india");
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] =
+    useState(DEFAULT_WL_PAGE_SIZE);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setData(null);
+    apiFetch(
+      `${API_URL}/insights/watchlist-stocks?market=${market}`,
+    )
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<WatchlistStocksResponse>;
+      })
+      .then((d) => {
+        if (!cancelled) setData(d);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [market]);
+
+  const filtered = useMemo(() => {
+    const stocks = data?.stocks ?? [];
+    if (!rsi2Filter) return stocks;
+    return stocks.filter((s) => {
+      if (s.rsi_2 == null) return false;
+      if (rsi2Filter === "lte5") return s.rsi_2 <= 5;
+      if (rsi2Filter === "lte10") return s.rsi_2 <= 10;
+      if (rsi2Filter === "gte80") return s.rsi_2 >= 80;
+      return true;
+    });
+  }, [data, rsi2Filter]);
+
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filtered.length / pageSize),
+  );
+  const safePage = Math.min(page, totalPages - 1);
+  const pageRows = filtered.slice(
+    safePage * pageSize,
+    safePage * pageSize + pageSize,
+  );
+
+  // Reset to page 0 whenever filter or market changes
+  useEffect(() => {
+    setPage(0);
+  }, [rsi2Filter, pageSize, market]);
+
+  const handleCopyTickers = () => {
+    const csv = filtered.map((s) => s.ticker).join(", ");
+    navigator.clipboard.writeText(csv).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  if (loading) {
+    return (
+      <div className="space-y-2 animate-pulse">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div
+            key={i}
+            className="h-10 rounded-md bg-gray-200 dark:bg-gray-800"
+          />
+        ))}
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-5 py-8 text-center text-sm text-red-600 dark:text-red-400">
+        {error}
+      </div>
+    );
+  }
+
+  if (!data || data.stocks.length === 0) {
+    return (
+      <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 px-5 py-10 text-center text-sm text-gray-500 dark:text-gray-400">
+        No watchlist or portfolio stocks found.
+      </div>
+    );
+  }
+
+  const rsi2Filters: {
+    id: Rsi2Filter;
+    label: string;
+  }[] = [
+    { id: "lte5", label: "RSI(2) ≤ 5" },
+    { id: "lte10", label: "RSI(2) ≤ 10" },
+    { id: "gte80", label: "RSI(2) ≥ 80" },
+  ];
+
+  return (
+    <div className="space-y-3">
+      {/* Toolbar: market + RSI filters + copy button */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Market toggle */}
+          <div className="flex items-center gap-1 rounded-lg border border-gray-200 dark:border-gray-700 p-0.5">
+            {(["india", "us"] as MarketFilter[]).map(
+              (m) => (
+                <button
+                  key={m}
+                  type="button"
+                  data-testid={`watchlist-market-${m}`}
+                  onClick={() => {
+                    setMarket(m);
+                    setRsi2Filter(null);
+                  }}
+                  className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
+                    market === m
+                      ? "bg-indigo-600 text-white dark:bg-indigo-500"
+                      : "text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
+                  }`}
+                >
+                  {m === "india" ? "India" : "US"}
+                </button>
+              ),
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+              RSI(2):
+            </span>
+              {rsi2Filters.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                data-testid={`watchlist-rsi2-filter-${f.id}`}
+                onClick={() =>
+                  setRsi2Filter((prev) =>
+                    prev === f.id ? null : f.id,
+                  )
+                }
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                  rsi2Filter === f.id
+                    ? "bg-indigo-600 text-white dark:bg-indigo-500"
+                    : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+            {rsi2Filter && (
+              <button
+                type="button"
+                onClick={() => setRsi2Filter(null)}
+                className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Copy tickers button */}
+        <button
+          type="button"
+          data-testid="watchlist-copy-tickers"
+          onClick={handleCopyTickers}
+          title="Copy comma-separated tickers to clipboard"
+          className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 dark:border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+        >
+          {copied ? (
+            <>
+              <svg
+                className="w-3.5 h-3.5 text-emerald-500"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+              >
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+              Copied!
+            </>
+          ) : (
+            <>
+              <svg
+                className="w-3.5 h-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <rect
+                  x="9"
+                  y="9"
+                  width="13"
+                  height="13"
+                  rx="2"
+                />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+              Copy Tickers
+              {filtered.length > 0 && (
+                <span className="text-gray-400">
+                  ({filtered.length})
+                </span>
+              )}
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* Table */}
+      <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700">
+        <table
+          className="min-w-full text-sm"
+          data-testid="watchlist-stocks-table"
+        >
+          <thead>
+            <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+              {[
+                { key: "ticker", label: "Ticker" },
+                { key: "close", label: "Price" },
+                { key: "rsi_2", label: "RSI(2)" },
+                { key: "sma_200", label: "SMA 200" },
+                { key: "sma_50", label: "SMA 50" },
+                { key: "sma_20", label: "SMA 20" },
+                { key: "sma_10", label: "SMA 10" },
+                { key: "sma_5", label: "SMA 5" },
+              ].map((col) => (
+                <th
+                  key={col.key}
+                  className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400"
+                >
+                  {col.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+            {pageRows.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={8}
+                  className="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-500"
+                >
+                  No stocks match the current filter.
+                </td>
+              </tr>
+            ) : (
+              pageRows.map((row) => {
+                const rsi2Color =
+                  row.rsi_2 == null
+                    ? "text-gray-400"
+                    : row.rsi_2 <= 10
+                      ? "text-emerald-600 dark:text-emerald-400 font-semibold"
+                      : row.rsi_2 >= 80
+                        ? "text-red-600 dark:text-red-400 font-semibold"
+                        : "text-gray-900 dark:text-gray-100";
+                return (
+                  <tr
+                    key={row.ticker}
+                    className="hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors"
+                  >
+                    <td className="px-4 py-2.5 font-mono text-xs font-semibold text-indigo-600 dark:text-indigo-400">
+                      {row.ticker}
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-xs text-gray-900 dark:text-gray-100">
+                      {fmt(row.close)}
+                    </td>
+                    <td
+                      className={`px-4 py-2.5 font-mono text-xs ${rsi2Color}`}
+                    >
+                      {fmt(row.rsi_2)}
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
+                      {fmt(row.sma_200)}
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
+                      {fmt(row.sma_50)}
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
+                      {fmt(row.sma_20)}
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
+                      {fmt(row.sma_10)}
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
+                      {fmt(row.sma_5)}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-gray-600 dark:text-gray-400">
+        <div className="flex items-center gap-2">
+          <span>
+            {filtered.length} stock
+            {filtered.length !== 1 ? "s" : ""}
+          </span>
+          <select
+            value={pageSize}
+            onChange={(e) => {
+              setPageSize(Number(e.target.value));
+              setPage(0);
+            }}
+            className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+          >
+            {PAGE_SIZE_OPTIONS_WL.map((n) => (
+              <option key={n} value={n}>
+                {n}/page
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={safePage <= 0}
+            onClick={() =>
+              setPage((p) => Math.max(0, p - 1))
+            }
+            className="rounded-md border border-gray-300 px-2 py-1 font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+          >
+            Prev
+          </button>
+          <span className="tabular-nums">
+            {safePage + 1} / {totalPages}
+          </span>
+          <button
+            type="button"
+            disabled={safePage >= totalPages - 1}
+            onClick={() =>
+              setPage((p) =>
+                Math.min(totalPages - 1, p + 1),
+              )
+            }
+            className="rounded-md border border-gray-300 px-2 py-1 font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+          >
+            Next
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
 // Tabs
 // ---------------------------------------------------------------
 
@@ -2084,6 +2470,10 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "forecast", label: "Stock Forecast" },
   { id: "compare", label: "Compare Stocks" },
   { id: "recommendations", label: "Recommendations" },
+  {
+    id: "watchlist-stocks",
+    label: "Watchlist Stocks",
+  },
 ];
 
 // ---------------------------------------------------------------
@@ -2431,7 +2821,7 @@ function AnalysisPageInner() {
 
         {/* Searchable ticker + refresh — RIGHT */}
         <div
-          className={`relative ${activeTab === "compare" || activeTab === "recommendations" || activeTab.startsWith("portfolio") ? "invisible" : ""}`}
+          className={`relative ${activeTab === "compare" || activeTab === "recommendations" || activeTab.startsWith("portfolio") || activeTab === "watchlist-stocks" ? "invisible" : ""}`}
         >
           <div className="flex items-center gap-1.5">
             <button
@@ -2581,6 +2971,9 @@ function AnalysisPageInner() {
             ?? "india"
           }
         />
+      )}
+      {activeTab === "watchlist-stocks" && (
+        <WatchlistStocksTab />
       )}
     </div>
   );

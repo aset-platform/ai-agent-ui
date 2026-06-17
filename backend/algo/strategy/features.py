@@ -79,11 +79,25 @@ FEATURES: list[Feature] = [
         source="technical",
     ),
     Feature(key="sma_5", label="SMA 5", type="float", source="technical"),
+    Feature(key="sma_10", label="SMA 10", type="float", source="technical"),
+    Feature(key="sma_20", label="SMA 20", type="float", source="technical"),
     Feature(key="sma_50", label="SMA 50", type="float", source="technical"),
     Feature(key="sma_200", label="SMA 200", type="float", source="technical"),
     Feature(
         key="distance_from_sma5",
         label="Distance from SMA 5",
+        type="float",
+        source="technical",
+    ),
+    Feature(
+        key="distance_from_sma20",
+        label="Distance from SMA 20",
+        type="float",
+        source="technical",
+    ),
+    Feature(
+        key="distance_from_sma50",
+        label="Distance from SMA 50",
         type="float",
         source="technical",
     ),
@@ -316,12 +330,6 @@ FEATURES: list[Feature] = [
     # intraday bar tables.
     # ────────────────────────────────────────────────────────────
     # Intraday — trend
-    Feature(
-        key="sma_20",
-        label="SMA 20 (intraday)",
-        type="float",
-        source="intraday_feature_store",
-    ),
     Feature(
         key="sma_100",
         label="SMA 100 (intraday)",

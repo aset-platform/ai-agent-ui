@@ -436,11 +436,12 @@ async def _reconcile_terminal_with_in_flight(
     # internal_order_id / reason / product and update the ledger.
     matched_entry: dict[str, Any] | None = None
     matched_run_id: Any = None
+    matched_strategy_id: Any = None
 
     factory = get_session_factory()
     async with factory() as session:
         runs = (await session.execute(text("""
-            SELECT id, live_orders_in_flight
+            SELECT id, strategy_id, live_orders_in_flight
             FROM algo.runs
             WHERE user_id = :uid AND mode = 'live'
               AND live_orders_in_flight IS NOT NULL
@@ -470,6 +471,7 @@ async def _reconcile_terminal_with_in_flight(
                     entry["cancel_reason"] = status_message
                 matched_entry = entry
                 matched_run_id = run["id"]
+                matched_strategy_id = run["strategy_id"]
                 found = True
                 break
             if found:
@@ -527,7 +529,7 @@ async def _reconcile_terminal_with_in_flight(
     rows_to_persist.append(event_row(
         session_id=_NULL_UUID,
         user_id=user_id,
-        strategy_id=None,
+        strategy_id=matched_strategy_id,
         mode="live",
         type_=event_type,
         payload=base_payload,
