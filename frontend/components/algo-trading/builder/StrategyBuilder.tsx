@@ -14,6 +14,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { AstTreeView } from "./AstTreeView";
 import { CadenceProductPanel } from "./CadenceProductPanel";
+import { ConditionBuilder } from "./ConditionBuilder";
 import { JsonPane } from "./JsonPane";
 import { NodePalette } from "./NodePalette";
 import { StrategyLeversPanel } from "./StrategyLeversPanel";
@@ -73,6 +74,7 @@ export function StrategyBuilder({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initial?.id]);
+  const [viewMode, setViewMode] = useState<"visual" | "ast">("visual");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -217,8 +219,39 @@ export function StrategyBuilder({
         />
         <CadenceProductPanel ast={ast} onChange={setAst} />
         <StrategyLeversPanel ast={ast} onChange={setAst} />
-        <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-white dark:bg-gray-900">
-          <AstTreeView node={ast.root} />
+        <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
+          <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-2 border-b border-gray-200 dark:border-gray-700">
+            <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mr-1">
+              Signal Rules
+            </span>
+            {(["visual", "ast"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setViewMode(mode)}
+                data-testid={`algo-builder-view-${mode}`}
+                className={`text-xs px-2 py-0.5 rounded ${
+                  viewMode === mode
+                    ? "bg-indigo-600 text-white"
+                    : "border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800"
+                }`}
+              >
+                {mode === "visual" ? "Visual" : "AST Tree"}
+              </button>
+            ))}
+          </div>
+          <div className="p-3">
+            {viewMode === "visual" ? (
+              <ConditionBuilder
+                root={ast.root}
+                onChangeRoot={(root) =>
+                  setAst((cur) => ({ ...cur, root }))
+                }
+              />
+            ) : (
+              <AstTreeView node={ast.root} />
+            )}
+          </div>
         </div>
         <div className="flex gap-2">
           <button

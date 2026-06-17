@@ -25,6 +25,7 @@ import { useTheme } from "@/hooks/useTheme";
 import { API_URL } from "@/lib/config";
 import dynamic from "next/dynamic";
 import { usePreferences } from "@/hooks/usePreferences";
+import { StockAnalysisLink } from "@/components/advanced-analytics/StockAnalysisLink";
 
 // Dynamic imports — lightweight-charts requires window/document
 // Skeleton heights match each chart's rendered height to keep
@@ -2366,7 +2367,10 @@ function WatchlistStocksTab() {
                     className="hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors"
                   >
                     <td className="px-4 py-2.5 font-mono text-xs font-semibold text-indigo-600 dark:text-indigo-400">
-                      {row.ticker}
+                      <span className="flex items-center gap-1.5">
+                        <StockAnalysisLink ticker={row.ticker} />
+                        {row.ticker}
+                      </span>
                     </td>
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-900 dark:text-gray-100">
                       {fmt(row.close)}

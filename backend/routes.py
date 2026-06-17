@@ -137,10 +137,16 @@ async def _admin_backups_list_impl(
     from backend.maintenance.backup import list_backups
     from backend.maintenance.backup_manifest import read_manifest
 
-    backups = [
-        b for b in list_backups(backup_root)
-        if _is_full_snapshot_dir_name(b.get("date", ""))
-    ]
+    # list_backups() calls _dir_size_mb() → subprocess.run("du -sk")
+    # which can block for 10s+ on a large warehouse backup dir
+    # (e.g. 64k files from stocks.intraday_features). Must run
+    # off the event loop thread to avoid freezing uvicorn.
+    backups = await asyncio.to_thread(
+        lambda: [
+            b for b in list_backups(backup_root)
+            if _is_full_snapshot_dir_name(b.get("date", ""))
+        ]
+    )
     now = _t.time()
     for b in backups:
         bp = Path(b["path"])
@@ -186,10 +192,14 @@ async def _admin_backups_health_impl(
     from backend.maintenance.backup import list_backups
     from backend.maintenance.backup_manifest import read_manifest
 
-    backups = [
-        b for b in list_backups(backup_root)
-        if _is_full_snapshot_dir_name(b.get("date", ""))
-    ]
+    # list_backups() → _dir_size_mb() → subprocess.run("du -sk")
+    # blocks event loop; wrap in to_thread (same fix as list endpoint).
+    backups = await asyncio.to_thread(
+        lambda: [
+            b for b in list_backups(backup_root)
+            if _is_full_snapshot_dir_name(b.get("date", ""))
+        ]
+    )
     if not backups:
         return {
             "status": "missing",

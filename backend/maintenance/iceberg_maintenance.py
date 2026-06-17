@@ -418,6 +418,49 @@ def compact_table(table_name: str) -> dict:
             "avg_files_per_partition": avg,
         }
 
+    if before > _MAX_SAFE_COMPACT_FILES:
+        files, partitions, avg = _avg_files_per_partition(table_dir)
+        _logger.warning(
+            "[maint] %s has %d files (> %d safe limit) — "
+            "skipping full-table-scan compaction to avoid "
+            "freezing uvicorn. Fix the write pipeline to use "
+            "overwrite() COW instead of delete()+append().",
+            table_name,
+            before,
+            _MAX_SAFE_COMPACT_FILES,
+        )
+        return {
+            "table": table_name,
+            "before": before,
+            "after": before,
+            "skipped_too_large": True,
+            "partitions": partitions,
+            "avg_files_per_partition": avg,
+        }
+
+    files, partitions, avg = _avg_files_per_partition(table_dir)
+    if partitions > 0 and avg > _MAX_AVG_FILES_PER_PARTITION:
+        _logger.warning(
+            "[maint] %s has avg %.1f files/partition "
+            "(> %d safe limit, %d files across %d partitions) — "
+            "manifest chain too deep; skipping compaction to avoid "
+            "freezing uvicorn. Run retention first to reduce commit "
+            "count, then re-enroll for compaction.",
+            table_name,
+            avg,
+            _MAX_AVG_FILES_PER_PARTITION,
+            files,
+            partitions,
+        )
+        return {
+            "table": table_name,
+            "before": before,
+            "after": before,
+            "skipped_deep_manifest": True,
+            "partitions": partitions,
+            "avg_files_per_partition": avg,
+        }
+
     t0 = time.monotonic()
 
     from tools._stock_shared import _require_repo
@@ -729,6 +772,24 @@ def _count_parquet_files(
 # atomic-overwrite-conflict failure mode (see CLAUDE.md §6.4 /
 # the 2026-05-14 stocks.intraday_bars overwrite-failed incident).
 _OPTIMAL_FILES_PER_PARTITION = 1.5
+
+# Full-table scan compaction reads ALL parquet files into an
+# in-process Arrow table before the overwrite. Above ~40k files
+# this seizes uvicorn for 10+ minutes (64k-file incident on
+# stocks.intraday_features, 2026-06-17). Tables above this
+# threshold are skipped with a warning — the write pipeline
+# should use overwrite() COW instead of delete()+append().
+_MAX_SAFE_COMPACT_FILES = 40_000
+
+# Even with a low total file count, a table with very high avg
+# files/partition has a proportionally deep manifest chain (one
+# manifest .avro per commit × avg per partition). algo.events
+# froze uvicorn (00:08–00:26 IST 2026-06-18) with only 4,900
+# parquet files but avg=700/partition → 4,900 manifest reads
+# × ~100 KB each = 500 MB manifest I/O just to enumerate data.
+# Threshold=50 skips algo.events (avg=700) while allowing all
+# legitimate tables (ohlcv, forecasts, sentiment all avg < 5).
+_MAX_AVG_FILES_PER_PARTITION = 50
 
 
 def _avg_files_per_partition(
