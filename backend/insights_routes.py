@@ -60,6 +60,8 @@ from insights_models import (
     SectorsResponse,
     TargetRow,
     TargetsResponse,
+    WatchlistStockRow,
+    WatchlistStocksResponse,
 )
 
 _logger = logging.getLogger(__name__)
@@ -2134,6 +2136,175 @@ def create_insights_router() -> APIRouter:
                 TTL_STABLE,
             )
 
+        return result
+
+    # -----------------------------------------------------------
+    # Watchlist Stocks tab (Analytics → Analysis page)
+    # -----------------------------------------------------------
+
+    @router.get(
+        "/watchlist-stocks",
+        response_model=WatchlistStocksResponse,
+    )
+    async def get_watchlist_stocks(
+        market: str = Query("india"),
+        user: UserContext = Depends(get_current_user),
+    ):
+        """Holdings + watchlist tickers with latest price and
+        technical indicators (RSI-2, SMA 5/10/20/50/200).
+
+        Uses the ``watchlist`` scope: returns watchlist ∪
+        current-holdings tickers for all roles.
+        ``market`` filters to ``'india'`` or ``'us'``
+        (default ``'india'``).
+        """
+        from market_utils import detect_market
+
+        mkt = market.lower() if market.lower() in (
+            "india", "us"
+        ) else "india"
+
+        cache = get_cache()
+        ck = (
+            f"cache:insights:watchlist-stocks:"
+            f"{user.user_id}:{mkt}"
+        )
+        hit = cache.get(ck)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        all_tickers = await _scoped_tickers(
+            user, "watchlist"
+        )
+        tickers = [
+            t for t in all_tickers
+            if detect_market(t) == mkt
+        ]
+        if not tickers:
+            return WatchlistStocksResponse()
+
+        try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+            from tools._analysis_indicators import (
+                _calculate_technical_indicators,
+            )
+
+            ph = ",".join(f"'{t}'" for t in tickers)
+            ohlcv_df = query_iceberg_df(
+                "stocks.ohlcv",
+                "SELECT ticker, date, open, high, "
+                "low, close, volume FROM ("
+                "  SELECT ticker, date, open, high, "
+                "  low, close, volume,"
+                "  ROW_NUMBER() OVER ("
+                "    PARTITION BY ticker "
+                "    ORDER BY date DESC"
+                "  ) AS rn FROM ohlcv "
+                f"  WHERE ticker IN ({ph})"
+                "    AND close IS NOT NULL"
+                ") WHERE rn <= 300 "
+                "ORDER BY ticker, date",
+            )
+        except Exception as exc:
+            _logger.error(
+                "watchlist-stocks OHLCV batch: %s", exc
+            )
+            return WatchlistStocksResponse()
+
+        if ohlcv_df.empty:
+            return WatchlistStocksResponse()
+
+        rows: list[WatchlistStockRow] = []
+        for ticker, grp in ohlcv_df.groupby("ticker"):
+            grp = grp.sort_values("date").reset_index(
+                drop=True
+            )
+            try:
+                # Use .values to detach from integer
+                # index — prevents pandas alignment bug
+                # that fills all columns with NaN when
+                # Series index doesn't match DatetimeIndex.
+                df_in = pd.DataFrame(
+                    {
+                        "Open": grp["open"].astype(
+                            float
+                        ).values,
+                        "High": grp["high"].astype(
+                            float
+                        ).values,
+                        "Low": grp["low"].astype(
+                            float
+                        ).values,
+                        "Close": grp["close"].astype(
+                            float
+                        ).values,
+                        "Adj Close": grp["close"].astype(
+                            float
+                        ).values,
+                        "Volume": grp["volume"].astype(
+                            float
+                        ).values,
+                    },
+                    index=pd.to_datetime(
+                        grp["date"].values
+                    ),
+                )
+                ind = _calculate_technical_indicators(
+                    df_in
+                )
+                last = ind.iloc[-1]
+                rows.append(
+                    WatchlistStockRow(
+                        ticker=str(ticker),
+                        market=mkt,
+                        close=_safe(last["Close"]),
+                        rsi_2=_safe(
+                            last.get("RSI_2")
+                        ),
+                        sma_200=_safe(
+                            last.get("SMA_200")
+                        ),
+                        sma_50=_safe(
+                            last.get("SMA_50")
+                        ),
+                        sma_20=_safe(
+                            last.get("SMA_20")
+                        ),
+                        sma_10=_safe(
+                            last.get("SMA_10")
+                        ),
+                        sma_5=_safe(last.get("SMA_5")),
+                    )
+                )
+            except Exception as exc:
+                _logger.warning(
+                    "watchlist-stocks indicator %s: %s",
+                    ticker,
+                    exc,
+                    exc_info=True,
+                )
+                try:
+                    rows.append(
+                        WatchlistStockRow(
+                            ticker=str(ticker),
+                            market=mkt,
+                            close=_safe(
+                                grp["close"].iloc[-1]
+                            ),
+                        )
+                    )
+                except Exception:
+                    pass
+
+        result = WatchlistStocksResponse(stocks=rows)
+        cache.set(
+            ck, result.model_dump_json(), TTL_STABLE
+        )
         return result
 
     @router.get(

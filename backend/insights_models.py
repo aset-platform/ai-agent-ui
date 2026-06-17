@@ -466,3 +466,30 @@ class ScreenTableResponse(BaseModel):
     columns: list[str] = Field(default_factory=list)
     table: str = ""
     is_aggregated: bool = False
+
+
+# ---------------------------------------------------------------
+# Watchlist Stocks (Analytics → Analysis → Watchlist Stocks tab)
+# ---------------------------------------------------------------
+
+
+class WatchlistStockRow(BaseModel):
+    """Single row in the Watchlist Stocks table."""
+
+    ticker: str
+    market: str = "india"
+    close: float | None = None
+    rsi_2: float | None = None
+    sma_200: float | None = None
+    sma_50: float | None = None
+    sma_20: float | None = None
+    sma_10: float | None = None
+    sma_5: float | None = None
+
+
+class WatchlistStocksResponse(BaseModel):
+    """Response for the Watchlist Stocks tab."""
+
+    stocks: list[WatchlistStockRow] = Field(
+        default_factory=list
+    )

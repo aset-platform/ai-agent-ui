@@ -192,7 +192,9 @@ async def fetch_kite_available_cash(
 
     try:
         margins = await _kite_margins_for_user(user_id)
-        cash = margins.get("equity", {}).get("available", {}).get("cash", 0)
+        # kc.margins("equity") returns the equity segment directly —
+        # no nested "equity" key. Access available.cash at the top level.
+        cash = margins.get("available", {}).get("cash", 0)
         out = Decimal(str(cash))
     except Exception as exc:  # noqa: BLE001
         _logger.warning(
