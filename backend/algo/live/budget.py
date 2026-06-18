@@ -193,8 +193,13 @@ async def fetch_kite_available_cash(
     try:
         margins = await _kite_margins_for_user(user_id)
         # kc.margins("equity") returns the equity segment directly —
-        # no nested "equity" key. Access available.cash at the top level.
-        cash = margins.get("available", {}).get("cash", 0)
+        # no nested "equity" key. Use live_balance (consistent with the
+        # algo header CASH stat) — it includes intraday payin from sells
+        # and matches what Kite allows for new CNC orders. available.cash
+        # deducts CNC blocks separately which would double-count against
+        # our own open_pos_cost tracking.
+        avail = margins.get("available", {})
+        cash = avail.get("live_balance") or avail.get("cash", 0)
         out = Decimal(str(cash))
     except Exception as exc:  # noqa: BLE001
         _logger.warning(
