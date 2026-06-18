@@ -50,7 +50,12 @@ This plan prevents recurrence.
 `ws_backpressure_drop` volume drops ~50/s → ~0.017/s (1/min). Unit test
 asserts the aggregator emits one row per window regardless of drop count.
 
-## PR 2 — Move `live-ws` events out of Iceberg (Tier 1)
+## PR 2 — Move `live-ws` events out of Iceberg (Tier 1) — ✅ DONE 2026-06-18
+Commits: `1959df0` (store), `4dfd0da`+`312cb30` (multiplexer→Redis),
+`084d848` (panel read). Runtime-verified live: v5 `ws_connected`
+(token_count=799) landed in `algo:ws-events:{user_id}`; 0 new
+`mode='live-ws'` rows in `algo.events` post-restart. Plan:
+`docs/superpowers/plans/2026-06-18-pr2-live-ws-redis.md`.
 1. Route all `mode=live-ws` lifecycle events to a Redis sorted set
    `algo:ws-events:{user_id}` (score = `ts_ns`), 7-day TTL. Follow
    §5.13 key schema; no-op when `REDIS_URL` empty (silent drop — these
