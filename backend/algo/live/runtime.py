@@ -225,6 +225,12 @@ class LiveRuntime:
         self._session_id = uuid4()
         self._events: list[dict[str, Any]] = []
         self._in_flight: list[dict[str, Any]] = []
+        # Per-ticker cap: set of internal tickers (e.g. "INFY.NS") that
+        # have an active BUY order (in-flight or open position). Prevents
+        # the weight mechanism from placing duplicate orders on the same
+        # ticker within a session. Populated at startup from hydrated
+        # positions + Redis; flushed to algo.runs every 30s.
+        self._ticker_locked: set[str] = set()
         self._bars_by_ticker: dict[str, list] = {}
 
         # ASETPLTFRM-376 — hydrate PositionTracker from any pre-
@@ -594,6 +600,111 @@ class LiveRuntime:
         except asyncio.CancelledError:
             raise
 
+    # ----------------------------------------------------------
+    # Per-ticker cap helpers
+    # ----------------------------------------------------------
+
+    def _sync_ticker_lock_to_redis(self) -> None:
+        """Mirror ``_ticker_locked`` to Redis so the lock survives a
+        backend restart within the same trading session (TTL = 24h)."""
+        try:
+            from backend.cache import get_cache
+
+            c = get_cache()
+            key = (
+                f"cache:algo:live:locked:"
+                f"{self._user_id}:{self._strategy.id}"
+            )
+            if self._ticker_locked:
+                c.set(
+                    key,
+                    ",".join(sorted(self._ticker_locked)),
+                    ttl=86400,
+                )
+            else:
+                c.delete(key)
+        except Exception:  # noqa: BLE001
+            _logger.warning("ticker lock Redis sync failed", exc_info=True)
+
+    def _restore_ticker_locks_from_redis(self) -> set[str]:
+        """Load any tickers locked in a prior session from Redis."""
+        try:
+            from backend.cache import get_cache
+
+            c = get_cache()
+            key = (
+                f"cache:algo:live:locked:"
+                f"{self._user_id}:{self._strategy.id}"
+            )
+            val = c.get(key)
+            if val and isinstance(val, str):
+                return {t.strip() for t in val.split(",") if t.strip()}
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "ticker lock Redis restore failed", exc_info=True
+            )
+        return set()
+
+    async def _restore_ticker_locks_from_pg(self) -> set[str]:
+        """Durable PG fallback: reads ``locked_tickers`` + unfinished
+        BUY in-flight entries from the previous run for this strategy.
+        Consulted when Redis is empty (e.g. after FLUSHALL or Redis
+        restart), ensuring the per-ticker cap survives a full cold boot."""
+        try:
+            return await self._caps_repo.get_locked_tickers_from_previous_run(
+                self._user_id,
+                self._strategy.id,
+                self._run_id,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "ticker lock PG restore failed", exc_info=True
+            )
+            return set()
+
+    async def _periodic_ticker_lock_flush(self) -> None:
+        """Persist ``_ticker_locked`` to ``algo.runs.locked_tickers``
+        every 30 seconds for durability and SQL observability.
+        Cancelled at session teardown; final flush done inline."""
+        try:
+            while True:
+                await asyncio.sleep(30)
+                try:
+                    await self._caps_repo.update_locked_tickers(
+                        self._user_id,
+                        self._run_id,
+                        self._ticker_locked,
+                    )
+                except Exception:  # noqa: BLE001
+                    _logger.warning(
+                        "ticker lock PG flush failed", exc_info=True
+                    )
+        except asyncio.CancelledError:
+            raise
+
+    async def _periodic_budget_reconcile(self) -> None:
+        """Reconcile SUBMITTED/PENDING budget reservations every 60 s.
+
+        Ensures fill confirmations arrive from Kite while the session
+        is active — the scheduler-driven ``algo_reconciliation`` job
+        only runs daily, so this is the real-time sweep."""
+        _INTERVAL_S = 60
+        try:
+            while True:
+                await asyncio.sleep(_INTERVAL_S)
+                try:
+                    from backend.algo.live.budget_reconciliation import (
+                        reconcile as _budget_reconcile,
+                    )
+
+                    await _budget_reconcile()
+                except Exception:  # noqa: BLE001
+                    _logger.warning(
+                        "periodic budget reconcile failed", exc_info=True
+                    )
+        except asyncio.CancelledError:
+            raise
+
     def _ensure_regime_cache(self, bar_date_obj: date) -> None:
         if self._regime_loaded:
             return
@@ -906,6 +1017,32 @@ class LiveRuntime:
             self._event_flush_task = asyncio.create_task(
                 self._periodic_event_flush(),
             )
+
+        # Per-ticker cap: union of three sources at startup so the lock
+        # set survives any restart scenario:
+        #   1. Kite position hydration — catches overnight/filled positions.
+        #   2. Redis — fast path for in-flight BUYs from the prior session.
+        #   3. PG previous-run locked_tickers + unfinished in-flight JSONB
+        #      — durable fallback when Redis is empty (FLUSHALL / cold boot).
+        for ticker, pos in self._positions.open_positions().items():
+            if pos.qty > 0:
+                self._ticker_locked.add(ticker)
+        self._ticker_locked.update(self._restore_ticker_locks_from_redis())
+        self._ticker_locked.update(await self._restore_ticker_locks_from_pg())
+        if self._ticker_locked:
+            _logger.info(
+                "LiveRuntime: ticker locks restored: %s",
+                self._ticker_locked,
+            )
+        ticker_lock_flush_task = asyncio.create_task(
+            self._periodic_ticker_lock_flush(),
+            name=f"ticker_lock_flush_{self._run_id}",
+        )
+        budget_reconcile_task = asyncio.create_task(
+            self._periodic_budget_reconcile(),
+            name=f"budget_reconcile_{self._run_id}",
+        )
+
         try:
             async for tick in source:
                 tick_count += 1
@@ -1008,6 +1145,40 @@ class LiveRuntime:
                     last_price=lp,
                     last_price_ts=lp_ts,
                 )
+            # Stop per-ticker lock flush before terminal drain.
+            ticker_lock_flush_task.cancel()
+            try:
+                await ticker_lock_flush_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            # Final PG flush of locked tickers at session end.
+            try:
+                await self._caps_repo.update_locked_tickers(
+                    self._user_id,
+                    self._run_id,
+                    self._ticker_locked,
+                )
+            except Exception:  # noqa: BLE001
+                _logger.warning(
+                    "final ticker lock PG flush failed", exc_info=True
+                )
+            # Stop and do a final budget reconcile sweep.
+            budget_reconcile_task.cancel()
+            try:
+                await budget_reconcile_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            try:
+                from backend.algo.live.budget_reconciliation import (
+                    reconcile as _budget_reconcile,
+                )
+
+                await _budget_reconcile()
+            except Exception:  # noqa: BLE001
+                _logger.warning(
+                    "final budget reconcile failed", exc_info=True
+                )
+
             # PR3 — stop the periodic flush before the terminal drain
             # so they cannot race on self._events.
             if self._event_flush_task is not None:
@@ -1515,6 +1686,45 @@ class LiveRuntime:
                 )
                 return 0
 
+        # Per-ticker cap: block BUY when the ticker already has an active
+        # order in-flight (_ticker_locked) or an open position from
+        # startup hydration (existing_pos.qty > 0). This prevents the
+        # weight-based order sizer from placing duplicate entries on the
+        # same stock across successive bars, enforcing portfolio
+        # diversification. Emit signal_rejected for observability.
+        if signal.side == "BUY" and (
+            signal.ticker in self._ticker_locked
+            or (existing_pos is not None and existing_pos.qty > 0)
+        ):
+            self._events.append(
+                event_row(
+                    session_id=self._session_id,
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    mode="live",
+                    type_="signal_rejected",
+                    payload={
+                        **({"dry_run": True} if self._dry_run else {}),
+                        "reason": "ticker_already_in_portfolio",
+                        "ticker": signal.ticker,
+                        "side": signal.side,
+                        "qty": signal.qty,
+                        "in_flight": signal.ticker in self._ticker_locked,
+                        "open_qty": (
+                            existing_pos.qty if existing_pos else 0
+                        ),
+                    },
+                )
+            )
+            _logger.debug(
+                "live per-ticker cap: %s already in portfolio "
+                "(in_flight=%s open_qty=%s)",
+                signal.ticker,
+                signal.ticker in self._ticker_locked,
+                existing_pos.qty if existing_pos else 0,
+            )
+            return 0
+
         # ASETPLTFRM-381 — also emit ``symbol`` (canonical, no .NS)
         # alongside ``ticker`` so attribution.trades can pair
         # signals with fills (fills carry payload.symbol only). The
@@ -1866,6 +2076,17 @@ class LiveRuntime:
             self._run_id,
             self._in_flight,
         )
+
+        # Per-ticker cap: lock on BUY submission, release on SELL
+        # submission. Release on SELL submission (not fill) so the
+        # ticker is available for re-entry as soon as the close order
+        # is in motion; the BUY gate's existing_pos.qty check still
+        # guards against premature re-entry before the SELL fills.
+        if side == "BUY":
+            self._ticker_locked.add(signal.ticker)
+        else:
+            self._ticker_locked.discard(signal.ticker)
+        self._sync_ticker_lock_to_redis()
 
         # PR #1 (order-safety) — order_submitted_live is now
         # emitted from inside KiteClient.place_order with the full

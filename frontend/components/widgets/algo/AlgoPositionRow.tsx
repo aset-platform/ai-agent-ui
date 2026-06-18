@@ -1,5 +1,6 @@
 "use client";
 
+import { StockAnalysisLink } from "@/components/advanced-analytics/StockAnalysisLink";
 import type { AlgoPositionView } from "@/lib/types/algoPortfolio";
 
 interface Props {
@@ -31,18 +32,26 @@ export function AlgoPositionRow({ row, onSelectTicker }: Props) {
       data-testid={`dashboard-algo-row-${row.tradingsymbol}`}
     >
       <td className="px-3 py-2 text-xs font-medium">
-        <span>{row.tradingsymbol}</span>
-        {row.source === "paper" && (
-          <span
-            data-testid={
-              `dashboard-algo-row-${row.tradingsymbol}-paper-badge`
-            }
-            className="ml-1 inline-block rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 text-[10px] font-semibold uppercase px-1 py-0.5 align-middle"
-            title="Position derived from paper-mode fills (not Kite)"
-          >
-            PAPER
+        <span className="flex items-center gap-1.5">
+          <span onClick={(e) => e.stopPropagation()}>
+            <StockAnalysisLink
+              ticker={row.internal_ticker}
+              testId={`dashboard-algo-row-${row.tradingsymbol}-analysis`}
+            />
           </span>
-        )}
+          <span>{row.tradingsymbol}</span>
+          {row.source === "paper" && (
+            <span
+              data-testid={
+                `dashboard-algo-row-${row.tradingsymbol}-paper-badge`
+              }
+              className="inline-block rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 text-[10px] font-semibold uppercase px-1 py-0.5"
+              title="Position derived from paper-mode fills (not Kite)"
+            >
+              PAPER
+            </span>
+          )}
+        </span>
       </td>
       <td className="px-3 py-2 text-xs tabular-nums">
         {row.t1_pending ? (
