@@ -28,8 +28,13 @@ export function useAlgoPositions() {
     },
   );
 
-  const positions: AlgoPositionView[] =
-    data?.positions ?? [];
+  // The watchlist widget surfaces LIVE algo positions only. Paper-mode
+  // rows (``source === "paper"``, synthesized from mode='paper'
+  // algo.events fills) are excluded so the dashboard reflects real
+  // Kite holdings. ``source`` defaults to "live" when absent.
+  const positions: AlgoPositionView[] = (data?.positions ?? []).filter(
+    (p) => p.source !== "paper",
+  );
 
   return {
     positions,

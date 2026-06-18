@@ -208,9 +208,13 @@ async def test_merges_mis_and_cnc_into_one_response(
     fake_kite = _fake_kite(net, hold)
     sid_mis = str(uuid4())
     sid_cnc = str(uuid4())
+    # Attribution keys are the bare Kite tradingsymbol (no ``.NS``),
+    # matching the real _fetch_strategy_attribution output. Using
+    # ``.NS`` keys here previously masked the live-positions-dropped
+    # bug (fixed 2026-06-18).
     attr = {
-        "INFY.NS": _attr(sid_mis, "RSI(2) v3"),
-        "TCS.NS": _attr(sid_cnc, "Bollinger"),
+        "INFY": _attr(sid_mis, "RSI(2) v3"),
+        "TCS": _attr(sid_cnc, "Bollinger"),
     }
     monkeypatch.setattr(
         "backend.algo.routes.portfolio."
@@ -258,7 +262,7 @@ async def test_t1_pending_flagged_on_cnc_settling(
         "_fetch_strategy_attribution",
         AsyncMock(
             return_value={
-                "HDFC.NS": _attr(sid, "Bollinger"),
+                "HDFC": _attr(sid, "Bollinger"),
             },
         ),
     )
@@ -298,8 +302,8 @@ async def test_sorted_by_pnl_inr_desc(monkeypatch):
         "_fetch_strategy_attribution",
         AsyncMock(
             return_value={
-                "A.NS": _attr(sid_a, "S1"),
-                "B.NS": _attr(sid_b, "S2"),
+                "A": _attr(sid_a, "S1"),
+                "B": _attr(sid_b, "S2"),
             },
         ),
     )

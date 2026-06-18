@@ -418,10 +418,19 @@ async def _get_algo_positions_impl(
         )
     ]
 
+    # Attribution joins on the Kite tradingsymbol (no ``.NS``) —
+    # ``order_filled_live`` payloads stamp ``symbol`` without the
+    # suffix (see live._fetch_strategy_attribution). Build the
+    # attribution symbol set + lookups in that bare form, NOT the
+    # ``.NS`` internal ticker, or every live Kite position is dropped
+    # by the strategy gate below (regression observed 2026-06-18:
+    # live positions never surfaced, only paper rows).
     symbols = sorted({
-        _to_internal_ticker(r.get("tradingsymbol", ""))
+        r.get("tradingsymbol", "")
         for r in open_pos + open_hold
-    } | {r.internal_ticker for r in paper_rows} - {""})
+    } | {
+        pr.internal_ticker.removesuffix(".NS") for pr in paper_rows
+    } - {""})
 
     attr = await _fetch_strategy_attribution(
         user_id, symbols, since_date=_ATTRIBUTION_SINCE,
@@ -429,14 +438,12 @@ async def _get_algo_positions_impl(
 
     rows: list[AlgoPositionRow] = []
     for r in open_pos:
-        sym = _to_internal_ticker(r.get("tradingsymbol", ""))
-        ctx = attr.get(sym)
+        ctx = attr.get(r.get("tradingsymbol", ""))
         if not ctx or not ctx.get("strategy_id"):
             continue
         rows.append(_row_from_position(r, ctx))
     for r in open_hold:
-        sym = _to_internal_ticker(r.get("tradingsymbol", ""))
-        ctx = attr.get(sym)
+        ctx = attr.get(r.get("tradingsymbol", ""))
         if not ctx or not ctx.get("strategy_id"):
             continue
         rows.append(_row_from_holding(r, ctx))
@@ -445,7 +452,7 @@ async def _get_algo_positions_impl(
     # If attribution is empty for a paper symbol, leave the
     # blank string — UI renders "—" or just the strategy_id.
     for pr in paper_rows:
-        ctx = attr.get(pr.internal_ticker) or {}
+        ctx = attr.get(pr.internal_ticker.removesuffix(".NS")) or {}
         if ctx.get("strategy_name"):
             rows.append(pr.model_copy(update={
                 "strategy_name": ctx.get("strategy_name") or "",

@@ -411,6 +411,57 @@ def create_kill_switch_router() -> APIRouter:
         if events:
             await asyncio.to_thread(flush_events, events)
 
+        # 7. Release the budget: cancel FILLED BUY reservations for
+        #    every ticker successfully closed. Without this, the budget
+        #    ledger keeps showing open_pos_cost > 0 indefinitely because
+        #    panic-close bypasses the normal live-runtime SELL reservation
+        #    flow and the reconciliation loop has nothing to pick up.
+        if tickers_closed:
+            from sqlalchemy import text as _text
+            from backend.algo.live.budget import (
+                transition as _budget_transition,
+                _session_factory as _budget_session_factory,
+            )
+            from backend.algo.live.budget_types import ReservationState
+            closed_ns = [f"{t}.NS" for t in tickers_closed]
+            _bf = _budget_session_factory()
+            try:
+                async with _bf() as _session:
+                    _result = await _session.execute(
+                        _text(
+                            "SELECT DISTINCT ON (reservation_id) "
+                            "  reservation_id, state "
+                            "FROM algo.budget_reservations "
+                            "WHERE user_id = :uid "
+                            "  AND ticker = ANY(:tks) "
+                            "  AND side = 'BUY' "
+                            "ORDER BY reservation_id, "
+                            "         transitioned_at DESC"
+                        ),
+                        {"uid": user_id, "tks": closed_ns},
+                    )
+                    _rows = _result.mappings().all()
+                for _row in _rows:
+                    if _row["state"] == "FILLED":
+                        try:
+                            await _budget_transition(
+                                reservation_id=_row["reservation_id"],
+                                new_state=ReservationState.CANCELLED,
+                                error_text="panic_close: position exited",
+                            )
+                        except Exception:  # noqa: BLE001
+                            _logger.warning(
+                                "panic_close: budget release failed "
+                                "for reservation %s",
+                                _row["reservation_id"],
+                                exc_info=True,
+                            )
+            except Exception:  # noqa: BLE001
+                _logger.warning(
+                    "panic_close: budget cleanup query failed",
+                    exc_info=True,
+                )
+
         return {
             "tickers_closed": tickers_closed,
             "orders_submitted": orders_submitted,

@@ -22,7 +22,7 @@ service shell.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -573,10 +573,14 @@ class PaperRuntime:
             ),
             market_regime=self._market_regime.get(bar_date_obj),
             market_trend=self._market_trend.get(bar_date_obj),
-            factor_row=self._factor_cache.get(
-                (bar.ticker, bar_date_obj),
+            factor_row=(
+                self._factor_cache.get((bar.ticker, bar_date_obj))
+                or self._factor_cache.get((bar.ticker, bar_date_obj - timedelta(days=1)))
             ),
-            regime_row=self._regime_by_date.get(bar_date_obj),
+            regime_row=(
+                self._regime_by_date.get(bar_date_obj)
+                or self._regime_by_date.get(bar_date_obj - timedelta(days=1))
+            ),
             daily_overlay=self._daily_overlay_cache.get(
                 (bar.ticker, bar_date_obj),
             ),
