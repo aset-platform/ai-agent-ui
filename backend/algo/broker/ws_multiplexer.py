@@ -23,8 +23,9 @@ Gap-fill on reconnect:
 
 Backpressure:
   Each subscriber queue is bounded (``QUEUE_MAX_SIZE``).  When full
-  the oldest item is dropped and a WARNING is logged.  A
-  ``ws_backpressure_drop`` event is recorded via event_row helper.
+  the oldest item is dropped.  Drops are aggregated per (user,
+  strategy) and a ``ws_backpressure_drop`` summary is recorded to the
+  per-user Redis store (``ws_event_store``) at most once per window.
 
 Thread-safety:
   KiteTicker callbacks run in a background thread.  All cross-thread
