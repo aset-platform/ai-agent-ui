@@ -122,6 +122,13 @@ _MIN_EVAL_TIME_IST = _parse_ist_time(
     os.environ.get("ALGO_DAILY_MIN_EVAL_TIME_IST", "14:30"),
 )
 
+# PR3 — live-mode events are buffered and flushed on this cadence
+# instead of one Iceberg commit per signal. The terminal flush on
+# session stop drains whatever remains. Env-overridable for tuning.
+_EVENT_FLUSH_INTERVAL_S = float(
+    os.environ.get("ALGO_EVENT_FLUSH_INTERVAL_S", "5")
+)
+
 
 def _select_last_price_ts_ns(tick: Any) -> int:
     """Return the best available ns-since-epoch stamp for ``tick``.
@@ -492,6 +499,10 @@ class LiveRuntime:
         # Daily / CNC strategies leave this as None.
         self._square_off_task: asyncio.Task | None = None
 
+        # PR3 — periodic algo.events flush task. Started in run(),
+        # cancelled in its finally: before the terminal flush.
+        self._event_flush_task: asyncio.Task | None = None
+
     def _load_bucket_by_ticker(self) -> dict[str, str]:
         """Read latest ``stocks.universe_snapshot`` and build a
         ticker → liquidity_bucket dict for this session.
@@ -566,6 +577,22 @@ class LiveRuntime:
             )
             # Re-buffer so events aren't lost on transient failure.
             self._events = rows + self._events
+
+    async def _periodic_event_flush(self) -> None:
+        """Flush buffered ``algo.events`` rows on a fixed cadence so
+        live-mode events reach the panel within a few seconds without a
+        commit per signal (PR3). Runs until cancelled at teardown."""
+        try:
+            while True:
+                await asyncio.sleep(_EVENT_FLUSH_INTERVAL_S)
+                try:
+                    await self._flush_events_now()
+                except Exception:  # noqa: BLE001
+                    _logger.warning(
+                        "periodic event flush failed", exc_info=True
+                    )
+        except asyncio.CancelledError:
+            raise
 
     def _ensure_regime_cache(self, bar_date_obj: date) -> None:
         if self._regime_loaded:
