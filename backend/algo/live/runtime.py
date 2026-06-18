@@ -899,6 +899,13 @@ class LiveRuntime:
             self._square_off_task = asyncio.create_task(
                 self._schedule_mis_square_off(),
             )
+        # PR3 — start the periodic algo.events flush (idempotent guard
+        # so a re-entrant run() doesn't double-start). Cancelled in the
+        # finally: block below before the terminal flush.
+        if self._event_flush_task is None:
+            self._event_flush_task = asyncio.create_task(
+                self._periodic_event_flush(),
+            )
         try:
             async for tick in source:
                 tick_count += 1
@@ -1001,6 +1008,15 @@ class LiveRuntime:
                     last_price=lp,
                     last_price_ts=lp_ts,
                 )
+            # PR3 — stop the periodic flush before the terminal drain
+            # so they cannot race on self._events.
+            if self._event_flush_task is not None:
+                self._event_flush_task.cancel()
+                try:
+                    await self._event_flush_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                self._event_flush_task = None
             if self._events:
                 _logger.info(
                     "LiveRuntime: flushing %d events to " "algo.events",
@@ -1416,7 +1432,6 @@ class LiveRuntime:
             len(history) >= 2 and history[-1].date == bar_date_obj
         )
         if daily_realtime and is_flat and last_bar_is_today:
-            _evt_n_before = len(self._events)
             closed_entry = self._eval_entry_on_closed_bar(
                 history, bar, last_price,
             )
@@ -1438,14 +1453,6 @@ class LiveRuntime:
                         _MIN_EVAL_TIME_IST.strftime("%H:%M"),
                     )
                     return 0
-            # The completed-bar eval may have buffered a qty=0
-            # rejection (entry qualified but the account can't afford
-            # one share). When no tradable BUY resulted there is no
-            # downstream ``_flush_events_now`` to push it, so flush
-            # here — bounded to once per (ticker, closed bar) because
-            # the underlying emit is cache-miss-gated.
-            if closed_entry is None and len(self._events) > _evt_n_before:
-                await self._flush_events_now()
 
         if signal is None:
             return 0
@@ -1532,7 +1539,6 @@ class LiveRuntime:
                 },
             )
         )
-        await self._flush_events_now()
 
         # Fresh caps read — used for max_inr / max_orders_per_day
         # and the allow-list; the daily-counter columns on the row
@@ -1609,7 +1615,6 @@ class LiveRuntime:
                     },
                 )
             )
-            await self._flush_events_now()
             return 0
 
         effective_qty = (
@@ -1870,7 +1875,6 @@ class LiveRuntime:
         # link; the kite_client payload preserves all top-level
         # keys (kite_order_id / dry_run / side / qty / symbol)
         # that PaperEventsTimeline reads.
-        await self._flush_events_now()
 
         # Dry-run: spawn synthetic fill after short delay
         if is_dry:
@@ -2028,7 +2032,6 @@ class LiveRuntime:
                 },
             )
         )
-        await self._flush_events_now()
 
         # Release the budget reservation: a synthetic DRY_ order has no
         # Kite counterpart, so reconciliation cannot advance it. Mark it
