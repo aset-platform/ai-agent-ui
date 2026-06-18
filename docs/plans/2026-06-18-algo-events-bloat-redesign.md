@@ -81,7 +81,32 @@ events panel still renders WS lifecycle from Redis; E2E covers panel.
 **Acceptance:** live-mode commits/session drop from ~1,470 → single
 digits; signals still appear in the panel within a few seconds.
 
-## PR 4 — Schedule retention + maintenance enrollment (Tier 3)
+## PR 4 — Schedule retention + maintenance enrollment (Tier 3) — ✅ DONE 2026-06-18
+Findings + actions:
+- **Enrollment was already in code** — `algo.events` is in `ALL_TABLES`
+  (`maintenance/iceberg_maintenance.py`) and `_HOT_ICEBERG_TABLES`
+  (`jobs/executor.py`). Added a regression test (`b4370d5`,
+  `backend/maintenance/tests/test_algo_events_enrollment.py`) so it
+  can't silently drop.
+- **Retention "never ran" = the seed was never applied.** The
+  `Weekly Long-Tail Iceberg Maintenance` pipeline (Sun 03:00 IST) was
+  defined in `scripts/seed_weekly_longtail_maintenance.py` (step 1
+  `algo_events_retention`, step 2 `iceberg_maintenance` incl.
+  `algo.events`) but not seeded into PG. Ran the seed → pipeline now
+  enrolled + enabled (registers on next scheduler reload/restart).
+- **One-time reclaim done** — `cleanup_orphans_v2("algo.events",
+  retain_snapshots=5, retain_snapshot_min_age_hours=0)` on the idle
+  post-close backend: snapshots → 5, orphans swept, read-verified.
+- **`file:////` delete warnings are benign** — `_normalize_uri`
+  collapses quad-slashes (unit-tested) and the orphan sweep unlinks via
+  clean `Path` objects (deleted 217 files, verified). The warnings come
+  from PyIceberg's *internal* expire/commit delete on the SQLite-catalog
+  `file://` warehouse; the metadata commit succeeds and the sweep
+  reclaims. No app fix needed.
+- **Deferred (future):** scheduler-history staleness alert (warn if
+  retention hasn't run in N days).
+
+### Original PR 4 spec (for reference)
 1. Enroll `algo_events_retention` in the weekly long-tail maintenance
    pipeline (Sunday ~02:00 IST) — purges 7-day short-retention modes.
 2. Ensure `algo.events` is in `ALL_TABLES`
