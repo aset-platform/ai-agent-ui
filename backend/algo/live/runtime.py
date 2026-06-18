@@ -351,29 +351,47 @@ class LiveRuntime:
         # query failure is non-fatal — every ticker just defaults.
         self._bucket_by_ticker: dict[str, str] = self._load_bucket_by_ticker()
 
-        # ASETPLTFRM-383 — preload 250 closed daily bars per allowed
-        # ticker from stocks.ohlcv (Iceberg) so the very first
-        # per-minute eval sees the same indicator landscape as the
-        # backtest. Today's running bar is appended lazily on the
-        # first ``_on_bar_close`` for each ticker via
+        # ASETPLTFRM-383 — preload 250 closed daily bars per ticker
+        # from stocks.ohlcv (Iceberg) so the very first per-minute
+        # eval sees the same indicator landscape as the backtest.
+        # Today's running bar is appended lazily on the first
+        # ``_on_bar_close`` for each ticker via
         # ``initial_running_bar``. Fail-soft: any error degrades to
         # the pre-383 empty-history behaviour (strategy silent-skips
         # until indicators settle).
+        #
+        # Scope: the full strategy evaluation universe
+        # (``_bucket_by_ticker``, 712 tickers from universe_snapshot)
+        # NOT just ``allowed_tickers`` (portfolio/watchlist, ~8).
+        # Reason: ``preload_daily_bars`` issues ONE bulk DuckDB query
+        # for all tickers — 8 vs 712 is the same round-trip — and
+        # preloading the full universe here eliminates 700+ sequential
+        # Kite API calls that would otherwise block the drain loop
+        # in ``_on_bar_close`` at runtime, most critically at the
+        # 15:25 IST daily bar-close when unpreloaded tickers all fire
+        # simultaneously.
         #
         # ASETPLTFRM-393 — for intraday cadences (15m / 5m / 1m) we
         # route through ``preload_intraday_bars`` instead, reading
         # from ``algo.intraday_bars`` and falling back to Kite. The
         # daily path is preserved bit-for-bit for ``interval="1d"``.
         allowed_for_preload = caps.get("allowed_tickers") or []
+        # Full evaluation universe: bucket cache (712 strategy-
+        # eligible tickers) plus any allowed_tickers not already
+        # covered. Falls back to allowed_tickers-only if the bucket
+        # cache is empty (fresh install / missing universe_snapshot).
+        universe_for_preload: list[str] = list(
+            set(self._bucket_by_ticker.keys()) | set(allowed_for_preload)
+        ) or list(allowed_for_preload)
         interval = strategy.schedule.interval
-        if allowed_for_preload and interval == "1d":
+        if universe_for_preload and interval == "1d":
             try:
                 from backend.algo.live.daily_bar_warmup import (
                     preload_daily_bars,
                 )
 
                 preloaded = preload_daily_bars(
-                    list(allowed_for_preload),
+                    universe_for_preload,
                     kite_client=kite,
                     ticker_to_token=self._ticker_to_token or None,
                 )
@@ -1005,6 +1023,22 @@ class LiveRuntime:
         # right warmup module based on strategy cadence.
         history = self._bars_by_ticker.get(bar.ticker)
         if history is None:
+            # Skip expensive Kite preload for tickers that are only
+            # in the universe LTP subscription (indices, instruments
+            # not in the strategy's evaluation universe). After a
+            # full startup warmup, _bars_by_ticker already covers all
+            # bucket_by_ticker entries; an absent entry here means a
+            # pure LTP-cache token (e.g. an index) that cannot be
+            # traded. Mark it seen-and-skip so this path is O(1) on
+            # every subsequent bar for that token.
+            if (
+                strategy_interval == "1d"
+                and bar.ticker not in self._bucket_by_ticker
+                and bar.ticker
+                not in self._positions.open_positions()
+            ):
+                self._bars_by_ticker[bar.ticker] = []
+                return 0
             try:
                 if strategy_interval == "1d":
                     lazy = await asyncio.to_thread(
