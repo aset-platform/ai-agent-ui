@@ -2,6 +2,49 @@
 
 ---
 
+### 2026-06-18 (session 2) — per-ticker in-flight cap + budget clarity + watchlist chart icon (branch `chore/serena-memory-2026-06-18`)
+
+**Issues observed in live day trading session:**
+
+1. **Per-ticker cap** (`backend/algo/live/runtime.py`): Same ticker
+   was being bought repeatedly across bars — weight mechanism sized
+   orders but never blocked re-entry. Added `_ticker_locked: set[str]`
+   to `LiveRuntime`. Gate (`ticker_already_in_portfolio`) fires BEFORE
+   `signal_generated` for any BUY when the ticker is in the locked set
+   OR has a hydrated open position. Lock acquired on BUY submission,
+   released on SELL submission. Redis sync on every lock/unlock (key:
+   `cache:algo:live:locked:{user_id}:{strategy_id}`, TTL 24h). PG flush
+   every 30s + at session teardown to `algo.runs.locked_tickers TEXT[]`
+   (migration: `2026_06_18_tickers`, down_rev: `2026_05_24_budget`).
+   Startup restores locks from both `_positions.open_positions()` and
+   Redis.
+
+2. **Budget page calculation** (`frontend/components/algo-trading/BudgetPanel.tsx`):
+   No arithmetic bug — `available = min(allocated − open − pending, kite)` was
+   always correct. High `pending` was caused by issue #1 (duplicate BUY
+   reservations). Added explicit formula breakdown: "Internal headroom:
+   ₹X = Allocated − Open − Pending" + "Kite wallet: ₹Y" + amber "⚡
+   constraining" indicator when Kite is the binding constraint. Added
+   ⓘ tooltip hints on Pending and Available tiles.
+
+3. **Watchlist Algo tab chart icon** (`frontend/components/widgets/algo/`):
+   Added 8th column (blank header) to `AlgoPositionsTab.tsx`. Added
+   chart icon `<td>` to `AlgoPositionRow.tsx` with `Link` to
+   `/analytics/{internal_ticker}` in a new tab; `stopPropagation` so
+   row click doesn't also fire.
+
+**Files changed:** `backend/algo/live/runtime.py`,
+`backend/algo/live/caps_repo.py`,
+`backend/db/migrations/versions/2026_06_18_add_locked_tickers_to_runs.py`,
+`frontend/components/algo-trading/BudgetPanel.tsx`,
+`frontend/components/widgets/algo/AlgoPositionsTab.tsx`,
+`frontend/components/widgets/algo/AlgoPositionRow.tsx`.
+
+**Requires:** `alembic upgrade head` + `restart backend` (new column on
+`algo.runs`).
+
+---
+
 ### 2026-06-18 — algo.events Iceberg bloat remediation (PR1–4) + qty=0 entry observability (branch `chore/serena-memory-2026-06-18`)
 
 **Incident:** Live trading page hung ("stuck loading": positions /
