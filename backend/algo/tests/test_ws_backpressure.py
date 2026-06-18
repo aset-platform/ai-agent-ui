@@ -9,7 +9,11 @@ from uuid import uuid4
 
 import pytest
 
+import json
+
 from backend.algo.broker.ws_multiplexer import (
+    _BP_AGG_WINDOW_NS,
+    _BP_AGG_WINDOW_S,
     QUEUE_MAX_SIZE,
     KiteWsMultiplexer,
 )
@@ -159,3 +163,59 @@ async def test_normal_throughput_does_not_drop():
         await asyncio.sleep(0)
 
         assert q.qsize() == QUEUE_MAX_SIZE
+
+
+def test_backpressure_aggregates_within_window():
+    """A burst of drops within one window emits ONE summary event
+    (the first), not one-per-drop — the flood that bloated
+    algo.events."""
+    mux = _make_mux()
+    sid = uuid4()
+
+    for _ in range(500):
+        mux._record_backpressure_event(strategy_id=sid, token=111)
+
+    bp = [e for e in mux._ws_events if e["type"] == "ws_backpressure_drop"]
+    assert len(bp) == 1, "expected a single summary for the burst"
+    # First emit carries count=1; the other 499 are pending.
+    assert json.loads(bp[0]["payload_json"])["dropped"] == 1
+    assert mux._bp_drops[sid] == 499
+
+
+def test_backpressure_summary_carries_count_on_window_roll():
+    """After the window rolls, the next drop flushes a summary that
+    carries every drop accumulated since the last emit."""
+    mux = _make_mux()
+    sid = uuid4()
+
+    for _ in range(500):
+        mux._record_backpressure_event(strategy_id=sid, token=111)
+    # Force the window to have elapsed.
+    mux._bp_last_emit_ns[sid] -= _BP_AGG_WINDOW_NS + 1_000_000_000
+    mux._record_backpressure_event(strategy_id=sid, token=111)
+
+    bp = [e for e in mux._ws_events if e["type"] == "ws_backpressure_drop"]
+    assert len(bp) == 2
+    payload = json.loads(bp[1]["payload_json"])
+    assert payload["dropped"] == 500  # 499 pending + 1 triggering
+    assert payload["window_s"] == _BP_AGG_WINDOW_S
+    assert sid not in mux._bp_drops  # counter reset after flush
+
+
+def test_backpressure_residual_flushed_on_close():
+    """Un-emitted drop counts surface as a summary on close so the
+    final partial window is not lost."""
+    mux = _make_mux()
+    sid = uuid4()
+
+    for _ in range(10):
+        mux._record_backpressure_event(strategy_id=sid, token=111)
+    # 1 emitted (first), 9 pending.
+    assert mux._bp_drops[sid] == 9
+
+    mux._flush_backpressure_residual()
+
+    bp = [e for e in mux._ws_events if e["type"] == "ws_backpressure_drop"]
+    assert len(bp) == 2
+    assert json.loads(bp[1]["payload_json"])["dropped"] == 9
+    assert not mux._bp_drops

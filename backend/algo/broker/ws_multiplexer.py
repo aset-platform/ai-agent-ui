@@ -47,6 +47,14 @@ from backend.algo.stream.types import Tick
 _logger = logging.getLogger(__name__)
 
 QUEUE_MAX_SIZE = 1_000
+# Backpressure-drop events are aggregated per (user, strategy) into a
+# single summary event at most once per this window. Under a tick
+# firehose the per-drop rate can hit ~50/s — one Iceberg commit per
+# drop bloated algo.events to millions of rows + GB of metadata. The
+# first drop in a window emits immediately (onset visibility); the
+# rest are counted and surface on the next window / on close.
+_BP_AGG_WINDOW_S = 60
+_BP_AGG_WINDOW_NS = _BP_AGG_WINDOW_S * 1_000_000_000
 _MAX_BACKOFF_S = 60.0
 _MIN_BACKOFF_S = 1.0
 _GAP_TOO_LARGE_S = 3_600  # 1 hour: abandon gap-fill
@@ -112,6 +120,10 @@ class KiteWsMultiplexer:
         from uuid import uuid4
         self._session_id: UUID = uuid4()
         self._ws_events: list[dict[str, Any]] = []
+        # Backpressure-drop aggregation — per strategy_id rolling
+        # counter + last-emit timestamp (ns). See _BP_AGG_WINDOW_S.
+        self._bp_drops: dict[UUID, int] = {}
+        self._bp_last_emit_ns: dict[UUID, int] = {}
 
         # Health observability — OBS-1.
         # ``last_tick_at`` tracks the wall-clock time of the most
@@ -279,7 +291,8 @@ class KiteWsMultiplexer:
             except asyncio.QueueFull:
                 pass
 
-        # Flush any pending WS events.
+        # Flush any pending backpressure counts, then all WS events.
+        self._flush_backpressure_residual()
         if self._ws_events:
             self._flush_events()
 
@@ -738,19 +751,53 @@ class KiteWsMultiplexer:
             q.put_nowait(tick)
         except asyncio.QueueFull:
             pass  # drop newest as a last resort
-        _logger.warning(
-            "ws_backpressure_drop user=%s strategy=%s token=%s",
-            self._user_id, sid, tok,
-        )
-        self._record_backpressure_event(sid, tok)
+        # No per-drop log/event here — aggregated below to avoid the
+        # ~50/s flood that bloated algo.events.
+        self._record_backpressure_event(strategy_id=sid, token=tok)
 
     def _record_backpressure_event(
         self, strategy_id: UUID, token: int,
     ) -> None:
+        """Count a backpressure drop; emit a summary event at most
+        once per ``_BP_AGG_WINDOW_S`` per strategy. The first drop in a
+        window emits immediately (so onset is visible); subsequent
+        drops are counted and surface on the next window / on close.
+        ``token`` is accepted for call-site compatibility but no longer
+        carried per-drop (aggregation is per strategy)."""
+        now_ns = int(time.time() * 1_000_000_000)
+        self._bp_drops[strategy_id] = (
+            self._bp_drops.get(strategy_id, 0) + 1
+        )
+        last = self._bp_last_emit_ns.get(strategy_id, 0)
+        if now_ns - last >= _BP_AGG_WINDOW_NS:
+            self._emit_backpressure_summary(strategy_id, now_ns)
+
+    def _emit_backpressure_summary(
+        self, strategy_id: UUID, now_ns: int,
+    ) -> None:
+        """Flush the accumulated drop count for ``strategy_id`` as one
+        ``ws_backpressure_drop`` summary event + a single WARNING."""
+        count = self._bp_drops.pop(strategy_id, 0)
+        if count <= 0:
+            return
+        self._bp_last_emit_ns[strategy_id] = now_ns
         self._emit_ws_event(
             "ws_backpressure_drop",
             {
                 "strategy_id": str(strategy_id),
-                "token": token,
+                "dropped": count,
+                "window_s": _BP_AGG_WINDOW_S,
             },
         )
+        _logger.warning(
+            "ws_backpressure_drop user=%s strategy=%s dropped=%d "
+            "(aggregated over ~%ds)",
+            self._user_id, strategy_id, count, _BP_AGG_WINDOW_S,
+        )
+
+    def _flush_backpressure_residual(self) -> None:
+        """Emit summaries for any un-flushed drop counts (called on
+        close so the final partial window is not lost)."""
+        now_ns = int(time.time() * 1_000_000_000)
+        for sid in list(self._bp_drops.keys()):
+            self._emit_backpressure_summary(sid, now_ns)
