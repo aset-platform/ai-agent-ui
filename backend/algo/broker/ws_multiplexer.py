@@ -116,10 +116,6 @@ class KiteWsMultiplexer:
         # reconnect storm and Kite rate-limiting).
         self._connect_ts: float = 0.0
 
-        # session_id for event rows (WS-level session)
-        from uuid import uuid4
-        self._session_id: UUID = uuid4()
-        self._ws_events: list[dict[str, Any]] = []
         # Backpressure-drop aggregation — per strategy_id rolling
         # counter + last-emit timestamp (ns). See _BP_AGG_WINDOW_S.
         self._bp_drops: dict[UUID, int] = {}
@@ -291,10 +287,8 @@ class KiteWsMultiplexer:
             except asyncio.QueueFull:
                 pass
 
-        # Flush any pending backpressure counts, then all WS events.
+        # Flush any pending backpressure counts (→ Redis store).
         self._flush_backpressure_residual()
-        if self._ws_events:
-            self._flush_events()
 
     @property
     def connected(self) -> bool:
@@ -691,43 +685,24 @@ class KiteWsMultiplexer:
         type_: str,
         payload: dict[str, Any],
     ) -> None:
-        """Queue a WS-lifecycle event for batch flush."""
-        from backend.algo.backtest.event_writer import event_row
-        row = event_row(
-            session_id=self._session_id,
+        """Persist a WS-lifecycle event to the per-user Redis store.
+
+        7-day observability records — NOT written to the algo.events
+        Iceberg log (incident 2026-06-18). Best-effort: a Redis failure
+        is swallowed inside record_ws_event."""
+        from uuid import uuid4
+
+        from backend.algo.broker.ws_event_store import record_ws_event
+
+        ts_ns = int(time.time() * 1_000_000_000)
+        record_ws_event(
             user_id=self._user_id,
-            strategy_id=None,
-            mode="live-ws",
+            event_id=str(uuid4()),
+            ts_ns=ts_ns,
             type_=type_,
+            strategy_id=payload.get("strategy_id"),
             payload=payload,
         )
-        self._ws_events.append(row)
-        # Flush in batches of 50 to bound memory.
-        if len(self._ws_events) >= 50:
-            self._flush_events()
-
-    def _flush_events(self) -> None:
-        if not self._ws_events:
-            return
-        rows = self._ws_events
-        self._ws_events = []
-        # Offload the Iceberg write to a thread-pool worker so the
-        # asyncio event loop is not blocked — each _retry_commit takes
-        # ~1-2 s and calling it inline here (scheduled via
-        # call_soon_threadsafe from the Kite WS thread) was starving
-        # FastAPI health probes under heavy backpressure.
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            # No running loop (tests / backtest context) — sync path.
-            try:
-                from backend.algo.backtest.event_writer import flush_events
-                flush_events(rows)
-            except Exception:
-                _logger.warning("ws event flush failed", exc_info=True)
-            return
-        from backend.algo.backtest.event_writer import flush_events
-        loop.run_in_executor(None, flush_events, rows)
 
     def _enqueue_tick(self, q, tick, sid, tok) -> None:
         """Push a tick onto a subscriber queue. Runs on the loop
