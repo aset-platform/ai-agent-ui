@@ -251,6 +251,21 @@ def create_paper_router() -> APIRouter:
         from backend.db.duckdb_engine import query_iceberg_table
         user_id_str = str(UUID(user.user_id))
 
+        if mode == "live-ws":
+            from backend.algo.broker.ws_event_store import read_ws_events
+
+            evs = read_ws_events(
+                user_id=UUID(user.user_id),
+                limit=limit,
+                offset=offset,
+                type_=type,
+            )
+            response.headers["X-Total-Count"] = str(len(evs))
+            response.headers["Access-Control-Expose-Headers"] = (
+                "X-Total-Count"
+            )
+            return evs
+
         clauses = ["user_id = ?"]
         base_params: list = [user_id_str]
         if type is not None:
