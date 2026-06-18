@@ -409,6 +409,40 @@ class LiveRuntime:
                     "settle on session-local minute history",
                     exc,
                 )
+            # Bulk factor cache — replace 712 per-ticker lazy DuckDB
+            # reads (each blocking the async event loop) with one
+            # single batch query at startup.
+            try:
+                from datetime import date as _date_t
+                from datetime import timedelta as _tdelta
+
+                from backend.algo.factors.repo import get_factors_window
+
+                _today = _date_t.today()
+                _factor_rows = get_factors_window(
+                    list(universe_for_preload),
+                    _today - _tdelta(days=400),
+                    _today + _tdelta(days=1),
+                )
+                for _fr in _factor_rows:
+                    self._factor_cache[(_fr.ticker, _fr.bar_date)] = {
+                        k: Decimal(str(v))
+                        for k, v in _fr.values.items()
+                        if v is not None
+                    }
+                self._factor_loaded_for_ticker.update(universe_for_preload)
+                _logger.info(
+                    "LiveRuntime: factor cache bulk-loaded — %d rows"
+                    " for %d tickers",
+                    len(_factor_rows),
+                    len(universe_for_preload),
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning(
+                    "LiveRuntime: factor cache bulk-load failed: %s"
+                    " — falling back to per-ticker lazy load",
+                    exc,
+                )
         elif allowed_for_preload and interval != "1d":
             try:
                 from backend.algo.live.intraday_bar_warmup import (
@@ -1169,10 +1203,18 @@ class LiveRuntime:
             ),
             market_regime=self._market_regime.get(bar_date_obj),
             market_trend=self._market_trend.get(bar_date_obj),
-            factor_row=self._factor_cache.get(
-                (bar.ticker, bar_date_obj),
+            factor_row=(
+                self._factor_cache.get((bar.ticker, bar_date_obj))
+                or self._factor_cache.get(
+                    (bar.ticker, bar_date_obj - timedelta(days=1))
+                )
             ),
-            regime_row=self._regime_by_date.get(bar_date_obj),
+            regime_row=(
+                self._regime_by_date.get(bar_date_obj)
+                or self._regime_by_date.get(
+                    bar_date_obj - timedelta(days=1)
+                )
+            ),
             daily_overlay=self._daily_overlay_cache.get(
                 (bar.ticker, bar_date_obj),
             ),
@@ -1347,6 +1389,7 @@ class LiveRuntime:
             len(history) >= 2 and history[-1].date == bar_date_obj
         )
         if daily_realtime and is_flat and last_bar_is_today:
+            _evt_n_before = len(self._events)
             closed_entry = self._eval_entry_on_closed_bar(
                 history, bar, last_price,
             )
@@ -1368,6 +1411,14 @@ class LiveRuntime:
                         _MIN_EVAL_TIME_IST.strftime("%H:%M"),
                     )
                     return 0
+            # The completed-bar eval may have buffered a qty=0
+            # rejection (entry qualified but the account can't afford
+            # one share). When no tradable BUY resulted there is no
+            # downstream ``_flush_events_now`` to push it, so flush
+            # here — bounded to once per (ticker, closed bar) because
+            # the underlying emit is cache-miss-gated.
+            if closed_entry is None and len(self._events) > _evt_n_before:
+                await self._flush_events_now()
 
         if signal is None:
             return 0
@@ -2190,9 +2241,11 @@ class LiveRuntime:
             return None
         closed_date = closed[-1].date
         cache_key = (bar.ticker, closed_date)
+        newly_computed = False
         if cache_key in self._closed_entry_cache:
             action = self._closed_entry_cache[cache_key]
         else:
+            newly_computed = True
             ind_map = compute_indicators(closed)
             # Idempotent lazy cache loads (already warmed for today,
             # which covers the prior day, but keep them explicit).
@@ -2209,10 +2262,18 @@ class LiveRuntime:
                 ),
                 market_regime=self._market_regime.get(closed_date),
                 market_trend=self._market_trend.get(closed_date),
-                factor_row=self._factor_cache.get(
-                    (bar.ticker, closed_date),
+                factor_row=(
+                    self._factor_cache.get((bar.ticker, closed_date))
+                    or self._factor_cache.get(
+                        (bar.ticker, closed_date - timedelta(days=1))
+                    )
                 ),
-                regime_row=self._regime_by_date.get(closed_date),
+                regime_row=(
+                    self._regime_by_date.get(closed_date)
+                    or self._regime_by_date.get(
+                        closed_date - timedelta(days=1)
+                    )
+                ),
                 daily_overlay=self._daily_overlay_cache.get(
                     (bar.ticker, closed_date),
                 ),
@@ -2233,12 +2294,95 @@ class LiveRuntime:
             self._closed_entry_cache[cache_key] = action
         if action is None:
             return None
-        return self._action_to_signal(
+        sig = self._action_to_signal(
             action,
             ticker=bar.ticker,
             bar_date_ns=bar.bar_open_ts_ns,
             last_price=last_price,
         )
+        # Observability — a completed-bar entry whose ``set_target_weight``
+        # BUY intent rounds to qty=0 (account can't afford one share) is
+        # otherwise a SILENT no-op: no signal, no event, the events panel
+        # looks frozen. Surface it as a ``signal_rejected`` so the user
+        # sees WHY no entry fired. ``newly_computed`` (cache miss) bounds
+        # this to at most one event per (ticker, closed bar) — no per-tick
+        # spam. Only the flat case reaches here (open_qty=0 by contract).
+        if sig is None and newly_computed:
+            self._maybe_emit_qty_zero_rejection(
+                action=action,
+                ticker=bar.ticker,
+                last_price=last_price,
+                bar_date=closed_date,
+            )
+        return sig
+
+    def _maybe_emit_qty_zero_rejection(
+        self,
+        *,
+        action: dict,
+        ticker: str,
+        last_price: Decimal | None,
+        bar_date: date,
+    ) -> bool:
+        """Emit a ``signal_rejected`` event when a ``set_target_weight``
+        BUY intent sizes to qty=0 because available equity cannot afford
+        a single share. Mirrors the sizing math in ``_action_to_signal``
+        so the event fires for exactly the case that method drops to
+        ``None``. Returns True iff an event was appended (eases testing).
+        """
+        if not isinstance(action, dict):
+            return False
+        if action.get("type") != "set_target_weight":
+            return False
+        if last_price is None or last_price <= 0:
+            return False
+        try:
+            weight = Decimal(str(action.get("weight", 0)))
+        except (TypeError, ValueError, ArithmeticError):
+            return False
+        if weight <= 0:
+            return False
+        current_equity = (
+            self._initial + self._positions.total_realised_pnl_inr()
+        )
+        if current_equity <= 0:
+            return False
+        target_qty = int((current_equity * weight) // last_price)
+        # Only the can't-afford-one-share case is the silent drop worth
+        # surfacing; a positive target sizes normally through the signal.
+        if target_qty > 0:
+            return False
+        self._events.append(
+            event_row(
+                session_id=self._session_id,
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                mode="live",
+                type_="signal_rejected",
+                payload={
+                    **({"dry_run": True} if self._dry_run else {}),
+                    "reason": "insufficient_capital_qty_zero",
+                    "ticker": ticker,
+                    "symbol": str(ticker).upper().removesuffix(".NS"),
+                    "side": "BUY",
+                    "qty": 0,
+                    "target_weight": float(weight),
+                    "last_price": str(last_price),
+                    "current_equity_inr": str(current_equity),
+                    "bar_date": bar_date.isoformat(),
+                },
+            )
+        )
+        _logger.info(
+            "live entry SKIPPED — insufficient capital (qty=0): "
+            "ticker=%s target_weight=%s last_price=%s equity=%s "
+            "(raise capital / weight or use a cheaper universe)",
+            ticker,
+            float(weight),
+            last_price,
+            current_equity,
+        )
+        return True
 
     def _action_to_signal(
         self,
