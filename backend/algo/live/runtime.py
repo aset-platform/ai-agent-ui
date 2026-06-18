@@ -682,6 +682,29 @@ class LiveRuntime:
         except asyncio.CancelledError:
             raise
 
+    async def _periodic_budget_reconcile(self) -> None:
+        """Reconcile SUBMITTED/PENDING budget reservations every 60 s.
+
+        Ensures fill confirmations arrive from Kite while the session
+        is active — the scheduler-driven ``algo_reconciliation`` job
+        only runs daily, so this is the real-time sweep."""
+        _INTERVAL_S = 60
+        try:
+            while True:
+                await asyncio.sleep(_INTERVAL_S)
+                try:
+                    from backend.algo.live.budget_reconciliation import (
+                        reconcile as _budget_reconcile,
+                    )
+
+                    await _budget_reconcile()
+                except Exception:  # noqa: BLE001
+                    _logger.warning(
+                        "periodic budget reconcile failed", exc_info=True
+                    )
+        except asyncio.CancelledError:
+            raise
+
     def _ensure_regime_cache(self, bar_date_obj: date) -> None:
         if self._regime_loaded:
             return
@@ -1015,6 +1038,10 @@ class LiveRuntime:
             self._periodic_ticker_lock_flush(),
             name=f"ticker_lock_flush_{self._run_id}",
         )
+        budget_reconcile_task = asyncio.create_task(
+            self._periodic_budget_reconcile(),
+            name=f"budget_reconcile_{self._run_id}",
+        )
 
         try:
             async for tick in source:
@@ -1134,6 +1161,22 @@ class LiveRuntime:
             except Exception:  # noqa: BLE001
                 _logger.warning(
                     "final ticker lock PG flush failed", exc_info=True
+                )
+            # Stop and do a final budget reconcile sweep.
+            budget_reconcile_task.cancel()
+            try:
+                await budget_reconcile_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            try:
+                from backend.algo.live.budget_reconciliation import (
+                    reconcile as _budget_reconcile,
+                )
+
+                await _budget_reconcile()
+            except Exception:  # noqa: BLE001
+                _logger.warning(
+                    "final budget reconcile failed", exc_info=True
                 )
 
             # PR3 — stop the periodic flush before the terminal drain
