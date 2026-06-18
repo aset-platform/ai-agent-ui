@@ -101,6 +101,12 @@ class KiteWsMultiplexer:
         self._auth_failed = False
         self._reconnect_task: asyncio.Task | None = None
         self._backoff_s: float = _MIN_BACKOFF_S
+        # Timestamp of the last successful connect (monotonic). Used
+        # to decide whether a connection was "stable" before resetting
+        # the exponential backoff — a brief connect that immediately
+        # drops should NOT reset backoff to MIN (that causes a
+        # reconnect storm and Kite rate-limiting).
+        self._connect_ts: float = 0.0
 
         # session_id for event rows (WS-level session)
         from uuid import uuid4
@@ -442,7 +448,11 @@ class KiteWsMultiplexer:
 
         def on_connect(ws, _resp):
             self._connected = True
-            self._backoff_s = _MIN_BACKOFF_S
+            self._connect_ts = time.monotonic()
+            # Reset backoff only if the PREVIOUS connection was stable
+            # (≥ 30s). A brief connect-then-drop must keep the growing
+            # backoff so we don't hammer Kite with rapid reconnects.
+            # _connect_ts is set here and checked in on_close.
             _logger.info(
                 "KiteWsMultiplexer: connected user=%s",
                 self._user_id,
@@ -473,11 +483,17 @@ class KiteWsMultiplexer:
 
         def on_close(_ws, code, reason):
             self._connected = False
+            uptime_s = time.monotonic() - self._connect_ts
+            # Only reset backoff when the connection was genuinely
+            # stable (≥ 30s). Brief flaps must keep the growing
+            # backoff to avoid hammering Kite with rapid reconnects.
+            if uptime_s >= 30.0:
+                self._backoff_s = _MIN_BACKOFF_S
             reason_str = str(reason)
             _logger.warning(
                 "KiteWsMultiplexer: disconnected user=%s "
-                "code=%s reason=%s",
-                self._user_id, code, reason_str,
+                "code=%s uptime=%.1fs reason=%s",
+                self._user_id, code, uptime_s, reason_str,
             )
             loop.call_soon_threadsafe(
                 self._emit_ws_event,
@@ -680,17 +696,25 @@ class KiteWsMultiplexer:
     def _flush_events(self) -> None:
         if not self._ws_events:
             return
+        rows = self._ws_events
+        self._ws_events = []
+        # Offload the Iceberg write to a thread-pool worker so the
+        # asyncio event loop is not blocked — each _retry_commit takes
+        # ~1-2 s and calling it inline here (scheduled via
+        # call_soon_threadsafe from the Kite WS thread) was starving
+        # FastAPI health probes under heavy backpressure.
         try:
-            from backend.algo.backtest.event_writer import (
-                flush_events,
-            )
-            flush_events(self._ws_events)
-            self._ws_events = []
-        except Exception:
-            _logger.warning(
-                "ws event flush failed", exc_info=True,
-            )
-            self._ws_events = []
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop (tests / backtest context) — sync path.
+            try:
+                from backend.algo.backtest.event_writer import flush_events
+                flush_events(rows)
+            except Exception:
+                _logger.warning("ws event flush failed", exc_info=True)
+            return
+        from backend.algo.backtest.event_writer import flush_events
+        loop.run_in_executor(None, flush_events, rows)
 
     def _enqueue_tick(self, q, tick, sid, tok) -> None:
         """Push a tick onto a subscriber queue. Runs on the loop
