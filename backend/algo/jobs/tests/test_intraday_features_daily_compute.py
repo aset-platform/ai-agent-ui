@@ -234,9 +234,7 @@ async def test_rerun_scoped_pre_delete_uses_in_ticker(fake_session):
     _walk(pred)
     assert "ticker" in seen_refs, f"got {seen_refs}"
     assert "bar_date" in seen_refs, f"got {seen_refs}"
-    assert (
-        "year_month" not in seen_refs
-    ), (
+    assert "year_month" not in seen_refs, (
         "Regression guard: pre-delete must NOT scope on "
         "year_month — that wipes prior-day features in the "
         "current month on every daily keeper run "
@@ -337,9 +335,7 @@ async def test_batched_read_crash_flags_all_tickers_failed(
     assert result["status"] == "ok"
     assert result["tickers_processed"] == 0
     assert result["tickers_failed"] == 2
-    assert all(
-        "fetch:" in reason for _, reason in result["failures"]
-    )
+    assert all("fetch:" in reason for _, reason in result["failures"])
     # Compute never fires when the read crashed.
     mock_compute.assert_not_called()
 
@@ -875,3 +871,60 @@ def test_register_job_wrapper_runs_async_job():
     assert isinstance(result, dict)
     assert result["status"] == "ok"
     assert result["payload_seen"] == {"interval_sec": 900}
+
+
+def test_features_arrow_schema_has_bar_date_d():
+    """``_features_arrow_schema()`` must expose ``bar_date_d`` as a
+    ``pa.date32()`` (non-nullable) column — the FE-1 Iceberg table
+    has field_id 10 of that type and the partition spec depends on
+    ``MonthTransform(bar_date_d)``."""
+    import pyarrow as pa
+
+    from backend.algo.jobs.intraday_features_daily_compute import (
+        _features_arrow_schema,
+    )
+
+    schema = _features_arrow_schema()
+    assert "bar_date_d" in schema.names
+    assert schema.field("bar_date_d").type == pa.date32()
+    assert schema.field("bar_date_d").nullable is False
+
+
+def test_panel_to_arrow_rows_emits_bar_date_d():
+    """``_panel_to_arrow_rows()`` must emit ``bar_date_d`` as a
+    ``datetime.date`` equal to the bar's date for every row."""
+    from datetime import date, datetime
+    from decimal import Decimal
+
+    from backend.algo.backtest.types import BarData
+    from backend.algo.jobs.intraday_features_daily_compute import (
+        _panel_to_arrow_rows,
+    )
+
+    ts_ns = 1_700_000_000_000_000_000
+    bar_day = date(2026, 5, 13)
+    bar = BarData(
+        ticker="A.NS",
+        date=bar_day,
+        open=Decimal("100"),
+        high=Decimal("101"),
+        low=Decimal("99"),
+        close=Decimal("100.5"),
+        volume=1000,
+        bar_open_ts_ns=ts_ns,
+    )
+    panel = {
+        "A.NS": {
+            ts_ns: {"rsi": 55.0},
+        },
+    }
+    rows = _panel_to_arrow_rows(
+        panel=panel,
+        bars_by_ticker={"A.NS": [bar]},
+        interval_sec=900,
+        feature_set_version="v1",
+        written_at=datetime(2026, 5, 13, 10, 0, 0),
+    )
+    assert len(rows) == 1
+    assert rows[0]["bar_date_d"] == bar_day
+    assert isinstance(rows[0]["bar_date_d"], date)
