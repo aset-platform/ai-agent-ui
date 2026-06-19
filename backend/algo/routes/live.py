@@ -1331,6 +1331,7 @@ def create_live_router() -> APIRouter:
         attr = await _fetch_strategy_attribution(
             uid,
             [r["tradingsymbol"] for r in open_rows],
+            since_date="2024-01-01",
         )
 
         out_rows: list[PositionRow] = []

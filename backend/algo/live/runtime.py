@@ -1075,6 +1075,7 @@ class LiveRuntime:
                         bar=bar,
                         last_price=lp,
                         last_price_ts=lp_ts,
+                        last_price_per_ticker=last_price_per_ticker,
                     )
                     fills += n
                     if n > 0:
@@ -1144,6 +1145,7 @@ class LiveRuntime:
                     bar=bar,
                     last_price=lp,
                     last_price_ts=lp_ts,
+                    last_price_per_ticker=last_price_per_ticker,
                 )
             # Stop per-ticker lock flush before terminal drain.
             ticker_lock_flush_task.cancel()
@@ -1215,6 +1217,7 @@ class LiveRuntime:
         bar: Any,
         last_price: Decimal,
         last_price_ts: datetime | None = None,
+        last_price_per_ticker: dict[str, Decimal] | None = None,
     ) -> int:
         """Evaluate → gate → submit to Kite. Returns 1 if filled."""
         # Best-effort: publish bar close as live LTP so the paper
@@ -1791,6 +1794,7 @@ class LiveRuntime:
             last_price=last_price,
             user_id=self._user_id,
             dry_run=self._dry_run,
+            last_price_per_ticker=last_price_per_ticker,
         )
 
         if decision.outcome == "reject":

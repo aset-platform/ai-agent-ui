@@ -39,7 +39,7 @@ SUBMITTED_HARD_TIMEOUT_S = 300
 
 
 async def _list_pending() -> list[BudgetReservation]:
-    """Pull all reservations whose latest state is PENDING."""
+    """Pull reservations whose latest state is PENDING."""
     factory = _session_factory()
     async with factory() as session:
         result = await session.execute(
@@ -50,6 +50,7 @@ async def _list_pending() -> list[BudgetReservation]:
                 "  filled_qty, filled_inr, kite_order_id, "
                 "  transitioned_at, metadata, error_text "
                 "FROM algo.budget_reservations "
+                "WHERE state = 'PENDING' "
                 "ORDER BY reservation_id, "
                 "         transitioned_at DESC"
             ),
@@ -59,8 +60,7 @@ async def _list_pending() -> list[BudgetReservation]:
     for row in rows:
         d = dict(row)
         d["state"] = ReservationState(d["state"])
-        if d["state"] == ReservationState.PENDING:
-            out.append(BudgetReservation(**d))
+        out.append(BudgetReservation(**d))
     return out
 
 
@@ -75,6 +75,7 @@ async def _list_submitted_and_partial() -> list[BudgetReservation]:
                 "  filled_qty, filled_inr, kite_order_id, "
                 "  transitioned_at, metadata, error_text "
                 "FROM algo.budget_reservations "
+                "WHERE state IN ('SUBMITTED', 'PARTIAL') "
                 "ORDER BY reservation_id, "
                 "         transitioned_at DESC"
             ),
@@ -84,24 +85,20 @@ async def _list_submitted_and_partial() -> list[BudgetReservation]:
     for row in rows:
         d = dict(row)
         d["state"] = ReservationState(d["state"])
-        if d["state"] in (
-            ReservationState.SUBMITTED,
-            ReservationState.PARTIAL,
-        ):
-            out.append(BudgetReservation(**d))
+        out.append(BudgetReservation(**d))
     return out
 
 
-async def _fetch_kite_order_status(
-    user_id: UUID,
+async def _fetch_order_status_for_user(
+    kite_client,
     kite_order_id: str,
+    user_id: UUID,
 ) -> dict[str, Any] | None:
-    """Pull the latest leg of a Kite order's history. None on
-    error or when creds are missing/expired."""
+    """Pull the latest leg of a Kite order's history using a pre-built
+    KiteClient. None on error or empty history."""
     try:
-        kc = await _build_kite_for_user(user_id)
         history = await asyncio.to_thread(
-            kc._kc.order_history,
+            kite_client._kc.order_history,
             kite_order_id,
         )
         if not history:
@@ -140,8 +137,16 @@ async def reconcile_pending_timeouts() -> None:
                 )
 
 
-async def reconcile_one(res: BudgetReservation) -> None:
-    """Reconcile a single SUBMITTED/PARTIAL reservation."""
+async def reconcile_one(
+    res: BudgetReservation,
+    kite_client,
+) -> None:
+    """Reconcile a single SUBMITTED/PARTIAL reservation.
+
+    ``kite_client`` is a pre-built client for ``res.user_id`` — the
+    caller builds one client per user per reconcile cycle instead of
+    one per reservation.
+    """
     if res.kite_order_id is None:
         return
 
@@ -157,9 +162,10 @@ async def reconcile_one(res: BudgetReservation) -> None:
         seconds=SUBMITTED_HARD_TIMEOUT_S,
     )
 
-    status_row = await _fetch_kite_order_status(
-        res.user_id,
+    status_row = await _fetch_order_status_for_user(
+        kite_client,
         res.kite_order_id,
+        res.user_id,
     )
     if status_row is None:
         if res.transitioned_at < threshold:
@@ -231,9 +237,34 @@ async def reconcile_one(res: BudgetReservation) -> None:
 
 
 async def reconcile_submitted() -> None:
-    for res in await _list_submitted_and_partial():
+    """Reconcile SUBMITTED/PARTIAL reservations.
+
+    Groups by user_id and builds one KiteClient per user per cycle
+    instead of one per reservation (avoids N redundant PG cred lookups
+    and N separate kiteconnect.KiteConnect instances).
+    """
+    reservations = await _list_submitted_and_partial()
+    if not reservations:
+        return
+
+    # Build one KiteClient per distinct user_id.
+    user_ids = {res.user_id for res in reservations}
+    kite_clients: dict[UUID, Any] = {}
+    for uid in user_ids:
         try:
-            await reconcile_one(res)
+            kite_clients[uid] = await _build_kite_for_user(uid)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "budget reconcile: no kite for user=%s: %s",
+                uid, exc,
+            )
+
+    for res in reservations:
+        kc = kite_clients.get(res.user_id)
+        if kc is None:
+            continue
+        try:
+            await reconcile_one(res, kc)
         except Exception as exc:  # noqa: BLE001
             _logger.error(
                 "budget reconcile_one failed res=%s: %s",
