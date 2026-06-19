@@ -210,9 +210,37 @@ async def _admin_backups_health_impl(
             "table_count": 0,
             "warehouse_size_mb": None,
             "has_catalog": False,
+            "backup_in_progress": False,
         }
 
-    latest = backups[0]
+    # Use the newest backup that has a manifest.json as the health
+    # reference. A manifest-less directory means build_manifest() is
+    # still running (rsync done, walk pending) — picking it would
+    # return table_count=0 and warehouse_size_mb≈0 (hardlinks make
+    # `du` near-zero). Surface an in_progress flag instead so the UI
+    # can show "backup building…" without hiding real health data.
+    newest = backups[0]
+    newest_bp = Path(newest["path"])
+    backup_in_progress = read_manifest(newest_bp) is None
+
+    latest = next(
+        (b for b in backups if read_manifest(Path(b["path"])) is not None),
+        None,
+    )
+    if latest is None:
+        # All full-snapshot dirs lack a manifest — report missing.
+        return {
+            "status": "missing",
+            "latest_date": newest["date"],
+            "completed_at": None,
+            "age_hours": None,
+            "backup_count": len(backups),
+            "table_count": 0,
+            "warehouse_size_mb": None,
+            "has_catalog": (newest_bp / "catalog.db").exists(),
+            "backup_in_progress": backup_in_progress,
+        }
+
     bp = Path(latest["path"])
     now_ = _t.time()
     completed_epoch = _completed_epoch(latest, bp)
@@ -226,16 +254,9 @@ async def _admin_backups_health_impl(
         status = "critical"
 
     manifest = read_manifest(bp)
-    if manifest is not None:
-        warehouse_size_mb = manifest.get("warehouse_size_mb")
-        table_count = len(manifest.get("tables", []))
-        has_catalog = bool(
-            manifest.get("catalog_present", False),
-        )
-    else:
-        warehouse_size_mb = latest.get("size_mb")
-        table_count = 0
-        has_catalog = (bp / "catalog.db").exists()
+    warehouse_size_mb = manifest.get("warehouse_size_mb")
+    table_count = len(manifest.get("tables", []))
+    has_catalog = bool(manifest.get("catalog_present", False))
 
     result = {
         "status": status,
@@ -249,6 +270,7 @@ async def _admin_backups_health_impl(
         # keep both keys in sync until Task 6 migrates the UI.
         "size_mb": warehouse_size_mb,
         "has_catalog": has_catalog,
+        "backup_in_progress": backup_in_progress,
     }
     if _c2 and backup_root is None:
         _c2.set(_bk2, json.dumps(result), 120)
