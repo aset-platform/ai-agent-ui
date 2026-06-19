@@ -40,8 +40,13 @@ def _ensure_table_and_clean_state():
     make sure ``stocks.index_intraday_bars`` is registered before
     any test touches it and wipe rows from a previous run that
     used the test prefix.
+
+    Also evolves the on-disk schema to add ``bar_date_d`` when the
+    table was created under the old 12-column schema (same migration
+    path as the equity-bars fixture in test_intraday_backfill.py).
     """
     from pyiceberg.expressions import StartsWith
+    from pyiceberg.types import DateType
 
     from stocks.create_tables import (
         _INDEX_INTRADAY_BARS_TABLE,
@@ -60,6 +65,18 @@ def _ensure_table_and_clean_state():
         _ticker_year_month_partition_spec(schema),
     )
     tbl = catalog.load_table(_INDEX_INTRADAY_BARS_TABLE)
+    # Schema evolution: add bar_date_d when the table was created
+    # under the old 12-column schema. _create_table is skip-if-
+    # exists, so this fixture is the add-column path for existing
+    # test environments. required=False is mandatory for add_column
+    # on a table that may already have rows.
+    if "bar_date_d" not in {f.name for f in tbl.schema().fields}:
+        with tbl.update_schema() as upd:
+            upd.add_column(
+                "bar_date_d",
+                DateType(),
+                required=False,
+            )
     try:
         tbl.delete(StartsWith("ticker", _TEST_TICKER_PREFIX))
     except Exception:
@@ -319,3 +336,37 @@ def test_upsert_empty_input_is_zero():
         )
         == 0
     )
+
+
+# ────────────────────────────────────────────────────────────────
+# _bars_to_arrow — bar_date_d column
+# ────────────────────────────────────────────────────────────────
+
+
+def test_index_bars_to_arrow_includes_bar_date_d():
+    """Arrow table emitted by ``_bars_to_arrow`` must contain a
+    ``bar_date_d`` column of PyArrow ``date32`` type whose value
+    equals the bar's date as a ``datetime.date``.
+    Uses an index symbol (``"NIFTY 50"``) as the ticker.
+    """
+    from datetime import date as _date
+
+    from backend.algo.backtest.index_intraday_backfill import (
+        _bars_to_arrow,
+    )
+
+    bars = [
+        BarData(
+            ticker="NIFTY 50",
+            date=_date(2026, 6, 19),
+            bar_open_ts_ns=1,
+            open=Decimal("22000.0"),
+            high=Decimal("22100.0"),
+            low=Decimal("21900.0"),
+            close=Decimal("22050.0"),
+            volume=0,
+        )
+    ]
+    tbl = _bars_to_arrow(bars, interval_sec=900, source="kite")
+    assert "bar_date_d" in tbl.schema.names
+    assert tbl.column("bar_date_d")[0].as_py() == _date(2026, 6, 19)
