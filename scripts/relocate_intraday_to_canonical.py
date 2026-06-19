@@ -164,11 +164,24 @@ def relocate_table(catalog, canonical, schema_fn, sort_order_fn) -> dict:
     renaming the live table aside, recreating it in the canonical dir,
     and copying all rows across with row-count parity enforcement.
 
-    On a row-count mismatch this RAISES, and in the same failure path
-    RECOVERS the pre-relocate state by dropping the partial fresh
-    canonical and renaming the ``_keep`` table back to ``canonical`` —
-    so a mid-copy failure leaves the original working table live with no
-    data loss.
+    On any failure AFTER step 1, RECOVERS the pre-relocate state:
+    first attempts to drop the partially-created canonical (tolerates
+    the case where ``create_table`` never succeeded), then renames
+    ``_keep`` back to ``canonical`` so the original working table stays
+    live with no data loss.
+
+    Recovery is NOT atomic — if the process dies between the drop and
+    the rename, the table lands in the "canonical missing, _keep exists"
+    STOP state.  An operator restores it with::
+
+        catalog.rename_table("stocks.<t>_keep", "stocks.<t>")
+
+    ``_prepare_state`` already detects and STOPs on that state on a
+    re-run, so an unattended retry will not make things worse.
+
+    Step 1 (``rename_table`` canonical → keep) is kept OUTSIDE the try
+    block: a failure there means nothing was changed yet, so no recovery
+    is needed and the exception propagates directly.
 
     Args:
         catalog: An open ``SqlCatalog``.
@@ -202,32 +215,32 @@ def relocate_table(catalog, canonical, schema_fn, sort_order_fn) -> dict:
     old_rows = src.scan(selected_fields=("ticker",)).to_arrow().num_rows
     _logger.info("[relocate] %s: %d rows to copy", canonical, old_rows)
 
-    # Step 2: fresh table written into the canonical dir (still holding
-    # orphan files — expected; swept later per CLAUDE.md §4.3 #20).
-    catalog.create_table(
-        identifier=canonical,
-        schema=schema,
-        partition_spec=spec,
-        sort_order=sort_order,
-    )
-    new_tbl = catalog.load_table(canonical)
-    target_arrow_schema = new_tbl.schema().as_arrow()
-
-    # Step 3: copy chunked by year_month to bound peak memory. _keep's
-    # schema already matches the target (built with the new schema incl.
-    # a correct non-null bar_date_d) — no bar_date_d derivation needed,
-    # just select-by-name + positional cast for safety.
-    months = sorted(
-        set(
-            src.scan(selected_fields=("year_month",))
-            .to_arrow()
-            .column("year_month")
-            .to_pylist()
-        )
-    )
-
     new_rows = 0
     try:
+        # Step 2: fresh table written into the canonical dir (still
+        # holding orphan files — expected; swept later per §4.3 #20).
+        catalog.create_table(
+            identifier=canonical,
+            schema=schema,
+            partition_spec=spec,
+            sort_order=sort_order,
+        )
+        new_tbl = catalog.load_table(canonical)
+        target_arrow_schema = new_tbl.schema().as_arrow()
+
+        # Step 3: copy chunked by year_month to bound peak memory.
+        # _keep's schema already matches the target (built with the new
+        # schema incl. a correct non-null bar_date_d) — no derivation
+        # needed; select-by-name + positional cast for safety.
+        months = sorted(
+            set(
+                src.scan(selected_fields=("year_month",))
+                .to_arrow()
+                .column("year_month")
+                .to_pylist()
+            )
+        )
+
         for ym in months:
             chunk = src.scan(
                 row_filter=EqualTo("year_month", ym)
@@ -252,21 +265,32 @@ def relocate_table(catalog, canonical, schema_fn, sort_order_fn) -> dict:
                 f"[relocate] {canonical} row mismatch: "
                 f"old={old_rows} new={new_rows}"
             )
-    except Exception:
-        # Recover the pre-relocate state: drop the partial fresh
-        # canonical, rename _keep back to canonical, then re-raise so
-        # the original working table stays live with no data loss.
+
+    except Exception as _exc:
+        # Recover the pre-relocate state: attempt to drop the partial
+        # (or never-created) canonical, then rename _keep back so the
+        # original working table stays live. The drop is tolerant of
+        # NoSuchTableError (create_table may have never committed a
+        # catalog row). Recovery is NOT atomic — see docstring.
         _logger.error(
-            "[relocate] %s: copy failed (old=%d new=%d) — recovering "
+            "[relocate] %s: failed (old=%d new=%d) — recovering "
             "pre-relocate state",
             canonical,
             old_rows,
             new_rows,
             exc_info=True,
         )
-        catalog.drop_table(canonical)
+        try:
+            catalog.drop_table(canonical)
+        except Exception:
+            _logger.warning(
+                "[relocate] %s: drop of partial canonical failed "
+                "(will still attempt keep→canonical restore)",
+                canonical,
+                exc_info=True,
+            )
         catalog.rename_table(keep, canonical)
-        raise
+        raise _exc
 
     # Step 5: success — drop the _keep catalog entry only (NO purge;
     # its _v2 dir files become orphans swept separately, never ``rm``,

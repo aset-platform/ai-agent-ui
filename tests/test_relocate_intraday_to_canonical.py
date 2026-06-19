@@ -204,6 +204,34 @@ def test_prepare_state_ambiguous_missing_canonical_stops():
     assert cat.renames == []
 
 
+def test_create_table_failure_restores_keep_to_canonical():
+    """create_table now lives INSIDE the try block.  If it raises, the
+    except path must rename _keep back to canonical even though canonical
+    was never created (drop_table will raise NoSuchTableError — that
+    must be swallowed so the restore rename can still run).
+    """
+    canonical = "stocks.intraday_bars"
+    src = _FakeTable(_src_rows())
+    cat = _FakeCatalog({canonical: src})
+
+    boom = RuntimeError("catalog write error")
+
+    def _fail_create(**_kwargs):
+        raise boom
+
+    cat.create_table = _fail_create
+
+    with pytest.raises(RuntimeError, match="catalog write error"):
+        m.relocate_table(cat, canonical, _schema_fn, _sort_order_fn)
+
+    keep = f"{canonical}_keep"
+    # _keep must be gone; canonical must be back and point at src.
+    assert keep not in cat.tables
+    assert cat.tables[canonical] is src
+    # The restore rename was recorded.
+    assert (keep, canonical) in cat.renames
+
+
 def test_prepare_state_both_exist_self_heals_then_relocates():
     canonical = "stocks.intraday_bars"
     keep = f"{canonical}_keep"
