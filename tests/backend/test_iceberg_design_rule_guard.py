@@ -53,12 +53,7 @@ DATE_LIKE_SUFFIXES = (
     "_date",
 )
 
-GRANDFATHERED_MODULES: frozenset[str] = frozenset({
-    # Legacy ``stocks.*`` tables that pre-date the universal
-    # rule.  Adding them here pins the bypass to a small
-    # known set so a future scan still catches NEW violations.
-    "stocks.create_tables",
-})
+GRANDFATHERED_MODULES: frozenset[str] = frozenset()
 
 
 def _all_iceberg_init_modules() -> list[str]:
@@ -216,3 +211,30 @@ def test_no_string_type_on_date_like_columns(
         "Iceberg design rule violations:\n  - "
         + "\n  - ".join(violations)
     )
+
+
+def test_intraday_tables_use_bucket_not_identity() -> None:
+    """CLAUDE.md §4.3 #22.a — intraday tables must use
+    BucketTransform(16, ticker) + MonthTransform, NOT
+    IdentityTransform on ticker (microfile-explosion guard).
+    Explicit test because the auto-discovery walker only
+    scans ``iceberg_init.py`` files; create_tables.py is
+    tested directly here.
+    """
+    import stocks.create_tables as ct
+
+    for fn in (
+        ct._intraday_bars_schema,
+        ct._index_intraday_bars_schema,
+        ct._intraday_features_schema,
+    ):
+        schema = fn()
+        spec = ct._ticker_bucket_month_partition_spec(schema)
+        for pf in spec.fields:
+            col = schema.find_field(pf.source_id).name
+            if col == "ticker":
+                assert not isinstance(pf.transform, IdentityTransform), (
+                    f"{fn.__name__}: ticker partition field "
+                    f"uses IdentityTransform — must use "
+                    f"BucketTransform per CLAUDE.md §4.3 #22.a"
+                )
