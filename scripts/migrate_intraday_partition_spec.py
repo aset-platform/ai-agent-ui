@@ -62,20 +62,26 @@ _TABLES = [
 
 
 def _add_bar_date_d(arrow_tbl: pa.Table) -> pa.Table:
-    """Append a ``bar_date_d`` date32 column derived from the existing
-    ``bar_date`` YYYY-MM-DD string column.
+    """Derive a ``bar_date_d`` date32 column from the existing
+    ``bar_date`` YYYY-MM-DD string column and attach it.
 
-    Preserves every original row and column; only the new
-    (non-nullable) ``bar_date_d`` field is appended at the end.
+    Idempotent: if ``bar_date_d`` already exists (e.g. an all-null
+    placeholder added by a prior schema migration), the column is
+    REPLACED in place so the non-null derived values overwrite it.
+    If the column is absent it is appended at the end.
+
+    Preserves every original row and all other columns.
     """
     bar_dates = [
         date.fromisoformat(s)
         for s in arrow_tbl.column("bar_date").to_pylist()
     ]
     arr = pa.array(bar_dates, type=pa.date32())
-    return arrow_tbl.append_column(
-        pa.field("bar_date_d", pa.date32(), nullable=False), arr
-    )
+    field = pa.field("bar_date_d", pa.date32(), nullable=False)
+    if "bar_date_d" in arrow_tbl.column_names:
+        idx = arrow_tbl.column_names.index("bar_date_d")
+        return arrow_tbl.set_column(idx, field, arr)
+    return arrow_tbl.append_column(field, arr)
 
 
 def migrate_table(catalog, canonical, schema_fn, sort_order_fn) -> dict:
