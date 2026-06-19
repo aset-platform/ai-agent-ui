@@ -2105,9 +2105,13 @@ function WatchlistStocksTab() {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setData(null);
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setLoading(true);
+        setError(null);
+        setData(null);
+      }
+    });
     apiFetch(
       `${API_URL}/insights/watchlist-stocks?market=${market}`,
     )
@@ -2168,7 +2172,9 @@ function WatchlistStocksTab() {
 
   // Reset to page 0 whenever any filter or market changes
   useEffect(() => {
-    setPage(0);
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) setPage(0); });
+    return () => { cancelled = true; };
   }, [rsi2Filter, curRsi2Filter, pageSize, market]);
 
   const handleCopyTickers = () => {
