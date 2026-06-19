@@ -52,8 +52,14 @@ def _ensure_table_and_clean_state():
     test touches it, and wipe any rows from a previous run that
     used the ``TST_`` ticker prefix (otherwise idempotency /
     coverage assertions become order-dependent).
+
+    Also evolves the on-disk schema to add ``bar_date_d`` when the
+    table was created under the old 12-column schema (task-1
+    migration path — ``_create_table`` is skip-if-exists so this
+    fixture is the single add-column point for test environments).
     """
     from pyiceberg.expressions import StartsWith
+    from pyiceberg.types import DateType
 
     from stocks.create_tables import (
         _INTRADAY_BARS_TABLE,
@@ -72,6 +78,18 @@ def _ensure_table_and_clean_state():
         _ticker_year_month_partition_spec(schema),
     )
     tbl = catalog.load_table(_INTRADAY_BARS_TABLE)
+    # Schema evolution: add bar_date_d when the table was created
+    # under the old 12-column schema. _create_table is skip-if-
+    # exists, so this fixture is the add-column path for existing
+    # test environments. required=False is mandatory for add_column
+    # on a table that may already have rows.
+    if "bar_date_d" not in {f.name for f in tbl.schema().fields}:
+        with tbl.update_schema() as upd:
+            upd.add_column(
+                "bar_date_d",
+                DateType(),
+                required=False,
+            )
     try:
         tbl.delete(StartsWith("ticker", _TEST_TICKER_PREFIX))
     except Exception:
@@ -464,3 +482,33 @@ def test_backfill_stats_dataclass_defaults():
     assert s.tickers_failed == 0
     assert s.bars_written == 0
     assert s.failures == []
+
+
+# ────────────────────────────────────────────────────────────────
+# _bars_to_arrow — bar_date_d column (ASETPLTFRM-400 slice 1c)
+# ────────────────────────────────────────────────────────────────
+
+
+def test_bars_to_arrow_includes_bar_date_d():
+    """Arrow table emitted by ``_bars_to_arrow`` must contain a
+    ``bar_date_d`` column of PyArrow ``date32`` type whose value
+    equals the bar's date as a ``datetime.date``."""
+    from datetime import date as _date
+
+    from backend.algo.backtest.intraday_backfill import _bars_to_arrow
+
+    bars = [
+        BarData(
+            ticker="RELIANCE.NS",
+            date=_date(2026, 6, 19),
+            bar_open_ts_ns=1,
+            open=Decimal("1.0"),
+            high=Decimal("2.0"),
+            low=Decimal("0.5"),
+            close=Decimal("1.5"),
+            volume=10,
+        )
+    ]
+    tbl = _bars_to_arrow(bars, interval_sec=900, source="kite")
+    assert "bar_date_d" in tbl.schema.names
+    assert tbl.column("bar_date_d")[0].as_py() == _date(2026, 6, 19)

@@ -108,6 +108,10 @@ def _arrow_schema() -> pa.Schema:
             # (ASETPLTFRM-400 slice 1i). Populated at write
             # time so the writer is the single source of truth.
             pa.field("year_month", pa.string(), nullable=False),
+            # ``bar_date_d`` = bar_date as a native DateType column.
+            # Required by the new BucketTransform(16, ticker) +
+            # MonthTransform(bar_date_d) partition spec.
+            pa.field("bar_date_d", pa.date32(), nullable=False),
         ]
     )
 
@@ -163,6 +167,8 @@ def _bars_to_arrow(
                 "source": source,
                 # YYYY-MM prefix of bar_date — partition key.
                 "year_month": bar_date_str[:7],
+                # Native date column for MonthTransform partition.
+                "bar_date_d": date.fromisoformat(bar_date_str),
             }
         )
     if not rows:
