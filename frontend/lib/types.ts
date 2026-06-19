@@ -378,6 +378,7 @@ export interface WatchlistStockRow {
   market: string;
   close: number | null;
   rsi_2: number | null;
+  current_rsi_2: number | null;
   sma_200: number | null;
   sma_50: number | null;
   sma_20: number | null;

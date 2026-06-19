@@ -64,7 +64,12 @@ os.environ.setdefault(
 from pyiceberg.catalog.sql import SqlCatalog  # noqa: E402
 from pyiceberg.partitioning import PartitionField, PartitionSpec  # noqa: E402
 from pyiceberg.schema import Schema  # noqa: E402
-from pyiceberg.transforms import IdentityTransform  # noqa: E402
+from pyiceberg.table.sorting import SortField, SortOrder  # noqa: E402
+from pyiceberg.transforms import (  # noqa: E402
+    BucketTransform,
+    IdentityTransform,
+    MonthTransform,
+)
 from pyiceberg.types import (  # noqa: E402
     BooleanType,
     DateType,
@@ -102,9 +107,7 @@ _FUNDAMENTALS_SNAPSHOT_TABLE = f"{_NAMESPACE}.fundamentals_snapshot"
 _INTRADAY_BARS_TABLE = f"{_NAMESPACE}.intraday_bars"
 _INDEX_INTRADAY_BARS_TABLE = f"{_NAMESPACE}.index_intraday_bars"
 _INTRADAY_FEATURES_TABLE = f"{_NAMESPACE}.intraday_features"
-_TRADE_FEATURE_SNAPSHOTS_TABLE = (
-    f"{_NAMESPACE}.trade_feature_snapshots"
-)
+_TRADE_FEATURE_SNAPSHOTS_TABLE = f"{_NAMESPACE}.trade_feature_snapshots"
 
 
 def _get_catalog() -> SqlCatalog:
@@ -1616,6 +1619,12 @@ def _intraday_bars_schema() -> Schema:
             field_type=StringType(),
             required=True,
         ),
+        NestedField(
+            field_id=13,
+            name="bar_date_d",
+            field_type=DateType(),
+            required=True,
+        ),
     )
 
 
@@ -1736,6 +1745,12 @@ def _index_intraday_bars_schema() -> Schema:
             field_type=StringType(),
             required=True,
         ),
+        NestedField(
+            field_id=13,
+            name="bar_date_d",
+            field_type=DateType(),
+            required=True,
+        ),
     )
 
 
@@ -1822,6 +1837,12 @@ def _intraday_features_schema() -> Schema:
             field_id=9,
             name="written_at",
             field_type=TimestampType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=10,
+            name="bar_date_d",
+            field_type=DateType(),
             required=True,
         ),
     )
@@ -1995,6 +2016,98 @@ def _ticker_year_month_partition_spec(
             field_id=1001,
             transform=IdentityTransform(),
             name="year_month",
+        ),
+    )
+
+
+def _ticker_bucket_month_partition_spec(
+    schema: Schema,
+    *,
+    buckets: int = 16,
+) -> PartitionSpec:
+    """Return a partition spec bucketing ``ticker`` into ``buckets``
+    and folding ``bar_date_d`` by month (CLAUDE.md §4.3 #22.a/b).
+
+    Replaces the legacy ``(ticker, year_month)`` identity grid which
+    produced one partition cell per (ticker, month) — ~22.7k cells
+    for 515 tickers × ~44 months, flooring the file count at ~22.7k.
+    ``BucketTransform(16) + MonthTransform`` yields 16 × N_months
+    cells (~700/yr), 32× fewer files.
+
+    Args:
+        schema: Schema containing ``ticker`` and ``bar_date_d``
+            fields.
+        buckets: Number of hash buckets for the ticker column
+            (default 16; must be a power of two ≥ 8 per
+            CLAUDE.md §4.3 #22.a).
+
+    Returns:
+        PartitionSpec: Bucket partition on ``ticker`` + month
+            partition on ``bar_date_d``.
+    """
+    ticker_fid = schema.find_field("ticker").field_id
+    bar_date_d_fid = schema.find_field("bar_date_d").field_id
+    return PartitionSpec(
+        PartitionField(
+            source_id=ticker_fid,
+            field_id=1000,
+            transform=BucketTransform(buckets),
+            name="ticker_bucket",
+        ),
+        PartitionField(
+            source_id=bar_date_d_fid,
+            field_id=1001,
+            transform=MonthTransform(),
+            name="bar_month",
+        ),
+    )
+
+
+def _intraday_bars_sort_order(schema: Schema) -> SortOrder:
+    """Sort (ticker, interval_sec, bar_open_ts_ns) within each
+    bucket-month partition — drives compaction layout + predicate
+    pushdown (CLAUDE.md §4.3 #22.c)."""
+    return SortOrder(
+        SortField(
+            source_id=schema.find_field("ticker").field_id,
+            transform=IdentityTransform(),
+        ),
+        SortField(
+            source_id=schema.find_field("interval_sec").field_id,
+            transform=IdentityTransform(),
+        ),
+        SortField(
+            source_id=schema.find_field("bar_open_ts_ns").field_id,
+            transform=IdentityTransform(),
+        ),
+    )
+
+
+def _index_intraday_bars_sort_order(schema: Schema) -> SortOrder:
+    """Identical layout to ``_intraday_bars_sort_order`` — the index
+    table mirrors the equity bars table column-for-column."""
+    return _intraday_bars_sort_order(schema)
+
+
+def _intraday_features_sort_order(schema: Schema) -> SortOrder:
+    """Sort (ticker, interval_sec, bar_open_ts_ns, feature_name)
+    within each bucket-month partition."""
+    return SortOrder(
+        SortField(
+            source_id=schema.find_field("ticker").field_id,
+            transform=IdentityTransform(),
+        ),
+        SortField(
+            source_id=schema.find_field("interval_sec").field_id,
+            transform=IdentityTransform(),
+        ),
+        SortField(
+            source_id=schema.find_field("bar_open_ts_ns").field_id,
+            transform=IdentityTransform(),
+        ),
+        SortField(
+            source_id=schema.find_field("feature_name").field_id,
+            transform=IdentityTransform(),
         ),
     )
 
@@ -2613,7 +2726,8 @@ def create_tables() -> None:
         catalog,
         _INTRADAY_BARS_TABLE,
         intraday_bars_schema,
-        _ticker_year_month_partition_spec(intraday_bars_schema),
+        _ticker_bucket_month_partition_spec(intraday_bars_schema),
+        sort_order=_intraday_bars_sort_order(intraday_bars_schema),
     )
 
     # Centralized feature engine output
@@ -2632,7 +2746,8 @@ def create_tables() -> None:
         catalog,
         _INTRADAY_FEATURES_TABLE,
         intraday_features_schema,
-        _ticker_year_month_partition_spec(intraday_features_schema),
+        _ticker_bucket_month_partition_spec(intraday_features_schema),
+        sort_order=_intraday_features_sort_order(intraday_features_schema),
     )
 
     # Per-fill feature-vector snapshots (ASETPLTFRM-402 /
@@ -2678,7 +2793,8 @@ def create_tables() -> None:
         catalog,
         _INDEX_INTRADAY_BARS_TABLE,
         index_intraday_bars_schema,
-        _ticker_year_month_partition_spec(index_intraday_bars_schema),
+        _ticker_bucket_month_partition_spec(index_intraday_bars_schema),
+        sort_order=_index_intraday_bars_sort_order(index_intraday_bars_schema),
     )
 
     # Regime engine — REGIME-1 (stocks.regime_history +

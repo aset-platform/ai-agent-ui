@@ -2,6 +2,20 @@
 
 import { useLivePositions } from "@/hooks/useLivePositions";
 
+function rsi2Display(v: string | null | undefined): string {
+  const n = Number(v ?? "");
+  if (!Number.isFinite(n) || v == null) return "—";
+  return n.toFixed(1);
+}
+
+function rsi2Class(v: string | null | undefined): string {
+  const n = Number(v ?? "");
+  if (!Number.isFinite(n) || v == null) return "text-slate-400";
+  if (n <= 10) return "text-emerald-600";
+  if (n >= 90) return "text-rose-600";
+  return "";
+}
+
 function fmt(
   v: string | null | undefined,
   kind: "inr" | "pct" | "qty",
@@ -77,6 +91,7 @@ export function PositionsTab() {
           <th className="px-2 py-2 text-right">P&amp;L%</th>
           <th className="px-2 py-2 text-left">Strategy</th>
           <th className="px-2 py-2 text-left">Entry</th>
+          <th className="px-2 py-2 text-right">RSI2</th>
           <th className="px-2 py-2 text-left">Reason</th>
         </tr>
       </thead>
@@ -109,6 +124,11 @@ export function PositionsTab() {
                     "en-IN",
                   )
                 : "—"}
+            </td>
+            <td
+              className={`px-2 py-2 text-right tabular-nums ${rsi2Class(r.rsi_2)}`}
+            >
+              {rsi2Display(r.rsi_2)}
             </td>
             <td className="px-2 py-2 text-xs">
               {r.entry_reason ?? "—"}

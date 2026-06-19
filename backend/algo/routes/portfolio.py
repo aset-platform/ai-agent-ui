@@ -67,6 +67,10 @@ class AlgoPositionRow(BaseModel):
     # dashboard Algo tab with a "PAPER" badge). Default
     # preserves backwards compatibility for older clients.
     source: Literal["live", "paper"] = "live"
+    # Latest closed bar's RSI(2) — same wilder_rsi(2) the live
+    # runtime uses in compute_indicators. None when OHLCV is
+    # unavailable or the ticker has fewer than 3 bars.
+    rsi_2: Decimal | None = None
 
 
 class AlgoPositionsResponse(BaseModel):
@@ -97,6 +101,70 @@ def _to_internal_ticker(tradingsymbol: str) -> str:
     if not tradingsymbol:
         return ""
     return f"{tradingsymbol}.NS"
+
+
+def _fetch_rsi2_batch(
+    internal_tickers: list[str],
+    ltp_by_ticker: dict[str, Decimal],
+) -> dict[str, Decimal | None]:
+    """Return latest RSI(2) per internal ticker, including today's running bar.
+
+    Mirrors the live runtime's compute_indicators path exactly:
+    - Load last 30 days of closed OHLCV bars.
+    - If the last closed bar is before today (IST), append a synthetic
+      bar using the current LTP as close — the same approach the live
+      runtime uses so the RSI2 shown matches the value that drove the
+      order decision.
+    Blocking — callers must wrap in asyncio.to_thread.
+    """
+    from datetime import timedelta as _td
+    from datetime import timezone as _tz
+    from zoneinfo import ZoneInfo
+
+    from backend.algo.backtest.data_source import load_ohlcv_window
+    from backend.algo.backtest.indicators import compute_indicators
+    from backend.algo.backtest.types import BarData
+
+    if not internal_tickers:
+        return {}
+    _dt = __import__("datetime").datetime
+    today_utc = _dt.now(_tz.utc).date()
+    today_ist = _dt.now(_tz.utc).astimezone(ZoneInfo("Asia/Kolkata")).date()
+    try:
+        bars_by_ticker = load_ohlcv_window(
+            tickers=internal_tickers,
+            period_start=today_utc - _td(days=30),
+            period_end=today_utc,
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "portfolio: rsi2 batch OHLCV load failed", exc_info=True,
+        )
+        return {t: None for t in internal_tickers}
+
+    result: dict[str, Decimal | None] = {}
+    for ticker in internal_tickers:
+        bars = list(bars_by_ticker.get(ticker, []))
+        ltp = ltp_by_ticker.get(ticker)
+        # Append today's running bar when OHLCV only has yesterday's close
+        # and we have a live LTP — identical to what the live runtime does.
+        if bars and ltp is not None and bars[-1].date < today_ist:
+            bars.append(BarData(
+                ticker=ticker,
+                date=today_ist,
+                open=ltp, high=ltp, low=ltp, close=ltp,
+                volume=0,
+            ))
+        if not bars:
+            result[ticker] = None
+            continue
+        ind_map = compute_indicators(bars)
+        if not ind_map:
+            result[ticker] = None
+            continue
+        latest_feats = ind_map[max(ind_map.keys())]
+        result[ticker] = latest_feats.get("rsi_2")
+    return result
 
 
 def _safe_int(v: Any) -> int:
@@ -418,10 +486,19 @@ async def _get_algo_positions_impl(
         )
     ]
 
+    # Attribution joins on the Kite tradingsymbol (no ``.NS``) —
+    # ``order_filled_live`` payloads stamp ``symbol`` without the
+    # suffix (see live._fetch_strategy_attribution). Build the
+    # attribution symbol set + lookups in that bare form, NOT the
+    # ``.NS`` internal ticker, or every live Kite position is dropped
+    # by the strategy gate below (regression observed 2026-06-18:
+    # live positions never surfaced, only paper rows).
     symbols = sorted({
-        _to_internal_ticker(r.get("tradingsymbol", ""))
+        r.get("tradingsymbol", "")
         for r in open_pos + open_hold
-    } | {r.internal_ticker for r in paper_rows} - {""})
+    } | {
+        pr.internal_ticker.removesuffix(".NS") for pr in paper_rows
+    } - {""})
 
     attr = await _fetch_strategy_attribution(
         user_id, symbols, since_date=_ATTRIBUTION_SINCE,
@@ -429,14 +506,12 @@ async def _get_algo_positions_impl(
 
     rows: list[AlgoPositionRow] = []
     for r in open_pos:
-        sym = _to_internal_ticker(r.get("tradingsymbol", ""))
-        ctx = attr.get(sym)
+        ctx = attr.get(r.get("tradingsymbol", ""))
         if not ctx or not ctx.get("strategy_id"):
             continue
         rows.append(_row_from_position(r, ctx))
     for r in open_hold:
-        sym = _to_internal_ticker(r.get("tradingsymbol", ""))
-        ctx = attr.get(sym)
+        ctx = attr.get(r.get("tradingsymbol", ""))
         if not ctx or not ctx.get("strategy_id"):
             continue
         rows.append(_row_from_holding(r, ctx))
@@ -445,7 +520,7 @@ async def _get_algo_positions_impl(
     # If attribution is empty for a paper symbol, leave the
     # blank string — UI renders "—" or just the strategy_id.
     for pr in paper_rows:
-        ctx = attr.get(pr.internal_ticker) or {}
+        ctx = attr.get(pr.internal_ticker.removesuffix(".NS")) or {}
         if ctx.get("strategy_name"):
             rows.append(pr.model_copy(update={
                 "strategy_name": ctx.get("strategy_name") or "",
@@ -456,6 +531,17 @@ async def _get_algo_positions_impl(
     rows.sort(
         key=lambda r: (-r.pnl_inr, r.tradingsymbol),
     )
+
+    # Inject RSI(2) — same value the live runtime uses for order decisions.
+    # Pass current LTP so today's running bar is included (matches runtime).
+    if rows:
+        _internal = list({r.internal_ticker for r in rows})
+        _ltp = {r.internal_ticker: r.last_price for r in rows}
+        rsi2_map = await asyncio.to_thread(_fetch_rsi2_batch, _internal, _ltp)
+        rows = [
+            r.model_copy(update={"rsi_2": rsi2_map.get(r.internal_ticker)})
+            for r in rows
+        ]
 
     resp = AlgoPositionsResponse(
         positions=rows,

@@ -16,6 +16,8 @@ import os
 import threading
 from datetime import datetime
 
+import pandas as pd
+
 from cache import (
     TTL_HERO,
     TTL_MARKET_LIVE,
@@ -1228,7 +1230,14 @@ def create_dashboard_router() -> APIRouter:
         ),
         user: UserContext = Depends(get_current_user),
     ):
-        """Technical indicators time series."""
+        """Technical indicators time series.
+
+        During NSE market hours, splices today's running bar from
+        Kite (same quote used by the OHLCV chart) before computing
+        indicators so RSI(2), SMAs, MACD, and Bollinger Bands all
+        reflect the current LTP. Falls back gracefully when Kite is
+        unavailable or market is closed.
+        """
         _logger.info(
             "chart/indicators ticker=%s user=%s",
             ticker,
@@ -1236,7 +1245,23 @@ def create_dashboard_router() -> APIRouter:
         )
         cache = get_cache()
         t_upper = ticker.upper()
-        cache_key = f"cache:chart:indicators:{t_upper}"
+
+        # Mirror the OHLCV endpoint's live/non-live split so the
+        # indicator cache is invalidated at the same cadence as the
+        # price chart during market hours.
+        live_eligible = (
+            is_market_open()
+            and detect_market(t_upper) == "india"
+        )
+        if live_eligible:
+            cache_key = (
+                f"cache:chart:indicators:{user.user_id}:{t_upper}"
+            )
+            cache_ttl = TTL_MARKET_LIVE
+        else:
+            cache_key = f"cache:chart:indicators:{t_upper}"
+            cache_ttl = TTL_STABLE
+
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -1244,16 +1269,63 @@ def create_dashboard_router() -> APIRouter:
                 media_type="application/json",
             )
 
-        # Compute indicators on-the-fly from OHLCV
-        # (~200ms per ticker, cached 300s in Redis).
-        from tools._analysis_shared import (
-            compute_indicators,
+        from tools._analysis_indicators import (
+            _calculate_technical_indicators,
         )
         from tools._analysis_movement import (
             _analyse_price_movement,
         )
 
-        df = compute_indicators(t_upper)
+        # Load raw OHLCV (lowercase cols, integer index) so we can
+        # splice today's Kite bar before the format conversion —
+        # mirrors what _load_ohlcv does internally but allows the
+        # splice step to happen in between.
+        stock_repo = _get_stock_repo()
+        raw_df = stock_repo.get_ohlcv(t_upper)
+
+        if raw_df.empty:
+            return IndicatorsResponse(ticker=t_upper)
+
+        # Splice today's running bar from Kite when available.
+        if live_eligible:
+            quote = await (
+                dashboard_kite_overlay._try_kite_quote(
+                    user, t_upper,
+                )
+            )
+            if quote is not None:
+                today_ist = datetime.now(IST).date()
+                raw_df = (
+                    dashboard_kite_overlay._splice_today_bar(
+                        raw_df, quote, today_ist,
+                    )
+                )
+
+        # Convert to DatetimeIndex + uppercase cols expected by
+        # _calculate_technical_indicators (mirrors _load_ohlcv).
+        raw_df["date"] = pd.to_datetime(raw_df["date"])
+        raw_df = raw_df.sort_values("date").set_index("date")
+        use_adj = (
+            "adj_close" in raw_df.columns
+            and raw_df["adj_close"].notna().mean() > 0.5
+        )
+        adj_col = (
+            raw_df["adj_close"] if use_adj else raw_df["close"]
+        )
+        ohlcv_df = pd.DataFrame(
+            {
+                "Open": raw_df["open"],
+                "High": raw_df["high"],
+                "Low": raw_df["low"],
+                "Close": raw_df["close"],
+                "Adj Close": adj_col,
+                "Volume": raw_df["volume"],
+            }
+        )
+        ohlcv_df.index.name = "Date"
+        ohlcv_df.index = pd.to_datetime(ohlcv_df.index)
+
+        df = _calculate_technical_indicators(ohlcv_df)
 
         if df is None or df.empty:
             return IndicatorsResponse(
@@ -1310,7 +1382,7 @@ def create_dashboard_router() -> APIRouter:
         cache.set(
             cache_key,
             result.model_dump_json(),
-            TTL_STABLE,
+            cache_ttl,
         )
         return result
 

@@ -332,6 +332,84 @@ class CapsRepo:
             )
             await session.commit()
 
+    async def update_locked_tickers(
+        self,
+        user_id: UUID,
+        run_id: UUID,
+        locked_tickers: set[str],
+    ) -> None:
+        """Persist the per-ticker lock set to ``algo.runs.locked_tickers``
+        for SQL observability and crash recovery."""
+        factory = get_session_factory()
+        async with factory() as session:
+            await session.execute(
+                text(
+                    "UPDATE algo.runs "
+                    "SET locked_tickers = :payload "
+                    "WHERE id = :rid "
+                    "  AND user_id = :uid"
+                ),
+                {
+                    "payload": list(locked_tickers),
+                    "rid": run_id,
+                    "uid": user_id,
+                },
+            )
+            await session.commit()
+
+    async def get_locked_tickers_from_previous_run(
+        self,
+        user_id: UUID,
+        strategy_id: UUID,
+        current_run_id: UUID,
+    ) -> set[str]:
+        """Return the union of ``locked_tickers`` + any SUBMITTED BUY
+        tickers from ``live_orders_in_flight`` on the most-recent live
+        run BEFORE ``current_run_id``.  Used at startup to restore
+        per-ticker locks that survived a backend restart (durable PG
+        fallback when Redis is empty)."""
+        factory = get_session_factory()
+        async with factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT locked_tickers, live_orders_in_flight "
+                        "FROM algo.runs "
+                        "WHERE user_id = :uid "
+                        "  AND strategy_id = :sid "
+                        "  AND mode = 'live' "
+                        "  AND id != :crid "
+                        "ORDER BY started_at DESC "
+                        "LIMIT 1"
+                    ),
+                    {
+                        "uid": user_id,
+                        "sid": strategy_id,
+                        "crid": current_run_id,
+                    },
+                )
+            ).one_or_none()
+
+        if row is None:
+            return set()
+
+        locked: list[str] = row[0] or []
+        in_flight_raw = row[1]
+        in_flight: list[dict] = (
+            json.loads(in_flight_raw)
+            if isinstance(in_flight_raw, str)
+            else (in_flight_raw or [])
+        )
+        # Derive tickers from in-flight BUYs that hadn't filled at crash.
+        _terminal = {"filled", "cancelled", "rejected", "timeout"}
+        submitted_buy_tickers = {
+            f"{e['symbol']}.NS"
+            for e in in_flight
+            if e.get("side") == "BUY"
+            and e.get("status", "") not in _terminal
+        }
+        return set(locked) | submitted_buy_tickers
+
     async def get_in_flight(
         self, user_id: UUID, run_id: UUID,
     ) -> list[dict]:

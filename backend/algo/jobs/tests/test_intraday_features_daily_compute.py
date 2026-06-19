@@ -135,9 +135,9 @@ async def test_happy_path_writes_features_with_version_stamp(
     assert result["window"] == ["2026-05-13", "2026-05-13"]
     assert result["interval_sec"] == 900
 
-    # Exactly one append call with the expected schema.
-    assert mock_tbl.append.call_count == 1
-    arrow_tbl = mock_tbl.append.call_args.args[0]
+    # Exactly one COW overwrite call with the expected schema.
+    assert mock_tbl.overwrite.call_count == 1
+    arrow_tbl = mock_tbl.overwrite.call_args.args[0]
     schema_names = arrow_tbl.schema.names
     for col in (
         "ticker",
@@ -160,10 +160,10 @@ async def test_happy_path_writes_features_with_version_stamp(
 
 
 async def test_rerun_scoped_pre_delete_uses_in_ticker(fake_session):
-    """NaN-replaceable upsert: pre-delete predicate must scope by
-    ``In("ticker", batch)`` (NOT EqualTo on the whole table) so
-    re-running the same window overwrites cleanly without wiping
-    other tickers."""
+    """NaN-replaceable upsert: the COW overwrite_filter must scope
+    by ``ticker`` AND ``bar_date`` (NOT by ``year_month``) so
+    re-running the same window replaces exactly the incoming rows
+    without wiping prior-day features from the same month."""
     from pyiceberg.expressions import And
 
     factory, _ = fake_session
@@ -207,17 +207,20 @@ async def test_rerun_scoped_pre_delete_uses_in_ticker(fake_session):
             {"period_start": "2026-05-13", "period_end": "2026-05-13"},
         )
 
-    mock_tbl.delete.assert_called_once()
-    pred = mock_tbl.delete.call_args.args[0]
-    assert isinstance(pred, And)
+    # The COW overwrite replaces the old delete()+append() two-step.
+    # Scope is now in the overwrite_filter kwarg (an And expression
+    # covering ticker × bar_date × interval_sec).
+    mock_tbl.overwrite.assert_called_once()
+    overwrite_filter = mock_tbl.overwrite.call_args.kwargs[
+        "overwrite_filter"
+    ]
+    assert isinstance(overwrite_filter, And)
     # Walk the And-tree and collect every scoped-ref name seen.
     # PyIceberg collapses ``In(name, [single])`` to ``EqualTo`` so
     # we accept either node type — what matters is that ``ticker``
-    # AND ``bar_date`` BOTH appear as scoped predicates (the
-    # NaN-replaceable upsert contract — per-DAY granularity, not
-    # per-month, otherwise the daily keeper [yesterday, today]
-    # window silently wipes prior-day features from the same
-    # month on every run).
+    # AND ``bar_date`` BOTH appear (per-DAY granularity, not
+    # per-month, so the daily keeper window does NOT wipe prior-day
+    # features from the same month on every run).
     seen_refs: set[str] = set()
 
     def _walk(p):
@@ -231,13 +234,11 @@ async def test_rerun_scoped_pre_delete_uses_in_ticker(fake_session):
             if name:
                 seen_refs.add(name)
 
-    _walk(pred)
+    _walk(overwrite_filter)
     assert "ticker" in seen_refs, f"got {seen_refs}"
     assert "bar_date" in seen_refs, f"got {seen_refs}"
-    assert (
-        "year_month" not in seen_refs
-    ), (
-        "Regression guard: pre-delete must NOT scope on "
+    assert "year_month" not in seen_refs, (
+        "Regression guard: overwrite_filter must NOT scope on "
         "year_month — that wipes prior-day features in the "
         "current month on every daily keeper run "
         "(force re-run + day-N-of-month bug). Use bar_date."
@@ -301,7 +302,7 @@ async def test_partial_batch_missing_bars_does_not_abort_batch(
     # failure, just no bars).
     assert result["tickers_processed"] == 1
     assert result["tickers_failed"] == 0
-    assert mock_tbl.append.call_count == 1
+    assert mock_tbl.overwrite.call_count == 1
     assert result["rows_written"] == 1
 
 
@@ -337,9 +338,7 @@ async def test_batched_read_crash_flags_all_tickers_failed(
     assert result["status"] == "ok"
     assert result["tickers_processed"] == 0
     assert result["tickers_failed"] == 2
-    assert all(
-        "fetch:" in reason for _, reason in result["failures"]
-    )
+    assert all("fetch:" in reason for _, reason in result["failures"])
     # Compute never fires when the read crashed.
     mock_compute.assert_not_called()
 
@@ -509,7 +508,7 @@ async def test_nan_feature_values_filtered_before_write(
     assert result["status"] == "ok"
     # Only today_ltp + vwap survive (rsi NaN, atr_14 inf filtered).
     assert result["rows_written"] == 2
-    arrow_tbl = mock_tbl.append.call_args.args[0]
+    arrow_tbl = mock_tbl.overwrite.call_args.args[0]
     feat_names = arrow_tbl.column("feature_name").to_pylist()
     assert set(feat_names) == {"today_ltp", "vwap"}
 
@@ -875,3 +874,60 @@ def test_register_job_wrapper_runs_async_job():
     assert isinstance(result, dict)
     assert result["status"] == "ok"
     assert result["payload_seen"] == {"interval_sec": 900}
+
+
+def test_features_arrow_schema_has_bar_date_d():
+    """``_features_arrow_schema()`` must expose ``bar_date_d`` as a
+    ``pa.date32()`` (non-nullable) column — the FE-1 Iceberg table
+    has field_id 10 of that type and the partition spec depends on
+    ``MonthTransform(bar_date_d)``."""
+    import pyarrow as pa
+
+    from backend.algo.jobs.intraday_features_daily_compute import (
+        _features_arrow_schema,
+    )
+
+    schema = _features_arrow_schema()
+    assert "bar_date_d" in schema.names
+    assert schema.field("bar_date_d").type == pa.date32()
+    assert schema.field("bar_date_d").nullable is False
+
+
+def test_panel_to_arrow_rows_emits_bar_date_d():
+    """``_panel_to_arrow_rows()`` must emit ``bar_date_d`` as a
+    ``datetime.date`` equal to the bar's date for every row."""
+    from datetime import date, datetime
+    from decimal import Decimal
+
+    from backend.algo.backtest.types import BarData
+    from backend.algo.jobs.intraday_features_daily_compute import (
+        _panel_to_arrow_rows,
+    )
+
+    ts_ns = 1_700_000_000_000_000_000
+    bar_day = date(2026, 5, 13)
+    bar = BarData(
+        ticker="A.NS",
+        date=bar_day,
+        open=Decimal("100"),
+        high=Decimal("101"),
+        low=Decimal("99"),
+        close=Decimal("100.5"),
+        volume=1000,
+        bar_open_ts_ns=ts_ns,
+    )
+    panel = {
+        "A.NS": {
+            ts_ns: {"rsi": 55.0},
+        },
+    }
+    rows = _panel_to_arrow_rows(
+        panel=panel,
+        bars_by_ticker={"A.NS": [bar]},
+        interval_sec=900,
+        feature_set_version="v1",
+        written_at=datetime(2026, 5, 13, 10, 0, 0),
+    )
+    assert len(rows) == 1
+    assert rows[0]["bar_date_d"] == bar_day
+    assert isinstance(rows[0]["bar_date_d"], date)

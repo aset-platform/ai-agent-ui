@@ -76,6 +76,7 @@ def _arrow_schema() -> pa.Schema:
             pa.field("written_at", pa.timestamp("us"), nullable=False),
             pa.field("source", pa.string(), nullable=False),
             pa.field("year_month", pa.string(), nullable=False),
+            pa.field("bar_date_d", pa.date32(), nullable=False),
         ]
     )
 
@@ -131,6 +132,7 @@ def _bars_to_arrow(
                 "written_at": written_at,
                 "source": source,
                 "year_month": bar_date_str[:7],
+                "bar_date_d": date.fromisoformat(bar_date_str),
             }
         )
     if not rows:

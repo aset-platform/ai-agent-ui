@@ -125,6 +125,38 @@ autouse mocks `runtime.budget_reserve` /
 All invalidated via `_invalidate_cache(user_id)` on every
 `reserve()` / `transition()` write (after the PG commit).
 
+## Kite wallet field — use `live_balance` not `cash`
+
+`fetch_kite_available_cash` (in `budget.py`) reads
+`margins["available"]["live_balance"]` (falls back to `cash` if
+absent/zero). **Do NOT revert to `cash`.**
+
+Reason: `available.cash` = base cash only; it misses
+`intraday_payin` (funds transferred into Kite during the day).
+`live_balance = opening_balance + intraday_payin − utilised.debits`
+— the same field the algo header CASH stat uses. Using `cash`
+causes the Budget panel to show a stale, lower number that
+confuses users after intraday deposits.
+
+Fixed 2026-06-18 (PR #265, commit `0d83653`).
+
+## Budget reconciliation auto-scheduling
+
+`algo_reconciliation` (in `backend/algo/jobs/algo_reconciliation.py`)
+was never enrolled in `scheduled_jobs` table. Fixed 2026-06-18:
+
+1. **LiveRuntime periodic task** — `_periodic_budget_reconcile()`
+   background task added to `run()`. Calls
+   `budget_reconciliation.reconcile()` every 60 s while session is
+   active + once more at session teardown. Ensures fills are confirmed
+   within a minute during a live trading session.
+2. **Scheduler enrollment** — row inserted in `scheduled_jobs` at
+   10:15 UTC / 15:45 IST Mon–Fri (post-market-close orphan sweep).
+   `job_type = 'algo_reconciliation'`, `enabled = true`.
+
+Without these, SUBMITTED reservations stayed stuck until manually
+triggered, causing `open_pos_cost = ₹0` / `active_reserved` inflated.
+
 ## Out of scope (v1, deferred)
 
 BO/CO orders, order modifications, per-strategy sub-pools, F&O

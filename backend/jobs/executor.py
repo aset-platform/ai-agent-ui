@@ -3526,42 +3526,87 @@ async def _job_algo_kite_reauth_notify(payload: dict | None = None):
     return await run_reauth_notify_job(payload)
 
 
+def _algo_job_success(repo, run_id: str | None) -> None:
+    """Mark an algo job run as success. Called by wrappers that use asyncio.run()
+    and therefore cannot call repo from within the coroutine."""
+    if repo and run_id:
+        repo.update_scheduler_run(
+            run_id,
+            {
+                "status": "success",
+                "completed_at": datetime.now(timezone.utc),
+            },
+        )
+
+
 @register_job("algo_kite_instruments_refresh")
-async def _job_algo_kite_instruments_refresh(
+def _job_algo_kite_instruments_refresh(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
     payload: dict | None = None,
 ):
     """Daily 07:00 IST refresh of algo.instruments from Kite."""
+    import asyncio
+
     from backend.algo.jobs.instrument_refresh import run
 
-    return await run(payload)
+    result = asyncio.run(run(payload))
+    _algo_job_success(repo, run_id)
+    return result
 
 
 @register_job("algo_risk_state_reset")
-async def _job_algo_risk_state_reset(
+def _job_algo_risk_state_reset(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
     payload: dict | None = None,
 ):
     """Daily IST-midnight reset of algo.risk_state P&L counters."""
+    import asyncio
+
     from backend.algo.jobs.risk_state_reset import (
         run_risk_state_reset_job,
     )
 
-    return await run_risk_state_reset_job(payload)
+    result = asyncio.run(run_risk_state_reset_job(payload))
+    _algo_job_success(repo, run_id)
+    return result
 
 
 @register_job("algo_reconciliation")
-async def _job_algo_reconciliation(
+def _job_algo_reconciliation(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
     payload: dict | None = None,
 ):
-    """Every-5-min reconciliation of broker vs our positions."""
+    """End-of-day reconciliation of broker positions vs algo.positions."""
+    import asyncio
+
     from backend.algo.jobs.algo_reconciliation import (
         run_reconciliation_job,
     )
 
-    return await run_reconciliation_job(payload)
+    result = asyncio.run(run_reconciliation_job(payload))
+    _algo_job_success(repo, run_id)
+    return result
 
 
 @register_job("algo_live_caps_daily_reset")
-async def _job_algo_live_caps_daily_reset(
+def _job_algo_live_caps_daily_reset(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
     payload: dict | None = None,
 ):
     """Reset live_caps counters at market open (09:00 IST).
@@ -3569,15 +3614,24 @@ async def _job_algo_live_caps_daily_reset(
     Resets cumulative_inr_today + orders_count_today on all
     algo.live_caps rows. Day boundary aligns with Kite's.
     """
+    import asyncio
+
     from backend.algo.jobs.live_caps_reset import (
         run_live_caps_daily_reset,
     )
 
-    return await run_live_caps_daily_reset(payload)
+    result = asyncio.run(run_live_caps_daily_reset(payload))
+    _algo_job_success(repo, run_id)
+    return result
 
 
 @register_job("algo_ws_tick_count_reset")
-async def _job_algo_ws_tick_count_reset(
+def _job_algo_ws_tick_count_reset(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
     payload: dict | None = None,
 ):
     """Daily 00:00 IST reset of WS multiplexer tick_count_today.
@@ -3585,11 +3639,15 @@ async def _job_algo_ws_tick_count_reset(
     OBS-1: walks the process-local WS registry and zeros the
     per-day counter on every active multiplexer. Idempotent.
     """
+    import asyncio
+
     from backend.algo.jobs.reset_tick_count import (
         run_reset_tick_count_job,
     )
 
-    return await run_reset_tick_count_job(payload)
+    result = asyncio.run(run_reset_tick_count_job(payload))
+    _algo_job_success(repo, run_id)
+    return result
 
 
 @register_job("intraday_bars_daily_ingest")

@@ -39,6 +39,8 @@ interface BackupHealth {
   size_mb?: number;
   warehouse_size_mb?: number;
   table_count?: number;
+  // True while build_manifest() is running (rsync done, walk pending).
+  backup_in_progress?: boolean;
 }
 
 // Render an ISO 8601 UTC timestamp in IST via the shared helper
@@ -227,6 +229,17 @@ export function BackupHealthPanel() {
           </h3>
           {health && (
             <HealthBadge status={health.status} />
+          )}
+          {health?.backup_in_progress && (
+            <span
+              className="inline-flex items-center gap-1.5
+                px-2.5 py-1 rounded-full text-xs font-medium
+                bg-blue-50 dark:bg-blue-900/20
+                text-blue-700 dark:text-blue-400"
+            >
+              <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+              Building…
+            </span>
           )}
         </div>
         <button
