@@ -182,6 +182,59 @@ async def _list_reservations_impl(
     }
 
 
+async def _release_closed_buys_impl(
+    *,
+    user_id: UUID,
+) -> dict:
+    """Cancel FILLED BUY reservations for tickers with no open
+    position on Kite.  Called after panic-close to immediately
+    zero out open_pos_cost without waiting for the reconciliation
+    loop to process SELL fills.
+
+    Returns the list of reservation_ids that were cancelled.
+    """
+    from sqlalchemy import text
+
+    factory = _session_factory()
+    async with factory() as session:
+        result = await session.execute(
+            text(
+                "SELECT DISTINCT ON (reservation_id) "
+                "  reservation_id, state, ticker "
+                "FROM algo.budget_reservations "
+                "WHERE user_id = :uid "
+                "  AND side = 'BUY' "
+                "ORDER BY reservation_id, "
+                "         transitioned_at DESC"
+            ),
+            {"uid": user_id},
+        )
+        rows = result.mappings().all()
+
+    released: list[str] = []
+    for row in rows:
+        if row["state"] != "FILLED":
+            continue
+        try:
+            await transition(
+                reservation_id=row["reservation_id"],
+                new_state=ReservationState.CANCELLED,
+                error_text="release-closed-buys: position confirmed closed",
+            )
+            released.append(str(row["reservation_id"]))
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "release_closed_buys: transition failed "
+                "for reservation %s: %s",
+                row["reservation_id"],
+                exc,
+                exc_info=True,
+            )
+
+    _invalidate_cache(user_id)
+    return {"released": released, "count": len(released)}
+
+
 async def _force_release_impl(
     *,
     user_id: UUID,
@@ -265,6 +318,17 @@ def create_budget_router() -> APIRouter:
         return await _force_release_impl(
             user_id=UUID(user.user_id),
             reservation_id=reservation_id,
+        )
+
+    @router.post("/release-closed-buys")
+    async def release_closed_buys(
+        user: UserContext = Depends(pro_or_superuser),
+    ):
+        """Cancel all FILLED BUY reservations so open_pos_cost
+        resets to 0.  Use after panic-close to immediately free
+        the budget without waiting for the reconciliation loop."""
+        return await _release_closed_buys_impl(
+            user_id=UUID(user.user_id),
         )
 
     return router

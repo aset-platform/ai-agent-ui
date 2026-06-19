@@ -113,6 +113,7 @@ async def pre_trade_check(
     last_price: Decimal,
     user_id: UUID,
     dry_run: bool = False,
+    last_price_per_ticker: dict[str, Decimal] | None = None,
 ) -> RiskDecision:
     """Apply all 9 caps and return the risk verdict.
 
@@ -322,8 +323,12 @@ async def pre_trade_check(
         cap_inr = (
             account.current_equity_inr * max_exposure_pct / Decimal("100")
         )
+        lp_map = last_price_per_ticker or {}
         existing_exposure = sum(
-            (Decimal(q) * last_price for q in account.open_positions.values()),
+            (
+                Decimal(q) * lp_map.get(t, last_price)
+                for t, q in account.open_positions.items()
+            ),
             start=Decimal("0"),
         )
         requested_notional = Decimal(signal.qty) * last_price

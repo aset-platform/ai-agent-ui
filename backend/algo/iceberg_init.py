@@ -369,6 +369,48 @@ SHORT_RETENTION_MODES: frozenset[str] = frozenset({
 })
 
 
+def _ensure_table_properties(
+    catalog,
+    identifier: str,
+    props: dict[str, str],
+) -> None:
+    """Set Iceberg table properties idempotently.
+
+    Loads ``identifier``, compares against ``props``, and commits a
+    single ``set_properties`` transaction only when a value is missing
+    or differs — so a startup that runs this on every boot does not
+    churn a no-op commit each time. Best-effort: a failure logs a
+    warning and returns (the table stays usable on its defaults).
+    """
+    try:
+        tbl = catalog.load_table(identifier)
+    except Exception:
+        _logger.warning(
+            "Cannot load %s to set properties — skipping.", identifier
+        )
+        return
+    current = dict(tbl.properties)
+    missing = {
+        k: v for k, v in props.items() if current.get(k) != v
+    }
+    if not missing:
+        return
+    try:
+        tbl.transaction().set_properties(**missing).commit_transaction()
+        _logger.info(
+            "Set %d table propert(ies) on %s: %s",
+            len(missing),
+            identifier,
+            ", ".join(sorted(missing)),
+        )
+    except Exception:
+        _logger.warning(
+            "Failed to set properties on %s — continuing.",
+            identifier,
+            exc_info=True,
+        )
+
+
 def create_algo_tables() -> None:
     """Create the ``algo`` namespace and event log table.
 
@@ -390,6 +432,18 @@ def create_algo_tables() -> None:
         _events_schema(),
         _events_partition_spec(),
         sort_order=_events_sort_order(),
+    )
+    # Bound the metadata.json chain so old versions self-prune on every
+    # commit (Iceberg defaults to keeping them forever — which let the
+    # snapshot chain grow to GBs of metadata for ~50 MB of data).
+    # Idempotent: only commits when a property is missing/changed.
+    _ensure_table_properties(
+        catalog,
+        _EVENTS_TABLE,
+        {
+            "write.metadata.delete-after-commit.enabled": "true",
+            "write.metadata.previous-versions-max": "20",
+        },
     )
     _create_table(
         catalog,

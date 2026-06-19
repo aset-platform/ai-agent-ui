@@ -480,6 +480,7 @@ class WatchlistStockRow(BaseModel):
     market: str = "india"
     close: float | None = None
     rsi_2: float | None = None
+    current_rsi_2: float | None = None
     sma_200: float | None = None
     sma_50: float | None = None
     sma_20: float | None = None

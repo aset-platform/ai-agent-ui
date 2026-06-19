@@ -254,4 +254,5 @@ def run_classifier_job(payload: dict) -> dict:
         "as_of": str(row.bar_date),
         "regime_label": row.regime_label,
         "stress_prob": row.stress_prob,
+        "rule_inputs": row.rule_inputs,
     }

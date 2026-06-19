@@ -2075,7 +2075,7 @@ function PortfolioForecastTab({
 // Tab: Watchlist Stocks
 // ---------------------------------------------------------------
 
-type Rsi2Filter = "lte5" | "lte10" | "gte80" | null;
+type Rsi2Filter = "lte5" | "lte10" | "lte25" | "gte80" | null;
 
 const PAGE_SIZE_OPTIONS_WL = [10, 25, 50] as const;
 const DEFAULT_WL_PAGE_SIZE = 25;
@@ -2093,6 +2093,8 @@ function WatchlistStocksTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rsi2Filter, setRsi2Filter] =
+    useState<Rsi2Filter>(null);
+  const [curRsi2Filter, setCurRsi2Filter] =
     useState<Rsi2Filter>(null);
   const [market, setMarket] =
     useState<MarketFilter>("india");
@@ -2128,16 +2130,31 @@ function WatchlistStocksTab() {
   }, [market]);
 
   const filtered = useMemo(() => {
-    const stocks = data?.stocks ?? [];
-    if (!rsi2Filter) return stocks;
-    return stocks.filter((s) => {
-      if (s.rsi_2 == null) return false;
-      if (rsi2Filter === "lte5") return s.rsi_2 <= 5;
-      if (rsi2Filter === "lte10") return s.rsi_2 <= 10;
-      if (rsi2Filter === "gte80") return s.rsi_2 >= 80;
-      return true;
-    });
-  }, [data, rsi2Filter]);
+    let stocks = data?.stocks ?? [];
+    if (rsi2Filter) {
+      stocks = stocks.filter((s) => {
+        const v = s.rsi_2;
+        if (v == null) return false;
+        if (rsi2Filter === "lte5") return v <= 5;
+        if (rsi2Filter === "lte10") return v <= 10;
+        if (rsi2Filter === "lte25") return v <= 25;
+        if (rsi2Filter === "gte80") return v >= 80;
+        return true;
+      });
+    }
+    if (curRsi2Filter) {
+      stocks = stocks.filter((s) => {
+        const v = s.current_rsi_2;
+        if (v == null) return false;
+        if (curRsi2Filter === "lte5") return v <= 5;
+        if (curRsi2Filter === "lte10") return v <= 10;
+        if (curRsi2Filter === "lte25") return v <= 25;
+        if (curRsi2Filter === "gte80") return v >= 80;
+        return true;
+      });
+    }
+    return stocks;
+  }, [data, rsi2Filter, curRsi2Filter]);
 
   const totalPages = Math.max(
     1,
@@ -2149,10 +2166,10 @@ function WatchlistStocksTab() {
     safePage * pageSize + pageSize,
   );
 
-  // Reset to page 0 whenever filter or market changes
+  // Reset to page 0 whenever any filter or market changes
   useEffect(() => {
     setPage(0);
-  }, [rsi2Filter, pageSize, market]);
+  }, [rsi2Filter, curRsi2Filter, pageSize, market]);
 
   const handleCopyTickers = () => {
     const csv = filtered.map((s) => s.ticker).join(", ");
@@ -2191,15 +2208,6 @@ function WatchlistStocksTab() {
     );
   }
 
-  const rsi2Filters: {
-    id: Rsi2Filter;
-    label: string;
-  }[] = [
-    { id: "lte5", label: "RSI(2) ≤ 5" },
-    { id: "lte10", label: "RSI(2) ≤ 10" },
-    { id: "gte80", label: "RSI(2) ≥ 80" },
-  ];
-
   return (
     <div className="space-y-3">
       {/* Toolbar: market + RSI filters + copy button */}
@@ -2216,6 +2224,7 @@ function WatchlistStocksTab() {
                   onClick={() => {
                     setMarket(m);
                     setRsi2Filter(null);
+                    setCurRsi2Filter(null);
                   }}
                   className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
                     market === m
@@ -2229,38 +2238,89 @@ function WatchlistStocksTab() {
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
-              RSI(2):
-            </span>
-              {rsi2Filters.map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                data-testid={`watchlist-rsi2-filter-${f.id}`}
-                onClick={() =>
-                  setRsi2Filter((prev) =>
-                    prev === f.id ? null : f.id,
-                  )
-                }
-                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                  rsi2Filter === f.id
-                    ? "bg-indigo-600 text-white dark:bg-indigo-500"
-                    : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
-            {rsi2Filter && (
-              <button
-                type="button"
-                onClick={() => setRsi2Filter(null)}
-                className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline"
-              >
-                Clear
-              </button>
-            )}
+          <div className="flex flex-col gap-1">
+            {/* RSI(2) filter row */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium w-20 shrink-0">
+                RSI(2):
+              </span>
+              {(["lte5", "lte10", "lte25", "gte80"] as Rsi2Filter[]).map((id) => {
+                const label =
+                  id === "lte5" ? "≤ 5"
+                  : id === "lte10" ? "≤ 10"
+                  : id === "lte25" ? "≤ 25"
+                  : "≥ 80";
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    data-testid={`watchlist-rsi2-filter-${id}`}
+                    onClick={() =>
+                      setRsi2Filter((prev) =>
+                        prev === id ? null : id,
+                      )
+                    }
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                      rsi2Filter === id
+                        ? "bg-indigo-600 text-white dark:bg-indigo-500"
+                        : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+              {rsi2Filter && (
+                <button
+                  type="button"
+                  onClick={() => setRsi2Filter(null)}
+                  className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            {/* Curr RSI(2) filter row */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium w-20 shrink-0">
+                Curr RSI(2):
+              </span>
+              {(["lte5", "lte10", "lte25", "gte80"] as Rsi2Filter[]).map((id) => {
+                const label =
+                  id === "lte5" ? "≤ 5"
+                  : id === "lte10" ? "≤ 10"
+                  : id === "lte25" ? "≤ 25"
+                  : "≥ 80";
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    data-testid={`watchlist-curr-rsi2-filter-${id}`}
+                    onClick={() =>
+                      setCurRsi2Filter((prev) =>
+                        prev === id ? null : id,
+                      )
+                    }
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                      curRsi2Filter === id
+                        ? "bg-violet-600 text-white dark:bg-violet-500"
+                        : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+              {curRsi2Filter && (
+                <button
+                  type="button"
+                  onClick={() => setCurRsi2Filter(null)}
+                  className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -2326,6 +2386,7 @@ function WatchlistStocksTab() {
                 { key: "ticker", label: "Ticker" },
                 { key: "close", label: "Price" },
                 { key: "rsi_2", label: "RSI(2)" },
+                { key: "current_rsi_2", label: "Curr RSI(2)" },
                 { key: "sma_200", label: "SMA 200" },
                 { key: "sma_50", label: "SMA 50" },
                 { key: "sma_20", label: "SMA 20" },
@@ -2345,7 +2406,7 @@ function WatchlistStocksTab() {
             {pageRows.length === 0 ? (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   className="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-500"
                 >
                   No stocks match the current filter.
@@ -2359,6 +2420,15 @@ function WatchlistStocksTab() {
                     : row.rsi_2 <= 10
                       ? "text-emerald-600 dark:text-emerald-400 font-semibold"
                       : row.rsi_2 >= 80
+                        ? "text-red-600 dark:text-red-400 font-semibold"
+                        : "text-gray-900 dark:text-gray-100";
+                const curRsi2 = row.current_rsi_2;
+                const curRsi2Color =
+                  curRsi2 == null
+                    ? "text-gray-400"
+                    : curRsi2 <= 10
+                      ? "text-emerald-600 dark:text-emerald-400 font-semibold"
+                      : curRsi2 >= 80
                         ? "text-red-600 dark:text-red-400 font-semibold"
                         : "text-gray-900 dark:text-gray-100";
                 return (
@@ -2379,6 +2449,12 @@ function WatchlistStocksTab() {
                       className={`px-4 py-2.5 font-mono text-xs ${rsi2Color}`}
                     >
                       {fmt(row.rsi_2)}
+                    </td>
+                    <td
+                      className={`px-4 py-2.5 font-mono text-xs ${curRsi2Color}`}
+                      title="Current RSI(2) — Wilder RSI with today's LTP as running bar"
+                    >
+                      {fmt(curRsi2)}
                     </td>
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
                       {fmt(row.sma_200)}

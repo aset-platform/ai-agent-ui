@@ -10,6 +10,8 @@ from uuid import uuid4
 import pytest
 
 from backend.algo.broker.ws_multiplexer import (
+    _BP_AGG_WINDOW_NS,
+    _BP_AGG_WINDOW_S,
     QUEUE_MAX_SIZE,
     KiteWsMultiplexer,
 )
@@ -18,6 +20,22 @@ from backend.algo.tests.fixtures.mock_kite_ws_server import (
     _ticker_to_token,
     patch_multiplexer_ticker,
 )
+
+import backend.algo.broker.ws_event_store as _store
+
+
+def _capture_ws_events(monkeypatch):
+    """Capture record_ws_event calls into a list of payload dicts."""
+    captured: list[dict] = []
+
+    def _fake(*, user_id, event_id, ts_ns, type_, strategy_id, payload):
+        captured.append(
+            {"type": type_, "payload": payload, "ts_ns": ts_ns}
+        )
+        return True
+
+    monkeypatch.setattr(_store, "record_ws_event", _fake)
+    return captured
 
 
 def _make_mux() -> KiteWsMultiplexer:
@@ -103,38 +121,6 @@ async def test_backpressure_emits_warning_log(caplog):
 
 
 @pytest.mark.asyncio
-async def test_backpressure_records_event():
-    """ws_backpressure_drop event is recorded in _ws_events."""
-    async with patch_multiplexer_ticker() as shim:
-        mux = _make_mux()
-        await mux.start()
-
-        ticker = "ONGC.NS"
-        tok = _ticker_to_token(ticker)
-        sid = uuid4()
-        q = mux.subscribe(sid, [tok], {tok: ticker})
-
-        # Fill queue directly to capacity.
-        for i in range(QUEUE_MAX_SIZE):
-            q.put_nowait(
-                Tick(ticker=ticker, ts_ns=i * 1000,
-                     ltp=1.0, volume=1),
-            )
-
-        # Overflow via shim.
-        shim.inject_raw([{
-            "instrument_token": tok,
-            "last_price": 2.0,
-            "last_traded_quantity": 1,
-        }])
-        # Allow event loop to process call_soon_threadsafe callbacks.
-        await asyncio.sleep(0)
-
-        event_types = [e["type"] for e in mux._ws_events]
-        assert "ws_backpressure_drop" in event_types
-
-
-@pytest.mark.asyncio
 async def test_normal_throughput_does_not_drop():
     """1000 ticks via shim → all land in queue with no drops."""
     async with patch_multiplexer_ticker() as shim:
@@ -159,3 +145,55 @@ async def test_normal_throughput_does_not_drop():
         await asyncio.sleep(0)
 
         assert q.qsize() == QUEUE_MAX_SIZE
+
+
+def test_backpressure_aggregates_within_window(monkeypatch):
+    mux = _make_mux()
+    captured = _capture_ws_events(monkeypatch)
+    sid = uuid4()
+    for _ in range(500):
+        mux._record_backpressure_event(strategy_id=sid, token=111)
+    bp = [e for e in captured if e["type"] == "ws_backpressure_drop"]
+    assert len(bp) == 1
+    assert bp[0]["payload"]["dropped"] == 1
+    assert mux._bp_drops[sid] == 499
+
+
+def test_backpressure_summary_carries_count_on_window_roll(monkeypatch):
+    mux = _make_mux()
+    captured = _capture_ws_events(monkeypatch)
+    sid = uuid4()
+    for _ in range(500):
+        mux._record_backpressure_event(strategy_id=sid, token=111)
+    mux._bp_last_emit_ns[sid] -= _BP_AGG_WINDOW_NS + 1_000_000_000
+    mux._record_backpressure_event(strategy_id=sid, token=111)
+    bp = [e for e in captured if e["type"] == "ws_backpressure_drop"]
+    assert len(bp) == 2
+    assert bp[1]["payload"]["dropped"] == 500
+    assert bp[1]["payload"]["window_s"] == _BP_AGG_WINDOW_S
+    assert sid not in mux._bp_drops
+
+
+def test_backpressure_residual_flushed_on_close(monkeypatch):
+    mux = _make_mux()
+    captured = _capture_ws_events(monkeypatch)
+    sid = uuid4()
+    for _ in range(10):
+        mux._record_backpressure_event(strategy_id=sid, token=111)
+    assert mux._bp_drops[sid] == 9
+    mux._flush_backpressure_residual()
+    bp = [e for e in captured if e["type"] == "ws_backpressure_drop"]
+    assert len(bp) == 2
+    assert bp[1]["payload"]["dropped"] == 9
+    assert not mux._bp_drops
+
+
+def test_emit_routes_to_store_not_iceberg(monkeypatch):
+    """_emit_ws_event persists via record_ws_event; the multiplexer
+    keeps no Iceberg buffer."""
+    mux = _make_mux()
+    captured = _capture_ws_events(monkeypatch)
+    mux._emit_ws_event("ws_connected", {"strategy_id": None})
+    assert len(captured) == 1
+    assert captured[0]["type"] == "ws_connected"
+    assert not hasattr(mux, "_ws_events")

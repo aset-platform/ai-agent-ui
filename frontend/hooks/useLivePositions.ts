@@ -18,6 +18,8 @@ export interface PositionRow {
   strategy_name: string | null;
   entry_ts_utc: string | null;
   entry_reason: string | null;
+  // Latest closed bar's RSI(2) — same value used for order decisions.
+  rsi_2?: string | null;
 }
 
 interface PositionsResponse {

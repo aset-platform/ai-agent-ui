@@ -23,8 +23,9 @@ Gap-fill on reconnect:
 
 Backpressure:
   Each subscriber queue is bounded (``QUEUE_MAX_SIZE``).  When full
-  the oldest item is dropped and a WARNING is logged.  A
-  ``ws_backpressure_drop`` event is recorded via event_row helper.
+  the oldest item is dropped.  Drops are aggregated per (user,
+  strategy) and a ``ws_backpressure_drop`` summary is recorded to the
+  per-user Redis store (``ws_event_store``) at most once per window.
 
 Thread-safety:
   KiteTicker callbacks run in a background thread.  All cross-thread
@@ -47,6 +48,14 @@ from backend.algo.stream.types import Tick
 _logger = logging.getLogger(__name__)
 
 QUEUE_MAX_SIZE = 1_000
+# Backpressure-drop events are aggregated per (user, strategy) into a
+# single summary event at most once per this window. Under a tick
+# firehose the per-drop rate can hit ~50/s — one Iceberg commit per
+# drop bloated algo.events to millions of rows + GB of metadata. The
+# first drop in a window emits immediately (onset visibility); the
+# rest are counted and surface on the next window / on close.
+_BP_AGG_WINDOW_S = 60
+_BP_AGG_WINDOW_NS = _BP_AGG_WINDOW_S * 1_000_000_000
 _MAX_BACKOFF_S = 60.0
 _MIN_BACKOFF_S = 1.0
 _GAP_TOO_LARGE_S = 3_600  # 1 hour: abandon gap-fill
@@ -101,11 +110,17 @@ class KiteWsMultiplexer:
         self._auth_failed = False
         self._reconnect_task: asyncio.Task | None = None
         self._backoff_s: float = _MIN_BACKOFF_S
+        # Timestamp of the last successful connect (monotonic). Used
+        # to decide whether a connection was "stable" before resetting
+        # the exponential backoff — a brief connect that immediately
+        # drops should NOT reset backoff to MIN (that causes a
+        # reconnect storm and Kite rate-limiting).
+        self._connect_ts: float = 0.0
 
-        # session_id for event rows (WS-level session)
-        from uuid import uuid4
-        self._session_id: UUID = uuid4()
-        self._ws_events: list[dict[str, Any]] = []
+        # Backpressure-drop aggregation — per strategy_id rolling
+        # counter + last-emit timestamp (ns). See _BP_AGG_WINDOW_S.
+        self._bp_drops: dict[UUID, int] = {}
+        self._bp_last_emit_ns: dict[UUID, int] = {}
 
         # Health observability — OBS-1.
         # ``last_tick_at`` tracks the wall-clock time of the most
@@ -273,9 +288,8 @@ class KiteWsMultiplexer:
             except asyncio.QueueFull:
                 pass
 
-        # Flush any pending WS events.
-        if self._ws_events:
-            self._flush_events()
+        # Flush any pending backpressure counts (→ Redis store).
+        self._flush_backpressure_residual()
 
     @property
     def connected(self) -> bool:
@@ -442,7 +456,11 @@ class KiteWsMultiplexer:
 
         def on_connect(ws, _resp):
             self._connected = True
-            self._backoff_s = _MIN_BACKOFF_S
+            self._connect_ts = time.monotonic()
+            # Reset backoff only if the PREVIOUS connection was stable
+            # (≥ 30s). A brief connect-then-drop must keep the growing
+            # backoff so we don't hammer Kite with rapid reconnects.
+            # _connect_ts is set here and checked in on_close.
             _logger.info(
                 "KiteWsMultiplexer: connected user=%s",
                 self._user_id,
@@ -473,11 +491,17 @@ class KiteWsMultiplexer:
 
         def on_close(_ws, code, reason):
             self._connected = False
+            uptime_s = time.monotonic() - self._connect_ts
+            # Only reset backoff when the connection was genuinely
+            # stable (≥ 30s). Brief flaps must keep the growing
+            # backoff to avoid hammering Kite with rapid reconnects.
+            if uptime_s >= 30.0:
+                self._backoff_s = _MIN_BACKOFF_S
             reason_str = str(reason)
             _logger.warning(
                 "KiteWsMultiplexer: disconnected user=%s "
-                "code=%s reason=%s",
-                self._user_id, code, reason_str,
+                "code=%s uptime=%.1fs reason=%s",
+                self._user_id, code, uptime_s, reason_str,
             )
             loop.call_soon_threadsafe(
                 self._emit_ws_event,
@@ -662,35 +686,24 @@ class KiteWsMultiplexer:
         type_: str,
         payload: dict[str, Any],
     ) -> None:
-        """Queue a WS-lifecycle event for batch flush."""
-        from backend.algo.backtest.event_writer import event_row
-        row = event_row(
-            session_id=self._session_id,
+        """Persist a WS-lifecycle event to the per-user Redis store.
+
+        7-day observability records — NOT written to the algo.events
+        Iceberg log (incident 2026-06-18). Best-effort: a Redis failure
+        is swallowed inside record_ws_event."""
+        from uuid import uuid4
+
+        from backend.algo.broker.ws_event_store import record_ws_event
+
+        ts_ns = int(time.time() * 1_000_000_000)
+        record_ws_event(
             user_id=self._user_id,
-            strategy_id=None,
-            mode="live-ws",
+            event_id=str(uuid4()),
+            ts_ns=ts_ns,
             type_=type_,
+            strategy_id=payload.get("strategy_id"),
             payload=payload,
         )
-        self._ws_events.append(row)
-        # Flush in batches of 50 to bound memory.
-        if len(self._ws_events) >= 50:
-            self._flush_events()
-
-    def _flush_events(self) -> None:
-        if not self._ws_events:
-            return
-        try:
-            from backend.algo.backtest.event_writer import (
-                flush_events,
-            )
-            flush_events(self._ws_events)
-            self._ws_events = []
-        except Exception:
-            _logger.warning(
-                "ws event flush failed", exc_info=True,
-            )
-            self._ws_events = []
 
     def _enqueue_tick(self, q, tick, sid, tok) -> None:
         """Push a tick onto a subscriber queue. Runs on the loop
@@ -714,19 +727,53 @@ class KiteWsMultiplexer:
             q.put_nowait(tick)
         except asyncio.QueueFull:
             pass  # drop newest as a last resort
-        _logger.warning(
-            "ws_backpressure_drop user=%s strategy=%s token=%s",
-            self._user_id, sid, tok,
-        )
-        self._record_backpressure_event(sid, tok)
+        # No per-drop log/event here — aggregated below to avoid the
+        # ~50/s flood that bloated algo.events.
+        self._record_backpressure_event(strategy_id=sid, token=tok)
 
     def _record_backpressure_event(
         self, strategy_id: UUID, token: int,
     ) -> None:
+        """Count a backpressure drop; emit a summary event at most
+        once per ``_BP_AGG_WINDOW_S`` per strategy. The first drop in a
+        window emits immediately (so onset is visible); subsequent
+        drops are counted and surface on the next window / on close.
+        ``token`` is accepted for call-site compatibility but no longer
+        carried per-drop (aggregation is per strategy)."""
+        now_ns = int(time.time() * 1_000_000_000)
+        self._bp_drops[strategy_id] = (
+            self._bp_drops.get(strategy_id, 0) + 1
+        )
+        last = self._bp_last_emit_ns.get(strategy_id, 0)
+        if now_ns - last >= _BP_AGG_WINDOW_NS:
+            self._emit_backpressure_summary(strategy_id, now_ns)
+
+    def _emit_backpressure_summary(
+        self, strategy_id: UUID, now_ns: int,
+    ) -> None:
+        """Flush the accumulated drop count for ``strategy_id`` as one
+        ``ws_backpressure_drop`` summary event + a single WARNING."""
+        count = self._bp_drops.pop(strategy_id, 0)
+        if count <= 0:
+            return
+        self._bp_last_emit_ns[strategy_id] = now_ns
         self._emit_ws_event(
             "ws_backpressure_drop",
             {
                 "strategy_id": str(strategy_id),
-                "token": token,
+                "dropped": count,
+                "window_s": _BP_AGG_WINDOW_S,
             },
         )
+        _logger.warning(
+            "ws_backpressure_drop user=%s strategy=%s dropped=%d "
+            "(aggregated over ~%ds)",
+            self._user_id, strategy_id, count, _BP_AGG_WINDOW_S,
+        )
+
+    def _flush_backpressure_residual(self) -> None:
+        """Emit summaries for any un-flushed drop counts (called on
+        close so the final partial window is not lost)."""
+        now_ns = int(time.time() * 1_000_000_000)
+        for sid in list(self._bp_drops.keys()):
+            self._emit_backpressure_summary(sid, now_ns)

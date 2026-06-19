@@ -77,8 +77,8 @@ async def run_reconciliation_job(
             reconcile as budget_reconcile,
         )
 
-        await budget_reconcile()
-        budget_summary = {"ok": True}
+        budget_summary = await budget_reconcile()
+        budget_summary["ok"] = True
     except Exception as exc:
         _logger.warning(
             "algo_reconciliation: budget reconcile failed: %s",

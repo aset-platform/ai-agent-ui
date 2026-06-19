@@ -16,6 +16,91 @@
 
 ---
 
+### 2026-06-18 (session 2) — per-ticker in-flight cap + budget clarity + watchlist chart icon (branch `chore/serena-memory-2026-06-18`)
+
+**Issues observed in live day trading session:**
+
+1. **Per-ticker cap** (`backend/algo/live/runtime.py`): Same ticker
+   was being bought repeatedly across bars — weight mechanism sized
+   orders but never blocked re-entry. Added `_ticker_locked: set[str]`
+   to `LiveRuntime`. Gate (`ticker_already_in_portfolio`) fires BEFORE
+   `signal_generated` for any BUY when the ticker is in the locked set
+   OR has a hydrated open position. Lock acquired on BUY submission,
+   released on SELL submission. Redis sync on every lock/unlock (key:
+   `cache:algo:live:locked:{user_id}:{strategy_id}`, TTL 24h). PG flush
+   every 30s + at session teardown to `algo.runs.locked_tickers TEXT[]`
+   (migration: `2026_06_18_tickers`, down_rev: `2026_05_24_budget`).
+   Startup restores locks from both `_positions.open_positions()` and
+   Redis.
+
+2. **Budget page calculation** (`frontend/components/algo-trading/BudgetPanel.tsx`):
+   No arithmetic bug — `available = min(allocated − open − pending, kite)` was
+   always correct. High `pending` was caused by issue #1 (duplicate BUY
+   reservations). Added explicit formula breakdown: "Internal headroom:
+   ₹X = Allocated − Open − Pending" + "Kite wallet: ₹Y" + amber "⚡
+   constraining" indicator when Kite is the binding constraint. Added
+   ⓘ tooltip hints on Pending and Available tiles.
+
+3. **Watchlist Algo tab chart icon** (`frontend/components/widgets/algo/`):
+   Added 8th column (blank header) to `AlgoPositionsTab.tsx`. Added
+   chart icon `<td>` to `AlgoPositionRow.tsx` with `Link` to
+   `/analytics/{internal_ticker}` in a new tab; `stopPropagation` so
+   row click doesn't also fire.
+
+**Files changed:** `backend/algo/live/runtime.py`,
+`backend/algo/live/caps_repo.py`,
+`backend/db/migrations/versions/2026_06_18_add_locked_tickers_to_runs.py`,
+`frontend/components/algo-trading/BudgetPanel.tsx`,
+`frontend/components/widgets/algo/AlgoPositionsTab.tsx`,
+`frontend/components/widgets/algo/AlgoPositionRow.tsx`.
+
+**Requires:** `alembic upgrade head` + `restart backend` (new column on
+`algo.runs`).
+
+---
+
+### 2026-06-18 — algo.events Iceberg bloat remediation (PR1–4) + qty=0 entry observability (branch `chore/serena-memory-2026-06-18`)
+
+**Incident:** Live trading page hung ("stuck loading": positions /
+postbacks / budget never refreshed). `algo.events` had grown to ~8.2 GB
+/ ~22k files for ~50 MB data (≈99% Iceberg snapshot-chain metadata);
+every panel read scans that table. WS `ws_backpressure_drop` events were
+written 1-per-drop (~50/s) under the ~800-token firehose.
+
+**Also fixed first:** silent qty=0 live entries — a `set_target_weight`
+BUY whose target rounds to 0 (account can't afford 1 share) was dropped
+with no signal/event. Now surfaced as `signal_rejected`
+(`insufficient_capital_qty_zero`) + log (`4ddb77d`).
+
+**Remediation (PR1–4):**
+- **PR1** (`8b02045`): aggregate `ws_backpressure_drop` per
+  (user,strategy) → 1 summary/60s; set `algo.events`
+  `write.metadata.delete-after-commit.enabled=true` +
+  `previous-versions-max=20`.
+- **PR2** (`1959df0`,`4dfd0da`,`312cb30`,`084d848`): WS lifecycle events
+  → per-user Redis sorted set (`ws_event_store.py`), out of Iceberg;
+  `/events?mode=live-ws` reads Redis. Runtime-verified (0 new live-ws
+  Iceberg rows). Plans `docs/superpowers/plans/2026-06-18-pr2-*`.
+- **PR3** (`8b88b7e`,`3198cfa`): `LiveRuntime` periodic 5s flush task
+  (`_periodic_event_flush`, env `ALGO_EVENT_FLUSH_INTERVAL_S`); removed
+  all 5 per-event `_flush_events_now()`. Runtime verify deferred to next
+  market session.
+- **PR4** (`b4370d5`,`773b1ab`): seeded Weekly Long-Tail pipeline
+  (Sun 03:00 IST: retention → maintenance incl. algo.events) — retention
+  had never run because the seed was never applied; enrollment
+  regression test; one-time `cleanup_orphans_v2` reclaim (snapshots→5,
+  verified). `file:////` delete warnings documented benign. Staleness
+  alert deferred.
+
+**Process:** Hit a real Kite postback delay when an `algo.events` delete
+contended with the order-fill writer — DO NOT run heavy maintenance on
+that table during a live session. Branch is 14 commits ahead of `dev`,
+all tests green (17 in changed scope); NOT yet pushed/PR'd. Spec:
+`docs/plans/2026-06-18-algo-events-bloat-redesign.md`. Memories: Serena
+`.serena/memories/iceberg/algo-events-bloat-remediation.md`.
+
+---
+
 ### 2026-06-14 — fix: dry-run reservations must not consume live budget (branch `feature/aa-add-to-watchlist`)
 
 **Why:** A dry-run (and paper) run hit `signal_rejected: live_budget_cap`
