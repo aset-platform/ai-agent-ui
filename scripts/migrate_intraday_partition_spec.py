@@ -103,7 +103,7 @@ def migrate_table(catalog, canonical, schema_fn, sort_order_fn) -> dict:
     sort_order = sort_order_fn(schema)
 
     src = catalog.load_table(canonical)
-    old_rows = src.scan().to_arrow().num_rows
+    old_rows = src.scan(selected_fields=("ticker",)).to_arrow().num_rows
     _logger.info("[migrate] %s: %d rows to copy", canonical, old_rows)
 
     # Clean any aborted prior run before recreating _v2.
