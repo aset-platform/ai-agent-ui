@@ -55,6 +55,7 @@ from backend.algo.backtest.stop_loss_monitor import (
 from backend.algo.backtest.time_stop_monitor import (
     check_time_stop_triggers,
 )
+from backend.algo.broker.freeze_cache import get_tick_size
 from backend.algo.broker.kite_client import KiteClient
 
 # REGIME-2a — pre-computed nightly factor library overlay.
@@ -98,7 +99,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 def _parse_ist_time(s: str) -> time:
     """Parse ``HH:MM`` 24-hour string → ``time`` object. Tolerant
-    of leading/trailing whitespace; falls back to ``14:30`` on any
+    of leading/trailing whitespace; falls back to ``09:30`` on any
     parse failure with a warning so a malformed env var doesn't
     crash the runtime constructor."""
     try:
@@ -107,19 +108,20 @@ def _parse_ist_time(s: str) -> time:
     except Exception:  # noqa: BLE001
         _logger.warning(
             "Invalid ALGO_DAILY_MIN_EVAL_TIME_IST=%r — falling "
-            "back to 14:30",
+            "back to 09:30",
             s,
         )
-        return time(14, 30)
+        return time(9, 30)
 
 
-# ASETPLTFRM-383 — IST cutoff before which per-minute bar closes
-# update today's running daily bar but do NOT fire strategy eval.
-# Suppresses noisy fires while today's "close" is still volatile.
-# Set via env; lower (e.g. ``09:30``) during smoke testing to see
-# evals fire from market open.
+# ASETPLTFRM-383 — IST cutoff: before this time BUY decisions use only
+# history[:-1] (yesterday's closed bar). At or after this time the
+# today's still-forming running bar is also eligible for BUY entry.
+# Exits (stop-loss, time-stop, discretionary SELL) are never gated —
+# they always fire on full history regardless of wall-clock.
+# Default 14:20 — 10 min before NSE close; lets the day's trend settle.
 _MIN_EVAL_TIME_IST = _parse_ist_time(
-    os.environ.get("ALGO_DAILY_MIN_EVAL_TIME_IST", "14:30"),
+    os.environ.get("ALGO_DAILY_MIN_EVAL_TIME_IST", "14:20"),
 )
 
 # PR3 — live-mode events are buffered and flushed on this cadence
@@ -682,26 +684,148 @@ class LiveRuntime:
         except asyncio.CancelledError:
             raise
 
-    async def _periodic_budget_reconcile(self) -> None:
-        """Reconcile SUBMITTED/PENDING budget reservations every 60 s.
+    async def _sync_fills_from_pg(self) -> None:
+        """Apply fills confirmed by the Kite postback webhook to the
+        in-memory position tracker.
 
-        Ensures fill confirmations arrive from Kite while the session
-        is active — the scheduler-driven ``algo_reconciliation`` job
-        only runs daily, so this is the real-time sweep."""
-        _INTERVAL_S = 60
+        The postback route updates ``algo.runs.live_orders_in_flight``
+        in PG (status → 'filled') and emits ``order_filled_live`` to
+        Iceberg, but it has no reference to this LiveRuntime instance.
+        Without this sync the in-memory ``_positions`` never sees the
+        close, so the signal engine regenerates a SELL on every
+        subsequent bar for an already-gone holding.
+
+        Runs every 30 s inside ``_periodic_budget_reconcile``.
+        """
         try:
-            while True:
-                await asyncio.sleep(_INTERVAL_S)
-                try:
-                    from backend.algo.live.budget_reconciliation import (
-                        reconcile as _budget_reconcile,
-                    )
+            pg_entries = await self._caps_repo.get_in_flight(
+                self._user_id, self._run_id,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "fill-sync: get_in_flight failed", exc_info=True,
+            )
+            return
 
-                    await _budget_reconcile()
+        from backend.algo.backtest.types import Fill
+        from datetime import datetime as _dt, timezone as _tz
+
+        in_flight_index = {
+            e["kite_order_id"]: e
+            for e in self._in_flight
+            if e.get("kite_order_id")
+        }
+
+        for pg_entry in pg_entries:
+            if pg_entry.get("status") != "filled":
+                continue
+            kid = pg_entry.get("kite_order_id")
+            if not kid:
+                continue
+            mem_entry = in_flight_index.get(kid)
+            if mem_entry and mem_entry.get("status") == "filled":
+                continue  # already applied in this session
+            side = pg_entry.get("side", "")
+            sym = pg_entry.get("symbol", "")
+            ticker = f"{sym}.NS" if not sym.endswith(".NS") else sym
+            qty = int(pg_entry.get("qty") or pg_entry.get("fill_qty") or 0)
+            fill_price_raw = pg_entry.get("fill_price") or 0
+            fill_price = Decimal(str(fill_price_raw)) if fill_price_raw else Decimal("0")
+            if qty <= 0:
+                continue
+            if side not in ("BUY", "SELL"):
+                continue
+            fill = Fill(
+                intent_id=uuid4(),
+                ticker=ticker,
+                side=side,  # type: ignore[arg-type]
+                qty=qty,
+                fill_price=fill_price,
+                fill_date=_dt.now(_tz.utc).date(),
+                fees_inr=Decimal("0"),
+                fee_rates_version="postback_sync",
+            )
+            self._positions.apply_fill(fill)
+            # Unlock the ticker on SELL so re-entry is possible
+            if side == "SELL":
+                self._ticker_locked.discard(ticker)
+                self._ticker_locked.discard(sym)
+            else:
+                self._ticker_locked.add(ticker)
+            # Mirror status into in-memory _in_flight so next sync skips it
+            if mem_entry is not None:
+                mem_entry["status"] = "filled"
+
+            # Transition the budget reservation to FILLED immediately.
+            # reservation_id was stored in the in-flight entry at submit
+            # time so we don't need a separate DB lookup. Without this,
+            # the only FILLED transition was reconcile_one() polling Kite
+            # API — which drops history after 1 trading day, causing the
+            # reservation to be TIMEOUT'd if the runtime restarted before
+            # the 60s poll could fire.
+            res_id_raw = pg_entry.get("reservation_id")
+            if res_id_raw:
+                try:
+                    from uuid import UUID as _UUID
+                    from backend.algo.live.budget_types import (
+                        ReservationState as _RS,
+                    )
+                    filled_inr = fill_price * Decimal(str(qty))
+                    await budget_transition(
+                        reservation_id=_UUID(res_id_raw),
+                        new_state=_RS.FILLED,
+                        filled_qty=qty,
+                        filled_inr=filled_inr,
+                    )
+                    _logger.info(
+                        "fill-sync: budget FILLED res=%s sym=%s "
+                        "qty=%d filled_inr=%.2f",
+                        res_id_raw, sym, qty, filled_inr,
+                    )
                 except Exception:  # noqa: BLE001
                     _logger.warning(
-                        "periodic budget reconcile failed", exc_info=True
+                        "fill-sync: budget FILLED transition failed "
+                        "res=%s sym=%s — reconciler will catch it",
+                        res_id_raw, sym, exc_info=True,
                     )
+
+            _logger.info(
+                "fill-sync applied postback fill: sym=%s side=%s "
+                "qty=%d @₹%s kite_order_id=%s",
+                sym, side, qty, fill_price, kid,
+            )
+        self._sync_ticker_lock_to_redis()
+
+    async def _periodic_budget_reconcile(self) -> None:
+        """Reconcile SUBMITTED/PENDING budget reservations every 60 s,
+        and sync postback fills to the in-memory position tracker every
+        30 s (half-interval) to prevent duplicate signals on filled legs.
+        """
+        _INTERVAL_S = 60
+        _tick = 0
+        try:
+            while True:
+                await asyncio.sleep(_INTERVAL_S // 2)
+                _tick += 1
+                # Sync fills on every half-tick (every 30 s).
+                try:
+                    await self._sync_fills_from_pg()
+                except Exception:  # noqa: BLE001
+                    _logger.warning(
+                        "periodic fill-sync failed", exc_info=True
+                    )
+                # Full budget reconcile on every full tick (every 60 s).
+                if _tick % 2 == 0:
+                    try:
+                        from backend.algo.live.budget_reconciliation import (
+                            reconcile as _budget_reconcile,
+                        )
+
+                        await _budget_reconcile()
+                    except Exception:  # noqa: BLE001
+                        _logger.warning(
+                            "periodic budget reconcile failed", exc_info=True
+                        )
         except asyncio.CancelledError:
             raise
 
@@ -1075,6 +1199,7 @@ class LiveRuntime:
                         bar=bar,
                         last_price=lp,
                         last_price_ts=lp_ts,
+                        last_price_per_ticker=last_price_per_ticker,
                     )
                     fills += n
                     if n > 0:
@@ -1144,6 +1269,7 @@ class LiveRuntime:
                     bar=bar,
                     last_price=lp,
                     last_price_ts=lp_ts,
+                    last_price_per_ticker=last_price_per_ticker,
                 )
             # Stop per-ticker lock flush before terminal drain.
             ticker_lock_flush_task.cancel()
@@ -1215,6 +1341,7 @@ class LiveRuntime:
         bar: Any,
         last_price: Decimal,
         last_price_ts: datetime | None = None,
+        last_price_per_ticker: dict[str, Decimal] | None = None,
     ) -> int:
         """Evaluate → gate → submit to Kite. Returns 1 if filled."""
         # Best-effort: publish bar close as live LTP so the paper
@@ -1369,7 +1496,7 @@ class LiveRuntime:
         # eval), NOT as a blanket pre-eval skip. Indicators, features
         # and exits MUST run on every bar so stop-loss / time-stop fire
         # on time and a completed-bar entry can be acted on immediately.
-        # The 14:30 IST cutoff (ALGO_DAILY_MIN_EVAL_TIME_IST) only
+        # The ALGO_DAILY_MIN_EVAL_TIME_IST gate only
         # defers a BUY that appears solely on today's still-forming
         # candle; replay is exempt (wall-clock is meaningless there).
         ind_map = compute_indicators(history)
@@ -1591,7 +1718,7 @@ class LiveRuntime:
         # immediately, regardless of wall-clock — matches Paper /
         # backtest and covers a signal already valid 1-2 days back that
         # still holds. A BUY that appears ONLY on today's forming candle
-        # is premature until _MIN_EVAL_TIME_IST (14:30 IST). Exits are
+        # is premature until _MIN_EVAL_TIME_IST. Exits are
         # never gated (stop-loss / time-stop handled above; a
         # discretionary SELL flows through unchanged below).
         is_flat = existing_pos is None or existing_pos.qty <= 0
@@ -1602,21 +1729,27 @@ class LiveRuntime:
         last_bar_is_today = (
             len(history) >= 2 and history[-1].date == bar_date_obj
         )
-        if daily_realtime and is_flat and last_bar_is_today:
-            closed_entry = self._eval_entry_on_closed_bar(
-                history, bar, last_price,
-            )
-            if closed_entry is not None and closed_entry.side == "BUY":
-                # Completed-bar entry — act now (not premature).
-                _logger.info(
-                    "daily entry on last CLOSED bar — acting now "
-                    "(not premature): ticker=%s",
-                    bar.ticker,
+        if (
+            daily_realtime
+            and is_flat
+            and last_bar_is_today
+            and bar.ticker not in self._ticker_locked
+        ):
+            now_ist = datetime.now(IST).time()
+            if now_ist < _MIN_EVAL_TIME_IST:
+                # Before gate — only yesterday's closed bar may trigger
+                # a BUY. Running-bar-only signals are deferred.
+                closed_entry = self._eval_entry_on_closed_bar(
+                    history, bar, last_price,
                 )
-                signal = closed_entry
-            elif signal is not None and signal.side == "BUY":
-                # Entry exists only on today's still-forming candle.
-                if datetime.now(IST).time() < _MIN_EVAL_TIME_IST:
+                if closed_entry is not None and closed_entry.side == "BUY":
+                    _logger.info(
+                        "daily entry on CLOSED bar (pre-gate) — "
+                        "acting now: ticker=%s",
+                        bar.ticker,
+                    )
+                    signal = closed_entry
+                elif signal is not None and signal.side == "BUY":
                     _logger.info(
                         "daily entry premature (today-forming only) "
                         "— deferring %s until %s IST",
@@ -1624,6 +1757,8 @@ class LiveRuntime:
                         _MIN_EVAL_TIME_IST.strftime("%H:%M"),
                     )
                     return 0
+            # After gate — signal from full history (running bar included)
+            # flows through unchanged. No closed-bar override.
 
         if signal is None:
             return 0
@@ -1791,6 +1926,7 @@ class LiveRuntime:
             last_price=last_price,
             user_id=self._user_id,
             dry_run=self._dry_run,
+            last_price_per_ticker=last_price_per_ticker,
         )
 
         if decision.outcome == "reject":
@@ -1900,9 +2036,15 @@ class LiveRuntime:
             limit_price = (
                 last_price + buffer if side == "BUY" else last_price - buffer
             )
-            # NSE tick size — round to 0.05 to satisfy Kite's
-            # tick rule, which rejects price not divisible by tick.
-            tick = Decimal("0.05")
+            # Look up the actual per-symbol tick size from the
+            # instruments cache (same Redis hash populated by freeze_cache).
+            # LAURUSLABS and other mid/smallcap scripts use 0.10, not 0.05.
+            tick = await asyncio.to_thread(
+                get_tick_size,
+                kc=self._kite,
+                redis_client=self._kite._get_redis(),
+                symbol=symbol,
+            )
             limit_price = (limit_price / tick).quantize(Decimal("1")) * tick
             order_kwargs = {
                 "order_type": "LIMIT",
@@ -2069,6 +2211,13 @@ class LiveRuntime:
             # strategy; surfacing the actual broker product keeps that
             # join honest for MIS positions too.
             "product": product_code,
+            # Stored so _sync_fills_from_pg can transition the budget
+            # reservation to FILLED immediately on postback — without
+            # this the only path was reconcile_one() polling Kite API
+            # which drops history after 1 trading day.
+            "reservation_id": (
+                str(reservation_id) if reservation_id else None
+            ),
         }
         self._in_flight.append(in_flight_entry)
         await self._caps_repo.update_in_flight(
@@ -2481,8 +2630,8 @@ class LiveRuntime:
 
         Returns the resulting Signal (typically BUY) or None. Used by
         the daily eval-time gate to tell a completed-bar entry (act
-        now) from a today-forming-only entry (premature until 14:30
-        IST). Always evaluated flat (open_qty=0); callers only invoke
+        now) from a today-forming-only entry (deferred until
+        _MIN_EVAL_TIME_IST). Always evaluated flat (open_qty=0); callers only invoke
         it when there is no open position.
         """
         from backend.algo.backtest.indicators import compute_indicators

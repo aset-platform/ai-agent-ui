@@ -91,6 +91,7 @@ def _features_arrow_schema() -> pa.Schema:
             pa.field("bar_open_ts_ns", pa.int64(), nullable=False),
             pa.field("bar_date", pa.string(), nullable=False),
             pa.field("year_month", pa.string(), nullable=False),
+            pa.field("bar_date_d", pa.date32(), nullable=False),
             pa.field("interval_sec", pa.int64(), nullable=False),
             pa.field("feature_name", pa.string(), nullable=False),
             pa.field("feature_value", pa.float64(), nullable=False),
@@ -277,6 +278,7 @@ def _panel_to_arrow_rows(
                         "bar_open_ts_ns": int(ts_ns),
                         "bar_date": bar_date_str,
                         "year_month": year_month,
+                        "bar_date_d": date.fromisoformat(bar_date_str),
                         "interval_sec": int(interval_sec),
                         "feature_name": str(feat_name),
                         "feature_value": fv,
@@ -753,14 +755,10 @@ async def run_intraday_features_daily_compute_job(
                 feature_set_version=feature_set_version,
                 stats=stats,
                 index_bars_by_symbol=(
-                    index_bars_by_symbol
-                    if index_bars_by_symbol
-                    else None
+                    index_bars_by_symbol if index_bars_by_symbol else None
                 ),
                 ticker_to_sector_index=ticker_to_sector_index,
-                regime_by_date=(
-                    regime_by_date if regime_by_date else None
-                ),
+                regime_by_date=(regime_by_date if regime_by_date else None),
             )
         except Exception as exc:  # noqa: BLE001
             _logger.error(

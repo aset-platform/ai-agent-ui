@@ -2,6 +2,21 @@
 
 ---
 
+### 2026-06-19 — fix: intraday Iceberg file-explosion rebuild (branch `feature/intraday-partition-rebuild`)
+
+**Why:** The Intraday Bars Daily Pipeline's compaction step ran 2h+ and approached the 40k `_MAX_SAFE_COMPACT_FILES` skip-cliff. Root cause (file-layout audit): the three EOD intraday tables (`stocks.intraday_bars`, `stocks.index_intraday_bars`, `stocks.intraday_features`) used `IdentityTransform(ticker)+IdentityTransform(year_month)` — a ~22.7k-cell partition grid (515 tickers × ~44 months) flooring `intraday_bars` at ~37.5k files (≈60% structural grid + ≈40% delete+append churn). `intraday_features` hit 67.8k files even after a prior COW-overwrite attempt.
+
+**What:** Added `bar_date_d` DateType column + new spec `BucketTransform(16,ticker)+MonthTransform(bar_date_d)`+SortOrder (`_ticker_bucket_month_partition_spec` in `stocks/create_tables.py`); writers populate `bar_date_d`; readers unchanged (year_month/bar_date kept as residual filters). Lossless rebuild migration (`scripts/migrate_intraday_partition_spec.py`) + corrective relocate-to-canonical-dir pass (`scripts/relocate_intraday_to_canonical.py`, needed because `rename_table` doesn't move files), both with row-count parity gates. Un-grandfathered `stocks.create_tables` in the design-rule guard; fixed 4 stale features tests (append→overwrite).
+
+**Result:** All 3 tables migrated in prod, parity exact (11,340,562 / 252,800 / 70,102,145), today's data intact, `bar_date_d` fully populated. Active files **~109,000 → 2,866 (~38×)** after `cleanup_orphans_v2` (~1.45 GB reclaimed). Daily compaction now trivial. Subagent-driven; final whole-branch review: ready to merge.
+
+**Follow-up:** writer-test `autouse` fixtures call `add_column` against the live `~/.ai-agent-ui` warehouse (not an isolated catalog) — test-isolation gap (§5.14) to fix in a separate ticket.
+
+**Commits:** `57996cf` `c619c4d` `68f4215` `beb6621` `71d4de6` `93967e3` `4af4918` `a07a5d5` `3bc52ae` `23f42e7` `7215f81`
+
+---
+
+
 ### 2026-06-18 (session 2) — per-ticker in-flight cap + budget clarity + watchlist chart icon (branch `chore/serena-memory-2026-06-18`)
 
 **Issues observed in live day trading session:**

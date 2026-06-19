@@ -51,6 +51,69 @@ _POSITIONS_CACHE_TTL = 10  # seconds — SWR polls every 10s
 _HOLDINGS_CACHE_TTL = 60  # seconds — SWR polls every 30s
 
 
+def _fetch_rsi2_for_tradingsymbols(
+    tradingsymbols: list[str],
+    ltp_by_sym: dict[str, Decimal],
+) -> dict[str, Decimal | None]:
+    """Return latest RSI(2) per Kite tradingsymbol, including today's running bar.
+
+    Converts bare tradingsymbols (e.g. ``INFY``) to internal ``.NS``
+    ticker format for the OHLCV lookup, then runs compute_indicators
+    — the same wilder_rsi(2) path used by the live runtime.
+    Appends a synthetic today's bar from the current LTP so the value
+    matches what drove the order decision.
+    Blocking — callers must wrap in asyncio.to_thread.
+    """
+    from datetime import timedelta as _td
+    from datetime import timezone as _tz
+    from zoneinfo import ZoneInfo
+
+    from backend.algo.backtest.data_source import load_ohlcv_window
+    from backend.algo.backtest.indicators import compute_indicators
+    from backend.algo.backtest.types import BarData
+
+    if not tradingsymbols:
+        return {}
+    sym_to_internal = {s: f"{s}.NS" for s in tradingsymbols}
+    _dt = __import__("datetime").datetime
+    today_utc = _dt.now(_tz.utc).date()
+    today_ist = _dt.now(_tz.utc).astimezone(ZoneInfo("Asia/Kolkata")).date()
+    try:
+        bars_by_ticker = load_ohlcv_window(
+            tickers=list(sym_to_internal.values()),
+            period_start=today_utc - _td(days=30),
+            period_end=today_utc,
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "live: rsi2 batch OHLCV load failed", exc_info=True,
+        )
+        return {s: None for s in tradingsymbols}
+
+    result: dict[str, Decimal | None] = {}
+    for sym, internal in sym_to_internal.items():
+        bars = list(bars_by_ticker.get(internal, []))
+        ltp = ltp_by_sym.get(sym)
+        # Append today's running bar when OHLCV only has yesterday's close.
+        if bars and ltp is not None and bars[-1].date < today_ist:
+            bars.append(BarData(
+                ticker=internal,
+                date=today_ist,
+                open=ltp, high=ltp, low=ltp, close=ltp,
+                volume=0,
+            ))
+        if not bars:
+            result[sym] = None
+            continue
+        ind_map = compute_indicators(bars)
+        if not ind_map:
+            result[sym] = None
+            continue
+        latest_feats = ind_map[max(ind_map.keys())]
+        result[sym] = latest_feats.get("rsi_2")
+    return result
+
+
 # ---------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------
@@ -300,6 +363,9 @@ class PositionRow(BaseModel):
     strategy_name: str | None = None
     entry_ts_utc: datetime | None = None
     entry_reason: str | None = None
+    # Latest closed bar's RSI(2) — same wilder_rsi(2) used by the live
+    # runtime's compute_indicators for order decisions.
+    rsi_2: Decimal | None = None
 
 
 class PositionsResponse(BaseModel):
@@ -1331,6 +1397,7 @@ def create_live_router() -> APIRouter:
         attr = await _fetch_strategy_attribution(
             uid,
             [r["tradingsymbol"] for r in open_rows],
+            since_date="2024-01-01",
         )
 
         out_rows: list[PositionRow] = []
@@ -1368,6 +1435,19 @@ def create_live_router() -> APIRouter:
                     entry_reason=ctx.get("entry_reason"),
                 )
             )
+
+        # Inject RSI(2) — same value the live runtime uses for order decisions.
+        # Pass current LTP so today's running bar is included (matches runtime).
+        if out_rows:
+            _syms = [r.tradingsymbol for r in out_rows]
+            _ltp = {r.tradingsymbol: r.last_price for r in out_rows}
+            rsi2_map = await asyncio.to_thread(
+                _fetch_rsi2_for_tradingsymbols, _syms, _ltp,
+            )
+            out_rows = [
+                r.model_copy(update={"rsi_2": rsi2_map.get(r.tradingsymbol)})
+                for r in out_rows
+            ]
 
         drift = await _ledger_kite_drift(
             uid,
