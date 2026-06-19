@@ -10,6 +10,7 @@ if either enrollment site drifts.
 
 from __future__ import annotations
 
+from pyiceberg.transforms import BucketTransform, MonthTransform
 from pyiceberg.types import (
     DoubleType,
     LongType,
@@ -20,6 +21,7 @@ from pyiceberg.types import (
 from stocks.create_tables import (
     _INTRADAY_BARS_TABLE,
     _intraday_bars_schema,
+    _ticker_bucket_month_partition_spec,
     _ticker_year_month_partition_spec,
 )
 
@@ -32,8 +34,12 @@ def test_table_identifier_in_stocks_namespace() -> None:
 
 
 def test_intraday_bars_schema_columns() -> None:
-    """All 12 spec'd fields present with the right types
-    (12th = ``year_month`` added by ASETPLTFRM-400 slice 1i)."""
+    """All 13 spec'd fields present with the right types
+    (12th = ``year_month`` added by ASETPLTFRM-400 slice 1i;
+    13th = ``bar_date_d`` DateType added for bucket+month
+    partition spec — replaces identity grid)."""
+    from pyiceberg.types import DateType
+
     schema = _intraday_bars_schema()
     by_name = {f.name: f for f in schema.fields}
 
@@ -50,6 +56,7 @@ def test_intraday_bars_schema_columns() -> None:
         "written_at": TimestampType,
         "source": StringType,
         "year_month": StringType,
+        "bar_date_d": DateType,
     }
     assert set(by_name.keys()) == set(expected.keys())
     for name, expected_type in expected.items():
@@ -92,3 +99,31 @@ def test_enrolled_in_all_tables() -> None:
     from backend.maintenance.iceberg_maintenance import ALL_TABLES
 
     assert "stocks.intraday_bars" in ALL_TABLES
+
+
+def test_intraday_bars_has_bar_date_d_datetype() -> None:
+    """New ``bar_date_d`` column must be ``DateType, required=True``
+    so ``MonthTransform`` can partition on it (CLAUDE.md §4.3 #22.b
+    forbids ``IdentityTransform`` on a string YYYY-MM-DD column)."""
+    from pyiceberg.types import DateType
+
+    schema = _intraday_bars_schema()
+    f = schema.find_field("bar_date_d")
+    assert isinstance(f.field_type, DateType)
+    assert f.required is True
+
+
+def test_intraday_bars_partition_spec_is_bucket_month() -> None:
+    """Partition spec must use ``BucketTransform(16)`` on ``ticker``
+    and ``MonthTransform`` on ``bar_date_d`` (CLAUDE.md §4.3 #22.a/b).
+    The legacy ``(ticker, year_month)`` identity grid produced ~22.7k
+    partition cells; the new spec yields ~700/yr — 32× fewer."""
+    schema = _intraday_bars_schema()
+    spec = _ticker_bucket_month_partition_spec(schema)
+    by_name = {pf.name: pf for pf in spec.fields}
+    assert isinstance(by_name["ticker_bucket"].transform, BucketTransform)
+    assert isinstance(by_name["bar_month"].transform, MonthTransform)
+    tk = schema.find_field("ticker").field_id
+    bd = schema.find_field("bar_date_d").field_id
+    assert by_name["ticker_bucket"].source_id == tk
+    assert by_name["bar_month"].source_id == bd
