@@ -755,6 +755,40 @@ class LiveRuntime:
             # Mirror status into in-memory _in_flight so next sync skips it
             if mem_entry is not None:
                 mem_entry["status"] = "filled"
+
+            # Transition the budget reservation to FILLED immediately.
+            # reservation_id was stored in the in-flight entry at submit
+            # time so we don't need a separate DB lookup. Without this,
+            # the only FILLED transition was reconcile_one() polling Kite
+            # API — which drops history after 1 trading day, causing the
+            # reservation to be TIMEOUT'd if the runtime restarted before
+            # the 60s poll could fire.
+            res_id_raw = pg_entry.get("reservation_id")
+            if res_id_raw:
+                try:
+                    from uuid import UUID as _UUID
+                    from backend.algo.live.budget_types import (
+                        ReservationState as _RS,
+                    )
+                    filled_inr = fill_price * Decimal(str(qty))
+                    await budget_transition(
+                        reservation_id=_UUID(res_id_raw),
+                        new_state=_RS.FILLED,
+                        filled_qty=qty,
+                        filled_inr=filled_inr,
+                    )
+                    _logger.info(
+                        "fill-sync: budget FILLED res=%s sym=%s "
+                        "qty=%d filled_inr=%.2f",
+                        res_id_raw, sym, qty, filled_inr,
+                    )
+                except Exception:  # noqa: BLE001
+                    _logger.warning(
+                        "fill-sync: budget FILLED transition failed "
+                        "res=%s sym=%s — reconciler will catch it",
+                        res_id_raw, sym, exc_info=True,
+                    )
+
             _logger.info(
                 "fill-sync applied postback fill: sym=%s side=%s "
                 "qty=%d @₹%s kite_order_id=%s",
@@ -2177,6 +2211,13 @@ class LiveRuntime:
             # strategy; surfacing the actual broker product keeps that
             # join honest for MIS positions too.
             "product": product_code,
+            # Stored so _sync_fills_from_pg can transition the budget
+            # reservation to FILLED immediately on postback — without
+            # this the only path was reconcile_one() polling Kite API
+            # which drops history after 1 trading day.
+            "reservation_id": (
+                str(reservation_id) if reservation_id else None
+            ),
         }
         self._in_flight.append(in_flight_entry)
         await self._caps_repo.update_in_flight(

@@ -2075,7 +2075,7 @@ function PortfolioForecastTab({
 // Tab: Watchlist Stocks
 // ---------------------------------------------------------------
 
-type Rsi2Filter = "lte5" | "lte10" | "gte80" | null;
+type Rsi2Filter = "lte5" | "lte10" | "lte25" | "gte80" | null;
 
 const PAGE_SIZE_OPTIONS_WL = [10, 25, 50] as const;
 const DEFAULT_WL_PAGE_SIZE = 25;
@@ -2137,6 +2137,7 @@ function WatchlistStocksTab() {
         if (v == null) return false;
         if (rsi2Filter === "lte5") return v <= 5;
         if (rsi2Filter === "lte10") return v <= 10;
+        if (rsi2Filter === "lte25") return v <= 25;
         if (rsi2Filter === "gte80") return v >= 80;
         return true;
       });
@@ -2147,6 +2148,7 @@ function WatchlistStocksTab() {
         if (v == null) return false;
         if (curRsi2Filter === "lte5") return v <= 5;
         if (curRsi2Filter === "lte10") return v <= 10;
+        if (curRsi2Filter === "lte25") return v <= 25;
         if (curRsi2Filter === "gte80") return v >= 80;
         return true;
       });
@@ -2242,10 +2244,11 @@ function WatchlistStocksTab() {
               <span className="text-xs text-gray-500 dark:text-gray-400 font-medium w-20 shrink-0">
                 RSI(2):
               </span>
-              {(["lte5", "lte10", "gte80"] as Rsi2Filter[]).map((id) => {
+              {(["lte5", "lte10", "lte25", "gte80"] as Rsi2Filter[]).map((id) => {
                 const label =
                   id === "lte5" ? "≤ 5"
                   : id === "lte10" ? "≤ 10"
+                  : id === "lte25" ? "≤ 25"
                   : "≥ 80";
                 return (
                   <button
@@ -2282,10 +2285,11 @@ function WatchlistStocksTab() {
               <span className="text-xs text-gray-500 dark:text-gray-400 font-medium w-20 shrink-0">
                 Curr RSI(2):
               </span>
-              {(["lte5", "lte10", "gte80"] as Rsi2Filter[]).map((id) => {
+              {(["lte5", "lte10", "lte25", "gte80"] as Rsi2Filter[]).map((id) => {
                 const label =
                   id === "lte5" ? "≤ 5"
                   : id === "lte10" ? "≤ 10"
+                  : id === "lte25" ? "≤ 25"
                   : "≥ 80";
                 return (
                   <button

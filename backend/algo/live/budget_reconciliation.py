@@ -24,9 +24,9 @@ from sqlalchemy import text
 
 from backend.algo.live.budget import (
     _build_kite_for_user,
-    _session_factory,
     transition,
 )
+from backend.db.engine import disposable_pg_session
 from backend.algo.live.budget_types import (
     BudgetReservation,
     ReservationState,
@@ -40,8 +40,7 @@ SUBMITTED_HARD_TIMEOUT_S = 300
 
 async def _list_pending() -> list[BudgetReservation]:
     """Pull reservations whose latest state is PENDING."""
-    factory = _session_factory()
-    async with factory() as session:
+    async with disposable_pg_session() as session:
         result = await session.execute(
             text(
                 "SELECT DISTINCT ON (reservation_id) "
@@ -65,8 +64,7 @@ async def _list_pending() -> list[BudgetReservation]:
 
 
 async def _list_submitted_and_partial() -> list[BudgetReservation]:
-    factory = _session_factory()
-    async with factory() as session:
+    async with disposable_pg_session() as session:
         result = await session.execute(
             text(
                 "SELECT DISTINCT ON (reservation_id) "
@@ -115,46 +113,91 @@ async def _fetch_order_status_for_user(
         return None
 
 
-async def reconcile_pending_timeouts() -> None:
+async def reconcile_pending_timeouts() -> dict:
     now = datetime.now(timezone.utc)
     threshold = now - timedelta(seconds=PENDING_TIMEOUT_S)
 
     pending = await _list_pending()
-    for res in pending:
-        if res.transitioned_at < threshold:
-            try:
-                await transition(
-                    reservation_id=res.reservation_id,
-                    new_state=ReservationState.TIMEOUT,
-                    error_text=(f"PENDING timeout > " f"{PENDING_TIMEOUT_S}s"),
-                )
-            except Exception as exc:  # noqa: BLE001
-                _logger.error(
-                    "PENDING-timeout transition failed " "res=%s: %s",
-                    res.reservation_id,
-                    exc,
-                    exc_info=True,
-                )
+    total = len(pending)
+    stale = [r for r in pending if r.transitioned_at < threshold]
+    _logger.info(
+        "budget_reconcile pending: found=%d stale=%d (>%ds)",
+        total, len(stale), PENDING_TIMEOUT_S,
+    )
+    timed_out = 0
+    errors = 0
+    for res in stale:
+        try:
+            await transition(
+                reservation_id=res.reservation_id,
+                new_state=ReservationState.TIMEOUT,
+                error_text=(f"PENDING timeout > {PENDING_TIMEOUT_S}s"),
+            )
+            timed_out += 1
+        except Exception as exc:  # noqa: BLE001
+            errors += 1
+            _logger.error(
+                "PENDING-timeout transition failed res=%s: %s",
+                res.reservation_id,
+                exc,
+                exc_info=True,
+            )
+    if stale:
+        _logger.info(
+            "budget_reconcile pending: timed_out=%d errors=%d",
+            timed_out, errors,
+        )
+    return {"found": total, "stale": len(stale), "timed_out": timed_out, "errors": errors}
+
+
+_SYNTHETIC_ORDER_PREFIXES = ("DRY_", "paper-", "dryrun-")
+
+
+def _is_synthetic_order(order_id: str | None) -> bool:
+    """True for paper/dryrun order IDs that have no Kite counterpart."""
+    return bool(
+        order_id
+        and any(order_id.startswith(p) for p in _SYNTHETIC_ORDER_PREFIXES)
+    )
+
+
+async def _timeout_synthetic_if_stale(res: BudgetReservation) -> None:
+    """Timeout a synthetic (paper/dryrun) reservation if past hard timeout.
+
+    Called directly without any Kite API call — synthetic order IDs are
+    invalid on Kite and would only produce 'Invalid order_id' warnings.
+    """
+    now = datetime.now(timezone.utc)
+    threshold = now - timedelta(seconds=SUBMITTED_HARD_TIMEOUT_S)
+    if res.transitioned_at < threshold:
+        if res.filled_inr > Decimal("0"):
+            await transition(
+                reservation_id=res.reservation_id,
+                new_state=ReservationState.FILLED,
+                filled_qty=res.filled_qty,
+                filled_inr=res.filled_inr,
+            )
+        else:
+            await transition(
+                reservation_id=res.reservation_id,
+                new_state=ReservationState.TIMEOUT,
+                error_text=(
+                    f"synthetic order ({res.kite_order_id!r}) — "
+                    f"SUBMITTED hard timeout > {SUBMITTED_HARD_TIMEOUT_S}s"
+                ),
+            )
 
 
 async def reconcile_one(
     res: BudgetReservation,
     kite_client,
 ) -> None:
-    """Reconcile a single SUBMITTED/PARTIAL reservation.
+    """Reconcile a single SUBMITTED/PARTIAL reservation against Kite.
 
-    ``kite_client`` is a pre-built client for ``res.user_id`` — the
-    caller builds one client per user per reconcile cycle instead of
-    one per reservation.
+    Only called for real (non-synthetic) Kite orders. Synthetic orders
+    are handled by ``_timeout_synthetic_if_stale`` before this loop.
     """
     if res.kite_order_id is None:
-        return
-
-    # Synthetic dry-run orders have no Kite counterpart — querying
-    # order_history for them only fails (and spams a traceback every
-    # tick). The LiveRuntime synthetic-fill path already transitions
-    # these reservations to FILLED, so skip them here entirely.
-    if res.kite_order_id.startswith("DRY_"):
         return
 
     now = datetime.now(timezone.utc)
@@ -169,15 +212,33 @@ async def reconcile_one(
     )
     if status_row is None:
         if res.transitioned_at < threshold:
-            await transition(
-                reservation_id=res.reservation_id,
-                new_state=ReservationState.TIMEOUT,
-                error_text=(
-                    f"SUBMITTED hard timeout > "
-                    f"{SUBMITTED_HARD_TIMEOUT_S}s, "
-                    "Kite unreachable"
-                ),
-            )
+            # Kite drops order history after 1 trading day. If filled_inr > 0
+            # the fill was already recorded (via webhook or sync) — treat as
+            # FILLED rather than TIMEOUT so open_pos_cost stays accurate.
+            if res.filled_inr > Decimal("0"):
+                _logger.info(
+                    "reconcile_one: Kite history gone but filled_inr=%.2f"
+                    " — marking FILLED (not TIMEOUT) res=%s ticker=%s",
+                    res.filled_inr,
+                    res.reservation_id,
+                    res.ticker,
+                )
+                await transition(
+                    reservation_id=res.reservation_id,
+                    new_state=ReservationState.FILLED,
+                    filled_qty=res.filled_qty,
+                    filled_inr=res.filled_inr,
+                )
+            else:
+                await transition(
+                    reservation_id=res.reservation_id,
+                    new_state=ReservationState.TIMEOUT,
+                    error_text=(
+                        f"SUBMITTED hard timeout > "
+                        f"{SUBMITTED_HARD_TIMEOUT_S}s, "
+                        "Kite unreachable"
+                    ),
+                )
         return
 
     kite_status = str(status_row.get("status", "")).upper()
@@ -236,45 +297,123 @@ async def reconcile_one(
         )
 
 
-async def reconcile_submitted() -> None:
+async def reconcile_submitted() -> dict:
     """Reconcile SUBMITTED/PARTIAL reservations.
 
-    Groups by user_id and builds one KiteClient per user per cycle
-    instead of one per reservation (avoids N redundant PG cred lookups
-    and N separate kiteconnect.KiteConnect instances).
+    Splits reservations into two buckets:
+    - Synthetic (paper-/dryrun-/DRY_): timed out internally; no Kite API call.
+    - Real Kite orders: grouped by user_id with one KiteClient per user.
+
+    Returns a summary dict with counts per phase.
     """
+    import time
+
     reservations = await _list_submitted_and_partial()
     if not reservations:
-        return
+        _logger.info("budget_reconcile submitted: nothing to process")
+        return {"synthetic": 0, "real": 0, "kite_checked": 0}
 
-    # Build one KiteClient per distinct user_id.
-    user_ids = {res.user_id for res in reservations}
+    synthetic = [r for r in reservations if _is_synthetic_order(r.kite_order_id)]
+    real = [r for r in reservations if not _is_synthetic_order(r.kite_order_id)]
+
+    _logger.info(
+        "budget_reconcile submitted: total=%d synthetic=%d real=%d",
+        len(reservations), len(synthetic), len(real),
+    )
+
+    # --- Synthetic phase (no Kite API) ---
+    syn_timed_out = 0
+    syn_errors = 0
+    if synthetic:
+        t0 = time.monotonic()
+        for res in synthetic:
+            try:
+                before = res.state  # noqa: F841 — for future debug
+                await _timeout_synthetic_if_stale(res)
+                syn_timed_out += 1
+            except Exception as exc:  # noqa: BLE001
+                syn_errors += 1
+                _logger.error(
+                    "budget reconcile_one (synthetic) failed res=%s: %s",
+                    res.reservation_id, exc, exc_info=True,
+                )
+        _logger.info(
+            "budget_reconcile synthetic: timed_out=%d errors=%d elapsed=%.1fs",
+            syn_timed_out, syn_errors, time.monotonic() - t0,
+        )
+
+    if not real:
+        return {"synthetic": len(synthetic), "syn_timed_out": syn_timed_out, "real": 0, "kite_checked": 0}
+
+    # --- Real Kite orders phase ---
+    t0 = time.monotonic()
+    user_ids = {res.user_id for res in real}
     kite_clients: dict[UUID, Any] = {}
     for uid in user_ids:
         try:
             kite_clients[uid] = await _build_kite_for_user(uid)
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
-                "budget reconcile: no kite for user=%s: %s",
-                uid, exc,
+                "budget reconcile: no kite for user=%s: %s", uid, exc,
             )
 
-    for res in reservations:
+    kite_checked = 0
+    kite_errors = 0
+    for i, res in enumerate(real, 1):
         kc = kite_clients.get(res.user_id)
         if kc is None:
             continue
+        if i % 50 == 0 or i == len(real):
+            _logger.info(
+                "budget_reconcile kite: %d/%d checked elapsed=%.1fs",
+                i, len(real), time.monotonic() - t0,
+            )
         try:
             await reconcile_one(res, kc)
+            kite_checked += 1
         except Exception as exc:  # noqa: BLE001
+            kite_errors += 1
             _logger.error(
                 "budget reconcile_one failed res=%s: %s",
-                res.reservation_id,
-                exc,
-                exc_info=True,
+                res.reservation_id, exc, exc_info=True,
             )
 
+    _logger.info(
+        "budget_reconcile kite: done checked=%d errors=%d elapsed=%.1fs",
+        kite_checked, kite_errors, time.monotonic() - t0,
+    )
+    return {
+        "synthetic": len(synthetic),
+        "syn_timed_out": syn_timed_out,
+        "real": len(real),
+        "kite_checked": kite_checked,
+        "kite_errors": kite_errors,
+    }
 
-async def reconcile() -> None:
-    """Entrypoint called by the scheduler tick."""
-    await reconcile_pending_timeouts()
-    await reconcile_submitted()
+
+async def reconcile() -> dict:
+    """Entrypoint called by the scheduler tick.
+
+    Returns a summary dict: pending + submitted phase counts.
+    """
+    import time
+
+    t_start = time.monotonic()
+    _logger.info("budget_reconcile: starting")
+
+    pending_summary = await reconcile_pending_timeouts()
+    submitted_summary = await reconcile_submitted()
+
+    elapsed = time.monotonic() - t_start
+    _logger.info(
+        "budget_reconcile: done in %.1fs — pending(found=%d timed_out=%d) "
+        "submitted(synthetic=%d syn_timed_out=%d real=%d kite_checked=%d)",
+        elapsed,
+        pending_summary.get("found", 0),
+        pending_summary.get("timed_out", 0),
+        submitted_summary.get("synthetic", 0),
+        submitted_summary.get("syn_timed_out", 0),
+        submitted_summary.get("real", 0),
+        submitted_summary.get("kite_checked", 0),
+    )
+    return {"pending": pending_summary, "submitted": submitted_summary, "elapsed_s": round(elapsed, 1)}
