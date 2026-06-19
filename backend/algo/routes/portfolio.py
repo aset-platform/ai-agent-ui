@@ -67,6 +67,10 @@ class AlgoPositionRow(BaseModel):
     # dashboard Algo tab with a "PAPER" badge). Default
     # preserves backwards compatibility for older clients.
     source: Literal["live", "paper"] = "live"
+    # Latest closed bar's RSI(2) — same wilder_rsi(2) the live
+    # runtime uses in compute_indicators. None when OHLCV is
+    # unavailable or the ticker has fewer than 3 bars.
+    rsi_2: Decimal | None = None
 
 
 class AlgoPositionsResponse(BaseModel):
@@ -97,6 +101,70 @@ def _to_internal_ticker(tradingsymbol: str) -> str:
     if not tradingsymbol:
         return ""
     return f"{tradingsymbol}.NS"
+
+
+def _fetch_rsi2_batch(
+    internal_tickers: list[str],
+    ltp_by_ticker: dict[str, Decimal],
+) -> dict[str, Decimal | None]:
+    """Return latest RSI(2) per internal ticker, including today's running bar.
+
+    Mirrors the live runtime's compute_indicators path exactly:
+    - Load last 30 days of closed OHLCV bars.
+    - If the last closed bar is before today (IST), append a synthetic
+      bar using the current LTP as close — the same approach the live
+      runtime uses so the RSI2 shown matches the value that drove the
+      order decision.
+    Blocking — callers must wrap in asyncio.to_thread.
+    """
+    from datetime import timedelta as _td
+    from datetime import timezone as _tz
+    from zoneinfo import ZoneInfo
+
+    from backend.algo.backtest.data_source import load_ohlcv_window
+    from backend.algo.backtest.indicators import compute_indicators
+    from backend.algo.backtest.types import BarData
+
+    if not internal_tickers:
+        return {}
+    _dt = __import__("datetime").datetime
+    today_utc = _dt.now(_tz.utc).date()
+    today_ist = _dt.now(_tz.utc).astimezone(ZoneInfo("Asia/Kolkata")).date()
+    try:
+        bars_by_ticker = load_ohlcv_window(
+            tickers=internal_tickers,
+            period_start=today_utc - _td(days=30),
+            period_end=today_utc,
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "portfolio: rsi2 batch OHLCV load failed", exc_info=True,
+        )
+        return {t: None for t in internal_tickers}
+
+    result: dict[str, Decimal | None] = {}
+    for ticker in internal_tickers:
+        bars = list(bars_by_ticker.get(ticker, []))
+        ltp = ltp_by_ticker.get(ticker)
+        # Append today's running bar when OHLCV only has yesterday's close
+        # and we have a live LTP — identical to what the live runtime does.
+        if bars and ltp is not None and bars[-1].date < today_ist:
+            bars.append(BarData(
+                ticker=ticker,
+                date=today_ist,
+                open=ltp, high=ltp, low=ltp, close=ltp,
+                volume=0,
+            ))
+        if not bars:
+            result[ticker] = None
+            continue
+        ind_map = compute_indicators(bars)
+        if not ind_map:
+            result[ticker] = None
+            continue
+        latest_feats = ind_map[max(ind_map.keys())]
+        result[ticker] = latest_feats.get("rsi_2")
+    return result
 
 
 def _safe_int(v: Any) -> int:
@@ -463,6 +531,17 @@ async def _get_algo_positions_impl(
     rows.sort(
         key=lambda r: (-r.pnl_inr, r.tradingsymbol),
     )
+
+    # Inject RSI(2) — same value the live runtime uses for order decisions.
+    # Pass current LTP so today's running bar is included (matches runtime).
+    if rows:
+        _internal = list({r.internal_ticker for r in rows})
+        _ltp = {r.internal_ticker: r.last_price for r in rows}
+        rsi2_map = await asyncio.to_thread(_fetch_rsi2_batch, _internal, _ltp)
+        rows = [
+            r.model_copy(update={"rsi_2": rsi2_map.get(r.internal_ticker)})
+            for r in rows
+        ]
 
     resp = AlgoPositionsResponse(
         positions=rows,

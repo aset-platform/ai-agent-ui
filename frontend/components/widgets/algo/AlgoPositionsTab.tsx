@@ -84,6 +84,9 @@ export function AlgoPositionsTab({ onSelectTicker }: Props) {
               Strategy
             </th>
             <th className="px-3 py-2 text-right font-semibold text-gray-500">
+              RSI2
+            </th>
+            <th className="px-3 py-2 text-right font-semibold text-gray-500">
               Days
             </th>
           </tr>

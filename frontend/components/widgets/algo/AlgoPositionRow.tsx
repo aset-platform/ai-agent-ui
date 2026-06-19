@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import { StockAnalysisLink } from "@/components/advanced-analytics/StockAnalysisLink";
 import type { AlgoPositionView } from "@/lib/types/algoPortfolio";
 
@@ -14,6 +15,20 @@ function inr(s: string): string {
   return `₹${n.toLocaleString("en-IN", {
     maximumFractionDigits: 2,
   })}`;
+}
+
+function rsi2Cell(v: string | null | undefined): React.ReactNode {
+  const n = Number(v ?? "");
+  if (!Number.isFinite(n) || v == null) {
+    return <span className="text-gray-400">—</span>;
+  }
+  const color =
+    n <= 10
+      ? "text-emerald-600"
+      : n >= 90
+        ? "text-rose-600"
+        : "text-gray-700 dark:text-gray-300";
+  return <span className={color}>{n.toFixed(1)}</span>;
 }
 
 function pctStr(s: string): string {
@@ -84,6 +99,9 @@ export function AlgoPositionRow({ row, onSelectTicker }: Props) {
         title={row.strategy_name}
       >
         {row.strategy_name}
+      </td>
+      <td className="px-3 py-2 text-xs tabular-nums text-right">
+        {rsi2Cell(row.rsi_2)}
       </td>
       <td className="px-3 py-2 text-xs text-right text-gray-500">
         {row.days_held}

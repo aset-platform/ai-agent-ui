@@ -114,15 +114,14 @@ def _parse_ist_time(s: str) -> time:
         return time(9, 30)
 
 
-# ASETPLTFRM-383 — IST cutoff before which per-minute bar closes
-# update today's running daily bar but BUY entries on the still-forming
-# candle are deferred. Exits (stop-loss, SELL) always fire immediately.
-# Production default: 09:30 — entries are valid from market open for
-# CNC/daily swing trades (today's signal is stable once the open bar
-# settles). Set higher (e.g. 14:20) for extra stability if you want to
-# wait for the day's trend to establish before buying.
+# ASETPLTFRM-383 — IST cutoff: before this time BUY decisions use only
+# history[:-1] (yesterday's closed bar). At or after this time the
+# today's still-forming running bar is also eligible for BUY entry.
+# Exits (stop-loss, time-stop, discretionary SELL) are never gated —
+# they always fire on full history regardless of wall-clock.
+# Default 14:20 — 10 min before NSE close; lets the day's trend settle.
 _MIN_EVAL_TIME_IST = _parse_ist_time(
-    os.environ.get("ALGO_DAILY_MIN_EVAL_TIME_IST", "09:30"),
+    os.environ.get("ALGO_DAILY_MIN_EVAL_TIME_IST", "14:20"),
 )
 
 # PR3 — live-mode events are buffered and flushed on this cadence
@@ -1696,21 +1695,27 @@ class LiveRuntime:
         last_bar_is_today = (
             len(history) >= 2 and history[-1].date == bar_date_obj
         )
-        if daily_realtime and is_flat and last_bar_is_today:
-            closed_entry = self._eval_entry_on_closed_bar(
-                history, bar, last_price,
-            )
-            if closed_entry is not None and closed_entry.side == "BUY":
-                # Completed-bar entry — act now (not premature).
-                _logger.info(
-                    "daily entry on last CLOSED bar — acting now "
-                    "(not premature): ticker=%s",
-                    bar.ticker,
+        if (
+            daily_realtime
+            and is_flat
+            and last_bar_is_today
+            and bar.ticker not in self._ticker_locked
+        ):
+            now_ist = datetime.now(IST).time()
+            if now_ist < _MIN_EVAL_TIME_IST:
+                # Before gate — only yesterday's closed bar may trigger
+                # a BUY. Running-bar-only signals are deferred.
+                closed_entry = self._eval_entry_on_closed_bar(
+                    history, bar, last_price,
                 )
-                signal = closed_entry
-            elif signal is not None and signal.side == "BUY":
-                # Entry exists only on today's still-forming candle.
-                if datetime.now(IST).time() < _MIN_EVAL_TIME_IST:
+                if closed_entry is not None and closed_entry.side == "BUY":
+                    _logger.info(
+                        "daily entry on CLOSED bar (pre-gate) — "
+                        "acting now: ticker=%s",
+                        bar.ticker,
+                    )
+                    signal = closed_entry
+                elif signal is not None and signal.side == "BUY":
                     _logger.info(
                         "daily entry premature (today-forming only) "
                         "— deferring %s until %s IST",
@@ -1718,6 +1723,8 @@ class LiveRuntime:
                         _MIN_EVAL_TIME_IST.strftime("%H:%M"),
                     )
                     return 0
+            # After gate — signal from full history (running bar included)
+            # flows through unchanged. No closed-bar override.
 
         if signal is None:
             return 0

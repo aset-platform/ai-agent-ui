@@ -18,6 +18,8 @@ export interface AlgoPositionView {
   // mode='paper' algo.events fills. Defaults to "live"
   // when older backends omit the field.
   source?: "live" | "paper";
+  // Latest closed bar's RSI(2) — same value used for order decisions.
+  rsi_2?: string | null;
 }
 
 export interface AlgoPositionsResponse {
