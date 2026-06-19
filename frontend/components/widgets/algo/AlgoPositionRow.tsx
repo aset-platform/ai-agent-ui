@@ -1,6 +1,5 @@
 "use client";
 
-import React from "react";
 import { StockAnalysisLink } from "@/components/advanced-analytics/StockAnalysisLink";
 import type { AlgoPositionView } from "@/lib/types/algoPortfolio";
 

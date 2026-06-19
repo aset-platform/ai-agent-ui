@@ -16,6 +16,7 @@
 
 ---
 
+
 ### 2026-06-18 (session 2) — per-ticker in-flight cap + budget clarity + watchlist chart icon (branch `chore/serena-memory-2026-06-18`)
 
 **Issues observed in live day trading session:**
