@@ -3616,6 +3616,16 @@ def create_app(
         from backend.db.duckdb_engine import query_iceberg_table
         cap = min(max(limit, 1), 500)
         window_days = min(max(days, 1), 90)
+        from cache import get_cache, TTL_VOLATILE
+        import json as _json
+        _cache = get_cache()
+        _ck = (
+            f"cache:admin:pipeline-assertions:{window_days}:"
+            f"{severity or 'all'}:{cap}"
+        )
+        _hit = _cache.get(_ck)
+        if _hit:
+            return _json.loads(_hit)
         sql = (
             "SELECT ts_ns, ts_date, payload_json "
             "FROM events "
@@ -3643,7 +3653,6 @@ def create_app(
             raw_rows = []
         rows: list[dict] = []
         counts = {"warn": 0, "error": 0}
-        import json as _json
         for r in raw_rows:
             try:
                 p = _json.loads(r.get("payload_json") or "{}")
@@ -3666,7 +3675,9 @@ def create_app(
                 "detail": p.get("detail") or {},
                 "ts_ist": p.get("ts_ist"),
             })
-        return {"rows": rows, "counts": counts}
+        _out = {"rows": rows, "counts": counts}
+        _cache.set(_ck, _json.dumps(_out), ttl=TTL_VOLATILE)
+        return _out
 
     admin_router.add_api_route(
         "/admin/data-health/pipeline-assertions",
