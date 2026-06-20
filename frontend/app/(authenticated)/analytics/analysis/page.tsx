@@ -2138,7 +2138,7 @@ function ColumnTooltip({ text }: { text: string }) {
 
 type Rsi2Filter = "lte5" | "lte10" | "lte25" | "gte80" | null;
 type AtrFilter = "" | "lt0" | "gt0lte1_5" | "gt1_5lte4" | "gt2lte5" | "gt5";
-type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt080lte10" | "gt10";
+type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt080lte10" | "gt1";
 type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sma_20" | "sharpe_ratio" | "atr_pct" | "rs_6m" | "score";
 type SortDir = "asc" | "desc";
 
@@ -2274,7 +2274,7 @@ function WatchlistStocksTab() {
         if (sharpeFilter === "gt0lte080") return v > 0 && v <= 0.8;
         if (sharpeFilter === "gt080lte2") return v > 0.8 && v <= 2;
         if (sharpeFilter === "gt080lte10") return v > 0.8 && v <= 10;
-        if (sharpeFilter === "gt10") return v > 10;
+        if (sharpeFilter === "gt1") return v > 1;
         return true;
       });
     }
@@ -2475,7 +2475,7 @@ function WatchlistStocksTab() {
                 <option value="gt0lte080">0 – 0.80</option>
                 <option value="gt080lte2">0.80 – 2</option>
                 <option value="gt080lte10">0.80 – 10</option>
-                <option value="gt10">&gt; 10</option>
+                <option value="gt1">&gt; 1</option>
               </select>
             </div>
           </div>
