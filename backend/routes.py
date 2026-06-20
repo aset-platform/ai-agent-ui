@@ -142,10 +142,7 @@ async def _admin_backups_list_impl(
     # (e.g. 64k files from stocks.intraday_features). Must run
     # off the event loop thread to avoid freezing uvicorn.
     backups = await asyncio.to_thread(
-        lambda: [
-            b for b in list_backups(backup_root)
-            if _is_full_snapshot_dir_name(b.get("date", ""))
-        ]
+        lambda: list_backups(backup_root, full_only=True)
     )
     now = _t.time()
     for b in backups:
@@ -195,10 +192,7 @@ async def _admin_backups_health_impl(
     # list_backups() → _dir_size_mb() → subprocess.run("du -sk")
     # blocks event loop; wrap in to_thread (same fix as list endpoint).
     backups = await asyncio.to_thread(
-        lambda: [
-            b for b in list_backups(backup_root)
-            if _is_full_snapshot_dir_name(b.get("date", ""))
-        ]
+        lambda: list_backups(backup_root, full_only=True)
     )
     if not backups:
         return {
@@ -2409,14 +2403,6 @@ def create_app(
         stale_30d = today - timedelta(days=30)
         stale_7d = today - timedelta(days=7)
 
-        # ── Invalidate DuckDB cache so health reads
-        # pick up recent writes (e.g. fix runs). ──
-        from db.duckdb_engine import (
-            invalidate_metadata,
-        )
-
-        invalidate_metadata()
-
         # ── Registry baseline ────────────────────
         try:
             repo = _require_repo()
@@ -2496,37 +2482,23 @@ def create_app(
                 "stale_tickers": [],
             }
             try:
-                # Single query for NaN stats
+                # One GROUP BY replaces 2 scans
                 nan_df = query_iceberg_df(
                     "stocks.ohlcv",
-                    "SELECT count(*) AS cnt, "
-                    "count(DISTINCT ticker) "
-                    "  AS tk_cnt "
+                    "SELECT ticker, "
+                    "count(*) AS cnt "
                     "FROM ohlcv "
                     "WHERE close IS NULL "
-                    "OR isnan(close)",
+                    "OR isnan(close) "
+                    "GROUP BY ticker",
                 )
                 if not nan_df.empty:
                     o["nan_close_count"] = int(
-                        nan_df["cnt"].iloc[0]
+                        nan_df["cnt"].sum()
                     )
-                if (
-                    not nan_df.empty
-                    and nan_df["tk_cnt"].iloc[0] > 0
-                ):
-                    tk = query_iceberg_df(
-                        "stocks.ohlcv",
-                        "SELECT DISTINCT ticker "
-                        "FROM ohlcv "
-                        "WHERE close IS NULL "
-                        "OR isnan(close)",
+                    o["nan_close_tickers"] = sorted(
+                        nan_df["ticker"].tolist()
                     )
-                    if not tk.empty:
-                        o["nan_close_tickers"] = (
-                            sorted(
-                                tk["ticker"].tolist()
-                            )
-                        )
 
                 # Freshness per ticker — skip
                 # illiquid tickers so they don't
@@ -3644,6 +3616,16 @@ def create_app(
         from backend.db.duckdb_engine import query_iceberg_table
         cap = min(max(limit, 1), 500)
         window_days = min(max(days, 1), 90)
+        from cache import get_cache, TTL_VOLATILE
+        import json as _json
+        _cache = get_cache()
+        _ck = (
+            f"cache:admin:pipeline-assertions:{window_days}:"
+            f"{severity or 'all'}:{cap}"
+        )
+        _hit = _cache.get(_ck)
+        if _hit:
+            return _json.loads(_hit)
         sql = (
             "SELECT ts_ns, ts_date, payload_json "
             "FROM events "
@@ -3671,7 +3653,6 @@ def create_app(
             raw_rows = []
         rows: list[dict] = []
         counts = {"warn": 0, "error": 0}
-        import json as _json
         for r in raw_rows:
             try:
                 p = _json.loads(r.get("payload_json") or "{}")
@@ -3694,7 +3675,9 @@ def create_app(
                 "detail": p.get("detail") or {},
                 "ts_ist": p.get("ts_ist"),
             })
-        return {"rows": rows, "counts": counts}
+        _out = {"rows": rows, "counts": counts}
+        _cache.set(_ck, _json.dumps(_out), ttl=TTL_VOLATILE)
+        return _out
 
     admin_router.add_api_route(
         "/admin/data-health/pipeline-assertions",
