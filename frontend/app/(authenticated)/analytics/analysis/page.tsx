@@ -2076,8 +2076,8 @@ function PortfolioForecastTab({
 // ---------------------------------------------------------------
 
 type Rsi2Filter = "lte5" | "lte10" | "lte25" | "gte80" | null;
-type AtrFilter = "" | "lte0" | "gt0lte1" | "gt1lte2" | "gt2lte5" | "gt5lte10";
-type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt2lte10";
+type AtrFilter = "" | "lt0" | "gt0lte1_5" | "gt1_5lte4" | "gt2lte5" | "gt5";
+type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt2lte10" | "gt10";
 type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sma_20" | "sharpe_ratio" | "atr_pct" | "rs_6m" | "score";
 type SortDir = "asc" | "desc";
 
@@ -2197,11 +2197,11 @@ function WatchlistStocksTab() {
       stocks = stocks.filter((s) => {
         const v = s.atr_pct;
         if (v == null) return false;
-        if (atrFilter === "lte0") return v <= 0;
-        if (atrFilter === "gt0lte1") return v > 0 && v <= 1;
-        if (atrFilter === "gt1lte2") return v > 1 && v <= 2;
+        if (atrFilter === "lt0") return v < 0;
+        if (atrFilter === "gt0lte1_5") return v >= 0 && v <= 1.5;
+        if (atrFilter === "gt1_5lte4") return v > 1.5 && v <= 4;
         if (atrFilter === "gt2lte5") return v > 2 && v <= 5;
-        if (atrFilter === "gt5lte10") return v > 5 && v <= 10;
+        if (atrFilter === "gt5") return v > 5;
         return true;
       });
     }
@@ -2213,6 +2213,7 @@ function WatchlistStocksTab() {
         if (sharpeFilter === "gt0lte080") return v > 0 && v <= 0.8;
         if (sharpeFilter === "gt080lte2") return v > 0.8 && v <= 2;
         if (sharpeFilter === "gt2lte10") return v > 2 && v <= 10;
+        if (sharpeFilter === "gt10") return v > 10;
         return true;
       });
     }
@@ -2365,11 +2366,11 @@ function WatchlistStocksTab() {
                 className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
               >
                 <option value="">All</option>
-                <option value="lte0">≤ 0%</option>
-                <option value="gt0lte1">0% – 1%</option>
-                <option value="gt1lte2">1% – 2%</option>
+                <option value="lt0">&lt; 0%</option>
+                <option value="gt0lte1_5">0% – 1.5%</option>
+                <option value="gt1_5lte4">1.5% – 4%</option>
                 <option value="gt2lte5">2% – 5%</option>
-                <option value="gt5lte10">5% – 10%</option>
+                <option value="gt5">&gt; 5%</option>
               </select>
             </div>
 
@@ -2413,6 +2414,7 @@ function WatchlistStocksTab() {
                 <option value="gt0lte080">0 – 0.80</option>
                 <option value="gt080lte2">0.80 – 2</option>
                 <option value="gt2lte10">2 – 10</option>
+                <option value="gt10">&gt; 10</option>
               </select>
             </div>
           </div>
@@ -2528,11 +2530,48 @@ function WatchlistStocksTab() {
                   { key: "sma_200", label: "SMA 200" },
                   { key: "sma_50", label: "SMA 50" },
                   { key: "sma_20", label: "SMA 20" },
-                  { key: "sharpe_ratio", label: "Sharpe (6M)" },
-                  { key: "rs_6m", label: "RS (6M)" },
-                  { key: "atr_pct", label: "ATR%" },
-                  { key: "score", label: "Score" },
-                ] as { key: SortKey; label: string }[]
+                  {
+                    key: "sharpe_ratio",
+                    label: "Sharpe (6M)",
+                    tooltip:
+                      "Annualised Sharpe Ratio over last ~126 trading days (≈6 months)\n" +
+                      "Formula: (Avg Daily Return ÷ Std Dev of Daily Returns) × √252\n\n" +
+                      "Example: Avg daily return = 0.10%, Std Dev = 1.0%\n" +
+                      "→ Sharpe = (0.10 / 1.0) × √252 ≈ 1.59\n\n" +
+                      "Higher = better risk-adjusted return. >2 strong, <0 net negative.",
+                  },
+                  {
+                    key: "rs_6m",
+                    label: "RS (6M)",
+                    tooltip:
+                      "Relative Strength vs Nifty 50 over last 6 months\n" +
+                      "Formula: Stock 6M Return% − Nifty 50 6M Return%\n\n" +
+                      "Example: Stock up 18%, Nifty up 8%\n" +
+                      "→ RS(6M) = +10% (outperformed Nifty by 10pp)\n\n" +
+                      "Positive = beat the index. Negative = underperformed.",
+                  },
+                  {
+                    key: "atr_pct",
+                    label: "ATR%",
+                    tooltip:
+                      "Average True Range (14-day) as % of price — daily volatility gauge\n" +
+                      "Formula: ATR(14) ÷ Close Price × 100\n\n" +
+                      "Example: ATR(14) = ₹25, Close = ₹500\n" +
+                      "→ ATR% = 25 / 500 × 100 = 5%\n\n" +
+                      "Lower = calmer stock. Higher = wider daily swings.",
+                  },
+                  {
+                    key: "score",
+                    label: "Score",
+                    tooltip:
+                      "Composite score: quality + momentum + volatility rank\n" +
+                      "Formula: 0.4×Sharpe(6M) + 0.4×RS(6M) + 0.2×ATR_Percentile\n" +
+                      "ATR Percentile = rank of ATR% among watchlist (0=calmest, 100=wildest)\n\n" +
+                      "Example: Sharpe=1.5, RS=10%, ATR Percentile=30\n" +
+                      "→ Score = 0.4×1.5 + 0.4×10 + 0.2×30 = 0.6 + 4.0 + 6.0 = 10.6\n\n" +
+                      "Higher score = stronger risk-adjusted outperformance.",
+                  },
+                ] as { key: SortKey; label: string; tooltip?: string }[]
               ).map((col) => {
                 const active = sortKey === col.key;
                 return (
@@ -2550,10 +2589,29 @@ function WatchlistStocksTab() {
                   >
                     <span className="inline-flex items-center gap-1">
                       {col.label}
+                      {col.tooltip && (
+                        <span
+                          className="group/tip relative inline-flex"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <svg
+                            className="w-3 h-3 text-gray-400 hover:text-indigo-500 shrink-0 cursor-help"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                          >
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 16v-4M12 8h.01" />
+                          </svg>
+                          <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-[80] w-72 rounded-lg bg-gray-900 dark:bg-gray-700 px-3 py-2.5 text-[11px] font-normal normal-case tracking-normal text-gray-100 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity whitespace-pre-line leading-relaxed">
+                            {col.tooltip}
+                            <span className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900 dark:border-t-gray-700" />
+                          </span>
+                        </span>
+                      )}
                       <span className="text-gray-300 dark:text-gray-600">
-                        {active
-                          ? sortDir === "asc" ? "↑" : "↓"
-                          : "↕"}
+                        {active ? (sortDir === "asc" ? "↑" : "↓") : "↕"}
                       </span>
                     </span>
                   </th>
