@@ -384,6 +384,8 @@ export interface WatchlistStockRow {
   sma_20: number | null;
   sharpe_ratio: number | null;
   atr_pct: number | null;
+  rs_6m: number | null;
+  score: number | null;
 }
 
 export interface WatchlistStocksResponse {

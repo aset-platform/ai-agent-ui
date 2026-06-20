@@ -2078,7 +2078,7 @@ function PortfolioForecastTab({
 type Rsi2Filter = "lte5" | "lte10" | "lte25" | "gte80" | null;
 type AtrFilter = "" | "lte0" | "gt0lte1" | "gt1lte2" | "gt2lte5" | "gt5lte10";
 type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt2lte10";
-type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sma_20" | "sharpe_ratio" | "atr_pct";
+type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sma_20" | "sharpe_ratio" | "atr_pct" | "rs_6m" | "score";
 type SortDir = "asc" | "desc";
 
 const PAGE_SIZE_OPTIONS_WL = [10, 25, 50] as const;
@@ -2529,7 +2529,9 @@ function WatchlistStocksTab() {
                   { key: "sma_50", label: "SMA 50" },
                   { key: "sma_20", label: "SMA 20" },
                   { key: "sharpe_ratio", label: "Sharpe (6M)" },
+                  { key: "rs_6m", label: "RS (6M)" },
                   { key: "atr_pct", label: "ATR%" },
+                  { key: "score", label: "Score" },
                 ] as { key: SortKey; label: string }[]
               ).map((col) => {
                 const active = sortKey === col.key;
@@ -2563,7 +2565,7 @@ function WatchlistStocksTab() {
             {pageRows.length === 0 ? (
               <tr>
                 <td
-                  colSpan={9}
+                  colSpan={11}
                   className="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-500"
                 >
                   No stocks match the current filter.
@@ -2634,6 +2636,19 @@ function WatchlistStocksTab() {
                       {fmt(row.sharpe_ratio)}
                     </td>
                     <td className={`px-4 py-2.5 font-mono text-xs ${
+                      row.rs_6m == null
+                        ? "text-gray-400"
+                        : row.rs_6m > 0
+                          ? "text-emerald-600 dark:text-emerald-400 font-semibold"
+                          : "text-red-500 dark:text-red-400"
+                    }`}
+                      title="Stock 6M return minus Nifty 50 6M return"
+                    >
+                      {row.rs_6m != null
+                        ? `${row.rs_6m >= 0 ? "+" : ""}${fmt(row.rs_6m)}%`
+                        : "—"}
+                    </td>
+                    <td className={`px-4 py-2.5 font-mono text-xs ${
                       row.atr_pct == null
                         ? "text-gray-400"
                         : row.atr_pct > 6
@@ -2643,6 +2658,19 @@ function WatchlistStocksTab() {
                             : "text-gray-900 dark:text-gray-100"
                     }`}>
                       {row.atr_pct != null ? `${fmt(row.atr_pct)}%` : "—"}
+                    </td>
+                    <td className={`px-4 py-2.5 font-mono text-xs font-semibold ${
+                      row.score == null
+                        ? "text-gray-400"
+                        : row.score > 10
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : row.score < 0
+                            ? "text-red-500 dark:text-red-400"
+                            : "text-gray-900 dark:text-gray-100"
+                    }`}
+                      title="Score = 0.4×Sharpe + 0.4×RS(6M) + 0.2×ATR Percentile"
+                    >
+                      {fmt(row.score)}
                     </td>
                   </tr>
                 );

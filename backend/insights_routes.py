@@ -2245,6 +2245,28 @@ def create_insights_router() -> APIRouter:
             .astimezone(_ZI("Asia/Kolkata"))
             .date()
         )
+
+        # Fetch Nifty 50 6M return once for RS(6M) calculation.
+        _nifty_6m_return: float | None = None
+        try:
+            _nifty_df = query_iceberg_df(
+                "stocks.ohlcv",
+                "SELECT date, close FROM ohlcv "
+                "WHERE ticker = '^NSEI' "
+                "  AND close IS NOT NULL "
+                "ORDER BY date DESC LIMIT 135",
+            )
+            if len(_nifty_df) >= 20:
+                _nc = (
+                    _nifty_df.sort_values("date")["close"]
+                    .astype(float)
+                )
+                _nifty_6m_return = float(
+                    (_nc.iloc[-1] - _nc.iloc[0]) / _nc.iloc[0] * 100
+                )
+        except Exception as _e:
+            _logger.debug("watchlist-stocks nifty 6m: %s", _e)
+
         # Only fetch live prices during NSE market hours (09:00–15:30 IST,
         # Mon–Fri). Off-hours current_rsi_2 == rsi_2 from OHLCV history.
         _live_mode = _is_indian_market_hours()
@@ -2376,6 +2398,7 @@ def create_insights_router() -> APIRouter:
                 # Sharpe Ratio: annualized using last ~126
                 # trading days (≈6 months).
                 _sharpe: float | None = None
+                _stock_6m_return: float | None = None
                 try:
                     _close_s = grp["close"].astype(float)
                     _rets = _close_s.pct_change().dropna()
@@ -2389,8 +2412,25 @@ def create_insights_router() -> APIRouter:
                                 * (252 ** 0.5),
                                 4,
                             )
+                    # 6M price return for RS calculation
+                    _c6 = _close_s.iloc[-127:]
+                    if len(_c6) >= 2:
+                        _stock_6m_return = float(
+                            (_c6.iloc[-1] - _c6.iloc[0])
+                            / _c6.iloc[0] * 100
+                        )
                 except Exception:
                     pass
+
+                # RS(6M) = stock 6M return − Nifty 6M return
+                _rs_6m: float | None = None
+                if (
+                    _stock_6m_return is not None
+                    and _nifty_6m_return is not None
+                ):
+                    _rs_6m = round(
+                        _stock_6m_return - _nifty_6m_return, 4
+                    )
 
                 # ATR% = ATR(14) / close * 100
                 _atr_pct: float | None = None
@@ -2425,6 +2465,7 @@ def create_insights_router() -> APIRouter:
                         ),
                         sharpe_ratio=_sharpe,
                         atr_pct=_atr_pct,
+                        rs_6m=_rs_6m,
                     )
                 )
             except Exception as exc:
@@ -2446,6 +2487,30 @@ def create_insights_router() -> APIRouter:
                     )
                 except Exception:
                     pass
+
+        # Compute ATR percentile ranks across all rows, then score.
+        # Score = 0.4×Sharpe + 0.4×RS(6M) + 0.2×ATR_Percentile
+        _atr_vals = [
+            r.atr_pct for r in rows if r.atr_pct is not None
+        ]
+        _n_atr = len(_atr_vals)
+        if _n_atr > 0:
+            _sorted_atr = sorted(_atr_vals)
+            for row in rows:
+                if row.atr_pct is not None:
+                    _rank = _sorted_atr.index(row.atr_pct)
+                    _pct = (
+                        _rank / (_n_atr - 1) * 100
+                        if _n_atr > 1
+                        else 50.0
+                    )
+                    _s = row.sharpe_ratio
+                    _r = row.rs_6m
+                    if _s is not None and _r is not None:
+                        row.score = round(
+                            0.4 * _s + 0.4 * _r + 0.2 * _pct,
+                            4,
+                        )
 
         result = WatchlistStocksResponse(stocks=rows)
         cache.set(
