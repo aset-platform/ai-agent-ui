@@ -44,13 +44,12 @@ def _iso_utc(ts) -> str | None:
         return None
     try:
         from datetime import datetime, timezone
+
         if hasattr(ts, "tzinfo"):
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
             return (
-                ts.astimezone(timezone.utc)
-                .isoformat()
-                .replace("+00:00", "Z")
+                ts.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
             )
         if isinstance(ts, str):
             return ts if "Z" in ts or "+" in ts else f"{ts}Z"
@@ -89,11 +88,9 @@ def _completed_epoch(latest: dict, fallback_path) -> float:
     completed_iso = latest.get("completed_at")
     if completed_iso:
         try:
-            return (
-                datetime.fromisoformat(
-                    completed_iso.replace("Z", "+00:00"),
-                ).timestamp()
-            )
+            return datetime.fromisoformat(
+                completed_iso.replace("Z", "+00:00"),
+            ).timestamp()
         except Exception:
             _logger.debug(
                 "_completed_epoch: completed_iso=%r "
@@ -105,8 +102,7 @@ def _completed_epoch(latest: dict, fallback_path) -> float:
         return fallback_path.stat().st_mtime
     except Exception:
         _logger.debug(
-            "_completed_epoch: stat() failed on %s, "
-            "falling back to now()",
+            "_completed_epoch: stat() failed on %s, " "falling back to now()",
             fallback_path,
             exc_info=True,
         )
@@ -141,11 +137,9 @@ async def _admin_backups_list_impl(
     # which can block for 10s+ on a large warehouse backup dir
     # (e.g. 64k files from stocks.intraday_features). Must run
     # off the event loop thread to avoid freezing uvicorn.
+    # full_only=True skips per-table dirs before the du spawn.
     backups = await asyncio.to_thread(
-        lambda: [
-            b for b in list_backups(backup_root)
-            if _is_full_snapshot_dir_name(b.get("date", ""))
-        ]
+        lambda: list_backups(backup_root, full_only=True)
     )
     now = _t.time()
     for b in backups:
@@ -194,11 +188,9 @@ async def _admin_backups_health_impl(
 
     # list_backups() → _dir_size_mb() → subprocess.run("du -sk")
     # blocks event loop; wrap in to_thread (same fix as list endpoint).
+    # full_only=True skips per-table dirs before the du spawn.
     backups = await asyncio.to_thread(
-        lambda: [
-            b for b in list_backups(backup_root)
-            if _is_full_snapshot_dir_name(b.get("date", ""))
-        ]
+        lambda: list_backups(backup_root, full_only=True)
     )
     if not backups:
         return {
@@ -339,11 +331,7 @@ async def _admin_backup_contents_impl(
             files = 0
             size_mb = 0.0
             if data_dir.exists():
-                parts = sum(
-                    1
-                    for d in data_dir.iterdir()
-                    if d.is_dir()
-                )
+                parts = sum(1 for d in data_dir.iterdir() if d.is_dir())
                 try:
                     r = _sp.run(
                         ["du", "-sk", str(data_dir)],
@@ -407,10 +395,12 @@ def create_app(
         # Failure is non-fatal — the backend still boots.
         try:
             from backend.main import _run_startup_hooks
+
             await _run_startup_hooks()
         except Exception:
             _logger.warning(
-                "startup hooks skipped", exc_info=True,
+                "startup hooks skipped",
+                exc_info=True,
             )
 
         try:
@@ -433,9 +423,7 @@ def create_app(
                 name="cache-warmup-tickers",
             ).start()
             threading.Thread(
-                target=lambda: asyncio.run(
-                    warm_frequent_users(top_n)
-                ),
+                target=lambda: asyncio.run(warm_frequent_users(top_n)),
                 daemon=True,
                 name="cache-warmup-users",
             ).start()
@@ -466,7 +454,8 @@ def create_app(
                     3,
                 )
                 svc = SchedulerService(
-                    _sched_repo, max_workers=max_w,
+                    _sched_repo,
+                    max_workers=max_w,
                 )
                 svc.start()
                 a.state.scheduler = svc
@@ -483,6 +472,7 @@ def create_app(
             from backend.algo.broker.ws_registry import (
                 shutdown_all as _ws_shutdown_all,
             )
+
             await _ws_shutdown_all()
         except Exception:
             _logger.warning(
@@ -645,13 +635,17 @@ def create_app(
                 role=user.role,
                 chat_request_count=int(
                     user_row.get(
-                        "chat_request_count", 0,
-                    ) or 0
+                        "chat_request_count",
+                        0,
+                    )
+                    or 0
                 ),
                 byo_monthly_limit=int(
                     user_row.get(
-                        "byo_monthly_limit", 100,
-                    ) or 100
+                        "byo_monthly_limit",
+                        100,
+                    )
+                    or 100
                 ),
             )
         except HTTPException:
@@ -680,7 +674,9 @@ def create_app(
                 user_id,
             )
         await _bump_chat_counter(
-            user_id, role, byo_active=byo_active,
+            user_id,
+            role,
+            byo_active=byo_active,
         )
 
     def _track_usage_sync(
@@ -702,7 +698,8 @@ def create_app(
 
             if loop is not None and loop.is_running():
                 asyncio.run_coroutine_threadsafe(
-                    increment_usage(user_id), loop,
+                    increment_usage(user_id),
+                    loop,
                 )
             else:
                 asyncio.run(increment_usage(user_id))
@@ -750,7 +747,9 @@ def create_app(
         # ── LangGraph path ────────────────────────
         if graph is not None and settings.use_langgraph:
             return await _chat_langgraph(
-                req, current_user.role, _byo_ctx,
+                req,
+                current_user.role,
+                _byo_ctx,
             )
 
         # ── Legacy path ───────────────────────────
@@ -770,12 +769,14 @@ def create_app(
                 set_current_user(req.user_id)
                 with apply_byo_context(_byo_ctx):
                     return agent.run(
-                        req.message, req.history,
+                        req.message,
+                        req.history,
                     )
 
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
-                executor, _run_with_user,
+                executor,
+                _run_with_user,
             )
             result = await asyncio.wait_for(
                 future,
@@ -829,7 +830,8 @@ def create_app(
 
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
-                executor, _invoke_with_user,
+                executor,
+                _invoke_with_user,
             )
             result = await asyncio.wait_for(
                 future,
@@ -851,7 +853,8 @@ def create_app(
                 detail="Agent execution failed",
             )
         await _track_usage(
-            req.user_id, role,
+            req.user_id,
+            role,
             byo_active=byo_ctx is not None,
         )
         return ChatResponse(
@@ -1065,8 +1068,7 @@ def create_app(
                     # Carry over context to new session
                     ctx.session_id = session_id
                     _logger.debug(
-                        "Resumed context from prior "
-                        "session for user %s",
+                        "Resumed context from prior " "session for user %s",
                         user_id,
                     )
                 else:
@@ -1080,13 +1082,16 @@ def create_app(
                         user_id,
                     )
                     ctx.user_tickers = user_ctx.get(
-                        "tickers", [],
+                        "tickers",
+                        [],
                     )
                     ctx.market_preference = user_ctx.get(
-                        "market", "",
+                        "market",
+                        "",
                     )
                     ctx.subscription_tier = user_ctx.get(
-                        "tier", "",
+                        "tier",
+                        "",
                     )
                 except Exception:
                     pass
@@ -1098,8 +1103,7 @@ def create_app(
             ctx.last_intent = intent
             ctx.last_response = response[:500]
             ctx.current_topic = (
-                f"{', '.join(tickers)} {intent}"
-                if tickers else intent
+                f"{', '.join(tickers)} {intent}" if tickers else intent
             )
             for t in tickers:
                 if t not in ctx.tickers_mentioned:
@@ -1154,21 +1158,23 @@ def create_app(
                             # so it uses the user's key
                             # when active.
                             _update_conversation_context(
-                                session_id=(
-                                    req.session_id or ""
-                                ),
+                                session_id=(req.session_id or ""),
                                 user_input=req.message,
                                 response=result.get(
-                                    "final_response", "",
+                                    "final_response",
+                                    "",
                                 ),
                                 agent=result.get(
-                                    "current_agent", "",
+                                    "current_agent",
+                                    "",
                                 ),
                                 intent=result.get(
-                                    "intent", "",
+                                    "intent",
+                                    "",
                                 ),
                                 tickers=result.get(
-                                    "tickers", [],
+                                    "tickers",
+                                    [],
                                 ),
                                 user_id=req.user_id or "",
                             )
@@ -1280,9 +1286,7 @@ def create_app(
         }
         if scope == "all":
             if token_budget is not None:
-                result["models"] = (
-                    token_budget.get_status()
-                )
+                result["models"] = token_budget.get_status()
             else:
                 result["models"] = {}
 
@@ -1300,10 +1304,7 @@ def create_app(
 
             repo = _require_repo()
             usage = repo.get_dashboard_llm_usage(
-                user_id=(
-                    str(user.user_id)
-                    if scope == "self" else None
-                ),
+                user_id=(str(user.user_id) if scope == "self" else None),
                 days=30,
             )
             cascade_stats["requests_total"] = int(
@@ -1320,7 +1321,8 @@ def create_app(
                     usage.get("per_model", {}),
                 )
                 result["daily_trend"] = usage.get(
-                    "daily_trend", [],
+                    "daily_trend",
+                    [],
                 )
         except Exception:
             _logger.debug(
@@ -1343,9 +1345,7 @@ def create_app(
                 keys = await auth_repo.list_llm_keys(
                     str(user.user_id),
                 )
-                keys_by_provider = {
-                    k["provider"]: k for k in keys
-                }
+                keys_by_provider = {k["provider"]: k for k in keys}
                 # ``request_count_30d`` on the key row is a
                 # future-use field; the authoritative BYO
                 # chat-turn count for the current IST month
@@ -1353,13 +1353,16 @@ def create_app(
                 from backend.llm_byo import (
                     read_byo_month_used,
                 )
+
                 byo_month_used = read_byo_month_used(
                     str(user.user_id),
                 )
                 _raw_used = int(
                     (user_row or {}).get(
-                        "chat_request_count", 0,
-                    ) or 0
+                        "chat_request_count",
+                        0,
+                    )
+                    or 0
                 )
                 # Clamp to the 10-turn ceiling for display —
                 # any historical drift past 10 (from before
@@ -1368,12 +1371,15 @@ def create_app(
                 result["quota"] = {
                     "free_allowance_total": 10,
                     "free_allowance_used": min(
-                        _raw_used, 10,
+                        _raw_used,
+                        10,
                     ),
                     "byo_monthly_limit": int(
                         (user_row or {}).get(
-                            "byo_monthly_limit", 100,
-                        ) or 100
+                            "byo_monthly_limit",
+                            100,
+                        )
+                        or 100
                     ),
                     "byo_month_used": byo_month_used,
                 }
@@ -1384,27 +1390,26 @@ def create_app(
                         {
                             "provider": p,
                             "configured": row is not None,
-                            "label": (
-                                row.get("label")
-                                if row else None
-                            ),
+                            "label": (row.get("label") if row else None),
                             "masked_key": (
-                                row.get("masked_key")
-                                if row else None
+                                row.get("masked_key") if row else None
                             ),
                             "last_used_at": (
                                 _iso_utc(
                                     row["last_used_at"],
                                 )
-                                if row and row.get(
+                                if row
+                                and row.get(
                                     "last_used_at",
-                                ) else None
+                                )
+                                else None
                             ),
                             "request_count_30d": (
                                 int(
                                     row["request_count_30d"],
                                 )
-                                if row else 0
+                                if row
+                                else 0
                             ),
                         }
                     )
@@ -1590,7 +1595,8 @@ def create_app(
 
         mgr = RetentionManager()
         results = await asyncio.to_thread(
-            mgr.run_cleanup, dry_run=dry_run,
+            mgr.run_cleanup,
+            dry_run=dry_run,
         )
         return {
             "results": [
@@ -1795,6 +1801,7 @@ def create_app(
             hit = cache.get(cache_key)
             if hit is not None:
                 import json
+
                 return json.loads(hit)
 
         from usage_tracker import get_usage_stats
@@ -1803,14 +1810,16 @@ def create_app(
         if scope == "self":
             uid = str(user.user_id)
             all_rows = [
-                r for r in all_rows
-                if str(r.get("user_id", "")) == uid
+                r for r in all_rows if str(r.get("user_id", "")) == uid
             ]
         result = {"users": all_rows, "scope": scope}
         if cache:
             import json
+
             cache.set(
-                cache_key, json.dumps(result), 30,
+                cache_key,
+                json.dumps(result),
+                30,
             )
         return result
 
@@ -1900,29 +1909,18 @@ def create_app(
 
             q = select(PaymentTransaction)
             if user_id:
-                q = q.where(
-                    PaymentTransaction.user_id == user_id
-                )
+                q = q.where(PaymentTransaction.user_id == user_id)
             if gateway:
-                q = q.where(
-                    PaymentTransaction.gateway == gateway
-                )
-            q = q.order_by(
-                PaymentTransaction.created_at.desc()
-            ).limit(limit)
+                q = q.where(PaymentTransaction.gateway == gateway)
+            q = q.order_by(PaymentTransaction.created_at.desc()).limit(limit)
             result = await session.execute(q)
             txns = result.scalars().all()
 
         rows = []
         for t in txns:
-            r = {
-                c.name: getattr(t, c.name)
-                for c in t.__table__.columns
-            }
+            r = {c.name: getattr(t, c.name) for c in t.__table__.columns}
             if hasattr(r.get("created_at"), "isoformat"):
-                r["created_at"] = (
-                    r["created_at"].isoformat()
-                )
+                r["created_at"] = r["created_at"].isoformat()
             uid = r.get("user_id", "")
             info = user_map.get(uid, {})
             r["user_name"] = info.get("name", "")
@@ -1942,7 +1940,9 @@ def create_app(
     async def _scheduler_list_jobs(request: Request):
         """GET /admin/scheduler/jobs."""
         svc = getattr(
-            request.app.state, "scheduler", None,
+            request.app.state,
+            "scheduler",
+            None,
         )
         if not svc:
             return {"jobs": []}
@@ -1954,24 +1954,26 @@ def create_app(
         """POST /admin/scheduler/jobs."""
         body = await request.json()
         svc = getattr(
-            request.app.state, "scheduler", None,
+            request.app.state,
+            "scheduler",
+            None,
         )
         if not svc:
             raise HTTPException(
-                503, "Scheduler not available",
+                503,
+                "Scheduler not available",
             )
         cron_days = body.get("cron_days", [])
         if isinstance(cron_days, list):
             cron_days = ",".join(cron_days)
         cron_dates = body.get("cron_dates", [])
         if isinstance(cron_dates, list):
-            cron_dates = ",".join(
-                str(d) for d in cron_dates
-            )
+            cron_dates = ",".join(str(d) for d in cron_dates)
         job = {
             "name": body.get("name", "Untitled"),
             "job_type": body.get(
-                "job_type", "data_refresh",
+                "job_type",
+                "data_refresh",
             ),
             "cron_days": cron_days,
             "cron_dates": cron_dates or "",
@@ -1982,66 +1984,81 @@ def create_app(
         return {"job_id": job_id, "detail": "created"}
 
     async def _scheduler_update_job(
-        request: Request, job_id: str,
+        request: Request,
+        job_id: str,
     ):
         """PATCH /admin/scheduler/jobs/{job_id}."""
         body = await request.json()
         svc = getattr(
-            request.app.state, "scheduler", None,
+            request.app.state,
+            "scheduler",
+            None,
         )
         if not svc:
             raise HTTPException(
-                503, "Scheduler not available",
+                503,
+                "Scheduler not available",
             )
         if "enabled" in body:
             svc.toggle_job(job_id, body["enabled"])
         else:
             updates = {}
             for k in (
-                "name", "cron_days", "cron_dates",
-                "cron_time", "scope",
+                "name",
+                "cron_days",
+                "cron_dates",
+                "cron_time",
+                "scope",
             ):
                 if k in body:
                     v = body[k]
                     if k == "cron_days" and isinstance(
-                        v, list,
+                        v,
+                        list,
                     ):
                         v = ",".join(v)
                     if k == "cron_dates" and isinstance(
-                        v, list,
+                        v,
+                        list,
                     ):
-                        v = ",".join(
-                            str(d) for d in v
-                        )
+                        v = ",".join(str(d) for d in v)
                     updates[k] = v
             if updates:
                 svc.update_job(job_id, updates)
         return {"detail": "updated"}
 
     async def _scheduler_delete_job(
-        request: Request, job_id: str,
+        request: Request,
+        job_id: str,
     ):
         """DELETE /admin/scheduler/jobs/{job_id}."""
         svc = getattr(
-            request.app.state, "scheduler", None,
+            request.app.state,
+            "scheduler",
+            None,
         )
         if not svc:
             raise HTTPException(
-                503, "Scheduler not available",
+                503,
+                "Scheduler not available",
             )
         svc.remove_job(job_id)
         return {"detail": "deleted"}
 
     async def _scheduler_trigger_job(
-        request: Request, job_id: str,
+        request: Request,
+        job_id: str,
     ):
         """POST /admin/scheduler/jobs/{job_id}/trigger."""
         svc = getattr(
-            request.app.state, "scheduler", None,
+            request.app.state,
+            "scheduler",
+            None,
         )
         if not svc:
             raise HTTPException(
-                503, "Scheduler not available",
+                503,
+                "Scheduler not available",
             )
         try:
             body = await request.json()
@@ -2055,32 +2072,40 @@ def create_app(
         )
         if not run_id:
             raise HTTPException(
-                404, "Job not found or no executor",
+                404,
+                "Job not found or no executor",
             )
         return {"run_id": run_id, "detail": "triggered"}
 
     async def _scheduler_cancel_run(
-        request: Request, run_id: str,
+        request: Request,
+        run_id: str,
     ):
         """POST /admin/scheduler/runs/{run_id}/cancel."""
         svc = getattr(
-            request.app.state, "scheduler", None,
+            request.app.state,
+            "scheduler",
+            None,
         )
         if not svc:
             raise HTTPException(
-                503, "Scheduler not available",
+                503,
+                "Scheduler not available",
             )
         ok = svc.cancel_run(run_id)
         if not ok:
             raise HTTPException(
-                404, "Run not found or already finished",
+                404,
+                "Run not found or already finished",
             )
         return {"detail": "cancel signal sent"}
 
     async def _scheduler_list_runs(request: Request):
         """GET /admin/scheduler/runs."""
         svc = getattr(
-            request.app.state, "scheduler", None,
+            request.app.state,
+            "scheduler",
+            None,
         )
         if not svc:
             return {"runs": [], "total": 0}
@@ -2088,9 +2113,7 @@ def create_app(
         days = int(params.get("days", "7"))
         job_type = params.get("job_type") or None
         status = params.get("status") or None
-        p_run_id = (
-            params.get("pipeline_run_id") or None
-        )
+        p_run_id = params.get("pipeline_run_id") or None
         offset = int(params.get("offset", "0"))
         limit = int(params.get("limit", "50"))
         runs = svc._repo.get_scheduler_runs(
@@ -2101,10 +2124,7 @@ def create_app(
             offset=offset,
             limit=limit,
         )
-        total = (
-            runs[0].get("_total", len(runs))
-            if runs else 0
-        )
+        total = runs[0].get("_total", len(runs)) if runs else 0
         import math as _math
 
         for r in runs:
@@ -2123,7 +2143,9 @@ def create_app(
     async def _pipeline_list(request: Request):
         """GET /admin/scheduler/pipelines."""
         svc = getattr(
-            request.app.state, "scheduler", None,
+            request.app.state,
+            "scheduler",
+            None,
         )
         if not svc:
             return {"pipelines": []}
@@ -2133,20 +2155,21 @@ def create_app(
         """POST /admin/scheduler/pipelines."""
         body = await request.json()
         svc = getattr(
-            request.app.state, "scheduler", None,
+            request.app.state,
+            "scheduler",
+            None,
         )
         if not svc:
             raise HTTPException(
-                503, "Scheduler not available",
+                503,
+                "Scheduler not available",
             )
         cron_days = body.get("cron_days", [])
         if isinstance(cron_days, list):
             cron_days = ",".join(cron_days)
         cron_dates = body.get("cron_dates", [])
         if isinstance(cron_dates, list):
-            cron_dates = ",".join(
-                str(d) for d in cron_dates
-            )
+            cron_dates = ",".join(str(d) for d in cron_dates)
         data = {
             "name": body.get("name", "Untitled"),
             "scope": body.get("scope", "all"),
@@ -2154,41 +2177,53 @@ def create_app(
             "cron_days": cron_days,
             "cron_dates": cron_dates or "",
             "cron_time": body.get(
-                "cron_time", "18:00",
+                "cron_time",
+                "18:00",
             ),
             "steps": body.get("steps", []),
         }
         pid = svc.add_pipeline(data)
         return {
-            "pipeline_id": pid, "detail": "created",
+            "pipeline_id": pid,
+            "detail": "created",
         }
 
     async def _pipeline_update(
-        request: Request, pipeline_id: str,
+        request: Request,
+        pipeline_id: str,
     ):
         """PATCH /admin/scheduler/pipelines/{id}."""
         body = await request.json()
         svc = getattr(
-            request.app.state, "scheduler", None,
+            request.app.state,
+            "scheduler",
+            None,
         )
         if not svc:
             raise HTTPException(
-                503, "Scheduler not available",
+                503,
+                "Scheduler not available",
             )
         updates = {}
         for k in (
-            "name", "scope", "enabled",
-            "cron_days", "cron_time", "cron_dates",
+            "name",
+            "scope",
+            "enabled",
+            "cron_days",
+            "cron_time",
+            "cron_dates",
             "steps",
         ):
             if k in body:
                 v = body[k]
                 if k == "cron_days" and isinstance(
-                    v, list,
+                    v,
+                    list,
                 ):
                     v = ",".join(v)
                 if k == "cron_dates" and isinstance(
-                    v, list,
+                    v,
+                    list,
                 ):
                     v = ",".join(str(d) for d in v)
                 updates[k] = v
@@ -2197,29 +2232,37 @@ def create_app(
         return {"detail": "updated"}
 
     async def _pipeline_delete(
-        request: Request, pipeline_id: str,
+        request: Request,
+        pipeline_id: str,
     ):
         """DELETE /admin/scheduler/pipelines/{id}."""
         svc = getattr(
-            request.app.state, "scheduler", None,
+            request.app.state,
+            "scheduler",
+            None,
         )
         if not svc:
             raise HTTPException(
-                503, "Scheduler not available",
+                503,
+                "Scheduler not available",
             )
         svc.remove_pipeline(pipeline_id)
         return {"detail": "deleted"}
 
     async def _pipeline_trigger(
-        request: Request, pipeline_id: str,
+        request: Request,
+        pipeline_id: str,
     ):
         """POST /admin/scheduler/pipelines/{id}/trigger."""
         svc = getattr(
-            request.app.state, "scheduler", None,
+            request.app.state,
+            "scheduler",
+            None,
         )
         if not svc:
             raise HTTPException(
-                503, "Scheduler not available",
+                503,
+                "Scheduler not available",
             )
         try:
             body = await request.json()
@@ -2227,33 +2270,41 @@ def create_app(
             body = {}
         force = body.get("force", False)
         tag = svc.trigger_pipeline_now(
-            pipeline_id, force=force,
+            pipeline_id,
+            force=force,
         )
         if not tag:
             raise HTTPException(
-                404, "Pipeline not found",
+                404,
+                "Pipeline not found",
             )
         return {"pipeline_id": pipeline_id, "tag": tag}
 
     async def _pipeline_resume(
-        request: Request, pipeline_id: str,
+        request: Request,
+        pipeline_id: str,
     ):
         """POST .../pipelines/{id}/resume."""
         body = await request.json()
         svc = getattr(
-            request.app.state, "scheduler", None,
+            request.app.state,
+            "scheduler",
+            None,
         )
         if not svc:
             raise HTTPException(
-                503, "Scheduler not available",
+                503,
+                "Scheduler not available",
             )
         from_step = body.get("from_step", 1)
         tag = svc.resume_pipeline_now(
-            pipeline_id, from_step,
+            pipeline_id,
+            from_step,
         )
         if not tag:
             raise HTTPException(
-                404, "Pipeline not found",
+                404,
+                "Pipeline not found",
             )
         return {
             "pipeline_id": pipeline_id,
@@ -2264,7 +2315,9 @@ def create_app(
     async def _scheduler_stats(request: Request):
         """GET /admin/scheduler/stats."""
         svc = getattr(
-            request.app.state, "scheduler", None,
+            request.app.state,
+            "scheduler",
+            None,
         )
         if not svc:
             return {
@@ -2284,9 +2337,7 @@ def create_app(
         import math as _math
 
         for k, v in list(stats.items()):
-            if isinstance(v, float) and (
-                _math.isnan(v) or _math.isinf(v)
-            ):
+            if isinstance(v, float) and (_math.isnan(v) or _math.isinf(v)):
                 stats[k] = None
             elif hasattr(v, "isoformat"):
                 stats[k] = v.isoformat()
@@ -2367,15 +2418,13 @@ def create_app(
         dependencies=[Depends(superuser_only)],
     )
     admin_router.add_api_route(
-        "/admin/scheduler/pipelines"
-        "/{pipeline_id}/trigger",
+        "/admin/scheduler/pipelines" "/{pipeline_id}/trigger",
         _pipeline_trigger,
         methods=["POST"],
         dependencies=[Depends(superuser_only)],
     )
     admin_router.add_api_route(
-        "/admin/scheduler/pipelines"
-        "/{pipeline_id}/resume",
+        "/admin/scheduler/pipelines" "/{pipeline_id}/resume",
         _pipeline_resume,
         methods=["POST"],
         dependencies=[Depends(superuser_only)],
@@ -2430,7 +2479,8 @@ def create_app(
                 t
                 for t in all_tickers
                 if not registry[t].get(
-                    "is_tradeable", True,
+                    "is_tradeable",
+                    True,
                 )
             }
             # Analyzable: stocks + ETFs, excluding
@@ -2440,7 +2490,8 @@ def create_app(
                 t
                 for t in all_tickers
                 if registry[t].get(
-                    "ticker_type", "stock",
+                    "ticker_type",
+                    "stock",
                 )
                 in ("stock", "etf")
                 and t not in illiquid_tickers
@@ -2451,7 +2502,8 @@ def create_app(
                 t
                 for t in all_tickers
                 if registry[t].get(
-                    "ticker_type", "stock",
+                    "ticker_type",
+                    "stock",
                 )
                 == "stock"
                 and t not in illiquid_tickers
@@ -2507,13 +2559,8 @@ def create_app(
                     "OR isnan(close)",
                 )
                 if not nan_df.empty:
-                    o["nan_close_count"] = int(
-                        nan_df["cnt"].iloc[0]
-                    )
-                if (
-                    not nan_df.empty
-                    and nan_df["tk_cnt"].iloc[0] > 0
-                ):
+                    o["nan_close_count"] = int(nan_df["cnt"].iloc[0])
+                if not nan_df.empty and nan_df["tk_cnt"].iloc[0] > 0:
                     tk = query_iceberg_df(
                         "stocks.ohlcv",
                         "SELECT DISTINCT ticker "
@@ -2522,11 +2569,7 @@ def create_app(
                         "OR isnan(close)",
                     )
                     if not tk.empty:
-                        o["nan_close_tickers"] = (
-                            sorted(
-                                tk["ticker"].tolist()
-                            )
-                        )
+                        o["nan_close_tickers"] = sorted(tk["ticker"].tolist())
 
                 # Freshness per ticker — skip
                 # illiquid tickers so they don't
@@ -2539,9 +2582,7 @@ def create_app(
                     "GROUP BY ticker",
                 )
                 if not latest.empty:
-                    for _, row in (
-                        latest.iterrows()
-                    ):
+                    for _, row in latest.iterrows():
                         tk = row["ticker"]
                         if tk in illiquid_tickers:
                             continue
@@ -2549,17 +2590,11 @@ def create_app(
                         if hasattr(d, "date"):
                             d = d.date()
                         if d < yesterday:
-                            o[
-                                "missing_latest_count"
-                            ] += 1
+                            o["missing_latest_count"] += 1
                         if d < stale_3d:
                             o["stale_count"] += 1
-                            o[
-                                "stale_tickers"
-                            ].append(tk)
-                    o["stale_tickers"] = sorted(
-                        o["stale_tickers"]
-                    )
+                            o["stale_tickers"].append(tk)
+                    o["stale_tickers"] = sorted(o["stale_tickers"])
             except Exception:
                 _logger.debug(
                     "OHLCV health failed",
@@ -2592,28 +2627,17 @@ def create_app(
                     ") WHERE rn = 1",
                 )
                 if not df.empty:
-                    tks = set(
-                        df["ticker"].tolist()
-                    )
+                    tks = set(df["ticker"].tolist())
                     f["total_tickers"] = len(tks)
-                    f["missing_tickers"] = sorted(
-                        analyzable_tickers - tks
-                    )
+                    f["missing_tickers"] = sorted(analyzable_tickers - tks)
                     for _, r in df.iterrows():
                         pct = r.get(
                             "target_3m_pct_change",
                         )
-                        if pct is not None and (
-                            pct > 50 or pct < -50
-                        ):
-                            f[
-                                "extreme_predictions"
-                            ] += 1
+                        if pct is not None and (pct > 50 or pct < -50):
+                            f["extreme_predictions"] += 1
                         mp = r.get("mape")
-                        if (
-                            mp is not None
-                            and mp > 25
-                        ):
+                        if mp is not None and mp > 25:
                             f["high_mape"] += 1
                         d = r["run_date"]
                         if hasattr(d, "date"):
@@ -2642,13 +2666,9 @@ def create_app(
                     "GROUP BY ticker",
                 )
                 if not df.empty:
-                    tks = set(
-                        df["ticker"].tolist()
-                    )
+                    tks = set(df["ticker"].tolist())
                     s["total_tickers"] = len(tks)
-                    s["missing_tickers"] = sorted(
-                        analyzable_tickers - tks
-                    )
+                    s["missing_tickers"] = sorted(analyzable_tickers - tks)
                     for _, r in df.iterrows():
                         d = r["latest"]
                         if hasattr(d, "date"):
@@ -2677,13 +2697,9 @@ def create_app(
                     "GROUP BY ticker",
                 )
                 if not df.empty:
-                    tks = set(
-                        df["ticker"].tolist()
-                    )
+                    tks = set(df["ticker"].tolist())
                     p["total_tickers"] = len(tks)
-                    p["missing_tickers"] = sorted(
-                        financial_tickers - tks
-                    )
+                    p["missing_tickers"] = sorted(financial_tickers - tks)
                     for _, r in df.iterrows():
                         d = r["latest"]
                         if hasattr(d, "date"):
@@ -2705,17 +2721,12 @@ def create_app(
             try:
                 df = query_iceberg_df(
                     "stocks.analysis_summary",
-                    "SELECT DISTINCT ticker "
-                    "FROM analysis_summary",
+                    "SELECT DISTINCT ticker " "FROM analysis_summary",
                 )
                 if not df.empty:
-                    tks = set(
-                        df["ticker"].tolist()
-                    )
+                    tks = set(df["ticker"].tolist())
                     a["total_tickers"] = len(tks)
-                    a["missing_tickers"] = sorted(
-                        analyzable_tickers - tks
-                    )
+                    a["missing_tickers"] = sorted(analyzable_tickers - tks)
             except Exception:
                 _logger.debug(
                     "Analytics health failed",
@@ -2753,13 +2764,11 @@ def create_app(
                     # Bhavcopy is NSE-only — compare only
                     # to the India-side analyzable set.
                     india_analyzable = {
-                        t for t in analyzable_tickers
-                        if t.endswith(".NS")
-                        or t.endswith(".BO")
+                        t
+                        for t in analyzable_tickers
+                        if t.endswith(".NS") or t.endswith(".BO")
                     }
-                    b["missing_tickers"] = sorted(
-                        india_analyzable - tks
-                    )
+                    b["missing_tickers"] = sorted(india_analyzable - tks)
                     overall_latest = None
                     for _, row in df.iterrows():
                         tk = row["ticker"]
@@ -2768,27 +2777,16 @@ def create_app(
                         d = row["latest"]
                         if hasattr(d, "date"):
                             d = d.date()
-                        if (
-                            overall_latest is None
-                            or d > overall_latest
-                        ):
+                        if overall_latest is None or d > overall_latest:
                             overall_latest = d
                         if d < yesterday:
-                            b[
-                                "missing_latest_count"
-                            ] += 1
+                            b["missing_latest_count"] += 1
                         if d < stale_3d:
                             b["stale_count"] += 1
-                            b[
-                                "stale_tickers"
-                            ].append(tk)
-                    b["stale_tickers"] = sorted(
-                        b["stale_tickers"]
-                    )
+                            b["stale_tickers"].append(tk)
+                    b["stale_tickers"] = sorted(b["stale_tickers"])
                     if overall_latest is not None:
-                        b["latest_date"] = (
-                            overall_latest.isoformat()
-                        )
+                        b["latest_date"] = overall_latest.isoformat()
             except Exception:
                 _logger.debug(
                     "Bhavcopy health failed",
@@ -2821,12 +2819,8 @@ def create_app(
                 )
                 if not df.empty:
                     row = df.iloc[0]
-                    c["total_events"] = int(
-                        row["cnt"] or 0
-                    )
-                    c["tickers_with_events"] = int(
-                        row["tks"] or 0
-                    )
+                    c["total_events"] = int(row["cnt"] or 0)
+                    c["tickers_with_events"] = int(row["tks"] or 0)
                     d = row["latest"]
                     # Reject NaT / NaN — empty tables
                     # surface as pandas NaT which is not
@@ -2834,17 +2828,12 @@ def create_app(
                     import pandas as _pd
 
                     if d is not None and not (
-                        isinstance(d, float)
-                        or _pd.isna(d)
+                        isinstance(d, float) or _pd.isna(d)
                     ):
                         if hasattr(d, "date"):
                             d = d.date()
-                        c["latest_event_date"] = (
-                            d.isoformat()
-                        )
-                        c["days_since_latest"] = (
-                            today - d
-                        ).days
+                        c["latest_event_date"] = d.isoformat()
+                        c["days_since_latest"] = (today - d).days
             except Exception:
                 _logger.debug(
                     "Corporate events health failed",
@@ -2878,25 +2867,18 @@ def create_app(
                 if not df.empty:
                     tks = set(df["ticker"].tolist())
                     f["total_tickers"] = len(tks)
-                    f["missing_tickers"] = sorted(
-                        financial_tickers - tks
-                    )
+                    f["missing_tickers"] = sorted(financial_tickers - tks)
                     overall_latest = None
                     for _, row in df.iterrows():
                         d = row["latest"]
                         if hasattr(d, "date"):
                             d = d.date()
-                        if (
-                            overall_latest is None
-                            or d > overall_latest
-                        ):
+                        if overall_latest is None or d > overall_latest:
                             overall_latest = d
                         if d < yesterday:
                             f["stale_count"] += 1
                     if overall_latest is not None:
-                        f["latest_snapshot_date"] = (
-                            overall_latest.isoformat()
-                        )
+                        f["latest_snapshot_date"] = overall_latest.isoformat()
             except Exception:
                 _logger.debug(
                     "Fundamentals snapshot health failed",
@@ -2922,9 +2904,7 @@ def create_app(
                 "total_tickers": 0,
                 "missing_tickers": [],
                 "latest_quarter_end": None,
-                "expected_quarter_end": (
-                    latest_quarter_end().isoformat()
-                ),
+                "expected_quarter_end": (latest_quarter_end().isoformat()),
                 "coverage_pct": 0.0,
             }
             try:
@@ -2938,28 +2918,19 @@ def create_app(
                 if not df.empty:
                     tks = set(df["ticker"].tolist())
                     p["total_tickers"] = len(tks)
-                    p["missing_tickers"] = sorted(
-                        financial_tickers - tks
-                    )
+                    p["missing_tickers"] = sorted(financial_tickers - tks)
                     overall_latest = None
                     for _, row in df.iterrows():
                         d = row["latest"]
                         if hasattr(d, "date"):
                             d = d.date()
-                        if (
-                            overall_latest is None
-                            or d > overall_latest
-                        ):
+                        if overall_latest is None or d > overall_latest:
                             overall_latest = d
                     if overall_latest is not None:
-                        p["latest_quarter_end"] = (
-                            overall_latest.isoformat()
-                        )
+                        p["latest_quarter_end"] = overall_latest.isoformat()
                 if len(financial_tickers) > 0:
                     p["coverage_pct"] = round(
-                        100.0
-                        * p["total_tickers"]
-                        / len(financial_tickers),
+                        100.0 * p["total_tickers"] / len(financial_tickers),
                         1,
                     )
             except Exception:
@@ -2995,9 +2966,7 @@ def create_app(
         result["analytics"] = f_ana.result()
         result["bhavcopy"] = f_bhav.result()
         result["corporate_events"] = f_evt.result()
-        result["fundamentals_snapshot"] = (
-            f_fund.result()
-        )
+        result["fundamentals_snapshot"] = f_fund.result()
         result["promoter_holdings"] = f_prom.result()
 
         # Cache for 60s
@@ -3005,7 +2974,9 @@ def create_app(
             import json
 
             _cache.set(
-                _ck, json.dumps(result), 60,
+                _ck,
+                json.dumps(result),
+                60,
             )
 
         return result
@@ -3025,9 +2996,7 @@ def create_app(
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "action must be "
-                    "'backfill_nan' or "
-                    "'backfill_missing'"
+                    "action must be " "'backfill_nan' or " "'backfill_missing'"
                 ),
             )
 
@@ -3060,8 +3029,7 @@ def create_app(
                 "action": "backfill_nan",
                 "status": "deleted",
                 "detail": (
-                    "Removed OHLCV rows with "
-                    "NULL/NaN close values."
+                    "Removed OHLCV rows with " "NULL/NaN close values."
                 ),
             }
 
@@ -3089,9 +3057,7 @@ def create_app(
             )
             have_latest: set[str] = set()
             if not latest_df.empty:
-                for _, row in (
-                    latest_df.iterrows()
-                ):
+                for _, row in latest_df.iterrows():
                     d = row["latest"]
                     if hasattr(d, "date"):
                         d = d.date()
@@ -3100,17 +3066,12 @@ def create_app(
                             row["ticker"],
                         )
 
-            missing = sorted(
-                set(registry.keys())
-                - have_latest
-            )
+            missing = sorted(set(registry.keys()) - have_latest)
             if not missing:
                 return {
                     "action": "backfill_missing",
                     "status": "ok",
-                    "detail": (
-                        "No missing tickers."
-                    ),
+                    "detail": ("No missing tickers."),
                     "count": 0,
                 }
 
@@ -3118,7 +3079,8 @@ def create_app(
             for tk in missing:
                 meta = registry.get(tk, {})
                 yf_tk = meta.get(
-                    "yf_ticker", tk,
+                    "yf_ticker",
+                    tk,
                 )
                 yf_map[tk] = yf_tk
 
@@ -3141,9 +3103,7 @@ def create_app(
 
             inserted = 0
             errors: list[str] = []
-            for canon_tk, yf_tk in (
-                yf_map.items()
-            ):
+            for canon_tk, yf_tk in yf_map.items():
                 try:
                     if len(yf_tickers) == 1:
                         df = raw.copy()
@@ -3164,13 +3124,12 @@ def create_app(
                         },
                     )
                     repo.insert_ohlcv(
-                        canon_tk, df,
+                        canon_tk,
+                        df,
                     )
                     inserted += 1
                 except Exception as exc:
-                    errors.append(
-                        f"{canon_tk}: {exc}"
-                    )
+                    errors.append(f"{canon_tk}: {exc}")
             return {
                 "action": "backfill_missing",
                 "status": "done",
@@ -3235,9 +3194,7 @@ def create_app(
         from datetime import date
         from cache import get_cache
 
-        ck = (
-            f"cache:admin:sentiment-details:{scope}"
-        )
+        ck = f"cache:admin:sentiment-details:{scope}"
         cache = get_cache()
         hit = cache.get(ck) if cache else None
         if hit is not None:
@@ -3282,10 +3239,7 @@ def create_app(
         else:
             if scope in ("india", "us"):
                 df["_market"] = (
-                    df["ticker"]
-                    .astype(str)
-                    .str.upper()
-                    .map(market_by_ticker)
+                    df["ticker"].astype(str).str.upper().map(market_by_ticker)
                 )
                 df = df[df["_market"] == scope]
 
@@ -3295,12 +3249,14 @@ def create_app(
                 .agg(
                     count=("ticker", "count"),
                     avg_score=(
-                        "avg_score", "mean",
+                        "avg_score",
+                        "mean",
                     ),
                 )
                 .reset_index()
                 .sort_values(
-                    "count", ascending=False,
+                    "count",
+                    ascending=False,
                 )
             )
             by_source = [
@@ -3308,23 +3264,24 @@ def create_app(
                     "source": str(r["source"]),
                     "count": int(r["count"]),
                     "avg_score": round(
-                        float(r["avg_score"]), 3,
+                        float(r["avg_score"]),
+                        3,
                     ),
                 }
                 for _, r in grp.iterrows()
             ]
 
             # Per-ticker list for non-fallback rows
-            scored_df = df[
-                df["source"] != "market_fallback"
-            ].sort_values(
-                "avg_score", ascending=False,
+            scored_df = df[df["source"] != "market_fallback"].sort_values(
+                "avg_score",
+                ascending=False,
             )
             scored = [
                 {
                     "ticker": str(r["ticker"]),
                     "score": round(
-                        float(r["avg_score"]), 3,
+                        float(r["avg_score"]),
+                        3,
                     ),
                     "headline_count": int(
                         r["headline_count"] or 0,
@@ -3391,14 +3348,12 @@ def create_app(
         if target not in _VALID_TARGETS:
             raise HTTPException(
                 400,
-                "target must be one of: "
-                + ", ".join(sorted(_VALID_TARGETS)),
+                "target must be one of: " + ", ".join(sorted(_VALID_TARGETS)),
             )
         if mode not in ("stale_only", "force_all"):
             raise HTTPException(
                 400,
-                "mode must be 'stale_only' or "
-                "'force_all'",
+                "mode must be 'stale_only' or " "'force_all'",
             )
 
         repo = _require_repo()
@@ -3439,7 +3394,9 @@ def create_app(
             try:
                 if target == "ohlcv":
                     _run_ohlcv_fix(
-                        repo, run_id, force,
+                        repo,
+                        run_id,
+                        force,
                     )
                 else:
                     from backend.jobs.executor import (
@@ -3471,13 +3428,16 @@ def create_app(
                 )
 
         threading.Thread(
-            target=_run, daemon=True,
+            target=_run,
+            daemon=True,
         ).start()
 
         return {"run_id": run_id, "status": "running"}
 
     def _run_ohlcv_fix(
-        repo, run_id: str, force: bool,
+        repo,
+        run_id: str,
+        force: bool,
     ):
         """Run OHLCV fix using batch_data_refresh.
 
@@ -3516,18 +3476,14 @@ def create_app(
                         if hasattr(d, "date"):
                             d = d.date()
                         if d < stale_3d:
-                            stale_tickers.append(
-                                row["ticker"]
-                            )
+                            stale_tickers.append(row["ticker"])
             except Exception:
                 pass
 
             # Also include tickers with no OHLCV at all
             ohlcv_set = set()
             if not df.empty:
-                ohlcv_set = set(
-                    df["ticker"].tolist()
-                )
+                ohlcv_set = set(df["ticker"].tolist())
             reg_set = set(registry.keys())
             missing = reg_set - ohlcv_set
 
@@ -3539,10 +3495,8 @@ def create_app(
                     {
                         "status": "success",
                         "completed_at": (
-                            __import__("datetime")
-                            .datetime.now(
-                                __import__("datetime")
-                                .timezone.utc
+                            __import__("datetime").datetime.now(
+                                __import__("datetime").timezone.utc
                             )
                         ),
                         "tickers_total": 0,
@@ -3563,7 +3517,9 @@ def create_app(
                 meta = registry.get(t, {})
                 mkt = meta.get("market", "")
                 if mkt.upper() in (
-                    "NSE", "BSE", "INDIA",
+                    "NSE",
+                    "BSE",
+                    "INDIA",
                 ):
                     yf_tickers.append(f"{t}.NS")
                 else:
@@ -3588,16 +3544,19 @@ def create_app(
         run = repo.get_scheduler_run_by_id(run_id)
         if not run:
             raise HTTPException(
-                404, "Run not found",
+                404,
+                "Run not found",
             )
         return {
             "run_id": run.get("run_id"),
             "status": run.get("status"),
             "tickers_total": run.get(
-                "tickers_total", 0,
+                "tickers_total",
+                0,
             ),
             "tickers_done": run.get(
-                "tickers_done", 0,
+                "tickers_done",
+                0,
             ),
             "errors": run.get("error_message"),
             "elapsed_s": run.get("duration_secs"),
@@ -3642,6 +3601,7 @@ def create_app(
         """
         from datetime import datetime, timedelta, timezone
         from backend.db.duckdb_engine import query_iceberg_table
+
         cap = min(max(limit, 1), 500)
         window_days = min(max(days, 1), 90)
         sql = (
@@ -3652,9 +3612,8 @@ def create_app(
             "ORDER BY ts_ns DESC "
             "LIMIT ?"
         )
-        threshold = (
-            datetime.now(timezone.utc).date()
-            - timedelta(days=window_days)
+        threshold = datetime.now(timezone.utc).date() - timedelta(
+            days=window_days
         )
         try:
             raw_rows = await asyncio.to_thread(
@@ -3665,13 +3624,13 @@ def create_app(
             )
         except Exception:  # noqa: BLE001
             _logger.exception(
-                "admin/data-health/pipeline-assertions query "
-                "failed",
+                "admin/data-health/pipeline-assertions query " "failed",
             )
             raw_rows = []
         rows: list[dict] = []
         counts = {"warn": 0, "error": 0}
         import json as _json
+
         for r in raw_rows:
             try:
                 p = _json.loads(r.get("payload_json") or "{}")
@@ -3682,18 +3641,20 @@ def create_app(
                 continue
             if sev in counts:
                 counts[sev] += 1
-            rows.append({
-                "ts_ns": int(r.get("ts_ns") or 0),
-                "ts_date": str(r.get("ts_date") or ""),
-                "pipeline_id": p.get("pipeline_id"),
-                "run_id": p.get("run_id"),
-                "step": p.get("step"),
-                "assertion": p.get("assertion"),
-                "severity": sev,
-                "message": p.get("message"),
-                "detail": p.get("detail") or {},
-                "ts_ist": p.get("ts_ist"),
-            })
+            rows.append(
+                {
+                    "ts_ns": int(r.get("ts_ns") or 0),
+                    "ts_date": str(r.get("ts_date") or ""),
+                    "pipeline_id": p.get("pipeline_id"),
+                    "run_id": p.get("run_id"),
+                    "step": p.get("step"),
+                    "assertion": p.get("assertion"),
+                    "severity": sev,
+                    "message": p.get("message"),
+                    "detail": p.get("detail") or {},
+                    "ts_ist": p.get("ts_ist"),
+                }
+            )
         return {"rows": rows, "counts": counts}
 
     admin_router.add_api_route(
@@ -3752,7 +3713,8 @@ def create_app(
         sf = get_session_factory()
         async with sf() as s:
             deleted = await delete_recommendation(
-                s, rec_id,
+                s,
+                rec_id,
             )
         if deleted == 0:
             raise HTTPException(
@@ -3788,7 +3750,8 @@ def create_app(
         sf = get_session_factory()
         async with sf() as s:
             deleted = await delete_recommendation_run(
-                s, run_id,
+                s,
+                run_id,
             )
         if deleted == 0:
             raise HTTPException(
@@ -3884,7 +3847,8 @@ def create_app(
 
         def _call() -> dict:
             return get_or_create_monthly_run(
-                target_uid, scope,
+                target_uid,
+                scope,
                 run_type="admin_test",
                 bypass_quota=True,
             )
@@ -3892,7 +3856,8 @@ def create_app(
         result = await _asyncio.to_thread(_call)
         if not result.get("run_id"):
             note = result.get(
-                "status_note", "no_recommendations",
+                "status_note",
+                "no_recommendations",
             )
             raise HTTPException(
                 422,
@@ -3901,8 +3866,11 @@ def create_app(
         _logger.info(
             "Admin %s force-refreshed test run %s "
             "for user=%s (input=%s) scope=%s",
-            user.email, result["run_id"],
-            target_uid[:8], raw, scope,
+            user.email,
+            result["run_id"],
+            target_uid[:8],
+            raw,
+            scope,
         )
         return {
             "status": "generated",
@@ -3947,20 +3915,19 @@ def create_app(
             row = (
                 await s.execute(
                     select(RecommendationRun).where(
-                        RecommendationRun.run_id
-                        == run_id,
+                        RecommendationRun.run_id == run_id,
                     )
                 )
             ).scalar_one_or_none()
             if row is None:
                 raise HTTPException(
-                    404, "Run not found",
+                    404,
+                    "Run not found",
                 )
             if row.run_type != "admin_test":
                 raise HTTPException(
                     400,
-                    "Only admin_test runs may be "
-                    "promoted.",
+                    "Only admin_test runs may be " "promoted.",
                 )
             target_user = str(row.user_id)
             target_scope = row.scope
@@ -3968,14 +3935,10 @@ def create_app(
             # Find existing non-test run this month
             existing_q = await s.execute(
                 select(RecommendationRun).where(
-                    RecommendationRun.user_id
-                    == target_user,
-                    RecommendationRun.scope
-                    == target_scope,
-                    RecommendationRun.run_type
-                    != "admin_test",
-                    RecommendationRun.created_at
-                    >= month_start,
+                    RecommendationRun.user_id == target_user,
+                    RecommendationRun.scope == target_scope,
+                    RecommendationRun.run_type != "admin_test",
+                    RecommendationRun.created_at >= month_start,
                     RecommendationRun.run_id != run_id,
                 )
             )
@@ -3985,7 +3948,8 @@ def create_app(
         for ex in existing:
             async with sf() as s:
                 await delete_recommendation_run(
-                    s, str(ex.run_id),
+                    s,
+                    str(ex.run_id),
                 )
             replaced_ids.append(str(ex.run_id))
 
@@ -3993,8 +3957,7 @@ def create_app(
             target = (
                 await s.execute(
                     select(RecommendationRun).where(
-                        RecommendationRun.run_id
-                        == run_id,
+                        RecommendationRun.run_id == run_id,
                     )
                 )
             ).scalar_one()
@@ -4002,10 +3965,11 @@ def create_app(
             await s.commit()
 
         _logger.info(
-            "Admin %s promoted run %s "
-            "(user=%s scope=%s) replacing %s",
-            user.email, run_id,
-            target_user[:8], target_scope,
+            "Admin %s promoted run %s " "(user=%s scope=%s) replacing %s",
+            user.email,
+            run_id,
+            target_user[:8],
+            target_scope,
             replaced_ids or "nothing",
         )
         return {
@@ -4272,6 +4236,7 @@ def create_app(
         prefix="/v1",
     )
     from backend.algo.routes import create_factors_router
+
     app.include_router(
         create_factors_router(),
         prefix="/v1",
@@ -4279,6 +4244,7 @@ def create_app(
     # REGIME-6 — attribution (Brinson + trade reasons + factor
     # regression). Pro-or-superuser only.
     from backend.algo.routes import create_attribution_router
+
     app.include_router(
         create_attribution_router(),
         prefix="/v1",
@@ -4289,6 +4255,7 @@ def create_app(
     from backend.algo.routes import (
         create_feature_importance_router,
     )
+
     app.include_router(
         create_feature_importance_router(),
         prefix="/v1",
@@ -4299,6 +4266,7 @@ def create_app(
     from backend.algo.routes import (
         create_feature_coverage_router,
     )
+
     app.include_router(
         create_feature_coverage_router(),
         prefix="/v1",
@@ -4310,6 +4278,7 @@ def create_app(
     from backend.algo.routes import (
         create_daily_factor_coverage_router,
     )
+
     app.include_router(
         create_daily_factor_coverage_router(),
         prefix="/v1",
@@ -4319,6 +4288,7 @@ def create_app(
     from backend.algo.routes import (
         create_shap_analysis_router,
     )
+
     app.include_router(
         create_shap_analysis_router(),
         prefix="/v1",
@@ -4328,6 +4298,7 @@ def create_app(
     from backend.algo.routes import (
         create_universe_snapshot_router,
     )
+
     app.include_router(
         create_universe_snapshot_router(),
         prefix="/v1",

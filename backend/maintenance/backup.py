@@ -122,7 +122,9 @@ def backup_table(
     if dest.exists() and any(dest.iterdir()):
         _logger.info(
             "Per-table backup for %s already exists today "
-            "(%s) — skipping re-rsync", table_id, dest,
+            "(%s) — skipping re-rsync",
+            table_id,
+            dest,
         )
         return str(dest)
     dest.mkdir(parents=True, exist_ok=True)
@@ -313,8 +315,18 @@ def restore_backup(
 
 def list_backups(
     backup_root: str | None = None,
+    *,
+    full_only: bool = False,
 ) -> list[dict]:
     """List available backups with dates and sizes.
+
+    Args:
+        backup_root: Override the default backup root dir.
+        full_only: When True, skip per-table dirs (those
+            not matching ``YYYY-MM-DD`` suffix) BEFORE
+            calling the expensive ``du -sk`` via
+            ``_dir_size_mb``.  Saves ~465 subprocess
+            spawns on a typical warehouse backup root.
 
     Returns:
         List of dicts with:
@@ -336,34 +348,35 @@ def list_backups(
 
     backups = []
     for d in sorted(root.iterdir(), reverse=True):
-        if d.is_dir() and d.name.startswith(
-            "backup-",
-        ):
-            dt = d.name.replace("backup-", "")
-            # Convert mtime → UTC ISO string with Z so
-            # the frontend's `new Date(...)` parses it
-            # unambiguously and renders in the user's
-            # browser TZ. Mirrors the `_iso_utc()`
-            # convention used by other admin endpoints.
-            completed_at = (
-                datetime.fromtimestamp(
-                    d.stat().st_mtime,
-                    tz=timezone.utc,
-                )
-                .isoformat()
-                .replace("+00:00", "Z")
+        if not (d.is_dir() and d.name.startswith("backup-")):
+            continue
+        if full_only and not _FULL_SNAPSHOT_NAME_RE.match(d.name):
+            continue
+        dt = d.name.replace("backup-", "")
+        # Convert mtime → UTC ISO string with Z so
+        # the frontend's `new Date(...)` parses it
+        # unambiguously and renders in the user's
+        # browser TZ. Mirrors the `_iso_utc()`
+        # convention used by other admin endpoints.
+        completed_at = (
+            datetime.fromtimestamp(
+                d.stat().st_mtime,
+                tz=timezone.utc,
             )
-            backups.append(
-                {
-                    "date": dt,
-                    "path": str(d),
-                    "size_mb": round(
-                        _dir_size_mb(d),
-                        1,
-                    ),
-                    "completed_at": completed_at,
-                }
-            )
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        backups.append(
+            {
+                "date": dt,
+                "path": str(d),
+                "size_mb": round(
+                    _dir_size_mb(d),
+                    1,
+                ),
+                "completed_at": completed_at,
+            }
+        )
     return backups
 
 
@@ -427,9 +440,7 @@ def verify_or_backup(
             age_h = (
                 datetime.now(timezone.utc) - created_at
             ).total_seconds() / 3600
-            listed = {
-                t["id"] for t in manifest.get("tables", [])
-            }
+            listed = {t["id"] for t in manifest.get("tables", [])}
             if age_h <= max_age_h and set(tables) <= listed:
                 return {
                     "mode": "verified",
@@ -441,7 +452,8 @@ def verify_or_backup(
                 _logger.debug(
                     "[verify_or_backup] manifest age %.1fh > "
                     "max %.1fh — falling back",
-                    age_h, max_age_h,
+                    age_h,
+                    max_age_h,
                 )
             if missing:
                 _logger.debug(
@@ -492,8 +504,7 @@ def _rotate_backups(
         [
             d
             for d in root.iterdir()
-            if d.is_dir()
-            and _FULL_SNAPSHOT_NAME_RE.match(d.name)
+            if d.is_dir() and _FULL_SNAPSHOT_NAME_RE.match(d.name)
         ],
         reverse=True,
     )
