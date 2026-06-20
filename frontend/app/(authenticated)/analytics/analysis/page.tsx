@@ -2604,9 +2604,9 @@ function WatchlistStocksTab() {
                             <circle cx="12" cy="12" r="10" />
                             <path d="M12 16v-4M12 8h.01" />
                           </svg>
-                          <span className="pointer-events-none absolute bottom-full right-0 mb-2 z-[80] w-72 rounded-lg bg-gray-900 dark:bg-gray-700 px-3 py-2.5 text-[11px] font-normal normal-case tracking-normal text-gray-100 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity whitespace-pre-line leading-relaxed">
+                          <span className="pointer-events-none absolute top-full right-0 mt-1 z-[80] w-72 rounded-lg bg-gray-900 dark:bg-gray-700 px-3 py-2.5 text-[11px] font-normal normal-case tracking-normal text-gray-100 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity whitespace-pre-line leading-relaxed">
+                            <span className="absolute bottom-full right-1.5 border-4 border-transparent border-b-gray-900 dark:border-b-gray-700" />
                             {col.tooltip}
-                            <span className="absolute top-full right-1.5 border-4 border-transparent border-t-gray-900 dark:border-t-gray-700" />
                           </span>
                         </span>
                       )}
