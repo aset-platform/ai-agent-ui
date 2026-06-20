@@ -2076,6 +2076,10 @@ function PortfolioForecastTab({
 // ---------------------------------------------------------------
 
 type Rsi2Filter = "lte5" | "lte10" | "lte25" | "gte80" | null;
+type AtrFilter = "" | "lte0" | "gt0lte1" | "gt1lte2" | "gt2lte5" | "gt5lte10";
+type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt2lte10";
+type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sma_20" | "sharpe_ratio" | "atr_pct";
+type SortDir = "asc" | "desc";
 
 const PAGE_SIZE_OPTIONS_WL = [10, 25, 50] as const;
 const DEFAULT_WL_PAGE_SIZE = 25;
@@ -2105,8 +2109,11 @@ function WatchlistStocksTab() {
   const [goldenCross, setGoldenCross] = useState(false);
   const [sma50AboveLtp, setSma50AboveLtp] = useState(false);
   const [sma200AboveLtp, setSma200AboveLtp] = useState(false);
-  const [atrFilter, setAtrFilter] = useState<"lte2" | "lte6" | "gt6" | "">("");
-  const [sharpeFilter, setSharpeFilter] = useState<"lte1" | "lte2" | "gt2" | "">("");
+  const [atrFilter, setAtrFilter] = useState<AtrFilter>("");
+  const [sharpeFilter, setSharpeFilter] = useState<SharpeFilter>("");
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("ticker");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
 
   useEffect(() => {
     let cancelled = false;
@@ -2190,9 +2197,11 @@ function WatchlistStocksTab() {
       stocks = stocks.filter((s) => {
         const v = s.atr_pct;
         if (v == null) return false;
-        if (atrFilter === "lte2") return v <= 2;
-        if (atrFilter === "lte6") return v <= 6;
-        if (atrFilter === "gt6") return v > 6;
+        if (atrFilter === "lte0") return v <= 0;
+        if (atrFilter === "gt0lte1") return v > 0 && v <= 1;
+        if (atrFilter === "gt1lte2") return v > 1 && v <= 2;
+        if (atrFilter === "gt2lte5") return v > 2 && v <= 5;
+        if (atrFilter === "gt5lte10") return v > 5 && v <= 10;
         return true;
       });
     }
@@ -2200,14 +2209,34 @@ function WatchlistStocksTab() {
       stocks = stocks.filter((s) => {
         const v = s.sharpe_ratio;
         if (v == null) return false;
-        if (sharpeFilter === "lte1") return v <= 1;
-        if (sharpeFilter === "lte2") return v <= 2;
-        if (sharpeFilter === "gt2") return v > 2;
+        if (sharpeFilter === "lte0") return v <= 0;
+        if (sharpeFilter === "gt0lte080") return v > 0 && v <= 0.8;
+        if (sharpeFilter === "gt080lte2") return v > 0.8 && v <= 2;
+        if (sharpeFilter === "gt2lte10") return v > 2 && v <= 10;
         return true;
       });
     }
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      stocks = stocks.filter((s) =>
+        s.ticker.toLowerCase().includes(q),
+      );
+    }
+    // Sort — nulls always last
+    stocks = [...stocks].sort((a, b) => {
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      const cmp =
+        typeof av === "string" && typeof bv === "string"
+          ? av.localeCompare(bv)
+          : (av as number) - (bv as number);
+      return sortDir === "asc" ? cmp : -cmp;
+    });
     return stocks;
-  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter]);
+  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, search, sortKey, sortDir]);
 
   const totalPages = Math.max(
     1,
@@ -2224,7 +2253,7 @@ function WatchlistStocksTab() {
     let cancelled = false;
     queueMicrotask(() => { if (!cancelled) setPage(0); });
     return () => { cancelled = true; };
-  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, pageSize, market]);
+  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, search, pageSize, market]);
 
   const handleCopyTickers = () => {
     const csv = filtered.map((s) => s.ticker).join(", ");
@@ -2285,6 +2314,7 @@ function WatchlistStocksTab() {
                   setSma200AboveLtp(false);
                   setAtrFilter("");
                   setSharpeFilter("");
+                  setSearch("");
                 }}
                 className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
                   market === m
@@ -2330,16 +2360,16 @@ function WatchlistStocksTab() {
                 value={atrFilter}
                 data-testid="watchlist-atr-select"
                 onChange={(e) =>
-                  setAtrFilter(
-                    e.target.value as typeof atrFilter,
-                  )
+                  setAtrFilter(e.target.value as AtrFilter)
                 }
                 className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
               >
                 <option value="">All</option>
-                <option value="lte2">≤ 2%</option>
-                <option value="lte6">≤ 6%</option>
-                <option value="gt6">&gt; 6%</option>
+                <option value="lte0">≤ 0%</option>
+                <option value="gt0lte1">0% – 1%</option>
+                <option value="gt1lte2">1% – 2%</option>
+                <option value="gt2lte5">2% – 5%</option>
+                <option value="gt5lte10">5% – 10%</option>
               </select>
             </div>
 
@@ -2374,16 +2404,15 @@ function WatchlistStocksTab() {
                 value={sharpeFilter}
                 data-testid="watchlist-sharpe-select"
                 onChange={(e) =>
-                  setSharpeFilter(
-                    e.target.value as typeof sharpeFilter,
-                  )
+                  setSharpeFilter(e.target.value as SharpeFilter)
                 }
                 className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
               >
                 <option value="">All</option>
-                <option value="lte1">≤ 1</option>
-                <option value="lte2">≤ 2</option>
-                <option value="gt2">&gt; 2</option>
+                <option value="lte0">≤ 0</option>
+                <option value="gt0lte080">0 – 0.80</option>
+                <option value="gt080lte2">0.80 – 2</option>
+                <option value="gt2lte10">2 – 10</option>
               </select>
             </div>
           </div>
@@ -2433,7 +2462,25 @@ function WatchlistStocksTab() {
           </div>
         </div>
 
-        {/* Right: copy button */}
+        {/* Right: search + copy */}
+        <div className="flex items-center gap-2 self-start">
+          <div className="relative">
+            <svg
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none"
+              viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+            >
+              <circle cx="11" cy="11" r="8" />
+              <path d="m21 21-4.35-4.35" />
+            </svg>
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search ticker…"
+              data-testid="watchlist-search"
+              className="pl-8 pr-3 py-1.5 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-xs text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-36"
+            />
+          </div>
         <button
           type="button"
           data-testid="watchlist-copy-tickers"
@@ -2461,6 +2508,7 @@ function WatchlistStocksTab() {
             </>
           )}
         </button>
+        </div>
       </div>
 
       {/* Table */}
@@ -2471,24 +2519,44 @@ function WatchlistStocksTab() {
         >
           <thead>
             <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
-              {[
-                { key: "ticker", label: "Ticker" },
-                { key: "close", label: "Price" },
-                { key: "rsi_2", label: "RSI(2)" },
-                { key: "current_rsi_2", label: "Curr RSI(2)" },
-                { key: "sma_200", label: "SMA 200" },
-                { key: "sma_50", label: "SMA 50" },
-                { key: "sma_20", label: "SMA 20" },
-                { key: "sharpe_ratio", label: "Sharpe (6M)" },
-                { key: "atr_pct", label: "ATR%" },
-              ].map((col) => (
-                <th
-                  key={col.key}
-                  className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400"
-                >
-                  {col.label}
-                </th>
-              ))}
+              {(
+                [
+                  { key: "ticker", label: "Ticker" },
+                  { key: "close", label: "Price" },
+                  { key: "rsi_2", label: "RSI(2)" },
+                  { key: "current_rsi_2", label: "Curr RSI(2)" },
+                  { key: "sma_200", label: "SMA 200" },
+                  { key: "sma_50", label: "SMA 50" },
+                  { key: "sma_20", label: "SMA 20" },
+                  { key: "sharpe_ratio", label: "Sharpe (6M)" },
+                  { key: "atr_pct", label: "ATR%" },
+                ] as { key: SortKey; label: string }[]
+              ).map((col) => {
+                const active = sortKey === col.key;
+                return (
+                  <th
+                    key={col.key}
+                    onClick={() => {
+                      if (active) {
+                        setSortDir((d) => d === "asc" ? "desc" : "asc");
+                      } else {
+                        setSortKey(col.key);
+                        setSortDir("asc");
+                      }
+                    }}
+                    className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 cursor-pointer select-none hover:text-gray-900 dark:hover:text-gray-100 transition-colors"
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      {col.label}
+                      <span className="text-gray-300 dark:text-gray-600">
+                        {active
+                          ? sortDir === "asc" ? "↑" : "↓"
+                          : "↕"}
+                      </span>
+                    </span>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
