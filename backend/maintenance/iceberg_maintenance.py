@@ -839,6 +839,13 @@ def _table_data_bytes(table_dir: Path) -> int:
     )
 
 
+def _bar_month_to_year_month(bar_month: int) -> str:
+    """MonthTransform value (months since 1970-01) → 'YYYY-MM'."""
+    year = 1970 + bar_month // 12
+    month = bar_month % 12 + 1
+    return f"{year}-{month:02d}"
+
+
 def is_compaction_already_optimal(
     table_dir: Path,
 ) -> bool:
