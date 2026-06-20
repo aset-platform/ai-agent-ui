@@ -676,6 +676,11 @@ export interface UseDataHealthResult {
   fixTarget: FixTarget | null;
 }
 
+export const DATA_HEALTH_SWR_OPTS = {
+  revalidateOnFocus: false,
+  dedupingInterval: 60_000,
+} as const;
+
 export function useDataHealth(): UseDataHealthResult {
   const {
     data,
@@ -685,10 +690,7 @@ export function useDataHealth(): UseDataHealthResult {
   } = useSWR<DataHealthResult>(
     `${API_URL}/admin/data-health`,
     fetcher,
-    {
-      revalidateOnFocus: false,
-      dedupingInterval: 5_000,
-    },
+    DATA_HEALTH_SWR_OPTS,
   );
 
   const [fixTarget, setFixTarget] =
