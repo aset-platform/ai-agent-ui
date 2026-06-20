@@ -2258,11 +2258,12 @@ function WatchlistStocksTab() {
       stocks = stocks.filter((s) => {
         const v = s.atr_pct;
         if (v == null) return false;
-        if (atrFilter === "lt0") return v < 0;
-        if (atrFilter === "gt0lte1_5") return v >= 0 && v <= 1.5;
-        if (atrFilter === "gt1_5lte4") return v > 1.5 && v <= 4;
-        if (atrFilter === "gt2lte5") return v > 2 && v <= 5;
-        if (atrFilter === "gt5") return v > 5;
+        const r = Math.round(v * 100) / 100;
+        if (atrFilter === "lt0") return r < 0;
+        if (atrFilter === "gt0lte1_5") return r >= 0 && r <= 1.5;
+        if (atrFilter === "gt1_5lte4") return r > 1.5 && r <= 4;
+        if (atrFilter === "gt2lte5") return r > 2 && r <= 5;
+        if (atrFilter === "gt5") return r > 5;
         return true;
       });
     }
@@ -2270,11 +2271,12 @@ function WatchlistStocksTab() {
       stocks = stocks.filter((s) => {
         const v = s.sharpe_ratio;
         if (v == null) return false;
-        if (sharpeFilter === "lte0") return v <= 0;
-        if (sharpeFilter === "gt0lte080") return v > 0 && v <= 0.8;
-        if (sharpeFilter === "gt080lte2") return v > 0.8 && v <= 2;
-        if (sharpeFilter === "gt080lte10") return v > 0.8 && v <= 10;
-        if (sharpeFilter === "gt1") return v >= 1;
+        const r = Math.round(v * 100) / 100;
+        if (sharpeFilter === "lte0") return r <= 0;
+        if (sharpeFilter === "gt0lte080") return r > 0 && r <= 0.8;
+        if (sharpeFilter === "gt080lte2") return r > 0.8 && r <= 2;
+        if (sharpeFilter === "gt080lte10") return r > 0.8 && r <= 10;
+        if (sharpeFilter === "gt1") return r >= 1;
         return true;
       });
     }
