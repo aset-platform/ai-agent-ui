@@ -434,6 +434,34 @@ def compact_table(table_name: str) -> dict:
             _SMALL_TABLE_COMPACT_BYTES / (1024 * 1024),
         )
 
+    # Byte ceiling — applies to ALL tables that reached here
+    # (incl. low-avg ones the file-count guards let through).
+    # compact_table reads the whole table into Arrow; a byte-heavy
+    # table OOM-kills uvicorn regardless of file count. Skip with a
+    # warning; needs batched per-partition compaction.
+    safe_bytes = _table_data_bytes(table_dir)
+    if safe_bytes > _MAX_SAFE_COMPACT_BYTES:
+        files, partitions, avg = _avg_files_per_partition(table_dir)
+        _logger.warning(
+            "[maint] %s is %.0f MB (> %d MB in-process limit, "
+            "%d files / %d partitions) — skipping full-table-scan "
+            "compaction to avoid OOM; needs batched per-partition "
+            "compaction.",
+            table_name,
+            safe_bytes / (1024 * 1024),
+            _MAX_SAFE_COMPACT_BYTES // (1024 * 1024),
+            files,
+            partitions,
+        )
+        return {
+            "table": table_name,
+            "before": before,
+            "after": before,
+            "skipped_too_large_bytes": True,
+            "partitions": partitions,
+            "avg_files_per_partition": avg,
+        }
+
     t0 = time.monotonic()
 
     from tools._stock_shared import _require_repo
@@ -768,6 +796,15 @@ _MAX_AVG_FILES_PER_PARTITION = 50
 # nse_delivery self-compact despite a high avg files/partition,
 # while genuinely large fragmented tables still defer.
 _SMALL_TABLE_COMPACT_BYTES = 512 * 1024 * 1024
+
+# Hard upper ceiling: compaction reads the WHOLE table into an
+# in-process Arrow table (scan().to_arrow()) then overwrite()s.
+# Above this byte size that OOM-kills uvicorn even when the file
+# count is low — the 2026-06-21 incident: stocks.intraday_features
+# (1.2 GB / 70M rows, avg ~1.6 files/partition) passed every
+# file-count guard and OOM-killed the backend. Skip these; they
+# need batched per-partition compaction (ASETPLTFRM follow-up).
+_MAX_SAFE_COMPACT_BYTES = 1024 * 1024 * 1024
 
 
 def _avg_files_per_partition(
