@@ -2736,10 +2736,26 @@ def execute_backups_daily(
     )
     write_manifest(Path(snapshot_path), manifest)
     _logger.info(
-        "[backups_daily] manifest written: %d tables, " "warehouse %.1f MB",
+        "[backups_daily] manifest written: %d tables, "
+        "warehouse %.1f MB",
         len(manifest["tables"]),
         manifest["warehouse_size_mb"],
     )
+
+    # Prune accumulated per-table fallback backup dirs so the
+    # backups folder can't re-bloat (the 463-dir / 47 GB incident,
+    # 2026-06-20). Non-fatal: backup success must not depend on it.
+    try:
+        from scripts.cleanup_per_table_backups import (
+            main as cleanup_per_table_backups,
+        )
+
+        cleanup_per_table_backups(dry_run=False)
+    except Exception:
+        _logger.error(
+            "[backups_daily] per-table cleanup failed",
+            exc_info=True,
+        )
 
     if repo is not None:
         try:
