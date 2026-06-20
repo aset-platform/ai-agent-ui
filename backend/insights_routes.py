@@ -74,6 +74,18 @@ def _get_stock_repo():
     return _require_repo()
 
 
+def _is_indian_market_hours() -> bool:
+    """Return True during NSE trading hours: 09:00–15:30 IST, Mon–Fri."""
+    from datetime import time as _time, timezone as _tz
+    from zoneinfo import ZoneInfo as _ZI
+
+    now = datetime.now(_tz.utc).astimezone(_ZI("Asia/Kolkata"))
+    if now.weekday() >= 5:  # Sat=5, Sun=6
+        return False
+    t = now.time()
+    return _time(9, 0) <= t <= _time(15, 30)
+
+
 def _safe(val) -> float | None:
     """Convert to float or return None for NaN/inf."""
     if val is None:
@@ -2219,13 +2231,10 @@ def create_insights_router() -> APIRouter:
         if ohlcv_df.empty:
             return WatchlistStocksResponse()
 
-        # Fetch today's LTP via yfinance for current_rsi_2 computation.
-        # One batch call for all tickers; result may be empty on failure.
         import math as _math
         from datetime import date as _date_t, timezone as _tz
         from decimal import Decimal as _Dec
         from zoneinfo import ZoneInfo as _ZI
-        import yfinance as _yf
         from backend.algo.backtest.types import BarData as _BD
         from backend.algo.backtest.indicators import (
             compute_indicators as _ci,
@@ -2236,32 +2245,37 @@ def create_insights_router() -> APIRouter:
             .astimezone(_ZI("Asia/Kolkata"))
             .date()
         )
+        # Only fetch live prices during NSE market hours (09:00–15:30 IST,
+        # Mon–Fri). Off-hours current_rsi_2 == rsi_2 from OHLCV history.
+        _live_mode = _is_indian_market_hours()
         _ltp_map: dict[str, float] = {}
-        try:
-            _price_raw = _yf.download(
-                tickers,
-                period="2d",
-                progress=False,
-                auto_adjust=True,
-            )
-            _close_col = _price_raw["Close"]
-            if isinstance(_close_col, pd.Series):
-                _v = _close_col.iloc[-1]
-                if not _math.isnan(float(_v)):
-                    _ltp_map[tickers[0]] = float(_v)
-            else:
-                for _t in _close_col.columns:
-                    _v = _close_col[_t].iloc[-1]
-                    try:
-                        _f = float(_v)
-                        if not _math.isnan(_f):
-                            _ltp_map[str(_t)] = _f
-                    except (ValueError, TypeError):
-                        pass
-        except Exception as _exc:
-            _logger.debug(
-                "watchlist-stocks LTP fetch: %s", _exc
-            )
+        if _live_mode:
+            import yfinance as _yf
+            try:
+                _price_raw = _yf.download(
+                    tickers,
+                    period="2d",
+                    progress=False,
+                    auto_adjust=True,
+                )
+                _close_col = _price_raw["Close"]
+                if isinstance(_close_col, pd.Series):
+                    _v = _close_col.iloc[-1]
+                    if not _math.isnan(float(_v)):
+                        _ltp_map[tickers[0]] = float(_v)
+                else:
+                    for _t in _close_col.columns:
+                        _v = _close_col[_t].iloc[-1]
+                        try:
+                            _f = float(_v)
+                            if not _math.isnan(_f):
+                                _ltp_map[str(_t)] = _f
+                        except (ValueError, TypeError):
+                            pass
+            except Exception as _exc:
+                _logger.debug(
+                    "watchlist-stocks LTP fetch: %s", _exc
+                )
 
         rows: list[WatchlistStockRow] = []
         for ticker, grp in ohlcv_df.groupby("ticker"):
@@ -2303,58 +2317,61 @@ def create_insights_router() -> APIRouter:
                 )
                 last = ind.iloc[-1]
 
-                # Compute current_rsi_2 using wilder RSI
-                # with today's LTP appended as a synthetic bar.
+                # Compute current_rsi_2: during market hours append a
+                # synthetic bar with today's LTP; off-hours reuse rsi_2.
                 _cur_rsi2: float | None = None
-                try:
-                    _bars: list[_BD] = []
-                    for _, _r in grp.iterrows():
-                        _d = _r["date"]
-                        if isinstance(_d, _date_t):
-                            pass
-                        elif hasattr(_d, "date"):
-                            _d = _d.date()
-                        else:
-                            _d = pd.Timestamp(
-                                _d
-                            ).date()
-                        _bars.append(_BD(
-                            ticker=str(ticker),
-                            date=_d,
-                            open=_Dec(str(_r["open"])),
-                            high=_Dec(str(_r["high"])),
-                            low=_Dec(str(_r["low"])),
-                            close=_Dec(str(_r["close"])),
-                            volume=int(_r["volume"] or 0),
-                        ))
-                    _ltp = _ltp_map.get(str(ticker))
-                    if (
-                        _bars
-                        and _ltp is not None
-                        and _bars[-1].date < _today_ist
-                    ):
-                        _bars.append(_BD(
-                            ticker=str(ticker),
-                            date=_today_ist,
-                            open=_Dec(str(_ltp)),
-                            high=_Dec(str(_ltp)),
-                            low=_Dec(str(_ltp)),
-                            close=_Dec(str(_ltp)),
-                            volume=0,
-                        ))
-                    if _bars:
-                        _imap = _ci(_bars)
-                        if _imap:
-                            _li = _imap[max(_imap.keys())]
-                            _r2 = _li.get("rsi_2")
-                            if _r2 is not None:
-                                _cur_rsi2 = float(_r2)
-                except Exception as _exc2:
-                    _logger.debug(
-                        "current_rsi_2 %s: %s",
-                        ticker,
-                        _exc2,
-                    )
+                if not _live_mode:
+                    _cur_rsi2 = _safe(last.get("RSI_2"))
+                else:
+                    try:
+                        _bars: list[_BD] = []
+                        for _, _r in grp.iterrows():
+                            _d = _r["date"]
+                            if isinstance(_d, _date_t):
+                                pass
+                            elif hasattr(_d, "date"):
+                                _d = _d.date()
+                            else:
+                                _d = pd.Timestamp(
+                                    _d
+                                ).date()
+                            _bars.append(_BD(
+                                ticker=str(ticker),
+                                date=_d,
+                                open=_Dec(str(_r["open"])),
+                                high=_Dec(str(_r["high"])),
+                                low=_Dec(str(_r["low"])),
+                                close=_Dec(str(_r["close"])),
+                                volume=int(_r["volume"] or 0),
+                            ))
+                        _ltp = _ltp_map.get(str(ticker))
+                        if (
+                            _bars
+                            and _ltp is not None
+                            and _bars[-1].date < _today_ist
+                        ):
+                            _bars.append(_BD(
+                                ticker=str(ticker),
+                                date=_today_ist,
+                                open=_Dec(str(_ltp)),
+                                high=_Dec(str(_ltp)),
+                                low=_Dec(str(_ltp)),
+                                close=_Dec(str(_ltp)),
+                                volume=0,
+                            ))
+                        if _bars:
+                            _imap = _ci(_bars)
+                            if _imap:
+                                _li = _imap[max(_imap.keys())]
+                                _r2 = _li.get("rsi_2")
+                                if _r2 is not None:
+                                    _cur_rsi2 = float(_r2)
+                    except Exception as _exc2:
+                        _logger.debug(
+                            "current_rsi_2 %s: %s",
+                            ticker,
+                            _exc2,
+                        )
 
                 rows.append(
                     WatchlistStockRow(
