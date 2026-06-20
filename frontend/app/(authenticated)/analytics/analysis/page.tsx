@@ -2274,7 +2274,7 @@ function WatchlistStocksTab() {
         if (sharpeFilter === "gt0lte080") return v > 0 && v <= 0.8;
         if (sharpeFilter === "gt080lte2") return v > 0.8 && v <= 2;
         if (sharpeFilter === "gt080lte10") return v > 0.8 && v <= 10;
-        if (sharpeFilter === "gt1") return v > 1;
+        if (sharpeFilter === "gt1") return v >= 1;
         return true;
       });
     }
@@ -2475,7 +2475,7 @@ function WatchlistStocksTab() {
                 <option value="gt0lte080">0 – 0.80</option>
                 <option value="gt080lte2">0.80 – 2</option>
                 <option value="gt080lte10">0.80 – 10</option>
-                <option value="gt1">&gt; 1</option>
+                <option value="gt1">≥ 1</option>
               </select>
             </div>
           </div>
