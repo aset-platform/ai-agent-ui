@@ -440,34 +440,44 @@ def compact_table(table_name: str) -> dict:
 
     files, partitions, avg = _avg_files_per_partition(table_dir)
     if partitions > 0 and avg > _MAX_AVG_FILES_PER_PARTITION:
-        _logger.warning(
-            "[maint] %s has avg %.1f files/partition "
-            "(> %d safe limit, %d files across %d partitions) — "
-            "manifest chain too deep; skipping compaction to avoid "
-            "freezing uvicorn. Run retention first to reduce commit "
-            "count, then re-enroll for compaction.",
+        total_bytes = _table_data_bytes(table_dir)
+        if total_bytes > _SMALL_TABLE_COMPACT_BYTES:
+            _logger.warning(
+                "[maint] %s has avg %.1f files/partition "
+                "(> %d safe limit, %d files across %d partitions, "
+                "%.0f MB) — manifest chain too deep; skipping "
+                "compaction to avoid freezing uvicorn. Run "
+                "retention first to reduce commit count.",
+                table_name,
+                avg,
+                _MAX_AVG_FILES_PER_PARTITION,
+                files,
+                partitions,
+                total_bytes / (1024 * 1024),
+            )
+            return {
+                "table": table_name,
+                "before": before,
+                "after": before,
+                "skipped_deep_manifest": True,
+                "partitions": partitions,
+                "avg_files_per_partition": avg,
+            }
+        _logger.info(
+            "[maint] %s avg %.1f files/partition but only "
+            "%.0f MB (≤ %.0f MB) — compacting in-process",
             table_name,
             avg,
-            _MAX_AVG_FILES_PER_PARTITION,
-            files,
-            partitions,
+            total_bytes / (1024 * 1024),
+            _SMALL_TABLE_COMPACT_BYTES / (1024 * 1024),
         )
-        return {
-            "table": table_name,
-            "before": before,
-            "after": before,
-            "skipped_deep_manifest": True,
-            "partitions": partitions,
-            "avg_files_per_partition": avg,
-        }
 
     t0 = time.monotonic()
 
     from tools._stock_shared import _require_repo
 
-    repo = _require_repo()
-
     try:
+        repo = _require_repo()
         tbl = repo.load_table(table_name)
         # tbl.refresh() forces the in-memory metadata view to match
         # the catalog pointer — protects against the (rare but real)
@@ -790,6 +800,12 @@ _MAX_SAFE_COMPACT_FILES = 40_000
 # Threshold=50 skips algo.events (avg=700) while allowing all
 # legitimate tables (ohlcv, forecasts, sentiment all avg < 5).
 _MAX_AVG_FILES_PER_PARTITION = 50
+# A table this small (total parquet bytes) is always safe to
+# compact in-process regardless of files/partition — reading it
+# into Arrow can't OOM. Lets algo.events (~70 MB) and
+# nse_delivery self-compact despite a high avg files/partition,
+# while genuinely large fragmented tables still defer.
+_SMALL_TABLE_COMPACT_BYTES = 512 * 1024 * 1024
 
 
 def _avg_files_per_partition(
@@ -813,6 +829,15 @@ def _avg_files_per_partition(
     if partitions == 0:
         return 0, 0, 0.0
     return files, partitions, files / partitions
+
+
+def _table_data_bytes(table_dir: Path) -> int:
+    """Total bytes of all ``*.parquet`` under the table dir."""
+    if not table_dir.exists():
+        return 0
+    return sum(
+        p.stat().st_size for p in table_dir.rglob("*.parquet")
+    )
 
 
 def is_compaction_already_optimal(

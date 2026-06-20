@@ -214,8 +214,13 @@ def test_compact_table_does_not_skip_when_fragmented(
     """A fragmented table (avg > threshold) must reach the
     overwrite path. We assert the smart-skip gate did NOT fire by
     verifying the repo load was invoked. We swallow the
-    overwrite-time exception (no real catalog in this unit test)
+    overwrite-time failure (no real catalog in this unit test)
     so the assertion is on the skip-vs-not-skip decision only.
+
+    _require_repo() is now inside the try/except read block, so a
+    RuntimeError from it returns {"error": "read failed"} rather
+    than propagating. The key assertion is that mock_repo was
+    called — proving the skip gate did NOT short-circuit.
     """
     table_dir = _seed_table(
         tmp_path,
@@ -232,13 +237,12 @@ def test_compact_table_does_not_skip_when_fragmented(
             "tools._stock_shared._require_repo",
             side_effect=RuntimeError("test-stop"),
         ) as mock_repo,
-        pytest.raises(RuntimeError, match="test-stop"),
     ):
-        compact_table("stocks.intraday_bars")
+        result = compact_table("stocks.intraday_bars")
     # Repo lookup WAS reached → smart-skip gate did NOT fire.
-    # If the skip gate had short-circuited, _require_repo would
-    # never have been called and pytest.raises wouldn't catch.
+    # _require_repo error is now caught as a read failure.
     assert mock_repo.called
+    assert result.get("error") == "read failed"
 
 
 # ────────────────────────────────────────────────────────────────
