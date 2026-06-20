@@ -22,6 +22,9 @@ import time
 from datetime import date, timedelta
 from pathlib import Path
 
+from backend.algo._iceberg_retry import retry_iceberg_op
+from backend.db.duckdb_engine import invalidate_metadata
+
 _logger = logging.getLogger(__name__)
 
 # Iceberg warehouse root
@@ -434,6 +437,22 @@ def compact_table(table_name: str) -> dict:
             _SMALL_TABLE_COMPACT_BYTES / (1024 * 1024),
         )
 
+    # Byte ceiling — applies to ALL tables that reached here
+    # (incl. low-avg ones the file-count guards let through).
+    # compact_table reads the whole table into Arrow; a byte-heavy
+    # table OOM-kills uvicorn regardless of file count. Route to
+    # batched per-month compaction instead.
+    safe_bytes = _table_data_bytes(table_dir)
+    if safe_bytes > _MAX_SAFE_COMPACT_BYTES:
+        _logger.info(
+            "[maint] %s is %.0f MB (> %d MB in-process limit) — "
+            "routing to batched per-month compaction",
+            table_name,
+            safe_bytes / (1024 * 1024),
+            _MAX_SAFE_COMPACT_BYTES // (1024 * 1024),
+        )
+        return _compact_table_by_month(table_name)
+
     t0 = time.monotonic()
 
     from tools._stock_shared import _require_repo
@@ -769,6 +788,15 @@ _MAX_AVG_FILES_PER_PARTITION = 50
 # while genuinely large fragmented tables still defer.
 _SMALL_TABLE_COMPACT_BYTES = 512 * 1024 * 1024
 
+# Hard upper ceiling: compaction reads the WHOLE table into an
+# in-process Arrow table (scan().to_arrow()) then overwrite()s.
+# Above this byte size that OOM-kills uvicorn even when the file
+# count is low — the 2026-06-21 incident: stocks.intraday_features
+# (1.2 GB / 70M rows, avg ~1.6 files/partition) passed every
+# file-count guard and OOM-killed the backend. Skip these; they
+# need batched per-partition compaction (ASETPLTFRM follow-up).
+_MAX_SAFE_COMPACT_BYTES = 1024 * 1024 * 1024
+
 
 def _avg_files_per_partition(
     table_dir: Path,
@@ -800,6 +828,154 @@ def _table_data_bytes(table_dir: Path) -> int:
     return sum(
         p.stat().st_size for p in table_dir.rglob("*.parquet")
     )
+
+
+def _bar_month_to_year_month(bar_month: int) -> str:
+    """MonthTransform value (months since 1970-01) → 'YYYY-MM'."""
+    year = 1970 + bar_month // 12
+    month = bar_month % 12 + 1
+    return f"{year}-{month:02d}"
+
+
+def _compact_table_by_month(table_name: str) -> dict:
+    """Compact a byte-heavy table one month at a time so the
+    whole table never loads into memory.  Reads
+    ``inspect.partitions()`` to find non-optimal months
+    (``sum(file_count) > partition_count``), then for each
+    rewrites only that month's rows scoped on the
+    ``year_month`` data column.
+
+    Used by ``compact_table`` for tables over
+    ``_MAX_SAFE_COMPACT_BYTES`` that carry a ``year_month``
+    column (e.g. ``stocks.intraday_features``, 1.2 GB).
+
+    Returns:
+        ``{"table", "before", "after", "months_rewritten",
+        "months_skipped", "errors", "batched": True}``
+        on success;
+        ``{"table", "error"}`` on load/inspect failure;
+        ``{"table", "before", "after",
+        "skipped_too_large_bytes": True}`` when the table
+        has no ``year_month`` column.
+    """
+    from collections import defaultdict
+
+    from pyiceberg.expressions import EqualTo
+
+    from tools._stock_shared import _require_repo
+
+    table_dir = WAREHOUSE_DIR / table_name.replace(".", "/")
+    before = _count_parquet_files(table_dir)
+    try:
+        repo = _require_repo()
+        tbl = repo.load_table(table_name)
+    except Exception:
+        _logger.error(
+            "[maint] batched: failed to load %s",
+            table_name,
+            exc_info=True,
+        )
+        return {"table": table_name, "error": "read failed"}
+
+    names = [f.name for f in tbl.schema().fields]
+    if "year_month" not in names:
+        _logger.warning(
+            "[maint] %s exceeds byte limit but has no "
+            "year_month column — skipping (needs generic "
+            "batched compaction)",
+            table_name,
+        )
+        return {
+            "table": table_name,
+            "before": before,
+            "after": before,
+            "skipped_too_large_bytes": True,
+        }
+
+    try:
+        pdict = tbl.inspect.partitions().to_pydict()
+    except Exception:
+        _logger.error(
+            "[maint] batched: inspect.partitions failed "
+            "for %s",
+            table_name,
+            exc_info=True,
+        )
+        return {
+            "table": table_name,
+            "error": "inspect failed",
+        }
+
+    parts = pdict.get("partition", [])
+    fcs = pdict.get("file_count", [])
+    by_month: dict[int, list[int]] = defaultdict(
+        lambda: [0, 0]
+    )
+    for p, c in zip(parts, fcs):
+        bm = p["bar_month"]
+        by_month[bm][0] += 1
+        by_month[bm][1] += int(c)
+    non_optimal = sorted(
+        bm
+        for bm, (nparts, nfiles) in by_month.items()
+        if nfiles > nparts
+    )
+    skipped = len(by_month) - len(non_optimal)
+
+    target = tbl.schema().as_arrow()
+    rewritten = 0
+    errors: list[str] = []
+    for bm in non_optimal:
+        ym = _bar_month_to_year_month(bm)
+        flt = EqualTo("year_month", ym)
+        try:
+            arrow = (
+                tbl.scan(row_filter=flt)
+                .to_arrow()
+                .cast(target)
+            )
+
+            def _do(_t=tbl, _a=arrow, _f=flt) -> None:
+                _t.overwrite(_a, overwrite_filter=_f)
+
+            retry_iceberg_op(table_name, _do)
+            invalidate_metadata(table_name)
+            rewritten += 1
+            _logger.info(
+                "[maint] %s month %s compacted",
+                table_name,
+                ym,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.error(
+                "[maint] %s month %s compaction failed: %s",
+                table_name,
+                ym,
+                exc,
+                exc_info=True,
+            )
+            errors.append(f"{ym}: {str(exc)[:120]}")
+
+    after = _count_parquet_files(table_dir)
+    _logger.info(
+        "[maint] %s batched compaction: %d months rewritten"
+        ", %d skipped, %d → %d files, %d errors",
+        table_name,
+        rewritten,
+        skipped,
+        before,
+        after,
+        len(errors),
+    )
+    return {
+        "table": table_name,
+        "before": before,
+        "after": after,
+        "months_rewritten": rewritten,
+        "months_skipped": skipped,
+        "errors": errors,
+        "batched": True,
+    }
 
 
 def is_compaction_already_optimal(

@@ -2,6 +2,18 @@
 
 ---
 
+### 2026-06-21 — feat: batched per-month Iceberg compaction (ASETPLTFRM-442, branch `feature/batched-compaction`, worktree)
+
+**Why:** The OOM hotfix (#270) added a 1 GB `_MAX_SAFE_COMPACT_BYTES` ceiling that *skips* compaction for byte-heavy tables (`stocks.intraday_features`, 1.2 GB / 70M rows) — so they never fold their daily-append fragmentation. `compact_table` loads the whole table into Arrow (`scan().to_arrow()`), and PyIceberg 0.11.1 has no native `rewrite_data_files`.
+
+**What:** New `_compact_table_by_month()` — enumerate non-optimal months from `inspect.partitions()` metadata (`sum(file_count) > partition_count`; skip already-optimal months → ~1–2 commits steady-state), then rewrite each month's rows scoped on the `year_month` column (`scan`+`overwrite(overwrite_filter=EqualTo("year_month", ym))` via `retry_iceberg_op`), bounded to ~12 MB/month. Per-month error isolation. `compact_table` routes >1 GB tables that carry a `year_month` column to it; others keep the skip. Added `_bar_month_to_year_month` (MonthTransform int → "YYYY-MM"). Promoted `retry_iceberg_op`/`invalidate_metadata` to module-level imports.
+
+**Result:** `intraday_features` now self-compacts month-by-month without OOM. 4 new unit tests + the byte-ceiling routing test green (63-test maintenance set passes). Subagent-driven; final whole-branch review: ready to merge. Done in an isolated worktree.
+
+**Follow-ups:** tidy the redundant inline `invalidate_metadata` imports + the dedup `_table_data_bytes` nit (cleanup PR); partition-prune the per-month scan; the `_do` closure reuses the loaded table (fine for single-writer maintenance).
+
+---
+
 ### 2026-06-20 — chore: pipelines cleanup — Iceberg maintenance + backup + admin-UI perf (branch `feature/pipelines-cleanup`, worktree)
 
 **Why:** Recurring Iceberg/backup bloat + slow admin UI. `algo.events` couldn't self-compact (manifest chain too deep; the maintenance `expire_snapshots` was a legacy no-op); the backups folder grew to 467 dirs / 53 GB (per-table backups never auto-pruned; retention jobs bypassed the dedup); `/admin/backups` `du`-scanned all 467 dirs; `/admin/data-health` nuked the whole metadata cache every request + scanned ohlcv 3× + uncached pipeline-assertions.
