@@ -2373,11 +2373,43 @@ def create_insights_router() -> APIRouter:
                             _exc2,
                         )
 
+                # Sharpe Ratio: annualized using last ~126
+                # trading days (≈6 months).
+                _sharpe: float | None = None
+                try:
+                    _close_s = grp["close"].astype(float)
+                    _rets = _close_s.pct_change().dropna()
+                    _rets6 = _rets.iloc[-126:]
+                    if len(_rets6) >= 20:
+                        _std = float(_rets6.std())
+                        if _std > 0:
+                            _sharpe = round(
+                                float(_rets6.mean())
+                                / _std
+                                * (252 ** 0.5),
+                                4,
+                            )
+                except Exception:
+                    pass
+
+                # ATR% = ATR(14) / close * 100
+                _atr_pct: float | None = None
+                _atr14 = _safe(last.get("ATR_14"))
+                _ltp_close = _safe(last["Close"])
+                if (
+                    _atr14 is not None
+                    and _ltp_close is not None
+                    and _ltp_close > 0
+                ):
+                    _atr_pct = round(
+                        _atr14 / _ltp_close * 100, 4
+                    )
+
                 rows.append(
                     WatchlistStockRow(
                         ticker=str(ticker),
                         market=mkt,
-                        close=_safe(last["Close"]),
+                        close=_ltp_close,
                         rsi_2=_safe(
                             last.get("RSI_2")
                         ),
@@ -2391,10 +2423,8 @@ def create_insights_router() -> APIRouter:
                         sma_20=_safe(
                             last.get("SMA_20")
                         ),
-                        sma_10=_safe(
-                            last.get("SMA_10")
-                        ),
-                        sma_5=_safe(last.get("SMA_5")),
+                        sharpe_ratio=_sharpe,
+                        atr_pct=_atr_pct,
                     )
                 )
             except Exception as exc:

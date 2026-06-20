@@ -2105,6 +2105,8 @@ function WatchlistStocksTab() {
   const [goldenCross, setGoldenCross] = useState(false);
   const [sma50AboveLtp, setSma50AboveLtp] = useState(false);
   const [sma200AboveLtp, setSma200AboveLtp] = useState(false);
+  const [atrFilter, setAtrFilter] = useState<"lte2" | "lte6" | "gt6" | "">("");
+  const [sharpeFilter, setSharpeFilter] = useState<"lte1" | "lte2" | "gt2" | "">("");
 
   useEffect(() => {
     let cancelled = false;
@@ -2184,8 +2186,28 @@ function WatchlistStocksTab() {
           s.close > s.sma_200,
       );
     }
+    if (atrFilter) {
+      stocks = stocks.filter((s) => {
+        const v = s.atr_pct;
+        if (v == null) return false;
+        if (atrFilter === "lte2") return v <= 2;
+        if (atrFilter === "lte6") return v <= 6;
+        if (atrFilter === "gt6") return v > 6;
+        return true;
+      });
+    }
+    if (sharpeFilter) {
+      stocks = stocks.filter((s) => {
+        const v = s.sharpe_ratio;
+        if (v == null) return false;
+        if (sharpeFilter === "lte1") return v <= 1;
+        if (sharpeFilter === "lte2") return v <= 2;
+        if (sharpeFilter === "gt2") return v > 2;
+        return true;
+      });
+    }
     return stocks;
-  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp]);
+  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter]);
 
   const totalPages = Math.max(
     1,
@@ -2202,7 +2224,7 @@ function WatchlistStocksTab() {
     let cancelled = false;
     queueMicrotask(() => { if (!cancelled) setPage(0); });
     return () => { cancelled = true; };
-  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, pageSize, market]);
+  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, pageSize, market]);
 
   const handleCopyTickers = () => {
     const csv = filtered.map((s) => s.ticker).join(", ");
@@ -2243,213 +2265,198 @@ function WatchlistStocksTab() {
 
   return (
     <div className="space-y-3">
-      {/* Toolbar: market + RSI filters + copy button */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-3">
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        {/* Left: market toggle + dropdowns grid */}
+        <div className="flex flex-wrap items-start gap-3">
           {/* Market toggle */}
-          <div className="flex items-center gap-1 rounded-lg border border-gray-200 dark:border-gray-700 p-0.5">
-            {(["india", "us"] as MarketFilter[]).map(
-              (m) => (
-                <button
-                  key={m}
-                  type="button"
-                  data-testid={`watchlist-market-${m}`}
-                  onClick={() => {
-                    setMarket(m);
-                    setRsi2Filter(null);
-                    setCurRsi2Filter(null);
-                    setGoldenCross(false);
-                    setSma50AboveLtp(false);
-                    setSma200AboveLtp(false);
-                  }}
-                  className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
-                    market === m
-                      ? "bg-indigo-600 text-white dark:bg-indigo-500"
-                      : "text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
-                  }`}
-                >
-                  {m === "india" ? "India" : "US"}
-                </button>
-              ),
-            )}
+          <div className="flex items-center gap-1 rounded-lg border border-gray-200 dark:border-gray-700 p-0.5 self-start mt-0.5">
+            {(["india", "us"] as MarketFilter[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                data-testid={`watchlist-market-${m}`}
+                onClick={() => {
+                  setMarket(m);
+                  setRsi2Filter(null);
+                  setCurRsi2Filter(null);
+                  setGoldenCross(false);
+                  setSma50AboveLtp(false);
+                  setSma200AboveLtp(false);
+                  setAtrFilter("");
+                  setSharpeFilter("");
+                }}
+                className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
+                  market === m
+                    ? "bg-indigo-600 text-white dark:bg-indigo-500"
+                    : "text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
+                }`}
+              >
+                {m === "india" ? "India" : "US"}
+              </button>
+            ))}
           </div>
 
-          <div className="flex flex-col gap-1">
-            {/* RSI(2) filter row */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium w-20 shrink-0">
-                RSI(2):
-              </span>
-              {(["lte5", "lte10", "lte25", "gte80"] as Rsi2Filter[]).map((id) => {
-                const label =
-                  id === "lte5" ? "≤ 5"
-                  : id === "lte10" ? "≤ 10"
-                  : id === "lte25" ? "≤ 25"
-                  : "≥ 80";
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    data-testid={`watchlist-rsi2-filter-${id}`}
-                    onClick={() =>
-                      setRsi2Filter((prev) =>
-                        prev === id ? null : id,
-                      )
-                    }
-                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                      rsi2Filter === id
-                        ? "bg-indigo-600 text-white dark:bg-indigo-500"
-                        : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-              {rsi2Filter && (
-                <button
-                  type="button"
-                  onClick={() => setRsi2Filter(null)}
-                  className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline"
-                >
-                  Clear
-                </button>
-              )}
+          {/* 2×2 dropdown grid */}
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+            {/* Row 1 */}
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                RSI(2)
+              </label>
+              <select
+                value={rsi2Filter ?? ""}
+                data-testid="watchlist-rsi2-select"
+                onChange={(e) =>
+                  setRsi2Filter(
+                    (e.target.value as Rsi2Filter) || null,
+                  )
+                }
+                className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              >
+                <option value="">All</option>
+                <option value="lte5">≤ 5</option>
+                <option value="lte10">≤ 10</option>
+                <option value="lte25">≤ 25</option>
+                <option value="gte80">≥ 80</option>
+              </select>
             </div>
-            {/* Curr RSI(2) filter row */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium w-20 shrink-0">
-                Curr RSI(2):
-              </span>
-              {(["lte5", "lte10", "lte25", "gte80"] as Rsi2Filter[]).map((id) => {
-                const label =
-                  id === "lte5" ? "≤ 5"
-                  : id === "lte10" ? "≤ 10"
-                  : id === "lte25" ? "≤ 25"
-                  : "≥ 80";
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    data-testid={`watchlist-curr-rsi2-filter-${id}`}
-                    onClick={() =>
-                      setCurRsi2Filter((prev) =>
-                        prev === id ? null : id,
-                      )
-                    }
-                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                      curRsi2Filter === id
-                        ? "bg-violet-600 text-white dark:bg-violet-500"
-                        : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-              {curRsi2Filter && (
-                <button
-                  type="button"
-                  onClick={() => setCurRsi2Filter(null)}
-                  className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline"
-                >
-                  Clear
-                </button>
-              )}
+
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                ATR%
+              </label>
+              <select
+                value={atrFilter}
+                data-testid="watchlist-atr-select"
+                onChange={(e) =>
+                  setAtrFilter(
+                    e.target.value as typeof atrFilter,
+                  )
+                }
+                className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              >
+                <option value="">All</option>
+                <option value="lte2">≤ 2%</option>
+                <option value="lte6">≤ 6%</option>
+                <option value="gt6">&gt; 6%</option>
+              </select>
             </div>
-            {/* SMA filters row */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium w-20 shrink-0">
-                SMA:
-              </span>
-              {(
-                [
-                  {
-                    id: "goldenCross" as const,
-                    label: "Golden Cross",
-                    title: "SMA 50 > SMA 200",
-                    active: goldenCross,
-                    toggle: () => setGoldenCross((v) => !v),
-                  },
-                  {
-                    id: "sma50AboveLtp" as const,
-                    label: "LTP > SMA 50",
-                    title: "Current price above 50-day SMA",
-                    active: sma50AboveLtp,
-                    toggle: () => setSma50AboveLtp((v) => !v),
-                  },
-                  {
-                    id: "sma200AboveLtp" as const,
-                    label: "LTP > SMA 200",
-                    title: "Current price above 200-day SMA",
-                    active: sma200AboveLtp,
-                    toggle: () => setSma200AboveLtp((v) => !v),
-                  },
-                ] as const
-              ).map(({ id, label, title, active, toggle }) => (
-                <button
-                  key={id}
-                  type="button"
-                  title={title}
-                  data-testid={`watchlist-sma-filter-${id}`}
-                  onClick={toggle}
-                  className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                    active
-                      ? "bg-amber-500 text-white dark:bg-amber-400 dark:text-gray-900"
-                      : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
+
+            {/* Row 2 */}
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                Curr RSI(2)
+              </label>
+              <select
+                value={curRsi2Filter ?? ""}
+                data-testid="watchlist-curr-rsi2-select"
+                onChange={(e) =>
+                  setCurRsi2Filter(
+                    (e.target.value as Rsi2Filter) || null,
+                  )
+                }
+                className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-violet-500"
+              >
+                <option value="">All</option>
+                <option value="lte5">≤ 5</option>
+                <option value="lte10">≤ 10</option>
+                <option value="lte25">≤ 25</option>
+                <option value="gte80">≥ 80</option>
+              </select>
             </div>
+
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                Sharpe
+              </label>
+              <select
+                value={sharpeFilter}
+                data-testid="watchlist-sharpe-select"
+                onChange={(e) =>
+                  setSharpeFilter(
+                    e.target.value as typeof sharpeFilter,
+                  )
+                }
+                className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              >
+                <option value="">All</option>
+                <option value="lte1">≤ 1</option>
+                <option value="lte2">≤ 2</option>
+                <option value="gt2">&gt; 2</option>
+              </select>
+            </div>
+          </div>
+
+          {/* SMA toggles */}
+          <div className="flex flex-wrap items-center gap-1.5 self-start mt-0.5">
+            {(
+              [
+                {
+                  id: "goldenCross" as const,
+                  label: "Golden Cross",
+                  title: "SMA 50 > SMA 200",
+                  active: goldenCross,
+                  toggle: () => setGoldenCross((v) => !v),
+                },
+                {
+                  id: "sma50AboveLtp" as const,
+                  label: "LTP > SMA 50",
+                  title: "Price above 50-day SMA",
+                  active: sma50AboveLtp,
+                  toggle: () => setSma50AboveLtp((v) => !v),
+                },
+                {
+                  id: "sma200AboveLtp" as const,
+                  label: "LTP > SMA 200",
+                  title: "Price above 200-day SMA",
+                  active: sma200AboveLtp,
+                  toggle: () => setSma200AboveLtp((v) => !v),
+                },
+              ] as const
+            ).map(({ id, label, title, active, toggle }) => (
+              <button
+                key={id}
+                type="button"
+                title={title}
+                data-testid={`watchlist-sma-filter-${id}`}
+                onClick={toggle}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                  active
+                    ? "bg-amber-500 text-white dark:bg-amber-400 dark:text-gray-900"
+                    : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Copy tickers button */}
+        {/* Right: copy button */}
         <button
           type="button"
           data-testid="watchlist-copy-tickers"
           onClick={handleCopyTickers}
           title="Copy comma-separated tickers to clipboard"
-          className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 dark:border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+          className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 dark:border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors self-start"
         >
           {copied ? (
             <>
-              <svg
-                className="w-3.5 h-3.5 text-emerald-500"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-              >
+              <svg className="w-3.5 h-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <path d="M20 6 9 17l-5-5" />
               </svg>
               Copied!
             </>
           ) : (
             <>
-              <svg
-                className="w-3.5 h-3.5"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <rect
-                  x="9"
-                  y="9"
-                  width="13"
-                  height="13"
-                  rx="2"
-                />
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" />
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
               </svg>
               Copy Tickers
               {filtered.length > 0 && (
-                <span className="text-gray-400">
-                  ({filtered.length})
-                </span>
+                <span className="text-gray-400">({filtered.length})</span>
               )}
             </>
           )}
@@ -2472,8 +2479,8 @@ function WatchlistStocksTab() {
                 { key: "sma_200", label: "SMA 200" },
                 { key: "sma_50", label: "SMA 50" },
                 { key: "sma_20", label: "SMA 20" },
-                { key: "sma_10", label: "SMA 10" },
-                { key: "sma_5", label: "SMA 5" },
+                { key: "sharpe_ratio", label: "Sharpe (6M)" },
+                { key: "atr_pct", label: "ATR%" },
               ].map((col) => (
                 <th
                   key={col.key}
@@ -2547,11 +2554,27 @@ function WatchlistStocksTab() {
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
                       {fmt(row.sma_20)}
                     </td>
-                    <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
-                      {fmt(row.sma_10)}
+                    <td className={`px-4 py-2.5 font-mono text-xs ${
+                      row.sharpe_ratio == null
+                        ? "text-gray-400"
+                        : row.sharpe_ratio > 2
+                          ? "text-emerald-600 dark:text-emerald-400 font-semibold"
+                          : row.sharpe_ratio < 0
+                            ? "text-red-500 dark:text-red-400"
+                            : "text-gray-900 dark:text-gray-100"
+                    }`}>
+                      {fmt(row.sharpe_ratio)}
                     </td>
-                    <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
-                      {fmt(row.sma_5)}
+                    <td className={`px-4 py-2.5 font-mono text-xs ${
+                      row.atr_pct == null
+                        ? "text-gray-400"
+                        : row.atr_pct > 6
+                          ? "text-red-500 dark:text-red-400 font-semibold"
+                          : row.atr_pct <= 2
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-gray-900 dark:text-gray-100"
+                    }`}>
+                      {row.atr_pct != null ? `${fmt(row.atr_pct)}%` : "—"}
                     </td>
                   </tr>
                 );
