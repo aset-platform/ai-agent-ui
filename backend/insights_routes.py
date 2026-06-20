@@ -2445,6 +2445,18 @@ def create_insights_router() -> APIRouter:
                         _atr14 / _ltp_close * 100, 4
                     )
 
+                # Distance above SMA200 = (Price - SMA200) / SMA200 * 100
+                _dist_sma200: float | None = None
+                _sma200 = _safe(last.get("SMA_200"))
+                if (
+                    _ltp_close is not None
+                    and _sma200 is not None
+                    and _sma200 > 0
+                ):
+                    _dist_sma200 = round(
+                        (_ltp_close - _sma200) / _sma200 * 100, 4
+                    )
+
                 rows.append(
                     WatchlistStockRow(
                         ticker=str(ticker),
@@ -2454,9 +2466,7 @@ def create_insights_router() -> APIRouter:
                             last.get("RSI_2")
                         ),
                         current_rsi_2=_cur_rsi2,
-                        sma_200=_safe(
-                            last.get("SMA_200")
-                        ),
+                        sma_200=_sma200,
                         sma_50=_safe(
                             last.get("SMA_50")
                         ),
@@ -2466,6 +2476,7 @@ def create_insights_router() -> APIRouter:
                         sharpe_ratio=_sharpe,
                         atr_pct=_atr_pct,
                         rs_6m=_rs_6m,
+                        dist_sma200=_dist_sma200,
                     )
                 )
             except Exception as exc:

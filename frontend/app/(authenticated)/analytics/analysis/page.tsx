@@ -2140,7 +2140,8 @@ type Rsi2Filter = "lte5" | "lte10" | "lte25" | "gte80" | null;
 type AtrFilter = "" | "lt0" | "gt0lte1_5" | "gt1_5lte4" | "gt2lte5" | "gt2lte6" | "gt5";
 type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt080lte10" | "gt1";
 type RsFilter = "" | "lt25" | "gte25";
-type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sma_20" | "sharpe_ratio" | "atr_pct" | "rs_6m" | "score";
+type DistSma200Filter = "" | "lt5" | "gte5lte35" | "gt35";
+type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sma_20" | "sharpe_ratio" | "atr_pct" | "rs_6m" | "dist_sma200" | "score";
 type SortDir = "asc" | "desc";
 
 const PAGE_SIZE_OPTIONS_WL = [10, 25, 50] as const;
@@ -2174,6 +2175,7 @@ function WatchlistStocksTab() {
   const [atrFilter, setAtrFilter] = useState<AtrFilter>("");
   const [sharpeFilter, setSharpeFilter] = useState<SharpeFilter>("");
   const [rsFilter, setRsFilter] = useState<RsFilter>("");
+  const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>("");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("ticker");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -2293,6 +2295,17 @@ function WatchlistStocksTab() {
         return true;
       });
     }
+    if (distSma200Filter) {
+      stocks = stocks.filter((s) => {
+        const v = s.dist_sma200;
+        if (v == null) return false;
+        const r = Math.round(v * 100) / 100;
+        if (distSma200Filter === "lt5") return r < 5;
+        if (distSma200Filter === "gte5lte35") return r >= 5 && r <= 35;
+        if (distSma200Filter === "gt35") return r > 35;
+        return true;
+      });
+    }
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       stocks = stocks.filter((s) =>
@@ -2313,7 +2326,7 @@ function WatchlistStocksTab() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return stocks;
-  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rsFilter, search, sortKey, sortDir]);
+  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rsFilter, distSma200Filter, search, sortKey, sortDir]);
 
   const totalPages = Math.max(
     1,
@@ -2330,7 +2343,7 @@ function WatchlistStocksTab() {
     let cancelled = false;
     queueMicrotask(() => { if (!cancelled) setPage(0); });
     return () => { cancelled = true; };
-  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rsFilter, search, pageSize, market]);
+  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rsFilter, distSma200Filter, search, pageSize, market]);
 
   const handleCopyTickers = () => {
     const csv = filtered.map((s) => s.ticker).join(", ");
@@ -2510,6 +2523,23 @@ function WatchlistStocksTab() {
                 <option value="gte25">≥ 25%</option>
               </select>
             </div>
+
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                Dist SMA200
+              </label>
+              <select
+                value={distSma200Filter}
+                data-testid="watchlist-dist-sma200-select"
+                onChange={(e) => setDistSma200Filter(e.target.value as DistSma200Filter)}
+                className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              >
+                <option value="">All</option>
+                <option value="lt5">&lt; 5%</option>
+                <option value="gte5lte35">5% – 35%</option>
+                <option value="gt35">&gt; 35%</option>
+              </select>
+            </div>
           </div>
 
           {/* SMA toggles */}
@@ -2654,6 +2684,16 @@ function WatchlistStocksTab() {
                       "Lower = calmer stock. Higher = wider daily swings.",
                   },
                   {
+                    key: "dist_sma200",
+                    label: "Dist SMA200",
+                    tooltip:
+                      "How far the current price is above (or below) the 200-day SMA\n" +
+                      "Formula: (Price − SMA200) / SMA200 × 100\n\n" +
+                      "Example: Price = ₹1,100, SMA200 = ₹1,000\n" +
+                      "→ Dist SMA200 = (1100 − 1000) / 1000 × 100 = +10%\n\n" +
+                      "Positive = price above SMA200 (uptrend). Negative = below (downtrend).",
+                  },
+                  {
                     key: "score",
                     label: "Score",
                     tooltip:
@@ -2698,7 +2738,7 @@ function WatchlistStocksTab() {
             {pageRows.length === 0 ? (
               <tr>
                 <td
-                  colSpan={11}
+                  colSpan={12}
                   className="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-500"
                 >
                   No stocks match the current filter.
@@ -2792,6 +2832,19 @@ function WatchlistStocksTab() {
                     }`}>
                       {row.atr_pct != null ? `${fmt(row.atr_pct)}%` : "—"}
                     </td>
+                    <td className={`px-4 py-2.5 font-mono text-xs ${
+                      row.dist_sma200 == null
+                        ? "text-gray-400"
+                        : row.dist_sma200 > 35
+                          ? "text-amber-600 dark:text-amber-400 font-semibold"
+                          : row.dist_sma200 >= 0
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-red-500 dark:text-red-400"
+                    }`}>
+                      {row.dist_sma200 != null
+                        ? `${row.dist_sma200 >= 0 ? "+" : ""}${fmt(row.dist_sma200)}%`
+                        : "—"}
+                    </td>
                     <td className={`px-4 py-2.5 font-mono text-xs font-semibold ${
                       row.score == null
                         ? "text-gray-400"
@@ -2801,7 +2854,7 @@ function WatchlistStocksTab() {
                             ? "text-red-500 dark:text-red-400"
                             : "text-gray-900 dark:text-gray-100"
                     }`}
-                      title="Score = 0.4×Sharpe + 0.4×RS(6M) + 0.2×ATR Percentile"
+                      title="Score = 0.5×SharpePercentile + 0.3×RSPercentile + 0.2×ATRPercentile"
                     >
                       {fmt(row.score)}
                     </td>
