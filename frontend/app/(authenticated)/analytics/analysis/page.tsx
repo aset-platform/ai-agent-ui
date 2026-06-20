@@ -2173,7 +2173,7 @@ function WatchlistStocksTab() {
         (s) =>
           s.sma_50 != null &&
           s.close != null &&
-          s.sma_50 > s.close,
+          s.close > s.sma_50,
       );
     }
     if (sma200AboveLtp) {
@@ -2181,7 +2181,7 @@ function WatchlistStocksTab() {
         (s) =>
           s.sma_200 != null &&
           s.close != null &&
-          s.sma_200 > s.close,
+          s.close > s.sma_200,
       );
     }
     return stocks;
@@ -2373,15 +2373,15 @@ function WatchlistStocksTab() {
                   },
                   {
                     id: "sma50AboveLtp" as const,
-                    label: "SMA 50 > LTP",
-                    title: "50-day SMA above current price",
+                    label: "LTP > SMA 50",
+                    title: "Current price above 50-day SMA",
                     active: sma50AboveLtp,
                     toggle: () => setSma50AboveLtp((v) => !v),
                   },
                   {
                     id: "sma200AboveLtp" as const,
-                    label: "SMA 200 > LTP",
-                    title: "200-day SMA above current price",
+                    label: "LTP > SMA 200",
+                    title: "Current price above 200-day SMA",
                     active: sma200AboveLtp,
                     toggle: () => setSma200AboveLtp((v) => !v),
                   },
