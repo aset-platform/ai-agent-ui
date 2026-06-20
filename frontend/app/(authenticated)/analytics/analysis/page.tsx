@@ -2171,7 +2171,7 @@ function DistSma200MultiSelect({
       </button>
 
       {open && (
-        <div className="absolute top-full left-0 mt-1 z-[80] w-64 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl py-1">
+        <div className="absolute top-full left-0 mt-1 z-[80] min-w-full w-max rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl py-1">
           {selected.length > 0 && (
             <button
               type="button"
@@ -2186,17 +2186,17 @@ function DistSma200MultiSelect({
             return (
               <label
                 key={b.value}
-                className="flex items-start gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800"
+                className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800"
               >
                 <input
                   type="checkbox"
                   checked={checked}
                   onChange={() => toggle(b.value)}
-                  className="mt-0.5 shrink-0 accent-indigo-600"
+                  className="shrink-0 accent-indigo-600"
                 />
-                <span className="flex flex-col">
-                  <span className="text-xs font-medium text-gray-900 dark:text-gray-100">{b.label}</span>
-                  <span className="text-[10px] text-gray-500 dark:text-gray-400">{b.caption}</span>
+                <span className="text-xs text-gray-900 dark:text-gray-100 whitespace-nowrap">
+                  <span className="font-medium">{b.label}</span>
+                  <span className="text-gray-500 dark:text-gray-400"> ({b.caption})</span>
                 </span>
               </label>
             );
