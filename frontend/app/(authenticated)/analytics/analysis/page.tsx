@@ -2387,163 +2387,143 @@ function WatchlistStocksTab() {
       {/* Toolbar */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         {/* Left: market toggle + dropdowns grid */}
-        <div className="flex flex-wrap items-start gap-3">
-          {/* Market toggle */}
-          <div className="flex items-center gap-1 rounded-lg border border-gray-200 dark:border-gray-700 p-0.5 self-start mt-0.5">
-            {(["india", "us"] as MarketFilter[]).map((m) => (
-              <button
-                key={m}
-                type="button"
-                data-testid={`watchlist-market-${m}`}
-                onClick={() => {
-                  setMarket(m);
-                  setRsi2Filter(null);
-                  setCurRsi2Filter(null);
-                  setGoldenCross(false);
-                  setSma50AboveLtp(false);
-                  setSma200AboveLtp(false);
-                  setAtrFilter("");
-                  setSharpeFilter("");
-                  setSearch("");
-                }}
-                className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
-                  market === m
-                    ? "bg-indigo-600 text-white dark:bg-indigo-500"
-                    : "text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
-                }`}
-              >
-                {m === "india" ? "India" : "US"}
-              </button>
+        <div className="flex flex-col gap-2">
+          {/* Row 1 — all dropdowns */}
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Market toggle */}
+            <div className="flex items-center gap-1 rounded-lg border border-gray-200 dark:border-gray-700 p-0.5">
+              {(["india", "us"] as MarketFilter[]).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  data-testid={`watchlist-market-${m}`}
+                  onClick={() => {
+                    setMarket(m);
+                    setRsi2Filter(null);
+                    setCurRsi2Filter(null);
+                    setGoldenCross(false);
+                    setSma50AboveLtp(false);
+                    setSma200AboveLtp(false);
+                    setAtrFilter("");
+                    setSharpeFilter("");
+                    setSearch("");
+                  }}
+                  className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
+                    market === m
+                      ? "bg-indigo-600 text-white dark:bg-indigo-500"
+                      : "text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
+                  }`}
+                >
+                  {m === "india" ? "India" : "US"}
+                </button>
+              ))}
+            </div>
+
+            <div className="h-4 w-px bg-gray-200 dark:bg-gray-700" />
+
+            {/* Dropdowns — all in one flex row */}
+            {(
+              [
+                {
+                  label: "RSI(2)",
+                  testId: "watchlist-rsi2-select",
+                  value: rsi2Filter ?? "",
+                  onChange: (v: string) => setRsi2Filter((v as Rsi2Filter) || null),
+                  options: [
+                    { value: "", label: "All" },
+                    { value: "lte5", label: "≤ 5" },
+                    { value: "lte10", label: "≤ 10" },
+                    { value: "lte25", label: "≤ 25" },
+                    { value: "gte80", label: "≥ 80" },
+                  ],
+                },
+                {
+                  label: "Curr RSI(2)",
+                  testId: "watchlist-curr-rsi2-select",
+                  value: curRsi2Filter ?? "",
+                  onChange: (v: string) => setCurRsi2Filter((v as Rsi2Filter) || null),
+                  options: [
+                    { value: "", label: "All" },
+                    { value: "lte5", label: "≤ 5" },
+                    { value: "lte10", label: "≤ 10" },
+                    { value: "lte25", label: "≤ 25" },
+                    { value: "gte80", label: "≥ 80" },
+                  ],
+                },
+                {
+                  label: "ATR%",
+                  testId: "watchlist-atr-select",
+                  value: atrFilter,
+                  onChange: (v: string) => setAtrFilter(v as AtrFilter),
+                  options: [
+                    { value: "", label: "All" },
+                    { value: "lt0", label: "< 0%" },
+                    { value: "gt0lte1_5", label: "0–1.5%" },
+                    { value: "gt1_5lte4", label: "1.5–4%" },
+                    { value: "gt2lte5", label: "2–5%" },
+                    { value: "gt2lte6", label: "2–6%" },
+                    { value: "gt5", label: "> 5%" },
+                  ],
+                },
+                {
+                  label: "Sharpe",
+                  testId: "watchlist-sharpe-select",
+                  value: sharpeFilter,
+                  onChange: (v: string) => setSharpeFilter(v as SharpeFilter),
+                  options: [
+                    { value: "", label: "All" },
+                    { value: "lte0", label: "≤ 0" },
+                    { value: "gt0lte080", label: "0–0.80" },
+                    { value: "gt080lte2", label: "0.80–2" },
+                    { value: "gt080lte10", label: "0.80–10" },
+                    { value: "gt1", label: "≥ 1" },
+                  ],
+                },
+                {
+                  label: "RS(6M)",
+                  testId: "watchlist-rs-select",
+                  value: rsFilter,
+                  onChange: (v: string) => setRsFilter(v as RsFilter),
+                  options: [
+                    { value: "", label: "All" },
+                    { value: "lt25", label: "< 25%" },
+                    { value: "gte25", label: "≥ 25%" },
+                  ],
+                },
+                {
+                  label: "Dist SMA200",
+                  testId: "watchlist-dist-sma200-select",
+                  value: distSma200Filter,
+                  onChange: (v: string) => setDistSma200Filter(v as DistSma200Filter),
+                  options: [
+                    { value: "", label: "All" },
+                    { value: "lt5", label: "< 5%" },
+                    { value: "gte5lte35", label: "5–35%" },
+                    { value: "gt35", label: "> 35%" },
+                  ],
+                },
+              ] as const
+            ).map((f) => (
+              <div key={f.testId} className="flex items-center gap-1.5">
+                <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                  {f.label}
+                </label>
+                <select
+                  value={f.value}
+                  data-testid={f.testId}
+                  onChange={(e) => f.onChange(e.target.value)}
+                  className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  {f.options.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
             ))}
           </div>
 
-          {/* 2×2 dropdown grid */}
-          <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-            {/* Row 1 */}
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                RSI(2)
-              </label>
-              <select
-                value={rsi2Filter ?? ""}
-                data-testid="watchlist-rsi2-select"
-                onChange={(e) =>
-                  setRsi2Filter(
-                    (e.target.value as Rsi2Filter) || null,
-                  )
-                }
-                className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              >
-                <option value="">All</option>
-                <option value="lte5">≤ 5</option>
-                <option value="lte10">≤ 10</option>
-                <option value="lte25">≤ 25</option>
-                <option value="gte80">≥ 80</option>
-              </select>
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                ATR%
-              </label>
-              <select
-                value={atrFilter}
-                data-testid="watchlist-atr-select"
-                onChange={(e) =>
-                  setAtrFilter(e.target.value as AtrFilter)
-                }
-                className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              >
-                <option value="">All</option>
-                <option value="lt0">&lt; 0%</option>
-                <option value="gt0lte1_5">0% – 1.5%</option>
-                <option value="gt1_5lte4">1.5% – 4%</option>
-                <option value="gt2lte5">2% – 5%</option>
-                <option value="gt2lte6">2% – 6%</option>
-                <option value="gt5">&gt; 5%</option>
-              </select>
-            </div>
-
-            {/* Row 2 */}
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                Curr RSI(2)
-              </label>
-              <select
-                value={curRsi2Filter ?? ""}
-                data-testid="watchlist-curr-rsi2-select"
-                onChange={(e) =>
-                  setCurRsi2Filter(
-                    (e.target.value as Rsi2Filter) || null,
-                  )
-                }
-                className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-violet-500"
-              >
-                <option value="">All</option>
-                <option value="lte5">≤ 5</option>
-                <option value="lte10">≤ 10</option>
-                <option value="lte25">≤ 25</option>
-                <option value="gte80">≥ 80</option>
-              </select>
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                Sharpe
-              </label>
-              <select
-                value={sharpeFilter}
-                data-testid="watchlist-sharpe-select"
-                onChange={(e) =>
-                  setSharpeFilter(e.target.value as SharpeFilter)
-                }
-                className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              >
-                <option value="">All</option>
-                <option value="lte0">≤ 0</option>
-                <option value="gt0lte080">0 – 0.80</option>
-                <option value="gt080lte2">0.80 – 2</option>
-                <option value="gt080lte10">0.80 – 10</option>
-                <option value="gt1">≥ 1</option>
-              </select>
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                RS(6M)
-              </label>
-              <select
-                value={rsFilter}
-                data-testid="watchlist-rs-select"
-                onChange={(e) => setRsFilter(e.target.value as RsFilter)}
-                className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              >
-                <option value="">All</option>
-                <option value="lt25">&lt; 25%</option>
-                <option value="gte25">≥ 25%</option>
-              </select>
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                Dist SMA200
-              </label>
-              <select
-                value={distSma200Filter}
-                data-testid="watchlist-dist-sma200-select"
-                onChange={(e) => setDistSma200Filter(e.target.value as DistSma200Filter)}
-                className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              >
-                <option value="">All</option>
-                <option value="lt5">&lt; 5%</option>
-                <option value="gte5lte35">5% – 35%</option>
-                <option value="gt35">&gt; 35%</option>
-              </select>
-            </div>
-          </div>
-
-          {/* SMA toggles */}
-          <div className="flex flex-wrap items-center gap-1.5 self-start mt-0.5">
+          {/* Row 2 — toggle chips */}
+          <div className="flex flex-wrap items-center gap-1.5">
             {(
               [
                 {
