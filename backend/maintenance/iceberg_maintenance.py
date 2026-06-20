@@ -440,30 +440,18 @@ def compact_table(table_name: str) -> dict:
     # Byte ceiling — applies to ALL tables that reached here
     # (incl. low-avg ones the file-count guards let through).
     # compact_table reads the whole table into Arrow; a byte-heavy
-    # table OOM-kills uvicorn regardless of file count. Skip with a
-    # warning; needs batched per-partition compaction.
+    # table OOM-kills uvicorn regardless of file count. Route to
+    # batched per-month compaction instead.
     safe_bytes = _table_data_bytes(table_dir)
     if safe_bytes > _MAX_SAFE_COMPACT_BYTES:
-        files, partitions, avg = _avg_files_per_partition(table_dir)
-        _logger.warning(
-            "[maint] %s is %.0f MB (> %d MB in-process limit, "
-            "%d files / %d partitions) — skipping full-table-scan "
-            "compaction to avoid OOM; needs batched per-partition "
-            "compaction.",
+        _logger.info(
+            "[maint] %s is %.0f MB (> %d MB in-process limit) — "
+            "routing to batched per-month compaction",
             table_name,
             safe_bytes / (1024 * 1024),
             _MAX_SAFE_COMPACT_BYTES // (1024 * 1024),
-            files,
-            partitions,
         )
-        return {
-            "table": table_name,
-            "before": before,
-            "after": before,
-            "skipped_too_large_bytes": True,
-            "partitions": partitions,
-            "avg_files_per_partition": avg,
-        }
+        return _compact_table_by_month(table_name)
 
     t0 = time.monotonic()
 
