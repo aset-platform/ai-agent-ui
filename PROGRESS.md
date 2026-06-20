@@ -2,6 +2,24 @@
 
 ---
 
+### 2026-06-20 — chore: pipelines cleanup — Iceberg maintenance + backup + admin-UI perf (branch `feature/pipelines-cleanup`, worktree)
+
+**Why:** Recurring Iceberg/backup bloat + slow admin UI. `algo.events` couldn't self-compact (manifest chain too deep; the maintenance `expire_snapshots` was a legacy no-op); the backups folder grew to 467 dirs / 53 GB (per-table backups never auto-pruned; retention jobs bypassed the dedup); `/admin/backups` `du`-scanned all 467 dirs; `/admin/data-health` nuked the whole metadata cache every request + scanned ohlcv 3× + uncached pipeline-assertions.
+
+**One-time reclaims (operational, done):** backups folder 467→4 dirs, **−43.4 GB** (`cleanup_per_table_backups`); `algo.events` metadata chain collapsed (105→10 metadata.json, 380 snapshots expired, → 70 MB) via retention + `cleanup_orphans_v2`.
+
+**Code (9 tasks, subagent-driven, all reviewed; final whole-branch review = ready to merge):**
+- **A** size-aware compaction guard (`_SMALL_TABLE_COMPACT_BYTES=512MB` → compact small tables despite high avg files/partition; 40k OOM ceiling intact); `expire_snapshots` now does real expiry via `cleanup_orphans_v2`.
+- **B** retention jobs route through `verify_or_backup` (dedup); daily backup pipeline auto-prunes per-table dirs; `backup_table` same-day dedup guard.
+- **C** `/admin/backups` `list_backups(full_only=True)` filters before `du` (465→2 spawns).
+- **D** data-health drops per-request `invalidate_metadata()`; ohlcv 3→2 scans; pipeline-assertions Redis-cached (TTL 60s); `DATA_HEALTH_SWR_OPTS.dedupingInterval` 5s→60s.
+
+**Result:** `algo.events`/`nse_delivery` now auto-compact on the next scheduled maintenance (no manual overwrite needed). 16 new unit tests green. Done in an isolated git worktree (main checkout untouched).
+
+**Follow-ups:** bump `pipeline_executor.py:142` expiry-error log DEBUG→WARNING (now real I/O); test-isolation gap (writer fixtures `add_column` against live warehouse); a few cosmetic doc/test nits.
+
+---
+
 ### 2026-06-20 — feat: Watchlist Stocks tab enhancements (branch `feature/watchlist-offhours-rsi`)
 
 **Why:** Watchlist Stocks tab was very slow (yfinance blocking async event loop) and had limited analysis columns.
