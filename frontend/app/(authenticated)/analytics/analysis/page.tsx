@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   useSearchParams,
   useRouter,
@@ -2075,6 +2076,66 @@ function PortfolioForecastTab({
 // Tab: Watchlist Stocks
 // ---------------------------------------------------------------
 
+function ColumnTooltip({ text }: { text: string }) {
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const [coords, setCoords] = useState<{
+    x: number; y: number; above: boolean;
+  } | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => { setMounted(true); }, []);
+
+  const show = useCallback(() => {
+    if (!triggerRef.current) return;
+    const r = triggerRef.current.getBoundingClientRect();
+    const above = r.top > 220;
+    setCoords({ x: r.right, y: above ? r.top - 6 : r.bottom + 6, above });
+  }, []);
+
+  const hide = useCallback(() => setCoords(null), []);
+
+  return (
+    <span
+      ref={triggerRef}
+      className="inline-flex"
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <svg
+        className="w-3 h-3 text-gray-400 hover:text-indigo-500 shrink-0 cursor-help"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+      >
+        <circle cx="12" cy="12" r="10" />
+        <path d="M12 16v-4M12 8h.01" />
+      </svg>
+      {mounted && coords && createPortal(
+        <div
+          style={{
+            position: "fixed",
+            top: coords.above ? undefined : coords.y,
+            bottom: coords.above
+              ? window.innerHeight - coords.y
+              : undefined,
+            left: Math.max(8, Math.min(
+              coords.x - 288,
+              window.innerWidth - 296
+            )),
+            zIndex: 9999,
+          }}
+          className="w-72 rounded-lg bg-gray-900 dark:bg-gray-700 px-3 py-2.5 text-[11px] text-gray-100 shadow-2xl whitespace-pre-line leading-relaxed pointer-events-none"
+        >
+          {text}
+        </div>,
+        document.body
+      )}
+    </span>
+  );
+}
+
 type Rsi2Filter = "lte5" | "lte10" | "lte25" | "gte80" | null;
 type AtrFilter = "" | "lt0" | "gt0lte1_5" | "gt1_5lte4" | "gt2lte5" | "gt5";
 type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt2lte10" | "gt10";
@@ -2590,25 +2651,7 @@ function WatchlistStocksTab() {
                     <span className="inline-flex items-center gap-1">
                       {col.label}
                       {col.tooltip && (
-                        <span
-                          className="group/tip relative inline-flex"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <svg
-                            className="w-3 h-3 text-gray-400 hover:text-indigo-500 shrink-0 cursor-help"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                          >
-                            <circle cx="12" cy="12" r="10" />
-                            <path d="M12 16v-4M12 8h.01" />
-                          </svg>
-                          <span className="pointer-events-none absolute top-full right-0 mt-1 z-[80] w-72 rounded-lg bg-gray-900 dark:bg-gray-700 px-3 py-2.5 text-[11px] font-normal normal-case tracking-normal text-gray-100 shadow-xl opacity-0 group-hover/tip:opacity-100 transition-opacity whitespace-pre-line leading-relaxed">
-                            <span className="absolute bottom-full right-1.5 border-4 border-transparent border-b-gray-900 dark:border-b-gray-700" />
-                            {col.tooltip}
-                          </span>
-                        </span>
+                        <ColumnTooltip text={col.tooltip} />
                       )}
                       <span className="text-gray-300 dark:text-gray-600">
                         {active ? (sortDir === "asc" ? "↑" : "↓") : "↕"}
