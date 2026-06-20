@@ -2488,29 +2488,49 @@ def create_insights_router() -> APIRouter:
                 except Exception:
                     pass
 
-        # Compute ATR percentile ranks across all rows, then score.
-        # Score = 0.4×Sharpe + 0.4×RS(6M) + 0.2×ATR_Percentile
+        # Compute cross-stock percentile ranks for Sharpe, RS and ATR,
+        # then score = 0.5×SharpePercentile + 0.3×RSPercentile
+        #              + 0.2×ATRPercentile
+        def _pct_rank(
+            vals: list[float], v: float, n: int
+        ) -> float:
+            if n <= 1:
+                return 50.0
+            return sorted(vals).index(v) / (n - 1) * 100
+
+        _sharpe_vals = [
+            r.sharpe_ratio for r in rows
+            if r.sharpe_ratio is not None
+        ]
+        _rs_vals = [
+            r.rs_6m for r in rows if r.rs_6m is not None
+        ]
         _atr_vals = [
             r.atr_pct for r in rows if r.atr_pct is not None
         ]
-        _n_atr = len(_atr_vals)
-        if _n_atr > 0:
-            _sorted_atr = sorted(_atr_vals)
-            for row in rows:
-                if row.atr_pct is not None:
-                    _rank = _sorted_atr.index(row.atr_pct)
-                    _pct = (
-                        _rank / (_n_atr - 1) * 100
-                        if _n_atr > 1
-                        else 50.0
-                    )
-                    _s = row.sharpe_ratio
-                    _r = row.rs_6m
-                    if _s is not None and _r is not None:
-                        row.score = round(
-                            0.4 * _s + 0.4 * _r + 0.2 * _pct,
-                            4,
-                        )
+        _ns = len(_sharpe_vals)
+        _nr = len(_rs_vals)
+        _na = len(_atr_vals)
+        for row in rows:
+            _sp = (
+                _pct_rank(_sharpe_vals, row.sharpe_ratio, _ns)
+                if row.sharpe_ratio is not None and _ns > 0
+                else None
+            )
+            _rp = (
+                _pct_rank(_rs_vals, row.rs_6m, _nr)
+                if row.rs_6m is not None and _nr > 0
+                else None
+            )
+            _ap = (
+                _pct_rank(_atr_vals, row.atr_pct, _na)
+                if row.atr_pct is not None and _na > 0
+                else None
+            )
+            if _sp is not None and _rp is not None and _ap is not None:
+                row.score = round(
+                    0.5 * _sp + 0.3 * _rp + 0.2 * _ap, 4
+                )
 
         result = WatchlistStocksResponse(stocks=rows)
         cache.set(

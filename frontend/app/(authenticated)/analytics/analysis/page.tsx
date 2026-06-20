@@ -2137,8 +2137,9 @@ function ColumnTooltip({ text }: { text: string }) {
 }
 
 type Rsi2Filter = "lte5" | "lte10" | "lte25" | "gte80" | null;
-type AtrFilter = "" | "lt0" | "gt0lte1_5" | "gt1_5lte4" | "gt2lte5" | "gt5";
+type AtrFilter = "" | "lt0" | "gt0lte1_5" | "gt1_5lte4" | "gt2lte5" | "gt2lte6" | "gt5";
 type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt080lte10" | "gt1";
+type RsFilter = "" | "lt25" | "gte25";
 type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sma_20" | "sharpe_ratio" | "atr_pct" | "rs_6m" | "score";
 type SortDir = "asc" | "desc";
 
@@ -2172,6 +2173,7 @@ function WatchlistStocksTab() {
   const [sma200AboveLtp, setSma200AboveLtp] = useState(false);
   const [atrFilter, setAtrFilter] = useState<AtrFilter>("");
   const [sharpeFilter, setSharpeFilter] = useState<SharpeFilter>("");
+  const [rsFilter, setRsFilter] = useState<RsFilter>("");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("ticker");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -2263,6 +2265,7 @@ function WatchlistStocksTab() {
         if (atrFilter === "gt0lte1_5") return r >= 0 && r <= 1.5;
         if (atrFilter === "gt1_5lte4") return r > 1.5 && r <= 4;
         if (atrFilter === "gt2lte5") return r > 2 && r <= 5;
+        if (atrFilter === "gt2lte6") return r > 2 && r <= 6;
         if (atrFilter === "gt5") return r > 5;
         return true;
       });
@@ -2277,6 +2280,16 @@ function WatchlistStocksTab() {
         if (sharpeFilter === "gt080lte2") return r > 0.8 && r <= 2;
         if (sharpeFilter === "gt080lte10") return r > 0.8 && r <= 10;
         if (sharpeFilter === "gt1") return r >= 1;
+        return true;
+      });
+    }
+    if (rsFilter) {
+      stocks = stocks.filter((s) => {
+        const v = s.rs_6m;
+        if (v == null) return false;
+        const r = Math.round(v * 100) / 100;
+        if (rsFilter === "lt25") return r < 25;
+        if (rsFilter === "gte25") return r >= 25;
         return true;
       });
     }
@@ -2300,7 +2313,7 @@ function WatchlistStocksTab() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return stocks;
-  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, search, sortKey, sortDir]);
+  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rsFilter, search, sortKey, sortDir]);
 
   const totalPages = Math.max(
     1,
@@ -2317,7 +2330,7 @@ function WatchlistStocksTab() {
     let cancelled = false;
     queueMicrotask(() => { if (!cancelled) setPage(0); });
     return () => { cancelled = true; };
-  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, search, pageSize, market]);
+  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rsFilter, search, pageSize, market]);
 
   const handleCopyTickers = () => {
     const csv = filtered.map((s) => s.ticker).join(", ");
@@ -2433,6 +2446,7 @@ function WatchlistStocksTab() {
                 <option value="gt0lte1_5">0% – 1.5%</option>
                 <option value="gt1_5lte4">1.5% – 4%</option>
                 <option value="gt2lte5">2% – 5%</option>
+                <option value="gt2lte6">2% – 6%</option>
                 <option value="gt5">&gt; 5%</option>
               </select>
             </div>
@@ -2478,6 +2492,22 @@ function WatchlistStocksTab() {
                 <option value="gt080lte2">0.80 – 2</option>
                 <option value="gt080lte10">0.80 – 10</option>
                 <option value="gt1">≥ 1</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                RS(6M)
+              </label>
+              <select
+                value={rsFilter}
+                data-testid="watchlist-rs-select"
+                onChange={(e) => setRsFilter(e.target.value as RsFilter)}
+                className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              >
+                <option value="">All</option>
+                <option value="lt25">&lt; 25%</option>
+                <option value="gte25">≥ 25%</option>
               </select>
             </div>
           </div>
@@ -2628,10 +2658,10 @@ function WatchlistStocksTab() {
                     label: "Score",
                     tooltip:
                       "Composite score: quality + momentum + volatility rank\n" +
-                      "Formula: 0.4×Sharpe(6M) + 0.4×RS(6M) + 0.2×ATR_Percentile\n" +
-                      "ATR Percentile = rank of ATR% among watchlist (0=calmest, 100=wildest)\n\n" +
-                      "Example: Sharpe=1.5, RS=10%, ATR Percentile=30\n" +
-                      "→ Score = 0.4×1.5 + 0.4×10 + 0.2×30 = 0.6 + 4.0 + 6.0 = 10.6\n\n" +
+                      "Formula: 0.5×SharpePercentile + 0.3×RSPercentile + 0.2×ATRPercentile\n" +
+                      "Each metric is ranked 0–100 among watchlist stocks before weighting.\n\n" +
+                      "Example: Sharpe pct=70, RS pct=80, ATR pct=30\n" +
+                      "→ Score = 0.5×70 + 0.3×80 + 0.2×30 = 35 + 24 + 6 = 65\n\n" +
                       "Higher score = stronger risk-adjusted outperformance.",
                   },
                 ] as { key: SortKey; label: string; tooltip?: string }[]
