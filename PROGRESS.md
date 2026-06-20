@@ -2,6 +2,23 @@
 
 ---
 
+### 2026-06-20 — feat: Watchlist Stocks tab enhancements (branch `feature/watchlist-offhours-rsi`)
+
+**Why:** Watchlist Stocks tab was very slow (yfinance blocking async event loop) and had limited analysis columns.
+
+**What:**
+- **Market hours gate**: `_is_indian_market_hours()` skips `yf.download()` off-hours (09:00–15:30 IST Mon–Fri); off-hours `current_rsi_2 == rsi_2` from OHLCV history
+- **New columns**: Sharpe(6M) (annualised), RS(6M) (stock vs Nifty 50 6M return), ATR% (ATR14/price×100), Dist SMA200 ((Price−SMA200)/SMA200×100), Score (0.5×SharpePercentile + 0.3×RSPercentile + 0.2×ATRPercentile)
+- **Score**: all three inputs cross-stock percentile-ranked 0–100 before weighting; computed post-loop
+- **Filters**: RSI(2), Curr RSI(2), ATR% (7 buckets), Sharpe (5 buckets), RS(6M) (<25%/≥25%), Dist SMA200 (multi-select, 7 buckets with interpretation captions), Golden Cross, LTP>SMA50, LTP>SMA200 toggles, ticker search, sortable columns
+- **Layout**: dropdowns in row 1, toggle chips in row 2
+- **Floating tooltips**: portal-based (`createPortal` + `getBoundingClientRect` + `position:fixed`) on Sharpe, RS(6M), ATR%, Score, Dist SMA200 columns — no viewport clipping
+- **Removed**: SMA5, SMA10 columns
+
+**Commits:** `a4a7e99` → `3ce611e` (20 commits)
+
+---
+
 ### 2026-06-19 — fix: intraday Iceberg file-explosion rebuild (branch `feature/intraday-partition-rebuild`)
 
 **Why:** The Intraday Bars Daily Pipeline's compaction step ran 2h+ and approached the 40k `_MAX_SAFE_COMPACT_FILES` skip-cliff. Root cause (file-layout audit): the three EOD intraday tables (`stocks.intraday_bars`, `stocks.index_intraday_bars`, `stocks.intraday_features`) used `IdentityTransform(ticker)+IdentityTransform(year_month)` — a ~22.7k-cell partition grid (515 tickers × ~44 months) flooring `intraday_bars` at ~37.5k files (≈60% structural grid + ≈40% delete+append churn). `intraday_features` hit 67.8k files even after a prior COW-overwrite attempt.
