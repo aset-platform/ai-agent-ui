@@ -2102,6 +2102,9 @@ function WatchlistStocksTab() {
   const [pageSize, setPageSize] =
     useState(DEFAULT_WL_PAGE_SIZE);
   const [copied, setCopied] = useState(false);
+  const [goldenCross, setGoldenCross] = useState(false);
+  const [sma50AboveLtp, setSma50AboveLtp] = useState(false);
+  const [sma200AboveLtp, setSma200AboveLtp] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -2157,8 +2160,32 @@ function WatchlistStocksTab() {
         return true;
       });
     }
+    if (goldenCross) {
+      stocks = stocks.filter(
+        (s) =>
+          s.sma_50 != null &&
+          s.sma_200 != null &&
+          s.sma_50 > s.sma_200,
+      );
+    }
+    if (sma50AboveLtp) {
+      stocks = stocks.filter(
+        (s) =>
+          s.sma_50 != null &&
+          s.close != null &&
+          s.sma_50 > s.close,
+      );
+    }
+    if (sma200AboveLtp) {
+      stocks = stocks.filter(
+        (s) =>
+          s.sma_200 != null &&
+          s.close != null &&
+          s.sma_200 > s.close,
+      );
+    }
     return stocks;
-  }, [data, rsi2Filter, curRsi2Filter]);
+  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp]);
 
   const totalPages = Math.max(
     1,
@@ -2175,7 +2202,7 @@ function WatchlistStocksTab() {
     let cancelled = false;
     queueMicrotask(() => { if (!cancelled) setPage(0); });
     return () => { cancelled = true; };
-  }, [rsi2Filter, curRsi2Filter, pageSize, market]);
+  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, pageSize, market]);
 
   const handleCopyTickers = () => {
     const csv = filtered.map((s) => s.ticker).join(", ");
@@ -2231,6 +2258,9 @@ function WatchlistStocksTab() {
                     setMarket(m);
                     setRsi2Filter(null);
                     setCurRsi2Filter(null);
+                    setGoldenCross(false);
+                    setSma50AboveLtp(false);
+                    setSma200AboveLtp(false);
                   }}
                   className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
                     market === m
@@ -2326,6 +2356,52 @@ function WatchlistStocksTab() {
                   Clear
                 </button>
               )}
+            </div>
+            {/* SMA filters row */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium w-20 shrink-0">
+                SMA:
+              </span>
+              {(
+                [
+                  {
+                    id: "goldenCross" as const,
+                    label: "Golden Cross",
+                    title: "SMA 50 > SMA 200",
+                    active: goldenCross,
+                    toggle: () => setGoldenCross((v) => !v),
+                  },
+                  {
+                    id: "sma50AboveLtp" as const,
+                    label: "SMA 50 > LTP",
+                    title: "50-day SMA above current price",
+                    active: sma50AboveLtp,
+                    toggle: () => setSma50AboveLtp((v) => !v),
+                  },
+                  {
+                    id: "sma200AboveLtp" as const,
+                    label: "SMA 200 > LTP",
+                    title: "200-day SMA above current price",
+                    active: sma200AboveLtp,
+                    toggle: () => setSma200AboveLtp((v) => !v),
+                  },
+                ] as const
+              ).map(({ id, label, title, active, toggle }) => (
+                <button
+                  key={id}
+                  type="button"
+                  title={title}
+                  data-testid={`watchlist-sma-filter-${id}`}
+                  onClick={toggle}
+                  className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                    active
+                      ? "bg-amber-500 text-white dark:bg-amber-400 dark:text-gray-900"
+                      : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
         </div>
