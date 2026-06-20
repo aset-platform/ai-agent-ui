@@ -40,7 +40,7 @@ _TEST_TICKER_PREFIX = "RTN_"
 
 @pytest.fixture(autouse=True)
 def _stub_backup_table(monkeypatch):
-    """Skip the real rsync from ``backup_table()`` during unit
+    """Skip the real rsync from ``verify_or_backup()`` during unit
     tests — we only want to exercise retention logic. The
     backup-gate behaviour itself is tested explicitly below
     with a failing stub."""
@@ -48,8 +48,12 @@ def _stub_backup_table(monkeypatch):
 
     monkeypatch.setattr(
         mod,
-        "backup_table",
-        lambda table_id, **_kw: f"/tmp/fake-backup-{table_id}",
+        "verify_or_backup",
+        lambda tables: {
+            "mode": "fallback_per_table",
+            "snapshot": None,
+            "paths": [f"/tmp/fake-backup-{tables[0]}"],
+        },
     )
 
 
@@ -196,11 +200,15 @@ async def test_gate_skips_when_already_ran_this_month(monkeypatch):
     )
     backup_calls = []
 
-    def _capture_backup(table_id, **_kw):
-        backup_calls.append(table_id)
-        return "/tmp/unreachable"
+    def _capture_backup(tables):
+        backup_calls.extend(tables)
+        return {
+            "mode": "fallback_per_table",
+            "snapshot": None,
+            "paths": ["/tmp/unreachable"],
+        }
 
-    monkeypatch.setattr(mod, "backup_table", _capture_backup)
+    monkeypatch.setattr(mod, "verify_or_backup", _capture_backup)
 
     result = await run_intraday_bars_retention_job(
         {"today": "2026-05-15"},
@@ -291,10 +299,10 @@ async def test_backup_failure_aborts_delete(monkeypatch):
     NOT issue the Iceberg delete — fail-closed contract."""
     from backend.algo.jobs import intraday_bars_retention as mod
 
-    def _bad_backup(table_id, **_kw):
+    def _bad_backup(tables):
         raise RuntimeError("rsync timed out (simulated)")
 
-    monkeypatch.setattr(mod, "backup_table", _bad_backup)
+    monkeypatch.setattr(mod, "verify_or_backup", _bad_backup)
 
     mock_tbl = MagicMock()
     mock_cat = MagicMock()
@@ -334,7 +342,8 @@ async def test_skip_backup_payload_bypasses_safety_gate():
             "backend.algo.jobs.intraday_bars_retention." "invalidate_metadata",
         ),
         patch(
-            "backend.algo.jobs.intraday_bars_retention." "backup_table",
+            "backend.algo.jobs.intraday_bars_retention."
+            "verify_or_backup",
         ) as mock_backup,
     ):
         result = await run_intraday_bars_retention_job(

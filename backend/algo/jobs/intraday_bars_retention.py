@@ -51,7 +51,7 @@ from sqlalchemy import text
 from backend.algo._iceberg_retry import retry_iceberg_op
 from backend.db.duckdb_engine import invalidate_metadata
 from backend.db.engine import disposable_pg_session
-from backend.maintenance.backup import backup_table
+from backend.maintenance.backup import verify_or_backup
 
 _logger = logging.getLogger(__name__)
 
@@ -190,7 +190,10 @@ async def run_intraday_bars_retention_job(
     backup_path: str | None = None
     if not skip_backup:
         try:
-            backup_path = backup_table(INTRADAY_BARS_TABLE)
+            _vob = verify_or_backup([INTRADAY_BARS_TABLE])
+            backup_path = _vob.get("snapshot") or (
+                _vob["paths"][0] if _vob.get("paths") else None
+            )
         except Exception as exc:  # noqa: BLE001
             _logger.error(
                 "intraday-retention: pre-delete backup failed "
