@@ -2076,6 +2076,137 @@ function PortfolioForecastTab({
 // Tab: Watchlist Stocks
 // ---------------------------------------------------------------
 
+const DIST_SMA200_BUCKETS = [
+  {
+    value: "lt0",
+    label: "< 0%",
+    caption: "Bearish trend · ❌ Avoid",
+  },
+  {
+    value: "gt0lte5",
+    label: "0% – 5%",
+    caption: "Trend not proven · ⚠️ Weak",
+  },
+  {
+    value: "gt5lte15",
+    label: "5% – 15%",
+    caption: "Early trend · ✅ Good",
+  },
+  {
+    value: "gt15lte35",
+    label: "15% – 35%",
+    caption: "Healthy trend · ⭐ Best",
+  },
+  {
+    value: "gt35lte50",
+    label: "35% – 50%",
+    caption: "Extended · ✅ Good",
+  },
+  {
+    value: "gt50lte80",
+    label: "50% – 80%",
+    caption: "Very extended · ⚠️ Selective",
+  },
+  {
+    value: "gt80",
+    label: "> 80%",
+    caption: "Extremely extended · ❌ Avoid",
+  },
+] as const;
+
+type DistSma200Bucket = (typeof DIST_SMA200_BUCKETS)[number]["value"];
+
+function DistSma200MultiSelect({
+  selected,
+  onChange,
+}: {
+  selected: DistSma200Bucket[];
+  onChange: (v: DistSma200Bucket[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const toggle = (v: DistSma200Bucket) => {
+    onChange(
+      selected.includes(v)
+        ? selected.filter((x) => x !== v)
+        : [...selected, v],
+    );
+  };
+
+  const label =
+    selected.length === 0
+      ? "All"
+      : selected.length === 1
+        ? DIST_SMA200_BUCKETS.find((b) => b.value === selected[0])?.label ?? "1 range"
+        : `${selected.length} ranges`;
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        data-testid="watchlist-dist-sma200-select"
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors ${
+          selected.length > 0
+            ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+            : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+        }`}
+      >
+        {label}
+        <svg className={`w-3 h-3 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-[80] w-64 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl py-1">
+          {selected.length > 0 && (
+            <button
+              type="button"
+              onClick={() => onChange([])}
+              className="w-full text-left px-3 py-1.5 text-xs text-indigo-600 dark:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800 font-medium"
+            >
+              Clear all
+            </button>
+          )}
+          {DIST_SMA200_BUCKETS.map((b) => {
+            const checked = selected.includes(b.value);
+            return (
+              <label
+                key={b.value}
+                className="flex items-start gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggle(b.value)}
+                  className="mt-0.5 shrink-0 accent-indigo-600"
+                />
+                <span className="flex flex-col">
+                  <span className="text-xs font-medium text-gray-900 dark:text-gray-100">{b.label}</span>
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400">{b.caption}</span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ColumnTooltip({ text }: { text: string }) {
   const triggerRef = useRef<HTMLSpanElement>(null);
   const [coords, setCoords] = useState<{
@@ -2140,7 +2271,7 @@ type Rsi2Filter = "lte5" | "lte10" | "lte25" | "gte80" | null;
 type AtrFilter = "" | "lt0" | "gt0lte1_5" | "gt1_5lte4" | "gt2lte5" | "gt2lte6" | "gt5";
 type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt080lte10" | "gt1";
 type RsFilter = "" | "lt25" | "gte25";
-type DistSma200Filter = "" | "lt5" | "gte5lte35" | "gt35";
+type DistSma200Filter = DistSma200Bucket[];
 type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sma_20" | "sharpe_ratio" | "atr_pct" | "rs_6m" | "dist_sma200" | "score";
 type SortDir = "asc" | "desc";
 
@@ -2175,7 +2306,7 @@ function WatchlistStocksTab() {
   const [atrFilter, setAtrFilter] = useState<AtrFilter>("");
   const [sharpeFilter, setSharpeFilter] = useState<SharpeFilter>("");
   const [rsFilter, setRsFilter] = useState<RsFilter>("");
-  const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>("");
+  const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>([]);
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("ticker");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -2295,15 +2426,21 @@ function WatchlistStocksTab() {
         return true;
       });
     }
-    if (distSma200Filter) {
+    if (distSma200Filter.length > 0) {
       stocks = stocks.filter((s) => {
         const v = s.dist_sma200;
         if (v == null) return false;
         const r = Math.round(v * 100) / 100;
-        if (distSma200Filter === "lt5") return r < 5;
-        if (distSma200Filter === "gte5lte35") return r >= 5 && r <= 35;
-        if (distSma200Filter === "gt35") return r > 35;
-        return true;
+        return distSma200Filter.some((bucket) => {
+          if (bucket === "lt0") return r < 0;
+          if (bucket === "gt0lte5") return r >= 0 && r <= 5;
+          if (bucket === "gt5lte15") return r > 5 && r <= 15;
+          if (bucket === "gt15lte35") return r > 15 && r <= 35;
+          if (bucket === "gt35lte50") return r > 35 && r <= 50;
+          if (bucket === "gt50lte80") return r > 50 && r <= 80;
+          if (bucket === "gt80") return r > 80;
+          return false;
+        });
       });
     }
     if (search.trim()) {
@@ -2406,6 +2543,7 @@ function WatchlistStocksTab() {
                     setSma200AboveLtp(false);
                     setAtrFilter("");
                     setSharpeFilter("");
+                    setDistSma200Filter([]);
                     setSearch("");
                   }}
                   className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
@@ -2490,18 +2628,6 @@ function WatchlistStocksTab() {
                     { value: "gte25", label: "≥ 25%" },
                   ],
                 },
-                {
-                  label: "Dist SMA200",
-                  testId: "watchlist-dist-sma200-select",
-                  value: distSma200Filter,
-                  onChange: (v: string) => setDistSma200Filter(v as DistSma200Filter),
-                  options: [
-                    { value: "", label: "All" },
-                    { value: "lt5", label: "< 5%" },
-                    { value: "gte5lte35", label: "5–35%" },
-                    { value: "gt35", label: "> 35%" },
-                  ],
-                },
               ] as const
             ).map((f) => (
               <div key={f.testId} className="flex items-center gap-1.5">
@@ -2520,6 +2646,17 @@ function WatchlistStocksTab() {
                 </select>
               </div>
             ))}
+
+            {/* Dist SMA200 — multi-select */}
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                Dist SMA200
+              </label>
+              <DistSma200MultiSelect
+                selected={distSma200Filter}
+                onChange={setDistSma200Filter}
+              />
+            </div>
           </div>
 
           {/* Row 2 — toggle chips */}
