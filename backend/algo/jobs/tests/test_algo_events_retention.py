@@ -120,7 +120,7 @@ class TestRunRetentionJob:
         with (
             patch(
                 "backend.algo.jobs.algo_events_retention."
-                "backup_table",
+                "verify_or_backup",
                 side_effect=RuntimeError("disk full"),
             ),
             patch(
@@ -137,8 +137,12 @@ class TestRunRetentionJob:
         with (
             patch(
                 "backend.algo.jobs.algo_events_retention."
-                "backup_table",
-                return_value="/tmp/backup-1",
+                "verify_or_backup",
+                return_value={
+                    "mode": "fallback_per_table",
+                    "snapshot": None,
+                    "paths": ["/tmp/backup-1"],
+                },
             ),
             patch(
                 "stocks.create_tables._get_catalog",

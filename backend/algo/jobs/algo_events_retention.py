@@ -61,7 +61,7 @@ from backend.algo.iceberg_init import (
     SHORT_RETENTION_MODES,
 )
 from backend.db.duckdb_engine import invalidate_metadata
-from backend.maintenance.backup import backup_table
+from backend.maintenance.backup import verify_or_backup
 
 _logger = logging.getLogger(__name__)
 
@@ -178,7 +178,10 @@ def run_algo_events_retention_job(
     backup_path: str | None = None
     if not skip_backup:
         try:
-            backup_path = backup_table(ALGO_EVENTS_TABLE)
+            _vob = verify_or_backup([ALGO_EVENTS_TABLE])
+            backup_path = _vob.get("snapshot") or (
+                _vob["paths"][0] if _vob.get("paths") else None
+            )
         except Exception as exc:  # noqa: BLE001
             _logger.error(
                 "algo-events-retention: pre-delete backup "

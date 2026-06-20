@@ -119,6 +119,12 @@ def backup_table(
     root.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
     dest = root / f"backup-{today}-{ns}-{name}"
+    if dest.exists() and any(dest.iterdir()):
+        _logger.info(
+            "Per-table backup for %s already exists today "
+            "(%s) — skipping re-rsync", table_id, dest,
+        )
+        return str(dest)
     dest.mkdir(parents=True, exist_ok=True)
     timeout = timeout_s or _rsync_timeout_s()
 
@@ -307,6 +313,8 @@ def restore_backup(
 
 def list_backups(
     backup_root: str | None = None,
+    *,
+    full_only: bool = False,
 ) -> list[dict]:
     """List available backups with dates and sizes.
 
@@ -333,6 +341,10 @@ def list_backups(
         if d.is_dir() and d.name.startswith(
             "backup-",
         ):
+            if full_only and not _FULL_SNAPSHOT_NAME_RE.match(
+                d.name
+            ):
+                continue
             dt = d.name.replace("backup-", "")
             # Convert mtime → UTC ISO string with Z so
             # the frontend's `new Date(...)` parses it
