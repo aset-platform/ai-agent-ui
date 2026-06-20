@@ -308,6 +308,19 @@ class RiskPerTrade(BaseModel):
     cooldown_after_failed_exit_days: int | None = Field(
         default=None, ge=1, le=365,
     )
+    # v5 trailing stop — all None = disabled (v1/v2/v3 unchanged)
+    phase1_ratchet_trigger_pct: float | None = Field(
+        default=None, ge=0, le=50,
+    )
+    phase1_ratchet_new_stop_pct: float | None = Field(
+        default=None, ge=0, le=50,
+    )
+    trailing_trigger_pct: float | None = Field(
+        default=None, ge=0, le=100,
+    )
+    trailing_atr_multiplier: float | None = Field(
+        default=None, ge=0.1, le=10.0,
+    )
 
 
 class RiskPortfolio(BaseModel):
