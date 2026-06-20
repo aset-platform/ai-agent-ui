@@ -282,69 +282,31 @@ def expire_snapshots(
     table_name: str,
     keep: int = SNAPSHOT_KEEP,
 ) -> dict:
-    """Expire old snapshots, keeping latest N.
+    """Expire old snapshots (keep latest ``keep``) via the real
+    PyIceberg path. Delegates to ``cleanup_orphans_v2`` which
+    performs native expire + referenced-set orphan sweep.
+
+    Caller contract: a step-0 backup must already have been taken
+    upstream (``skip_backup=True`` here). ``run_maintenance`` and
+    the post-pipeline expiry tail satisfy this via the daily
+    snapshot + Iceberg snapshot retention.
 
     Args:
         table_name: e.g. 'stocks.ohlcv'
-        keep: Number of snapshots to retain
+        keep: Number of snapshots to retain (default SNAPSHOT_KEEP)
 
     Returns:
-        Dict with before/after counts.
+        Dict with keys ``table``, ``expired``, ``verified``.
     """
-    catalog = _get_catalog()
-    tbl = catalog.load_table(table_name)
-
-    snapshots = list(tbl.metadata.snapshots)
-    before = len(snapshots)
-
-    if before <= keep:
-        _logger.info(
-            "[maint] %s: %d snapshots, no " "expiry needed (keep=%d)",
-            table_name,
-            before,
-            keep,
-        )
-        return {
-            "table": table_name,
-            "before": before,
-            "after": before,
-            "expired": 0,
-        }
-
-    # No-op kept for backwards compatibility — see
-    # ``cleanup_orphans_v2`` for the real PyIceberg
-    # 0.11.1 expiry path. Compaction via overwrite()
-    # remains the primary file-count cleanup; this
-    # function previously logged "expired N" but
-    # didn't actually call expire_snapshots() because
-    # the API was assumed unsafe. That assumption is
-    # outdated. Callers wanting real expiry should
-    # call ``cleanup_orphans_v2`` instead.
-    _logger.info(
-        "[maint] %s: %d snapshots present "
-        "(legacy no-op; use cleanup_orphans_v2 "
-        "for real expiry)",
+    res = cleanup_orphans_v2(
         table_name,
-        before,
-    )
-
-    # Reload to verify
-    tbl = catalog.load_table(table_name)
-    after = len(list(tbl.metadata.snapshots))
-    expired = before - after
-
-    _logger.info(
-        "[maint] %s: expired %d snapshots " "(%d → %d)",
-        table_name,
-        expired,
-        before,
-        after,
+        retain_snapshots=keep,
+        skip_backup=True,
     )
     return {
         "table": table_name,
-        "before": before,
-        "after": after,
-        "expired": expired,
+        "expired": int(res.get("expired_snapshots", 0)),
+        "verified": res.get("verified", True),
     }
 
 
