@@ -119,6 +119,12 @@ def backup_table(
     root.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
     dest = root / f"backup-{today}-{ns}-{name}"
+    if dest.exists() and any(dest.iterdir()):
+        _logger.info(
+            "Per-table backup for %s already exists today "
+            "(%s) — skipping re-rsync", table_id, dest,
+        )
+        return str(dest)
     dest.mkdir(parents=True, exist_ok=True)
     timeout = timeout_s or _rsync_timeout_s()
 
