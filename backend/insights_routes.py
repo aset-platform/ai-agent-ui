@@ -74,6 +74,18 @@ def _get_stock_repo():
     return _require_repo()
 
 
+def _is_indian_market_hours() -> bool:
+    """Return True during NSE trading hours: 09:00–15:30 IST, Mon–Fri."""
+    from datetime import time as _time, timezone as _tz
+    from zoneinfo import ZoneInfo as _ZI
+
+    now = datetime.now(_tz.utc).astimezone(_ZI("Asia/Kolkata"))
+    if now.weekday() >= 5:  # Sat=5, Sun=6
+        return False
+    t = now.time()
+    return _time(9, 0) <= t <= _time(15, 30)
+
+
 def _safe(val) -> float | None:
     """Convert to float or return None for NaN/inf."""
     if val is None:
@@ -2219,13 +2231,10 @@ def create_insights_router() -> APIRouter:
         if ohlcv_df.empty:
             return WatchlistStocksResponse()
 
-        # Fetch today's LTP via yfinance for current_rsi_2 computation.
-        # One batch call for all tickers; result may be empty on failure.
         import math as _math
         from datetime import date as _date_t, timezone as _tz
         from decimal import Decimal as _Dec
         from zoneinfo import ZoneInfo as _ZI
-        import yfinance as _yf
         from backend.algo.backtest.types import BarData as _BD
         from backend.algo.backtest.indicators import (
             compute_indicators as _ci,
@@ -2236,32 +2245,59 @@ def create_insights_router() -> APIRouter:
             .astimezone(_ZI("Asia/Kolkata"))
             .date()
         )
-        _ltp_map: dict[str, float] = {}
+
+        # Fetch Nifty 50 6M return once for RS(6M) calculation.
+        _nifty_6m_return: float | None = None
         try:
-            _price_raw = _yf.download(
-                tickers,
-                period="2d",
-                progress=False,
-                auto_adjust=True,
+            _nifty_df = query_iceberg_df(
+                "stocks.ohlcv",
+                "SELECT date, close FROM ohlcv "
+                "WHERE ticker = '^NSEI' "
+                "  AND close IS NOT NULL "
+                "ORDER BY date DESC LIMIT 135",
             )
-            _close_col = _price_raw["Close"]
-            if isinstance(_close_col, pd.Series):
-                _v = _close_col.iloc[-1]
-                if not _math.isnan(float(_v)):
-                    _ltp_map[tickers[0]] = float(_v)
-            else:
-                for _t in _close_col.columns:
-                    _v = _close_col[_t].iloc[-1]
-                    try:
-                        _f = float(_v)
-                        if not _math.isnan(_f):
-                            _ltp_map[str(_t)] = _f
-                    except (ValueError, TypeError):
-                        pass
-        except Exception as _exc:
-            _logger.debug(
-                "watchlist-stocks LTP fetch: %s", _exc
-            )
+            if len(_nifty_df) >= 20:
+                _nc = (
+                    _nifty_df.sort_values("date")["close"]
+                    .astype(float)
+                )
+                _nifty_6m_return = float(
+                    (_nc.iloc[-1] - _nc.iloc[0]) / _nc.iloc[0] * 100
+                )
+        except Exception as _e:
+            _logger.debug("watchlist-stocks nifty 6m: %s", _e)
+
+        # Only fetch live prices during NSE market hours (09:00–15:30 IST,
+        # Mon–Fri). Off-hours current_rsi_2 == rsi_2 from OHLCV history.
+        _live_mode = _is_indian_market_hours()
+        _ltp_map: dict[str, float] = {}
+        if _live_mode:
+            import yfinance as _yf
+            try:
+                _price_raw = _yf.download(
+                    tickers,
+                    period="2d",
+                    progress=False,
+                    auto_adjust=True,
+                )
+                _close_col = _price_raw["Close"]
+                if isinstance(_close_col, pd.Series):
+                    _v = _close_col.iloc[-1]
+                    if not _math.isnan(float(_v)):
+                        _ltp_map[tickers[0]] = float(_v)
+                else:
+                    for _t in _close_col.columns:
+                        _v = _close_col[_t].iloc[-1]
+                        try:
+                            _f = float(_v)
+                            if not _math.isnan(_f):
+                                _ltp_map[str(_t)] = _f
+                        except (ValueError, TypeError):
+                            pass
+            except Exception as _exc:
+                _logger.debug(
+                    "watchlist-stocks LTP fetch: %s", _exc
+                )
 
         rows: list[WatchlistStockRow] = []
         for ticker, grp in ohlcv_df.groupby("ticker"):
@@ -2303,81 +2339,144 @@ def create_insights_router() -> APIRouter:
                 )
                 last = ind.iloc[-1]
 
-                # Compute current_rsi_2 using wilder RSI
-                # with today's LTP appended as a synthetic bar.
+                # Compute current_rsi_2: during market hours append a
+                # synthetic bar with today's LTP; off-hours reuse rsi_2.
                 _cur_rsi2: float | None = None
+                if not _live_mode:
+                    _cur_rsi2 = _safe(last.get("RSI_2"))
+                else:
+                    try:
+                        _bars: list[_BD] = []
+                        for _, _r in grp.iterrows():
+                            _d = _r["date"]
+                            if isinstance(_d, _date_t):
+                                pass
+                            elif hasattr(_d, "date"):
+                                _d = _d.date()
+                            else:
+                                _d = pd.Timestamp(
+                                    _d
+                                ).date()
+                            _bars.append(_BD(
+                                ticker=str(ticker),
+                                date=_d,
+                                open=_Dec(str(_r["open"])),
+                                high=_Dec(str(_r["high"])),
+                                low=_Dec(str(_r["low"])),
+                                close=_Dec(str(_r["close"])),
+                                volume=int(_r["volume"] or 0),
+                            ))
+                        _ltp = _ltp_map.get(str(ticker))
+                        if (
+                            _bars
+                            and _ltp is not None
+                            and _bars[-1].date < _today_ist
+                        ):
+                            _bars.append(_BD(
+                                ticker=str(ticker),
+                                date=_today_ist,
+                                open=_Dec(str(_ltp)),
+                                high=_Dec(str(_ltp)),
+                                low=_Dec(str(_ltp)),
+                                close=_Dec(str(_ltp)),
+                                volume=0,
+                            ))
+                        if _bars:
+                            _imap = _ci(_bars)
+                            if _imap:
+                                _li = _imap[max(_imap.keys())]
+                                _r2 = _li.get("rsi_2")
+                                if _r2 is not None:
+                                    _cur_rsi2 = float(_r2)
+                    except Exception as _exc2:
+                        _logger.debug(
+                            "current_rsi_2 %s: %s",
+                            ticker,
+                            _exc2,
+                        )
+
+                # Sharpe Ratio: annualized using last ~126
+                # trading days (≈6 months).
+                _sharpe: float | None = None
+                _stock_6m_return: float | None = None
                 try:
-                    _bars: list[_BD] = []
-                    for _, _r in grp.iterrows():
-                        _d = _r["date"]
-                        if isinstance(_d, _date_t):
-                            pass
-                        elif hasattr(_d, "date"):
-                            _d = _d.date()
-                        else:
-                            _d = pd.Timestamp(
-                                _d
-                            ).date()
-                        _bars.append(_BD(
-                            ticker=str(ticker),
-                            date=_d,
-                            open=_Dec(str(_r["open"])),
-                            high=_Dec(str(_r["high"])),
-                            low=_Dec(str(_r["low"])),
-                            close=_Dec(str(_r["close"])),
-                            volume=int(_r["volume"] or 0),
-                        ))
-                    _ltp = _ltp_map.get(str(ticker))
-                    if (
-                        _bars
-                        and _ltp is not None
-                        and _bars[-1].date < _today_ist
-                    ):
-                        _bars.append(_BD(
-                            ticker=str(ticker),
-                            date=_today_ist,
-                            open=_Dec(str(_ltp)),
-                            high=_Dec(str(_ltp)),
-                            low=_Dec(str(_ltp)),
-                            close=_Dec(str(_ltp)),
-                            volume=0,
-                        ))
-                    if _bars:
-                        _imap = _ci(_bars)
-                        if _imap:
-                            _li = _imap[max(_imap.keys())]
-                            _r2 = _li.get("rsi_2")
-                            if _r2 is not None:
-                                _cur_rsi2 = float(_r2)
-                except Exception as _exc2:
-                    _logger.debug(
-                        "current_rsi_2 %s: %s",
-                        ticker,
-                        _exc2,
+                    _close_s = grp["close"].astype(float)
+                    _rets = _close_s.pct_change().dropna()
+                    _rets6 = _rets.iloc[-126:]
+                    if len(_rets6) >= 20:
+                        _std = float(_rets6.std())
+                        if _std > 0:
+                            _sharpe = round(
+                                float(_rets6.mean())
+                                / _std
+                                * (252 ** 0.5),
+                                4,
+                            )
+                    # 6M price return for RS calculation
+                    _c6 = _close_s.iloc[-127:]
+                    if len(_c6) >= 2:
+                        _stock_6m_return = float(
+                            (_c6.iloc[-1] - _c6.iloc[0])
+                            / _c6.iloc[0] * 100
+                        )
+                except Exception:
+                    pass
+
+                # RS(6M) = stock 6M return − Nifty 6M return
+                _rs_6m: float | None = None
+                if (
+                    _stock_6m_return is not None
+                    and _nifty_6m_return is not None
+                ):
+                    _rs_6m = round(
+                        _stock_6m_return - _nifty_6m_return, 4
+                    )
+
+                # ATR% = ATR(14) / close * 100
+                _atr_pct: float | None = None
+                _atr14 = _safe(last.get("ATR_14"))
+                _ltp_close = _safe(last["Close"])
+                if (
+                    _atr14 is not None
+                    and _ltp_close is not None
+                    and _ltp_close > 0
+                ):
+                    _atr_pct = round(
+                        _atr14 / _ltp_close * 100, 4
+                    )
+
+                # Distance above SMA200 = (Price - SMA200) / SMA200 * 100
+                _dist_sma200: float | None = None
+                _sma200 = _safe(last.get("SMA_200"))
+                if (
+                    _ltp_close is not None
+                    and _sma200 is not None
+                    and _sma200 > 0
+                ):
+                    _dist_sma200 = round(
+                        (_ltp_close - _sma200) / _sma200 * 100, 4
                     )
 
                 rows.append(
                     WatchlistStockRow(
                         ticker=str(ticker),
                         market=mkt,
-                        close=_safe(last["Close"]),
+                        close=_ltp_close,
                         rsi_2=_safe(
                             last.get("RSI_2")
                         ),
                         current_rsi_2=_cur_rsi2,
-                        sma_200=_safe(
-                            last.get("SMA_200")
-                        ),
+                        sma_200=_sma200,
                         sma_50=_safe(
                             last.get("SMA_50")
                         ),
                         sma_20=_safe(
                             last.get("SMA_20")
                         ),
-                        sma_10=_safe(
-                            last.get("SMA_10")
-                        ),
-                        sma_5=_safe(last.get("SMA_5")),
+                        sharpe_ratio=_sharpe,
+                        atr_pct=_atr_pct,
+                        rs_6m=_rs_6m,
+                        dist_sma200=_dist_sma200,
                     )
                 )
             except Exception as exc:
@@ -2399,6 +2498,50 @@ def create_insights_router() -> APIRouter:
                     )
                 except Exception:
                     pass
+
+        # Compute cross-stock percentile ranks for Sharpe, RS and ATR,
+        # then score = 0.5×SharpePercentile + 0.3×RSPercentile
+        #              + 0.2×ATRPercentile
+        def _pct_rank(
+            vals: list[float], v: float, n: int
+        ) -> float:
+            if n <= 1:
+                return 50.0
+            return sorted(vals).index(v) / (n - 1) * 100
+
+        _sharpe_vals = [
+            r.sharpe_ratio for r in rows
+            if r.sharpe_ratio is not None
+        ]
+        _rs_vals = [
+            r.rs_6m for r in rows if r.rs_6m is not None
+        ]
+        _atr_vals = [
+            r.atr_pct for r in rows if r.atr_pct is not None
+        ]
+        _ns = len(_sharpe_vals)
+        _nr = len(_rs_vals)
+        _na = len(_atr_vals)
+        for row in rows:
+            _sp = (
+                _pct_rank(_sharpe_vals, row.sharpe_ratio, _ns)
+                if row.sharpe_ratio is not None and _ns > 0
+                else None
+            )
+            _rp = (
+                _pct_rank(_rs_vals, row.rs_6m, _nr)
+                if row.rs_6m is not None and _nr > 0
+                else None
+            )
+            _ap = (
+                _pct_rank(_atr_vals, row.atr_pct, _na)
+                if row.atr_pct is not None and _na > 0
+                else None
+            )
+            if _sp is not None and _rp is not None and _ap is not None:
+                row.score = round(
+                    0.5 * _sp + 0.3 * _rp + 0.2 * _ap, 4
+                )
 
         result = WatchlistStocksResponse(stocks=rows)
         cache.set(

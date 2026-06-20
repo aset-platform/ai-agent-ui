@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   useSearchParams,
   useRouter,
@@ -2075,7 +2076,204 @@ function PortfolioForecastTab({
 // Tab: Watchlist Stocks
 // ---------------------------------------------------------------
 
+const DIST_SMA200_BUCKETS = [
+  {
+    value: "lt0",
+    label: "< 0%",
+    caption: "Bearish trend · ❌ Avoid",
+  },
+  {
+    value: "gt0lte5",
+    label: "0% – 5%",
+    caption: "Trend not proven · ⚠️ Weak",
+  },
+  {
+    value: "gt5lte15",
+    label: "5% – 15%",
+    caption: "Early trend · ✅ Good",
+  },
+  {
+    value: "gt15lte35",
+    label: "15% – 35%",
+    caption: "Healthy trend · ⭐ Best",
+  },
+  {
+    value: "gt35lte50",
+    label: "35% – 50%",
+    caption: "Extended · ✅ Good",
+  },
+  {
+    value: "gt50lte80",
+    label: "50% – 80%",
+    caption: "Very extended · ⚠️ Selective",
+  },
+  {
+    value: "gt80",
+    label: "> 80%",
+    caption: "Extremely extended · ❌ Avoid",
+  },
+] as const;
+
+type DistSma200Bucket = (typeof DIST_SMA200_BUCKETS)[number]["value"];
+
+function DistSma200MultiSelect({
+  selected,
+  onChange,
+}: {
+  selected: DistSma200Bucket[];
+  onChange: (v: DistSma200Bucket[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const toggle = (v: DistSma200Bucket) => {
+    onChange(
+      selected.includes(v)
+        ? selected.filter((x) => x !== v)
+        : [...selected, v],
+    );
+  };
+
+  const label =
+    selected.length === 0
+      ? "All"
+      : selected.length === 1
+        ? DIST_SMA200_BUCKETS.find((b) => b.value === selected[0])?.label ?? "1 range"
+        : `${selected.length} ranges`;
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        data-testid="watchlist-dist-sma200-select"
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors ${
+          selected.length > 0
+            ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+            : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+        }`}
+      >
+        {label}
+        <svg className={`w-3 h-3 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-[80] min-w-full w-max rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl py-1">
+          {selected.length > 0 && (
+            <button
+              type="button"
+              onClick={() => onChange([])}
+              className="w-full text-left px-3 py-1.5 text-xs text-indigo-600 dark:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800 font-medium"
+            >
+              Clear all
+            </button>
+          )}
+          {DIST_SMA200_BUCKETS.map((b) => {
+            const checked = selected.includes(b.value);
+            return (
+              <label
+                key={b.value}
+                className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggle(b.value)}
+                  className="shrink-0 accent-indigo-600"
+                />
+                <span className="text-xs text-gray-900 dark:text-gray-100 whitespace-nowrap">
+                  <span className="font-medium">{b.label}</span>
+                  <span className="text-gray-500 dark:text-gray-400"> ({b.caption})</span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ColumnTooltip({ text }: { text: string }) {
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const [coords, setCoords] = useState<{
+    x: number; y: number; above: boolean;
+  } | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => { setMounted(true); }, []);
+
+  const show = useCallback(() => {
+    if (!triggerRef.current) return;
+    const r = triggerRef.current.getBoundingClientRect();
+    const above = r.top > 220;
+    setCoords({ x: r.right, y: above ? r.top - 6 : r.bottom + 6, above });
+  }, []);
+
+  const hide = useCallback(() => setCoords(null), []);
+
+  return (
+    <span
+      ref={triggerRef}
+      className="inline-flex"
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <svg
+        className="w-3 h-3 text-gray-400 hover:text-indigo-500 shrink-0 cursor-help"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+      >
+        <circle cx="12" cy="12" r="10" />
+        <path d="M12 16v-4M12 8h.01" />
+      </svg>
+      {mounted && coords && createPortal(
+        <div
+          style={{
+            position: "fixed",
+            top: coords.above ? undefined : coords.y,
+            bottom: coords.above
+              ? window.innerHeight - coords.y
+              : undefined,
+            left: Math.max(8, Math.min(
+              coords.x - 288,
+              window.innerWidth - 296
+            )),
+            zIndex: 9999,
+          }}
+          className="w-72 rounded-lg bg-gray-900 dark:bg-gray-700 px-3 py-2.5 text-[11px] text-gray-100 shadow-2xl whitespace-pre-line leading-relaxed pointer-events-none"
+        >
+          {text}
+        </div>,
+        document.body
+      )}
+    </span>
+  );
+}
+
 type Rsi2Filter = "lte5" | "lte10" | "lte25" | "gte80" | null;
+type AtrFilter = "" | "lt0" | "gt0lte1_5" | "gt1_5lte4" | "gt2lte5" | "gt2lte6" | "gt5";
+type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt080lte10" | "gt1";
+type RsFilter = "" | "lt25" | "gte25";
+type DistSma200Filter = DistSma200Bucket[];
+type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sma_20" | "sharpe_ratio" | "atr_pct" | "rs_6m" | "dist_sma200" | "score";
+type SortDir = "asc" | "desc";
 
 const PAGE_SIZE_OPTIONS_WL = [10, 25, 50] as const;
 const DEFAULT_WL_PAGE_SIZE = 25;
@@ -2102,6 +2300,16 @@ function WatchlistStocksTab() {
   const [pageSize, setPageSize] =
     useState(DEFAULT_WL_PAGE_SIZE);
   const [copied, setCopied] = useState(false);
+  const [goldenCross, setGoldenCross] = useState(false);
+  const [sma50AboveLtp, setSma50AboveLtp] = useState(false);
+  const [sma200AboveLtp, setSma200AboveLtp] = useState(false);
+  const [atrFilter, setAtrFilter] = useState<AtrFilter>("");
+  const [sharpeFilter, setSharpeFilter] = useState<SharpeFilter>("");
+  const [rsFilter, setRsFilter] = useState<RsFilter>("");
+  const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>([]);
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("ticker");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
 
   useEffect(() => {
     let cancelled = false;
@@ -2157,8 +2365,105 @@ function WatchlistStocksTab() {
         return true;
       });
     }
+    if (goldenCross) {
+      stocks = stocks.filter(
+        (s) =>
+          s.sma_50 != null &&
+          s.sma_200 != null &&
+          s.sma_50 > s.sma_200,
+      );
+    }
+    if (sma50AboveLtp) {
+      stocks = stocks.filter(
+        (s) =>
+          s.sma_50 != null &&
+          s.close != null &&
+          s.close > s.sma_50,
+      );
+    }
+    if (sma200AboveLtp) {
+      stocks = stocks.filter(
+        (s) =>
+          s.sma_200 != null &&
+          s.close != null &&
+          s.close > s.sma_200,
+      );
+    }
+    if (atrFilter) {
+      stocks = stocks.filter((s) => {
+        const v = s.atr_pct;
+        if (v == null) return false;
+        const r = Math.round(v * 100) / 100;
+        if (atrFilter === "lt0") return r < 0;
+        if (atrFilter === "gt0lte1_5") return r >= 0 && r <= 1.5;
+        if (atrFilter === "gt1_5lte4") return r > 1.5 && r <= 4;
+        if (atrFilter === "gt2lte5") return r > 2 && r <= 5;
+        if (atrFilter === "gt2lte6") return r > 2 && r <= 6;
+        if (atrFilter === "gt5") return r > 5;
+        return true;
+      });
+    }
+    if (sharpeFilter) {
+      stocks = stocks.filter((s) => {
+        const v = s.sharpe_ratio;
+        if (v == null) return false;
+        const r = Math.round(v * 100) / 100;
+        if (sharpeFilter === "lte0") return r <= 0;
+        if (sharpeFilter === "gt0lte080") return r > 0 && r <= 0.8;
+        if (sharpeFilter === "gt080lte2") return r > 0.8 && r <= 2;
+        if (sharpeFilter === "gt080lte10") return r > 0.8 && r <= 10;
+        if (sharpeFilter === "gt1") return r >= 1;
+        return true;
+      });
+    }
+    if (rsFilter) {
+      stocks = stocks.filter((s) => {
+        const v = s.rs_6m;
+        if (v == null) return false;
+        const r = Math.round(v * 100) / 100;
+        if (rsFilter === "lt25") return r < 25;
+        if (rsFilter === "gte25") return r >= 25;
+        return true;
+      });
+    }
+    if (distSma200Filter.length > 0) {
+      stocks = stocks.filter((s) => {
+        const v = s.dist_sma200;
+        if (v == null) return false;
+        const r = Math.round(v * 100) / 100;
+        return distSma200Filter.some((bucket) => {
+          if (bucket === "lt0") return r < 0;
+          if (bucket === "gt0lte5") return r >= 0 && r <= 5;
+          if (bucket === "gt5lte15") return r > 5 && r <= 15;
+          if (bucket === "gt15lte35") return r > 15 && r <= 35;
+          if (bucket === "gt35lte50") return r > 35 && r <= 50;
+          if (bucket === "gt50lte80") return r > 50 && r <= 80;
+          if (bucket === "gt80") return r > 80;
+          return false;
+        });
+      });
+    }
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      stocks = stocks.filter((s) =>
+        s.ticker.toLowerCase().includes(q),
+      );
+    }
+    // Sort — nulls always last
+    stocks = [...stocks].sort((a, b) => {
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      const cmp =
+        typeof av === "string" && typeof bv === "string"
+          ? av.localeCompare(bv)
+          : (av as number) - (bv as number);
+      return sortDir === "asc" ? cmp : -cmp;
+    });
     return stocks;
-  }, [data, rsi2Filter, curRsi2Filter]);
+  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rsFilter, distSma200Filter, search, sortKey, sortDir]);
 
   const totalPages = Math.max(
     1,
@@ -2175,7 +2480,7 @@ function WatchlistStocksTab() {
     let cancelled = false;
     queueMicrotask(() => { if (!cancelled) setPage(0); });
     return () => { cancelled = true; };
-  }, [rsi2Filter, curRsi2Filter, pageSize, market]);
+  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rsFilter, distSma200Filter, search, pageSize, market]);
 
   const handleCopyTickers = () => {
     const csv = filtered.map((s) => s.ticker).join(", ");
@@ -2216,13 +2521,15 @@ function WatchlistStocksTab() {
 
   return (
     <div className="space-y-3">
-      {/* Toolbar: market + RSI filters + copy button */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Market toggle */}
-          <div className="flex items-center gap-1 rounded-lg border border-gray-200 dark:border-gray-700 p-0.5">
-            {(["india", "us"] as MarketFilter[]).map(
-              (m) => (
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        {/* Left: market toggle + dropdowns grid */}
+        <div className="flex flex-col gap-2">
+          {/* Row 1 — all dropdowns */}
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Market toggle */}
+            <div className="flex items-center gap-1 rounded-lg border border-gray-200 dark:border-gray-700 p-0.5">
+              {(["india", "us"] as MarketFilter[]).map((m) => (
                 <button
                   key={m}
                   type="button"
@@ -2231,6 +2538,13 @@ function WatchlistStocksTab() {
                     setMarket(m);
                     setRsi2Filter(null);
                     setCurRsi2Filter(null);
+                    setGoldenCross(false);
+                    setSma50AboveLtp(false);
+                    setSma200AboveLtp(false);
+                    setAtrFilter("");
+                    setSharpeFilter("");
+                    setDistSma200Filter([]);
+                    setSearch("");
                   }}
                   className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
                     market === m
@@ -2240,144 +2554,203 @@ function WatchlistStocksTab() {
                 >
                   {m === "india" ? "India" : "US"}
                 </button>
-              ),
-            )}
+              ))}
+            </div>
+
+            <div className="h-4 w-px bg-gray-200 dark:bg-gray-700" />
+
+            {/* Dropdowns — all in one flex row */}
+            {(
+              [
+                {
+                  label: "RSI(2)",
+                  testId: "watchlist-rsi2-select",
+                  value: rsi2Filter ?? "",
+                  onChange: (v: string) => setRsi2Filter((v as Rsi2Filter) || null),
+                  options: [
+                    { value: "", label: "All" },
+                    { value: "lte5", label: "≤ 5" },
+                    { value: "lte10", label: "≤ 10" },
+                    { value: "lte25", label: "≤ 25" },
+                    { value: "gte80", label: "≥ 80" },
+                  ],
+                },
+                {
+                  label: "Curr RSI(2)",
+                  testId: "watchlist-curr-rsi2-select",
+                  value: curRsi2Filter ?? "",
+                  onChange: (v: string) => setCurRsi2Filter((v as Rsi2Filter) || null),
+                  options: [
+                    { value: "", label: "All" },
+                    { value: "lte5", label: "≤ 5" },
+                    { value: "lte10", label: "≤ 10" },
+                    { value: "lte25", label: "≤ 25" },
+                    { value: "gte80", label: "≥ 80" },
+                  ],
+                },
+                {
+                  label: "ATR%",
+                  testId: "watchlist-atr-select",
+                  value: atrFilter,
+                  onChange: (v: string) => setAtrFilter(v as AtrFilter),
+                  options: [
+                    { value: "", label: "All" },
+                    { value: "lt0", label: "< 0%" },
+                    { value: "gt0lte1_5", label: "0–1.5%" },
+                    { value: "gt1_5lte4", label: "1.5–4%" },
+                    { value: "gt2lte5", label: "2–5%" },
+                    { value: "gt2lte6", label: "2–6%" },
+                    { value: "gt5", label: "> 5%" },
+                  ],
+                },
+                {
+                  label: "Sharpe",
+                  testId: "watchlist-sharpe-select",
+                  value: sharpeFilter,
+                  onChange: (v: string) => setSharpeFilter(v as SharpeFilter),
+                  options: [
+                    { value: "", label: "All" },
+                    { value: "lte0", label: "≤ 0" },
+                    { value: "gt0lte080", label: "0–0.80" },
+                    { value: "gt080lte2", label: "0.80–2" },
+                    { value: "gt080lte10", label: "0.80–10" },
+                    { value: "gt1", label: "≥ 1" },
+                  ],
+                },
+                {
+                  label: "RS(6M)",
+                  testId: "watchlist-rs-select",
+                  value: rsFilter,
+                  onChange: (v: string) => setRsFilter(v as RsFilter),
+                  options: [
+                    { value: "", label: "All" },
+                    { value: "lt25", label: "< 25%" },
+                    { value: "gte25", label: "≥ 25%" },
+                  ],
+                },
+              ] as const
+            ).map((f) => (
+              <div key={f.testId} className="flex items-center gap-1.5">
+                <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                  {f.label}
+                </label>
+                <select
+                  value={f.value}
+                  data-testid={f.testId}
+                  onChange={(e) => f.onChange(e.target.value)}
+                  className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1 text-xs text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  {f.options.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+            ))}
+
+            {/* Dist SMA200 — multi-select */}
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                Dist SMA200
+              </label>
+              <DistSma200MultiSelect
+                selected={distSma200Filter}
+                onChange={setDistSma200Filter}
+              />
+            </div>
           </div>
 
-          <div className="flex flex-col gap-1">
-            {/* RSI(2) filter row */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium w-20 shrink-0">
-                RSI(2):
-              </span>
-              {(["lte5", "lte10", "lte25", "gte80"] as Rsi2Filter[]).map((id) => {
-                const label =
-                  id === "lte5" ? "≤ 5"
-                  : id === "lte10" ? "≤ 10"
-                  : id === "lte25" ? "≤ 25"
-                  : "≥ 80";
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    data-testid={`watchlist-rsi2-filter-${id}`}
-                    onClick={() =>
-                      setRsi2Filter((prev) =>
-                        prev === id ? null : id,
-                      )
-                    }
-                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                      rsi2Filter === id
-                        ? "bg-indigo-600 text-white dark:bg-indigo-500"
-                        : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-              {rsi2Filter && (
-                <button
-                  type="button"
-                  onClick={() => setRsi2Filter(null)}
-                  className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline"
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-            {/* Curr RSI(2) filter row */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium w-20 shrink-0">
-                Curr RSI(2):
-              </span>
-              {(["lte5", "lte10", "lte25", "gte80"] as Rsi2Filter[]).map((id) => {
-                const label =
-                  id === "lte5" ? "≤ 5"
-                  : id === "lte10" ? "≤ 10"
-                  : id === "lte25" ? "≤ 25"
-                  : "≥ 80";
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    data-testid={`watchlist-curr-rsi2-filter-${id}`}
-                    onClick={() =>
-                      setCurRsi2Filter((prev) =>
-                        prev === id ? null : id,
-                      )
-                    }
-                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                      curRsi2Filter === id
-                        ? "bg-violet-600 text-white dark:bg-violet-500"
-                        : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-              {curRsi2Filter && (
-                <button
-                  type="button"
-                  onClick={() => setCurRsi2Filter(null)}
-                  className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline"
-                >
-                  Clear
-                </button>
-              )}
-            </div>
+          {/* Row 2 — toggle chips */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {(
+              [
+                {
+                  id: "goldenCross" as const,
+                  label: "Golden Cross",
+                  title: "SMA 50 > SMA 200",
+                  active: goldenCross,
+                  toggle: () => setGoldenCross((v) => !v),
+                },
+                {
+                  id: "sma50AboveLtp" as const,
+                  label: "LTP > SMA 50",
+                  title: "Price above 50-day SMA",
+                  active: sma50AboveLtp,
+                  toggle: () => setSma50AboveLtp((v) => !v),
+                },
+                {
+                  id: "sma200AboveLtp" as const,
+                  label: "LTP > SMA 200",
+                  title: "Price above 200-day SMA",
+                  active: sma200AboveLtp,
+                  toggle: () => setSma200AboveLtp((v) => !v),
+                },
+              ] as const
+            ).map(({ id, label, title, active, toggle }) => (
+              <button
+                key={id}
+                type="button"
+                title={title}
+                data-testid={`watchlist-sma-filter-${id}`}
+                onClick={toggle}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                  active
+                    ? "bg-amber-500 text-white dark:bg-amber-400 dark:text-gray-900"
+                    : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Copy tickers button */}
+        {/* Right: search + copy */}
+        <div className="flex items-center gap-2 self-start">
+          <div className="relative">
+            <svg
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none"
+              viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+            >
+              <circle cx="11" cy="11" r="8" />
+              <path d="m21 21-4.35-4.35" />
+            </svg>
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search ticker…"
+              data-testid="watchlist-search"
+              className="pl-8 pr-3 py-1.5 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-xs text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-36"
+            />
+          </div>
         <button
           type="button"
           data-testid="watchlist-copy-tickers"
           onClick={handleCopyTickers}
           title="Copy comma-separated tickers to clipboard"
-          className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 dark:border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+          className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 dark:border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors self-start"
         >
           {copied ? (
             <>
-              <svg
-                className="w-3.5 h-3.5 text-emerald-500"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-              >
+              <svg className="w-3.5 h-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <path d="M20 6 9 17l-5-5" />
               </svg>
               Copied!
             </>
           ) : (
             <>
-              <svg
-                className="w-3.5 h-3.5"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <rect
-                  x="9"
-                  y="9"
-                  width="13"
-                  height="13"
-                  rx="2"
-                />
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" />
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
               </svg>
               Copy Tickers
               {filtered.length > 0 && (
-                <span className="text-gray-400">
-                  ({filtered.length})
-                </span>
+                <span className="text-gray-400">({filtered.length})</span>
               )}
             </>
           )}
         </button>
+        </div>
       </div>
 
       {/* Table */}
@@ -2388,31 +2761,101 @@ function WatchlistStocksTab() {
         >
           <thead>
             <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
-              {[
-                { key: "ticker", label: "Ticker" },
-                { key: "close", label: "Price" },
-                { key: "rsi_2", label: "RSI(2)" },
-                { key: "current_rsi_2", label: "Curr RSI(2)" },
-                { key: "sma_200", label: "SMA 200" },
-                { key: "sma_50", label: "SMA 50" },
-                { key: "sma_20", label: "SMA 20" },
-                { key: "sma_10", label: "SMA 10" },
-                { key: "sma_5", label: "SMA 5" },
-              ].map((col) => (
-                <th
-                  key={col.key}
-                  className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400"
-                >
-                  {col.label}
-                </th>
-              ))}
+              {(
+                [
+                  { key: "ticker", label: "Ticker" },
+                  { key: "close", label: "Price" },
+                  { key: "rsi_2", label: "RSI(2)" },
+                  { key: "current_rsi_2", label: "Curr RSI(2)" },
+                  { key: "sma_200", label: "SMA 200" },
+                  { key: "sma_50", label: "SMA 50" },
+                  { key: "sma_20", label: "SMA 20" },
+                  {
+                    key: "sharpe_ratio",
+                    label: "Sharpe (6M)",
+                    tooltip:
+                      "Annualised Sharpe Ratio over last ~126 trading days (≈6 months)\n" +
+                      "Formula: (Avg Daily Return ÷ Std Dev of Daily Returns) × √252\n\n" +
+                      "Example: Avg daily return = 0.10%, Std Dev = 1.0%\n" +
+                      "→ Sharpe = (0.10 / 1.0) × √252 ≈ 1.59\n\n" +
+                      "Higher = better risk-adjusted return. >2 strong, <0 net negative.",
+                  },
+                  {
+                    key: "rs_6m",
+                    label: "RS (6M)",
+                    tooltip:
+                      "Relative Strength vs Nifty 50 over last 6 months\n" +
+                      "Formula: Stock 6M Return% − Nifty 50 6M Return%\n\n" +
+                      "Example: Stock up 18%, Nifty up 8%\n" +
+                      "→ RS(6M) = +10% (outperformed Nifty by 10pp)\n\n" +
+                      "Positive = beat the index. Negative = underperformed.",
+                  },
+                  {
+                    key: "atr_pct",
+                    label: "ATR%",
+                    tooltip:
+                      "Average True Range (14-day) as % of price — daily volatility gauge\n" +
+                      "Formula: ATR(14) ÷ Close Price × 100\n\n" +
+                      "Example: ATR(14) = ₹25, Close = ₹500\n" +
+                      "→ ATR% = 25 / 500 × 100 = 5%\n\n" +
+                      "Lower = calmer stock. Higher = wider daily swings.",
+                  },
+                  {
+                    key: "dist_sma200",
+                    label: "Dist SMA200",
+                    tooltip:
+                      "How far the current price is above (or below) the 200-day SMA\n" +
+                      "Formula: (Price − SMA200) / SMA200 × 100\n\n" +
+                      "Example: Price = ₹1,100, SMA200 = ₹1,000\n" +
+                      "→ Dist SMA200 = (1100 − 1000) / 1000 × 100 = +10%\n\n" +
+                      "Positive = price above SMA200 (uptrend). Negative = below (downtrend).",
+                  },
+                  {
+                    key: "score",
+                    label: "Score",
+                    tooltip:
+                      "Composite score: quality + momentum + volatility rank\n" +
+                      "Formula: 0.5×SharpePercentile + 0.3×RSPercentile + 0.2×ATRPercentile\n" +
+                      "Each metric is ranked 0–100 among watchlist stocks before weighting.\n\n" +
+                      "Example: Sharpe pct=70, RS pct=80, ATR pct=30\n" +
+                      "→ Score = 0.5×70 + 0.3×80 + 0.2×30 = 35 + 24 + 6 = 65\n\n" +
+                      "Higher score = stronger risk-adjusted outperformance.",
+                  },
+                ] as { key: SortKey; label: string; tooltip?: string }[]
+              ).map((col) => {
+                const active = sortKey === col.key;
+                return (
+                  <th
+                    key={col.key}
+                    onClick={() => {
+                      if (active) {
+                        setSortDir((d) => d === "asc" ? "desc" : "asc");
+                      } else {
+                        setSortKey(col.key);
+                        setSortDir("asc");
+                      }
+                    }}
+                    className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 cursor-pointer select-none hover:text-gray-900 dark:hover:text-gray-100 transition-colors"
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      {col.label}
+                      {col.tooltip && (
+                        <ColumnTooltip text={col.tooltip} />
+                      )}
+                      <span className="text-gray-300 dark:text-gray-600">
+                        {active ? (sortDir === "asc" ? "↑" : "↓") : "↕"}
+                      </span>
+                    </span>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
             {pageRows.length === 0 ? (
               <tr>
                 <td
-                  colSpan={9}
+                  colSpan={12}
                   className="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-500"
                 >
                   No stocks match the current filter.
@@ -2471,11 +2914,66 @@ function WatchlistStocksTab() {
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
                       {fmt(row.sma_20)}
                     </td>
-                    <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
-                      {fmt(row.sma_10)}
+                    <td className={`px-4 py-2.5 font-mono text-xs ${
+                      row.sharpe_ratio == null
+                        ? "text-gray-400"
+                        : row.sharpe_ratio > 2
+                          ? "text-emerald-600 dark:text-emerald-400 font-semibold"
+                          : row.sharpe_ratio < 0
+                            ? "text-red-500 dark:text-red-400"
+                            : "text-gray-900 dark:text-gray-100"
+                    }`}>
+                      {fmt(row.sharpe_ratio)}
                     </td>
-                    <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
-                      {fmt(row.sma_5)}
+                    <td className={`px-4 py-2.5 font-mono text-xs ${
+                      row.rs_6m == null
+                        ? "text-gray-400"
+                        : row.rs_6m > 0
+                          ? "text-emerald-600 dark:text-emerald-400 font-semibold"
+                          : "text-red-500 dark:text-red-400"
+                    }`}
+                      title="Stock 6M return minus Nifty 50 6M return"
+                    >
+                      {row.rs_6m != null
+                        ? `${row.rs_6m >= 0 ? "+" : ""}${fmt(row.rs_6m)}%`
+                        : "—"}
+                    </td>
+                    <td className={`px-4 py-2.5 font-mono text-xs ${
+                      row.atr_pct == null
+                        ? "text-gray-400"
+                        : row.atr_pct > 6
+                          ? "text-red-500 dark:text-red-400 font-semibold"
+                          : row.atr_pct <= 2
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-gray-900 dark:text-gray-100"
+                    }`}>
+                      {row.atr_pct != null ? `${fmt(row.atr_pct)}%` : "—"}
+                    </td>
+                    <td className={`px-4 py-2.5 font-mono text-xs ${
+                      row.dist_sma200 == null
+                        ? "text-gray-400"
+                        : row.dist_sma200 > 35
+                          ? "text-amber-600 dark:text-amber-400 font-semibold"
+                          : row.dist_sma200 >= 0
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-red-500 dark:text-red-400"
+                    }`}>
+                      {row.dist_sma200 != null
+                        ? `${row.dist_sma200 >= 0 ? "+" : ""}${fmt(row.dist_sma200)}%`
+                        : "—"}
+                    </td>
+                    <td className={`px-4 py-2.5 font-mono text-xs font-semibold ${
+                      row.score == null
+                        ? "text-gray-400"
+                        : row.score > 10
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : row.score < 0
+                            ? "text-red-500 dark:text-red-400"
+                            : "text-gray-900 dark:text-gray-100"
+                    }`}
+                      title="Score = 0.5×SharpePercentile + 0.3×RSPercentile + 0.2×ATRPercentile"
+                    >
+                      {fmt(row.score)}
                     </td>
                   </tr>
                 );

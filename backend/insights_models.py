@@ -484,8 +484,11 @@ class WatchlistStockRow(BaseModel):
     sma_200: float | None = None
     sma_50: float | None = None
     sma_20: float | None = None
-    sma_10: float | None = None
-    sma_5: float | None = None
+    sharpe_ratio: float | None = None
+    atr_pct: float | None = None
+    rs_6m: float | None = None
+    dist_sma200: float | None = None
+    score: float | None = None
 
 
 class WatchlistStocksResponse(BaseModel):
