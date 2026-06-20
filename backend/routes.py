@@ -2403,14 +2403,6 @@ def create_app(
         stale_30d = today - timedelta(days=30)
         stale_7d = today - timedelta(days=7)
 
-        # ── Invalidate DuckDB cache so health reads
-        # pick up recent writes (e.g. fix runs). ──
-        from db.duckdb_engine import (
-            invalidate_metadata,
-        )
-
-        invalidate_metadata()
-
         # ── Registry baseline ────────────────────
         try:
             repo = _require_repo()
@@ -2490,37 +2482,23 @@ def create_app(
                 "stale_tickers": [],
             }
             try:
-                # Single query for NaN stats
+                # One GROUP BY replaces 2 scans
                 nan_df = query_iceberg_df(
                     "stocks.ohlcv",
-                    "SELECT count(*) AS cnt, "
-                    "count(DISTINCT ticker) "
-                    "  AS tk_cnt "
+                    "SELECT ticker, "
+                    "count(*) AS cnt "
                     "FROM ohlcv "
                     "WHERE close IS NULL "
-                    "OR isnan(close)",
+                    "OR isnan(close) "
+                    "GROUP BY ticker",
                 )
                 if not nan_df.empty:
                     o["nan_close_count"] = int(
-                        nan_df["cnt"].iloc[0]
+                        nan_df["cnt"].sum()
                     )
-                if (
-                    not nan_df.empty
-                    and nan_df["tk_cnt"].iloc[0] > 0
-                ):
-                    tk = query_iceberg_df(
-                        "stocks.ohlcv",
-                        "SELECT DISTINCT ticker "
-                        "FROM ohlcv "
-                        "WHERE close IS NULL "
-                        "OR isnan(close)",
+                    o["nan_close_tickers"] = sorted(
+                        nan_df["ticker"].tolist()
                     )
-                    if not tk.empty:
-                        o["nan_close_tickers"] = (
-                            sorted(
-                                tk["ticker"].tolist()
-                            )
-                        )
 
                 # Freshness per ticker — skip
                 # illiquid tickers so they don't
