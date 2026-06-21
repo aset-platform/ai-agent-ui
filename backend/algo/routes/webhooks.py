@@ -386,6 +386,29 @@ async def kite_postback(request: Request) -> dict:
                 _sym, exc, exc_info=True,
             )
 
+    # Trailing stop: on COMPLETE SELL, clear trailing state.
+    if (
+        status == "COMPLETE"
+        and _side == "SELL"
+        and our_user_id is not None
+        and matched_strategy_id is not None
+    ):
+        try:
+            from backend.algo.paper.supervisor import get_supervisor
+            rt = get_supervisor().get_live_runtime(
+                user_id=our_user_id,
+                strategy_id=matched_strategy_id,
+            )
+            if rt is not None:
+                _ticker = _sym + ".NS" if "." not in _sym else _sym
+                rt._on_sell_fill_trailing(_ticker)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "kite postback: trailing SELL cleanup failed "
+                "for %s: %s",
+                _sym, exc, exc_info=True,
+            )
+
     await asyncio.to_thread(flush_events, rows_to_persist)
 
     # Cache invalidation per CLAUDE.md §5.13.

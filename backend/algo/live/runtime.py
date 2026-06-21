@@ -1241,6 +1241,29 @@ class LiveRuntime:
 
     # ── v5 GTT trailing stop ─────────────────────────────────────
 
+    def _on_sell_fill_trailing(self, ticker: str) -> None:
+        """Clear trailing state when any SELL fill is confirmed.
+
+        Called from the postback handler on COMPLETE SELL. Safe to
+        call even when no trailing state exists for the ticker.
+        """
+        if not self._trailing_enabled:
+            return
+        self._trailing_managers.pop(ticker, None)
+        self._gtt_ids.pop(ticker, None)
+        self._ws_hwm.pop(ticker, None)
+        try:
+            from backend.cache import get_cache
+            get_cache().invalidate_exact(
+                f"trailing:{self._user_id}:"
+                f"{self._strategy.id}:{ticker}"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        _logger.info(
+            "trailing: state cleared for %s after SELL fill", ticker,
+        )
+
     # Headroom below trigger price for the GTT limit order:
     # 1% absorbs typical intraday gap-downs without missing the fill.
     _GTT_LIMIT_HEADROOM_PCT: float = 0.01
@@ -2036,6 +2059,45 @@ class LiveRuntime:
                     trig.holding_days,
                     trig.max_holding_days,
                 )
+                # v5 trailing stop: cancel GTT before placing SELL
+                # to prevent double exit (GTT fires + SELL fills).
+                if self._trailing_enabled:
+                    _gtt_id = self._gtt_ids.pop(trig.ticker, None)
+                    if _gtt_id is not None:
+                        try:
+                            self._kite.delete_gtt(_gtt_id)
+                        except Exception:  # noqa: BLE001
+                            _logger.warning(
+                                "time_stop: delete_gtt %d "
+                                "failed for %s",
+                                _gtt_id, trig.ticker,
+                                exc_info=True,
+                            )
+                        self._events.append(
+                            event_row(
+                                session_id=self._session_id,
+                                user_id=self._user_id,
+                                strategy_id=self._strategy.id,
+                                mode="live",
+                                type_="gtt_cancelled_for_time_stop",
+                                payload={
+                                    "ticker": trig.ticker,
+                                    "holding_days": trig.holding_days,
+                                    "gtt_id": _gtt_id,
+                                    "dry_run": self._dry_run,
+                                },
+                            )
+                        )
+                    self._trailing_managers.pop(trig.ticker, None)
+                    self._ws_hwm.pop(trig.ticker, None)
+                    try:
+                        from backend.cache import get_cache
+                        get_cache().invalidate_exact(
+                            f"trailing:{self._user_id}:"
+                            f"{self._strategy.id}:{trig.ticker}"
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 fill_count = await self._submit_order(
                     signal=ts_signal,
                     last_price=last_price,
