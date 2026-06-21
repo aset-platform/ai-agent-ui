@@ -17,13 +17,25 @@
 - **T8** 15-min GTT ratchet loop: `_trailing_ratchet_loop` aligned to bar boundaries 09:15–15:25 IST, `_ratchet_all_gtts` via `asyncio.to_thread`; STOP_UPDATED → delete+replace GTT + Redis + `gtt_ratcheted` event; STOP_HIT → emergency limit SELL; WS tick loop updates `_ws_hwm` (no GTT logic in hot path); 15 tests
 - **T9** Time-stop cleanup: cancels GTT before LIMIT SELL (double-exit prevention), emits `gtt_cancelled_for_time_stop`; `_on_sell_fill_trailing` clears all trailing state + Redis; postback handler COMPLETE SELL → `_on_sell_fill_trailing`; 14 integration tests (roundtrip, BUY fill, phase-2 ratchet, SELL cleanup)
 
-**Commits:** `3f17099` → `48cf8bb` (9 feature commits). Branch pushed, worktree cleaned. Pending manual test + bug-fix iterations before PR to dev.
+**Commits:** `3f17099` → `48cf8bb` (9 feature commits). Branch pushed, worktree cleaned.
+
+**Manual testing (2026-06-21, same session):**
+- Backtest v3 (7d cooldown): 311 trades, 838 cooldown-skips, trailing N/A — clean ✅
+- Backtest v4 (55d name / 7d AST, trailing enabled): 366 trades, 848 cooldown-skips, ~60 "insufficient bars for atr_14" warnings on thin-data tickers — expected ✅
+- Paper v4 run 1 (pre-fix): every BUY fill logged "missing atr_14" — trailing never activated ❌ → diagnosed: paper runtime was looking for `atr_14` in the algo.factors Iceberg store (not stored there); factor cache only has `adx_14`, `sma200_slope`, `distance_from_sma200`
+- Paper v4 run 2 (post-fix): 2 residual warnings (ADANIPOWER.NS, SANSERA.NS — genuine < 14-bar data); trailing SELL events firing (`DELHIVERY.NS phase=1`, `FEDERALBNK.NS phase=1`) ✅
+- Dry-run (source=replay, Saturday): 3015 ticks, 3006 bars, 0 fills — expected (markets closed, RSI(2) conditions not met on last trading day replay) ✅
+
+**Bug fixes shipped this session:**
+- `fix(paper)` — `_wilder_atr(history, 14)` replaces factor-cache ATR lookup; mirrors backtest runner exactly (`d6f7e66`)
+- `feat(levers)` — 4 v5 GTT trailing stop fields added to Strategy Levers panel with captions; stale editor after update fixed (SWR `mutate()` on individual strategy cache slots after `upsertStrategyMetadata`) (`8f7fdad`)
 
 **Follow-ups / known gaps:**
-- Manual end-to-end test with v5 strategy against real Kite dry-run
-- GTT fill postback currently doesn't call `_on_sell_fill_trailing` unless the GTT SELL is also in `live_orders_in_flight` — need to verify postback routing for exchange-side GTT fills (they may not have an in-flight entry)
+- GTT fill postback routing for exchange-side GTT fills (no `live_orders_in_flight` entry → `_on_sell_fill_trailing` won't fire) — needs live market test
+- 3 tickers (GSPL.NS, AKZOINDIA.NS, CIGNITITEC.NS) missing `instrument_token` in token map — run instruments master refresh
 - `benchmark_return_pct` hardcoded 0 in outcomes job (pre-existing TODO)
 - Walk-forward DSR gate for v5 paper promotion (next session)
+- PR to dev only when user explicitly asks
 
 ---
 
