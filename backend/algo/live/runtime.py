@@ -521,6 +521,10 @@ class LiveRuntime:
         # PR3 — periodic algo.events flush task. Started in run(),
         # cancelled in its finally: before the terminal flush.
         self._event_flush_task: asyncio.Task | None = None
+        # v5 trailing stop — 15-min GTT ratchet task (trailing-
+        # enabled strategies only). Started in run(), cancelled in
+        # finally: before terminal flush.
+        self._trailing_ratchet_task: asyncio.Task | None = None
 
     def _load_bucket_by_ticker(self) -> dict[str, str]:
         """Read latest ``stocks.universe_snapshot`` and build a
@@ -1084,6 +1088,157 @@ class LiveRuntime:
                     exc_info=True,
                 )
 
+    # ── v5 GTT trailing stop — 15-min ratchet ────────────────────
+
+    async def _trailing_ratchet_loop(self) -> None:
+        """Every 15 min during market hours: ratchet GTTs.
+
+        Aligned to 15m bar boundaries starting 09:15 IST.
+        Stops evaluating at 15:25 IST (strategy time-stop fires
+        before then to close all positions anyway).
+        """
+        _MARKET_OPEN = (9, 15)
+        _MARKET_CLOSE = (15, 25)
+        _INTERVAL_MIN = 15
+
+        while True:
+            try:
+                now_ist = datetime.now(IST)
+                h, m = now_ist.hour, now_ist.minute
+
+                after_open = (h, m) >= _MARKET_OPEN
+                before_close = (h, m) < _MARKET_CLOSE
+                if not (after_open and before_close):
+                    await asyncio.sleep(60)
+                    continue
+
+                minutes_past = (
+                    (m - _MARKET_OPEN[1]) % _INTERVAL_MIN
+                )
+                wait_s = (
+                    (_INTERVAL_MIN - minutes_past) * 60
+                    - now_ist.second
+                )
+                if wait_s > 0:
+                    await asyncio.sleep(wait_s)
+
+                if not self._trailing_enabled:
+                    continue
+
+                await asyncio.to_thread(self._ratchet_all_gtts)
+
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                _logger.error(
+                    "trailing ratchet loop error: %s",
+                    exc, exc_info=True,
+                )
+                await asyncio.sleep(30)
+
+    def _ratchet_all_gtts(self) -> None:
+        """Sync: evaluate all trailing managers against WS HWM.
+
+        Called from ``_trailing_ratchet_loop`` via
+        ``asyncio.to_thread``. Updates GTTs when stop ratchets up.
+        Places an emergency limit sell if STOP_HIT is detected via
+        the WS HWM (i.e. the GTT fired but the postback hasn't
+        arrived yet, or the GTT missed).
+        """
+        for ticker, mgr in list(self._trailing_managers.items()):
+            pos = self._positions.open_positions().get(ticker)
+            if pos is None or pos.qty <= 0:
+                self._trailing_managers.pop(ticker, None)
+                continue
+
+            hwm_price = self._ws_hwm.get(ticker, 0.0)
+            if hwm_price <= 0:
+                continue
+
+            old_stop = mgr.current_stop
+            event = mgr.on_price_update(hwm_price)
+
+            if event is None:
+                continue
+
+            if event.event_type == "STOP_UPDATED":
+                old_gtt_id = self._gtt_ids.get(ticker)
+                stop = mgr.current_stop
+                limit = stop * (
+                    1.0 - self._GTT_LIMIT_HEADROOM_PCT
+                )
+                try:
+                    if old_gtt_id:
+                        self._kite.delete_gtt(old_gtt_id)
+                    new_id = self._kite.place_gtt(
+                        ticker=ticker,
+                        trigger_price=stop,
+                        limit_price=limit,
+                        qty=pos.qty,
+                    )
+                    self._gtt_ids[ticker] = new_id
+                    self._save_trailing_state(ticker, mgr, new_id)
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="live",
+                            type_="gtt_ratcheted",
+                            payload={
+                                "ticker": ticker,
+                                "phase": event.phase.value,
+                                "old_stop": old_stop,
+                                "new_stop": stop,
+                                "hwm": event.hwm,
+                                "gtt_id_old": old_gtt_id,
+                                "gtt_id_new": new_id,
+                                "dry_run": self._dry_run,
+                            },
+                        )
+                    )
+                    _logger.info(
+                        "trailing: ratcheted GTT %s "
+                        "%.4f → %.4f (phase %d) dry=%s",
+                        ticker, old_stop, stop,
+                        event.phase.value, self._dry_run,
+                    )
+                except Exception as exc:
+                    _logger.error(
+                        "trailing: ratchet GTT failed for %s: %s",
+                        ticker, exc, exc_info=True,
+                    )
+
+            elif event.event_type == "STOP_HIT":
+                _logger.warning(
+                    "trailing: STOP_HIT via WS HWM for %s "
+                    "— GTT may not have fired; emergency SELL",
+                    ticker,
+                )
+                old_gtt_id = self._gtt_ids.pop(ticker, None)
+                if old_gtt_id:
+                    self._kite.delete_gtt(old_gtt_id)
+                raw = ticker.removesuffix(
+                    ".NS"
+                ).removesuffix(".BO")
+                try:
+                    self._kite.place_order(
+                        tradingsymbol=raw,
+                        exchange="NSE",
+                        transaction_type="SELL",
+                        quantity=pos.qty,
+                        order_type="LIMIT",
+                        price=mgr.current_stop,
+                        product=self._strategy.product or "CNC",
+                    )
+                except Exception as exc:
+                    _logger.error(
+                        "trailing: emergency SELL failed for "
+                        "%s: %s",
+                        ticker, exc, exc_info=True,
+                    )
+                self._trailing_managers.pop(ticker, None)
+
     # ── v5 GTT trailing stop ─────────────────────────────────────
 
     # Headroom below trigger price for the GTT limit order:
@@ -1346,6 +1501,11 @@ class LiveRuntime:
             self._periodic_budget_reconcile(),
             name=f"budget_reconcile_{self._run_id}",
         )
+        if self._trailing_enabled:
+            self._trailing_ratchet_task = asyncio.create_task(
+                self._trailing_ratchet_loop(),
+                name=f"trailing_ratchet_{self._run_id}",
+            )
 
         try:
             async for tick in source:
@@ -1357,6 +1517,14 @@ class LiveRuntime:
                         tick.ticker,
                     )
                 last_price_per_ticker[tick.ticker] = Decimal(str(tick.ltp))
+                # v5 trailing stop: lightweight HWM update per tick.
+                if (
+                    self._trailing_enabled
+                    and tick.ticker in self._trailing_managers
+                ):
+                    _ltp = float(tick.ltp)
+                    if _ltp > self._ws_hwm.get(tick.ticker, 0.0):
+                        self._ws_hwm[tick.ticker] = _ltp
                 # PR #1 — stamp arrival time for staleness gate.
                 # ASETPLTFRM-372 — prefer exchange-emission ts
                 # when Kite supplied it (full/quote-mode packets);
@@ -1484,6 +1652,17 @@ class LiveRuntime:
                 _logger.warning(
                     "final budget reconcile failed", exc_info=True
                 )
+
+            # v5 trailing stop: cancel the ratchet loop before
+            # the event flush so any final ratchet events land
+            # in self._events before terminal drain.
+            if self._trailing_ratchet_task is not None:
+                self._trailing_ratchet_task.cancel()
+                try:
+                    await self._trailing_ratchet_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                self._trailing_ratchet_task = None
 
             # PR3 — stop the periodic flush before the terminal drain
             # so they cannot race on self._events.
