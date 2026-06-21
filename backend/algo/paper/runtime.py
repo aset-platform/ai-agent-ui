@@ -52,6 +52,7 @@ from backend.algo.backtest.trailing_stop_manager import (
 
 # REGIME-2a — pre-computed nightly factor library overlay.
 from backend.algo.factors.repo import get_factors_window
+from backend.algo.features.primitives import wilder_atr as _wilder_atr
 # FE-15b — shared per-bar feature assembly.
 from backend.algo.features.per_bar import (
     assemble_per_bar_features,
@@ -1051,17 +1052,17 @@ class PaperRuntime:
         self._positions.apply_fill(fill)
         if self._trailing_enabled:
             if fill.side == "BUY":
-                _atr_raw = (
-                    self._factor_cache.get((fill.ticker, bar_date_obj))
-                    or self._factor_cache.get(
-                        (fill.ticker, bar_date_obj - timedelta(days=1))
-                    )
-                    or {}
+                # Mirror the backtest runner: compute ATR directly from
+                # the per-ticker OHLCV history (already in scope as
+                # `history`). The factor cache does not store atr_14.
+                _bars_up = [b for b in history if b.date <= bar_date_obj]
+                _atr_series = _wilder_atr(_bars_up, 14)
+                _atr = float(
+                    _atr_series[-1]
+                    if _atr_series and _atr_series[-1] is not None
+                    else 0.0
                 )
-                _atr = float(_atr_raw.get("atr_14", 0.0))
-                if _atr > 0 and fill.ticker not in (
-                    self._trailing_managers
-                ):
+                if _atr > 0 and fill.ticker not in self._trailing_managers:
                     self._trailing_managers[fill.ticker] = (
                         TrailingStopManager(
                             self._strategy.risk.per_trade,
