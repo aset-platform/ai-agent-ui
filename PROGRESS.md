@@ -2,6 +2,31 @@
 
 ---
 
+### 2026-06-21 — feat: RSI(2) Connors Daily v5 — three-phase GTT trailing stop (branch `feature/rsi2-exit-strategy`, worktree)
+
+**Why:** RSI(2) v3/v4 used an SMA5 bar-close exit which required holding overnight. v5 replaces it with a three-phase Kite GTT trailing stop: hard stop at entry×0.95, one-time ratchet to entry×0.97 when gain ≥ 2%, ATR×1.5 trailing stop once gain ≥ 5%. GTT fires intraday without monitoring — Kite's exchange-side trigger handles execution.
+
+**What (9 tasks across 3 sessions):**
+- **T1** `RiskPerTrade` 4 new optional fields (`phase1_ratchet_trigger_pct`, `phase1_ratchet_new_stop_pct`, `trailing_trigger_pct`, `trailing_atr_multiplier`)
+- **T2** `TrailingStopManager` pure state machine (`backend/algo/backtest/trailing_stop_manager.py`) — phases HARD_STOP/RATCHETED/ATR_TRAIL, `on_price_update()` returns `TrailingEvent(STOP_UPDATED|STOP_HIT)`, `to_dict()`/`from_dict()` for Redis serialisation; 22 unit tests
+- **T3** Backtest runner wires trailing manager — LOW-first (stop check) then HIGH (HWM advance) per bar; exits routed as `phase1_stop`/`phase1_ratchet`/`trail_stop` reasons; cooldown applies for phase1 exits only; 17 integration tests
+- **T4** `rsi2_connors_daily_v5.json` template — identical 5-condition entry to v3, `else: hold` (GTT owns all exits); 5 template tests
+- **T5** Paper runtime trailing evaluation — per-bar LOW/HIGH evaluation with same conservative ordering as backtest; v3 flat-stop path unchanged; dry-run logs GTT intents
+- **T6** `KiteClient.place_gtt / delete_gtt / get_gtts` — `GTT_TYPE_SINGLE`, strips `.NS`/`.BO`, dry-run guards, swallow-all on delete; 12 tests
+- **T7** Live runtime BUY fill → GTT init: `on_buy_fill_trailing` (ATR from factor cache, places GTT, saves to Redis 48h TTL, emits `gtt_placed`); `_save_trailing_state`/`_load_trailing_state_from_redis` (restart recovery called in `run()` after ticker-lock restore); `PaperSupervisor.get_live_runtime(user_id, strategy_id)`; postback handler COMPLETE BUY → `on_buy_fill_trailing`; 14 tests
+- **T8** 15-min GTT ratchet loop: `_trailing_ratchet_loop` aligned to bar boundaries 09:15–15:25 IST, `_ratchet_all_gtts` via `asyncio.to_thread`; STOP_UPDATED → delete+replace GTT + Redis + `gtt_ratcheted` event; STOP_HIT → emergency limit SELL; WS tick loop updates `_ws_hwm` (no GTT logic in hot path); 15 tests
+- **T9** Time-stop cleanup: cancels GTT before LIMIT SELL (double-exit prevention), emits `gtt_cancelled_for_time_stop`; `_on_sell_fill_trailing` clears all trailing state + Redis; postback handler COMPLETE SELL → `_on_sell_fill_trailing`; 14 integration tests (roundtrip, BUY fill, phase-2 ratchet, SELL cleanup)
+
+**Commits:** `3f17099` → `48cf8bb` (9 feature commits). Branch pushed, worktree cleaned. Pending manual test + bug-fix iterations before PR to dev.
+
+**Follow-ups / known gaps:**
+- Manual end-to-end test with v5 strategy against real Kite dry-run
+- GTT fill postback currently doesn't call `_on_sell_fill_trailing` unless the GTT SELL is also in `live_orders_in_flight` — need to verify postback routing for exchange-side GTT fills (they may not have an in-flight entry)
+- `benchmark_return_pct` hardcoded 0 in outcomes job (pre-existing TODO)
+- Walk-forward DSR gate for v5 paper promotion (next session)
+
+---
+
 ### 2026-06-21 — feat: batched per-month Iceberg compaction (ASETPLTFRM-442, branch `feature/batched-compaction`, worktree)
 
 **Why:** The OOM hotfix (#270) added a 1 GB `_MAX_SAFE_COMPACT_BYTES` ceiling that *skips* compaction for byte-heavy tables (`stocks.intraday_features`, 1.2 GB / 70M rows) — so they never fold their daily-append fragmentation. `compact_table` loads the whole table into Arrow (`scan().to_arrow()`), and PyIceberg 0.11.1 has no native `rewrite_data_files`.
