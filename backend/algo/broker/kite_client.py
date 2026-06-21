@@ -1782,3 +1782,99 @@ class KiteClient:
             )
         resp = self._kc.positions()
         return resp.get("net", [])
+
+    # ── GTT (Good Till Triggered) ─────────────────────────────────
+
+    def place_gtt(
+        self,
+        ticker: str,
+        trigger_price: float,
+        limit_price: float,
+        qty: int,
+        transaction_type: str = "SELL",
+    ) -> int:
+        """Place a single-leg GTT stop order. Returns gtt_id.
+
+        In dry-run mode logs the intent and returns 0 without
+        touching the Kite API.
+
+        Args:
+            ticker: Internal ticker (e.g. ``"RELIANCE.NS"``).
+            trigger_price: Price at which the GTT fires.
+            limit_price: Limit price of the triggered order.
+                ``trigger_price * 0.99`` is a safe headroom for
+                typical intraday gaps.
+            qty: Quantity to trade.
+            transaction_type: ``"SELL"`` (default) or ``"BUY"``.
+
+        Returns:
+            Integer GTT trigger ID from Kite, or 0 in dry-run.
+        """
+        tradingsymbol = ticker.removesuffix(".NS").removesuffix(".BO")
+        exchange = "NSE"
+        if self._dry_run:
+            _logger.info(
+                "[DRY_RUN] place_gtt symbol=%s trigger=%.4f "
+                "limit=%.4f qty=%d side=%s",
+                tradingsymbol,
+                trigger_price,
+                limit_price,
+                qty,
+                transaction_type,
+            )
+            return 0
+        resp = self._kc.place_gtt(
+            trigger_type=self._kc.GTT_TYPE_SINGLE,
+            tradingsymbol=tradingsymbol,
+            exchange=exchange,
+            trigger_values=[trigger_price],
+            last_price=trigger_price,
+            orders=[{
+                "exchange": exchange,
+                "tradingsymbol": tradingsymbol,
+                "transaction_type": transaction_type,
+                "quantity": qty,
+                "product": "CNC",
+                "order_type": "LIMIT",
+                "price": limit_price,
+            }],
+        )
+        gtt_id: int = (
+            int(resp.get("trigger_id", 0))
+            if isinstance(resp, dict)
+            else int(resp)
+        )
+        _logger.info(
+            "place_gtt: %s trigger=%.4f limit=%.4f qty=%d "
+            "gtt_id=%d",
+            ticker, trigger_price, limit_price, qty, gtt_id,
+        )
+        return gtt_id
+
+    def delete_gtt(self, gtt_id: int) -> None:
+        """Cancel a GTT. Silently no-ops if already triggered.
+
+        In dry-run mode skips the Kite API call.
+        """
+        if self._dry_run:
+            _logger.info("[DRY_RUN] delete_gtt gtt_id=%d", gtt_id)
+            return
+        try:
+            self._kc.delete_gtt(trigger_id=gtt_id)
+            _logger.info("delete_gtt: gtt_id=%d", gtt_id)
+        except Exception as exc:
+            _logger.warning(
+                "delete_gtt %d failed (may be already triggered): "
+                "%s",
+                gtt_id, exc,
+            )
+
+    def get_gtts(self) -> list[dict]:
+        """List all active GTTs for the user. Returns ``[]`` on error."""
+        try:
+            return self._kc.get_gtts()
+        except Exception as exc:
+            _logger.warning(
+                "get_gtts failed: %s", exc, exc_info=True,
+            )
+            return []
