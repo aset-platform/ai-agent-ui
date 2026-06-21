@@ -227,6 +227,25 @@ class PaperSupervisor:
             if uid == user_id
         ]
 
+    def get_live_runtime(
+        self, *, user_id: UUID, strategy_id: UUID,
+    ) -> Any | None:
+        """Return the active LiveRuntime for (user, strategy), or None.
+
+        Returns None when: no run exists, the run is not live mode,
+        or the asyncio task has already completed.
+        """
+        key = (user_id, strategy_id)
+        entry = self._runs.get(key)
+        if entry is None:
+            return None
+        task: asyncio.Task = entry["task"]
+        if task.done():
+            return None
+        if entry.get("mode") != "live":
+            return None
+        return entry.get("runtime")
+
     @staticmethod
     def _public_row(entry: dict[str, Any]) -> dict[str, Any]:
         task: asyncio.Task = entry["task"]

@@ -55,6 +55,9 @@ from backend.algo.backtest.stop_loss_monitor import (
 from backend.algo.backtest.time_stop_monitor import (
     check_time_stop_triggers,
 )
+from backend.algo.backtest.trailing_stop_manager import (
+    TrailingStopManager,
+)
 from backend.algo.broker.freeze_cache import get_tick_size
 from backend.algo.broker.kite_client import KiteClient
 
@@ -343,6 +346,14 @@ class LiveRuntime:
         # not a ticker list).
         self._factor_cache: dict[tuple[str, date], dict[str, Decimal]] = {}
         self._factor_loaded_for_ticker: set[str] = set()
+        # v5 three-phase trailing stop (all None = disabled; v3 unchanged).
+        self._trailing_enabled = (
+            strategy.risk.per_trade.trailing_trigger_pct is not None
+            and strategy.risk.per_trade.trailing_atr_multiplier is not None
+        )
+        self._trailing_managers: dict[str, TrailingStopManager] = {}
+        self._gtt_ids: dict[str, int] = {}
+        self._ws_hwm: dict[str, float] = {}
         # REGIME-1 — regime_label + stress_prob lookup, loaded
         # lazily on first bar so live sessions resolve regime
         # features identically to backtest + paper.
@@ -1073,6 +1084,174 @@ class LiveRuntime:
                     exc_info=True,
                 )
 
+    # ── v5 GTT trailing stop ─────────────────────────────────────
+
+    # Headroom below trigger price for the GTT limit order:
+    # 1% absorbs typical intraday gap-downs without missing the fill.
+    _GTT_LIMIT_HEADROOM_PCT: float = 0.01
+
+    def on_buy_fill_trailing(
+        self,
+        *,
+        ticker: str,
+        fill_price: float,
+        qty: int,
+    ) -> None:
+        """Initialise TrailingStopManager + place GTT after BUY fill.
+
+        Called by the postback route when a COMPLETE BUY arrives for
+        a trailing-enabled strategy. Safe to call from any thread —
+        the only shared state is the in-memory dicts (no await).
+        """
+        if not self._trailing_enabled:
+            return
+        today = datetime.now(timezone.utc).date()
+        _atr_raw = (
+            self._factor_cache.get((ticker, today))
+            or self._factor_cache.get(
+                (ticker, today - timedelta(days=1))
+            )
+            or {}
+        )
+        atr = float(_atr_raw.get("atr_14", 0.0))
+        if atr <= 0:
+            _logger.warning(
+                "trailing: atr_14 missing for %s — GTT not placed",
+                ticker,
+            )
+            return
+        mgr = TrailingStopManager(
+            self._strategy.risk.per_trade,
+            entry_price=fill_price,
+            atr=atr,
+            ticker=ticker,
+        )
+        stop = mgr.current_stop
+        limit = stop * (1.0 - self._GTT_LIMIT_HEADROOM_PCT)
+        try:
+            gtt_id = self._kite.place_gtt(
+                ticker=ticker,
+                trigger_price=stop,
+                limit_price=limit,
+                qty=qty,
+            )
+        except Exception as exc:
+            _logger.error(
+                "trailing: place_gtt failed for %s: %s",
+                ticker, exc, exc_info=True,
+            )
+            return
+        self._trailing_managers[ticker] = mgr
+        self._gtt_ids[ticker] = gtt_id
+        self._ws_hwm[ticker] = fill_price
+        self._save_trailing_state(ticker, mgr, gtt_id)
+        self._events.append(
+            event_row(
+                session_id=self._session_id,
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                mode="live",
+                type_="gtt_placed",
+                payload={
+                    "ticker": ticker,
+                    "phase": 1,
+                    "entry_price": fill_price,
+                    "stop_price": stop,
+                    "limit_price": limit,
+                    "gtt_id": gtt_id,
+                    "atr": atr,
+                    "dry_run": self._dry_run,
+                },
+            )
+        )
+        _logger.info(
+            "trailing: placed GTT %d for %s stop=%.4f "
+            "(dry_run=%s)",
+            gtt_id, ticker, stop, self._dry_run,
+        )
+
+    def _save_trailing_state(
+        self,
+        ticker: str,
+        mgr: TrailingStopManager,
+        gtt_id: int,
+    ) -> None:
+        """Persist trailing manager state to Redis (TTL = 48 h)."""
+        try:
+            import json as _json
+            from backend.cache import get_cache
+            key = (
+                f"trailing:{self._user_id}:"
+                f"{self._strategy.id}:{ticker}"
+            )
+            data = mgr.to_dict()
+            data["gtt_id"] = gtt_id
+            get_cache().set(key, _json.dumps(data), ttl=172800)
+        except Exception as exc:
+            _logger.warning(
+                "trailing: Redis save failed for %s: %s",
+                ticker, exc, exc_info=True,
+            )
+
+    def _load_trailing_state_from_redis(self) -> None:
+        """On restart: reload all trailing managers from Redis.
+
+        Called once at the top of ``run()`` after ticker-lock restore.
+        Silently skips tickers with no Redis entry or with corrupt data.
+        """
+        if not self._trailing_enabled:
+            return
+        try:
+            import json as _json
+            from backend.cache import get_cache
+            cache = get_cache()
+            prefix = (
+                f"trailing:{self._user_id}:{self._strategy.id}:"
+            )
+            for ticker in list(
+                self._positions.open_positions().keys()
+            ):
+                raw = cache.get(f"{prefix}{ticker}")
+                if raw is None:
+                    continue
+                data = _json.loads(raw)
+                gtt_id = int(data.pop("gtt_id", 0))
+                if not gtt_id:
+                    continue
+                mgr = TrailingStopManager.from_dict(
+                    data, self._strategy.risk.per_trade,
+                )
+                self._trailing_managers[ticker] = mgr
+                self._gtt_ids[ticker] = gtt_id
+                self._ws_hwm[ticker] = mgr.state.hwm
+                _logger.info(
+                    "trailing: restored %s from Redis "
+                    "phase=%d stop=%.4f gtt_id=%d",
+                    ticker, mgr.state.phase.value,
+                    mgr.current_stop, gtt_id,
+                )
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="trailing_stop_recovered",
+                        payload={
+                            "ticker": ticker,
+                            "phase": mgr.state.phase.value,
+                            "hwm": mgr.state.hwm,
+                            "current_stop": mgr.current_stop,
+                            "gtt_id": gtt_id,
+                        },
+                    )
+                )
+        except Exception as exc:
+            _logger.warning(
+                "trailing: Redis restore failed: %s",
+                exc, exc_info=True,
+            )
+
     async def run(self, source: TickSource) -> int:
         """Drain the tick source. Returns fill count."""
         from backend.algo.stream.sources import ReplayTickSource
@@ -1153,6 +1332,7 @@ class LiveRuntime:
                 self._ticker_locked.add(ticker)
         self._ticker_locked.update(self._restore_ticker_locks_from_redis())
         self._ticker_locked.update(await self._restore_ticker_locks_from_pg())
+        self._load_trailing_state_from_redis()
         if self._ticker_locked:
             _logger.info(
                 "LiveRuntime: ticker locks restored: %s",
