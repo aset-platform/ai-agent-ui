@@ -1284,12 +1284,14 @@ class LiveRuntime:
         if not self._trailing_enabled:
             return
         today = datetime.now(timezone.utc).date()
-        _atr_raw = (
-            self._factor_cache.get((ticker, today))
-            or self._factor_cache.get(
-                (ticker, today - timedelta(days=1))
-            )
-            or {}
+        _atr_raw = next(
+            (
+                self._factor_cache.get((ticker, today - timedelta(days=n)))
+                for n in range(8)
+                if (today - timedelta(days=n)).weekday() < 5
+                and self._factor_cache.get((ticker, today - timedelta(days=n)))
+            ),
+            {},
         )
         atr = float(_atr_raw.get("atr_14", 0.0))
         if atr <= 0:
@@ -1924,19 +1926,51 @@ class LiveRuntime:
                     "today_vol": Decimal(bar.volume),
                 },
             ),
-            market_regime=self._market_regime.get(bar_date_obj),
-            market_trend=self._market_trend.get(bar_date_obj),
-            factor_row=(
-                self._factor_cache.get((bar.ticker, bar_date_obj))
-                or self._factor_cache.get(
-                    (bar.ticker, bar_date_obj - timedelta(days=1))
-                )
+            market_regime=next(
+                (
+                    self._market_regime.get(bar_date_obj - timedelta(days=n))
+                    for n in range(8)
+                    if (bar_date_obj - timedelta(days=n)).weekday() < 5
+                    and self._market_regime.get(bar_date_obj - timedelta(days=n))
+                    is not None
+                ),
+                None,
             ),
-            regime_row=(
-                self._regime_by_date.get(bar_date_obj)
-                or self._regime_by_date.get(
-                    bar_date_obj - timedelta(days=1)
-                )
+            market_trend=next(
+                (
+                    self._market_trend.get(bar_date_obj - timedelta(days=n))
+                    for n in range(8)
+                    if (bar_date_obj - timedelta(days=n)).weekday() < 5
+                    and self._market_trend.get(bar_date_obj - timedelta(days=n))
+                    is not None
+                ),
+                None,
+            ),
+            factor_row=next(
+                (
+                    self._factor_cache.get(
+                        (bar.ticker, bar_date_obj - timedelta(days=n))
+                    )
+                    for n in range(8)
+                    if (bar_date_obj - timedelta(days=n)).weekday() < 5
+                    and self._factor_cache.get(
+                        (bar.ticker, bar_date_obj - timedelta(days=n))
+                    )
+                ),
+                None,
+            ),
+            regime_row=next(
+                (
+                    self._regime_by_date.get(
+                        bar_date_obj - timedelta(days=n)
+                    )
+                    for n in range(8)
+                    if (bar_date_obj - timedelta(days=n)).weekday() < 5
+                    and self._regime_by_date.get(
+                        bar_date_obj - timedelta(days=n)
+                    )
+                ),
+                None,
             ),
             daily_overlay=self._daily_overlay_cache.get(
                 (bar.ticker, bar_date_obj),
@@ -2123,8 +2157,28 @@ class LiveRuntime:
                 self._strategy.root.model_dump(by_alias=True),
                 ctx,
             )
-        except KeyError:
+        except KeyError as exc:
+            _logger.warning(
+                "eval_node KeyError ticker=%s date=%s missing_key=%s "
+                "features=%s",
+                bar.ticker, bar_date_obj, exc,
+                {k: v for k, v in (features or {}).items()
+                 if k in ("rsi_2", "distance_from_sma50", "distance_from_sma200",
+                          "stress_prob", "nifty_above_sma200", "nifty_30d_return_pct")},
+            )
             return 0
+
+        _logger.info(
+            "eval ticker=%s date=%s action=%s rsi2=%s sma50dist=%s sma200dist=%s "
+            "stress_prob=%s nifty_sma200=%s nifty30d=%s",
+            bar.ticker, bar_date_obj, action,
+            (features or {}).get("rsi_2"),
+            (features or {}).get("distance_from_sma50"),
+            (features or {}).get("distance_from_sma200"),
+            (features or {}).get("stress_prob"),
+            (features or {}).get("nifty_above_sma200"),
+            (features or {}).get("nifty_30d_return_pct"),
+        )
 
         signal = self._action_to_signal(
             action,
@@ -2182,6 +2236,12 @@ class LiveRuntime:
             # flows through unchanged. No closed-bar override.
 
         if signal is None:
+            _logger.info(
+                "_action_to_signal returned None ticker=%s action=%s "
+                "last_price=%s equity=%s",
+                bar.ticker, action, last_price,
+                self._initial + self._positions.total_realised_pnl_inr(),
+            )
             return 0
 
         # ASETPLTFRM-436 — repeat-offender cooldown gate. Blocks
@@ -3019,8 +3079,17 @@ class LiveRuntime:
             tz=timezone.utc,
         ).date()
         nav = self._initial + self._positions.total_realised_pnl_inr()
-        factor_row = self._factor_cache.get(
-            (ticker, bar_date_obj),
+        factor_row = next(
+            (
+                self._factor_cache.get(
+                    (ticker, bar_date_obj - timedelta(days=n))
+                )
+                for n in range(8)
+                if (bar_date_obj - timedelta(days=n)).weekday() < 5
+                and self._factor_cache.get(
+                    (ticker, bar_date_obj - timedelta(days=n))
+                )
+            ),
             {},
         )
         realized_vol = factor_row.get(
@@ -3081,19 +3150,49 @@ class LiveRuntime:
                         "today_vol": Decimal(closed[-1].volume),
                     },
                 ),
-                market_regime=self._market_regime.get(closed_date),
-                market_trend=self._market_trend.get(closed_date),
-                factor_row=(
-                    self._factor_cache.get((bar.ticker, closed_date))
-                    or self._factor_cache.get(
-                        (bar.ticker, closed_date - timedelta(days=1))
-                    )
+                market_regime=next(
+                    (
+                        self._market_regime.get(closed_date - timedelta(days=n))
+                        for n in range(8)
+                        if (closed_date - timedelta(days=n)).weekday() < 5
+                        and self._market_regime.get(closed_date - timedelta(days=n))
+                        is not None
+                    ),
+                    None,
                 ),
-                regime_row=(
-                    self._regime_by_date.get(closed_date)
-                    or self._regime_by_date.get(
-                        closed_date - timedelta(days=1)
-                    )
+                market_trend=next(
+                    (
+                        self._market_trend.get(closed_date - timedelta(days=n))
+                        for n in range(8)
+                        if (closed_date - timedelta(days=n)).weekday() < 5
+                        and self._market_trend.get(closed_date - timedelta(days=n))
+                        is not None
+                    ),
+                    None,
+                ),
+                factor_row=next(
+                    (
+                        self._factor_cache.get(
+                            (bar.ticker, closed_date - timedelta(days=n))
+                        )
+                        for n in range(8)
+                        if (closed_date - timedelta(days=n)).weekday() < 5
+                        and self._factor_cache.get(
+                            (bar.ticker, closed_date - timedelta(days=n))
+                        )
+                    ),
+                    None,
+                ),
+                regime_row=next(
+                    (
+                        self._regime_by_date.get(closed_date - timedelta(days=n))
+                        for n in range(8)
+                        if (closed_date - timedelta(days=n)).weekday() < 5
+                        and self._regime_by_date.get(
+                            closed_date - timedelta(days=n)
+                        )
+                    ),
+                    None,
                 ),
                 daily_overlay=self._daily_overlay_cache.get(
                     (bar.ticker, closed_date),
