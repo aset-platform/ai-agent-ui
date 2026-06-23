@@ -2292,7 +2292,7 @@ function WatchlistStocksTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rsi2Filter, setRsi2Filter] =
-    useState<Rsi2Filter>(null);
+    useState<Rsi2Filter>("lte25");
   const [curRsi2Filter, setCurRsi2Filter] =
     useState<Rsi2Filter>(null);
   const [market, setMarket] =
@@ -2301,13 +2301,15 @@ function WatchlistStocksTab() {
   const [pageSize, setPageSize] =
     useState(DEFAULT_WL_PAGE_SIZE);
   const [copied, setCopied] = useState(false);
-  const [goldenCross, setGoldenCross] = useState(false);
-  const [sma50AboveLtp, setSma50AboveLtp] = useState(false);
-  const [sma200AboveLtp, setSma200AboveLtp] = useState(false);
-  const [atrFilter, setAtrFilter] = useState<AtrFilter>("");
-  const [sharpeFilter, setSharpeFilter] = useState<SharpeFilter>("");
-  const [rsFilter, setRsFilter] = useState<RsFilter>("");
-  const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>([]);
+  const [goldenCross, setGoldenCross] = useState(true);
+  const [sma50AboveLtp, setSma50AboveLtp] = useState(true);
+  const [sma200AboveLtp, setSma200AboveLtp] = useState(true);
+  const [atrFilter, setAtrFilter] = useState<AtrFilter>("gt2lte6");
+  const [sharpeFilter, setSharpeFilter] = useState<SharpeFilter>("gt1");
+  const [rsFilter, setRsFilter] = useState<RsFilter>("gte25");
+  const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>(
+    ["gt5lte15", "gt15lte35", "gt35lte50"],
+  );
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("ticker");
   const [sortDir, setSortDir] = useState<SortDir>("asc");

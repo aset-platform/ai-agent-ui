@@ -258,7 +258,10 @@ function StrategyCapsPanel({
 // ── Main modal ───────────────────────────────────────────────────
 
 export function AddToStrategyModal({ filteredTickers, onClose }: Props) {
-  const { strategies, loading: stLoading } = useStrategies();
+  const { strategies: allStrategies, loading: stLoading } = useStrategies();
+  const strategies = allStrategies.filter(
+    (s) => s.mode === "live" && !s.archived_at,
+  );
   const [selectedId, setSelectedId] = useState<string>("");
   const [mounted, setMounted] = useState(false);
 
@@ -333,7 +336,11 @@ export function AddToStrategyModal({ filteredTickers, onClose }: Props) {
             data-testid="add-to-strategy-select"
           >
             <option value="">
-              {stLoading ? "Loading strategies…" : "— pick a strategy —"}
+              {stLoading
+                ? "Loading strategies…"
+                : strategies.length === 0
+                  ? "No live strategies"
+                  : "— pick a live strategy —"}
             </option>
             {strategies.map((s) => (
               <option key={s.id} value={s.id}>
