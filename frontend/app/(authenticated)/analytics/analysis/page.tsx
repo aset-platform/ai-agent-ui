@@ -27,6 +27,7 @@ import { API_URL } from "@/lib/config";
 import dynamic from "next/dynamic";
 import { usePreferences } from "@/hooks/usePreferences";
 import { StockAnalysisLink } from "@/components/advanced-analytics/StockAnalysisLink";
+import { AddToStrategyModal } from "@/components/algo-trading/AddToStrategyModal";
 
 // Dynamic imports — lightweight-charts requires window/document
 // Skeleton heights match each chart's rendered height to keep
@@ -2310,6 +2311,7 @@ function WatchlistStocksTab() {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("ticker");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [addToStrategyOpen, setAddToStrategyOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -2750,8 +2752,28 @@ function WatchlistStocksTab() {
             </>
           )}
         </button>
+        <button
+          type="button"
+          data-testid="watchlist-add-to-strategy"
+          onClick={() => setAddToStrategyOpen(true)}
+          disabled={filtered.length === 0}
+          title="Add filtered tickers to a strategy's allowed list"
+          className="inline-flex items-center gap-1.5 rounded-md border border-indigo-200 dark:border-indigo-700 px-3 py-1.5 text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed self-start"
+        >
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          Add to Strategy
+        </button>
         </div>
       </div>
+
+      {addToStrategyOpen && (
+        <AddToStrategyModal
+          filteredTickers={filtered.map((s) => s.ticker)}
+          onClose={() => setAddToStrategyOpen(false)}
+        />
+      )}
 
       {/* Table */}
       <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700">
