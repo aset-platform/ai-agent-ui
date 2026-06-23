@@ -2342,6 +2342,10 @@ def create_insights_router() -> APIRouter:
                 # Compute current_rsi_2: during market hours append a
                 # synthetic bar with today's LTP; off-hours reuse rsi_2.
                 _cur_rsi2: float | None = None
+                _cur_sma200: float | None = None
+                _cur_sma50: float | None = None
+                _cur_sma20: float | None = None
+                _live_ltp: float | None = None
                 if not _live_mode:
                     _cur_rsi2 = _safe(last.get("RSI_2"))
                 else:
@@ -2381,6 +2385,7 @@ def create_insights_router() -> APIRouter:
                                 close=_Dec(str(_ltp)),
                                 volume=0,
                             ))
+                            _live_ltp = _ltp
                         if _bars:
                             _imap = _ci(_bars)
                             if _imap:
@@ -2388,6 +2393,19 @@ def create_insights_router() -> APIRouter:
                                 _r2 = _li.get("rsi_2")
                                 if _r2 is not None:
                                     _cur_rsi2 = float(_r2)
+                                for _k, _ref in (
+                                    ("sma_200", "_cur_sma200"),
+                                    ("sma_50", "_cur_sma50"),
+                                    ("sma_20", "_cur_sma20"),
+                                ):
+                                    _sv = _li.get(_k)
+                                    if _sv is not None:
+                                        if _k == "sma_200":
+                                            _cur_sma200 = float(_sv)
+                                        elif _k == "sma_50":
+                                            _cur_sma50 = float(_sv)
+                                        else:
+                                            _cur_sma20 = float(_sv)
                     except Exception as _exc2:
                         _logger.debug(
                             "current_rsi_2 %s: %s",
@@ -2467,12 +2485,11 @@ def create_insights_router() -> APIRouter:
                         ),
                         current_rsi_2=_cur_rsi2,
                         sma_200=_sma200,
-                        sma_50=_safe(
-                            last.get("SMA_50")
-                        ),
-                        sma_20=_safe(
-                            last.get("SMA_20")
-                        ),
+                        sma_50=_safe(last.get("SMA_50")),
+                        sma_20=_safe(last.get("SMA_20")),
+                        current_sma_200=_cur_sma200,
+                        current_sma_50=_cur_sma50,
+                        current_sma_20=_cur_sma20,
                         sharpe_ratio=_sharpe,
                         atr_pct=_atr_pct,
                         rs_6m=_rs_6m,

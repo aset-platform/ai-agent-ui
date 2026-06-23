@@ -2907,12 +2907,21 @@ function WatchlistStocksTab() {
                     </td>
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
                       {fmt(row.sma_200)}
+                      {row.current_sma_200 != null && (
+                        <span className="text-blue-500 dark:text-blue-400"> | {fmt(row.current_sma_200)}</span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
                       {fmt(row.sma_50)}
+                      {row.current_sma_50 != null && (
+                        <span className="text-blue-500 dark:text-blue-400"> | {fmt(row.current_sma_50)}</span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
                       {fmt(row.sma_20)}
+                      {row.current_sma_20 != null && (
+                        <span className="text-blue-500 dark:text-blue-400"> | {fmt(row.current_sma_20)}</span>
+                      )}
                     </td>
                     <td className={`px-4 py-2.5 font-mono text-xs ${
                       row.sharpe_ratio == null

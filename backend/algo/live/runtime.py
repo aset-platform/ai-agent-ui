@@ -1432,6 +1432,224 @@ class LiveRuntime:
                 exc, exc_info=True,
             )
 
+    async def _ensure_gtts_for_hydrated_positions(self) -> None:
+        """Place (or re-register) GTTs for positions with no active manager.
+
+        Called once in ``run()`` after ``_load_trailing_state_from_redis()``.
+        Covers two scenarios:
+          1. Fresh live promotion — no Redis state, position existed before
+             this strategy run (e.g. a holding bought outside the algo or
+             by a prior run whose Redis TTL expired).
+          2. GTT was deleted on Kite (manual removal, policy change, etc.) —
+             Redis has state but the GTT id is gone; ratchet would place a
+             replacement anyway, but this catches it at startup.
+
+        For every position not already in ``_trailing_managers``:
+          - Checks Kite for an existing active GTT for that ticker.
+            If found, registers it so the ratchet loop can manage it.
+          - Otherwise places a fresh GTT using entry=avg_price, ATR from
+            factor cache, phase advanced by a single on_price_update(ltp).
+          - Source tag ``hydrated_algo`` / ``hydrated_manual`` is logged
+            and emitted in the ``gtt_placed`` event.
+        """
+        if not self._trailing_enabled:
+            return
+
+        open_pos = self._positions.open_positions()
+        unmanaged = {
+            t: p
+            for t, p in open_pos.items()
+            if t not in self._trailing_managers and p.qty > 0
+        }
+        if not unmanaged:
+            return
+
+        _logger.info(
+            "ensure_gtts: %d unmanaged position(s): %s",
+            len(unmanaged), list(unmanaged),
+        )
+
+        # Batch-fetch active GTTs from Kite once.
+        try:
+            all_gtts: list[dict] = await asyncio.to_thread(
+                self._kite.get_gtts
+            )
+        except Exception as exc:
+            _logger.warning(
+                "ensure_gtts: get_gtts failed: %s", exc
+            )
+            all_gtts = []
+
+        # bare_symbol (no suffix) → (gtt_id, trigger_price)
+        kite_gtt_map: dict[str, tuple[int, float]] = {}
+        for _g in all_gtts:
+            if _g.get("status") != "active":
+                continue
+            _cond = _g.get("condition") or {}
+            _sym = (_cond.get("tradingsymbol") or "").upper()
+            _gid = _g.get("id") or 0
+            _triggers = _cond.get("trigger_values") or []
+            if _sym and _gid and _triggers:
+                kite_gtt_map[_sym] = (int(_gid), float(_triggers[0]))
+
+        # Batch-query algo.events to identify algo-placed positions.
+        _algo_syms: set[str] = set()
+        try:
+            from backend.db.duckdb_engine import query_iceberg_table
+            import json as _json
+            _evt_rows = query_iceberg_table(
+                "algo.events",
+                "SELECT payload_json FROM events "
+                "WHERE user_id = ? AND mode = 'live' "
+                "  AND type = 'order_filled_live'",
+                [str(self._user_id)],
+            )
+            for _r in _evt_rows:
+                try:
+                    _p = _json.loads(_r.get("payload_json") or "{}")
+                    _s = (_p.get("symbol") or "").upper()
+                    if _s:
+                        _algo_syms.add(_s)
+                except Exception:
+                    pass
+        except Exception as exc:
+            _logger.debug(
+                "ensure_gtts: events query failed: %s", exc
+            )
+
+        _today = datetime.now(timezone.utc).date()
+
+        for ticker, pos in unmanaged.items():
+            bare = (
+                ticker.removesuffix(".NS").removesuffix(".BO").upper()
+            )
+            avg_price = float(pos.avg_price)
+            qty = pos.qty
+            source = (
+                "hydrated_algo"
+                if bare in _algo_syms
+                else "hydrated_manual"
+            )
+
+            # ATR — weekday-aware, same pattern as on_buy_fill_trailing.
+            _atr_raw = next(
+                (
+                    self._factor_cache.get(
+                        (ticker, _today - timedelta(days=_n))
+                    )
+                    for _n in range(8)
+                    if (
+                        _today - timedelta(days=_n)
+                    ).weekday() < 5
+                    and self._factor_cache.get(
+                        (ticker, _today - timedelta(days=_n))
+                    ) is not None
+                ),
+                {},
+            )
+            atr = float(_atr_raw.get("atr_14", 0.0))
+            if atr <= 0:
+                _logger.warning(
+                    "ensure_gtts: atr_14 missing for %s — "
+                    "skipping GTT placement",
+                    ticker,
+                )
+                continue
+
+            # Build manager at entry; advance phase via LTP if known.
+            mgr = TrailingStopManager(
+                self._strategy.risk.per_trade,
+                entry_price=avg_price,
+                atr=atr,
+                ticker=ticker,
+            )
+            ltp = self._ws_hwm.get(ticker, avg_price)
+            if ltp > avg_price:
+                mgr.on_price_update(ltp)
+
+            stop = mgr.current_stop
+            limit = stop * (1.0 - self._GTT_LIMIT_HEADROOM_PCT)
+
+            # If an active GTT already exists on Kite, register it.
+            existing = kite_gtt_map.get(bare)
+            if existing:
+                _existing_gtt_id, _existing_stop = existing
+                self._trailing_managers[ticker] = mgr
+                self._gtt_ids[ticker] = _existing_gtt_id
+                self._ws_hwm.setdefault(ticker, avg_price)
+                self._save_trailing_state(ticker, mgr, _existing_gtt_id)
+                _logger.info(
+                    "ensure_gtts: registered existing GTT %d for %s "
+                    "kite_stop=%.4f our_stop=%.4f phase=%d source=%s",
+                    _existing_gtt_id, ticker, _existing_stop,
+                    stop, mgr.state.phase.value, source,
+                )
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="trailing_stop_recovered",
+                        payload={
+                            "ticker": ticker,
+                            "phase": mgr.state.phase.value,
+                            "hwm": mgr.state.hwm,
+                            "current_stop": stop,
+                            "gtt_id": _existing_gtt_id,
+                            "source": source,
+                        },
+                    )
+                )
+                continue
+
+            # No GTT on Kite — place a fresh one.
+            try:
+                gtt_id = await asyncio.to_thread(
+                    self._kite.place_gtt,
+                    ticker,
+                    stop,
+                    limit,
+                    qty,
+                )
+            except Exception as exc:
+                _logger.error(
+                    "ensure_gtts: place_gtt failed for %s: %s",
+                    ticker, exc, exc_info=True,
+                )
+                continue
+
+            self._trailing_managers[ticker] = mgr
+            self._gtt_ids[ticker] = gtt_id
+            self._ws_hwm.setdefault(ticker, avg_price)
+            self._save_trailing_state(ticker, mgr, gtt_id)
+            self._events.append(
+                event_row(
+                    session_id=self._session_id,
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    mode="live",
+                    type_="gtt_placed",
+                    payload={
+                        "ticker": ticker,
+                        "phase": mgr.state.phase.value,
+                        "entry_price": avg_price,
+                        "stop_price": stop,
+                        "limit_price": limit,
+                        "gtt_id": gtt_id,
+                        "atr": atr,
+                        "dry_run": self._dry_run,
+                        "source": source,
+                    },
+                )
+            )
+            _logger.info(
+                "ensure_gtts: placed GTT %d for %s stop=%.4f "
+                "phase=%d source=%s (dry_run=%s)",
+                gtt_id, ticker, stop,
+                mgr.state.phase.value, source, self._dry_run,
+            )
+
     async def run(self, source: TickSource) -> int:
         """Drain the tick source. Returns fill count."""
         from backend.algo.stream.sources import ReplayTickSource
@@ -1513,6 +1731,7 @@ class LiveRuntime:
         self._ticker_locked.update(self._restore_ticker_locks_from_redis())
         self._ticker_locked.update(await self._restore_ticker_locks_from_pg())
         self._load_trailing_state_from_redis()
+        await self._ensure_gtts_for_hydrated_positions()
         if self._ticker_locked:
             _logger.info(
                 "LiveRuntime: ticker locks restored: %s",
