@@ -217,6 +217,9 @@ class LiveRuntime:
         self._caps = caps
         self._run_id = run_id
         self._caps_repo = caps_repo
+        self._gtt_limit_headroom_pct: float = float(
+            caps.get("gtt_limit_headroom_pct", 0.01)
+        )
         self._kill_switch_repo = kill_switch_repo
         self._ticker_to_token = ticker_to_token or {}
         self._evaluator = Evaluator()
@@ -1165,7 +1168,7 @@ class LiveRuntime:
                 old_gtt_id = self._gtt_ids.get(ticker)
                 stop = mgr.current_stop
                 limit = stop * (
-                    1.0 - self._GTT_LIMIT_HEADROOM_PCT
+                    1.0 - self._gtt_limit_headroom_pct
                 )
                 try:
                     if old_gtt_id:
@@ -1264,10 +1267,6 @@ class LiveRuntime:
             "trailing: state cleared for %s after SELL fill", ticker,
         )
 
-    # Headroom below trigger price for the GTT limit order:
-    # 1% absorbs typical intraday gap-downs without missing the fill.
-    _GTT_LIMIT_HEADROOM_PCT: float = 0.01
-
     def on_buy_fill_trailing(
         self,
         *,
@@ -1307,7 +1306,7 @@ class LiveRuntime:
             ticker=ticker,
         )
         stop = mgr.current_stop
-        limit = stop * (1.0 - self._GTT_LIMIT_HEADROOM_PCT)
+        limit = stop * (1.0 - self._gtt_limit_headroom_pct)
         try:
             gtt_id = self._kite.place_gtt(
                 ticker=ticker,
@@ -1568,7 +1567,7 @@ class LiveRuntime:
                 mgr.on_price_update(ltp)
 
             stop = mgr.current_stop
-            limit = stop * (1.0 - self._GTT_LIMIT_HEADROOM_PCT)
+            limit = stop * (1.0 - self._gtt_limit_headroom_pct)
 
             # If an active GTT already exists on Kite, register it.
             existing = kite_gtt_map.get(bare)

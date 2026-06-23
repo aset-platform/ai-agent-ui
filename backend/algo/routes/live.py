@@ -124,6 +124,11 @@ class UpsertCapsRequest(BaseModel):
     max_orders_per_day: int = Field(ge=0, le=50)
     allowed_tickers: list[str] = Field(default_factory=list)
     last_walkforward_run_id: UUID | None = None
+    gtt_limit_headroom_pct: Decimal = Field(
+        default=Decimal("0.01"),
+        ge=Decimal("0"),
+        le=Decimal("0.10"),
+    )
 
 
 class CapsResponse(BaseModel):
@@ -138,6 +143,7 @@ class CapsResponse(BaseModel):
     last_walkforward_run_id: UUID | None = None
     cumulative_inr_today: Decimal
     orders_count_today: int
+    gtt_limit_headroom_pct: Decimal = Decimal("0.01")
 
 
 class GatesStatus(BaseModel):
@@ -1108,6 +1114,7 @@ def create_live_router() -> APIRouter:
             max_orders_per_day=body.max_orders_per_day,
             allowed_tickers=body.allowed_tickers,
             last_walkforward_run_id=body.last_walkforward_run_id,
+            gtt_limit_headroom_pct=body.gtt_limit_headroom_pct,
         )
         return CapsResponse(
             **{k: row[k] for k in CapsResponse.model_fields if k in row}

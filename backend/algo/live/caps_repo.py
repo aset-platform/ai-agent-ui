@@ -52,6 +52,7 @@ class CapsRepo:
                         "  last_walkforward_run_id, "
                         "  cumulative_inr_today, "
                         "  orders_count_today, "
+                        "  gtt_limit_headroom_pct, "
                         "  created_at, updated_at "
                         "FROM algo.live_caps "
                         "WHERE user_id = :uid "
@@ -88,6 +89,7 @@ class CapsRepo:
             "last_walkforward_run_id": None,
             "cumulative_inr_today": Decimal("0"),
             "orders_count_today": 0,
+            "gtt_limit_headroom_pct": Decimal("0.01"),
         }
 
     async def list_enabled(
@@ -126,6 +128,7 @@ class CapsRepo:
         max_orders_per_day: int,
         allowed_tickers: list[str],
         last_walkforward_run_id: UUID | None = None,
+        gtt_limit_headroom_pct: Decimal | None = None,
     ) -> dict[str, Any]:
         """Create or update the caps row (does NOT change
         live_orders_enabled — that requires a separate call).
@@ -142,18 +145,20 @@ class CapsRepo:
                     "  max_orders_per_day, allowed_tickers, "
                     "  live_orders_enabled, "
                     "  last_walkforward_run_id, "
+                    "  gtt_limit_headroom_pct, "
                     "  cumulative_inr_today, orders_count_today, "
                     "  created_at, updated_at) "
                     "VALUES ("
                     "  :uid, :sid, :max_inr, :max_ord, "
                     "  CAST(:tickers AS jsonb), false, "
-                    "  :wf_run_id, 0, 0, :now, :now) "
+                    "  :wf_run_id, :gtt_pct, 0, 0, :now, :now) "
                     "ON CONFLICT (user_id, strategy_id) "
                     "DO UPDATE SET "
                     "  max_inr = :max_inr, "
                     "  max_orders_per_day = :max_ord, "
                     "  allowed_tickers = CAST(:tickers AS jsonb), "
                     "  last_walkforward_run_id = :wf_run_id, "
+                    "  gtt_limit_headroom_pct = :gtt_pct, "
                     "  updated_at = :now"
                 ),
                 {
@@ -163,6 +168,11 @@ class CapsRepo:
                     "max_ord": max_orders_per_day,
                     "tickers": json.dumps(allowed_tickers),
                     "wf_run_id": last_walkforward_run_id,
+                    "gtt_pct": (
+                        gtt_limit_headroom_pct
+                        if gtt_limit_headroom_pct is not None
+                        else Decimal("0.01")
+                    ),
                     "now": now,
                 },
             )

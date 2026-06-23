@@ -28,6 +28,7 @@ export function LiveSafetyBeltsForm({ strategyId }: Props) {
   const [maxInr, setMaxInr] = useState<string>("");
   const [maxOrders, setMaxOrders] = useState<string>("");
   const [tickers, setTickers] = useState<string>("");
+  const [gttHeadroomPct, setGttHeadroomPct] = useState<string>("1.0");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -37,6 +38,9 @@ export function LiveSafetyBeltsForm({ strategyId }: Props) {
       setMaxInr(String(caps.max_inr ?? 0));
       setMaxOrders(String(caps.max_orders_per_day ?? 0));
       setTickers((caps.allowed_tickers ?? []).join(", "));
+      setGttHeadroomPct(
+        String(((caps.gtt_limit_headroom_pct ?? 0.01) * 100).toFixed(2)),
+      );
     }
   }, [caps]);
 
@@ -53,6 +57,10 @@ export function LiveSafetyBeltsForm({ strategyId }: Props) {
         max_inr: Number(maxInr),
         max_orders_per_day: Math.min(50, Math.max(0, Number(maxOrders))),
         allowed_tickers: tickerList,
+        gtt_limit_headroom_pct: Math.min(
+          0.1,
+          Math.max(0, Number(gttHeadroomPct) / 100),
+        ),
       });
       setSaved(true);
       // Invalidate gate-status so the toggle re-evaluates caps_set
@@ -82,7 +90,7 @@ export function LiveSafetyBeltsForm({ strategyId }: Props) {
       className="space-y-3"
       data-testid="live-safety-belts-form"
     >
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
         {/* Max INR per day */}
         <label className="flex flex-col gap-0.5">
           <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
@@ -121,6 +129,27 @@ export function LiveSafetyBeltsForm({ strategyId }: Props) {
           />
           <span className="text-[10px] text-slate-400">
             Max 50; 0 = no new orders
+          </span>
+        </label>
+
+        {/* GTT limit buffer */}
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
+            GTT limit buffer %
+          </span>
+          <input
+            type="number"
+            min={0}
+            max={10}
+            step={0.1}
+            value={gttHeadroomPct}
+            onChange={(e) => setGttHeadroomPct(e.target.value)}
+            className="rounded border border-slate-300 px-2 py-1 text-sm
+              dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+            data-testid="live-caps-gtt-headroom"
+          />
+          <span className="text-[10px] text-slate-400">
+            Limit = trigger × (1 − buffer). Max 10%.
           </span>
         </label>
 
