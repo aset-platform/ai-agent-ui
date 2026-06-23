@@ -2,6 +2,47 @@
 
 ---
 
+### 2026-06-23/24 — feat: GTT hydration, configurable buffer, Watchlist → Strategy modal (branch `feature/rsi2-exit-strategy`)
+
+**Why:** Live market testing on 2026-06-23 surfaced three gaps: (1) GTTs placed by our algo could be accidentally deleted from Kite (no re-hydration on restart); (2) the 1% GTT limit headroom was hardcoded and couldn't be tuned per-strategy; (3) the Watchlist Stocks page had no way to push a curated filtered list directly into a strategy's allowed_tickers.
+
+**What (4 tasks, 5 commits):**
+
+- **T1 — GTT hydration on startup** (`feat(live): GTT hydration on startup + panic-close GTT cancel`, `f0aa047`)
+  - `_ensure_gtts_for_hydrated_positions()` in `LiveRuntime.run()` — called after `_load_trailing_state_from_redis()`
+  - For every open position not yet in `_trailing_managers`: fetches Kite GTTs, queries `algo.events` for algo vs manual source, creates `TrailingStopManager`, places GTT if missing (emits `gtt_placed` with `source=hydrated_algo|hydrated_manual`) or registers existing (emits `trailing_stop_recovered`)
+  - Covers first promotion post-deploy and accidentally-deleted GTTs
+  - **Panic close GTT cancel**: `kill_switch.py` `panic_close_all()` now cancels ALL active Kite GTTs before submitting SELL orders; returns `gtts_cancelled` count in response
+
+- **T2 — Configurable GTT limit buffer** (`feat(live): make GTT limit buffer configurable via Settings tab`, `2668977`)
+  - Alembic migration `2026_06_23_gtt_headroom`: `gtt_limit_headroom_pct NUMERIC(5,4) DEFAULT 0.01` on `algo.live_caps`
+  - `CapsRepo` get/upsert/default updated; `UpsertCapsRequest` + `CapsResponse` in `live.py` updated
+  - `LiveRuntime.__init__` reads from caps; class constant `_GTT_LIMIT_HEADROOM_PCT` removed
+  - `LiveSafetyBeltsForm.tsx` — 4th column "GTT limit buffer %" (0–10%, default 1.0%)
+  - Confirmed: Live Test 3000 RSI updated to 0.50% → `0.0050` stored ✓
+
+- **T3 — Watchlist → Strategy "Add to Strategy" modal** (`feat(watchlist): add filtered tickers to strategy allowed list modal`, `9a312f2`)
+  - `frontend/components/algo-trading/AddToStrategyModal.tsx` — strategy dropdown (live+non-archived only), side-by-side existing vs filtered, Merge → final chip list → Save
+  - Preserves all other caps fields on save; Back button; Escape/backdrop close
+  - "Add to Strategy" button in Watchlist Stocks toolbar next to Copy Tickers
+
+- **T4 — Default filters + live-only dropdown** (`fix(watchlist): default filters + modal live-only strategies`, `ab02bda`)
+  - Watchlist Stocks default state: RSI(2)≤25, ATR 2–6%, Sharpe≥1, RS≥25%, Dist SMA200=[5–15%,15–35%,35–50%], Golden Cross + LTP>SMA50 + LTP>SMA200 ON
+  - Modal dropdown filtered to `mode==="live" && !archived_at`
+
+**Live SMA columns (shipped 2026-06-23, same session):**
+- `current_sma_200/50/20` on `WatchlistStockRow` — intraday live values shown as `prev | current` in blue
+- Filter chips use prev-day close for stability (NOT live LTP)
+
+**Manual testing:** All features verified in browser after full restart + Redis FLUSHALL. GTT buffer 0.50% confirmed stored as `0.0050`. Watchlist loads with default filters applied.
+
+**Pending (market hours tomorrow):**
+- GTT hydration end-to-end with live positions (RSI(2) Connors Daily v5 + 5% price stop)
+- GTT fill postback routing for exchange-side GTT triggers
+- Walk-forward DSR gate for v5 paper→live promotion
+
+---
+
 ### 2026-06-21 — feat: RSI(2) Connors Daily v5 — three-phase GTT trailing stop (branch `feature/rsi2-exit-strategy`, worktree)
 
 **Why:** RSI(2) v3/v4 used an SMA5 bar-close exit which required holding overnight. v5 replaces it with a three-phase Kite GTT trailing stop: hard stop at entry×0.95, one-time ratchet to entry×0.97 when gain ≥ 2%, ATR×1.5 trailing stop once gain ≥ 5%. GTT fires intraday without monitoring — Kite's exchange-side trigger handles execution.

@@ -39,7 +39,13 @@ Same LOW/HIGH ordering per 15m bar. Dry-run logs GTT intents without calling Kit
 ### Live (`backend/algo/live/runtime.py`)
 - `on_buy_fill_trailing(ticker, fill_price, qty)` — called from postback on COMPLETE BUY;
   builds manager from factor-cache ATR, places GTT, saves state to Redis, emits `gtt_placed`
-- `_load_trailing_state_from_redis()` — restart recovery, called in `run()` after ticker-lock restore
+- `_load_trailing_state_from_redis()` — restart recovery from Redis; called in `run()` after ticker-lock restore
+- `_ensure_gtts_for_hydrated_positions()` — called in `run()` AFTER `_load_trailing_state_from_redis()`; covers Redis-miss cases (first promotion after deploy, accidentally deleted GTTs). For every open position NOT already in `_trailing_managers`:
+  - Batch-fetches `kite.get_gtts()` and builds `kite_gtt_map[bare_symbol] → (gtt_id, trigger_price)`
+  - Batch-queries `algo.events` for `order_filled_live` to determine `source` (algo vs manual)
+  - Computes ATR via weekday-aware `range(8)` lookback; creates `TrailingStopManager`
+  - If GTT exists on Kite: registers id, emits `trailing_stop_recovered` with `source` field
+  - If no GTT: places via `kite.place_gtt(...)`, emits `gtt_placed` with `source=hydrated_algo|hydrated_manual`
 - `_trailing_ratchet_loop()` — asyncio task aligned to 15m boundaries 09:15–15:25 IST;
   calls `_ratchet_all_gtts()` via `asyncio.to_thread`
 - `_ratchet_all_gtts()` — evaluates WS HWM; STOP_UPDATED → delete+replace GTT; STOP_HIT → emergency limit SELL
@@ -64,16 +70,19 @@ LiveRuntime or None (mode≠live or task done → None).
 - `delete_gtt(gtt_id)` — swallows all exceptions (already-triggered is fine)
 - `get_gtts() → list[dict]`
 
-GTT limit order = trigger_price × (1 − 0.01) to absorb gap-downs.
+GTT limit order = `trigger_price × (1 − gtt_limit_headroom_pct)` to absorb gap-downs.
+`gtt_limit_headroom_pct` is stored in `algo.live_caps` (NUMERIC(5,4), default 0.01)
+and read into `self._gtt_limit_headroom_pct` at `LiveRuntime.__init__`.
+Configurable via Live Trading → Settings → "GTT limit buffer %" input (displayed as %, stored as decimal 0–0.10).
 
 ## Event vocabulary
 
 | Event type | Emitted by | Payload keys |
 |---|---|---|
-| `gtt_placed` | `on_buy_fill_trailing` | ticker, phase, entry_price, stop_price, limit_price, gtt_id, atr |
+| `gtt_placed` | `on_buy_fill_trailing` or `_ensure_gtts_for_hydrated_positions` | ticker, phase, entry_price, stop_price, limit_price, gtt_id, atr, source |
 | `gtt_ratcheted` | `_ratchet_all_gtts` | ticker, phase, old_stop, new_stop, hwm, gtt_id_old, gtt_id_new |
 | `gtt_cancelled_for_time_stop` | time-stop path | ticker, holding_days, gtt_id |
-| `trailing_stop_recovered` | `_load_trailing_state_from_redis` | ticker, phase, hwm, current_stop, gtt_id |
+| `trailing_stop_recovered` | `_load_trailing_state_from_redis` or `_ensure_gtts_for_hydrated_positions` | ticker, phase, hwm, current_stop, gtt_id, source |
 
 ## AST fields (RiskPerTrade)
 
