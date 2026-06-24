@@ -221,6 +221,21 @@ def hydrate(
         raw_pos.get("net", [])
         if isinstance(raw_pos, dict) else []
     )
+    if net:
+        _logger.debug(
+            "hydration: positions()['net'] returned %d row(s): %s",
+            len(net),
+            [(r.get("tradingsymbol"), r.get("quantity"), r.get("product"))
+             for r in net],
+        )
+    else:
+        _logger.warning(
+            "hydration: positions()['net'] is empty "
+            "(kc=%s, raw_pos type=%s, net type=%s)",
+            type(kc).__name__,
+            type(raw_pos).__name__,
+            type(net).__name__,
+        )
     for r in net:
         product = (r.get("product") or "").upper()
         qty = _safe_int(r.get("quantity"))

@@ -19,7 +19,7 @@ from uuid import UUID
 
 from sqlalchemy import text
 
-from backend.db.engine import get_session_factory
+from backend.db.engine import disposable_pg_session, get_session_factory
 
 _logger = logging.getLogger(__name__)
 
@@ -420,12 +420,88 @@ class CapsRepo:
         }
         return set(locked) | submitted_buy_tickers
 
+    async def get_filled_buys_from_previous_runs(
+        self,
+        user_id: UUID,
+        strategy_id: UUID,
+        current_run_id: UUID,
+        *,
+        look_back: int = 10,
+    ) -> dict[str, dict]:
+        """Return filled BUY entries from recent previous live runs.
+
+        Scans up to ``look_back`` prior runs (ordered most-recent-first) and
+        collects all status='filled' BUY orders.  Used by
+        ``_recover_unhydrated_positions`` to re-inject positions that were
+        filled while the prior runtime was stopping (the postback arrived
+        after ``get_live_runtime`` returned None so no GTT or Redis state
+        was saved).  A short intermediate run with no orders (empty in_flight)
+        must not hide a fill from an earlier run — hence the multi-hop scan.
+
+        Returns dict keyed by ``TICKER.NS`` → ``{fill_price, qty}``.
+        Only entries with status='filled', side='BUY', fill_price > 0,
+        qty > 0 are included.  If a ticker appears in multiple runs the
+        most-recent fill wins (rows are processed newest-first).
+        """
+        async with disposable_pg_session() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT live_orders_in_flight "
+                        "FROM algo.runs "
+                        "WHERE user_id = :uid "
+                        "  AND strategy_id = :sid "
+                        "  AND mode = 'live' "
+                        "  AND id != :crid "
+                        "ORDER BY started_at DESC "
+                        "LIMIT :n"
+                    ),
+                    {
+                        "uid": user_id,
+                        "sid": strategy_id,
+                        "crid": current_run_id,
+                        "n": look_back,
+                    },
+                )
+            ).all()
+
+        result: dict[str, dict] = {}
+        for row in rows:
+            raw = row[0]
+            in_flight: list[dict] = (
+                json.loads(raw) if isinstance(raw, str) else (raw or [])
+            )
+            for e in in_flight:
+                if e.get("side") != "BUY" or e.get("status") != "filled":
+                    continue
+                sym = e.get("symbol") or ""
+                if not sym:
+                    continue
+                ticker = f"{sym}.NS" if "." not in sym else sym
+                if ticker in result:
+                    continue  # already found a more-recent fill
+                try:
+                    fp = float(e.get("fill_price") or 0)
+                    qty = int(
+                        e.get("filled_qty") or e.get("qty") or 0
+                    )
+                except (TypeError, ValueError):
+                    continue
+                if fp > 0 and qty > 0:
+                    result[ticker] = {"fill_price": fp, "qty": qty}
+        return result
+
     async def get_in_flight(
         self, user_id: UUID, run_id: UUID,
     ) -> list[dict]:
-        """Return the in-flight orders list for a run."""
-        factory = get_session_factory()
-        async with factory() as session:
+        """Return the in-flight orders list for a run.
+
+        Uses disposable_pg_session (NullPool) because this is called
+        every 30 s from _sync_fills_from_pg in the live runtime.
+        NullPool avoids accumulating idle-in-transaction pool connections
+        from repeated read-only SELECT calls that never commit.
+        """
+        async with disposable_pg_session() as session:
             row = (
                 await session.execute(
                     text(

@@ -1401,9 +1401,14 @@ class LiveRuntime:
             prefix = (
                 f"trailing:{self._user_id}:{self._strategy.id}:"
             )
-            for ticker in list(
-                self._positions.open_positions().keys()
-            ):
+            # Scan both hydrated positions AND locked tickers so a restart
+            # that missed the Kite positions() API still recovers trailing
+            # managers for all previously-filled positions.
+            _restore_set = (
+                set(self._positions.open_positions().keys())
+                | self._ticker_locked
+            )
+            for ticker in list(_restore_set):
                 raw = cache.get(f"{prefix}{ticker}")
                 if raw is None:
                     continue
@@ -1443,6 +1448,76 @@ class LiveRuntime:
             _logger.warning(
                 "trailing: Redis restore failed: %s",
                 exc, exc_info=True,
+            )
+
+    async def _recover_unhydrated_positions(self) -> None:
+        """Re-inject positions that are ticker-locked but missed by hydration.
+
+        Scenario: a BUY filled while the prior runtime was stopping — the
+        Kite postback arrived after ``get_live_runtime`` returned None, so
+        ``on_buy_fill_trailing`` was never called.  On the next restart
+        ``positions()['net']`` can miss the intraday CNC fill (timing race),
+        so the position never enters the tracker and ``ensure_gtts`` can't
+        place its GTT.
+
+        Recovery: for every ticker in ``_ticker_locked`` that is NOT in
+        ``open_positions()``, look up the fill data from the previous run's
+        ``live_orders_in_flight`` and inject a synthetic BUY fill.  This
+        makes the position visible to ``_ensure_gtts_for_hydrated_positions``,
+        which runs immediately after and places the missing GTT.
+        """
+        open_pos = self._positions.open_positions()
+        locked_unhydrated = {
+            t for t in self._ticker_locked
+            if t not in open_pos
+        }
+        if not locked_unhydrated:
+            return
+
+        try:
+            filled = await self._caps_repo.get_filled_buys_from_previous_runs(
+                self._user_id, self._strategy.id, self._run_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "recover_positions: previous run query failed: %s",
+                exc,
+                exc_info=True,
+            )
+            return
+
+        from backend.algo.backtest.types import Fill
+
+        recovered = 0
+        for ticker in locked_unhydrated:
+            fd = filled.get(ticker)
+            if not fd or fd["fill_price"] <= 0 or fd["qty"] <= 0:
+                continue
+            self._positions.apply_fill(
+                Fill(
+                    intent_id=uuid4(),
+                    ticker=ticker,
+                    side="BUY",
+                    qty=fd["qty"],
+                    fill_price=Decimal(str(fd["fill_price"])),
+                    fill_date=datetime.now(timezone.utc).date(),
+                    fees_inr=Decimal("0"),
+                    fee_rates_version="recovered",
+                )
+            )
+            _logger.info(
+                "recover_positions: re-injected %s qty=%d avg=%.4f "
+                "(locked-but-not-hydrated; prev run in_flight)",
+                ticker,
+                fd["qty"],
+                fd["fill_price"],
+            )
+            recovered += 1
+
+        if recovered:
+            _logger.info(
+                "recover_positions: %d position(s) re-injected",
+                recovered,
             )
 
     async def _ensure_gtts_for_hydrated_positions(self) -> None:
@@ -1761,6 +1836,7 @@ class LiveRuntime:
                 self._ticker_locked.add(ticker)
         self._ticker_locked.update(self._restore_ticker_locks_from_redis())
         self._ticker_locked.update(await self._restore_ticker_locks_from_pg())
+        await self._recover_unhydrated_positions()
         self._load_trailing_state_from_redis()
         await self._ensure_gtts_for_hydrated_positions()
         if self._ticker_locked:

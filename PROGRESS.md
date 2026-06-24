@@ -2,6 +2,29 @@
 
 ---
 
+### 2026-06-24 — fix: SOUTHBANK GTT missing + locked-but-not-hydrated recovery (branch `feature/rsi2-exit-strategy`)
+
+**Why:** SOUTHBANK.NS (50 shares, avg ₹45.56, filled 14:31:50 IST) had no GTT protecting it. Two-part root cause: (1) fill arrived while runtime `bb9d9161` was stopping — `get_live_runtime` returned None → `on_buy_fill_trailing` never called; (2) on subsequent restarts `kite.positions()['net']` returned 0 rows (intraday API timing race during market hours) → hydration only loaded overnight holdings → `ensure_gtts` never saw SOUTHBANK.
+
+**Three fixes:**
+
+- **`_recover_unhydrated_positions()`** (`runtime.py`) — new startup method called after ticker-lock restoration. Finds tickers in `_ticker_locked` not in `open_positions()`, reads filled BUY data from previous runs' `live_orders_in_flight` (multi-hop scan, up to 10 runs back), re-injects as synthetic fills. Handles the case where an intermediate run had empty in_flight (bb9d9161 fill data is 2 hops back from edadf678 via 8bf78023 which had []).
+
+- **`get_filled_buys_from_previous_runs()`** (`caps_repo.py`) — scans up to 10 prior live runs for status='filled' BUY entries with fill_price > 0. Returns dict `TICKER.NS → {fill_price, qty}` with newest-first dedup.
+
+- **`_load_trailing_state_from_redis()`** fix — now iterates `open_positions() ∪ _ticker_locked` (was only `open_positions()`). KTKBANK was in Redis with a valid trailing manager but wasn't being restored because positions() missed it.
+
+- **`position_hydration.py`** debug logging — WARNING when `positions()['net']` is empty; DEBUG log of all raw rows when non-empty. Will diagnose the API timing race on future intraday restarts.
+
+**Verification (16:41 IST restart):**
+- `7 position(s) hydrated (positions=4 holdings=3)` — positions() returned 4 rows (market closed, no timing race)
+- `ensure_gtts: placed GTT 324887204 for SOUTHBANK.NS stop=43.7376 phase=1 source=hydrated_algo`
+- Redis: 7 trailing entries confirmed (SOUTHBANK.NS added with `entry_price=45.56 gtt_id=324887204 current_stop=43.7376 atr=1.528`)
+
+**Remaining gap:** `positions=0` during intraday restarts — the timing race is now mitigated by the recovery path, but root cause (Kite API lag) not fixed. The `positions()` WARNING log will capture the next occurrence.
+
+---
+
 ### 2026-06-24 — feat: intelligent qty sizing + live GTT verification (branch `feature/rsi2-exit-strategy`)
 
 **Why:** Live market run on 2026-06-24 surfaced two issues: (1) GTTs were placed correctly but the strategy was computing qty from equity × weight without checking available budget — SKYGOLD generated qty=5 when only ₹1,628 remained in the ₹10,000 strategy cap after three open positions (HSCL, NSLNISP, SHAILY). (2) The first fix (Kite live_balance) was too permissive — user keeps a cash buffer in Zerodha beyond the strategy allocation.
