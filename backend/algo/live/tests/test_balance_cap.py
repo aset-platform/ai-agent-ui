@@ -300,3 +300,142 @@ async def test_zero_budget_rejects_signal():
     assert "committed_inr" in p
 
     kite.place_order.assert_not_called()
+
+
+# ── C4 deliverable (C) — in-flight reservations inflate committed_inr ─────────
+# The two tests below are the ONLY ones that patch budget_active_for_strategy
+# to a NONZERO value. Without this coverage a refactor that drops the
+# active_reserved term from committed_inr_now would still pass all tests.
+
+
+def _gate_patches_with_active(active_inr: Decimal):
+    """Return the three gate patches with active_reserved = active_inr.
+
+    Replaces the zero-stub in _budget_gate_patches so the in-flight
+    term is exercised as the *sole* source of committed capital (no
+    seeded open positions). The user-pool gate is still bypassed.
+    """
+    from backend.algo.live.budget_types import UserBudget
+
+    async def _load_user(_uid):
+        return UserBudget(
+            user_id=_uid,
+            allocated_inr=Decimal("100000000"),
+        )
+
+    async def _active(_uid, _sid):
+        return active_inr
+
+    return (
+        patch(
+            "backend.algo.live.runtime.budget_reserve_if_headroom",
+            new=AsyncMock(return_value=uuid4()),
+        ),
+        patch(
+            "backend.algo.live.runtime.budget_load_user",
+            new=_load_user,
+        ),
+        patch(
+            "backend.algo.live.runtime.budget_active_for_strategy",
+            new=_active,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_active_reservation_blocks_buy_when_headroom_gone():
+    """Active in-flight reservation exhausts max_inr → signal_rejected.
+
+    max_inr=10000, filled=0, active_reserved=9500.
+    committed_inr_now = 0 + 9500 = 9500.
+    remaining = 10000 - 9500 = 500 < 614.50 (price) → affordable=0 → reject.
+
+    Verifies that dropping the active_reserved term from committed_inr_now
+    would cause this test to FAIL (500 would become 10000, affording 16 shares).
+    """
+    # No open positions seeded — committed comes entirely from active_reserved.
+    active_reserved = Decimal("9500")
+    runtime, kite = _make_runtime(buy_qty=5, max_inr=Decimal("10000"))
+    _seed_bars(runtime)
+
+    _g1, _g2, _g3 = _gate_patches_with_active(active_reserved)
+    with patch(
+        "backend.algo.live.runtime.budget_reserve",
+        new=AsyncMock(return_value=uuid4()),
+    ), _g1, _g2, _g3:
+        result = await runtime._on_bar_close(
+            bar=_make_bar(), last_price=_PRICE
+        )
+
+    assert result == 0, (
+        "Expected 0 (early return) when active reservation leaves "
+        "no headroom for even 1 share"
+    )
+    rejected = [
+        e for e in runtime._events
+        if e["type"] == "signal_rejected"
+        and json.loads(e["payload_json"]).get("reason")
+        == "insufficient_balance"
+    ]
+    assert len(rejected) == 1, (
+        f"Expected 1 signal_rejected event, got {len(rejected)}"
+    )
+    p = json.loads(rejected[0]["payload_json"])
+    assert p["ticker"] == _TICKER
+    assert p["max_inr"] == str(_MAX_INR)
+    # committed_inr must include the active reservation amount
+    assert Decimal(p["committed_inr"]) == active_reserved, (
+        "committed_inr must equal active_reserved when no open positions exist"
+    )
+    kite.place_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_active_reservation_shrinks_affordable_qty():
+    """Active in-flight reservation reduces headroom → qty adjusted down.
+
+    max_inr=10000, filled=0, active_reserved=7000.
+    committed_inr_now = 0 + 7000 = 7000.
+    remaining = 10000 - 7000 = 3000.
+    affordable = 3000 // 614.50 = 4 shares < buy_qty(5) → signal_adjusted 5→4.
+
+    Verifies the shrink branch exercises the active_reserved term; removing
+    the term would give remaining=10000, affordable=16, no adjustment fired.
+    """
+    from backend.algo.paper.types import RiskDecision
+
+    active_reserved = Decimal("7000")
+    runtime, kite = _make_runtime(buy_qty=5, max_inr=Decimal("10000"))
+    _seed_bars(runtime)
+
+    _g1, _g2, _g3 = _gate_patches_with_active(active_reserved)
+    with patch(
+        "backend.algo.live.runtime.pre_trade_check",
+        new=AsyncMock(return_value=RiskDecision(outcome="accept")),
+    ), patch(
+        "backend.algo.live.runtime.budget_reserve",
+        new=AsyncMock(return_value=uuid4()),
+    ), patch(
+        "backend.algo.live.runtime.budget_transition",
+        new=AsyncMock(),
+    ), _g1, _g2, _g3:
+        await runtime._on_bar_close(
+            bar=_make_bar(), last_price=_PRICE
+        )
+
+    adj = [e for e in runtime._events if e["type"] == "signal_adjusted"]
+    assert len(adj) == 1, (
+        f"Expected 1 signal_adjusted event, got {len(adj)}"
+    )
+    p = json.loads(adj[0]["payload_json"])
+    assert p["old_qty"] == 5
+    # 3000 // 614.50 = 4
+    assert p["new_qty"] == 4, (
+        f"Expected new_qty=4 (3000 // 614.50), got {p['new_qty']}"
+    )
+    assert p["reason"] == "strategy_budget_cap"
+    assert Decimal(p["committed_inr"]) == active_reserved, (
+        "committed_inr must reflect active_reserved, not just filled"
+    )
+    assert kite.place_order.called
+    assert kite.place_order.call_args.kwargs["quantity"] == 4
