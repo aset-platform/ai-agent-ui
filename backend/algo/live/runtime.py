@@ -788,6 +788,31 @@ class LiveRuntime:
             if mem_entry is not None:
                 mem_entry["status"] = "filled"
 
+            # Place the protective GTT / trailing manager exactly as the
+            # webhook postback does. Without this a BUY synced here (postback
+            # miss / mid-session restart) is left NAKED — no stop — for the
+            # rest of the session. on_buy_fill_trailing is sync, self-gates on
+            # _trailing_enabled, and is idempotent on _trailing_managers; it
+            # does blocking Kite I/O so run it off the event loop.
+            if (
+                side == "BUY"
+                and self._trailing_enabled
+                and ticker not in self._trailing_managers
+            ):
+                try:
+                    await asyncio.to_thread(
+                        self.on_buy_fill_trailing,
+                        ticker=ticker,
+                        fill_price=float(fill_price),
+                        qty=qty,
+                    )
+                except Exception:  # noqa: BLE001
+                    _logger.error(
+                        "fill-sync: protective GTT init failed for %s "
+                        "— position may be unprotected until ratchet",
+                        ticker, exc_info=True,
+                    )
+
             # Transition the budget reservation to FILLED immediately.
             # reservation_id was stored in the in-flight entry at submit
             # time so we don't need a separate DB lookup. Without this,
