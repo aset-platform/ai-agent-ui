@@ -8,7 +8,8 @@ import json
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
-from uuid import UUID
+from typing import Any
+from uuid import UUID, uuid4
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -116,6 +117,100 @@ class BudgetRepo:
                 "et": res.error_text,
             },
         )
+
+    async def reserve_if_headroom(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: UUID,
+        strategy_id: UUID,
+        ticker: str,
+        side: str,
+        qty: int,
+        reserved_inr: Decimal,
+        allocated_inr: Decimal,
+        metadata: dict[str, Any] | None = None,
+    ) -> UUID | None:
+        """Atomic, uncached, headroom-aware PENDING reservation.
+
+        Closes the TOCTOU over-deploy gap (Critical C4): the
+        budget CHECK and the RESERVE happen in ONE transaction so
+        two concurrent BUYs can no longer both pass and over-
+        deploy the user's allocated pool.
+
+        Steps (single txn on ``session`` — caller commits):
+          1. ``SELECT ... FOR UPDATE`` the user's
+             ``algo.user_budget`` row to serialize concurrent
+             reservers per-user. The lock — not the row's value —
+             is what matters; ``allocated_inr`` is supplied by the
+             caller so the gate works even before the row exists.
+          2. Recompute ``headroom = allocated_inr − Σopen_cost −
+             Σactive_reservations`` UNCACHED inside this txn,
+             reusing ``sum_open_position_cost`` /
+             ``sum_active_reservations`` executed on THIS session
+             (NOT the 5s cache in ``budget.py``).
+          3. Insert the PENDING row only if
+             ``headroom >= reserved_inr``; else return ``None``.
+
+        Returns the new ``reservation_id`` on success, else
+        ``None``. Does NOT commit — the caller owns the txn
+        boundary so the lock is held until commit/rollback.
+        """
+        # 1. Acquire the per-user serialization lock. If the row
+        # does not exist yet the lock is a no-op, but the headroom
+        # gate below still rejects over-deploy on the caller's
+        # allocated_inr.
+        await session.execute(
+            text(
+                "SELECT user_id FROM algo.user_budget "
+                "WHERE user_id = :uid FOR UPDATE"
+            ),
+            {"uid": user_id},
+        )
+
+        # 2. Recompute headroom UNCACHED, in this same txn — so we
+        # observe any committed reservation from a serialized peer.
+        open_cost = await self.sum_open_position_cost(
+            session,
+            user_id=user_id,
+        )
+        active = await self.sum_active_reservations(
+            session,
+            user_id=user_id,
+        )
+        headroom = allocated_inr - open_cost - active
+
+        # 3. Conditional insert.
+        if headroom < reserved_inr:
+            _logger.info(
+                "reserve_if_headroom REJECT user=%s ticker=%s "
+                "reserved=%s headroom=%s (alloc=%s open=%s "
+                "active=%s)",
+                user_id,
+                ticker,
+                reserved_inr,
+                headroom,
+                allocated_inr,
+                open_cost,
+                active,
+            )
+            return None
+
+        reservation_id = uuid4()
+        row = BudgetReservation(
+            reservation_id=reservation_id,
+            user_id=user_id,
+            strategy_id=strategy_id,
+            state=ReservationState.PENDING,
+            ticker=ticker,
+            side=side,
+            qty=qty,
+            reserved_inr=reserved_inr,
+            transitioned_at=datetime.now(timezone.utc),
+            metadata=metadata or {},
+        )
+        await self.insert_reservation_event(session, row)
+        return reservation_id
 
     async def get_current_state(
         self,

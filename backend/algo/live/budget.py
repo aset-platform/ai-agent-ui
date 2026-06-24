@@ -269,6 +269,50 @@ async def reserve(
     return reservation_id
 
 
+async def reserve_if_headroom(
+    *,
+    user_id: UUID,
+    strategy_id: UUID,
+    ticker: str,
+    side: str,
+    qty: int,
+    reserved_inr: Decimal,
+    allocated_inr: Decimal,
+    metadata: dict[str, Any] | None = None,
+) -> UUID | None:
+    """Atomic, uncached, headroom-aware reservation wrapper.
+
+    Opens ONE NullPool session, delegates to
+    ``BudgetRepo.reserve_if_headroom`` (``SELECT ... FOR UPDATE``
+    on ``algo.user_budget`` + uncached headroom recompute +
+    conditional PENDING insert), then commits — holding the per-
+    user lock for the whole txn so concurrent reservers serialize.
+
+    Returns the new ``reservation_id`` on success, else ``None``
+    when ``headroom < reserved_inr``. This is the atomic primitive
+    that supersedes the non-atomic check-then-reserve flow; the
+    runtime/safety rewire to call it lands in Task 2.2.
+    """
+    repo = BudgetRepo()
+    factory = _session_factory()
+    async with factory() as session:
+        reservation_id = await repo.reserve_if_headroom(
+            session,
+            user_id=user_id,
+            strategy_id=strategy_id,
+            ticker=ticker,
+            side=side,
+            qty=qty,
+            reserved_inr=reserved_inr,
+            allocated_inr=allocated_inr,
+            metadata=metadata,
+        )
+        await session.commit()
+    if reservation_id is not None:
+        _invalidate_cache(user_id)
+    return reservation_id
+
+
 async def transition(
     *,
     reservation_id: UUID,
