@@ -45,5 +45,21 @@ async def test_redis_error_falls_back_to_pg_active():
 
 
 @pytest.mark.asyncio
+async def test_redis_error_falls_back_to_pg_inactive():
+    r = AsyncMock()
+    r.get.side_effect = RuntimeError("redis down")
+    repo = KillSwitchRepo(r)
+
+    async def fake_get(session, *, user_id):
+        return {"active": False}
+
+    repo.get = AsyncMock(side_effect=fake_get)  # type: ignore
+    sf = MagicMock()
+    sf.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
+    sf.return_value.__aexit__ = AsyncMock(return_value=False)
+    assert await repo.is_active(uuid4(), session_factory=sf) is False
+
+
+@pytest.mark.asyncio
 async def test_no_redis_no_pg_fails_closed():
     assert await KillSwitchRepo(None).is_active(uuid4()) is True
