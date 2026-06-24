@@ -67,15 +67,17 @@ async def _list_submitted_and_partial() -> list[BudgetReservation]:
     async with disposable_pg_session() as session:
         result = await session.execute(
             text(
-                "SELECT DISTINCT ON (reservation_id) "
-                "  reservation_id, user_id, strategy_id, "
-                "  state, ticker, side, qty, reserved_inr, "
-                "  filled_qty, filled_inr, kite_order_id, "
-                "  transitioned_at, metadata, error_text "
-                "FROM algo.budget_reservations "
-                "WHERE state IN ('SUBMITTED', 'PARTIAL') "
-                "ORDER BY reservation_id, "
-                "         transitioned_at DESC"
+                "SELECT * FROM ( "
+                "  SELECT DISTINCT ON (reservation_id) "
+                "    reservation_id, user_id, strategy_id, "
+                "    state, ticker, side, qty, reserved_inr, "
+                "    filled_qty, filled_inr, kite_order_id, "
+                "    transitioned_at, metadata, error_text "
+                "  FROM algo.budget_reservations "
+                "  ORDER BY reservation_id, "
+                "           transitioned_at DESC, id DESC "
+                ") latest "
+                "WHERE latest.state IN ('SUBMITTED', 'PARTIAL')"
             ),
         )
         rows = result.mappings().all()

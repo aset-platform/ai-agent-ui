@@ -13,13 +13,16 @@ shape as ``test_budget_repo.py``.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
 
+from backend.algo.live.budget_reconciliation import (
+    _list_submitted_and_partial,
+)
 from backend.algo.live.budget_repo import BudgetRepo
 from backend.algo.live.budget_types import BudgetReservation, ReservationState
 from db.engine import disposable_pg_session
@@ -511,6 +514,159 @@ async def test_single_open_buy_cost_unchanged(user_id):
         cost = await repo.sum_open_position_cost(s, user_id=user_id)
 
     assert cost == Decimal("7500")
+
+
+# ---------------------------------------------------------------------------
+# Task 2.3b — reconciler selects by LATEST reservation state
+# ---------------------------------------------------------------------------
+
+
+async def _insert_event(
+    session,
+    *,
+    rid,
+    uid,
+    sid,
+    state: ReservationState,
+    ticker: str,
+    transitioned_at: datetime,
+) -> None:
+    """Append one lifecycle event for an existing reservation_id."""
+    repo = BudgetRepo()
+    await repo.insert_reservation_event(
+        session,
+        BudgetReservation(
+            reservation_id=rid,
+            user_id=uid,
+            strategy_id=sid,
+            state=state,
+            ticker=ticker,
+            side="BUY",
+            qty=10,
+            reserved_inr=Decimal("5000"),
+            filled_qty=0,
+            filled_inr=Decimal("0"),
+            kite_order_id="kite-1",
+            transitioned_at=transitioned_at,
+            metadata={"mode": "live"},
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_active_excludes_terminal_backlog(user_id):
+    """Task 2.3b — RED before the latest-state-first rewrite.
+
+    ``_list_submitted_and_partial`` must return only reservations
+    whose CURRENT (latest) state is SUBMITTED/PARTIAL. The old
+    ``WHERE state IN (...)`` BEFORE ``DISTINCT ON`` matched a
+    reservation via its stale SUBMITTED row even after it had
+    transitioned to a terminal state (TIMEOUT/FILLED), so the
+    reconciler re-processed the whole terminal backlog every tick.
+
+    Four reservations:
+      - latest=SUBMITTED            → MUST be returned
+      - latest=PARTIAL              → MUST be returned
+      - SUBMITTED→TIMEOUT (2 rows)  → MUST NOT be returned
+      - SUBMITTED→FILLED  (2 rows)  → MUST NOT be returned
+
+    FAILS against the filter-before-distinct query (the terminal
+    pair leak through via their old SUBMITTED rows); PASSES after.
+    """
+    repo = BudgetRepo()
+    sid = uuid4()
+    rid_submitted = uuid4()
+    rid_partial = uuid4()
+    rid_timeout = uuid4()
+    rid_filled = uuid4()
+    base = datetime.now(timezone.utc) - timedelta(minutes=10)
+
+    async with disposable_pg_session() as s:
+        # Latest = SUBMITTED (single row).
+        await _insert_event(
+            s,
+            rid=rid_submitted,
+            uid=user_id,
+            sid=sid,
+            state=ReservationState.SUBMITTED,
+            ticker="SUB.NS",
+            transitioned_at=base,
+        )
+        # Latest = PARTIAL (single row).
+        await _insert_event(
+            s,
+            rid=rid_partial,
+            uid=user_id,
+            sid=sid,
+            state=ReservationState.PARTIAL,
+            ticker="PAR.NS",
+            transitioned_at=base,
+        )
+        # SUBMITTED then TIMEOUT — latest is terminal.
+        await _insert_event(
+            s,
+            rid=rid_timeout,
+            uid=user_id,
+            sid=sid,
+            state=ReservationState.SUBMITTED,
+            ticker="TMO.NS",
+            transitioned_at=base,
+        )
+        await _insert_event(
+            s,
+            rid=rid_timeout,
+            uid=user_id,
+            sid=sid,
+            state=ReservationState.TIMEOUT,
+            ticker="TMO.NS",
+            transitioned_at=base + timedelta(minutes=5),
+        )
+        # SUBMITTED then FILLED — latest is terminal.
+        await _insert_event(
+            s,
+            rid=rid_filled,
+            uid=user_id,
+            sid=sid,
+            state=ReservationState.SUBMITTED,
+            ticker="FIL.NS",
+            transitioned_at=base,
+        )
+        await _insert_event(
+            s,
+            rid=rid_filled,
+            uid=user_id,
+            sid=sid,
+            state=ReservationState.FILLED,
+            ticker="FIL.NS",
+            transitioned_at=base + timedelta(minutes=5),
+        )
+        await s.commit()
+
+    rows = await _list_submitted_and_partial()
+    mine = {
+        r.reservation_id: r
+        for r in rows
+        if r.reservation_id
+        in {
+            rid_submitted,
+            rid_partial,
+            rid_timeout,
+            rid_filled,
+        }
+    }
+
+    assert set(mine) == {rid_submitted, rid_partial}, (
+        "expected only the two active reservations; got "
+        f"{sorted(str(k) for k in mine)}"
+    )
+    assert mine[rid_submitted].state == ReservationState.SUBMITTED
+    assert mine[rid_partial].state == ReservationState.PARTIAL
+    assert rid_timeout not in mine, (
+        "terminal TIMEOUT reservation leaked via stale SUBMITTED row"
+    )
+    assert rid_filled not in mine, (
+        "terminal FILLED reservation leaked via stale SUBMITTED row"
+    )
 
 
 @pytest.mark.asyncio
