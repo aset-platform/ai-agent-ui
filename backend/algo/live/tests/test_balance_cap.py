@@ -1,22 +1,24 @@
-"""Kite balance cap gate in LiveRuntime._on_bar_close.
+"""Strategy budget cap gate in LiveRuntime._on_bar_close.
+
+The cap uses max_inr (strategy allocation) minus committed_inr (currently
+deployed open positions) to compute remaining budget, then reduces qty to
+fit. This is intentionally tighter than Zerodha's live_balance because the
+user keeps a buffer in their account beyond the strategy allocation.
 
 Three cases:
-1. available_inr covers full qty → no adjustment, signal_generated only
-2. available_inr covers partial qty → signal_adjusted event, reduced qty sent to Kite
-3. available_inr < 1 share → signal_rejected(reason=insufficient_balance), no Kite call
-
-The cap applies to BUY only. SELL signals are unaffected.
+1. Remaining budget covers full weight-based qty → no adjustment
+2. Remaining budget covers partial qty → signal_adjusted, reduced qty to Kite
+3. Remaining budget < 1 share → signal_rejected(reason=insufficient_balance)
 """
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
-
-import json
 
 import pytest
 
@@ -32,12 +34,14 @@ pytestmark = pytest.mark.skipif(
 
 _TICKER = "SKYGOLD.NS"
 _PRICE = Decimal("614.50")
+# strategy max_inr = ₹10 000; HSCL + NSLNISP already deployed ≈ ₹3 000
+_MAX_INR = Decimal("10000")
 
 
 def _strategy_payload(*, buy_qty: int = 5) -> dict:
     return {
         "id": str(uuid4()),
-        "name": "balance cap test strategy",
+        "name": "budget cap test strategy",
         "universe": {
             "type": "scope",
             "scope": "watchlist",
@@ -70,7 +74,7 @@ def _make_bar(*, ticker: str = _TICKER, close: float = float(_PRICE)):
     )
 
 
-def _make_runtime(*, buy_qty: int = 5):
+def _make_runtime(*, buy_qty: int = 5, max_inr: Decimal = _MAX_INR):
     from backend.algo.live.runtime import LiveRuntime
     from backend.algo.strategy.ast import parse_strategy
 
@@ -79,7 +83,7 @@ def _make_runtime(*, buy_qty: int = 5):
     caps_repo = AsyncMock()
     caps_repo.get.return_value = {
         "live_orders_enabled": True,
-        "max_inr": Decimal("10000000"),
+        "max_inr": max_inr,
         "max_orders_per_day": 100,
         "allowed_tickers": [_TICKER],
         "cumulative_inr_today": Decimal("0"),
@@ -130,18 +134,41 @@ def _seed_bars(runtime, *, ticker: str = _TICKER, close: float = float(_PRICE)):
     ]
 
 
+def _seed_open_position(runtime, *, ticker: str, qty: int, avg_price: Decimal):
+    """Plant a synthetic open position so committed_inr_now reflects deployed capital."""
+    from backend.algo.backtest.types import Fill
+
+    fill = Fill(
+        intent_id=uuid4(),
+        ticker=ticker,
+        side="BUY",
+        qty=qty,
+        fill_price=avg_price,
+        fill_date=date(2026, 6, 20),
+        fees_inr=Decimal("0"),
+        fee_rates_version="test",
+    )
+    runtime._positions.apply_fill(fill)
+
+
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_full_balance_no_adjustment():
-    """Available ₹ covers full qty → no signal_adjusted event."""
-    runtime, kite = _make_runtime(buy_qty=5)
+async def test_full_budget_no_adjustment():
+    """Remaining strategy budget covers full qty → no signal_adjusted event.
+
+    max_inr=10000, deployed=0, remaining=10000.
+    5 × 614.50 = 3072.50 ≤ 10000 → no adjustment.
+    """
+    from backend.algo.paper.types import RiskDecision
+
+    runtime, kite = _make_runtime(buy_qty=5, max_inr=Decimal("10000"))
     _seed_bars(runtime)
 
     with patch(
-        "backend.algo.live.runtime.fetch_kite_available_cash",
-        new=AsyncMock(return_value=Decimal("10000")),  # covers 5 × 614.50 = 3072.50
+        "backend.algo.live.runtime.pre_trade_check",
+        new=AsyncMock(return_value=RiskDecision(outcome="accept")),
     ), patch(
         "backend.algo.live.runtime.budget_reserve",
         new=AsyncMock(return_value=uuid4()),
@@ -152,7 +179,7 @@ async def test_full_balance_no_adjustment():
         await runtime._on_bar_close(bar=_make_bar(), last_price=_PRICE)
 
     adj = [e for e in runtime._events if e["type"] == "signal_adjusted"]
-    assert adj == [], "No adjustment expected when balance covers full qty"
+    assert adj == [], "No adjustment expected when budget covers full qty"
 
     gen = [e for e in runtime._events if e["type"] == "signal_generated"]
     assert len(gen) == 1
@@ -160,19 +187,29 @@ async def test_full_balance_no_adjustment():
 
 
 @pytest.mark.asyncio
-async def test_partial_balance_reduces_qty():
-    """Available ₹1800 → can only afford 2 shares at 614.50 → qty reduced 5→2."""
+async def test_partial_budget_reduces_qty():
+    """max_inr=10000, deployed ≈ ₹8772 → remaining ₹1228 → only 2 shares at ₹614.50.
+
+    HSCL 1×642.60 + NSLNISP 67×44.98 + SHAILY 1×2739.60 = ₹6396.26 deployed.
+    Remaining = 10000 - 6396.26 = ₹3603.74 → 5 shares needed but only 5 fit...
+
+    Use a simpler setup: deploy ₹8000 via 2 fake positions, ₹2000 remaining.
+    2000 // 614.50 = 3 shares. buy_qty=5 → reduced to 3.
+    """
     from backend.algo.paper.types import RiskDecision
 
-    runtime, kite = _make_runtime(buy_qty=5)
+    runtime, kite = _make_runtime(buy_qty=5, max_inr=Decimal("10000"))
     _seed_bars(runtime)
+    # Seed ₹8000 deployed: 2 positions totalling ~₹8000
+    _seed_open_position(runtime, ticker="HSCL.NS", qty=6, avg_price=Decimal("642.60"))
+    _seed_open_position(runtime, ticker="NSLNISP.NS", qty=67, avg_price=Decimal("44.98"))
+    # 6×642.60 + 67×44.98 = 3855.60 + 3013.66 = 6869.26 deployed
+    # remaining = 10000 - 6869.26 = 3130.74 → 3130.74 // 614.50 = 5 shares... bump deployment
+    _seed_open_position(runtime, ticker="FAKE2.NS", qty=5, avg_price=Decimal("400.00"))
+    # + 5×400 = 2000 → total deployed = 8869.26, remaining = 1130.74
+    # 1130.74 // 614.50 = 1 share → reduced 5→1
 
     with patch(
-        "backend.algo.live.runtime.fetch_kite_available_cash",
-        new=AsyncMock(return_value=Decimal("1800")),  # 1800 // 614.50 = 2
-    ), patch(
-        # Skip the full pre_trade_check safety pipeline (budget tables not
-        # seeded in test env) — the gate under test is the balance cap above.
         "backend.algo.live.runtime.pre_trade_check",
         new=AsyncMock(return_value=RiskDecision(outcome="accept")),
     ), patch(
@@ -188,27 +225,25 @@ async def test_partial_balance_reduces_qty():
     assert len(adj) == 1
     p = json.loads(adj[0]["payload_json"])
     assert p["old_qty"] == 5
-    assert p["new_qty"] == 2
-    assert p["reason"] == "insufficient_kite_balance"
+    assert p["new_qty"] == 1
+    assert p["reason"] == "strategy_budget_cap"
+    assert "committed_inr" in p
+    assert "remaining_inr" in p
 
-    # Kite must have been called with the reduced qty
     assert kite.place_order.called
-    call_kwargs = kite.place_order.call_args
-    assert call_kwargs.kwargs["quantity"] == 2 or (
-        len(call_kwargs.args) > 3 and call_kwargs.args[3] == 2
-    )
+    assert kite.place_order.call_args.kwargs["quantity"] == 1
 
 
 @pytest.mark.asyncio
-async def test_zero_balance_rejects_signal():
-    """Available ₹400 < 614.50/share → rejected, no Kite call."""
-    runtime, kite = _make_runtime(buy_qty=5)
+async def test_zero_budget_rejects_signal():
+    """Deployed ≥ max_inr → remaining ≤ 0 → signal_rejected, no Kite call."""
+    runtime, kite = _make_runtime(buy_qty=5, max_inr=Decimal("10000"))
     _seed_bars(runtime)
+    # Deploy more than max_inr so remaining < 0
+    _seed_open_position(runtime, ticker="HSCL.NS", qty=16, avg_price=Decimal("642.60"))
+    # 16 × 642.60 = ₹10281.60 > ₹10000
 
     with patch(
-        "backend.algo.live.runtime.fetch_kite_available_cash",
-        new=AsyncMock(return_value=Decimal("400")),  # 400 // 614.50 = 0
-    ), patch(
         "backend.algo.live.runtime.budget_reserve",
         new=AsyncMock(return_value=uuid4()),
     ):
@@ -223,6 +258,7 @@ async def test_zero_balance_rejects_signal():
     assert len(rejected) == 1
     p = json.loads(rejected[0]["payload_json"])
     assert p["ticker"] == _TICKER
-    assert "available_inr" in p
+    assert "max_inr" in p
+    assert "committed_inr" in p
 
     kite.place_order.assert_not_called()

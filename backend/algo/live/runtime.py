@@ -74,7 +74,6 @@ from backend.algo.features.per_bar import (
 from backend.algo.live import slippage as _slippage
 from backend.algo.live.order_timeout import _OrderTimeoutWatcher
 from backend.algo.live.budget import (
-    fetch_kite_available_cash,
     reserve as budget_reserve,
 )
 from backend.algo.live.budget import (
@@ -2617,76 +2616,6 @@ class LiveRuntime:
             )
         )
 
-        # Kite balance cap — BUY only. Reduce qty to what Zerodha
-        # can actually fill given the real available cash.
-        # fetch_kite_available_cash is Redis-cached (5s TTL) so
-        # this is cheap even when many tickers signal on the same bar.
-        # Fail-open: API errors return Decimal("inf") → original qty.
-        if signal.side == "BUY":
-            available_inr = await fetch_kite_available_cash(self._user_id)
-            affordable_qty = (
-                int(available_inr // last_price)
-                if last_price and last_price > 0
-                else 0
-            )
-            if affordable_qty < 1:
-                self._events.append(
-                    event_row(
-                        session_id=self._session_id,
-                        user_id=self._user_id,
-                        strategy_id=self._strategy.id,
-                        mode="live",
-                        type_="signal_rejected",
-                        payload={
-                            **({"dry_run": True} if self._dry_run else {}),
-                            "reason": "insufficient_balance",
-                            "ticker": signal.ticker,
-                            "side": signal.side,
-                            "qty": signal.qty,
-                            "available_inr": str(available_inr),
-                            "last_price": str(last_price),
-                        },
-                    )
-                )
-                _logger.warning(
-                    "live balance cap: %s rejected — available ₹%s < price ₹%s",
-                    signal.ticker,
-                    available_inr,
-                    last_price,
-                )
-                return 0
-            elif affordable_qty < signal.qty:
-                old_qty = signal.qty
-                signal = signal.model_copy(update={"qty": affordable_qty})
-                self._events.append(
-                    event_row(
-                        session_id=self._session_id,
-                        user_id=self._user_id,
-                        strategy_id=self._strategy.id,
-                        mode="live",
-                        type_="signal_adjusted",
-                        payload={
-                            **({"dry_run": True} if self._dry_run else {}),
-                            "ticker": signal.ticker,
-                            "side": signal.side,
-                            "old_qty": old_qty,
-                            "new_qty": affordable_qty,
-                            "available_inr": str(available_inr),
-                            "last_price": str(last_price),
-                            "reason": "insufficient_kite_balance",
-                        },
-                    )
-                )
-                _logger.info(
-                    "live balance cap: %s qty reduced %d → %d "
-                    "(available ₹%s, price ₹%s)",
-                    signal.ticker,
-                    old_qty,
-                    affordable_qty,
-                    available_inr,
-                    last_price,
-                )
-
         # Fresh caps read — used for max_inr / max_orders_per_day
         # and the allow-list; the daily-counter columns on the row
         # are no longer authoritative (see below).
@@ -2718,6 +2647,90 @@ class LiveRuntime:
             "cumulative_inr_today": committed_inr_now,
             "orders_count_today": len(positions_open),
         }
+
+        # Strategy budget cap — BUY only. Use the strategy's own
+        # max_inr allocation minus what's already deployed to compute
+        # how many shares we can actually afford. This is tighter than
+        # Zerodha's live_balance (which includes the user's buffer
+        # beyond the strategy allocation) and correctly reflects
+        # remaining strategy headroom.
+        # Only active when max_inr > 0 (0 means "no cap").
+        if signal.side == "BUY":
+            _max_inr = Decimal(str(current_caps.get("max_inr") or 0))
+            if _max_inr > 0:
+                _remaining = _max_inr - committed_inr_now
+                _affordable = (
+                    int(_remaining // last_price)
+                    if last_price and last_price > 0 and _remaining > 0
+                    else 0
+                )
+                if _affordable < 1:
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="live",
+                            type_="signal_rejected",
+                            payload={
+                                **({"dry_run": True} if self._dry_run else {}),
+                                "reason": "insufficient_balance",
+                                "ticker": signal.ticker,
+                                "side": signal.side,
+                                "qty": signal.qty,
+                                "max_inr": str(_max_inr),
+                                "committed_inr": str(committed_inr_now),
+                                "remaining_inr": str(max(_remaining, Decimal("0"))),
+                                "last_price": str(last_price),
+                            },
+                        )
+                    )
+                    _logger.warning(
+                        "live budget cap: %s rejected — remaining ₹%s "
+                        "(max_inr ₹%s − deployed ₹%s) < price ₹%s",
+                        signal.ticker,
+                        _remaining,
+                        _max_inr,
+                        committed_inr_now,
+                        last_price,
+                    )
+                    return 0
+                elif _affordable < signal.qty:
+                    _old_qty = signal.qty
+                    signal = signal.model_copy(update={"qty": _affordable})
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="live",
+                            type_="signal_adjusted",
+                            payload={
+                                **({"dry_run": True} if self._dry_run else {}),
+                                "ticker": signal.ticker,
+                                "side": signal.side,
+                                "old_qty": _old_qty,
+                                "new_qty": _affordable,
+                                "max_inr": str(_max_inr),
+                                "committed_inr": str(committed_inr_now),
+                                "remaining_inr": str(_remaining),
+                                "last_price": str(last_price),
+                                "reason": "strategy_budget_cap",
+                            },
+                        )
+                    )
+                    _logger.info(
+                        "live budget cap: %s qty %d → %d "
+                        "(max_inr ₹%s − deployed ₹%s = ₹%s remaining, "
+                        "price ₹%s)",
+                        signal.ticker,
+                        _old_qty,
+                        _affordable,
+                        _max_inr,
+                        committed_inr_now,
+                        _remaining,
+                        last_price,
+                    )
 
         decision = await pre_trade_check(
             signal=signal,
