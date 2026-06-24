@@ -46,6 +46,33 @@ TERMINAL_STATES: frozenset[ReservationState] = frozenset({
 })
 
 
+class TerminalStateError(ValueError):
+    """Raised when ``transition()`` is called on a reservation
+    that is already in a terminal state (FILLED / CANCELLED /
+    REJECTED / PARTIAL_CANCELLED / TIMEOUT).
+
+    Callers that wrap ``budget_transition`` in a broad
+    ``except Exception`` block already propagate or log this;
+    the named type lets callers distinguish an idempotency
+    guard from a real DB / network failure.
+    """
+
+    def __init__(
+        self,
+        reservation_id: object,
+        current_state: ReservationState,
+        requested_state: ReservationState,
+    ) -> None:
+        super().__init__(
+            f"reservation {reservation_id} is already in "
+            f"terminal state {current_state.value!r}; "
+            f"refusing transition to {requested_state.value!r}"
+        )
+        self.reservation_id = reservation_id
+        self.current_state = current_state
+        self.requested_state = requested_state
+
+
 class UserBudget(BaseModel):
     """User-pool allocation row (mutable)."""
 

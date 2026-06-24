@@ -20,6 +20,7 @@ from backend.algo.live.budget import (
 from backend.algo.live.budget_types import (
     BudgetReservation,
     ReservationState,
+    TerminalStateError,
     UserBudget,
 )
 
@@ -215,3 +216,150 @@ async def test_sum_active_reservations_passthrough(
         )
         out = await sum_active_reservations(uuid4())
     assert out == Decimal("8500.00")
+
+
+def _terminal_reservation(
+    state: ReservationState,
+) -> BudgetReservation:
+    return BudgetReservation(
+        reservation_id=uuid4(),
+        user_id=uuid4(),
+        strategy_id=uuid4(),
+        state=state,
+        ticker="INFY.NS",
+        side="BUY",
+        qty=10,
+        reserved_inr=Decimal("5000.00"),
+        transitioned_at=datetime.now(timezone.utc),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "terminal_state",
+    [
+        ReservationState.FILLED,
+        ReservationState.CANCELLED,
+        ReservationState.REJECTED,
+        ReservationState.PARTIAL_CANCELLED,
+        ReservationState.TIMEOUT,
+    ],
+)
+async def test_transition_refuses_terminal_state(
+    terminal_state: ReservationState,
+):
+    """transition() MUST raise TerminalStateError when the
+    current reservation state is already terminal.  No new
+    event row may be inserted."""
+    fake_repo = MagicMock()
+    fake_repo.get_current_state = AsyncMock(
+        return_value=_terminal_reservation(terminal_state),
+    )
+    fake_repo.insert_reservation_event = AsyncMock()
+    with (
+        patch(
+            "backend.algo.live.budget.BudgetRepo",
+            return_value=fake_repo,
+        ),
+        patch(
+            "backend.algo.live.budget._session_factory",
+        ) as factory,
+        patch("backend.algo.live.budget._invalidate_cache"),
+    ):
+        factory.return_value.__aenter__ = AsyncMock(
+            return_value=MagicMock(commit=AsyncMock()),
+        )
+        factory.return_value.__aexit__ = AsyncMock(
+            return_value=None,
+        )
+        with pytest.raises(TerminalStateError) as exc_info:
+            await transition(
+                reservation_id=uuid4(),
+                new_state=ReservationState.TIMEOUT,
+            )
+    assert exc_info.value.current_state == terminal_state
+    assert exc_info.value.requested_state == ReservationState.TIMEOUT
+    fake_repo.insert_reservation_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_transition_pending_to_submitted_still_works():
+    """Non-terminal (PENDING) → SUBMITTED is accepted normally."""
+    fake_repo = MagicMock()
+    fake_repo.get_current_state = AsyncMock(
+        return_value=_terminal_reservation(
+            ReservationState.PENDING,
+        ),
+    )
+    fake_repo.insert_reservation_event = AsyncMock()
+    with (
+        patch(
+            "backend.algo.live.budget.BudgetRepo",
+            return_value=fake_repo,
+        ),
+        patch(
+            "backend.algo.live.budget._session_factory",
+        ) as factory,
+        patch("backend.algo.live.budget._invalidate_cache"),
+    ):
+        factory.return_value.__aenter__ = AsyncMock(
+            return_value=MagicMock(commit=AsyncMock()),
+        )
+        factory.return_value.__aexit__ = AsyncMock(
+            return_value=None,
+        )
+        # Must NOT raise.
+        await transition(
+            reservation_id=uuid4(),
+            new_state=ReservationState.SUBMITTED,
+            kite_order_id="kite-42",
+        )
+    fake_repo.insert_reservation_event.assert_awaited_once()
+    new_row = fake_repo.insert_reservation_event.await_args.args[1]
+    assert new_row.state == ReservationState.SUBMITTED
+
+
+@pytest.mark.asyncio
+async def test_transition_submitted_to_filled_still_works():
+    """SUBMITTED → FILLED (normal fill-sync path) is accepted."""
+    fake_repo = MagicMock()
+    fake_repo.get_current_state = AsyncMock(
+        return_value=BudgetReservation(
+            reservation_id=uuid4(),
+            user_id=uuid4(),
+            strategy_id=uuid4(),
+            state=ReservationState.SUBMITTED,
+            ticker="RELIANCE.NS",
+            side="BUY",
+            qty=5,
+            reserved_inr=Decimal("12000.00"),
+            transitioned_at=datetime.now(timezone.utc),
+            kite_order_id="kite-99",
+        ),
+    )
+    fake_repo.insert_reservation_event = AsyncMock()
+    with (
+        patch(
+            "backend.algo.live.budget.BudgetRepo",
+            return_value=fake_repo,
+        ),
+        patch(
+            "backend.algo.live.budget._session_factory",
+        ) as factory,
+        patch("backend.algo.live.budget._invalidate_cache"),
+    ):
+        factory.return_value.__aenter__ = AsyncMock(
+            return_value=MagicMock(commit=AsyncMock()),
+        )
+        factory.return_value.__aexit__ = AsyncMock(
+            return_value=None,
+        )
+        await transition(
+            reservation_id=uuid4(),
+            new_state=ReservationState.FILLED,
+            filled_qty=5,
+            filled_inr=Decimal("12000.00"),
+        )
+    fake_repo.insert_reservation_event.assert_awaited_once()
+    new_row = fake_repo.insert_reservation_event.await_args.args[1]
+    assert new_row.state == ReservationState.FILLED

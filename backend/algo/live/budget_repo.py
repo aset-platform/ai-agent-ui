@@ -245,7 +245,8 @@ class BudgetRepo:
                 "       error_text "
                 "FROM algo.budget_reservations "
                 "WHERE reservation_id = :rid "
-                "ORDER BY transitioned_at DESC LIMIT 1"
+                "ORDER BY transitioned_at DESC, id DESC "
+                "LIMIT 1"
             ),
             {"rid": reservation_id},
         )
@@ -286,7 +287,7 @@ class BudgetRepo:
                 "  FROM algo.budget_reservations "
                 "  WHERE user_id = :uid "
                 "  ORDER BY reservation_id, "
-                "           transitioned_at DESC "
+                "           transitioned_at DESC, id DESC "
                 ") "
                 "SELECT COALESCE(SUM("
                 "  reserved_inr - filled_inr), 0) AS total "
@@ -332,7 +333,7 @@ class BudgetRepo:
                 "  WHERE user_id = :uid "
                 "    AND strategy_id = :sid "
                 "  ORDER BY reservation_id, "
-                "           transitioned_at DESC "
+                "           transitioned_at DESC, id DESC "
                 ") "
                 "SELECT COALESCE(SUM("
                 "  reserved_inr - filled_inr), 0) AS total "
@@ -376,7 +377,7 @@ class BudgetRepo:
                 "  FROM algo.budget_reservations "
                 "  WHERE user_id = :uid "
                 "  ORDER BY reservation_id, "
-                "           transitioned_at DESC "
+                "           transitioned_at DESC, id DESC "
                 ") "
                 "SELECT COALESCE(SUM(CASE WHEN side = 'BUY' "
                 "  THEN COALESCE(NULLIF(filled_inr, 0), "
@@ -418,7 +419,7 @@ class BudgetRepo:
                 "FROM algo.budget_reservations "
                 "WHERE user_id = :uid "
                 "ORDER BY reservation_id, "
-                "         transitioned_at DESC"
+                "         transitioned_at DESC, id DESC"
             ),
             {"uid": user_id},
         )

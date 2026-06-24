@@ -20,8 +20,10 @@ from uuid import UUID, uuid4
 
 from backend.algo.live.budget_repo import BudgetRepo
 from backend.algo.live.budget_types import (
+    TERMINAL_STATES,
     BudgetReservation,
     ReservationState,
+    TerminalStateError,
     UserBudget,
 )
 
@@ -384,6 +386,18 @@ async def transition(
                 reservation_id,
             )
             return
+        if prev.state in TERMINAL_STATES:
+            err = TerminalStateError(
+                reservation_id=reservation_id,
+                current_state=prev.state,
+                requested_state=new_state,
+            )
+            _logger.error(
+                "transition refused: %s",
+                err,
+                exc_info=True,
+            )
+            raise err
         row = BudgetReservation(
             reservation_id=reservation_id,
             user_id=prev.user_id,
