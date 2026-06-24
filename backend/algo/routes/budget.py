@@ -32,7 +32,10 @@ from backend.algo.live.budget import (
     transition,
 )
 from backend.algo.live.budget_repo import BudgetRepo
-from backend.algo.live.budget_types import ReservationState
+from backend.algo.live.budget_types import (
+    ReservationState,
+    TerminalStateError,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -257,11 +260,21 @@ async def _force_release_impl(
             status_code=403,
             detail="Not owner of reservation",
         )
-    await transition(
-        reservation_id=reservation_id,
-        new_state=ReservationState.CANCELLED,
-        error_text="force-released by user",
-    )
+    try:
+        await transition(
+            reservation_id=reservation_id,
+            new_state=ReservationState.CANCELLED,
+            error_text="force-released by user",
+        )
+    except TerminalStateError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot force-release a reservation in a "
+                f"terminal state ({exc.current_state.value}); "
+                "its capital is already settled/released."
+            ),
+        ) from exc
     return {"status": "released"}
 
 
