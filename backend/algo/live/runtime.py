@@ -162,6 +162,47 @@ def _select_last_price_ts_ns(tick: Any) -> int:
     return tick.exchange_ts_ns or tick.ts_ns
 
 
+def _parse_fill_date(*candidates: Any) -> date | None:
+    """Return the ``date`` parsed from the first ISO-8601 candidate.
+
+    Used to preserve a position's REAL open date across a restart /
+    fill-sync. Each candidate is an ISO-8601 timestamp string (e.g.
+    the in-flight entry's ``filled_at`` or ``submitted_at``). The
+    first parseable one wins; returns ``None`` when none parse so the
+    caller can fall back to ``date.today()`` rather than crash.
+
+    A naive timestamp (no tz) is treated as UTC. We take the UTC
+    ``.date()`` — fill dates are coarse-grained for the calendar-day
+    ``max_holding_days`` arithmetic, so tz drift of a few hours never
+    flips a holding-day count near the boundary in a way that under-
+    counts (UTC is at or behind IST, so it never reports the position
+    as YOUNGER than it really is).
+    """
+    for cand in candidates:
+        if not cand:
+            continue
+        if isinstance(cand, date) and not isinstance(cand, datetime):
+            return cand
+        if isinstance(cand, datetime):
+            return cand.date()
+        if not isinstance(cand, str):
+            continue
+        raw = cand.strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            _logger.warning(
+                "fill-date: cannot parse ISO timestamp %r", cand,
+            )
+            continue
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc)
+        return parsed.date()
+    return None
+
+
 class LiveNotEnabledError(RuntimeError):
     """Raised when live trading is not enabled for (user, strategy)."""
 
@@ -762,18 +803,33 @@ class LiveRuntime:
             ticker = f"{sym}.NS" if not sym.endswith(".NS") else sym
             qty = int(pg_entry.get("qty") or pg_entry.get("fill_qty") or 0)
             fill_price_raw = pg_entry.get("fill_price") or 0
-            fill_price = Decimal(str(fill_price_raw)) if fill_price_raw else Decimal("0")
+            fill_price = (
+                Decimal(str(fill_price_raw))
+                if fill_price_raw
+                else Decimal("0")
+            )
             if qty <= 0:
                 continue
             if side not in ("BUY", "SELL"):
                 continue
+            # Preserve the REAL fill date so opened_at (→ time-stop
+            # holding-days) survives a restart. The webhook stamps
+            # ``filled_at`` on the in-flight entry at fill time;
+            # ``submitted_at`` is the fallback. Only default to today
+            # when neither is present/parseable.
+            orig_date = _parse_fill_date(
+                pg_entry.get("filled_at"),
+                pg_entry.get("submitted_at"),
+            )
+            if orig_date is None:
+                orig_date = _dt.now(_tz.utc).date()
             fill = Fill(
                 intent_id=uuid4(),
                 ticker=ticker,
                 side=side,  # type: ignore[arg-type]
                 qty=qty,
                 fill_price=fill_price,
-                fill_date=_dt.now(_tz.utc).date(),
+                fill_date=orig_date,
                 fees_inr=Decimal("0"),
                 fee_rates_version="postback_sync",
             )
@@ -1531,6 +1587,15 @@ class LiveRuntime:
             fd = filled.get(ticker)
             if not fd or fd["fill_price"] <= 0 or fd["qty"] <= 0:
                 continue
+            # Preserve the REAL open date so the time-stop holding-day
+            # count survives the restart. Fall back to today only when
+            # the previous run's in-flight entry carried no parseable
+            # fill/submit timestamp.
+            open_date = fd.get("fill_date") or _parse_fill_date(
+                fd.get("filled_at"), fd.get("submitted_at"),
+            )
+            if open_date is None:
+                open_date = datetime.now(timezone.utc).date()
             self._positions.apply_fill(
                 Fill(
                     intent_id=uuid4(),
@@ -1538,17 +1603,19 @@ class LiveRuntime:
                     side="BUY",
                     qty=fd["qty"],
                     fill_price=Decimal(str(fd["fill_price"])),
-                    fill_date=datetime.now(timezone.utc).date(),
+                    fill_date=open_date,
                     fees_inr=Decimal("0"),
                     fee_rates_version="recovered",
                 )
             )
             _logger.info(
                 "recover_positions: re-injected %s qty=%d avg=%.4f "
-                "(locked-but-not-hydrated; prev run in_flight)",
+                "opened_at=%s (locked-but-not-hydrated; prev run "
+                "in_flight)",
                 ticker,
                 fd["qty"],
-                fd["fill_price"],
+                float(fd["fill_price"]),
+                open_date.isoformat(),
             )
             recovered += 1
 
@@ -1656,6 +1723,35 @@ class LiveRuntime:
                 if bare in _algo_syms
                 else "hydrated_manual"
             )
+
+            # REFUSE to place a GTT off a missing/zero entry price.
+            # A ₹0 avg_price yields a ₹0 trigger/limit — a garbage
+            # protective stop that would either never fire or fire
+            # instantly. Emit a loud event so the unprotected position
+            # is visible on the live panel instead of silently naked.
+            if avg_price <= 0:
+                _logger.error(
+                    "ensure_gtts: REFUSING GTT for %s — entry price "
+                    "is %.4f (missing/zero). Position left WITHOUT a "
+                    "protective stop; manual review required.",
+                    ticker, avg_price,
+                )
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="gtt_skipped_no_entry_price",
+                        payload={
+                            "ticker": ticker,
+                            "avg_price": avg_price,
+                            "qty": qty,
+                            "source": source,
+                        },
+                    )
+                )
+                continue
 
             # ATR — weekday-aware, same pattern as on_buy_fill_trailing.
             _atr_raw = next(

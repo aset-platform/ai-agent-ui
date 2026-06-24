@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
-from decimal import Decimal
+from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
@@ -24,6 +24,30 @@ from backend.db.engine import disposable_pg_session, get_session_factory
 _logger = logging.getLogger(__name__)
 
 UTC = timezone.utc
+
+
+def _parse_iso_date(raw: Any) -> date | None:
+    """Parse an ISO-8601 timestamp string → its UTC ``date``.
+
+    Returns ``None`` when ``raw`` is empty or unparseable so the
+    caller can fall back rather than crash. A naive timestamp is
+    treated as UTC; tz-aware stamps are normalised to UTC first.
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(s)
+    except ValueError:
+        _logger.warning(
+            "caps_repo: cannot parse fill timestamp %r", raw,
+        )
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(UTC)
+    return parsed.date()
 
 
 class CapsRepo:
@@ -438,7 +462,15 @@ class CapsRepo:
         was saved).  A short intermediate run with no orders (empty in_flight)
         must not hide a fill from an earlier run — hence the multi-hop scan.
 
-        Returns dict keyed by ``TICKER.NS`` → ``{fill_price, qty}``.
+        Returns dict keyed by ``TICKER.NS`` →
+        ``{fill_price: Decimal, qty: int, fill_date: date | None}``.
+        ``fill_date`` carries the ORIGINAL open date (parsed from the
+        in-flight entry's ``filled_at`` / ``submitted_at`` ISO-8601
+        stamp) so the recovery path can preserve ``opened_at`` across a
+        restart instead of resetting it to today — without that the
+        ``max_holding_days`` time-stop never fires for a recovered
+        position. ``fill_date`` is ``None`` when no stamp is parseable.
+
         Only entries with status='filled', side='BUY', fill_price > 0,
         qty > 0 are included.  If a ticker appears in multiple runs the
         most-recent fill wins (rows are processed newest-first).
@@ -481,14 +513,21 @@ class CapsRepo:
                 if ticker in result:
                     continue  # already found a more-recent fill
                 try:
-                    fp = float(e.get("fill_price") or 0)
+                    fp = Decimal(str(e.get("fill_price") or 0))
                     qty = int(
                         e.get("filled_qty") or e.get("qty") or 0
                     )
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, InvalidOperation):
                     continue
                 if fp > 0 and qty > 0:
-                    result[ticker] = {"fill_price": fp, "qty": qty}
+                    result[ticker] = {
+                        "fill_price": fp,
+                        "qty": qty,
+                        "fill_date": _parse_iso_date(
+                            e.get("filled_at")
+                            or e.get("submitted_at"),
+                        ),
+                    }
         return result
 
     async def get_in_flight(
