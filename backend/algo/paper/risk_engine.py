@@ -16,14 +16,15 @@ from backend.algo.paper.types import (
 )
 
 
-def _is_nan(x: object) -> bool:
-    """Return True when x is NaN or non-finite; False otherwise.
+def _is_non_finite(x: object) -> bool:
+    """Return True when x is non-finite (NaN, inf, -inf); False for
+    finite or non-coercible values.
 
-    Guards against Decimal("NaN"), float("nan"), and values that
-    cannot be coerced to float at all.
+    Guards against Decimal("NaN"), float("nan"), float("inf"),
+    float("-inf"), and values that cannot be coerced to float at all.
     """
     try:
-        return math.isnan(float(x))  # type: ignore[arg-type]
+        return not math.isfinite(float(x))  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return False
 
@@ -70,10 +71,10 @@ class RiskEngine:
         # which would let every cap check pass as if the signal
         # were safe.)
         if (
-            _is_nan(last_price)
-            or _is_nan(account.current_equity_inr)
-            or _is_nan(account.daily_realised_pnl_inr)
-            or _is_nan(account.daily_unrealised_pnl_inr)
+            _is_non_finite(last_price)
+            or _is_non_finite(account.current_equity_inr)
+            or _is_non_finite(account.daily_realised_pnl_inr)
+            or _is_non_finite(account.daily_unrealised_pnl_inr)
         ):
             return _reject(RejectReason.INVALID_INPUT)
 

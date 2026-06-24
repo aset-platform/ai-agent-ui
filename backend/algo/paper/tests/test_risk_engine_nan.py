@@ -18,7 +18,7 @@ from datetime import date
 from decimal import Decimal
 from uuid import uuid4
 
-from backend.algo.paper.risk_engine import RiskEngine
+from backend.algo.paper.risk_engine import RiskEngine, _is_non_finite
 from backend.algo.paper.types import AccountState, RejectReason, Signal
 
 
@@ -88,17 +88,41 @@ _ENGINE = RiskEngine()
 
 
 # ---------------------------------------------------------------------------
-# NaN rejection tests
+# Non-finite rejection tests (NaN, inf, -inf)
 # ---------------------------------------------------------------------------
 
 
 def test_nan_last_price_rejects():
-    """NaN last_price must be caught and rejected."""
+    """NaN last_price (Decimal) must be caught and rejected."""
     d = _ENGINE.gate(
         signal=_signal(),
         account=_account(),
         risk=_RISK,
         last_price=_NAN,
+    )
+    assert d.outcome == "reject"
+    assert d.reason == RejectReason.INVALID_INPUT
+
+
+def test_float_nan_last_price_rejects():
+    """float('nan') last_price must be caught and rejected."""
+    d = _ENGINE.gate(
+        signal=_signal(),
+        account=_account(),
+        risk=_RISK,
+        last_price=Decimal(str(float("nan"))),
+    )
+    assert d.outcome == "reject"
+    assert d.reason == RejectReason.INVALID_INPUT
+
+
+def test_inf_last_price_rejects():
+    """float('inf') last_price must be caught and rejected."""
+    d = _ENGINE.gate(
+        signal=_signal(),
+        account=_account(),
+        risk=_RISK,
+        last_price=Decimal(str(float("inf"))),
     )
     assert d.outcome == "reject"
     assert d.reason == RejectReason.INVALID_INPUT
