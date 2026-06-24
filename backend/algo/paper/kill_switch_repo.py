@@ -27,18 +27,42 @@ class KillSwitchRepo:
     def __init__(self, redis_client=None) -> None:  # noqa: ANN001
         self._redis = redis_client
 
-    async def is_active(self, user_id: UUID) -> bool:
-        """Fast read — Redis first, falls back to False if Redis
-        unavailable (graceful degradation)."""
+    async def is_active(
+        self,
+        user_id: UUID,
+        *,
+        session_factory=None,  # noqa: ANN001
+    ) -> bool:
+        """Fast read — Redis first. On Redis failure, fall back to the
+        durable PG flag; if neither can confirm a SAFE (disarmed) state,
+        FAIL CLOSED (return True) so a halted strategy never resumes
+        trading on an infra hiccup (real-money safety gate)."""
         if self._redis is not None:
             try:
                 v = await self._redis.get(_redis_key(user_id))
                 return bool(v)
             except Exception:  # noqa: BLE001
                 _logger.warning(
-                    "Redis kill-switch read failed; falling back",
+                    "Redis kill-switch read failed for %s — falling "
+                    "back to PG",
+                    user_id,
+                    exc_info=True,
                 )
-        return False
+        if session_factory is not None:
+            try:
+                async with session_factory() as session:
+                    row = await self.get(session, user_id=user_id)
+                return bool(row.get("active"))
+            except Exception:  # noqa: BLE001
+                _logger.error(
+                    "Kill-switch PG fallback failed for %s — failing "
+                    "CLOSED",
+                    user_id,
+                    exc_info=True,
+                )
+                return True
+        # No Redis result and no PG fallback available → fail closed.
+        return True
 
     async def get(
         self,

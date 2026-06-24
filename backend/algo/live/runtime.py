@@ -80,6 +80,7 @@ from backend.algo.live.budget import (
     transition as budget_transition,
 )
 from backend.algo.live.budget_types import ReservationState
+from backend.db.engine import disposable_pg_session
 from backend.algo.live.safety import (
     LiveRejectReason,
     pre_trade_check,
@@ -2705,7 +2706,8 @@ class LiveRuntime:
 
         account = self._account_snapshot(
             kill_switch_active=await self._kill_switch_repo.is_active(
-                self._user_id
+                self._user_id,
+                session_factory=disposable_pg_session,
             ),
         )
         # Exposure-based day_state: "consumption" is the capital
