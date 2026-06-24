@@ -3,23 +3,25 @@
 ``pre_trade_check`` applies the 9-cap risk gate in order:
 
   1. Kill switch               (KILL_SWITCH)
-  2. Allowed tickers           (LIVE_TICKER_NOT_ALLOWED)   ← cheapest
-  3. max concurrent positions  (LIVE_ORDERS_PER_DAY_CAP)
-  4. max_inr (strategy alloc)  (LIVE_INR_CAP)
-  5. Per-trade max_qty         (MAX_QTY)
-  6. Daily max_loss_pct        (DAILY_LOSS_CAP)
-  7. Daily max_open_positions  (MAX_OPEN_POSITIONS)
-  8. Portfolio max_concentration_pct  (POSITION_CAP)
-  9. Portfolio max_exposure_pct       (EXPOSURE_CAP — may scale)
+  2. Allowed tickers           (LIVE_TICKER_NOT_ALLOWED)   ← cheapest, in-memory
+  3. User-pool budget          (LIVE_BUDGET_CAP)           ← async DB, skip for allowed tickers
+  4. max concurrent positions  (LIVE_ORDERS_PER_DAY_CAP)
+  5. max_inr (strategy alloc)  (LIVE_INR_CAP)
+  6. Per-trade max_qty         (MAX_QTY)
+  7. Daily max_loss_pct        (DAILY_LOSS_CAP)
+  8. Daily max_open_positions  (MAX_OPEN_POSITIONS)
+  9. Portfolio max_concentration_pct  (POSITION_CAP)
+ 10. Portfolio max_exposure_pct       (EXPOSURE_CAP — may scale)
 
-Caps 3 & 4 are **exposure-based**: ``day_state`` carries currently-
+Cap 2 (allowed tickers) runs BEFORE Cap 3 (user-pool budget) because
+it is a pure in-memory set lookup with no async I/O.  Tickers outside
+the allow-list are rejected without hitting the DB.
+
+Caps 4 & 5 are **exposure-based**: ``day_state`` carries currently-
 committed values (Σ qty × avg over open legs) rather than turnover
 since 09:00. SELLs and BUY-adds to an existing ticker bypass these
 caps — the only action that consumes new budget / opens a new leg
 is a BUY opening a new ticker.
-
-v2-new layers (2-4) run BEFORE the v1 layers (5-9) so we short-
-circuit cheaply before any portfolio arithmetic.
 
 Per spec §5, the ordering matters for short-circuit efficiency.
 """
@@ -139,7 +141,38 @@ async def pre_trade_check(
         )
         return _reject(RejectReason.KILL_SWITCH)
 
-    # ---- Cap 0: User-pool budget reservation (NEW) -------------
+    # ---- Cap 2: Allowed tickers --------------------------------
+    # Pure in-memory set lookup — runs before any async I/O so
+    # tickers outside the allow-list are short-circuited cheaply.
+    #
+    # Allow-list is NOT a block-list. Empty list = reject all
+    # (no tickers configured). The UX forces the user to set
+    # at least one ticker before enabling live trading.
+    #
+    # Suffix-tolerant compare: the safety belts UI lets users
+    # type bare symbols (`JUBLFOOD`) but signals carry the
+    # market-suffixed form (`JUBLFOOD.NS`). Strip the .NS / .BO
+    # suffix from BOTH sides so both spellings pass.
+    def _bare(t: str) -> str:
+        for suf in (".NS", ".BO", ".NSI"):
+            if t.endswith(suf):
+                return t[: -len(suf)]
+        return t
+
+    allowed = caps.get("allowed_tickers", [])
+    allowed_bare = {_bare(t).upper() for t in (allowed or [])}
+    signal_bare = _bare(signal.ticker).upper()
+    if not allowed_bare or signal_bare not in allowed_bare:
+        _logger.debug(
+            "pre_trade_check: REJECT ticker=%s not in allow-list=%s",
+            signal.ticker,
+            allowed,
+        )
+        return _reject_live(
+            RejectReason.LIVE_TICKER_NOT_ALLOWED,
+        )
+
+    # ---- Cap 0: User-pool budget reservation -------------------
     # SELL closes a position → releases capital → bypass.
     if signal.side != "SELL":
         user_budget = await load_user_budget(user_id)
@@ -185,34 +218,6 @@ async def pre_trade_check(
                     "active_reserved": str(active_reserved),
                 },
             )
-
-    # ---- Cap 2: Allowed tickers --------------------------------
-    # Allow-list is NOT a block-list. Empty list = reject all
-    # (no tickers configured). The UX forces the user to set
-    # at least one ticker before enabling live trading.
-    #
-    # Suffix-tolerant compare: the safety belts UI lets users
-    # type bare symbols (`JUBLFOOD`) but signals carry the
-    # market-suffixed form (`JUBLFOOD.NS`). Strip the .NS / .BO
-    # suffix from BOTH sides so both spellings pass.
-    def _bare(t: str) -> str:
-        for suf in (".NS", ".BO", ".NSI"):
-            if t.endswith(suf):
-                return t[: -len(suf)]
-        return t
-
-    allowed = caps.get("allowed_tickers", [])
-    allowed_bare = {_bare(t).upper() for t in (allowed or [])}
-    signal_bare = _bare(signal.ticker).upper()
-    if not allowed_bare or signal_bare not in allowed_bare:
-        _logger.debug(
-            "pre_trade_check: REJECT ticker=%s not in allow-list=%s",
-            signal.ticker,
-            allowed,
-        )
-        return _reject_live(
-            RejectReason.LIVE_TICKER_NOT_ALLOWED,
-        )
 
     # ---- Cap 3: max concurrent open positions ------------------
     # Exposure semantics: ``orders_count_today`` is now the count
