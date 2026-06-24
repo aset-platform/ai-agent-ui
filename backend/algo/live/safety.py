@@ -175,18 +175,28 @@ async def pre_trade_check(
     # ---- Cap 0: User-pool budget reservation -------------------
     # SELL closes a position → releases capital → bypass.
     if signal.side != "SELL":
-        user_budget = await load_user_budget(user_id)
-        open_pos_cost = await sum_open_position_cost(user_id)
-        active_reserved = await sum_active_reservations(user_id)
-        # Dry-run moves no real money, so the real-Kite available-cash
-        # cap is meaningless — and actively blocks the rehearsal when
-        # the broker account is empty or its token is expired. Gate on
-        # the internal (allocated_inr) budget only in dry-run.
-        kite_available = (
-            Decimal("Infinity")
-            if dry_run
-            else await fetch_kite_available_cash(user_id)
-        )
+        try:
+            user_budget = await load_user_budget(user_id)
+            open_pos_cost = await sum_open_position_cost(user_id)
+            active_reserved = await sum_active_reservations(user_id)
+            # Dry-run moves no real money, so the real-Kite
+            # available-cash cap is meaningless — and actively
+            # blocks the rehearsal when the broker account is
+            # empty or its token is expired. Gate on the internal
+            # (allocated_inr) budget only in dry-run.
+            kite_available = (
+                Decimal("Infinity")
+                if dry_run
+                else await fetch_kite_available_cash(user_id)
+            )
+        except Exception:  # noqa: BLE001
+            _logger.error(
+                "pre_trade_check: budget I/O failed for %s"
+                " — failing closed",
+                user_id,
+                exc_info=True,
+            )
+            return _reject_live(RejectReason.LIVE_BUDGET_CAP)
 
         internal_headroom = (
             user_budget.allocated_inr - open_pos_cost - active_reserved
