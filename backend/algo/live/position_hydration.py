@@ -201,7 +201,13 @@ def hydrate(
 
     out: list[HydratedPosition] = []
 
-    # Source 1: net positions (intraday MIS).
+    # Source 1: net positions (MIS intraday + CNC bought today).
+    # CNC buys made today appear here as product='CNC' during the
+    # market session but do NOT appear in holdings() until T+1
+    # settlement (next trading day).  Including them here prevents
+    # committed_inr_now from being understated after a restart,
+    # which would otherwise let the qty-cap gate allow over-budget
+    # orders on the same day.
     try:
         kc = getattr(kite, "_kc", None)
         raw_pos = kc.positions() if kc is not None else {}
@@ -218,7 +224,7 @@ def hydrate(
     for r in net:
         product = (r.get("product") or "").upper()
         qty = _safe_int(r.get("quantity"))
-        if qty == 0 or product != "MIS":
+        if qty == 0 or product not in ("MIS", "CNC"):
             continue
         internal = _to_internal_ticker(
             r.get("tradingsymbol") or "",
@@ -234,11 +240,15 @@ def hydrate(
             qty=qty,
             avg_price=avg,
             source="positions",
-            product="MIS",
+            product=product,
             entry_ts=_ns_to_utc(ts_ns),
         ))
 
     # Source 2: holdings (overnight CNC).
+    # Skip any symbol already loaded from Source 1 (positions) to
+    # avoid double-counting today's CNC buys that appear in both
+    # positions()['net'] and holdings() as T+1.
+    already_loaded = {h.symbol for h in out}
     try:
         kc = getattr(kite, "_kc", None)
         raw_hold = kc.holdings() if kc is not None else []
@@ -266,6 +276,8 @@ def hydrate(
         if not internal:
             continue
         if allowed_set is not None and internal not in allowed_set:
+            continue
+        if internal in already_loaded:
             continue
         avg = _safe_decimal(r.get("average_price"))
         ts_ns = reader(user_id, internal)
