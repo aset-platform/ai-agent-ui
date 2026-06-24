@@ -13,6 +13,9 @@ def _make_client() -> KiteClient:
     client._kc.GTT_TYPE_SINGLE = "single"
     client._dry_run = False
     client._access_token = "tok"
+    # _redis=None → get_tick_size falls back to SDK call which
+    # returns _DEFAULT_TICK_SIZE (0.05) via the MagicMock iterable.
+    client._redis = None
     return client
 
 

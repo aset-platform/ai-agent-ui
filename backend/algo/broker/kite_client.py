@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Any, AsyncIterator, Callable
 from uuid import uuid4
 
@@ -34,6 +35,7 @@ from backend.algo.broker.exceptions import (
 from backend.algo.broker.freeze_cache import (
     default_for_bucket,
     get_freeze_qty,
+    get_tick_size,
     should_emit_fallback_event,
 )
 from backend.algo.broker.redis_keys import build_dedup_key
@@ -148,6 +150,48 @@ def resolve_dry_run_for_user(
             exc,
         )
         return _read_dry_run_env()
+
+
+_DEFAULT_TICK = Decimal("0.05")
+
+
+def _round_to_tick(
+    price: float,
+    tick: Decimal | None,
+    *,
+    side: str,
+    is_stop: bool,
+) -> float:
+    """Round *price* to the nearest valid tick multiple.
+
+    Direction rules
+    ---------------
+    * BUY LIMIT   → round DOWN  (never overpay).
+    * SELL LIMIT  → round UP    (never undersell).
+    * SELL stop   → round DOWN  (trigger fires below market).
+    * BUY  stop   → round UP    (trigger fires above market).
+
+    If *tick* is ``None`` or zero the NSE default (0.05) is used
+    and a warning is emitted so ops can investigate the data gap.
+    """
+    effective_tick = tick if (tick and tick > 0) else None
+    if effective_tick is None:
+        _logger.warning(
+            "_round_to_tick: tick=%r is falsy — "
+            "falling back to NSE default %s",
+            tick,
+            _DEFAULT_TICK,
+        )
+        effective_tick = _DEFAULT_TICK
+    buy_rounds_down = (side == "BUY" and not is_stop) or (
+        side == "SELL" and is_stop
+    )
+    rounding = ROUND_FLOOR if buy_rounds_down else ROUND_CEILING
+    d_price = Decimal(str(price))
+    quantized = (d_price / effective_tick).to_integral_value(
+        rounding=rounding
+    ) * effective_tick
+    return float(quantized)
 
 
 class KiteClient:
@@ -1094,6 +1138,7 @@ class KiteClient:
             internal_order_id=internal_order_id,
         )
 
+
     def _place_single_chunk(
         self,
         *,
@@ -1135,7 +1180,17 @@ class KiteClient:
             "product": product,
         }
         if order_type == "LIMIT":
-            params["price"] = price
+            tick = get_tick_size(
+                kc=self._kc,
+                redis_client=self._get_redis(),
+                symbol=tradingsymbol,
+            )
+            params["price"] = _round_to_tick(
+                price,
+                tick,
+                side=transaction_type,
+                is_stop=False,
+            )
         # NOTE: kiteconnect-python SDK does not accept
         # market_protection as a kwarg in this version. MARKET
         # orders without market_protection are rejected by Kite
@@ -1816,7 +1871,29 @@ class KiteClient:
         """
         tradingsymbol = ticker.removesuffix(".NS").removesuffix(".BO")
         exchange = "NSE"
-        kite_last_price = last_price if last_price is not None else trigger_price * 1.01
+        tick = get_tick_size(
+            kc=self._kc,
+            redis_client=self._get_redis(),
+            symbol=tradingsymbol,
+        )
+        # Round stop-trigger (is_stop=True) + limit order prices
+        # to valid tick multiples before calling Kite.
+        trigger_price = _round_to_tick(
+            trigger_price, tick,
+            side=transaction_type, is_stop=True,
+        )
+        limit_price = _round_to_tick(
+            limit_price, tick,
+            side=transaction_type, is_stop=False,
+        )
+        raw_last = (
+            last_price if last_price is not None
+            else trigger_price * 1.01
+        )
+        kite_last_price = _round_to_tick(
+            raw_last, tick,
+            side=transaction_type, is_stop=False,
+        )
         if self._dry_run:
             _logger.info(
                 "[DRY_RUN] place_gtt symbol=%s trigger=%.4f "
