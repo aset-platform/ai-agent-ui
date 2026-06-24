@@ -232,7 +232,37 @@ def test_zero_avg_price_refused():
     assert "gtt_skipped_no_entry_price" in types
 
 
-# ── 7. qty 0 phantom in managers/locked -> scoped out ───────────────
+# ── 7. avg_price <= 0 with active Kite GTT -> register, no manager ──
+
+def test_zero_avg_price_with_active_kite_gtt_registers():
+    """Held position qty>0, avg_price=0, ACTIVE Kite GTT exists.
+
+    Must NOT call place_gtt; must register the Kite gtt_id; must NOT
+    create a trailing manager (avg_price invalid for entry).
+    Branch: lines ~1769-1780 of runtime.py._ensure_gtts_for_hydrated_positions.
+    """
+    rt = _make_runtime()
+    _seed_atr(rt, "PROTX.NS")
+    _set_positions(rt, {"PROTX.NS": _pos(15, 0.0)})  # qty > 0, avg_price = 0
+    # Active Kite GTT exists for this symbol
+    rt._kite.get_gtts.return_value = [
+        _active_gtt("PROTX", 666, 100.0),
+    ]
+
+    _run(rt)
+
+    # Must NOT place a new GTT
+    rt._kite.place_gtt.assert_not_called()
+    # Must register the Kite gtt_id
+    assert rt._gtt_ids["PROTX.NS"] == 666
+    # Must NOT create a manager (avg_price = 0 is invalid for entry)
+    assert "PROTX.NS" not in rt._trailing_managers
+    # No gtt_skipped_no_entry_price event (active GTT path, not refusal)
+    types = [e["type"] for e in rt._events]
+    assert "gtt_skipped_no_entry_price" not in types
+
+
+# ── 8. qty 0 phantom in managers/locked -> scoped out ───────────────
 
 def test_qty_zero_phantom_not_placed():
     rt = _make_runtime()
