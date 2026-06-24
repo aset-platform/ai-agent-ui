@@ -23,8 +23,9 @@ class LtpStaleError(Exception):
 
 class DuplicateOrderError(Exception):
     """Raised by ``KiteClient.place_order`` when the same
-    ``internal_order_id`` is re-submitted while its dedup SETNX key
-    is still live in Redis (TTL = ``ALGO_DEDUP_TTL_S``, default 60 s).
+    ``(user, strategy, symbol, side)`` tuple is submitted more than
+    once within the same 60-second minute bucket (the content-addressed
+    pre-submit dedup guard, TTL = ``ALGO_DEDUP_TTL_S``, default 60 s).
 
     Caught by a Redis SETNX guard BEFORE the SDK call so duplicate
     Kite submissions never happen. Runtime catches this and surfaces
