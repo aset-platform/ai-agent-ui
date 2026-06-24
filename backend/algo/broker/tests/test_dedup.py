@@ -1,20 +1,28 @@
-"""Tests for Task 1.4: dedup keyed on internal_order_id +
-fail-closed for large notional.
+"""Tests for Task 1.4: content-addressed dedup key (symbol/side/
+minute, no qty) + fail-closed for large notional.
 
 Covers:
-  (a) ``build_dedup_key`` derives from ``internal_order_id``; same
-      logical order → same key; different orders → different keys.
+  (a) ``build_dedup_key`` is content-addressed on
+      ``(user, strategy, symbol, side, minute_bucket)``. Same params
+      in the same minute → same key; different minute → different
+      key; qty does NOT affect the key.
   (b) On Redis error with notional >= ``ALGO_DEDUP_FAILCLOSED_INR``
       the order is BLOCKED (raises ``DedupUnavailableError``).
   (c) On Redis error with notional < threshold the order proceeds
       (fail-open) with a warning.
 
-Also verifies the core duplicate-blocked path still works end-to-end
-through ``KiteClient.place_order``.
+Also verifies the cross-call duplicate-blocked path still works
+end-to-end through ``KiteClient.place_order`` (same signal firing
+twice in the same minute → second blocked).
+
+The dedup gate is enabled by ``ALGO_DEDUP_TTL_S > 0``. Tests that
+rely on the gate set ``ALGO_DEDUP_TTL_S=60`` explicitly via
+``patch.dict`` rather than depending on the ``algo_dedup_enabled``
+marker (whose fixture does not cover ``broker/tests``).
 """
 from __future__ import annotations
 
-import uuid
+import os
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -132,92 +140,109 @@ def _call_place(client, events_buffer, **overrides):
 
 
 # -----------------------------------------------------------------
-# (a) build_dedup_key — keyed on internal_order_id
+# (a) build_dedup_key — content-addressed (symbol/side/minute,
+#     no qty)
 # -----------------------------------------------------------------
 
 
 class TestBuildDedupKey:
-    def test_same_internal_order_id_produces_same_key(self):
-        """Same logical order (same id) → identical dedup key."""
-        order_id = str(uuid.uuid4())
+    def test_same_params_same_minute_produce_same_key(self):
+        """Same (user,strategy,symbol,side) within the same minute
+        bucket → identical dedup key (cross-call duplicate guard).
+        """
+        now = 1_700_000_000.0  # arbitrary fixed instant
         k1 = build_dedup_key(
             user_id="u1",
             strategy_id="s1",
             symbol="INFY",
             side="BUY",
-            internal_order_id=order_id,
+            now_unix=now,
         )
+        # Same minute (now + 30s is still within the same bucket).
         k2 = build_dedup_key(
             user_id="u1",
             strategy_id="s1",
             symbol="INFY",
             side="BUY",
-            internal_order_id=order_id,
+            now_unix=now + 30.0,
         )
         assert k1 == k2
 
-    def test_different_internal_order_ids_produce_different_keys(self):
-        """Two distinct logical orders → different keys."""
+    def test_different_minute_produces_different_key(self):
+        """Same params but a different minute bucket → different key."""
+        now = 1_700_000_000.0
         k1 = build_dedup_key(
             user_id="u1",
             strategy_id="s1",
             symbol="INFY",
             side="BUY",
-            internal_order_id=str(uuid.uuid4()),
+            now_unix=now,
         )
+        # +60s crosses into the next minute bucket.
         k2 = build_dedup_key(
             user_id="u1",
             strategy_id="s1",
             symbol="INFY",
             side="BUY",
-            internal_order_id=str(uuid.uuid4()),
+            now_unix=now + 60.0,
         )
         assert k1 != k2
 
-    def test_key_contains_internal_order_id(self):
-        """Dedup key must embed the internal_order_id for traceability."""
-        order_id = "fixed-order-id-123"
-        key = build_dedup_key(
+    def test_key_does_not_vary_with_qty(self):
+        """qty is NOT a parameter of build_dedup_key — two
+        submissions with different computed qty in the same minute
+        resolve to the same key (so the second is deduped).
+        """
+        now = 1_700_000_000.0
+        # build_dedup_key has no qty arg by design; the same call
+        # signature for any qty yields the same key in a minute.
+        k1 = build_dedup_key(
+            user_id="u1",
+            strategy_id="s1",
+            symbol="TCS",
+            side="BUY",
+            now_unix=now,
+        )
+        k2 = build_dedup_key(
+            user_id="u1",
+            strategy_id="s1",
+            symbol="TCS",
+            side="BUY",
+            now_unix=now,
+        )
+        assert k1 == k2
+
+    def test_different_side_produces_different_key(self):
+        """BUY vs SELL in the same minute → different keys."""
+        now = 1_700_000_000.0
+        buy = build_dedup_key(
+            user_id="u1",
+            strategy_id="s1",
+            symbol="TCS",
+            side="BUY",
+            now_unix=now,
+        )
+        sell = build_dedup_key(
             user_id="u1",
             strategy_id="s1",
             symbol="TCS",
             side="SELL",
-            internal_order_id=order_id,
+            now_unix=now,
         )
-        assert order_id in key
+        assert buy != sell
 
-    def test_key_does_not_vary_with_qty(self):
-        """Key must NOT incorporate qty — qty-recompute retry must
-        hit the same key as the original submission.
-        """
-        order_id = str(uuid.uuid4())
-        # Same internal_order_id regardless of qty variation.
-        k1 = build_dedup_key(
-            user_id="u1",
-            strategy_id="s1",
-            symbol="TCS",
-            side="BUY",
-            internal_order_id=order_id,
-        )
-        k2 = build_dedup_key(
-            user_id="u1",
-            strategy_id="s1",
-            symbol="TCS",
-            side="BUY",
-            internal_order_id=order_id,
-        )
-        assert k1 == k2
-
-    def test_key_prefix(self):
-        """Dedup key has the expected prefix for Redis namespace clarity."""
+    def test_key_prefix_and_minute_bucket(self):
+        """Key has the expected prefix and embeds the minute bucket."""
+        now = 1_700_000_000.0
         key = build_dedup_key(
             user_id="u1",
             strategy_id="s1",
             symbol="WIPRO",
             side="BUY",
-            internal_order_id="oid-abc",
+            now_unix=now,
         )
         assert key.startswith("algo:placeorder:dedup:")
+        assert key.endswith(str(int(now // 60)))
 
 
 # -----------------------------------------------------------------
@@ -228,6 +253,13 @@ class TestBuildDedupKey:
 @pytest.mark.algo_dedup_enabled
 class TestFailClosedLargeNotional:
     """On Redis error, orders with notional >= threshold are blocked."""
+
+    @pytest.fixture(autouse=True)
+    def _enable_gate(self):
+        # The dedup gate is enabled only when ALGO_DEDUP_TTL_S > 0;
+        # set it explicitly (the marker's fixture is not wired here).
+        with patch.dict(os.environ, {"ALGO_DEDUP_TTL_S": "60"}):
+            yield
 
     # default threshold = 100_000 INR.  qty=50, price=2500 → 125_000.
     _LARGE_QTY = 50
@@ -298,6 +330,11 @@ class TestFailClosedLargeNotional:
 class TestFailOpenSmallNotional:
     """On Redis error, orders below the threshold proceed (fail-open)."""
 
+    @pytest.fixture(autouse=True)
+    def _enable_gate(self):
+        with patch.dict(os.environ, {"ALGO_DEDUP_TTL_S": "60"}):
+            yield
+
     # qty=1, price=500 → 500 INR, well below 100_000.
     _SMALL_QTY = 1
     _SMALL_PRICE = 500.0
@@ -350,38 +387,60 @@ class TestFailOpenSmallNotional:
 
 @pytest.mark.algo_dedup_enabled
 class TestDedupEndToEnd:
-    """Same internal_order_id on second call → DuplicateOrderError."""
+    """Content-addressed cross-call guard via the minute bucket.
 
-    def test_same_id_second_call_blocked(self):
-        """Explicit same internal_order_id → duplicate blocked."""
+    Two place_order calls for the same (user,strategy,symbol,side) in
+    the same minute → second blocked, regardless of internal_order_id
+    or qty.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _enable_gate(self):
+        with patch.dict(os.environ, {"ALGO_DEDUP_TTL_S": "60"}):
+            yield
+
+    def test_same_signal_twice_same_minute_blocked(self):
+        """Same signal firing twice in the same minute → second
+        blocked even though each call generates a fresh uuid4.
+        """
         client = _make_client(FakeRedis())
-        order_id = str(uuid.uuid4())
-        # First call succeeds.
-        _call_place(client, [], internal_order_id=order_id)
-        client._kc.place_order.assert_called_once()
-        # Second call with SAME id → blocked.
-        with pytest.raises(DuplicateOrderError):
-            _call_place(client, [], internal_order_id=order_id)
+        # Pin the clock so both calls land in the same minute bucket.
+        with patch("time.time", return_value=1_700_000_000.0):
+            _call_place(client, [])
+            client._kc.place_order.assert_called_once()
+            with pytest.raises(DuplicateOrderError):
+                _call_place(client, [])
         assert client._kc.place_order.call_count == 1
 
-    def test_different_ids_both_succeed(self):
-        """Two distinct internal_order_ids → both orders go through."""
+    def test_qty_recompute_retry_same_minute_blocked(self):
+        """A retry with a recomputed qty in the same minute hits the
+        same key → blocked (finding #19 goal; qty not in key).
+        """
         client = _make_client(FakeRedis())
-        _call_place(
-            client, [],
-            internal_order_id=str(uuid.uuid4()),
-        )
-        _call_place(
-            client, [],
-            internal_order_id=str(uuid.uuid4()),
-        )
+        with patch("time.time", return_value=1_700_000_000.0):
+            _call_place(client, [], quantity=10)
+            with pytest.raises(DuplicateOrderError):
+                _call_place(client, [], quantity=12)
+        assert client._kc.place_order.call_count == 1
+
+    def test_different_minute_both_succeed(self):
+        """Same params but separated across a minute boundary →
+        both orders go through.
+        """
+        client = _make_client(FakeRedis())
+        with patch("time.time", return_value=1_700_000_000.0):
+            _call_place(client, [])
+        with patch("time.time", return_value=1_700_000_060.0):
+            _call_place(client, [])
         assert client._kc.place_order.call_count == 2
 
     def test_ttl_zero_disables_dedup(self):
-        """ALGO_DEDUP_TTL_S=0 → same id repeated → both pass."""
+        """ALGO_DEDUP_TTL_S=0 → gate disabled → both pass even in
+        the same minute with identical params.
+        """
         client = _make_client(FakeRedis())
-        order_id = str(uuid.uuid4())
-        with patch.dict("os.environ", {"ALGO_DEDUP_TTL_S": "0"}):
-            _call_place(client, [], internal_order_id=order_id)
-            _call_place(client, [], internal_order_id=order_id)
+        with patch.dict(os.environ, {"ALGO_DEDUP_TTL_S": "0"}):
+            with patch("time.time", return_value=1_700_000_000.0):
+                _call_place(client, [])
+                _call_place(client, [])
         assert client._kc.place_order.call_count == 2

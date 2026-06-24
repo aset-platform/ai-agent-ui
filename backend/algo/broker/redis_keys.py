@@ -4,12 +4,16 @@
 Three key families live here:
 
 1. ``algo:placeorder:dedup:{user_id}:{strategy_id}:{symbol}:{side}:
-   {internal_order_id}`` — pre-submit duplicate guard (PR #4 §3.4,
-   hardened in PR #5 Task 1.4). Keyed on the logical order id
-   (caller-generated UUID) so a qty-recompute retry of the SAME
-   logical order is correctly identified as a duplicate regardless of
-   the computed qty. SETNX with ``ALGO_DEDUP_TTL_S`` TTL (default
-   60 s).
+   {minute_bucket}`` — pre-submit duplicate guard (PR #4 §3.4,
+   hardened in PR #5 Task 1.4). Content-addressed on
+   ``(user, strategy, symbol, side, minute_bucket)`` — deliberately
+   WITHOUT qty — so that (a) a retry that recomputes a different qty
+   in the same minute collides with the original, and (b) the same
+   signal firing twice in the same minute collides (cross-call
+   duplicate guard). A legitimate same-symbol/side scale-in within
+   the same minute is intentionally deduped (accepted tradeoff —
+   safer default for real-money orders). SETNX with
+   ``ALGO_DEDUP_TTL_S`` TTL (default 60 s).
 
 2. ``kite:freeze:{date_ist}`` — once-per-day Redis hash of
    ``tradingsymbol -> freeze_qty`` (PR #4 §3.5). Used by
@@ -31,7 +35,7 @@ from datetime import datetime, timezone, timedelta
 
 _DEDUP_KEY_FMT = (
     "algo:placeorder:dedup:{user_id}:{strategy_id}:"
-    "{symbol}:{side}:{internal_order_id}"
+    "{symbol}:{side}:{minute_bucket}"
 )
 _FREEZE_HASH_KEY_FMT = "kite:freeze:{date_ist}"
 _FREEZE_FALLBACK_FLAG_FMT = (
@@ -61,31 +65,32 @@ def build_dedup_key(
     strategy_id: object,
     symbol: str,
     side: str,
-    internal_order_id: str,
+    now_unix: float | None = None,
 ) -> str:
     """Build the Redis SETNX key for the pre-submit duplicate guard.
 
     ``user_id`` / ``strategy_id`` are coerced via ``str(...)`` so
     UUID, str, and None all serialise predictably.
 
-    Keyed on ``internal_order_id`` (the caller-generated UUID that
-    identifies one logical order submission) rather than the old
-    ``(symbol, side, qty, minute_bucket)`` tuple. This means:
+    Content-addressed on ``(user, strategy, symbol, side,
+    minute_bucket)`` where ``minute_bucket = int(now_unix // 60)``.
+    qty is deliberately NOT part of the key. This means:
 
-    - The same logical order submitted twice (same id) → same key →
-      second SETNX returns False → blocked as duplicate (correct).
-    - Two different logical orders that happen to share the same
-      ticker/side/qty → different ids → different keys → both pass
-      (correct; the old scheme would have false-blocked them).
-    - A retry that recomputes a slightly different qty but is still
-      the *same* logical order → same id → correctly blocked.
+    - A retry that recomputes a different qty for the same
+      symbol/side in the same minute → same key → second SETNX
+      returns False → blocked (the finding #19 goal).
+    - The same signal firing twice in the same minute → same key →
+      blocked (the cross-call duplicate guard restored).
+    - A legitimate same-symbol/side scale-in within the same minute
+      is ALSO deduped. This is an intentional, accepted tradeoff —
+      the safer default is to suppress a possibly-duplicate
+      real-money order rather than risk a double fill. A scale-in
+      that genuinely needs to fire in the same minute can be split
+      across minute boundaries or use a distinct strategy_id.
 
-    Note: ``runtime.py::_submit_order`` generates ``internal_order_id
-    = str(uuid4())`` at the top of each call, so every discrete
-    invocation gets a fresh id. Retries that call ``_submit_order``
-    again will NOT share the same id unless the caller explicitly
-    preserves and passes it in. This is a caller-level concern; the
-    key scheme is correct by design.
+    The minute_bucket reuses ``_minute_bucket`` so callers can pass a
+    deterministic ``now_unix`` in tests and the live path supplies
+    the current wall-clock time.
     """
     return _DEDUP_KEY_FMT.format(
         user_id=str(user_id) if user_id is not None else "anon",
@@ -95,7 +100,7 @@ def build_dedup_key(
         ),
         symbol=symbol,
         side=side,
-        internal_order_id=internal_order_id,
+        minute_bucket=_minute_bucket(now_unix),
     )
 
 

@@ -1074,9 +1074,10 @@ class KiteClient:
             )
 
         # ── Pre-submit dedup gate (PR #4 §3.4, hardened Task 1.4) ──
-        # Keyed on internal_order_id so a qty-recompute retry of the
-        # SAME logical order collides correctly. Fail-closed when
-        # Redis is down for orders >= ALGO_DEDUP_FAILCLOSED_INR INR.
+        # Content-addressed key (symbol/side/minute, no qty) so a
+        # qty-recompute retry AND a same-signal double-fire in the
+        # same minute both collide correctly. Fail-closed when Redis
+        # is down for orders >= ALGO_DEDUP_FAILCLOSED_INR INR.
         # Dry-run already short-circuited above so we never see it.
         self._dedup_guard_or_raise(
             user_id=user_id,
@@ -1395,14 +1396,17 @@ class KiteClient:
         session_id: Any,
         internal_order_id: str,
     ) -> None:
-        """Acquire the SETNX dedup slot for this logical order.
+        """Acquire the SETNX dedup slot for this order.
 
-        The Redis key is derived from ``internal_order_id`` (the
-        caller-generated UUID) so the dedup guard identifies the
-        LOGICAL order, not the ``(ticker, side, qty)`` tuple. This
-        means a retry that recomputes a slightly different qty still
-        collides with the first attempt (same id → same key →
-        SETNX returns False → blocked).
+        The Redis key is content-addressed on ``(user, strategy,
+        symbol, side, minute_bucket)`` — deliberately WITHOUT qty.
+        This means a retry that recomputes a different qty in the
+        same minute collides with the first attempt, AND the same
+        signal firing twice in the same minute collides (cross-call
+        duplicate guard). ``internal_order_id`` is still threaded
+        through for event/log traceability but is NOT part of the
+        key. A legitimate same-minute scale-in is intentionally
+        deduped (accepted tradeoff — safer default).
 
         Duplicate → emit ``order_duplicate_blocked`` + raise
         ``DuplicateOrderError``.
@@ -1458,12 +1462,14 @@ class KiteClient:
                 failclosed_inr,
             )
             return
+        import time
+
         dedup_key = build_dedup_key(
             user_id=user_id,
             strategy_id=strategy_id,
             symbol=symbol,
             side=side,
-            internal_order_id=internal_order_id,
+            now_unix=time.time(),
         )
         try:
             acquired = redis_client.set(

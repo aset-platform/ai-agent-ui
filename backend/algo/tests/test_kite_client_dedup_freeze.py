@@ -173,24 +173,24 @@ class TestPreSubmitDedup:
     def test_within_minute_duplicate_blocked(
         self, kite_client, events_buffer,
     ):
-        """Same internal_order_id submitted twice → second call raises.
+        """Same (symbol, side) twice in the same minute → blocked.
 
-        Task 1.4: dedup is now keyed on internal_order_id, not on
-        (symbol, side, qty, minute_bucket). Callers must pass the
-        SAME internal_order_id to trigger the duplicate guard.
+        Task 1.4 (content-addressed key): dedup is keyed on
+        (user, strategy, symbol, side, minute_bucket) — NOT on
+        internal_order_id and NOT on qty. The second submission in
+        the same minute hits the same key even though each call
+        generates a fresh internal_order_id.
         """
-        from uuid import uuid4
         client, mock_kc = kite_client
         mock_kc.place_order.return_value = {"order_id": "K1"}
-        order_id = str(uuid4())
-        # First call succeeds.
-        _call_place(client, events_buffer, internal_order_id=order_id)
-        mock_kc.place_order.assert_called_once()
-        # Second call with SAME internal_order_id → blocked.
-        with pytest.raises(DuplicateOrderError):
-            _call_place(
-                client, events_buffer, internal_order_id=order_id,
-            )
+        # Pin the clock so both calls land in the same minute bucket.
+        with patch("time.time", return_value=1_700_000_000.0):
+            # First call succeeds.
+            _call_place(client, events_buffer)
+            mock_kc.place_order.assert_called_once()
+            # Second call (same symbol/side, same minute) → blocked.
+            with pytest.raises(DuplicateOrderError):
+                _call_place(client, events_buffer)
         # SDK only called once total (no second submission).
         assert mock_kc.place_order.call_count == 1
         # order_duplicate_blocked event present.
@@ -204,26 +204,22 @@ class TestPreSubmitDedup:
         assert p["side"] == "BUY"
         assert p["qty"] == 8
 
-    def test_different_internal_order_ids_both_succeed(
+    def test_different_minute_both_succeed(
         self, kite_client, events_buffer,
     ):
-        """Two distinct internal_order_ids → both calls succeed.
+        """Same (symbol, side) across a minute boundary → both pass.
 
-        Task 1.4: replacing the old cross-minute bucket test. The new
-        key scheme means different ids always produce different keys
-        regardless of timing.
+        Task 1.4 (content-addressed key): the minute_bucket differs
+        across the boundary, so the two submissions resolve to
+        different keys and both go through. internal_order_id is
+        irrelevant to the key.
         """
-        from uuid import uuid4
         client, mock_kc = kite_client
         mock_kc.place_order.return_value = {"order_id": "K1"}
-        _call_place(
-            client, events_buffer,
-            internal_order_id=str(uuid4()),
-        )
-        _call_place(
-            client, events_buffer,
-            internal_order_id=str(uuid4()),
-        )
+        with patch("time.time", return_value=1_700_000_000.0):
+            _call_place(client, events_buffer)
+        with patch("time.time", return_value=1_700_000_060.0):
+            _call_place(client, events_buffer)
         assert mock_kc.place_order.call_count == 2
 
     def test_dry_run_skips_dedup_entirely(self, fake_redis, events_buffer):
