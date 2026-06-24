@@ -28,6 +28,7 @@ from uuid import uuid4
 from kiteconnect import KiteConnect
 
 from backend.algo.broker.exceptions import (
+    BrokerResponseError,
     DuplicateOrderError,
     FreezeChunkExceedsDailyCapError,
     LtpStaleError,
@@ -1255,10 +1256,31 @@ class KiteClient:
         if tag:
             params["tag"] = tag
         resp = self._kc.place_order(variety=variety, **params)
-        # SDK returns {"order_id": "<id>"} or raises KiteException.
-        order_id: str = (
-            resp.get("order_id", "") if isinstance(resp, dict) else str(resp)
-        )
+        # SDK typically returns {"order_id": "<id>"} or raises
+        # KiteException.  Older SDK variants return a bare string id.
+        # Any other response (None, {}, dict without order_id) is an
+        # ambiguous broker signal: recording an empty id creates an
+        # untrackable phantom order that can never be cancelled or
+        # reconciled, so we must treat it as a hard failure.
+        if isinstance(resp, dict):
+            order_id: str = resp.get("order_id") or ""
+        elif isinstance(resp, str) and resp:
+            order_id = resp
+        else:
+            order_id = ""
+        if not order_id:
+            _logger.error(
+                "place_order: no order_id in SDK response — "
+                "rejecting as phantom; symbol=%s side=%s qty=%d "
+                "raw_response=%r",
+                tradingsymbol,
+                transaction_type,
+                quantity,
+                resp,
+            )
+            raise BrokerResponseError(
+                f"place_order returned no order_id: {resp!r}"
+            )
         _logger.info(
             "place_order: symbol=%s side=%s qty=%d "
             "order_type=%s chunk=%s/%s kite_order_id=%s",

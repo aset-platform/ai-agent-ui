@@ -19,7 +19,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.algo.broker.exceptions import PartialChunkPlacementError
+from backend.algo.broker.exceptions import (
+    BrokerResponseError,
+    PartialChunkPlacementError,
+)
 from backend.algo.broker.freeze_cache import build_freeze_key
 from backend.algo.broker.kite_client import KiteClient
 
@@ -194,3 +197,87 @@ def test_all_chunks_succeed_returns_first_id(
         if e["type"] == "order_partial_chunk_failure"
     ]
     assert failures == []
+
+
+# ---------------------------------------------------------------------------
+# Task 1.3 — phantom empty order_id tests
+# ---------------------------------------------------------------------------
+
+def _call_single_chunk(client, mock_kc, sdk_return, events_buffer):
+    """Drive ``_place_single_chunk`` with a controlled SDK return value."""
+    mock_kc.place_order.return_value = sdk_return
+    return client._place_single_chunk(
+        tradingsymbol="RELIANCE",
+        exchange="NSE",
+        transaction_type="BUY",
+        quantity=100,
+        order_type="MARKET",
+        product="CNC",
+        variety="regular",
+        price=0.0,
+        tag="",
+        last_price=2850.0,
+        last_price_ts=_fresh_ts(),
+        liquidity_bucket="largecap",
+        slippage_bps_applied=0,
+        chunk_index=0,
+        chunk_total=1,
+        events_sink=events_buffer.append,
+        session_id="sess-1",
+        user_id="user-1",
+        strategy_id="strat-1",
+        internal_order_id="ioid-1",
+    )
+
+
+@pytest.mark.parametrize(
+    "sdk_return",
+    [
+        None,
+        {},
+        {"status": "ok"},  # dict missing order_id key
+    ],
+    ids=["sdk_returns_none", "sdk_returns_empty_dict", "sdk_dict_no_order_id"],
+)
+def test_empty_order_id_raises_broker_response_error(
+    kite_client, events_buffer, sdk_return,
+):
+    """When SDK returns None / {} / dict-without-order_id, _place_single_chunk
+    must raise BrokerResponseError and must NOT emit a submitted event with
+    an empty kite_order_id (which would create an untrackable phantom order).
+    """
+    client, mock_kc = kite_client
+
+    with pytest.raises(BrokerResponseError) as exc_info:
+        _call_single_chunk(client, mock_kc, sdk_return, events_buffer)
+
+    # Error message must reference the raw SDK response for diagnostics.
+    assert repr(sdk_return) in str(exc_info.value)
+
+    # No submitted event with an empty kite_order_id must have been emitted.
+    phantom_events = [
+        e for e in events_buffer
+        if e.get("type") == "order_submitted_live"
+        and not json.loads(e.get("payload_json", "{}")).get("kite_order_id")
+    ]
+    assert phantom_events == [], (
+        "submitted event with empty kite_order_id was emitted — phantom order"
+    )
+
+
+def test_valid_order_id_emits_submitted_event(kite_client, events_buffer):
+    """Sanity: a well-formed SDK response still works end-to-end."""
+    client, mock_kc = kite_client
+
+    result = _call_single_chunk(
+        client, mock_kc, {"order_id": "OID-VALID"}, events_buffer,
+    )
+
+    assert result == "OID-VALID"
+    submitted = [
+        e for e in events_buffer
+        if e.get("type") == "order_submitted_live"
+    ]
+    assert len(submitted) == 1
+    payload = json.loads(submitted[0]["payload_json"])
+    assert payload["kite_order_id"] == "OID-VALID"

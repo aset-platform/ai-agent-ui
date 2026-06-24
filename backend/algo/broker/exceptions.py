@@ -42,6 +42,18 @@ class FreezeChunkExceedsDailyCapError(Exception):
     """
 
 
+class BrokerResponseError(Exception):
+    """Raised by ``KiteClient._place_single_chunk`` when the Kite SDK
+    returns a response that contains no usable ``order_id`` (e.g.
+    ``None``, ``{}``, or a dict missing the ``order_id`` key).
+
+    Emitting a submitted event with an empty id would create an
+    untrackable, uncancellable phantom order.  This exception surfaces
+    the raw SDK response so callers can treat the placement as a hard
+    failure and route it through the partial-chunk reconciler.
+    """
+
+
 class PartialChunkPlacementError(Exception):
     """Raised by ``KiteClient.place_order`` when a multi-chunk
     (freeze-split) submission fails AFTER one or more chunks are
