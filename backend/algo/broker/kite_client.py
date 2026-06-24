@@ -155,6 +155,21 @@ def resolve_dry_run_for_user(
 _DEFAULT_TICK = Decimal("0.05")
 
 
+def _floor_to_tick(price: float, tick: Decimal | None) -> float:
+    """Truncate *price* down to the nearest tick multiple.
+
+    Direction-neutral: suitable for LTP sentinels and similar values
+    that are not themselves LIMIT or stop prices.  Uses the same
+    ``_DEFAULT_TICK`` fallback as :func:`_round_to_tick`.
+    """
+    effective_tick = tick if (tick and tick > 0) else _DEFAULT_TICK
+    d_price = Decimal(str(price))
+    quantized = (d_price / effective_tick).to_integral_value(
+        rounding=ROUND_FLOOR
+    ) * effective_tick
+    return float(quantized)
+
+
 def _round_to_tick(
     price: float,
     tick: Decimal | None,
@@ -1769,11 +1784,26 @@ class KiteClient:
         order_type: str | None = None,
         price: float | None = None,
         quantity: int | None = None,
+        tradingsymbol: str,
+        transaction_type: str,
+        exchange: str = "NSE",
     ) -> str:
         """Modify price and/or quantity of a LIMIT order.
 
         Only LIMIT orders can be modified (MARKET orders are
         immediately sent to the exchange).  Returns the order_id.
+
+        Args:
+            order_id: Kite order ID to modify.
+            variety: Order variety (e.g. ``"regular"``).
+            order_type: Must be ``"LIMIT"`` or ``None``.
+            price: New limit price; tick-rounded before forwarding to
+                the SDK (BUY rounds down, SELL rounds up).
+            quantity: New quantity.
+            tradingsymbol: Exchange symbol used to look up tick size.
+            transaction_type: ``"BUY"`` or ``"SELL"`` — determines
+                rounding direction for the price.
+            exchange: Exchange code; defaults to ``"NSE"``.
 
         Raises:
             ValueError: if order_type is provided and is not LIMIT.
@@ -1784,24 +1814,38 @@ class KiteClient:
                 "modify_order requires an access_token; "
                 "complete the OAuth handshake first.",
             )
-        if self._dry_run:
-            _logger.info(
-                "[DRY_RUN] modify_order kite_order_id=%s "
-                "variety=%s price=%s qty=%s",
-                order_id,
-                variety,
-                price,
-                quantity,
-            )
-            return order_id
         if order_type is not None and order_type != "LIMIT":
             raise ValueError(
                 f"modify_order only supports LIMIT orders; "
                 f"got order_type={order_type!r}.",
             )
-        params: dict[str, Any] = {}
+        rounded_price: float | None = None
         if price is not None:
-            params["price"] = price
+            tick = get_tick_size(
+                kc=self._kc,
+                redis_client=self._get_redis(),
+                symbol=tradingsymbol,
+            )
+            rounded_price = _round_to_tick(
+                price,
+                tick,
+                side=transaction_type,
+                is_stop=False,
+            )
+        if self._dry_run:
+            _logger.info(
+                "[DRY_RUN] modify_order kite_order_id=%s "
+                "variety=%s price=%s (raw=%s) qty=%s",
+                order_id,
+                variety,
+                rounded_price,
+                price,
+                quantity,
+            )
+            return order_id
+        params: dict[str, Any] = {}
+        if rounded_price is not None:
+            params["price"] = rounded_price
         if quantity is not None:
             params["quantity"] = quantity
         if order_type is not None:
@@ -1812,9 +1856,11 @@ class KiteClient:
             **params,
         )
         _logger.info(
-            "modify_order: kite_order_id=%s variety=%s " "price=%s qty=%s",
+            "modify_order: kite_order_id=%s variety=%s "
+            "price=%s (raw=%s) qty=%s",
             order_id,
             variety,
+            rounded_price,
             price,
             quantity,
         )
@@ -1890,10 +1936,9 @@ class KiteClient:
             last_price if last_price is not None
             else trigger_price * 1.01
         )
-        kite_last_price = _round_to_tick(
-            raw_last, tick,
-            side=transaction_type, is_stop=False,
-        )
+        # LTP sentinel Kite requires to differ from trigger_price —
+        # floor-to-tick is direction-neutral (not an order price).
+        kite_last_price = _floor_to_tick(raw_last, tick)
         if self._dry_run:
             _logger.info(
                 "[DRY_RUN] place_gtt symbol=%s trigger=%.4f "
