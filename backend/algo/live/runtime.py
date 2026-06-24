@@ -203,6 +203,23 @@ def _parse_fill_date(*candidates: Any) -> date | None:
     return None
 
 
+def _to_int(v: Any) -> int:
+    """Coerce a broker numeric field to int; 0 on garbage/None."""
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _as_ns(tradingsymbol: str) -> str:
+    """Kite bare tradingsymbol -> internal ``.NS`` ticker form.
+
+    Leaves a symbol that already carries an exchange suffix
+    (``"RELIANCE.NS"``) untouched; appends ``.NS`` otherwise.
+    """
+    return tradingsymbol if "." in tradingsymbol else f"{tradingsymbol}.NS"
+
+
 class LiveNotEnabledError(RuntimeError):
     """Raised when live trading is not enabled for (user, strategy)."""
 
@@ -1343,11 +1360,23 @@ class LiveRuntime:
     def _on_sell_fill_trailing(self, ticker: str) -> None:
         """Clear trailing state when any SELL fill is confirmed.
 
-        Called from the postback handler on COMPLETE SELL. Safe to
-        call even when no trailing state exists for the ticker.
+        Called from the postback handler on COMPLETE SELL — the
+        position is being CLOSED, so its protective GTT and per-ticker
+        lock must go too:
+          * Cancel the live Kite GTT (``delete_gtt`` no-ops safely if
+            this SELL *was* the GTT firing — calling it on an
+            already-triggered id is harmless).
+          * Drop the per-ticker lock + sync it to Redis so the cap
+            frees the slot.
+
+        Safe to call even when no trailing state exists for the
+        ticker. A GTT-cancel failure must NOT abort the rest of the
+        cleanup (best-effort, logged with ``exc_info``).
         """
         if not self._trailing_enabled:
             return
+        # Capture the gtt_id BEFORE popping so we can cancel it.
+        gtt_id = self._gtt_ids.get(ticker)
         self._trailing_managers.pop(ticker, None)
         self._gtt_ids.pop(ticker, None)
         self._ws_hwm.pop(ticker, None)
@@ -1359,8 +1388,20 @@ class LiveRuntime:
             )
         except Exception:  # noqa: BLE001
             pass
+        if gtt_id:
+            try:
+                self._kite.delete_gtt(gtt_id)
+            except Exception as exc:
+                _logger.warning(
+                    "trailing: delete_gtt %s failed on SELL close "
+                    "for %s: %s",
+                    gtt_id, ticker, exc, exc_info=True,
+                )
+        self._ticker_locked.discard(ticker)
+        self._sync_ticker_lock_to_redis()
         _logger.info(
-            "trailing: state cleared for %s after SELL fill", ticker,
+            "trailing: state cleared for %s after SELL fill "
+            "(gtt_id=%s, lock released)", ticker, gtt_id,
         )
 
     def on_buy_fill_trailing(
@@ -1961,6 +2002,185 @@ class LiveRuntime:
                 mgr.state.phase.value, source, self._dry_run,
             )
 
+    def _broker_really_held(self) -> set[str] | None:
+        """Tickers with ANY real exposure across ALL broker sources.
+
+        The load-bearing safety set for close-time / hydration GTT
+        cleanup. A ticker is HELD if it shows exposure in EITHER:
+          * ``positions().net`` row with ``quantity != 0`` — this
+            catches CNC buys made TODAY (they live in net, NOT in
+            holdings until T+1), the exact bug a holdings()-only
+            check caused earlier.
+          * ``holdings`` row with ``quantity > 0 OR t1_quantity > 0``
+            — settled or T+1-pending delivery equity.
+
+        Returns the union as internal ``.NS`` tickers, or ``None`` if
+        EITHER broker read raises / is unavailable. ``None`` means
+        UNKNOWN -> the caller MUST clean nothing (fail safe). Reuses
+        the ``kite._kc.positions()/holdings()`` access pattern from
+        ``position_hydration.hydrate``.
+        """
+        kc = getattr(self._kite, "_kc", None)
+        if kc is None:
+            _logger.warning(
+                "cleanup: kite._kc unavailable — held set UNKNOWN",
+            )
+            return None
+        try:
+            raw_pos = kc.positions()
+            raw_hold = kc.holdings()
+        except Exception as exc:
+            _logger.warning(
+                "cleanup: broker positions/holdings read failed — "
+                "held set UNKNOWN (%s)", exc, exc_info=True,
+            )
+            return None
+
+        held: set[str] = set()
+
+        net = (
+            raw_pos.get("net", [])
+            if isinstance(raw_pos, dict) else []
+        )
+        for r in net:
+            qty = _to_int(r.get("quantity"))
+            if qty == 0:
+                continue
+            sym = (r.get("tradingsymbol") or "").strip()
+            if sym:
+                held.add(_as_ns(sym))
+
+        rows = raw_hold if isinstance(raw_hold, list) else []
+        for r in rows:
+            settled = _to_int(r.get("quantity"))
+            t1 = _to_int(r.get("t1_quantity"))
+            if settled <= 0 and t1 <= 0:
+                continue
+            sym = (r.get("tradingsymbol") or "").strip()
+            if sym:
+                held.add(_as_ns(sym))
+
+        return held
+
+    async def _cleanup_stale_protection(self) -> None:
+        """Cancel GTTs + clear lock/Redis for PROVABLY-GONE tickers.
+
+        Called once in ``run()`` right AFTER
+        ``_ensure_gtts_for_hydrated_positions``. Reconciles leftover
+        protection (a lock / trailing manager / live Kite GTT) for
+        tickers that NO LONGER have any real position — e.g. a SELL
+        that filled while the prior runtime was down, so close-time
+        cleanup never ran.
+
+        GUARDRAIL (load-bearing, real-money): a ticker is cleaned ONLY
+        if ``_broker_really_held`` proves it gone across ALL broker
+        sources. If the broker read is UNKNOWN (``None``) we clean
+        NOTHING and emit ``cleanup_skipped_broker_unreadable``.
+        """
+        if not self._trailing_enabled:
+            return
+
+        really_held = self._broker_really_held()
+        if really_held is None:
+            _logger.warning(
+                "cleanup: broker unreadable — skipping stale "
+                "protection cleanup (clean nothing, fail safe)",
+            )
+            self._events.append(
+                event_row(
+                    session_id=self._session_id,
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    mode="live",
+                    type_="cleanup_skipped_broker_unreadable",
+                    payload={
+                        "candidates": sorted(
+                            self._ticker_locked
+                            | set(self._trailing_managers)
+                        ),
+                    },
+                )
+            )
+            return
+
+        # Active Kite GTT book: bare symbol -> gtt_id. Best-effort;
+        # only used to find a GTT to cancel, NOT as a safety gate.
+        gtt_by_bare: dict[str, int] = {}
+        try:
+            all_gtts = await asyncio.to_thread(self._kite.get_gtts)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "cleanup: get_gtts failed: %s", exc, exc_info=True,
+            )
+            all_gtts = []
+        for _g in all_gtts or []:
+            if _g.get("status") != "active":
+                continue
+            _cond = _g.get("condition") or {}
+            _sym = (_cond.get("tradingsymbol") or "").upper()
+            _gid = _g.get("id") or 0
+            if _sym and _gid:
+                gtt_by_bare[_sym] = int(_gid)
+
+        candidates = (
+            set(self._ticker_locked)
+            | set(self._trailing_managers)
+            | {_as_ns(s) for s in gtt_by_bare}
+        )
+
+        lock_changed = False
+        for ticker in sorted(candidates):
+            if ticker in really_held:
+                continue
+            bare = (
+                ticker.removesuffix(".NS").removesuffix(".BO").upper()
+            )
+            gtt_id = self._gtt_ids.get(ticker) or gtt_by_bare.get(bare)
+            if gtt_id:
+                try:
+                    self._kite.delete_gtt(gtt_id)
+                except Exception as exc:
+                    _logger.warning(
+                        "cleanup: delete_gtt %s failed for %s: %s",
+                        gtt_id, ticker, exc, exc_info=True,
+                    )
+            try:
+                from backend.cache import get_cache
+                get_cache().invalidate_exact(
+                    f"trailing:{self._user_id}:"
+                    f"{self._strategy.id}:{ticker}"
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            self._trailing_managers.pop(ticker, None)
+            self._gtt_ids.pop(ticker, None)
+            self._ws_hwm.pop(ticker, None)
+            if ticker in self._ticker_locked:
+                self._ticker_locked.discard(ticker)
+                lock_changed = True
+            _logger.info(
+                "cleanup: stale protection cleared for %s "
+                "(provably gone; cancelled_gtt_id=%s)",
+                ticker, gtt_id,
+            )
+            self._events.append(
+                event_row(
+                    session_id=self._session_id,
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    mode="live",
+                    type_="stale_protection_cleaned",
+                    payload={
+                        "ticker": ticker,
+                        "cancelled_gtt_id": gtt_id,
+                        "reason": "provably_gone_no_broker_position",
+                    },
+                )
+            )
+
+        if lock_changed:
+            self._sync_ticker_lock_to_redis()
+
     async def run(self, source: TickSource) -> int:
         """Drain the tick source. Returns fill count."""
         from backend.algo.stream.sources import ReplayTickSource
@@ -2044,6 +2264,7 @@ class LiveRuntime:
         await self._recover_unhydrated_positions()
         self._load_trailing_state_from_redis()
         await self._ensure_gtts_for_hydrated_positions()
+        await self._cleanup_stale_protection()
         if self._ticker_locked:
             _logger.info(
                 "LiveRuntime: ticker locks restored: %s",
