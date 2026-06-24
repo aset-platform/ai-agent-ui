@@ -58,6 +58,7 @@ from backend.algo.backtest.time_stop_monitor import (
 from backend.algo.backtest.trailing_stop_manager import (
     TrailingStopManager,
 )
+from backend.algo.features.primitives import wilder_atr as _wilder_atr
 from backend.algo.broker.freeze_cache import get_tick_size
 from backend.algo.broker.kite_client import KiteClient
 
@@ -73,6 +74,7 @@ from backend.algo.features.per_bar import (
 from backend.algo.live import slippage as _slippage
 from backend.algo.live.order_timeout import _OrderTimeoutWatcher
 from backend.algo.live.budget import (
+    fetch_kite_available_cash,
     reserve as budget_reserve,
 )
 from backend.algo.live.budget import (
@@ -1178,6 +1180,7 @@ class LiveRuntime:
                         trigger_price=stop,
                         limit_price=limit,
                         qty=pos.qty,
+                        last_price=hwm_price,
                     )
                     self._gtt_ids[ticker] = new_id
                     self._save_trailing_state(ticker, mgr, new_id)
@@ -1294,11 +1297,22 @@ class LiveRuntime:
         )
         atr = float(_atr_raw.get("atr_14", 0.0))
         if atr <= 0:
+            _bars = self._bars_by_ticker.get(ticker, [])
+            if len(_bars) >= 2:
+                _atr_series = _wilder_atr(_bars, 14)
+                atr = float(
+                    _atr_series[-1]
+                    if _atr_series and _atr_series[-1] is not None
+                    else 0.0
+                )
+        if atr <= 0:
+            atr = fill_price * 0.02
             _logger.warning(
-                "trailing: atr_14 missing for %s — GTT not placed",
-                ticker,
+                "trailing: atr_14 missing for %s — "
+                "using 2%% price proxy atr=%.4f; "
+                "phase-3 trail may be imprecise",
+                ticker, atr,
             )
-            return
         mgr = TrailingStopManager(
             self._strategy.risk.per_trade,
             entry_price=fill_price,
@@ -1313,6 +1327,7 @@ class LiveRuntime:
                 trigger_price=stop,
                 limit_price=limit,
                 qty=qty,
+                last_price=fill_price,
             )
         except Exception as exc:
             _logger.error(
@@ -1548,12 +1563,25 @@ class LiveRuntime:
             )
             atr = float(_atr_raw.get("atr_14", 0.0))
             if atr <= 0:
+                # Fallback: compute Wilder ATR(14) from preloaded daily bars.
+                _bars = self._bars_by_ticker.get(ticker, [])
+                if len(_bars) >= 2:
+                    _atr_series = _wilder_atr(_bars, 14)
+                    atr = float(
+                        _atr_series[-1]
+                        if _atr_series and _atr_series[-1] is not None
+                        else 0.0
+                    )
+            if atr <= 0:
+                # Last resort: 2% of entry price (phase-0 GTT still placed;
+                # phase-3 ATR trail will be imprecise but better than no GTT).
+                atr = avg_price * 0.02
                 _logger.warning(
                     "ensure_gtts: atr_14 missing for %s — "
-                    "skipping GTT placement",
-                    ticker,
+                    "using 2%% price proxy atr=%.4f; "
+                    "phase-3 trail may be imprecise",
+                    ticker, atr,
                 )
-                continue
 
             # Build manager at entry; advance phase via LTP if known.
             mgr = TrailingStopManager(
@@ -1603,13 +1631,18 @@ class LiveRuntime:
                 continue
 
             # No GTT on Kite — place a fresh one.
+            # ltp captured in closure so lambda binds the right value
+            # per iteration (ticker-level variable, not loop-level).
+            _ltp_snap = ltp
             try:
                 gtt_id = await asyncio.to_thread(
-                    self._kite.place_gtt,
-                    ticker,
-                    stop,
-                    limit,
-                    qty,
+                    lambda: self._kite.place_gtt(
+                        ticker=ticker,
+                        trigger_price=stop,
+                        limit_price=limit,
+                        qty=qty,
+                        last_price=_ltp_snap,
+                    )
                 )
             except Exception as exc:
                 _logger.error(
@@ -2583,6 +2616,76 @@ class LiveRuntime:
                 },
             )
         )
+
+        # Kite balance cap — BUY only. Reduce qty to what Zerodha
+        # can actually fill given the real available cash.
+        # fetch_kite_available_cash is Redis-cached (5s TTL) so
+        # this is cheap even when many tickers signal on the same bar.
+        # Fail-open: API errors return Decimal("inf") → original qty.
+        if signal.side == "BUY":
+            available_inr = await fetch_kite_available_cash(self._user_id)
+            affordable_qty = (
+                int(available_inr // last_price)
+                if last_price and last_price > 0
+                else 0
+            )
+            if affordable_qty < 1:
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="signal_rejected",
+                        payload={
+                            **({"dry_run": True} if self._dry_run else {}),
+                            "reason": "insufficient_balance",
+                            "ticker": signal.ticker,
+                            "side": signal.side,
+                            "qty": signal.qty,
+                            "available_inr": str(available_inr),
+                            "last_price": str(last_price),
+                        },
+                    )
+                )
+                _logger.warning(
+                    "live balance cap: %s rejected — available ₹%s < price ₹%s",
+                    signal.ticker,
+                    available_inr,
+                    last_price,
+                )
+                return 0
+            elif affordable_qty < signal.qty:
+                old_qty = signal.qty
+                signal = signal.model_copy(update={"qty": affordable_qty})
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="signal_adjusted",
+                        payload={
+                            **({"dry_run": True} if self._dry_run else {}),
+                            "ticker": signal.ticker,
+                            "side": signal.side,
+                            "old_qty": old_qty,
+                            "new_qty": affordable_qty,
+                            "available_inr": str(available_inr),
+                            "last_price": str(last_price),
+                            "reason": "insufficient_kite_balance",
+                        },
+                    )
+                )
+                _logger.info(
+                    "live balance cap: %s qty reduced %d → %d "
+                    "(available ₹%s, price ₹%s)",
+                    signal.ticker,
+                    old_qty,
+                    affordable_qty,
+                    available_inr,
+                    last_price,
+                )
 
         # Fresh caps read — used for max_inr / max_orders_per_day
         # and the allow-list; the daily-counter columns on the row
