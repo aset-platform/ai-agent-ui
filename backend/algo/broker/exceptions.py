@@ -23,12 +23,26 @@ class LtpStaleError(Exception):
 
 class DuplicateOrderError(Exception):
     """Raised by ``KiteClient.place_order`` when the same
-    ``(user, strategy, symbol, side, qty, minute_bucket)`` tuple
-    is re-submitted inside the same 60-second window.
+    ``internal_order_id`` is re-submitted while its dedup SETNX key
+    is still live in Redis (TTL = ``ALGO_DEDUP_TTL_S``, default 60 s).
 
     Caught by a Redis SETNX guard BEFORE the SDK call so duplicate
     Kite submissions never happen. Runtime catches this and surfaces
     it as an ``order_duplicate_blocked`` rejection event.
+    """
+
+
+class DedupUnavailableError(Exception):
+    """Raised by ``KiteClient.place_order`` when the Redis dedup gate
+    cannot be acquired (Redis error) AND the order notional
+    (``qty × price``) meets or exceeds ``ALGO_DEDUP_FAILCLOSED_INR``
+    (default 100 000 INR).
+
+    For large-notional orders the dedup backstop is a critical safety
+    layer; silently degrading to fail-open when Redis is down
+    disengages it at exactly the moment it is most needed. Below the
+    threshold the old fail-open behaviour is preserved (warning only)
+    because the financial impact of a rare duplicate is bounded.
     """
 
 

@@ -29,6 +29,7 @@ from kiteconnect import KiteConnect
 
 from backend.algo.broker.exceptions import (
     BrokerResponseError,
+    DedupUnavailableError,
     DuplicateOrderError,
     FreezeChunkExceedsDailyCapError,
     LtpStaleError,
@@ -58,6 +59,11 @@ _DEFAULT_MAX_LTP_AGE_S = 999999
 # PR #4 — pre-submit dedup window. 0 disables the gate entirely.
 _DEFAULT_DEDUP_TTL_S = 60
 
+# Task 1.4 — fail-closed threshold. On Redis error, orders with
+# notional >= this value (INR) are BLOCKED (raise DedupUnavailableError).
+# Below threshold the legacy fail-open behaviour is kept with a warning.
+_DEFAULT_DEDUP_FAILCLOSED_INR = 100_000
+
 
 def _read_dedup_ttl_s() -> int:
     """Read ALGO_DEDUP_TTL_S env var; default 60s. 0 disables."""
@@ -73,6 +79,31 @@ def _read_dedup_ttl_s() -> int:
             _DEFAULT_DEDUP_TTL_S,
         )
         return _DEFAULT_DEDUP_TTL_S
+
+
+def _read_dedup_failclosed_inr() -> int:
+    """Read ALGO_DEDUP_FAILCLOSED_INR env var; default 100 000.
+
+    Orders with notional >= this value are BLOCKED (raise
+    ``DedupUnavailableError``) when the Redis dedup gate is
+    unreachable. Orders below the threshold continue to fail-open
+    with a warning (legacy behaviour).
+    """
+    raw = os.environ.get(
+        "ALGO_DEDUP_FAILCLOSED_INR", "",
+    ).strip()
+    if not raw:
+        return _DEFAULT_DEDUP_FAILCLOSED_INR
+    try:
+        return int(raw)
+    except ValueError:
+        _logger.warning(
+            "ALGO_DEDUP_FAILCLOSED_INR=%r is not an int "
+            "— using default %d",
+            raw,
+            _DEFAULT_DEDUP_FAILCLOSED_INR,
+        )
+        return _DEFAULT_DEDUP_FAILCLOSED_INR
 
 
 def _read_max_ltp_age_s() -> int:
@@ -1042,16 +1073,18 @@ class KiteClient:
                 f"Only 'regular' is allowed.",
             )
 
-        # ── Pre-submit dedup gate (PR #4 §3.4) ─────────────────
-        # Same (user, strategy, symbol, side, qty) inside the same
-        # minute → block. Cross-minute repeats are intentional. Dry-
-        # run already short-circuited above so we never see it here.
+        # ── Pre-submit dedup gate (PR #4 §3.4, hardened Task 1.4) ──
+        # Keyed on internal_order_id so a qty-recompute retry of the
+        # SAME logical order collides correctly. Fail-closed when
+        # Redis is down for orders >= ALGO_DEDUP_FAILCLOSED_INR INR.
+        # Dry-run already short-circuited above so we never see it.
         self._dedup_guard_or_raise(
             user_id=user_id,
             strategy_id=strategy_id,
             symbol=tradingsymbol,
             side=transaction_type,
             qty=quantity,
+            price=price,
             events_sink=events_sink,
             session_id=session_id,
             internal_order_id=internal_order_id,
@@ -1357,26 +1390,72 @@ class KiteClient:
         symbol: str,
         side: str,
         qty: int,
+        price: float,
         events_sink: Callable[[dict], None] | None,
         session_id: Any,
         internal_order_id: str,
     ) -> None:
-        """Acquire the SETNX dedup slot for this submission tuple.
+        """Acquire the SETNX dedup slot for this logical order.
 
-        Same-minute duplicate → emit ``order_duplicate_blocked`` +
-        raise ``DuplicateOrderError``. Redis unreachable or
-        ``ALGO_DEDUP_TTL_S=0`` → no-op (graceful degradation).
+        The Redis key is derived from ``internal_order_id`` (the
+        caller-generated UUID) so the dedup guard identifies the
+        LOGICAL order, not the ``(ticker, side, qty)`` tuple. This
+        means a retry that recomputes a slightly different qty still
+        collides with the first attempt (same id → same key →
+        SETNX returns False → blocked).
+
+        Duplicate → emit ``order_duplicate_blocked`` + raise
+        ``DuplicateOrderError``.
+
+        Redis error handling (fail-closed for large notional):
+        - notional = qty × price. If notional >=
+          ``ALGO_DEDUP_FAILCLOSED_INR`` (default 100 000 INR) the
+          order is BLOCKED via ``DedupUnavailableError`` because
+          the dedup backstop is a critical safety layer that should
+          not silently disengage on infrastructure failure for
+          large-money orders.
+        - Below the threshold the legacy fail-open behaviour is
+          preserved (log warning, let the order through) because the
+          financial impact of a rare duplicate is bounded.
+
+        ``ALGO_DEDUP_TTL_S=0`` → gate disabled entirely (no-op).
         """
         ttl_s = _read_dedup_ttl_s()
         if ttl_s <= 0:
             return
         redis_client = self._get_redis()
+        notional = qty * price
+        failclosed_inr = _read_dedup_failclosed_inr()
         if redis_client is None:
+            if notional >= failclosed_inr:
+                _logger.error(
+                    "place_order BLOCKED: dedup gate unavailable "
+                    "(no Redis) and notional=%.2f >= "
+                    "failclosed_inr=%d — blocking to protect "
+                    "against duplicate real-money order. "
+                    "symbol=%s side=%s qty=%d "
+                    "internal_order_id=%s",
+                    notional,
+                    failclosed_inr,
+                    symbol,
+                    side,
+                    qty,
+                    internal_order_id,
+                )
+                raise DedupUnavailableError(
+                    f"Redis dedup gate unavailable; order blocked "
+                    f"(fail-closed) because notional={notional:.2f} "
+                    f">= {failclosed_inr} INR. "
+                    f"internal_order_id={internal_order_id!r}",
+                )
             _logger.warning(
                 "place_order: dedup gate skipped — Redis "
-                "unreachable. symbol=%s qty=%d",
+                "unreachable. symbol=%s qty=%d notional=%.2f "
+                "< failclosed_inr=%d (fail-open)",
                 symbol,
                 qty,
+                notional,
+                failclosed_inr,
             )
             return
         dedup_key = build_dedup_key(
@@ -1384,7 +1463,7 @@ class KiteClient:
             strategy_id=strategy_id,
             symbol=symbol,
             side=side,
-            qty=qty,
+            internal_order_id=internal_order_id,
         )
         try:
             acquired = redis_client.set(
@@ -1394,11 +1473,38 @@ class KiteClient:
                 ex=ttl_s,
             )
         except Exception as exc:  # noqa: BLE001
+            if notional >= failclosed_inr:
+                _logger.error(
+                    "place_order BLOCKED: dedup SETNX raised "
+                    "err=%s and notional=%.2f >= "
+                    "failclosed_inr=%d — blocking to protect "
+                    "against duplicate real-money order. "
+                    "symbol=%s side=%s qty=%d "
+                    "internal_order_id=%s",
+                    exc,
+                    notional,
+                    failclosed_inr,
+                    symbol,
+                    side,
+                    qty,
+                    internal_order_id,
+                    exc_info=True,
+                )
+                raise DedupUnavailableError(
+                    f"Redis dedup SETNX failed (err={exc!r}); "
+                    f"order blocked (fail-closed) because "
+                    f"notional={notional:.2f} >= "
+                    f"{failclosed_inr} INR. "
+                    f"internal_order_id={internal_order_id!r}",
+                ) from exc
             _logger.warning(
-                "place_order: dedup SETNX failed key=%s err=%s — "
-                "allowing order through (fail-open by design)",
+                "place_order: dedup SETNX failed key=%s err=%s "
+                "notional=%.2f < failclosed_inr=%d — "
+                "allowing order through (fail-open)",
                 dedup_key,
                 exc,
+                notional,
+                failclosed_inr,
             )
             return
         if not acquired:

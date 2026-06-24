@@ -173,15 +173,24 @@ class TestPreSubmitDedup:
     def test_within_minute_duplicate_blocked(
         self, kite_client, events_buffer,
     ):
-        """Same params inside the same minute → second call raises."""
+        """Same internal_order_id submitted twice → second call raises.
+
+        Task 1.4: dedup is now keyed on internal_order_id, not on
+        (symbol, side, qty, minute_bucket). Callers must pass the
+        SAME internal_order_id to trigger the duplicate guard.
+        """
+        from uuid import uuid4
         client, mock_kc = kite_client
         mock_kc.place_order.return_value = {"order_id": "K1"}
+        order_id = str(uuid4())
         # First call succeeds.
-        _call_place(client, events_buffer)
+        _call_place(client, events_buffer, internal_order_id=order_id)
         mock_kc.place_order.assert_called_once()
-        # Second call (same minute, same params) blocked.
+        # Second call with SAME internal_order_id → blocked.
         with pytest.raises(DuplicateOrderError):
-            _call_place(client, events_buffer)
+            _call_place(
+                client, events_buffer, internal_order_id=order_id,
+            )
         # SDK only called once total (no second submission).
         assert mock_kc.place_order.call_count == 1
         # order_duplicate_blocked event present.
@@ -195,24 +204,26 @@ class TestPreSubmitDedup:
         assert p["side"] == "BUY"
         assert p["qty"] == 8
 
-    def test_cross_minute_same_params_both_succeed(
+    def test_different_internal_order_ids_both_succeed(
         self, kite_client, events_buffer,
     ):
-        """Bumping the minute_bucket lets the second call through."""
+        """Two distinct internal_order_ids → both calls succeed.
+
+        Task 1.4: replacing the old cross-minute bucket test. The new
+        key scheme means different ids always produce different keys
+        regardless of timing.
+        """
+        from uuid import uuid4
         client, mock_kc = kite_client
         mock_kc.place_order.return_value = {"order_id": "K1"}
-        # First call at t0.
-        with patch(
-            "backend.algo.broker.redis_keys.time.time",
-            return_value=1_700_000_000.0,
-        ):
-            _call_place(client, events_buffer)
-        # Second call 70s later → different minute bucket.
-        with patch(
-            "backend.algo.broker.redis_keys.time.time",
-            return_value=1_700_000_070.0,
-        ):
-            _call_place(client, events_buffer)
+        _call_place(
+            client, events_buffer,
+            internal_order_id=str(uuid4()),
+        )
+        _call_place(
+            client, events_buffer,
+            internal_order_id=str(uuid4()),
+        )
         assert mock_kc.place_order.call_count == 2
 
     def test_dry_run_skips_dedup_entirely(self, fake_redis, events_buffer):
