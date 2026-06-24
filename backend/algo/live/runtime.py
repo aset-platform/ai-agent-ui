@@ -1626,52 +1626,82 @@ class LiveRuntime:
             )
 
     async def _ensure_gtts_for_hydrated_positions(self) -> None:
-        """Place (or re-register) GTTs for positions with no active manager.
+        """Verify every HELD position's GTT against the LIVE Kite book.
 
         Called once in ``run()`` after ``_load_trailing_state_from_redis()``.
-        Covers two scenarios:
-          1. Fresh live promotion — no Redis state, position existed before
-             this strategy run (e.g. a holding bought outside the algo or
-             by a prior run whose Redis TTL expired).
-          2. GTT was deleted on Kite (manual removal, policy change, etc.) —
-             Redis has state but the GTT id is gone; ratchet would place a
-             replacement anyway, but this catches it at startup.
+        Kite's active GTT book is the SOURCE OF TRUTH — a Redis-restored
+        ``gtt_id`` is NOT proof a GTT exists. This is a real-money safety
+        check: a held position whose GTT is dead on Kite would otherwise be
+        silently believed-protected.
 
-        For every position not already in ``_trailing_managers``:
-          - Checks Kite for an existing active GTT for that ticker.
-            If found, registers it so the ratchet loop can manage it.
-          - Otherwise places a fresh GTT using entry=avg_price, ATR from
-            factor cache, phase advanced by a single on_price_update(ltp).
-          - Source tag ``hydrated_algo`` / ``hydrated_manual`` is logged
-            and emitted in the ``gtt_placed`` event.
+        For every held position (``open_positions()`` with ``qty > 0``),
+        regardless of whether the ticker is already in
+        ``_trailing_managers``:
+          - If Kite has an active GTT for the bare symbol → the position IS
+            protected. Register/correct the manager to the REAL Kite
+            ``gtt_id`` (trust Kite over Redis); never place a duplicate.
+          - If Kite has NO active GTT → the position is UNPROTECTED (even if
+            Redis had a manager/id). Place a fresh GTT (entry=avg_price, ATR
+            from factor cache / Wilder fallback / 2% proxy) and register it.
+            A zero/negative ``avg_price`` is refused (Task 3.2 preserved).
+
+        Kite READ FAILURE is NOT "no GTTs": if ``get_gtts`` raises we log a
+        loud WARNING, emit ``gtt_verification_failed``, and return early
+        leaving existing managers intact — placing on an unreadable book
+        would create duplicate GTTs.
+
+        Source tag ``hydrated_algo`` / ``hydrated_manual`` is logged and
+        emitted in the ``gtt_placed`` event.
         """
         if not self._trailing_enabled:
             return
 
         open_pos = self._positions.open_positions()
-        unmanaged = {
+        held = {
             t: p
             for t, p in open_pos.items()
-            if t not in self._trailing_managers and p.qty > 0
+            if p.qty > 0
         }
-        if not unmanaged:
+        if not held:
             return
 
         _logger.info(
-            "ensure_gtts: %d unmanaged position(s): %s",
-            len(unmanaged), list(unmanaged),
+            "ensure_gtts: verifying %d held position(s) vs Kite: %s",
+            len(held), list(held),
         )
 
-        # Batch-fetch active GTTs from Kite once.
+        # Batch-fetch active GTTs from Kite once. A READ FAILURE must NOT
+        # masquerade as "no GTTs" (that would place duplicates). Fail
+        # VISIBLE: warn loudly, emit an event, and bail with managers
+        # intact.
         try:
             all_gtts: list[dict] = await asyncio.to_thread(
                 self._kite.get_gtts
             )
         except Exception as exc:
             _logger.warning(
-                "ensure_gtts: get_gtts failed: %s", exc
+                "ensure_gtts: get_gtts FAILED — cannot verify held "
+                "positions against Kite; leaving %d manager(s) intact, "
+                "placing nothing (avoids duplicate GTTs): %s",
+                len(self._trailing_managers), exc, exc_info=True,
             )
-            all_gtts = []
+            self._events.append(
+                event_row(
+                    session_id=self._session_id,
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    mode="live",
+                    type_="gtt_verification_failed",
+                    payload={
+                        "error": str(exc),
+                        "held_tickers": list(held),
+                        "managers_preserved": list(
+                            self._trailing_managers
+                        ),
+                    },
+                )
+            )
+            return
 
         # bare_symbol (no suffix) → (gtt_id, trigger_price)
         kite_gtt_map: dict[str, tuple[int, float]] = {}
@@ -1712,7 +1742,7 @@ class LiveRuntime:
 
         _today = datetime.now(timezone.utc).date()
 
-        for ticker, pos in unmanaged.items():
+        for ticker, pos in held.items():
             bare = (
                 ticker.removesuffix(".NS").removesuffix(".BO").upper()
             )
@@ -1724,6 +1754,80 @@ class LiveRuntime:
                 else "hydrated_manual"
             )
 
+            # ── Kite is SOURCE OF TRUTH ──────────────────────────────
+            # If an active GTT exists on Kite for this held position it
+            # IS protected. Register/correct the manager to the REAL
+            # Kite gtt_id (trust Kite over a possibly-stale Redis id)
+            # and place NOTHING — no duplicate GTTs. Reuse the
+            # Redis-restored manager (phase/hwm) when present; else
+            # build one at entry so the ratchet loop can manage it.
+            existing = kite_gtt_map.get(bare)
+            if existing:
+                _existing_gtt_id, _existing_stop = existing
+                mgr = self._trailing_managers.get(ticker)
+                if mgr is None:
+                    if avg_price <= 0:
+                        # Can't build a manager off a ₹0 entry, but the
+                        # position IS protected on Kite — record the id
+                        # so the ratchet loop sees it; skip manager.
+                        self._gtt_ids[ticker] = _existing_gtt_id
+                        _logger.warning(
+                            "ensure_gtts: %s protected by Kite GTT %d "
+                            "but avg_price=%.4f — registered gtt_id "
+                            "without a manager (manual review).",
+                            ticker, _existing_gtt_id, avg_price,
+                        )
+                        continue
+                    mgr = TrailingStopManager(
+                        self._strategy.risk.per_trade,
+                        entry_price=avg_price,
+                        atr=avg_price * 0.02,
+                        ticker=ticker,
+                    )
+                    _ltp = self._ws_hwm.get(ticker, avg_price)
+                    if _ltp > avg_price:
+                        mgr.on_price_update(_ltp)
+                _prev_id = self._gtt_ids.get(ticker)
+                self._trailing_managers[ticker] = mgr
+                self._gtt_ids[ticker] = _existing_gtt_id
+                self._ws_hwm.setdefault(ticker, avg_price)
+                self._save_trailing_state(
+                    ticker, mgr, _existing_gtt_id,
+                )
+                if _prev_id is not None and _prev_id != _existing_gtt_id:
+                    _logger.warning(
+                        "ensure_gtts: %s gtt_id corrected %d -> %d "
+                        "(Redis was stale; Kite is truth)",
+                        ticker, _prev_id, _existing_gtt_id,
+                    )
+                _logger.info(
+                    "ensure_gtts: %s protected by live Kite GTT %d "
+                    "kite_stop=%.4f phase=%d source=%s — no duplicate",
+                    ticker, _existing_gtt_id, _existing_stop,
+                    mgr.state.phase.value, source,
+                )
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="trailing_stop_recovered",
+                        payload={
+                            "ticker": ticker,
+                            "phase": mgr.state.phase.value,
+                            "hwm": mgr.state.hwm,
+                            "current_stop": mgr.current_stop,
+                            "gtt_id": _existing_gtt_id,
+                            "source": source,
+                        },
+                    )
+                )
+                continue
+
+            # ── No active Kite GTT — position is UNPROTECTED ─────────
+            # Place a fresh protective GTT (even if Redis had a manager
+            # whose gtt_id is now dead on Kite).
             # REFUSE to place a GTT off a missing/zero entry price.
             # A ₹0 avg_price yields a ₹0 trigger/limit — a garbage
             # protective stop that would either never fire or fire
@@ -1804,39 +1908,6 @@ class LiveRuntime:
 
             stop = mgr.current_stop
             limit = stop * (1.0 - self._gtt_limit_headroom_pct)
-
-            # If an active GTT already exists on Kite, register it.
-            existing = kite_gtt_map.get(bare)
-            if existing:
-                _existing_gtt_id, _existing_stop = existing
-                self._trailing_managers[ticker] = mgr
-                self._gtt_ids[ticker] = _existing_gtt_id
-                self._ws_hwm.setdefault(ticker, avg_price)
-                self._save_trailing_state(ticker, mgr, _existing_gtt_id)
-                _logger.info(
-                    "ensure_gtts: registered existing GTT %d for %s "
-                    "kite_stop=%.4f our_stop=%.4f phase=%d source=%s",
-                    _existing_gtt_id, ticker, _existing_stop,
-                    stop, mgr.state.phase.value, source,
-                )
-                self._events.append(
-                    event_row(
-                        session_id=self._session_id,
-                        user_id=self._user_id,
-                        strategy_id=self._strategy.id,
-                        mode="live",
-                        type_="trailing_stop_recovered",
-                        payload={
-                            "ticker": ticker,
-                            "phase": mgr.state.phase.value,
-                            "hwm": mgr.state.hwm,
-                            "current_stop": stop,
-                            "gtt_id": _existing_gtt_id,
-                            "source": source,
-                        },
-                    )
-                )
-                continue
 
             # No GTT on Kite — place a fresh one.
             # ltp captured in closure so lambda binds the right value
