@@ -21,6 +21,7 @@ import pytest
 from sqlalchemy import text
 
 from backend.algo.live.budget_reconciliation import (
+    _list_pending,
     _list_submitted_and_partial,
 )
 from backend.algo.live.budget_repo import BudgetRepo
@@ -666,6 +667,104 @@ async def test_list_active_excludes_terminal_backlog(user_id):
     )
     assert rid_filled not in mine, (
         "terminal FILLED reservation leaked via stale SUBMITTED row"
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_pending_excludes_terminal_backlog(user_id):
+    """Task 2.3c — RED before the latest-state-first rewrite of
+    ``_list_pending``.
+
+    ``_list_pending`` must return only reservations whose CURRENT
+    (latest) state is PENDING. The old ``WHERE state = 'PENDING'``
+    BEFORE ``DISTINCT ON`` matched a reservation via its stale
+    PENDING row even after it had transitioned to a terminal state,
+    causing ``reconcile_pending_timeouts`` to re-attempt the
+    transition and spam TerminalStateError tracebacks.
+
+    Three reservations:
+      - latest=PENDING                   → MUST be returned
+      - PENDING→TIMEOUT (2 rows present) → MUST NOT be returned
+      - PENDING→FILLED  (2 rows present) → MUST NOT be returned
+
+    FAILS against the filter-before-distinct query (terminal pair
+    leaks through via old PENDING rows); PASSES after the fix.
+    """
+    repo = BudgetRepo()
+    sid = uuid4()
+    rid_pending = uuid4()
+    rid_timeout = uuid4()
+    rid_filled = uuid4()
+    base = datetime.now(timezone.utc) - timedelta(minutes=10)
+
+    async with disposable_pg_session() as s:
+        # Latest = PENDING (single row — still active).
+        await _insert_event(
+            s,
+            rid=rid_pending,
+            uid=user_id,
+            sid=sid,
+            state=ReservationState.PENDING,
+            ticker="PND.NS",
+            transitioned_at=base,
+        )
+        # PENDING then TIMEOUT — latest is terminal.
+        await _insert_event(
+            s,
+            rid=rid_timeout,
+            uid=user_id,
+            sid=sid,
+            state=ReservationState.PENDING,
+            ticker="TMO.NS",
+            transitioned_at=base,
+        )
+        await _insert_event(
+            s,
+            rid=rid_timeout,
+            uid=user_id,
+            sid=sid,
+            state=ReservationState.TIMEOUT,
+            ticker="TMO.NS",
+            transitioned_at=base + timedelta(minutes=5),
+        )
+        # PENDING then FILLED — latest is terminal.
+        await _insert_event(
+            s,
+            rid=rid_filled,
+            uid=user_id,
+            sid=sid,
+            state=ReservationState.PENDING,
+            ticker="FIL.NS",
+            transitioned_at=base,
+        )
+        await _insert_event(
+            s,
+            rid=rid_filled,
+            uid=user_id,
+            sid=sid,
+            state=ReservationState.FILLED,
+            ticker="FIL.NS",
+            transitioned_at=base + timedelta(minutes=5),
+        )
+        await s.commit()
+
+    rows = await _list_pending()
+    mine = {
+        r.reservation_id: r
+        for r in rows
+        if r.reservation_id in {rid_pending, rid_timeout, rid_filled}
+    }
+
+    assert set(mine) == {rid_pending}, (
+        "expected only the PENDING reservation; got "
+        f"{sorted(str(k) for k in mine)}"
+    )
+    assert mine[rid_pending].state == ReservationState.PENDING
+    assert rid_timeout not in mine, (
+        "terminal TIMEOUT reservation leaked via stale PENDING row"
+    )
+    assert rid_filled not in mine, (
+        "terminal FILLED reservation leaked via stale PENDING row"
     )
 
 

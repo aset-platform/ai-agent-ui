@@ -39,19 +39,28 @@ SUBMITTED_HARD_TIMEOUT_S = 300
 
 
 async def _list_pending() -> list[BudgetReservation]:
-    """Pull reservations whose latest state is PENDING."""
+    """Pull reservations whose latest state is PENDING.
+
+    Computes the most-recent row per reservation_id first
+    (DISTINCT ON ordered by transitioned_at DESC, id DESC),
+    then filters — so a reservation that has since transitioned
+    to a terminal state (TIMEOUT, FILLED, …) is excluded even
+    though it has an older PENDING row in the ledger.
+    """
     async with disposable_pg_session() as session:
         result = await session.execute(
             text(
-                "SELECT DISTINCT ON (reservation_id) "
-                "  reservation_id, user_id, strategy_id, "
-                "  state, ticker, side, qty, reserved_inr, "
-                "  filled_qty, filled_inr, kite_order_id, "
-                "  transitioned_at, metadata, error_text "
-                "FROM algo.budget_reservations "
-                "WHERE state = 'PENDING' "
-                "ORDER BY reservation_id, "
-                "         transitioned_at DESC"
+                "SELECT * FROM ( "
+                "  SELECT DISTINCT ON (reservation_id) "
+                "    reservation_id, user_id, strategy_id, "
+                "    state, ticker, side, qty, reserved_inr, "
+                "    filled_qty, filled_inr, kite_order_id, "
+                "    transitioned_at, metadata, error_text "
+                "  FROM algo.budget_reservations "
+                "  ORDER BY reservation_id, "
+                "           transitioned_at DESC, id DESC "
+                ") latest "
+                "WHERE latest.state = 'PENDING'"
             ),
         )
         rows = result.mappings().all()
