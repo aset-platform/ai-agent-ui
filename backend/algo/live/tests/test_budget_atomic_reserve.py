@@ -13,6 +13,7 @@ shape as ``test_budget_repo.py``.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -20,7 +21,7 @@ import pytest
 from sqlalchemy import text
 
 from backend.algo.live.budget_repo import BudgetRepo
-from backend.algo.live.budget_types import ReservationState
+from backend.algo.live.budget_types import BudgetReservation, ReservationState
 from db.engine import disposable_pg_session
 
 
@@ -331,10 +332,6 @@ async def _insert_filled(
     metadata: dict | None = None,
 ) -> None:
     """Helper: insert a single FILLED reservation row."""
-    from datetime import datetime, timezone
-
-    from backend.algo.live.budget_types import BudgetReservation
-
     repo = BudgetRepo()
     await repo.insert_reservation_event(
         session,
@@ -437,9 +434,6 @@ async def test_partial_fill_overfill_does_not_reduce_active(
     """
     repo = BudgetRepo()
     sid = uuid4()
-    from datetime import datetime, timezone
-
-    from backend.algo.live.budget_types import BudgetReservation
 
     async with disposable_pg_session() as s:
         # Row 1: normal active BUY — ₹2 000 reserved, ₹0 filled.
@@ -517,3 +511,108 @@ async def test_single_open_buy_cost_unchanged(user_id):
         cost = await repo.sum_open_position_cost(s, user_id=user_id)
 
     assert cost == Decimal("7500")
+
+
+@pytest.mark.asyncio
+async def test_per_strategy_overfill_does_not_reduce_active(
+    user_id,
+):
+    """Task 2.4 — GREATEST floor on
+    sum_active_reservations_for_strategy.
+
+    When filled_inr slightly exceeds reserved_inr (slippage) on one
+    active row, that row must contribute 0 — not a negative — so the
+    overfill cannot drag the total below the other rows' contribution.
+
+    Setup (all belong to strategy sid_a):
+      Row 1 (SUBMITTED): reserved=₹3 000, filled=₹0    → contrib ₹3 000
+      Row 2 (PARTIAL):   reserved=₹1 000, filled=₹1 100 → contrib ₹0
+                                                (GREATEST floors it)
+    Expected total: ₹3 000 (not ₹2 900).
+
+    A second strategy sid_b has its own ₹5 000 SUBMITTED row and
+    must NOT affect sid_a's total.
+    """
+    repo = BudgetRepo()
+    sid_a = uuid4()
+    sid_b = uuid4()
+
+    async with disposable_pg_session() as s:
+        # sid_a — Row 1: normal active BUY, no fill yet.
+        await repo.insert_reservation_event(
+            s,
+            BudgetReservation(
+                reservation_id=uuid4(),
+                user_id=user_id,
+                strategy_id=sid_a,
+                state=ReservationState.SUBMITTED,
+                ticker="A.NS",
+                side="BUY",
+                qty=10,
+                reserved_inr=Decimal("3000"),
+                filled_qty=0,
+                filled_inr=Decimal("0"),
+                transitioned_at=datetime.now(timezone.utc),
+                metadata={"mode": "live"},
+            ),
+        )
+        # sid_a — Row 2: partial-fill with slippage overfill.
+        await repo.insert_reservation_event(
+            s,
+            BudgetReservation(
+                reservation_id=uuid4(),
+                user_id=user_id,
+                strategy_id=sid_a,
+                state=ReservationState.PARTIAL,
+                ticker="B.NS",
+                side="BUY",
+                qty=5,
+                reserved_inr=Decimal("1000"),
+                filled_qty=3,
+                filled_inr=Decimal("1100"),
+                transitioned_at=datetime.now(timezone.utc),
+                metadata={"mode": "live"},
+            ),
+        )
+        # sid_b — unrelated BUY that must not bleed into sid_a.
+        await repo.insert_reservation_event(
+            s,
+            BudgetReservation(
+                reservation_id=uuid4(),
+                user_id=user_id,
+                strategy_id=sid_b,
+                state=ReservationState.SUBMITTED,
+                ticker="C.NS",
+                side="BUY",
+                qty=20,
+                reserved_inr=Decimal("5000"),
+                filled_qty=0,
+                filled_inr=Decimal("0"),
+                transitioned_at=datetime.now(timezone.utc),
+                metadata={"mode": "live"},
+            ),
+        )
+        await s.commit()
+
+    async with disposable_pg_session() as s:
+        total_a = await repo.sum_active_reservations_for_strategy(
+            s,
+            user_id=user_id,
+            strategy_id=sid_a,
+        )
+        total_b = await repo.sum_active_reservations_for_strategy(
+            s,
+            user_id=user_id,
+            strategy_id=sid_b,
+        )
+
+    # Row 2 must floor at 0 — not drag total below ₹3 000.
+    assert total_a == Decimal("3000"), (
+        f"expected 3000, got {total_a} — "
+        "overfill row is producing a negative contribution "
+        "in sum_active_reservations_for_strategy"
+    )
+    # sid_b must be unaffected.
+    assert total_b == Decimal("5000"), (
+        f"expected 5000, got {total_b}"
+    )
