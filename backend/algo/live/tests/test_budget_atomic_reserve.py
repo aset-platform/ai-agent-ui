@@ -310,3 +310,210 @@ async def test_active_for_strategy_counts_only_that_strategy(
         )
     assert a_total == Decimal("50000")
     assert b_total == Decimal("30000")
+
+
+# ---------------------------------------------------------------------------
+# Task 2.4 — per-ticker cost basis (no global SELL netting)
+# ---------------------------------------------------------------------------
+
+
+async def _insert_filled(
+    session,
+    *,
+    uid,
+    sid,
+    ticker: str,
+    side: str,
+    qty: int,
+    reserved_inr: Decimal,
+    filled_qty: int,
+    filled_inr: Decimal,
+    metadata: dict | None = None,
+) -> None:
+    """Helper: insert a single FILLED reservation row."""
+    from datetime import datetime, timezone
+
+    from backend.algo.live.budget_types import BudgetReservation
+
+    repo = BudgetRepo()
+    await repo.insert_reservation_event(
+        session,
+        BudgetReservation(
+            reservation_id=uuid4(),
+            user_id=uid,
+            strategy_id=sid,
+            state=ReservationState.FILLED,
+            ticker=ticker,
+            side=side,
+            qty=qty,
+            reserved_inr=reserved_inr,
+            filled_qty=filled_qty,
+            filled_inr=filled_inr,
+            transitioned_at=datetime.now(timezone.utc),
+            metadata=metadata or {},
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_sell_proceeds_on_b_do_not_reduce_open_cost_of_a(
+    user_id,
+):
+    """Task 2.4 — cross-ticker netting bug (RED before fix).
+
+    User has:
+      - Ticker A: open BUY (filled 10 shares @ ₹1 000 each = ₹10 000)
+      - Ticker B: profitable round-trip — BUY ₹5 000, SELL ₹8 000
+
+    Before fix: global net = 10_000 + 5_000 − 8_000 = 7_000
+    (B's sell proceeds net against A's cost basis — WRONG).
+
+    After fix: per-ticker:
+      A: max(0, 10−0) × (10_000/10) = 10_000
+      B: max(0, 10−10) × avg = 0  (fully closed)
+    Total = 10_000.
+    """
+    repo = BudgetRepo()
+    sid = uuid4()
+
+    async with disposable_pg_session() as s:
+        # Ticker A: open BUY, not yet closed.
+        await _insert_filled(
+            s,
+            uid=user_id,
+            sid=sid,
+            ticker="A.NS",
+            side="BUY",
+            qty=10,
+            reserved_inr=Decimal("10000"),
+            filled_qty=10,
+            filled_inr=Decimal("10000"),
+        )
+        # Ticker B: BUY leg.
+        await _insert_filled(
+            s,
+            uid=user_id,
+            sid=sid,
+            ticker="B.NS",
+            side="BUY",
+            qty=10,
+            reserved_inr=Decimal("5000"),
+            filled_qty=10,
+            filled_inr=Decimal("5000"),
+        )
+        # Ticker B: SELL leg — profitable (8 000 > 5 000).
+        await _insert_filled(
+            s,
+            uid=user_id,
+            sid=sid,
+            ticker="B.NS",
+            side="SELL",
+            qty=10,
+            reserved_inr=Decimal("5000"),
+            filled_qty=10,
+            filled_inr=Decimal("8000"),
+        )
+        await s.commit()
+
+    async with disposable_pg_session() as s:
+        cost = await repo.sum_open_position_cost(s, user_id=user_id)
+
+    # Only A's open BUY should be counted; B is fully closed → 0.
+    assert cost == Decimal("10000"), (
+        f"expected 10000, got {cost} — "
+        "B's profitable SELL is netting against A's open position"
+    )
+
+
+@pytest.mark.asyncio
+async def test_partial_fill_overfill_does_not_reduce_active(
+    user_id,
+):
+    """Task 2.4 — GREATEST guard on sum_active_reservations.
+
+    When filled_inr slightly exceeds reserved_inr (e.g. slippage),
+    that single row must not produce a *negative* contribution that
+    reduces the total below the other rows' contribution.
+    """
+    repo = BudgetRepo()
+    sid = uuid4()
+    from datetime import datetime, timezone
+
+    from backend.algo.live.budget_types import BudgetReservation
+
+    async with disposable_pg_session() as s:
+        # Row 1: normal active BUY — ₹2 000 reserved, ₹0 filled.
+        await repo.insert_reservation_event(
+            s,
+            BudgetReservation(
+                reservation_id=uuid4(),
+                user_id=user_id,
+                strategy_id=sid,
+                state=ReservationState.SUBMITTED,
+                ticker="A.NS",
+                side="BUY",
+                qty=10,
+                reserved_inr=Decimal("2000"),
+                filled_qty=0,
+                filled_inr=Decimal("0"),
+                transitioned_at=datetime.now(timezone.utc),
+            ),
+        )
+        # Row 2: partial-fill where slippage caused filled_inr to
+        # exceed reserved_inr (₹1 000 reserved, ₹1 050 filled).
+        await repo.insert_reservation_event(
+            s,
+            BudgetReservation(
+                reservation_id=uuid4(),
+                user_id=user_id,
+                strategy_id=sid,
+                state=ReservationState.PARTIAL,
+                ticker="B.NS",
+                side="BUY",
+                qty=5,
+                reserved_inr=Decimal("1000"),
+                filled_qty=3,
+                filled_inr=Decimal("1050"),
+                transitioned_at=datetime.now(timezone.utc),
+            ),
+        )
+        await s.commit()
+
+    async with disposable_pg_session() as s:
+        total = await repo.sum_active_reservations(
+            s, user_id=user_id
+        )
+
+    # Row 2 should contribute GREATEST(1000−1050, 0) = 0.
+    # Total must be exactly ₹2 000 (Row 1), not ₹1 950.
+    assert total == Decimal("2000"), (
+        f"expected 2000, got {total} — "
+        "overfill row is producing a negative contribution"
+    )
+
+
+@pytest.mark.asyncio
+async def test_single_open_buy_cost_unchanged(user_id):
+    """Task 2.4 — simple single-ticker open BUY still returns
+    the correct cost (regression guard)."""
+    repo = BudgetRepo()
+    sid = uuid4()
+
+    async with disposable_pg_session() as s:
+        await _insert_filled(
+            s,
+            uid=user_id,
+            sid=sid,
+            ticker="INFY.NS",
+            side="BUY",
+            qty=5,
+            reserved_inr=Decimal("7500"),
+            filled_qty=5,
+            filled_inr=Decimal("7500"),
+        )
+        await s.commit()
+
+    async with disposable_pg_session() as s:
+        cost = await repo.sum_open_position_cost(s, user_id=user_id)
+
+    assert cost == Decimal("7500")
