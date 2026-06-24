@@ -186,8 +186,14 @@ async def sum_active_reservations(
 async def fetch_kite_available_cash(
     user_id: UUID,
 ) -> Decimal:
-    """kite.margins.equity.available.cash; Decimal('inf')
-    on Kite error (fail-open)."""
+    """kite.margins.equity.available.cash; Decimal('0') on
+    Kite error (fail-closed — blocks new live orders until the
+    broker connection is restored).
+
+    Dry-run bypass lives at the call site in safety.py and is
+    unaffected: dry_run paths return Decimal('Infinity') there
+    so this function is never called for dry-run.
+    """
     from backend.cache import get_cache
 
     c = get_cache()
@@ -200,22 +206,28 @@ async def fetch_kite_available_cash(
     try:
         margins = await _kite_margins_for_user(user_id)
         # kc.margins("equity") returns the equity segment directly —
-        # no nested "equity" key. Use live_balance (consistent with the
-        # algo header CASH stat) — it includes intraday payin from sells
-        # and matches what Kite allows for new CNC orders. available.cash
-        # deducts CNC blocks separately which would double-count against
-        # our own open_pos_cost tracking.
+        # no nested "equity" key. Use live_balance (consistent with
+        # the algo header CASH stat) — it includes intraday payin
+        # from sells and matches what Kite allows for new CNC orders.
+        # available.cash deducts CNC blocks separately which would
+        # double-count against our own open_pos_cost tracking.
+        #
+        # Explicit None check so a legitimate zero live_balance is
+        # honored and not masked by the cash fallback (the old `or`
+        # treated 0 as falsy and silently fell through to cash).
         avail = margins.get("available", {})
-        cash = avail.get("live_balance") or avail.get("cash", 0)
-        out = Decimal(str(cash))
+        lb = avail.get("live_balance")
+        raw = lb if lb is not None else avail.get("cash", 0)
+        out = Decimal(str(raw))
     except Exception as exc:  # noqa: BLE001
         _logger.warning(
-            "kite margins fetch failed for user=%s: %s",
+            "kite margins fetch failed for user=%s: %s — "
+            "broker-cash cap set to 0 (fail-closed)",
             user_id,
             exc,
             exc_info=True,
         )
-        return Decimal("inf")
+        return Decimal("0")
 
     if c:
         c.set(key, str(out), ttl=_CACHE_TTL_S)

@@ -54,7 +54,12 @@ async def test_load_user_budget_returns_default_when_missing():
 async def test_fetch_kite_available_cash_returns_inf_on_error(
     monkeypatch,
 ):
-    """Kite API error -> Decimal('inf') (fail-open)."""
+    """Kite API error -> Decimal('0') (fail-closed).
+
+    Updated for Task 0.2: broker-cash cap now fails closed so
+    a Kite outage blocks new live orders rather than silently
+    removing the cash ceiling.
+    """
 
     async def boom(*args, **kwargs):
         raise RuntimeError("kite down")
@@ -64,7 +69,7 @@ async def test_fetch_kite_available_cash_returns_inf_on_error(
         boom,
     )
     out = await fetch_kite_available_cash(uuid4())
-    assert out == Decimal("inf")
+    assert out == Decimal("0")
 
 
 @pytest.mark.asyncio
