@@ -59,6 +59,11 @@ def _invalidate_cache(user_id: UUID) -> None:
         c = get_cache()
         if c:
             c.invalidate_exact(*_cache_keys(user_id))
+            # Per-strategy active-reservation keys live under the
+            # same per-user prefix but carry a strategy_id we don't
+            # have here; glob-sweep them so a fresh reservation
+            # never reads a stale strategy total.
+            c.invalidate(f"cache:budget:user:{user_id}:strat_active:*")
     except Exception as exc:  # noqa: BLE001
         _logger.warning(
             "budget cache invalidate failed: %s",
@@ -177,6 +182,44 @@ async def sum_active_reservations(
         total = await repo.sum_active_reservations(
             session,
             user_id=user_id,
+        )
+    if c:
+        c.set(key, str(total), ttl=_CACHE_TTL_S)
+    return total
+
+
+async def sum_active_reservations_for_strategy(
+    user_id: UUID,
+    strategy_id: UUID,
+) -> Decimal:
+    """Active BUY reservation total for one strategy.
+
+    Feeds the runtime's deployed-capital calc (deployed = filled
+    positions + in-flight reservations) so two BUYs in one tick
+    can't both size against the same remaining max_inr (Critical
+    C4). Cache: 5s per (user, strategy); invalidated on every
+    reservation insert via ``_invalidate_cache`` (the key shares
+    the ``cache:budget:user:<uid>:`` prefix swept there).
+    """
+    from backend.cache import get_cache
+
+    c = get_cache()
+    key = (
+        f"cache:budget:user:{user_id}"
+        f":strat_active:{strategy_id}"
+    )
+    if c:
+        cached = c.get(key)
+        if cached is not None:
+            return Decimal(cached)
+
+    repo = BudgetRepo()
+    factory = _session_factory()
+    async with factory() as session:
+        total = await repo.sum_active_reservations_for_strategy(
+            session,
+            user_id=user_id,
+            strategy_id=strategy_id,
         )
     if c:
         c.set(key, str(total), ttl=_CACHE_TTL_S)

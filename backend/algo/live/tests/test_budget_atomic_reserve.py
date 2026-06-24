@@ -204,3 +204,109 @@ async def test_concurrent_reserves_one_wins(user_id):
         )
         n = res.mappings().first()["n"]
     assert n == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_reserves_no_budget_row_one_wins(user_id):
+    """Critical C4 — the no-row concurrency hole.
+
+    With NO seeded ``algo.user_budget`` row the ``SELECT ... FOR
+    UPDATE`` matches zero rows and serializes NOTHING — so two
+    concurrent reservers whose combined cost exceeds the caller-
+    supplied ``allocated_inr`` could BOTH pass and over-deploy. The
+    per-user advisory xact lock (``pg_advisory_xact_lock``) must
+    serialize them regardless of row existence: exactly ONE wins.
+
+    This test FAILS before the advisory lock (both reservers pass)
+    and PASSES after.
+    """
+    # Deliberately NO _seed_budget call — the row does not exist.
+    sid = uuid4()
+
+    async def _attempt() -> UUID | None:
+        repo = BudgetRepo()
+        async with disposable_pg_session() as s:
+            rid = await repo.reserve_if_headroom(
+                s,
+                user_id=user_id,
+                strategy_id=sid,
+                ticker="A.NS",
+                side="BUY",
+                qty=10,
+                reserved_inr=Decimal("60000"),
+                allocated_inr=Decimal("100000"),
+                metadata={"mode": "live"},
+            )
+            await s.commit()
+            return rid
+
+    results = await asyncio.gather(_attempt(), _attempt())
+    winners = [r for r in results if r is not None]
+    losers = [r for r in results if r is None]
+    assert len(winners) == 1, results
+    assert len(losers) == 1, results
+
+    async with disposable_pg_session() as s:
+        res = await s.execute(
+            text(
+                "SELECT COUNT(*) AS n FROM "
+                "algo.budget_reservations WHERE user_id = :u"
+            ),
+            {"u": user_id},
+        )
+        n = res.mappings().first()["n"]
+    assert n == 1
+
+
+@pytest.mark.asyncio
+async def test_active_for_strategy_counts_only_that_strategy(
+    user_id,
+):
+    """Critical C4 — deployed = filled + in-flight. The per-
+    strategy active-reservation sum counts PENDING BUYs for ONE
+    strategy and excludes other strategies, SELLs and dry-run."""
+    await _seed_budget(user_id, Decimal("1000000"))
+    repo = BudgetRepo()
+    sid_a = uuid4()
+    sid_b = uuid4()
+
+    async with disposable_pg_session() as s:
+        # strategy A: a ₹50k live BUY (counts).
+        await repo.reserve_if_headroom(
+            s,
+            user_id=user_id,
+            strategy_id=sid_a,
+            ticker="A.NS",
+            side="BUY",
+            qty=10,
+            reserved_inr=Decimal("50000"),
+            allocated_inr=Decimal("1000000"),
+            metadata={"mode": "live"},
+        )
+        # strategy B: a ₹30k live BUY (must NOT count for A).
+        await repo.reserve_if_headroom(
+            s,
+            user_id=user_id,
+            strategy_id=sid_b,
+            ticker="B.NS",
+            side="BUY",
+            qty=10,
+            reserved_inr=Decimal("30000"),
+            allocated_inr=Decimal("1000000"),
+            metadata={"mode": "live"},
+        )
+        await s.commit()
+
+    async with disposable_pg_session() as s:
+        a_total = await repo.sum_active_reservations_for_strategy(
+            s,
+            user_id=user_id,
+            strategy_id=sid_a,
+        )
+        b_total = await repo.sum_active_reservations_for_strategy(
+            s,
+            user_id=user_id,
+            strategy_id=sid_b,
+        )
+    assert a_total == Decimal("50000")
+    assert b_total == Decimal("30000")

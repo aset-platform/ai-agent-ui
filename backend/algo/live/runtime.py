@@ -80,7 +80,16 @@ from backend.algo.live.budget import (
     reserve as budget_reserve,
 )
 from backend.algo.live.budget import (
+    reserve_if_headroom as budget_reserve_if_headroom,
+)
+from backend.algo.live.budget import (
+    sum_active_reservations_for_strategy as budget_active_for_strategy,
+)
+from backend.algo.live.budget import (
     transition as budget_transition,
+)
+from backend.algo.live.budget import (
+    load_user_budget as budget_load_user,
 )
 from backend.algo.live.budget_types import ReservationState
 from backend.db.engine import disposable_pg_session
@@ -2720,10 +2729,32 @@ class LiveRuntime:
         # restart preserves yesterday's overnight legs. Square-offs
         # naturally bring this back to 0, no daily reset job needed.
         positions_open = self._positions.open_positions()
-        committed_inr_now = sum(
+        filled_committed = sum(
             (Decimal(p.qty) * p.avg_price for p in positions_open.values()),
             start=Decimal("0"),
         )
+        # Critical C4 — deployed = filled positions + in-flight
+        # BUY reservations. Without the in-flight term two BUYs in
+        # one tick both size against the same remaining max_inr
+        # (fills land asynchronously, so positions_open hasn't moved
+        # yet). Dry-run reservations are tagged mode=dryrun and are
+        # excluded by the query, so the rehearsal still sees full
+        # headroom. Best-effort: a budget read failure must not
+        # block trading, so fall back to filled-only.
+        active_reserved = Decimal("0")
+        try:
+            active_reserved = await budget_active_for_strategy(
+                self._user_id,
+                self._strategy.id,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "in-flight reservation read failed for strategy=%s "
+                "— deployed falls back to filled-only",
+                self._strategy.id,
+                exc_info=True,
+            )
+        committed_inr_now = filled_committed + active_reserved
         day_state = {
             "cumulative_inr_today": committed_inr_now,
             "orders_count_today": len(positions_open),
@@ -2963,34 +2994,116 @@ class LiveRuntime:
         # Intraday MIS strategies route here with product="MIS".
         product_code = self._strategy.product
 
-        # Budget reservation — append-only audit lifecycle.
-        # Reserves on BUY + SELL so the ledger captures full
-        # context (Cap 0 gating runs separately in safety.py;
-        # this is the audit trail).
+        # Budget reservation.
+        #
+        # Critical C4 — for a LIVE BUY the reservation is the
+        # AUTHORITATIVE atomic gate, not just an audit row. The
+        # safety.py Cap-0 check (run earlier in pre_trade_check) is
+        # a cached advisory pre-filter; it has a TOCTOU window where
+        # two concurrent BUYs can both pass. reserve_if_headroom
+        # locks the user (advisory xact lock + FOR UPDATE),
+        # recomputes headroom UNCACHED in one txn, and only inserts
+        # the PENDING row if it fits. On None we ABORT — no order is
+        # placed.
+        #
+        # SELL frees capital (never gated) and dry-run is a
+        # rehearsal that must NOT consume real budget — both keep
+        # the plain append-only audit reservation. dry-run rows are
+        # tagged mode=dryrun and are excluded from every headroom
+        # query.
         order_cost = (
             Decimal(signal.qty) * last_price
             if last_price and last_price > 0
             else Decimal("0")
         )
-        reservation_id = await budget_reserve(
-            user_id=self._user_id,
-            strategy_id=self._strategy.id,
-            ticker=signal.ticker,
-            side=signal.side,
-            qty=signal.qty,
-            reserved_inr=order_cost,
-            metadata={
-                "internal_order_id": internal_order_id,
-                "limit_price": (
-                    str(limit_price) if limit_price is not None else None
-                ),
-                # Tag dry-run reservations so the user-pool headroom
-                # math excludes them (mirrors paper). Only real live
-                # orders account against allocated_inr; dry-run is a
-                # rehearsal and must not consume the budget.
-                "mode": "dryrun" if self._dry_run else "live",
-            },
-        )
+        reservation_metadata = {
+            "internal_order_id": internal_order_id,
+            "limit_price": (
+                str(limit_price) if limit_price is not None else None
+            ),
+            "mode": "dryrun" if self._dry_run else "live",
+        }
+        if signal.side == "BUY" and not self._dry_run:
+            try:
+                allocated_inr = (
+                    await budget_load_user(self._user_id)
+                ).allocated_inr
+            except Exception:  # noqa: BLE001
+                # Fail-closed: cannot determine the allocation →
+                # do not place a live order against unknown budget.
+                _logger.error(
+                    "live order ABORT %s — budget load failed; "
+                    "cannot gate on allocated_inr (fail-closed)",
+                    signal.ticker,
+                    exc_info=True,
+                )
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="signal_rejected",
+                        payload={
+                            "reason": "insufficient_balance",
+                            "ticker": signal.ticker,
+                            "side": signal.side,
+                            "qty": signal.qty,
+                            "order_cost": str(order_cost),
+                            "detail": "budget_load_failed",
+                        },
+                    )
+                )
+                return 0
+            reservation_id = await budget_reserve_if_headroom(
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                ticker=signal.ticker,
+                side=signal.side,
+                qty=signal.qty,
+                reserved_inr=order_cost,
+                allocated_inr=allocated_inr,
+                metadata=reservation_metadata,
+            )
+            if reservation_id is None:
+                # Atomic gate rejected — over allocated headroom.
+                # ABORT; do NOT place the order.
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="signal_rejected",
+                        payload={
+                            "reason": "insufficient_balance",
+                            "ticker": signal.ticker,
+                            "side": signal.side,
+                            "qty": signal.qty,
+                            "order_cost": str(order_cost),
+                            "allocated_inr": str(allocated_inr),
+                        },
+                    )
+                )
+                _logger.warning(
+                    "live order ABORT %s — atomic reserve "
+                    "rejected: cost ₹%s over allocated ₹%s "
+                    "headroom",
+                    signal.ticker,
+                    order_cost,
+                    allocated_inr,
+                )
+                return 0
+        else:
+            reservation_id = await budget_reserve(
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                ticker=signal.ticker,
+                side=signal.side,
+                qty=signal.qty,
+                reserved_inr=order_cost,
+                metadata=reservation_metadata,
+            )
         try:
             kite_order_id = await asyncio.to_thread(
                 self._kite.place_order,

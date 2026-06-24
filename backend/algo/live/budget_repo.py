@@ -156,10 +156,26 @@ class BudgetRepo:
         ``None``. Does NOT commit — the caller owns the txn
         boundary so the lock is held until commit/rollback.
         """
-        # 1. Acquire the per-user serialization lock. If the row
-        # does not exist yet the lock is a no-op, but the headroom
-        # gate below still rejects over-deploy on the caller's
-        # allocated_inr.
+        # 1. Acquire the per-user serialization lock.
+        #
+        # The ``SELECT ... FOR UPDATE`` below is a NO-OP when the
+        # user has no ``algo.user_budget`` row yet (it locks zero
+        # rows), which leaves the no-row concurrency hole open:
+        # two concurrent reservers both pass and over-deploy
+        # (Critical C4). The transaction-scoped advisory lock keyed
+        # on the user serializes reservers regardless of row
+        # existence and auto-releases at commit/rollback.
+        # ``hashtext`` returns int4 which auto-casts to the bigint
+        # single-arg ``pg_advisory_xact_lock``.
+        await session.execute(
+            text(
+                "SELECT pg_advisory_xact_lock(hashtext(:k))"
+            ),
+            {"k": str(user_id)},
+        )
+        # Belt-and-suspenders: also take the row lock when the row
+        # exists so a concurrent ``upsert_user_budget`` serializes
+        # against in-flight reservations too.
         await session.execute(
             text(
                 "SELECT user_id FROM algo.user_budget "
@@ -280,6 +296,52 @@ class BudgetRepo:
                 "    = 'live'"
             ),
             {"uid": user_id},
+        )
+        row = result.mappings().first()
+        if row is None or row["total"] is None:
+            return Decimal("0")
+        return Decimal(row["total"])
+
+    async def sum_active_reservations_for_strategy(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: UUID,
+        strategy_id: UUID,
+    ) -> Decimal:
+        """Sum reserved_inr - filled_inr across active BUY
+        reservations for ONE strategy (latest state per
+        reservation_id ∈ ACTIVE_STATES, side='BUY', live mode).
+
+        Drives the strategy max_inr cap: two BUYs in one tick must
+        size against deployed = filled positions + in-flight
+        reservations, not just filled positions (Critical C4).
+        Same live-only / BUY-only filters as
+        ``sum_active_reservations``; additionally scoped to the
+        strategy so one strategy's in-flight orders don't shrink
+        another's headroom.
+        """
+        active = ",".join(f"'{s.value}'" for s in ACTIVE_STATES)
+        result = await session.execute(
+            text(
+                "WITH latest AS ( "
+                "  SELECT DISTINCT ON (reservation_id) "
+                "    reservation_id, state, side, strategy_id, "
+                "    reserved_inr, filled_inr, metadata "
+                "  FROM algo.budget_reservations "
+                "  WHERE user_id = :uid "
+                "    AND strategy_id = :sid "
+                "  ORDER BY reservation_id, "
+                "           transitioned_at DESC "
+                ") "
+                "SELECT COALESCE(SUM("
+                "  reserved_inr - filled_inr), 0) AS total "
+                f"FROM latest WHERE state IN ({active}) "
+                "AND side = 'BUY' "
+                "AND COALESCE(metadata->>'mode', 'live') "
+                "    = 'live'"
+            ),
+            {"uid": user_id, "sid": strategy_id},
         )
         row = result.mappings().first()
         if row is None or row["total"] is None:

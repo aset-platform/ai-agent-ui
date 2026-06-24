@@ -151,6 +151,41 @@ def _seed_open_position(runtime, *, ticker: str, qty: int, avg_price: Decimal):
     runtime._positions.apply_fill(fill)
 
 
+def _budget_gate_patches():
+    """Task 2.2 — a LIVE BUY now routes through the atomic gate
+    (budget_reserve_if_headroom + budget_load_user) and _on_bar_close
+    reads in-flight reservations via budget_active_for_strategy. These
+    tests target the STRATEGY max_inr cap (deployed from open
+    positions), so stub the user-pool gate to always pass and report
+    zero in-flight reservations — keeps the cap logic under test the
+    sole gate, no real PG."""
+    from backend.algo.live.budget_types import UserBudget
+
+    async def _load_user(_uid):
+        return UserBudget(
+            user_id=_uid,
+            allocated_inr=Decimal("100000000"),
+        )
+
+    async def _active(_uid, _sid):
+        return Decimal("0")
+
+    return (
+        patch(
+            "backend.algo.live.runtime.budget_reserve_if_headroom",
+            new=AsyncMock(return_value=uuid4()),
+        ),
+        patch(
+            "backend.algo.live.runtime.budget_load_user",
+            new=_load_user,
+        ),
+        patch(
+            "backend.algo.live.runtime.budget_active_for_strategy",
+            new=_active,
+        ),
+    )
+
+
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
@@ -166,6 +201,7 @@ async def test_full_budget_no_adjustment():
     runtime, kite = _make_runtime(buy_qty=5, max_inr=Decimal("10000"))
     _seed_bars(runtime)
 
+    _g1, _g2, _g3 = _budget_gate_patches()
     with patch(
         "backend.algo.live.runtime.pre_trade_check",
         new=AsyncMock(return_value=RiskDecision(outcome="accept")),
@@ -175,7 +211,7 @@ async def test_full_budget_no_adjustment():
     ), patch(
         "backend.algo.live.runtime.budget_transition",
         new=AsyncMock(),
-    ):
+    ), _g1, _g2, _g3:
         await runtime._on_bar_close(bar=_make_bar(), last_price=_PRICE)
 
     adj = [e for e in runtime._events if e["type"] == "signal_adjusted"]
@@ -209,6 +245,7 @@ async def test_partial_budget_reduces_qty():
     # + 5×400 = 2000 → total deployed = 8869.26, remaining = 1130.74
     # 1130.74 // 614.50 = 1 share → reduced 5→1
 
+    _g1, _g2, _g3 = _budget_gate_patches()
     with patch(
         "backend.algo.live.runtime.pre_trade_check",
         new=AsyncMock(return_value=RiskDecision(outcome="accept")),
@@ -218,7 +255,7 @@ async def test_partial_budget_reduces_qty():
     ), patch(
         "backend.algo.live.runtime.budget_transition",
         new=AsyncMock(),
-    ):
+    ), _g1, _g2, _g3:
         await runtime._on_bar_close(bar=_make_bar(), last_price=_PRICE)
 
     adj = [e for e in runtime._events if e["type"] == "signal_adjusted"]
@@ -243,10 +280,11 @@ async def test_zero_budget_rejects_signal():
     _seed_open_position(runtime, ticker="HSCL.NS", qty=16, avg_price=Decimal("642.60"))
     # 16 × 642.60 = ₹10281.60 > ₹10000
 
+    _g1, _g2, _g3 = _budget_gate_patches()
     with patch(
         "backend.algo.live.runtime.budget_reserve",
         new=AsyncMock(return_value=uuid4()),
-    ):
+    ), _g1, _g2, _g3:
         result = await runtime._on_bar_close(bar=_make_bar(), last_price=_PRICE)
 
     assert result == 0

@@ -159,9 +159,23 @@ async def test_partial_chunk_failure_no_blind_retry():
     async def _fake_transition(**kw):
         transitions.append(kw)
 
+    async def _fake_load_user(_uid):
+        from backend.algo.live.budget_types import UserBudget
+
+        return UserBudget(
+            user_id=_uid,
+            allocated_inr=Decimal("100000000"),
+        )
+
+    # Task 2.2 — a LIVE BUY now routes through the atomic gate
+    # (reserve_if_headroom + budget_load_user), not the plain audit
+    # reserve. Patch both so the partial-chunk path under test runs.
     with patch(
-        "backend.algo.live.runtime.budget_reserve",
+        "backend.algo.live.runtime.budget_reserve_if_headroom",
         new=_fake_reserve,
+    ), patch(
+        "backend.algo.live.runtime.budget_load_user",
+        new=_fake_load_user,
     ), patch(
         "backend.algo.live.runtime.budget_transition",
         new=_fake_transition,
