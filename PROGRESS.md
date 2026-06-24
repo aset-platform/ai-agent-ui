@@ -2,6 +2,44 @@
 
 ---
 
+### 2026-06-24 — feat: intelligent qty sizing + live GTT verification (branch `feature/rsi2-exit-strategy`)
+
+**Why:** Live market run on 2026-06-24 surfaced two issues: (1) GTTs were placed correctly but the strategy was computing qty from equity × weight without checking available budget — SKYGOLD generated qty=5 when only ₹1,628 remained in the ₹10,000 strategy cap after three open positions (HSCL, NSLNISP, SHAILY). (2) The first fix (Kite live_balance) was too permissive — user keeps a cash buffer in Zerodha beyond the strategy allocation.
+
+**What (2 commits):**
+
+- **feat(live): cap BUY qty to Kite balance** (`60b8629`) — initial gate using `fetch_kite_available_cash`. Superseded by the next commit.
+
+- **fix(live): qty cap uses strategy budget (max_inr − deployed)** (`2266cb0`)
+  - Gate in `LiveRuntime._on_bar_close`, after `current_caps` + `committed_inr_now` are computed, before `pre_trade_check`
+  - `remaining = max_inr − committed_inr_now`; `affordable_qty = floor(remaining / last_price)`
+  - `affordable_qty < 1` → `signal_rejected(reason=insufficient_balance)` with full context
+  - `affordable_qty < signal.qty` → `signal_adjusted(reason=strategy_budget_cap)` with old_qty / new_qty / committed_inr / remaining_inr
+  - `max_inr = 0` → gate skipped (fail-open, no cap configured)
+  - 3 tests: `test_balance_cap.py` — full budget / partial / zero
+  - Serena memory: `algo-budget-qty-cap`
+
+**Live verification (market hours 2026-06-24):**
+- GTT placement confirmed: all 3 positions got GTTs at exactly −4% from Kite avg cost (HARD_STOP phase=1) at 09:18:50 IST
+- SHAILY.NS ratcheted at 09:30:00 IST: LTP hit ₹2828.70 (+3.25% above avg ₹2739.60), GTT 324758017 cancelled, new GTT 324765504 at ₹2684.808 (−2% from avg, RATCHETED phase=15)
+- HSCL and NSLNISP in HARD_STOP phase — neither crossed +2% trigger
+- algo.events query confirmed: `gtt_placed` × 3 at 09:18:50 + `gtt_ratcheted` × 1 at 09:30:00
+
+**TrailingPhase enum values (non-obvious):**
+- `HARD_STOP = 1` (NOT 0 — "phase=1" in logs = hard stop)
+- `RATCHETED = 15`
+- `ATR_TRAIL = 2`
+
+**Live strategy AST (actual DB values, not template):**
+- `stop_loss_pct = 4.0`, `phase1_ratchet_trigger_pct = 2.0`, `phase1_ratchet_new_stop_pct = 2.0`, `trailing_trigger_pct = 4.0`
+
+**Pending:**
+- GTT fill postback routing for exchange-side GTT triggers (no `in_flight` entry for exchange-triggered fills)
+- Walk-forward DSR gate for v5 paper→live promotion
+- PR to dev — end of this week
+
+---
+
 ### 2026-06-23/24 — feat: GTT hydration, configurable buffer, Watchlist → Strategy modal (branch `feature/rsi2-exit-strategy`)
 
 **Why:** Live market testing on 2026-06-23 surfaced three gaps: (1) GTTs placed by our algo could be accidentally deleted from Kite (no re-hydration on restart); (2) the 1% GTT limit headroom was hardcoded and couldn't be tuned per-strategy; (3) the Watchlist Stocks page had no way to push a curated filtered list directly into a strategy's allowed_tickers.
