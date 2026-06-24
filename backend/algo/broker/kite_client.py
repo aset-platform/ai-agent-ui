@@ -1792,6 +1792,7 @@ class KiteClient:
         limit_price: float,
         qty: int,
         transaction_type: str = "SELL",
+        last_price: float | None = None,
     ) -> int:
         """Place a single-leg GTT stop order. Returns gtt_id.
 
@@ -1806,21 +1807,26 @@ class KiteClient:
                 typical intraday gaps.
             qty: Quantity to trade.
             transaction_type: ``"SELL"`` (default) or ``"BUY"``.
+            last_price: Current market LTP. Kite requires this to
+                differ from trigger_price. Defaults to
+                ``trigger_price * 1.01`` when not supplied.
 
         Returns:
             Integer GTT trigger ID from Kite, or 0 in dry-run.
         """
         tradingsymbol = ticker.removesuffix(".NS").removesuffix(".BO")
         exchange = "NSE"
+        kite_last_price = last_price if last_price is not None else trigger_price * 1.01
         if self._dry_run:
             _logger.info(
                 "[DRY_RUN] place_gtt symbol=%s trigger=%.4f "
-                "limit=%.4f qty=%d side=%s",
+                "limit=%.4f qty=%d side=%s last_price=%.4f",
                 tradingsymbol,
                 trigger_price,
                 limit_price,
                 qty,
                 transaction_type,
+                kite_last_price,
             )
             return 0
         resp = self._kc.place_gtt(
@@ -1828,7 +1834,7 @@ class KiteClient:
             tradingsymbol=tradingsymbol,
             exchange=exchange,
             trigger_values=[trigger_price],
-            last_price=trigger_price,
+            last_price=kite_last_price,
             orders=[{
                 "exchange": exchange,
                 "tradingsymbol": tradingsymbol,

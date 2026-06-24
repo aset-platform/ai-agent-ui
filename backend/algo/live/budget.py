@@ -31,10 +31,17 @@ _CACHE_TTL_S = 5
 
 
 def _session_factory():
-    """Lazy import — avoid circular dep with db.engine."""
-    from backend.db.engine import get_session_factory
+    """Return a loop-independent session factory.
 
-    return get_session_factory()
+    Uses disposable_pg_session (NullPool) so budget functions work
+    from both the uvicorn event loop (live runtime, FastAPI routes)
+    AND from the scheduler's asyncio.run() loop.  get_session_factory()
+    is bound to the uvicorn loop and raises "Future attached to a
+    different loop" when called from asyncio.run().
+    """
+    from backend.db.engine import disposable_pg_session
+
+    return disposable_pg_session
 
 
 def _cache_keys(user_id: UUID) -> tuple[str, str, str]:
