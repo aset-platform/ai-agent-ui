@@ -35,6 +35,8 @@ class RejectReason(str, Enum):
     LIVE_ORDERS_PER_DAY_CAP = "live_orders_per_day_cap"
     LIVE_NOT_ENABLED = "live_not_enabled"
     LIVE_BUDGET_CAP = "live_budget_cap"
+    # Fail-closed guard: a critical numeric input was NaN / non-finite.
+    INVALID_INPUT = "invalid_input"
 
 
 class Signal(BaseModel):

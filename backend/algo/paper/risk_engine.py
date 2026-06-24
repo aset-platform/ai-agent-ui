@@ -7,12 +7,26 @@ this module is responsible only for the verdict.
 from __future__ import annotations
 
 import logging
+import math
 from decimal import Decimal
 from typing import Any
 
 from backend.algo.paper.types import (
     AccountState, RejectReason, RiskDecision, Signal,
 )
+
+
+def _is_nan(x: object) -> bool:
+    """Return True when x is NaN or non-finite; False otherwise.
+
+    Guards against Decimal("NaN"), float("nan"), and values that
+    cannot be coerced to float at all.
+    """
+    try:
+        return math.isnan(float(x))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+
 
 _logger = logging.getLogger(__name__)
 
@@ -51,6 +65,18 @@ class RiskEngine:
         ``max_exposure_pct`` may scale the order rather than reject
         outright (signal still meaningful at smaller size).
         """
+        # Fail closed: any NaN critical input → reject immediately.
+        # (Decimal NaN comparisons silently return False in Python,
+        # which would let every cap check pass as if the signal
+        # were safe.)
+        if (
+            _is_nan(last_price)
+            or _is_nan(account.current_equity_inr)
+            or _is_nan(account.daily_realised_pnl_inr)
+            or _is_nan(account.daily_unrealised_pnl_inr)
+        ):
+            return _reject(RejectReason.INVALID_INPUT)
+
         if account.kill_switch_active:
             return _reject(RejectReason.KILL_SWITCH)
 
@@ -119,7 +145,7 @@ class RiskEngine:
                 new_notional / account.current_equity_inr
                 * Decimal("100")
             )
-            if new_concentration_pct > max_concentration_pct:
+            if new_concentration_pct >= max_concentration_pct:
                 return _reject(
                     RejectReason.POSITION_CAP,
                     threshold=max_concentration_pct,
