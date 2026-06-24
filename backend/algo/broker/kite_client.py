@@ -31,6 +31,7 @@ from backend.algo.broker.exceptions import (
     DuplicateOrderError,
     FreezeChunkExceedsDailyCapError,
     LtpStaleError,
+    PartialChunkPlacementError,
 )
 from backend.algo.broker.freeze_cache import (
     default_for_bucket,
@@ -1101,33 +1102,70 @@ class KiteClient:
                 freeze_qty=freeze_qty,
                 chunk_qtys=chunks,
             )
-            first_oid = ""
+            # Transactional chunk loop. If chunk N raises AFTER
+            # chunks 0..N-1 are already live on the exchange, we
+            # MUST NOT let the bare SDK error propagate — the
+            # runtime treats a generic failure as "order failed"
+            # and may blind-retry the FULL quantity, doubling the
+            # already-live chunks into real duplicate exposure
+            # (Critical C1). Instead emit a partial-failure audit
+            # event and raise PartialChunkPlacementError carrying
+            # the live order ids so the caller reconciles them.
+            placed: list[str] = []
             for idx, chunk_qty in enumerate(chunks):
-                oid = self._place_single_chunk(
-                    tradingsymbol=tradingsymbol,
-                    exchange=exchange,
-                    transaction_type=transaction_type,
-                    quantity=chunk_qty,
-                    order_type=order_type,
-                    product=product,
-                    variety=variety,
-                    price=price,
-                    tag=(f"{tag}-c{idx}" if tag else f"c{idx}"),
-                    last_price=last_price,
-                    last_price_ts=last_price_ts,
-                    liquidity_bucket=liquidity_bucket,
-                    slippage_bps_applied=slippage_bps_applied,
-                    chunk_index=idx,
-                    chunk_total=len(chunks),
-                    events_sink=events_sink,
-                    session_id=session_id,
-                    user_id=user_id,
-                    strategy_id=strategy_id,
-                    internal_order_id=internal_order_id,
-                )
-                if idx == 0:
-                    first_oid = oid
-            return first_oid
+                try:
+                    oid = self._place_single_chunk(
+                        tradingsymbol=tradingsymbol,
+                        exchange=exchange,
+                        transaction_type=transaction_type,
+                        quantity=chunk_qty,
+                        order_type=order_type,
+                        product=product,
+                        variety=variety,
+                        price=price,
+                        tag=(
+                            f"{tag}-c{idx}" if tag else f"c{idx}"
+                        ),
+                        last_price=last_price,
+                        last_price_ts=last_price_ts,
+                        liquidity_bucket=liquidity_bucket,
+                        slippage_bps_applied=slippage_bps_applied,
+                        chunk_index=idx,
+                        chunk_total=len(chunks),
+                        events_sink=events_sink,
+                        session_id=session_id,
+                        user_id=user_id,
+                        strategy_id=strategy_id,
+                        internal_order_id=internal_order_id,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._emit_partial_chunk_failure_event(
+                        events_sink=events_sink,
+                        session_id=session_id,
+                        user_id=user_id,
+                        strategy_id=strategy_id,
+                        internal_order_id=internal_order_id,
+                        symbol=tradingsymbol,
+                        placed_order_ids=placed,
+                        failed_chunk=idx,
+                        total_chunks=len(chunks),
+                        cause=str(exc),
+                    )
+                    _logger.error(
+                        "place_order: chunk %d/%d FAILED after %d "
+                        "live chunks (order_ids=%s) — NOT "
+                        "retrying full qty",
+                        idx,
+                        len(chunks),
+                        len(placed),
+                        placed,
+                        exc_info=True,
+                    )
+                    raise PartialChunkPlacementError(
+                        placed, idx, exc,
+                    ) from exc
+                placed.append(oid)
+            return placed[0]
 
         # Single-chunk path — quantity within freeze cap.
         return self._place_single_chunk(
@@ -1703,6 +1741,60 @@ class KiteClient:
         except Exception:  # noqa: BLE001
             _logger.warning(
                 "order_freeze_chunked emit failed symbol=%s",
+                symbol,
+                exc_info=True,
+            )
+
+    def _emit_partial_chunk_failure_event(
+        self,
+        *,
+        events_sink: Callable[[dict], None] | None,
+        session_id: Any,
+        user_id: Any,
+        strategy_id: Any,
+        internal_order_id: str,
+        symbol: str,
+        placed_order_ids: list[str],
+        failed_chunk: int,
+        total_chunks: int,
+        cause: str,
+    ) -> None:
+        """Audit a freeze-chunk submission that failed mid-loop.
+
+        Emitted when chunk ``failed_chunk`` raised while
+        ``placed_order_ids`` were already live on the exchange.
+        The runtime consumes this trail to reconcile the live
+        chunks rather than blind-retry the full quantity.
+        """
+        if events_sink is None:
+            return
+        from backend.algo.backtest.event_writer import event_row
+
+        payload = {
+            "internal_order_id": internal_order_id,
+            "symbol": symbol,
+            "placed_order_ids": placed_order_ids,
+            "placed_count": len(placed_order_ids),
+            "failed_chunk": failed_chunk,
+            "total_chunks": total_chunks,
+            "cause": cause,
+        }
+        sid = session_id if session_id is not None else uuid4()
+        uid = user_id if user_id is not None else uuid4()
+        try:
+            row = event_row(
+                session_id=sid,
+                user_id=uid,
+                strategy_id=strategy_id,
+                mode="live",
+                type_="order_partial_chunk_failure",
+                payload=payload,
+            )
+            events_sink(row)
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "order_partial_chunk_failure emit failed "
+                "symbol=%s",
                 symbol,
                 exc_info=True,
             )

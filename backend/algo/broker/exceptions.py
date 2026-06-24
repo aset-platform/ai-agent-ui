@@ -40,3 +40,36 @@ class FreezeChunkExceedsDailyCapError(Exception):
     Raised BEFORE any chunk is submitted so the daily cap is not
     silently breached partway through a multi-chunk submission.
     """
+
+
+class PartialChunkPlacementError(Exception):
+    """Raised by ``KiteClient.place_order`` when a multi-chunk
+    (freeze-split) submission fails AFTER one or more chunks are
+    already live on the exchange.
+
+    Carries the broker order ids of the chunks that DID reach Kite
+    (``placed_order_ids``), the index of the chunk that failed
+    (``failed_chunk``), and the underlying SDK error (``cause``).
+
+    The runtime caller MUST NOT blind-retry the full quantity on
+    this error — doing so would duplicate the already-live chunks
+    into real, doubled exposure. Instead it records the placed ids
+    into ``_in_flight`` and moves the budget reservation into a
+    needs-reconcile (PARTIAL) state so the order book / reconciler
+    settles the placed chunks.
+    """
+
+    def __init__(
+        self,
+        placed_order_ids: list[str],
+        failed_chunk: int,
+        cause: Exception,
+    ) -> None:
+        self.placed_order_ids = placed_order_ids
+        self.failed_chunk = failed_chunk
+        self.cause = cause
+        super().__init__(
+            f"chunk {failed_chunk} failed after "
+            f"{len(placed_order_ids)} live chunk(s) "
+            f"(order_ids={placed_order_ids}): {cause}"
+        )

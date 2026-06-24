@@ -59,6 +59,9 @@ from backend.algo.backtest.trailing_stop_manager import (
     TrailingStopManager,
 )
 from backend.algo.features.primitives import wilder_atr as _wilder_atr
+from backend.algo.broker.exceptions import (
+    PartialChunkPlacementError,
+)
 from backend.algo.broker.freeze_cache import get_tick_size
 from backend.algo.broker.kite_client import KiteClient
 
@@ -3018,6 +3021,101 @@ class LiveRuntime:
                 # PR #4 — daily-cap budget for freeze-chunk pre-check
                 daily_cap_remaining=daily_cap_remaining,
             )
+        except PartialChunkPlacementError as exc:
+            # Critical C1 — a freeze-split order failed mid-loop
+            # with chunks 0..N-1 ALREADY live on the exchange. We
+            # must NOT re-submit (that would blind-retry the full
+            # qty and double the live chunks). Instead record the
+            # live order ids in _in_flight so the postback / order-
+            # timeout reconciler tracks and settles them, and move
+            # the reservation into PARTIAL (an ACTIVE, non-terminal
+            # state) so its reserved capital stays held and the
+            # reconciliation loop picks it up — explicitly NOT
+            # FILLED/CANCELLED (terminal — would free/settle the
+            # budget and lose the live exposure).
+            placed_ids = exc.placed_order_ids
+            _logger.error(
+                "live order PARTIAL chunk failure: symbol=%s "
+                "side=%s placed=%d failed_chunk=%d — recording "
+                "live ids %s, NOT re-submitting",
+                symbol,
+                side,
+                len(placed_ids),
+                exc.failed_chunk,
+                placed_ids,
+                exc_info=True,
+            )
+            self._events.append(
+                event_row(
+                    session_id=self._session_id,
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    mode="live",
+                    type_="order_partial_chunk_failure",
+                    payload={
+                        **({"dry_run": True} if self._dry_run else {}),
+                        "internal_order_id": internal_order_id,
+                        "symbol": symbol,
+                        "side": side,
+                        "qty": signal.qty,
+                        "placed_order_ids": placed_ids,
+                        "placed_count": len(placed_ids),
+                        "failed_chunk": exc.failed_chunk,
+                        "rejection_reason": str(exc.cause)[:500],
+                    },
+                )
+            )
+            # Record each live chunk so reconciliation / order-
+            # timeout track them. All chunks share the originating
+            # internal_order_id + reservation_id for attribution.
+            for oid in placed_ids:
+                self._in_flight.append(
+                    {
+                        "kite_order_id": oid,
+                        "internal_order_id": internal_order_id,
+                        "symbol": symbol,
+                        "side": side,
+                        "qty": signal.qty,
+                        "submitted_at": now_iso,
+                        "status": "submitted",
+                        "reason": signal.reason,
+                        "product": product_code,
+                        "reservation_id": (
+                            str(reservation_id)
+                            if reservation_id
+                            else None
+                        ),
+                    }
+                )
+            if placed_ids:
+                await self._caps_repo.update_in_flight(
+                    self._user_id,
+                    self._run_id,
+                    self._in_flight,
+                )
+            # Move reservation to PARTIAL (needs-reconcile) — keeps
+            # the capital held; reconciler settles the live chunks.
+            try:
+                await budget_transition(
+                    reservation_id=reservation_id,
+                    new_state=ReservationState.PARTIAL,
+                    kite_order_id=(
+                        placed_ids[0] if placed_ids else None
+                    ),
+                    error_text=str(exc.cause)[:500],
+                )
+            except Exception:  # noqa: BLE001
+                _logger.exception(
+                    "budget transition to PARTIAL failed — "
+                    "reservation %s, placed ids %s — "
+                    "reconciliation loop will heal",
+                    reservation_id,
+                    placed_ids,
+                )
+            # Return the count of live chunks (>0 if any reached
+            # the exchange). Crucially we DO NOT re-call
+            # place_order — the live chunks settle via reconcile.
+            return len(placed_ids)
         except Exception as exc:
             rejection_reason = str(exc)
             self._events.append(
