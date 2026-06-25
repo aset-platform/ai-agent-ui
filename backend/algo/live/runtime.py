@@ -1870,7 +1870,7 @@ class LiveRuntime:
                         user_id=self._user_id,
                         strategy_id=self._strategy.id,
                         mode="live",
-                        type_="trailing_stop_recovered",
+                        type_="trailing_gtt_verified",
                         payload={
                             "ticker": ticker,
                             "phase": mgr.state.phase.value,
