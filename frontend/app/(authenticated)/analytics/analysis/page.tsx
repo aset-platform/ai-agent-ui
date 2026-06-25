@@ -2435,6 +2435,23 @@ type AtrFilter = "" | "lt0" | "gt0lte1_5" | "gt1_5lte4" | "gt2lte5" | "gt2lte6" 
 type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt080lte10" | "gt1";
 type RsFilter = "" | "lt25" | "gte25";
 type Rs3mFilter = "" | "lt15" | "gte15";
+
+// Default filter values — used for initial state AND the Reset All button
+const DEFAULTS = {
+  rsi2Filter:       null as null,
+  curRsi2Filter:    null as null,
+  atrFilter:        "gt2lte6" as AtrFilter,
+  sharpeFilter:     "gt1" as SharpeFilter,
+  rs3mFilter:       "gte15" as Rs3mFilter,
+  rsFilter:         "gte25" as RsFilter,
+  blendedRsFilter:  ["20to35", "35to50", "gt50"] as BlendedRsBucket[],
+  mdd6mFilter:      ["lt10", "10to15", "15to20"] as Mdd6mBucket[],
+  distSma200Filter: ["gt5lte15", "gt15lte35", "gt35lte50"] as DistSma200Bucket[],
+  goldenCross:      false,
+  sma50AboveLtp:    false,
+  sma200AboveLtp:   false,
+  search:           "",
+} as const;
 type DistSma200Filter = DistSma200Bucket[];
 type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sharpe_ratio" | "blended_rs" | "rs_3m" | "rs_6m" | "mdd_6m" | "atr_pct" | "dist_sma200" | "score";
 type SortDir = "asc" | "desc";
@@ -2467,15 +2484,13 @@ function WatchlistStocksTab() {
   const [goldenCross, setGoldenCross] = useState(true);
   const [sma50AboveLtp, setSma50AboveLtp] = useState(true);
   const [sma200AboveLtp, setSma200AboveLtp] = useState(true);
-  const [atrFilter, setAtrFilter] = useState<AtrFilter>("gt2lte6");
-  const [sharpeFilter, setSharpeFilter] = useState<SharpeFilter>("gt1");
-  const [rs3mFilter, setRs3mFilter] = useState<Rs3mFilter>("");
-  const [rsFilter, setRsFilter] = useState<RsFilter>("gte25");
-  const [blendedRsFilter, setBlendedRsFilter] = useState<BlendedRsBucket[]>([]);
-  const [mdd6mFilter, setMdd6mFilter] = useState<Mdd6mBucket[]>([]);
-  const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>(
-    ["gt5lte15", "gt15lte35", "gt35lte50"],
-  );
+  const [atrFilter, setAtrFilter] = useState<AtrFilter>(DEFAULTS.atrFilter);
+  const [sharpeFilter, setSharpeFilter] = useState<SharpeFilter>(DEFAULTS.sharpeFilter);
+  const [rs3mFilter, setRs3mFilter] = useState<Rs3mFilter>(DEFAULTS.rs3mFilter);
+  const [rsFilter, setRsFilter] = useState<RsFilter>(DEFAULTS.rsFilter);
+  const [blendedRsFilter, setBlendedRsFilter] = useState<BlendedRsBucket[]>([...DEFAULTS.blendedRsFilter]);
+  const [mdd6mFilter, setMdd6mFilter] = useState<Mdd6mBucket[]>([...DEFAULTS.mdd6mFilter]);
+  const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>([...DEFAULTS.distSma200Filter]);
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("ticker");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -2690,6 +2705,22 @@ function WatchlistStocksTab() {
     return () => { cancelled = true; };
   }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rs3mFilter, rsFilter, blendedRsFilter, mdd6mFilter, distSma200Filter, search, pageSize, market]);
 
+  const resetAllFilters = () => {
+    setRsi2Filter(DEFAULTS.rsi2Filter);
+    setCurRsi2Filter(DEFAULTS.curRsi2Filter);
+    setGoldenCross(DEFAULTS.goldenCross);
+    setSma50AboveLtp(DEFAULTS.sma50AboveLtp);
+    setSma200AboveLtp(DEFAULTS.sma200AboveLtp);
+    setAtrFilter(DEFAULTS.atrFilter);
+    setSharpeFilter(DEFAULTS.sharpeFilter);
+    setRs3mFilter(DEFAULTS.rs3mFilter);
+    setRsFilter(DEFAULTS.rsFilter);
+    setBlendedRsFilter([...DEFAULTS.blendedRsFilter]);
+    setMdd6mFilter([...DEFAULTS.mdd6mFilter]);
+    setDistSma200Filter([...DEFAULTS.distSma200Filter]);
+    setSearch(DEFAULTS.search);
+  };
+
   const handleCopyTickers = () => {
     const csv = filtered.map((s) => s.ticker).join(", ");
     navigator.clipboard.writeText(csv).then(() => {
@@ -2744,19 +2775,19 @@ function WatchlistStocksTab() {
                   data-testid={`watchlist-market-${m}`}
                   onClick={() => {
                     setMarket(m);
-                    setRsi2Filter(null);
-                    setCurRsi2Filter(null);
-                    setGoldenCross(false);
-                    setSma50AboveLtp(false);
-                    setSma200AboveLtp(false);
-                    setAtrFilter("");
-                    setSharpeFilter("");
-                    setRs3mFilter("");
-                    setRsFilter("gte25");
-                    setBlendedRsFilter([]);
-                    setMdd6mFilter([]);
-                    setDistSma200Filter([]);
-                    setSearch("");
+                    setRsi2Filter(DEFAULTS.rsi2Filter);
+                    setCurRsi2Filter(DEFAULTS.curRsi2Filter);
+                    setGoldenCross(DEFAULTS.goldenCross);
+                    setSma50AboveLtp(DEFAULTS.sma50AboveLtp);
+                    setSma200AboveLtp(DEFAULTS.sma200AboveLtp);
+                    setAtrFilter(DEFAULTS.atrFilter);
+                    setSharpeFilter(DEFAULTS.sharpeFilter);
+                    setRs3mFilter(DEFAULTS.rs3mFilter);
+                    setRsFilter(DEFAULTS.rsFilter);
+                    setBlendedRsFilter([...DEFAULTS.blendedRsFilter]);
+                    setMdd6mFilter([...DEFAULTS.mdd6mFilter]);
+                    setDistSma200Filter([...DEFAULTS.distSma200Filter]);
+                    setSearch(DEFAULTS.search);
                   }}
                   className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
                     market === m
@@ -3010,6 +3041,21 @@ function WatchlistStocksTab() {
                 <path d="M12 5v14M5 12h14" />
               </svg>
               Add to Strategy
+            </button>
+
+            {/* Reset All Filters */}
+            <button
+              type="button"
+              data-testid="watchlist-reset-filters"
+              onClick={resetAllFilters}
+              title="Reset all filters to defaults"
+              className="inline-flex items-center gap-1 rounded-md border border-gray-200 dark:border-gray-700 px-2.5 py-1.5 text-xs font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
+            >
+              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+              </svg>
+              Reset
             </button>
           </div>
         </div>
