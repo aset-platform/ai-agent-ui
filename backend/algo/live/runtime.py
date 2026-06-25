@@ -142,6 +142,16 @@ _MIN_EVAL_TIME_IST = _parse_ist_time(
     os.environ.get("ALGO_DAILY_MIN_EVAL_TIME_IST", "14:20"),
 )
 
+# Earliest wall-clock at which a BUY order may be placed.
+# The NSE opening auction runs 09:07–09:15; the first 15 min of the
+# regular session (09:15–09:30) is typically high-volatility price
+# discovery. No BUY is placed before this time regardless of which
+# eval path fired. SELLs and GTT exits are never gated here.
+# Override: ALGO_MIN_BUY_TIME_IST (HH:MM IST).
+_MIN_BUY_TIME_IST = _parse_ist_time(
+    os.environ.get("ALGO_MIN_BUY_TIME_IST", "09:30"),
+)
+
 # PR3 — live-mode events are buffered and flushed on this cadence
 # instead of one Iceberg commit per signal. The terminal flush on
 # session stop drains whatever remains. Env-overridable for tuning.
@@ -2980,6 +2990,25 @@ class LiveRuntime:
             and bar.ticker not in self._ticker_locked
         ):
             now_ist = datetime.now(IST).time()
+
+            # Gate A: no BUY before _MIN_BUY_TIME_IST (default 09:30).
+            # Pre-open auction prices are erratic; first 15 min of the
+            # regular session is volatile price discovery.
+            # SELL / GTT exits are never blocked here.
+            if (
+                signal is not None
+                and signal.side == "BUY"
+                and now_ist < _MIN_BUY_TIME_IST
+            ):
+                _logger.info(
+                    "daily BUY deferred — before %s IST "
+                    "(ticker=%s now=%s IST)",
+                    _MIN_BUY_TIME_IST.strftime("%H:%M"),
+                    bar.ticker,
+                    now_ist.strftime("%H:%M:%S"),
+                )
+                return 0
+
             if now_ist < _MIN_EVAL_TIME_IST:
                 # Before gate — only yesterday's closed bar may trigger
                 # a BUY. Running-bar-only signals are deferred.
@@ -2987,12 +3016,45 @@ class LiveRuntime:
                     history, bar, last_price,
                 )
                 if closed_entry is not None and closed_entry.side == "BUY":
-                    _logger.info(
-                        "daily entry on CLOSED bar (pre-gate) — "
-                        "acting now: ticker=%s",
-                        bar.ticker,
-                    )
-                    signal = closed_entry
+                    # Dual-bar confirmation: yesterday was oversold
+                    # (closed_entry says BUY). Also require today's
+                    # running bar to confirm (today's main-eval signal
+                    # == BUY). If today's bar no longer says BUY the
+                    # stock has already recovered intraday — suppress to
+                    # avoid chasing a gap-up or upper-circuit opener.
+                    if signal is not None and signal.side == "BUY":
+                        _logger.info(
+                            "daily entry on CLOSED bar (pre-gate) — "
+                            "both bars confirm: ticker=%s",
+                            bar.ticker,
+                        )
+                        signal = closed_entry
+                    else:
+                        _logger.info(
+                            "daily closed-bar BUY suppressed — "
+                            "today's running bar does not confirm "
+                            "(stock recovered intraday, ticker=%s)",
+                            bar.ticker,
+                        )
+                        self._events.append(
+                            event_row(
+                                session_id=self._session_id,
+                                user_id=self._user_id,
+                                strategy_id=self._strategy.id,
+                                mode="live",
+                                type_="signal_rejected",
+                                payload={
+                                    **(
+                                        {"dry_run": True}
+                                        if self._dry_run else {}
+                                    ),
+                                    "reason": "today_bar_not_confirmed",
+                                    "ticker": bar.ticker,
+                                    "side": "BUY",
+                                },
+                            )
+                        )
+                        return 0
                 elif signal is not None and signal.side == "BUY":
                     _logger.info(
                         "daily entry premature (today-forming only) "
