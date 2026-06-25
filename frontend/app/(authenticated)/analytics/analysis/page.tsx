@@ -2436,21 +2436,23 @@ type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt080lte10" | "gt
 type RsFilter = "" | "lt25" | "gte25";
 type Rs3mFilter = "" | "lt15" | "gte15";
 
-// Default filter values — used for initial state AND the Reset All button.
-// Keep in sync with the useState initializers below.
-const DEFAULTS = {
-  rsi2Filter:       "lte25" as Rsi2Filter,
+// Reset target — what the Reset button restores.
+// Intentionally liberal for legacy filters (All / OFF) so clicking Reset is
+// visibly meaningful regardless of what the page loaded with.
+// The 3 new quality filters keep their curated defaults.
+const RESET_TARGET = {
+  rsi2Filter:       null as Rsi2Filter | null,
   curRsi2Filter:    null as Rsi2Filter | null,
-  atrFilter:        "gt2lte6" as AtrFilter,
-  sharpeFilter:     "gt1" as SharpeFilter,
+  atrFilter:        "" as AtrFilter,
+  sharpeFilter:     "" as SharpeFilter,
   rs3mFilter:       "gte15" as Rs3mFilter,
-  rsFilter:         "gte25" as RsFilter,
+  rsFilter:         "" as RsFilter,
   blendedRsFilter:  ["20to35", "35to50", "gt50"] as BlendedRsBucket[],
   mdd6mFilter:      ["lt10", "10to15", "15to20"] as Mdd6mBucket[],
-  distSma200Filter: ["gt5lte15", "gt15lte35", "gt35lte50"] as DistSma200Bucket[],
-  goldenCross:      true,
-  sma50AboveLtp:    true,
-  sma200AboveLtp:   true,
+  distSma200Filter: [] as DistSma200Bucket[],
+  goldenCross:      false,
+  sma50AboveLtp:    false,
+  sma200AboveLtp:   false,
   search:           "",
 };
 type DistSma200Filter = DistSma200Bucket[];
@@ -2473,25 +2475,31 @@ function WatchlistStocksTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rsi2Filter, setRsi2Filter] =
-    useState<Rsi2Filter | null>(DEFAULTS.rsi2Filter);
+    useState<Rsi2Filter>("lte25");
   const [curRsi2Filter, setCurRsi2Filter] =
-    useState<Rsi2Filter | null>(DEFAULTS.curRsi2Filter);
+    useState<Rsi2Filter | null>(null);
   const [market, setMarket] =
     useState<MarketFilter>("india");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] =
     useState(DEFAULT_WL_PAGE_SIZE);
   const [copied, setCopied] = useState(false);
-  const [goldenCross, setGoldenCross] = useState(DEFAULTS.goldenCross);
-  const [sma50AboveLtp, setSma50AboveLtp] = useState(DEFAULTS.sma50AboveLtp);
-  const [sma200AboveLtp, setSma200AboveLtp] = useState(DEFAULTS.sma200AboveLtp);
-  const [atrFilter, setAtrFilter] = useState<AtrFilter>(DEFAULTS.atrFilter);
-  const [sharpeFilter, setSharpeFilter] = useState<SharpeFilter>(DEFAULTS.sharpeFilter);
-  const [rs3mFilter, setRs3mFilter] = useState<Rs3mFilter>(DEFAULTS.rs3mFilter);
-  const [rsFilter, setRsFilter] = useState<RsFilter>(DEFAULTS.rsFilter);
-  const [blendedRsFilter, setBlendedRsFilter] = useState<BlendedRsBucket[]>([...DEFAULTS.blendedRsFilter]);
-  const [mdd6mFilter, setMdd6mFilter] = useState<Mdd6mBucket[]>([...DEFAULTS.mdd6mFilter]);
-  const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>([...DEFAULTS.distSma200Filter]);
+  const [goldenCross, setGoldenCross] = useState(true);
+  const [sma50AboveLtp, setSma50AboveLtp] = useState(true);
+  const [sma200AboveLtp, setSma200AboveLtp] = useState(true);
+  const [atrFilter, setAtrFilter] = useState<AtrFilter>("gt2lte6");
+  const [sharpeFilter, setSharpeFilter] = useState<SharpeFilter>("gt1");
+  const [rs3mFilter, setRs3mFilter] = useState<Rs3mFilter>("gte15");
+  const [rsFilter, setRsFilter] = useState<RsFilter>("gte25");
+  const [blendedRsFilter, setBlendedRsFilter] = useState<BlendedRsBucket[]>(
+    ["20to35", "35to50", "gt50"],
+  );
+  const [mdd6mFilter, setMdd6mFilter] = useState<Mdd6mBucket[]>(
+    ["lt10", "10to15", "15to20"],
+  );
+  const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>(
+    ["gt5lte15", "gt15lte35", "gt35lte50"],
+  );
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("ticker");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -2707,19 +2715,19 @@ function WatchlistStocksTab() {
   }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rs3mFilter, rsFilter, blendedRsFilter, mdd6mFilter, distSma200Filter, search, pageSize, market]);
 
   const resetAllFilters = () => {
-    setRsi2Filter(DEFAULTS.rsi2Filter);
-    setCurRsi2Filter(DEFAULTS.curRsi2Filter);
-    setGoldenCross(DEFAULTS.goldenCross);
-    setSma50AboveLtp(DEFAULTS.sma50AboveLtp);
-    setSma200AboveLtp(DEFAULTS.sma200AboveLtp);
-    setAtrFilter(DEFAULTS.atrFilter);
-    setSharpeFilter(DEFAULTS.sharpeFilter);
-    setRs3mFilter(DEFAULTS.rs3mFilter);
-    setRsFilter(DEFAULTS.rsFilter);
-    setBlendedRsFilter([...DEFAULTS.blendedRsFilter]);
-    setMdd6mFilter([...DEFAULTS.mdd6mFilter]);
-    setDistSma200Filter([...DEFAULTS.distSma200Filter]);
-    setSearch(DEFAULTS.search);
+    setRsi2Filter(RESET_TARGET.rsi2Filter);
+    setCurRsi2Filter(RESET_TARGET.curRsi2Filter);
+    setGoldenCross(RESET_TARGET.goldenCross);
+    setSma50AboveLtp(RESET_TARGET.sma50AboveLtp);
+    setSma200AboveLtp(RESET_TARGET.sma200AboveLtp);
+    setAtrFilter(RESET_TARGET.atrFilter);
+    setSharpeFilter(RESET_TARGET.sharpeFilter);
+    setRs3mFilter(RESET_TARGET.rs3mFilter);
+    setRsFilter(RESET_TARGET.rsFilter);
+    setBlendedRsFilter([...RESET_TARGET.blendedRsFilter]);
+    setMdd6mFilter([...RESET_TARGET.mdd6mFilter]);
+    setDistSma200Filter([...RESET_TARGET.distSma200Filter]);
+    setSearch(RESET_TARGET.search);
   };
 
   const handleCopyTickers = () => {
