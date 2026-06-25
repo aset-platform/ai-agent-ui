@@ -2246,8 +2246,9 @@ def create_insights_router() -> APIRouter:
             .date()
         )
 
-        # Fetch Nifty 50 6M return once for RS(6M) calculation.
+        # Fetch Nifty 50 returns once for RS calculations.
         _nifty_6m_return: float | None = None
+        _nifty_3m_return: float | None = None
         try:
             _nifty_df = query_iceberg_df(
                 "stocks.ohlcv",
@@ -2264,8 +2265,13 @@ def create_insights_router() -> APIRouter:
                 _nifty_6m_return = float(
                     (_nc.iloc[-1] - _nc.iloc[0]) / _nc.iloc[0] * 100
                 )
+                if len(_nc) >= 64:
+                    _nifty_3m_return = float(
+                        (_nc.iloc[-1] - _nc.iloc[-64])
+                        / _nc.iloc[-64] * 100
+                    )
         except Exception as _e:
-            _logger.debug("watchlist-stocks nifty 6m: %s", _e)
+            _logger.debug("watchlist-stocks nifty returns: %s", _e)
 
         # Only fetch live prices during NSE market hours (09:00–15:30 IST,
         # Mon–Fri). Off-hours current_rsi_2 == rsi_2 from OHLCV history.
@@ -2458,17 +2464,33 @@ def create_insights_router() -> APIRouter:
                         _stock_6m_return - _nifty_6m_return, 4
                     )
 
-                # Blended RS = 0.5×Return3M + 0.5×Return6M
-                _blended_rs: float | None = None
+                # RS(3M) = stock 3M return − Nifty 3M return
+                _rs_3m: float | None = None
                 if (
                     _stock_3m_return is not None
-                    and _stock_6m_return is not None
+                    and _nifty_3m_return is not None
                 ):
-                    _blended_rs = round(
-                        0.5 * _stock_3m_return
-                        + 0.5 * _stock_6m_return,
-                        4,
+                    _rs_3m = round(
+                        _stock_3m_return - _nifty_3m_return, 4
                     )
+
+                # Blended RS = 0.6×RS3M + 0.4×RS6M
+                _blended_rs: float | None = None
+                if _rs_3m is not None and _rs_6m is not None:
+                    _blended_rs = round(
+                        0.6 * _rs_3m + 0.4 * _rs_6m, 4
+                    )
+
+                # MDD(6M): max drawdown over last ~126 trading days
+                _mdd_6m: float | None = None
+                try:
+                    _c6m = _close_s.iloc[-126:]
+                    if len(_c6m) >= 2:
+                        _peak = _c6m.cummax()
+                        _dd = (_c6m - _peak) / _peak * 100
+                        _mdd_6m = round(float(_dd.min()), 4)
+                except Exception:
+                    pass
 
                 # ATR% = ATR(14) / close * 100
                 _atr_pct: float | None = None
@@ -2513,8 +2535,10 @@ def create_insights_router() -> APIRouter:
                         sharpe_ratio=_sharpe,
                         atr_pct=_atr_pct,
                         rs_6m=_rs_6m,
+                        rs_3m=_rs_3m,
                         return_3m=_stock_3m_return,
                         blended_rs=_blended_rs,
+                        mdd_6m=_mdd_6m,
                         dist_sma200=_dist_sma200,
                     )
                 )

@@ -2273,7 +2273,7 @@ type AtrFilter = "" | "lt0" | "gt0lte1_5" | "gt1_5lte4" | "gt2lte5" | "gt2lte6" 
 type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt080lte10" | "gt1";
 type RsFilter = "" | "lt25" | "gte25";
 type DistSma200Filter = DistSma200Bucket[];
-type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sharpe_ratio" | "atr_pct" | "rs_6m" | "blended_rs" | "dist_sma200" | "score";
+type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sharpe_ratio" | "blended_rs" | "rs_3m" | "rs_6m" | "mdd_6m" | "atr_pct" | "dist_sma200" | "score";
 type SortDir = "asc" | "desc";
 
 const PAGE_SIZE_OPTIONS_WL = [10, 25, 50] as const;
@@ -2794,18 +2794,6 @@ function WatchlistStocksTab() {
                   { key: "sma_200", label: "SMA 200" },
                   { key: "sma_50", label: "SMA 50" },
                   {
-                    key: "blended_rs",
-                    label: "Blended RS",
-                    tooltip:
-                      "Blended Momentum = 0.5 × Return3M + 0.5 × Return6M\n" +
-                      "Raw price return over ~63 and ~126 trading days, equally weighted.\n\n" +
-                      "Example: Return3M = +12%, Return6M = +18%\n" +
-                      "→ Blended RS = 0.5×12 + 0.5×18 = +15%\n\n" +
-                      "Captures both recent momentum (3M) and medium-term trend (6M).\n" +
-                      "Nifty leaders often rotate every 3–6 months — blending both\n" +
-                      "periods is more robust than pure 6M relative strength.",
-                  },
-                  {
                     key: "sharpe_ratio",
                     label: "Sharpe (6M)",
                     tooltip:
@@ -2816,14 +2804,47 @@ function WatchlistStocksTab() {
                       "Higher = better risk-adjusted return. >2 strong, <0 net negative.",
                   },
                   {
+                    key: "blended_rs",
+                    label: "Blended RS",
+                    tooltip:
+                      "Blended Relative Strength = 0.6 × RS(3M) + 0.4 × RS(6M)\n" +
+                      "Each RS = Stock Return% − Nifty 50 Return% over that period.\n\n" +
+                      "Example: RS(3M) = +12%, RS(6M) = +8%\n" +
+                      "→ Blended RS = 0.6×12 + 0.4×8 = +10.4%\n\n" +
+                      "Weights recent 3M performance more — Nifty leaders often rotate\n" +
+                      "every 3–6 months, so blending both periods is more robust than\n" +
+                      "pure 6M relative strength.",
+                  },
+                  {
+                    key: "rs_3m",
+                    label: "RS (3M)",
+                    tooltip:
+                      "Relative Strength vs Nifty 50 over last 3 months (~63 trading days)\n" +
+                      "Formula: Stock 3M Return% − Nifty 50 3M Return%\n\n" +
+                      "Example: Stock up 10%, Nifty up 4%\n" +
+                      "→ RS(3M) = +6% (outperformed Nifty by 6pp in 3 months)\n\n" +
+                      "Positive = beat the index recently. Negative = underperformed.",
+                  },
+                  {
                     key: "rs_6m",
                     label: "RS (6M)",
                     tooltip:
-                      "Relative Strength vs Nifty 50 over last 6 months\n" +
+                      "Relative Strength vs Nifty 50 over last 6 months (~126 trading days)\n" +
                       "Formula: Stock 6M Return% − Nifty 50 6M Return%\n\n" +
                       "Example: Stock up 18%, Nifty up 8%\n" +
                       "→ RS(6M) = +10% (outperformed Nifty by 10pp)\n\n" +
                       "Positive = beat the index. Negative = underperformed.",
+                  },
+                  {
+                    key: "mdd_6m",
+                    label: "MDD (6M)",
+                    tooltip:
+                      "Maximum Drawdown over last 6 months (~126 trading days)\n" +
+                      "Formula: (Trough after Peak − Peak) ÷ Peak × 100\n\n" +
+                      "Example: Peak close = ₹150, Lowest close after that = ₹120\n" +
+                      "→ MDD = (120 − 150) / 150 × 100 = −20%\n\n" +
+                      "Always negative or zero. Closer to 0 = shallower drawdown (safer).\n" +
+                      "> −10% mild, −10% to −25% moderate, < −25% severe.",
                   },
                   {
                     key: "atr_pct",
@@ -2890,7 +2911,7 @@ function WatchlistStocksTab() {
             {pageRows.length === 0 ? (
               <tr>
                 <td
-                  colSpan={12}
+                  colSpan={14}
                   className="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-500"
                 >
                   No stocks match the current filter.
@@ -2953,21 +2974,6 @@ function WatchlistStocksTab() {
                       )}
                     </td>
                     <td className={`px-4 py-2.5 font-mono text-xs ${
-                      row.blended_rs == null
-                        ? "text-gray-400"
-                        : row.blended_rs > 20
-                          ? "text-emerald-600 dark:text-emerald-400 font-semibold"
-                          : row.blended_rs > 0
-                            ? "text-emerald-600 dark:text-emerald-400"
-                            : "text-red-500 dark:text-red-400"
-                    }`}
-                      title="Blended Momentum: 0.5×Return3M + 0.5×Return6M"
-                    >
-                      {row.blended_rs != null
-                        ? `${row.blended_rs >= 0 ? "+" : ""}${fmt(row.blended_rs)}%`
-                        : "—"}
-                    </td>
-                    <td className={`px-4 py-2.5 font-mono text-xs ${
                       row.sharpe_ratio == null
                         ? "text-gray-400"
                         : row.sharpe_ratio > 2
@@ -2977,6 +2983,34 @@ function WatchlistStocksTab() {
                             : "text-gray-900 dark:text-gray-100"
                     }`}>
                       {fmt(row.sharpe_ratio)}
+                    </td>
+                    <td className={`px-4 py-2.5 font-mono text-xs ${
+                      row.blended_rs == null
+                        ? "text-gray-400"
+                        : row.blended_rs > 20
+                          ? "text-emerald-600 dark:text-emerald-400 font-semibold"
+                          : row.blended_rs > 0
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-red-500 dark:text-red-400"
+                    }`}
+                      title="Blended RS: 0.6×RS(3M) + 0.4×RS(6M)"
+                    >
+                      {row.blended_rs != null
+                        ? `${row.blended_rs >= 0 ? "+" : ""}${fmt(row.blended_rs)}%`
+                        : "—"}
+                    </td>
+                    <td className={`px-4 py-2.5 font-mono text-xs ${
+                      row.rs_3m == null
+                        ? "text-gray-400"
+                        : row.rs_3m > 0
+                          ? "text-emerald-600 dark:text-emerald-400 font-semibold"
+                          : "text-red-500 dark:text-red-400"
+                    }`}
+                      title="Stock 3M return minus Nifty 50 3M return"
+                    >
+                      {row.rs_3m != null
+                        ? `${row.rs_3m >= 0 ? "+" : ""}${fmt(row.rs_3m)}%`
+                        : "—"}
                     </td>
                     <td className={`px-4 py-2.5 font-mono text-xs ${
                       row.rs_6m == null
@@ -2990,6 +3024,19 @@ function WatchlistStocksTab() {
                       {row.rs_6m != null
                         ? `${row.rs_6m >= 0 ? "+" : ""}${fmt(row.rs_6m)}%`
                         : "—"}
+                    </td>
+                    <td className={`px-4 py-2.5 font-mono text-xs ${
+                      row.mdd_6m == null
+                        ? "text-gray-400"
+                        : row.mdd_6m > -10
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : row.mdd_6m > -25
+                            ? "text-amber-600 dark:text-amber-400"
+                            : "text-red-600 dark:text-red-400 font-semibold"
+                    }`}
+                      title="Max drawdown: (trough after peak − peak) / peak × 100"
+                    >
+                      {row.mdd_6m != null ? `${fmt(row.mdd_6m)}%` : "—"}
                     </td>
                     <td className={`px-4 py-2.5 font-mono text-xs ${
                       row.atr_pct == null
