@@ -2273,7 +2273,7 @@ type AtrFilter = "" | "lt0" | "gt0lte1_5" | "gt1_5lte4" | "gt2lte5" | "gt2lte6" 
 type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt080lte10" | "gt1";
 type RsFilter = "" | "lt25" | "gte25";
 type DistSma200Filter = DistSma200Bucket[];
-type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sma_20" | "sharpe_ratio" | "atr_pct" | "rs_6m" | "dist_sma200" | "score";
+type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sharpe_ratio" | "atr_pct" | "rs_6m" | "blended_rs" | "dist_sma200" | "score";
 type SortDir = "asc" | "desc";
 
 const PAGE_SIZE_OPTIONS_WL = [10, 25, 50] as const;
@@ -2793,7 +2793,18 @@ function WatchlistStocksTab() {
                   { key: "current_rsi_2", label: "Curr RSI(2)" },
                   { key: "sma_200", label: "SMA 200" },
                   { key: "sma_50", label: "SMA 50" },
-                  { key: "sma_20", label: "SMA 20" },
+                  {
+                    key: "blended_rs",
+                    label: "Blended RS",
+                    tooltip:
+                      "Blended Momentum = 0.5 × Return3M + 0.5 × Return6M\n" +
+                      "Raw price return over ~63 and ~126 trading days, equally weighted.\n\n" +
+                      "Example: Return3M = +12%, Return6M = +18%\n" +
+                      "→ Blended RS = 0.5×12 + 0.5×18 = +15%\n\n" +
+                      "Captures both recent momentum (3M) and medium-term trend (6M).\n" +
+                      "Nifty leaders often rotate every 3–6 months — blending both\n" +
+                      "periods is more robust than pure 6M relative strength.",
+                  },
                   {
                     key: "sharpe_ratio",
                     label: "Sharpe (6M)",
@@ -2941,11 +2952,20 @@ function WatchlistStocksTab() {
                         <span className="text-blue-500 dark:text-blue-400"> | {fmt(row.current_sma_50)}</span>
                       )}
                     </td>
-                    <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
-                      {fmt(row.sma_20)}
-                      {row.current_sma_20 != null && (
-                        <span className="text-blue-500 dark:text-blue-400"> | {fmt(row.current_sma_20)}</span>
-                      )}
+                    <td className={`px-4 py-2.5 font-mono text-xs ${
+                      row.blended_rs == null
+                        ? "text-gray-400"
+                        : row.blended_rs > 20
+                          ? "text-emerald-600 dark:text-emerald-400 font-semibold"
+                          : row.blended_rs > 0
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-red-500 dark:text-red-400"
+                    }`}
+                      title="Blended Momentum: 0.5×Return3M + 0.5×Return6M"
+                    >
+                      {row.blended_rs != null
+                        ? `${row.blended_rs >= 0 ? "+" : ""}${fmt(row.blended_rs)}%`
+                        : "—"}
                     </td>
                     <td className={`px-4 py-2.5 font-mono text-xs ${
                       row.sharpe_ratio == null

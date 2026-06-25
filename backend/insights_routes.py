@@ -2417,6 +2417,7 @@ def create_insights_router() -> APIRouter:
                 # trading days (≈6 months).
                 _sharpe: float | None = None
                 _stock_6m_return: float | None = None
+                _stock_3m_return: float | None = None
                 try:
                     _close_s = grp["close"].astype(float)
                     _rets = _close_s.pct_change().dropna()
@@ -2430,12 +2431,19 @@ def create_insights_router() -> APIRouter:
                                 * (252 ** 0.5),
                                 4,
                             )
-                    # 6M price return for RS calculation
+                    # 6M price return (~126 bars)
                     _c6 = _close_s.iloc[-127:]
                     if len(_c6) >= 2:
                         _stock_6m_return = float(
                             (_c6.iloc[-1] - _c6.iloc[0])
                             / _c6.iloc[0] * 100
+                        )
+                    # 3M price return (~63 bars)
+                    _c3 = _close_s.iloc[-64:]
+                    if len(_c3) >= 2:
+                        _stock_3m_return = float(
+                            (_c3.iloc[-1] - _c3.iloc[0])
+                            / _c3.iloc[0] * 100
                         )
                 except Exception:
                     pass
@@ -2448,6 +2456,18 @@ def create_insights_router() -> APIRouter:
                 ):
                     _rs_6m = round(
                         _stock_6m_return - _nifty_6m_return, 4
+                    )
+
+                # Blended RS = 0.5×Return3M + 0.5×Return6M
+                _blended_rs: float | None = None
+                if (
+                    _stock_3m_return is not None
+                    and _stock_6m_return is not None
+                ):
+                    _blended_rs = round(
+                        0.5 * _stock_3m_return
+                        + 0.5 * _stock_6m_return,
+                        4,
                     )
 
                 # ATR% = ATR(14) / close * 100
@@ -2493,6 +2513,8 @@ def create_insights_router() -> APIRouter:
                         sharpe_ratio=_sharpe,
                         atr_pct=_atr_pct,
                         rs_6m=_rs_6m,
+                        return_3m=_stock_3m_return,
+                        blended_rs=_blended_rs,
                         dist_sma200=_dist_sma200,
                     )
                 )

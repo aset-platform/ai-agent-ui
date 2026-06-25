@@ -388,6 +388,8 @@ export interface WatchlistStockRow {
   sharpe_ratio: number | null;
   atr_pct: number | null;
   rs_6m: number | null;
+  return_3m: number | null;
+  blended_rs: number | null;
   dist_sma200: number | null;
   score: number | null;
 }
