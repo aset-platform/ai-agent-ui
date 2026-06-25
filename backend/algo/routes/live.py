@@ -766,7 +766,12 @@ async def _compute_strategy_commitment(
         return Decimal("0"), 0
 
     net = raw_pos.get("net", []) if isinstance(raw_pos, dict) else []
-    pos_rows = [r for r in net if int(r.get("quantity", 0)) != 0]
+    # Only long (positive-qty) net positions. Negative qty means a net
+    # intraday SELL of an overnight holding (e.g. sold 2 of 16 KTKBANK
+    # today → qty=-2 in positions()['net']). Counting those with abs()
+    # would (a) double-count the ticker alongside its holdings() entry
+    # and (b) show closed longs (SHAILY qty=-1) as open positions.
+    pos_rows = [r for r in net if int(r.get("quantity", 0)) > 0]
     hold_rows = [
         r for r in (raw_hold if isinstance(raw_hold, list) else [])
         if (
@@ -802,7 +807,7 @@ async def _compute_strategy_commitment(
             continue
         if attributed is None and sym not in attr:
             continue
-        qty = abs(int(r.get("quantity", 0)))
+        qty = int(r.get("quantity", 0))
         avg = Decimal(str(r.get("average_price", 0) or 0))
         committed += Decimal(qty) * avg
         count += 1

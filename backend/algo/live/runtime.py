@@ -77,6 +77,7 @@ from backend.algo.features.per_bar import (
 from backend.algo.live import slippage as _slippage
 from backend.algo.live.order_timeout import _OrderTimeoutWatcher
 from backend.algo.live.budget import (
+    fetch_kite_available_cash,
     reserve as budget_reserve,
 )
 from backend.algo.live.budget import (
@@ -3199,7 +3200,21 @@ class LiveRuntime:
         if signal.side == "BUY":
             _max_inr = Decimal(str(current_caps.get("max_inr") or 0))
             if _max_inr > 0:
-                _remaining = _max_inr - committed_inr_now
+                _internal_remaining = _max_inr - committed_inr_now
+                # Cap against Kite's actual available cash so the clamped
+                # qty doesn't overshoot what the broker will accept.
+                # pre_trade_check enforces this too, but aligning here
+                # turns a full reject into a partial-fill instead.
+                # Dry-run: no real broker cash; fail-open on error.
+                _kite_cash = Decimal("Infinity")
+                if not self._dry_run:
+                    try:
+                        _kite_cash = await fetch_kite_available_cash(
+                            self._user_id
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass  # pre_trade_check is the authoritative gate
+                _remaining = min(_internal_remaining, _kite_cash)
                 _affordable = (
                     int(_remaining // last_price)
                     if last_price and last_price > 0 and _remaining > 0
