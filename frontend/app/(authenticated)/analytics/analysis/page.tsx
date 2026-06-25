@@ -2117,6 +2117,26 @@ const DIST_SMA200_BUCKETS = [
 
 type DistSma200Bucket = (typeof DIST_SMA200_BUCKETS)[number]["value"];
 
+const BLENDED_RS_BUCKETS = [
+  { value: "lt10",    label: "< 10%",   caption: "Reject" },
+  { value: "10to20",  label: "10–20%",  caption: "Average" },
+  { value: "20to35",  label: "20–35%",  caption: "Good" },
+  { value: "35to50",  label: "35–50%",  caption: "Excellent" },
+  { value: "gt50",    label: "> 50%",   caption: "Elite leaders" },
+] as const;
+
+type BlendedRsBucket = (typeof BLENDED_RS_BUCKETS)[number]["value"];
+
+const MDD_6M_BUCKETS = [
+  { value: "lt10",    label: "< 10%",   caption: "⭐ Elite" },
+  { value: "10to15",  label: "10–15%",  caption: "Excellent" },
+  { value: "15to20",  label: "15–20%",  caption: "Good" },
+  { value: "20to30",  label: "20–30%",  caption: "Acceptable" },
+  { value: "gt30",    label: "> 30%",   caption: "Reject" },
+] as const;
+
+type Mdd6mBucket = (typeof MDD_6M_BUCKETS)[number]["value"];
+
 function DistSma200MultiSelect({
   selected,
   onChange,
@@ -2208,6 +2228,148 @@ function DistSma200MultiSelect({
   );
 }
 
+function BlendedRsMultiSelect({
+  selected,
+  onChange,
+}: {
+  selected: BlendedRsBucket[];
+  onChange: (v: BlendedRsBucket[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const toggle = (v: BlendedRsBucket) =>
+    onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v]);
+
+  const label =
+    selected.length === 0
+      ? "All"
+      : selected.length === 1
+        ? BLENDED_RS_BUCKETS.find((b) => b.value === selected[0])?.label ?? "1 range"
+        : `${selected.length} ranges`;
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        data-testid="watchlist-blended-rs-select"
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors ${
+          selected.length > 0
+            ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+            : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+        }`}
+      >
+        {label}
+        <svg className={`w-3 h-3 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-[80] min-w-full w-max rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl py-1">
+          {selected.length > 0 && (
+            <button type="button" onClick={() => onChange([])} className="w-full text-left px-3 py-1.5 text-xs text-indigo-600 dark:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800 font-medium">
+              Clear all
+            </button>
+          )}
+          {BLENDED_RS_BUCKETS.map((b) => {
+            const checked = selected.includes(b.value);
+            return (
+              <label key={b.value} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
+                <input type="checkbox" checked={checked} onChange={() => toggle(b.value)} className="shrink-0 accent-indigo-600" />
+                <span className="text-xs text-gray-900 dark:text-gray-100 whitespace-nowrap">
+                  <span className="font-medium">{b.label}</span>
+                  <span className="text-gray-500 dark:text-gray-400"> — {b.caption}</span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Mdd6mMultiSelect({
+  selected,
+  onChange,
+}: {
+  selected: Mdd6mBucket[];
+  onChange: (v: Mdd6mBucket[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const toggle = (v: Mdd6mBucket) =>
+    onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v]);
+
+  const label =
+    selected.length === 0
+      ? "All"
+      : selected.length === 1
+        ? MDD_6M_BUCKETS.find((b) => b.value === selected[0])?.label ?? "1 range"
+        : `${selected.length} ranges`;
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        data-testid="watchlist-mdd6m-select"
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors ${
+          selected.length > 0
+            ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+            : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+        }`}
+      >
+        {label}
+        <svg className={`w-3 h-3 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-[80] min-w-full w-max rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl py-1">
+          {selected.length > 0 && (
+            <button type="button" onClick={() => onChange([])} className="w-full text-left px-3 py-1.5 text-xs text-indigo-600 dark:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800 font-medium">
+              Clear all
+            </button>
+          )}
+          {MDD_6M_BUCKETS.map((b) => {
+            const checked = selected.includes(b.value);
+            return (
+              <label key={b.value} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
+                <input type="checkbox" checked={checked} onChange={() => toggle(b.value)} className="shrink-0 accent-indigo-600" />
+                <span className="text-xs text-gray-900 dark:text-gray-100 whitespace-nowrap">
+                  <span className="font-medium">{b.label}</span>
+                  <span className="text-gray-500 dark:text-gray-400"> — {b.caption}</span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ColumnTooltip({ text }: { text: string }) {
   const triggerRef = useRef<HTMLSpanElement>(null);
   const [coords, setCoords] = useState<{
@@ -2272,6 +2434,7 @@ type Rsi2Filter = "lte5" | "lte10" | "lte25" | "gte80" | null;
 type AtrFilter = "" | "lt0" | "gt0lte1_5" | "gt1_5lte4" | "gt2lte5" | "gt2lte6" | "gt5";
 type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt080lte10" | "gt1";
 type RsFilter = "" | "lt25" | "gte25";
+type Rs3mFilter = "" | "lt15" | "gte15";
 type DistSma200Filter = DistSma200Bucket[];
 type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sharpe_ratio" | "blended_rs" | "rs_3m" | "rs_6m" | "mdd_6m" | "atr_pct" | "dist_sma200" | "score";
 type SortDir = "asc" | "desc";
@@ -2306,7 +2469,10 @@ function WatchlistStocksTab() {
   const [sma200AboveLtp, setSma200AboveLtp] = useState(true);
   const [atrFilter, setAtrFilter] = useState<AtrFilter>("gt2lte6");
   const [sharpeFilter, setSharpeFilter] = useState<SharpeFilter>("gt1");
+  const [rs3mFilter, setRs3mFilter] = useState<Rs3mFilter>("");
   const [rsFilter, setRsFilter] = useState<RsFilter>("gte25");
+  const [blendedRsFilter, setBlendedRsFilter] = useState<BlendedRsBucket[]>([]);
+  const [mdd6mFilter, setMdd6mFilter] = useState<Mdd6mBucket[]>([]);
   const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>(
     ["gt5lte15", "gt15lte35", "gt35lte50"],
   );
@@ -2420,6 +2586,15 @@ function WatchlistStocksTab() {
         return true;
       });
     }
+    if (rs3mFilter) {
+      stocks = stocks.filter((s) => {
+        const v = s.rs_3m;
+        if (v == null) return false;
+        if (rs3mFilter === "lt15") return v < 15;
+        if (rs3mFilter === "gte15") return v >= 15;
+        return true;
+      });
+    }
     if (rsFilter) {
       stocks = stocks.filter((s) => {
         const v = s.rs_6m;
@@ -2428,6 +2603,35 @@ function WatchlistStocksTab() {
         if (rsFilter === "lt25") return r < 25;
         if (rsFilter === "gte25") return r >= 25;
         return true;
+      });
+    }
+    if (blendedRsFilter.length > 0) {
+      stocks = stocks.filter((s) => {
+        const v = s.blended_rs;
+        if (v == null) return false;
+        return blendedRsFilter.some((bucket) => {
+          if (bucket === "lt10") return v < 10;
+          if (bucket === "10to20") return v >= 10 && v < 20;
+          if (bucket === "20to35") return v >= 20 && v < 35;
+          if (bucket === "35to50") return v >= 35 && v < 50;
+          if (bucket === "gt50") return v >= 50;
+          return false;
+        });
+      });
+    }
+    if (mdd6mFilter.length > 0) {
+      stocks = stocks.filter((s) => {
+        const v = s.mdd_6m; // always <= 0
+        if (v == null) return false;
+        const abs = Math.abs(v);
+        return mdd6mFilter.some((bucket) => {
+          if (bucket === "lt10") return abs < 10;
+          if (bucket === "10to15") return abs >= 10 && abs < 15;
+          if (bucket === "15to20") return abs >= 15 && abs < 20;
+          if (bucket === "20to30") return abs >= 20 && abs < 30;
+          if (bucket === "gt30") return abs >= 30;
+          return false;
+        });
       });
     }
     if (distSma200Filter.length > 0) {
@@ -2467,7 +2671,7 @@ function WatchlistStocksTab() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return stocks;
-  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rsFilter, distSma200Filter, search, sortKey, sortDir]);
+  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rs3mFilter, rsFilter, blendedRsFilter, mdd6mFilter, distSma200Filter, search, sortKey, sortDir]);
 
   const totalPages = Math.max(
     1,
@@ -2484,7 +2688,7 @@ function WatchlistStocksTab() {
     let cancelled = false;
     queueMicrotask(() => { if (!cancelled) setPage(0); });
     return () => { cancelled = true; };
-  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rsFilter, distSma200Filter, search, pageSize, market]);
+  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rs3mFilter, rsFilter, blendedRsFilter, mdd6mFilter, distSma200Filter, search, pageSize, market]);
 
   const handleCopyTickers = () => {
     const csv = filtered.map((s) => s.ticker).join(", ");
@@ -2526,8 +2730,8 @@ function WatchlistStocksTab() {
   return (
     <div className="space-y-3">
       {/* Toolbar */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        {/* Left: market toggle + dropdowns grid */}
+      <div className="flex flex-col gap-2">
+        {/* Filter strip: row 1 = dropdowns, row 2 = chips + search + actions */}
         <div className="flex flex-col gap-2">
           {/* Row 1 — all dropdowns */}
           <div className="flex flex-wrap items-center gap-3">
@@ -2547,6 +2751,10 @@ function WatchlistStocksTab() {
                     setSma200AboveLtp(false);
                     setAtrFilter("");
                     setSharpeFilter("");
+                    setRs3mFilter("");
+                    setRsFilter("gte25");
+                    setBlendedRsFilter([]);
+                    setMdd6mFilter([]);
                     setDistSma200Filter([]);
                     setSearch("");
                   }}
@@ -2622,6 +2830,17 @@ function WatchlistStocksTab() {
                   ],
                 },
                 {
+                  label: "RS(3M)",
+                  testId: "watchlist-rs3m-select",
+                  value: rs3mFilter,
+                  onChange: (v: string) => setRs3mFilter(v as Rs3mFilter),
+                  options: [
+                    { value: "", label: "All" },
+                    { value: "lt15", label: "< 15%" },
+                    { value: "gte15", label: "≥ 15%" },
+                  ],
+                },
+                {
                   label: "RS(6M)",
                   testId: "watchlist-rs-select",
                   value: rsFilter,
@@ -2651,6 +2870,17 @@ function WatchlistStocksTab() {
               </div>
             ))}
 
+            {/* Blended RS — multi-select */}
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                Blended RS
+              </label>
+              <BlendedRsMultiSelect
+                selected={blendedRsFilter}
+                onChange={setBlendedRsFilter}
+              />
+            </div>
+
             {/* Dist SMA200 — multi-select */}
             <div className="flex items-center gap-1.5">
               <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
@@ -2661,9 +2891,20 @@ function WatchlistStocksTab() {
                 onChange={setDistSma200Filter}
               />
             </div>
+
+            {/* MDD(6M) — multi-select */}
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                MDD(6M)
+              </label>
+              <Mdd6mMultiSelect
+                selected={mdd6mFilter}
+                onChange={setMdd6mFilter}
+              />
+            </div>
           </div>
 
-          {/* Row 2 — toggle chips */}
+          {/* Row 2 — toggle chips + search + actions */}
           <div className="flex flex-wrap items-center gap-1.5">
             {(
               [
@@ -2705,68 +2946,72 @@ function WatchlistStocksTab() {
                 {label}
               </button>
             ))}
-          </div>
-        </div>
 
-        {/* Right: search + copy */}
-        <div className="flex items-center gap-2 self-start">
-          <div className="relative">
-            <svg
-              className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none"
-              viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+            <div className="h-4 w-px bg-gray-200 dark:bg-gray-700 mx-1" />
+
+            {/* Search */}
+            <div className="relative">
+              <svg
+                className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none"
+                viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+              >
+                <circle cx="11" cy="11" r="8" />
+                <path d="m21 21-4.35-4.35" />
+              </svg>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search ticker…"
+                data-testid="watchlist-search"
+                className="pl-8 pr-3 py-1.5 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-xs text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-36"
+              />
+            </div>
+
+            {/* Copy Tickers */}
+            <button
+              type="button"
+              data-testid="watchlist-copy-tickers"
+              onClick={handleCopyTickers}
+              title="Copy comma-separated tickers to clipboard"
+              className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 dark:border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
             >
-              <circle cx="11" cy="11" r="8" />
-              <path d="m21 21-4.35-4.35" />
-            </svg>
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search ticker…"
-              data-testid="watchlist-search"
-              className="pl-8 pr-3 py-1.5 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-xs text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-36"
-            />
-          </div>
-        <button
-          type="button"
-          data-testid="watchlist-copy-tickers"
-          onClick={handleCopyTickers}
-          title="Copy comma-separated tickers to clipboard"
-          className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 dark:border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors self-start"
-        >
-          {copied ? (
-            <>
-              <svg className="w-3.5 h-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <path d="M20 6 9 17l-5-5" />
-              </svg>
-              Copied!
-            </>
-          ) : (
-            <>
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="9" y="9" width="13" height="13" rx="2" />
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-              </svg>
-              Copy Tickers
-              {filtered.length > 0 && (
-                <span className="text-gray-400">({filtered.length})</span>
+              {copied ? (
+                <>
+                  <svg className="w-3.5 h-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                  Copied!
+                </>
+              ) : (
+                <>
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                  Copy Tickers
+                  {filtered.length > 0 && (
+                    <span className="text-gray-400">({filtered.length})</span>
+                  )}
+                </>
               )}
-            </>
-          )}
-        </button>
-        <button
-          type="button"
-          data-testid="watchlist-add-to-strategy"
-          onClick={() => setAddToStrategyOpen(true)}
-          disabled={filtered.length === 0}
-          title="Add filtered tickers to a strategy's allowed list"
-          className="inline-flex items-center gap-1.5 rounded-md border border-indigo-200 dark:border-indigo-700 px-3 py-1.5 text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed self-start"
-        >
-          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-          Add to Strategy
-        </button>
+            </button>
+
+            {/* Add to Strategy */}
+            <button
+              type="button"
+              data-testid="watchlist-add-to-strategy"
+              onClick={() => setAddToStrategyOpen(true)}
+              disabled={filtered.length === 0}
+              title="Add filtered tickers to a strategy's allowed list"
+              className="inline-flex items-center gap-1.5 rounded-md border border-indigo-200 dark:border-indigo-700 px-3 py-1.5 text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              Add to Strategy
+            </button>
+          </div>
         </div>
       </div>
 
