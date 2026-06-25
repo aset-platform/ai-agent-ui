@@ -2436,19 +2436,18 @@ type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt080lte10" | "gt
 type RsFilter = "" | "lt25" | "gte25";
 type Rs3mFilter = "" | "lt15" | "gte15";
 
-// Reset target — what the Reset button restores.
-// Intentionally liberal for legacy filters (All / OFF) so clicking Reset is
-// visibly meaningful regardless of what the page loaded with.
-// The 3 new quality filters keep their curated defaults.
+// Reset target — "All / OFF" for every filter.
+// The page loads with curated defaults (initial useState values); Reset
+// returns to a fully-unfiltered state so the action is always visible.
 const RESET_TARGET = {
   rsi2Filter:       null as Rsi2Filter | null,
   curRsi2Filter:    null as Rsi2Filter | null,
   atrFilter:        "" as AtrFilter,
   sharpeFilter:     "" as SharpeFilter,
-  rs3mFilter:       "gte15" as Rs3mFilter,
+  rs3mFilter:       "" as Rs3mFilter,
   rsFilter:         "" as RsFilter,
-  blendedRsFilter:  ["20to35", "35to50", "gt50"] as BlendedRsBucket[],
-  mdd6mFilter:      ["lt10", "10to15", "15to20"] as Mdd6mBucket[],
+  blendedRsFilter:  [] as BlendedRsBucket[],
+  mdd6mFilter:      [] as Mdd6mBucket[],
   distSma200Filter: [] as DistSma200Bucket[],
   goldenCross:      false,
   sma50AboveLtp:    false,
