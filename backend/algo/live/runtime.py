@@ -4397,6 +4397,17 @@ class LiveRuntime:
             existing = self._positions.open_positions().get(ticker)
             if not existing:
                 return None
+            # v5 trailing stop: GTT is the primary exit — suppress
+            # the AST's RSI-based exit while the GTT is live so the
+            # position can ride further before the trail fires.
+            if self._trailing_enabled and ticker in self._trailing_managers:
+                _logger.info(
+                    "trailing active — suppressing AST exit for %s "
+                    "(gtt_id=%s handles close)",
+                    ticker,
+                    self._gtt_ids.get(ticker),
+                )
+                return None
             return Signal(
                 strategy_id=self._strategy.id,
                 user_id=self._user_id,

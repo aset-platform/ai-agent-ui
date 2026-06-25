@@ -1196,6 +1196,14 @@ class PaperRuntime:
             existing = self._positions.open_positions().get(ticker)
             if not existing:
                 return None
+            # v5 trailing stop: GTT/simulated trail is the primary exit —
+            # suppress AST exit signal while trailing manager is active.
+            if self._trailing_enabled and ticker in self._trailing_managers:
+                _logger.info(
+                    "trailing active — suppressing AST exit for %s",
+                    ticker,
+                )
+                return None
             return Signal(
                 strategy_id=self._strategy.id,
                 user_id=self._user_id,
