@@ -11,7 +11,7 @@ import { BudgetAllocationModal }
 import { BudgetReservationHistoryModal }
   from "./BudgetReservationHistoryModal";
 
-export function BudgetPanel() {
+export function BudgetPanel({ mode = "live" }: { mode?: string }) {
   const {
     budget, isLoading, error, mutate: mutateBudget,
   } = useUserBudget();
@@ -295,6 +295,7 @@ export function BudgetPanel() {
       {historyOpen && (
         <BudgetReservationHistoryModal
           onClose={() => setHistoryOpen(false)}
+          mode={mode}
         />
       )}
     </>

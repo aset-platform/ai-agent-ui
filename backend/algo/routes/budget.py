@@ -132,6 +132,7 @@ async def _list_reservations_impl(
     *,
     user_id: UUID,
     include_history: bool = False,
+    mode: str | None = None,
 ) -> dict:
     repo = BudgetRepo()
     factory = _session_factory()
@@ -139,6 +140,9 @@ async def _list_reservations_impl(
         if include_history:
             from sqlalchemy import text
 
+            mode_clause = (
+                "  AND (metadata->>'mode') = :mode " if mode else ""
+            )
             result = await session.execute(
                 text(
                     "SELECT reservation_id, user_id, "
@@ -149,11 +153,11 @@ async def _list_reservations_impl(
                     "       transitioned_at, metadata, "
                     "       error_text "
                     "FROM algo.budget_reservations "
-                    "WHERE user_id = :uid "
+                    f"WHERE user_id = :uid {mode_clause}"
                     "ORDER BY transitioned_at DESC "
                     "LIMIT 500"
                 ),
-                {"uid": user_id},
+                {"uid": user_id, **({"mode": mode} if mode else {})},
             )
             rows = result.mappings().all()
             return {
@@ -314,11 +318,13 @@ def create_budget_router() -> APIRouter:
     @router.get("/reservations")
     async def list_reservations(
         include_history: bool = False,
+        mode: str | None = None,
         user: UserContext = Depends(pro_or_superuser),
     ):
         return await _list_reservations_impl(
             user_id=UUID(user.user_id),
             include_history=include_history,
+            mode=mode,
         )
 
     @router.post(
