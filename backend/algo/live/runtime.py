@@ -1357,24 +1357,40 @@ class LiveRuntime:
 
     # ── v5 GTT trailing stop ─────────────────────────────────────
 
-    def _on_sell_fill_trailing(self, ticker: str) -> None:
-        """Clear trailing state when any SELL fill is confirmed.
+    def _on_sell_fill_trailing(
+        self,
+        ticker: str,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        """Clear trailing state when a position-closing SELL fills.
 
-        Called from the postback handler on COMPLETE SELL — the
-        position is being CLOSED, so its protective GTT and per-ticker
-        lock must go too:
-          * Cancel the live Kite GTT (``delete_gtt`` no-ops safely if
-            this SELL *was* the GTT firing — calling it on an
-            already-triggered id is harmless).
-          * Drop the per-ticker lock + sync it to Redis so the cap
-            frees the slot.
+        Called from the postback handler on COMPLETE SELL.
 
-        Safe to call even when no trailing state exists for the
-        ticker. A GTT-cancel failure must NOT abort the rest of the
-        cleanup (best-effort, logged with ``exc_info``).
+        ``reason`` is the signal reason stored in the in-flight entry.
+        A ``set_target_weight`` SELL is a rebalancing *trim* (partial
+        reduce to fit the 20% weight), NOT a full position close.
+        For trims the GTT and trailing state must be preserved so the
+        remaining shares stay protected. Only exit/stop_loss/None (GTT
+        trigger postback has no in-flight entry) → full close cleanup.
+
+        Safe to call even when no trailing state exists for the ticker.
+        A GTT-cancel failure must NOT abort the rest of the cleanup
+        (best-effort, logged with ``exc_info``).
         """
         if not self._trailing_enabled:
             return
+        if reason == "set_target_weight":
+            # Rebalancing trim: position is NOT fully closed.
+            # Keep GTT + trailing manager active to protect what remains.
+            _logger.info(
+                "trailing: set_target_weight trim for %s — "
+                "preserving GTT/trailing state (not a full close); "
+                "gtt_id=%s",
+                ticker, self._gtt_ids.get(ticker),
+            )
+            return
+        # Full close (exit, stop_loss, GTT fire, panic-close, etc.)
         # Capture the gtt_id BEFORE popping so we can cancel it.
         gtt_id = self._gtt_ids.get(ticker)
         self._trailing_managers.pop(ticker, None)

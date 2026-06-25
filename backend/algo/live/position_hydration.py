@@ -239,7 +239,13 @@ def hydrate(
     for r in net:
         product = (r.get("product") or "").upper()
         qty = _safe_int(r.get("quantity"))
-        if qty == 0 or product not in ("MIS", "CNC"):
+        # qty < 0 means a net intraday SELL of an overnight holding
+        # (e.g. held 16 shares overnight, sold 2 today → qty=-2 in
+        # positions()['net']). Skip it so the overnight holdings entry
+        # (qty=14 from holdings()) is not blocked by the already_loaded
+        # guard — otherwise the position would appear as 0 to the tracker
+        # even though 14 shares are still held in Kite.
+        if qty <= 0 or product not in ("MIS", "CNC"):
             continue
         internal = _to_internal_ticker(
             r.get("tradingsymbol") or "",

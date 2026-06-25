@@ -401,7 +401,13 @@ async def kite_postback(request: Request) -> dict:
             )
             if rt is not None:
                 _ticker = _sym + ".NS" if "." not in _sym else _sym
-                rt._on_sell_fill_trailing(_ticker)
+                _sell_reason = (
+                    matched_entry.get("reason")
+                    if matched_entry else None
+                )
+                rt._on_sell_fill_trailing(
+                    _ticker, reason=_sell_reason
+                )
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
                 "kite postback: trailing SELL cleanup failed "
