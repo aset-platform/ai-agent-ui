@@ -160,6 +160,23 @@ _EVENT_FLUSH_INTERVAL_S = float(
     os.environ.get("ALGO_EVENT_FLUSH_INTERVAL_S", "5")
 )
 
+# High #15 — cap per-ticker bar history so a long live session cannot
+# grow _bars_by_ticker without bound. 300 > SMA-200 (largest indicator
+# lookback) with headroom; override via ALGO_MAX_BAR_HISTORY env var.
+# Falls back to 300 on any parse error so a bad env value doesn't crash
+# the runtime at startup.
+try:
+    _MAX_BAR_HISTORY = int(os.getenv("ALGO_MAX_BAR_HISTORY", "300"))
+    if _MAX_BAR_HISTORY < 1:
+        raise ValueError("must be positive")
+except Exception:  # noqa: BLE001
+    _MAX_BAR_HISTORY = 300
+
+# _closed_entry_cache keys are (ticker, closed_date). Entries whose
+# date is older than this many calendar days are evicted at bar-close.
+# 4 calendar days covers 2 trading days including a weekend.
+_CLOSED_ENTRY_CACHE_MAX_AGE_DAYS = 4
+
 
 def _env_truthy(name: str) -> bool:
     """True when env var ``name`` is set to a truthy value.
@@ -2727,6 +2744,12 @@ class LiveRuntime:
                     bar_open_ts_ns=bucket_open_ns,
                 )
             )
+            # High #15 — trim in place so the same list object remains
+            # bound to _bars_by_ticker[ticker]; keeps the most-recent N
+            # bars. Only on new-bucket append (NOT the in-place update
+            # else branch below — that path never grows the list).
+            if len(history) > _MAX_BAR_HISTORY:
+                del history[: len(history) - _MAX_BAR_HISTORY]
         else:
             today_bar = history[-1]
             history[-1] = today_bar.model_copy(
@@ -2758,6 +2781,9 @@ class LiveRuntime:
             history=history,
             cadence=self._strategy.schedule.interval,
         )
+        # High #15 — evict stale _closed_entry_cache entries once per
+        # bar-close. Cheap dict comprehension; guards unbounded growth.
+        self._evict_stale_closed_entry_cache(as_of=bar_date_obj)
         # FE-15b — shared per-bar feature assembly (single
         # source of truth across backtest/paper/live/dry-run).
         features = assemble_per_bar_features(
@@ -4530,6 +4556,24 @@ class LiveRuntime:
                 bar_date=closed_date,
             )
         return sig
+
+    def _evict_stale_closed_entry_cache(self, *, as_of: date) -> None:
+        """Drop _closed_entry_cache entries older than
+        _CLOSED_ENTRY_CACHE_MAX_AGE_DAYS calendar days before ``as_of``.
+
+        High #15 — prevents the cache from growing without bound across
+        a long live session. Called once per bar-close; the dict is
+        small (one entry per ticker per day) so the comprehension is
+        cheap. Safe to call on an empty dict.
+        """
+        if not self._closed_entry_cache:
+            return
+        cutoff = as_of - timedelta(days=_CLOSED_ENTRY_CACHE_MAX_AGE_DAYS)
+        self._closed_entry_cache = {
+            k: v
+            for k, v in self._closed_entry_cache.items()
+            if k[1] >= cutoff
+        }
 
     def _maybe_emit_qty_zero_rejection(
         self,
