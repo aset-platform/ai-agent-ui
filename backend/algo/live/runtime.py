@@ -999,6 +999,57 @@ class LiveRuntime:
         except asyncio.CancelledError:
             raise
 
+    def _per_bar_sync_reads(
+        self,
+        *,
+        ticker: str,
+        bar_date_obj: date,
+        history: list[Any],
+        cadence: str,
+    ) -> None:
+        """Sync Iceberg reads + feature emit for one bar.
+
+        Called via ``asyncio.to_thread`` from ``_on_bar_close`` so
+        the event-loop tick drain is not blocked. Must complete before
+        ``assemble_per_bar_features`` (sequential ``await``).
+
+        FE-10: feature emission failure is non-fatal (try/except kept
+        as today — ticker logged, bar continues).
+        REGIME-2a: factor / regime / overlay caches are idempotent +
+        O(1) after first load so repeated calls are cheap.
+        """
+        # FE-10 — emit per-ticker intraday features to
+        # ``stocks.intraday_features`` for the bar that just
+        # closed. Side-effect only; failure is non-fatal. Daily
+        # cadence is a no-op inside the emitter (FE-3 owns the
+        # daily writes). Cohort features (FE-8 / FE-9) are NOT
+        # emitted here — daily-batch compute is canonical.
+        try:
+            from backend.algo.features.live_emitter import (
+                _INTERVAL_SEC_BY_LABEL,
+                emit_features_for_bar,
+            )
+
+            if cadence in _INTERVAL_SEC_BY_LABEL:
+                emit_features_for_bar(
+                    ticker=ticker,
+                    interval_sec=_INTERVAL_SEC_BY_LABEL[cadence],
+                    history=history,
+                    cadence_interval=cadence,
+                    mode="live",
+                )
+        except Exception:
+            _logger.exception(
+                "[live] FE-10 feature emission hook failed "
+                "(non-fatal): ticker=%s",
+                ticker,
+            )
+        # REGIME-2a — lazy-load cached factor rows for this
+        # ticker on first sight; subsequent bars are O(1).
+        self._ensure_factor_cache(ticker, bar_date_obj)
+        self._ensure_regime_cache(bar_date_obj)
+        self._ensure_daily_overlay_cache(ticker, bar_date_obj)
+
     def _ensure_regime_cache(self, bar_date_obj: date) -> None:
         if self._regime_loaded:
             return
@@ -2696,38 +2747,17 @@ class LiveRuntime:
         # defers a BUY that appears solely on today's still-forming
         # candle; replay is exempt (wall-clock is meaningless there).
         ind_map = compute_indicators(history)
-        # FE-10 — emit per-ticker intraday features to
-        # ``stocks.intraday_features`` for the bar that just
-        # closed. Side-effect only; failure is non-fatal. Daily
-        # cadence is a no-op inside the emitter (FE-3 owns the
-        # daily writes). Cohort features (FE-8 / FE-9) are NOT
-        # emitted here — daily-batch compute is canonical.
-        try:
-            from backend.algo.features.live_emitter import (
-                _INTERVAL_SEC_BY_LABEL,
-                emit_features_for_bar,
-            )
-
-            _cadence = self._strategy.schedule.interval
-            if _cadence in _INTERVAL_SEC_BY_LABEL:
-                emit_features_for_bar(
-                    ticker=bar.ticker,
-                    interval_sec=_INTERVAL_SEC_BY_LABEL[_cadence],
-                    history=history,
-                    cadence_interval=_cadence,
-                    mode="live",
-                )
-        except Exception:
-            _logger.exception(
-                "[live] FE-10 feature emission hook failed "
-                "(non-fatal): ticker=%s",
-                bar.ticker,
-            )
-        # REGIME-2a — lazy-load cached factor rows for this
-        # ticker on first sight; subsequent bars are O(1).
-        self._ensure_factor_cache(bar.ticker, bar_date_obj)
-        self._ensure_regime_cache(bar_date_obj)
-        self._ensure_daily_overlay_cache(bar.ticker, bar_date_obj)
+        # FE-10 + REGIME-2a — offloaded to a worker thread so the
+        # WS tick drain is not blocked by sync Iceberg reads.
+        # Sequential await ensures caches are warm before the
+        # assemble_per_bar_features call that follows.
+        await asyncio.to_thread(
+            self._per_bar_sync_reads,
+            ticker=bar.ticker,
+            bar_date_obj=bar_date_obj,
+            history=history,
+            cadence=self._strategy.schedule.interval,
+        )
         # FE-15b — shared per-bar feature assembly (single
         # source of truth across backtest/paper/live/dry-run).
         features = assemble_per_bar_features(
