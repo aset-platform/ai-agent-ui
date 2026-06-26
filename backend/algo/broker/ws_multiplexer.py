@@ -484,14 +484,17 @@ class KiteWsMultiplexer:
                         exc_info=True,
                     )
             # 5.3: flush all staged LTP values in one pipeline call.
-            # Best-effort — failure is swallowed to keep the tick path
-            # non-blocking. 60s TTL matches the previous per-tick TTL.
+            # Best-effort — skip when Redis is unavailable (pipe=None).
+            # 60s TTL uses raw Redis ``ex=`` kwarg, NOT CacheService
+            # ``ttl=``, because pipeline() returns the raw redis-py
+            # Pipeline object.
             if _ltp_cache is not None and ltp_batch:
                 try:
                     pipe = _ltp_cache.pipeline()
-                    for key, val in ltp_batch.items():
-                        pipe.set(key, val, ex=60)
-                    pipe.execute()
+                    if pipe is not None:
+                        for key, val in ltp_batch.items():
+                            pipe.set(key, val, ex=60)
+                        pipe.execute()
                 except Exception:  # noqa: BLE001
                     pass
 

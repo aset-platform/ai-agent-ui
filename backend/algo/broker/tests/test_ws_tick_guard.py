@@ -6,6 +6,11 @@
       cancel in close().
 5.3 — Batch per-tick LTP writes into one pipeline per on_ticks batch;
       prune backpressure dicts on unsubscribe.
+
+TTL convention note (5.3):
+  pipeline() returns the *raw* redis-py Pipeline, not a CacheService
+  wrapper, so callers correctly use pipe.set(key, val, ex=60) with
+  the raw Redis ``ex=`` kwarg — NOT the CacheService ``ttl=`` kwarg.
 """
 from __future__ import annotations
 
@@ -93,10 +98,6 @@ def _wire(
     # The closure captures _ltp_cache at _build_ticker call time via
     # ``from backend.cache import get_cache; _ltp_cache = get_cache()``.
     # Patch the module attribute so the lazy import returns our fake.
-    patch_target = (
-        "backend.algo.broker.ws_multiplexer.KiteWsMultiplexer"
-        "._build_ticker"
-    )
     with patch.dict(sys.modules, {"kiteconnect": fake_kc}):
         if ltp_cache is not None:
             with patch(
@@ -467,3 +468,99 @@ class TestBpDictPruning:
 
         assert _SID_2 in mux._bp_drops
         assert mux._bp_drops[_SID_2] == 7
+
+
+# ---------------------------------------------------------------------------
+# 5.3 regression — real CacheService must expose pipeline()
+#
+# This test exercises the *real* CacheService (not _FakeCache) with a
+# MagicMock redis client.  It FAILED before the fix because CacheService
+# had no pipeline() method, causing an AttributeError swallowed by the
+# bare ``except Exception: pass`` guard in on_ticks, meaning LTP was
+# silently never written to Redis in production.
+# ---------------------------------------------------------------------------
+
+
+class TestCacheServicePipeline:
+    """CacheService.pipeline() must delegate to the raw redis client
+    and the batched LTP flush in on_ticks must actually reach Redis."""
+
+    def _make_cache_with_mock_client(self):
+        """Return a CacheService whose internal redis client is a
+        MagicMock so we can assert pipeline/set/execute calls."""
+        from backend.cache import CacheService
+
+        mock_client = MagicMock()
+        # pipeline() on the mock returns a child Mock by default.
+        svc = object.__new__(CacheService)
+        # Inject dependencies without calling __init__ (which needs
+        # a live Redis URL).
+        import redis as _redis_mod
+        svc._redis = _redis_mod
+        svc._client = mock_client
+        return svc, mock_client
+
+    def test_cache_service_has_pipeline_method(self):
+        """CacheService must expose pipeline() — AttributeError here
+        means the fix is not applied."""
+        svc, _ = self._make_cache_with_mock_client()
+        assert hasattr(svc, "pipeline"), (
+            "CacheService missing pipeline() — 5.3 regression"
+        )
+
+    def test_pipeline_delegates_to_raw_client(self):
+        """pipeline() must return the raw redis-py Pipeline object
+        (client.pipeline()), not None when client is available."""
+        svc, mock_client = self._make_cache_with_mock_client()
+        pipe = svc.pipeline()
+        mock_client.pipeline.assert_called_once()
+        assert pipe is mock_client.pipeline.return_value
+
+    def test_pipeline_returns_none_when_no_client(self):
+        """pipeline() returns None when Redis is unavailable."""
+        from backend.cache import CacheService
+        import redis as _redis_mod
+
+        svc = object.__new__(CacheService)
+        svc._redis = _redis_mod
+        svc._client = None
+        assert svc.pipeline() is None
+
+    def test_on_ticks_calls_pipeline_set_and_execute(
+        self, event_loop,
+    ):
+        """End-to-end: on_ticks flush must call pipeline.set() and
+        pipeline.execute() on the real CacheService — this FAILED
+        before the fix because CacheService had no pipeline() method."""
+        loop = event_loop
+        mux, fake_kt = _make_mux(loop)
+
+        # Build a real CacheService backed by a MagicMock redis client.
+        svc, mock_client = self._make_cache_with_mock_client()
+        mock_pipe = MagicMock()
+        mock_client.pipeline.return_value = mock_pipe
+
+        _wire(mux, fake_kt, ltp_cache=svc)
+
+        mux.subscribe(
+            _SID_1, [101], {101: "RELIANCE"},
+        )
+
+        fake_kt.fire_ticks([
+            {"instrument_token": 101, "last_price": 2500.0},
+        ])
+        loop.run_until_complete(asyncio.sleep(0))
+
+        # pipeline() must have been called once.
+        mock_client.pipeline.assert_called_once()
+        # pipe.set() must have been called with ex=60.
+        mock_pipe.set.assert_called_once()
+        _key, _val = (
+            mock_pipe.set.call_args[0][0],
+            mock_pipe.set.call_args[0][1],
+        )
+        assert mock_pipe.set.call_args[1].get("ex") == 60, (
+            "pipeline.set() not called with ex=60"
+        )
+        # pipe.execute() must have been called exactly once.
+        mock_pipe.execute.assert_called_once()
