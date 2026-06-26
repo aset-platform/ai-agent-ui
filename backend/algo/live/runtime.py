@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time as _time
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -323,6 +324,12 @@ class LiveRuntime:
         # positions + Redis; flushed to algo.runs every 30s.
         self._ticker_locked: set[str] = set()
         self._bars_by_ticker: dict[str, list] = {}
+        # Task 4.0a — anti-churn guard. Keyed on (ticker, side) →
+        # epoch seconds of the last ACTUAL placement. A non-protective
+        # (rebalance/entry) order for the same key inside
+        # ALGO_ORDER_COOLDOWN_S is suppressed; protective exits are
+        # exempt. See _submit_order's churn guard.
+        self._last_submit_ts: dict[tuple[str, str], float] = {}
 
         # ASETPLTFRM-376 — hydrate PositionTracker from any pre-
         # existing Kite positions/holdings so EXIT logic can see
@@ -3424,6 +3431,51 @@ class LiveRuntime:
     # Kite order submission
     # ----------------------------------------------------------
 
+    # Default cooldown between same-(ticker, side) non-protective
+    # placements. Read once per call so tests / ops can tune via env
+    # without a restart. 300s = 5 min: long enough to outlast an
+    # order-timeout cancel+re-eval cycle, short enough to not block a
+    # legitimate same-direction rebalance later in the session.
+    _COOLDOWN_DEFAULT_S = 300.0
+
+    def _churn_suppress_kind(
+        self, *, ticker: str, side: str
+    ) -> str | None:
+        """Return the churn-suppression kind for a non-protective
+        (ticker, side) order, or None if it may proceed.
+
+        ``"inflight"`` — a non-terminal in-flight entry exists for the
+        same (ticker, side). ``"cooldown"`` — placed within
+        ``ALGO_ORDER_COOLDOWN_S`` of the last actual placement. The
+        caller MUST have already exempted protective exits.
+        """
+        symbol = ticker.replace(".NS", "")
+        _TERMINAL = {"filled", "cancelled", "rejected", "complete"}
+        for entry in self._in_flight:
+            if entry.get("side") != side:
+                continue
+            entry_symbol = str(entry.get("symbol", "")).replace(
+                ".NS", ""
+            )
+            if entry_symbol != symbol:
+                continue
+            if str(entry.get("status", "")).lower() not in _TERMINAL:
+                return "inflight"
+
+        try:
+            cooldown_s = float(
+                os.getenv(
+                    "ALGO_ORDER_COOLDOWN_S",
+                    str(self._COOLDOWN_DEFAULT_S),
+                )
+            )
+        except (TypeError, ValueError):
+            cooldown_s = self._COOLDOWN_DEFAULT_S
+        last = self._last_submit_ts.get((ticker, side))
+        if last is not None and (_time.time() - last) < cooldown_s:
+            return "cooldown"
+        return None
+
     async def _submit_order(
         self,
         *,
@@ -3440,6 +3492,58 @@ class LiveRuntime:
         exchange = "NSE"
         symbol = signal.ticker.replace(".NS", "")
         side = "BUY" if signal.side == "BUY" else "SELL"
+
+        # Task 4.0a — anti-churn guard. On 2026-06-25 the runtime
+        # re-issued an identical KTKBANK set_target_weight SELL every
+        # eval (~60s) while prior ones were still in-flight or had
+        # just been cancelled by the order-timeout watcher → place→
+        # cancel→re-place churn that became real fills. Suppress a
+        # non-protective duplicate (ticker, side) when an order is
+        # already in flight OR within the cooldown window.
+        #
+        # Load-bearing safety property: a PROTECTIVE exit MUST NEVER
+        # be suppressed. stop_loss / time_stop / mis_auto_square_off
+        # (and any reason containing "exit") bypass the guard
+        # entirely — a protective SELL always reaches place_order.
+        reason = (signal.reason or "").lower()
+        _PROTECTIVE = {"stop_loss", "time_stop", "mis_auto_square_off"}
+        is_protective = reason in _PROTECTIVE or "exit" in reason
+        if not is_protective:
+            suppress_kind = self._churn_suppress_kind(
+                ticker=signal.ticker, side=side
+            )
+            if suppress_kind is not None:
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="dryrun" if self._dry_run else "live",
+                        type_="order_suppressed_churn",
+                        payload={
+                            **(
+                                {"dry_run": True}
+                                if self._dry_run
+                                else {}
+                            ),
+                            "ticker": signal.ticker,
+                            "side": side,
+                            "qty": signal.qty,
+                            "signal_reason": signal.reason,
+                            "suppress_kind": suppress_kind,
+                        },
+                    )
+                )
+                _logger.info(
+                    "order SUPPRESSED (churn/%s): ticker=%s side=%s "
+                    "qty=%d reason=%s — not placing",
+                    suppress_kind,
+                    signal.ticker,
+                    side,
+                    signal.qty,
+                    signal.reason,
+                )
+                return 0
 
         # Use LIMIT orders priced at the bar-close LTP plus a
         # small marketable buffer so the order is aggressive
@@ -3830,6 +3934,12 @@ class LiveRuntime:
             ),
         }
         self._in_flight.append(in_flight_entry)
+        # Task 4.0a — record the placement clock for the anti-churn
+        # cooldown. Keyed on the internal ticker (.NS form) + side so
+        # the guard's lookup matches. Updated ONLY on an actual
+        # placement (incl. dry-run), never on a suppressed/aborted
+        # order — so a suppressed dup does not extend the window.
+        self._last_submit_ts[(signal.ticker, side)] = _time.time()
         await self._caps_repo.update_in_flight(
             self._user_id,
             self._run_id,
