@@ -2138,6 +2138,17 @@ const MDD_6M_BUCKETS = [
 
 type Mdd6mBucket = (typeof MDD_6M_BUCKETS)[number]["value"];
 
+const SCORE_BUCKETS = [
+  { value: "lt50",    label: "< 50",   caption: "Weak — Reject" },
+  { value: "50to60",  label: "50–60",  caption: "Average — Avoid" },
+  { value: "60to70",  label: "60–70",  caption: "Good — Tradable" },
+  { value: "70to80",  label: "70–80",  caption: "Very Good — Preferred" },
+  { value: "80to90",  label: "80–90",  caption: "Excellent — High priority" },
+  { value: "gt90",    label: "> 90",   caption: "Elite — Highest priority" },
+] as const;
+
+type ScoreBucket = (typeof SCORE_BUCKETS)[number]["value"];
+
 function DistSma200MultiSelect({
   selected,
   onChange,
@@ -2371,6 +2382,77 @@ function Mdd6mMultiSelect({
   );
 }
 
+function ScoreMultiSelect({
+  selected,
+  onChange,
+}: {
+  selected: ScoreBucket[];
+  onChange: (v: ScoreBucket[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const toggle = (v: ScoreBucket) =>
+    onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v]);
+
+  const label =
+    selected.length === 0
+      ? "All"
+      : selected.length === 1
+        ? SCORE_BUCKETS.find((b) => b.value === selected[0])?.label ?? "1 range"
+        : `${selected.length} ranges`;
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        data-testid="watchlist-score-select"
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors ${
+          selected.length > 0
+            ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+            : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+        }`}
+      >
+        {label}
+        <svg className={`w-3 h-3 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-[80] min-w-full w-max rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl py-1">
+          {selected.length > 0 && (
+            <button type="button" onClick={() => onChange([])} className="w-full text-left px-3 py-1.5 text-xs text-indigo-600 dark:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800 font-medium">
+              Clear all
+            </button>
+          )}
+          {SCORE_BUCKETS.map((b) => {
+            const checked = selected.includes(b.value);
+            return (
+              <label key={b.value} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
+                <input type="checkbox" checked={checked} onChange={() => toggle(b.value)} className="shrink-0 accent-indigo-600" />
+                <span className="text-xs text-gray-900 dark:text-gray-100 whitespace-nowrap">
+                  <span className="font-medium">{b.label}</span>
+                  <span className="text-gray-500 dark:text-gray-400"> — {b.caption}</span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ColumnTooltip({ text }: { text: string }) {
   const triggerRef = useRef<HTMLSpanElement>(null);
   const [coords, setCoords] = useState<{
@@ -2450,6 +2532,7 @@ const RESET_TARGET = {
   blendedRsFilter:  [] as BlendedRsBucket[],
   mdd6mFilter:      [] as Mdd6mBucket[],
   distSma200Filter: [] as DistSma200Bucket[],
+  scoreFilter:      [] as ScoreBucket[],
   goldenCross:      false,
   sma50AboveLtp:    false,
   sma200AboveLtp:   false,
@@ -2500,6 +2583,7 @@ function WatchlistStocksTab() {
   const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>(
     ["gt5lte15", "gt15lte35", "gt35lte50"],
   );
+  const [scoreFilter, setScoreFilter] = useState<ScoreBucket[]>([]);
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("ticker");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -2676,6 +2760,21 @@ function WatchlistStocksTab() {
         });
       });
     }
+    if (scoreFilter.length > 0) {
+      stocks = stocks.filter((s) => {
+        const v = s.score;
+        if (v == null) return false;
+        return scoreFilter.some((bucket) => {
+          if (bucket === "lt50")   return v < 50;
+          if (bucket === "50to60") return v >= 50 && v < 60;
+          if (bucket === "60to70") return v >= 60 && v < 70;
+          if (bucket === "70to80") return v >= 70 && v < 80;
+          if (bucket === "80to90") return v >= 80 && v < 90;
+          if (bucket === "gt90")   return v >= 90;
+          return false;
+        });
+      });
+    }
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       stocks = stocks.filter((s) =>
@@ -2696,7 +2795,7 @@ function WatchlistStocksTab() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return stocks;
-  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rs3mFilter, rsFilter, blendedRsFilter, mdd6mFilter, distSma200Filter, search, sortKey, sortDir]);
+  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rs3mFilter, rsFilter, blendedRsFilter, mdd6mFilter, distSma200Filter, scoreFilter, search, sortKey, sortDir]);
 
   const totalPages = Math.max(
     1,
@@ -2713,7 +2812,7 @@ function WatchlistStocksTab() {
     let cancelled = false;
     queueMicrotask(() => { if (!cancelled) setPage(0); });
     return () => { cancelled = true; };
-  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rs3mFilter, rsFilter, blendedRsFilter, mdd6mFilter, distSma200Filter, search, pageSize, market]);
+  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rs3mFilter, rsFilter, blendedRsFilter, mdd6mFilter, distSma200Filter, scoreFilter, search, pageSize, market]);
 
   const resetAllFilters = () => {
     setRsi2Filter(RESET_TARGET.rsi2Filter);
@@ -2728,6 +2827,7 @@ function WatchlistStocksTab() {
     setBlendedRsFilter([...RESET_TARGET.blendedRsFilter]);
     setMdd6mFilter([...RESET_TARGET.mdd6mFilter]);
     setDistSma200Filter([...RESET_TARGET.distSma200Filter]);
+    setScoreFilter([...RESET_TARGET.scoreFilter]);
     setSearch(RESET_TARGET.search);
   };
 
@@ -2929,6 +3029,17 @@ function WatchlistStocksTab() {
               <Mdd6mMultiSelect
                 selected={mdd6mFilter}
                 onChange={setMdd6mFilter}
+              />
+            </div>
+
+            {/* Score — multi-select */}
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                Score
+              </label>
+              <ScoreMultiSelect
+                selected={scoreFilter}
+                onChange={setScoreFilter}
               />
             </div>
           </div>
