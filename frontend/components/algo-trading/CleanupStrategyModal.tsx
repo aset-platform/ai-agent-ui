@@ -16,6 +16,7 @@ import { createPortal } from "react-dom";
 
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { useLiveHoldings } from "@/hooks/useLiveHoldings";
+import { useLivePositions } from "@/hooks/useLivePositions";
 import { useStrategies } from "@/hooks/useStrategies";
 import { useLiveCaps, upsertLiveCaps } from "@/hooks/useLiveCaps";
 
@@ -252,6 +253,7 @@ export function CleanupStrategyModal({ filteredTickers, onClose }: Props) {
   const { strategies: all, loading: stLoading } = useStrategies();
   const { holdings } = usePortfolio();
   const { rows: liveRows } = useLiveHoldings();
+  const { rows: posRows } = useLivePositions();
 
   const strategies = useMemo(
     () =>
@@ -268,15 +270,22 @@ export function CleanupStrategyModal({ filteredTickers, onClose }: Props) {
     for (const h of holdings) {
       if (h.quantity > 0) tickers.add(h.ticker);
     }
-    // Kite live holdings — tradingsymbol + exchange → ticker
+    // Kite settled holdings (T+2 done + T+1 pending)
     for (const row of liveRows ?? []) {
       if (row.quantity > 0 || row.t1_pending) {
         const suffix = EXCHANGE_SUFFIX[row.exchange] ?? `.${row.exchange}`;
         tickers.add(`${row.tradingsymbol}${suffix}`);
       }
     }
+    // Algo positions tracker — catches CNC buys not yet T+2 settled
+    for (const row of posRows ?? []) {
+      if (row.quantity > 0) {
+        const suffix = EXCHANGE_SUFFIX[row.exchange] ?? `.${row.exchange}`;
+        tickers.add(`${row.tradingsymbol}${suffix}`);
+      }
+    }
     return tickers;
-  }, [holdings, liveRows]);
+  }, [holdings, liveRows, posRows]);
 
   const filteredSet = useMemo(
     () => new Set(filteredTickers),
