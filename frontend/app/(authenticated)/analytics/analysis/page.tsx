@@ -2583,7 +2583,9 @@ function WatchlistStocksTab() {
   const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>(
     ["gt5lte15", "gt15lte35", "gt35lte50"],
   );
-  const [scoreFilter, setScoreFilter] = useState<ScoreBucket[]>([]);
+  const [scoreFilter, setScoreFilter] = useState<ScoreBucket[]>(
+    ["60to70", "70to80", "80to90", "gt90"],
+  );
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("ticker");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -3032,16 +3034,6 @@ function WatchlistStocksTab() {
               />
             </div>
 
-            {/* Score — multi-select */}
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                Score
-              </label>
-              <ScoreMultiSelect
-                selected={scoreFilter}
-                onChange={setScoreFilter}
-              />
-            </div>
           </div>
 
           {/* Row 2 — toggle chips + search + actions */}
@@ -3086,6 +3078,19 @@ function WatchlistStocksTab() {
                 {label}
               </button>
             ))}
+
+            <div className="h-4 w-px bg-gray-200 dark:bg-gray-700 mx-1" />
+
+            {/* Score — multi-select */}
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                Score
+              </label>
+              <ScoreMultiSelect
+                selected={scoreFilter}
+                onChange={setScoreFilter}
+              />
+            </div>
 
             <div className="h-4 w-px bg-gray-200 dark:bg-gray-700 mx-1" />
 
@@ -3292,16 +3297,15 @@ function WatchlistStocksTab() {
                     key: "score",
                     label: "Score",
                     tooltip:
-                      "Composite score — each factor is percentile-ranked 0–100 across watchlist stocks, then weighted:\n" +
+                      "Composite score (0–100), higher = stronger quality + momentum.\n\n" +
+                      "Percentile-ranked cross-stock (higher rank = better):\n" +
                       "  Sharpe (6M)        30%\n" +
                       "  Blended RS         30%\n" +
-                      "  Max Drawdown (6M)  20%  (shallower drawdown = higher rank)\n" +
-                      "  ATR %              10%\n" +
-                      "  SMA200 Distance    10%  (above SMA200 = higher rank)\n\n" +
-                      "Example: Sharpe=70 RS=80 MDD=60 ATR=40 SMA=55\n" +
-                      "→ 0.30×70 + 0.30×80 + 0.20×60 + 0.10×40 + 0.10×55 = 67.5\n\n" +
-                      "Missing factors are excluded and remaining weights re-normalised.\n" +
-                      "Higher score = stronger risk-adjusted quality + momentum.",
+                      "  Max Drawdown (6M)  20%  (shallower drawdown = higher rank)\n\n" +
+                      "Closeness score — fixed curve, not relative to peers:\n" +
+                      "  ATR %              10%  (ideal 3–4%; peaks at 100, drops to 0 above 10%)\n" +
+                      "  SMA200 Distance    10%  (ideal 20–30%; peaks at 100, drops to 0 above 90%)\n\n" +
+                      "Missing factors are excluded and remaining weights re-normalised.",
                   },
                 ] as { key: SortKey; label: string; tooltip?: string }[]
               ).map((col) => {
@@ -3497,7 +3501,7 @@ function WatchlistStocksTab() {
                             ? "text-red-500 dark:text-red-400"
                             : "text-gray-900 dark:text-gray-100"
                     }`}
-                      title="Score = 0.30×Sharpe + 0.30×BlendedRS + 0.20×MDD + 0.10×ATR% + 0.10×SMA200Dist (all percentile-ranked)"
+                      title="Score = 0.30×Sharpe(pct) + 0.30×BlendedRS(pct) + 0.20×MDD(pct) + 0.10×ATR(closeness) + 0.10×SMA200(closeness)"
                     >
                       {fmt(row.score)}
                     </td>

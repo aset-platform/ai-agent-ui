@@ -2562,17 +2562,56 @@ def create_insights_router() -> APIRouter:
                 except Exception:
                     pass
 
-        # Cross-stock percentile ranks → composite score
-        # Weights: Sharpe(6M) 30% + Blended RS 30% + MDD(6M) 20%
-        #          + ATR% 10% + SMA200 Distance 10%
-        # MDD(6M) is negative; lower (more negative) = worse drawdown,
-        # so _pct_rank naturally gives high rank to shallow drawdowns.
+        # Composite score:
+        #   Sharpe(6M) 30% + Blended RS 30% + MDD(6M) 20%  → percentile rank
+        #   ATR%       10% + SMA200 Distance 10%            → closeness score
+        #
+        # Percentile rank: cross-stock rank 0–100 (higher = better).
+        # MDD(6M) is negative; shallower drawdown → higher rank.
+        #
+        # Closeness score: fixed piecewise-linear curve (0–100) where
+        # the ideal range scores 100 and scores decay on both sides.
+        # ATR ideal: 3–4% (best risk-adjusted volatility for mean-rev).
+        # SMA200 ideal: 20–30% above (healthy trend, not overextended).
+        # Outside the defined range the curve is extrapolated linearly
+        # and clamped to [0, 100].
+        _ATR_PTS: list[tuple[float, float]] = [
+            (2, 90), (3, 100), (4, 100), (5, 90),
+            (6, 80), (7, 60), (8, 30), (10, 0),
+        ]
+        _SMA_PTS: list[tuple[float, float]] = [
+            (5, 70), (10, 90), (20, 100), (30, 100),
+            (40, 90), (50, 70), (70, 30), (90, 0),
+        ]
+
         def _pct_rank(
             vals: list[float], v: float, n: int
         ) -> float:
             if n <= 1:
                 return 50.0
             return sorted(vals).index(v) / (n - 1) * 100
+
+        def _closeness(
+            pts: list[tuple[float, float]], v: float
+        ) -> float:
+            """Piecewise-linear score; extrapolates + clamps to [0,100]."""
+            if v <= pts[0][0]:
+                x0, y0 = pts[0]
+                x1, y1 = pts[1]
+                s = (y1 - y0) / (x1 - x0)
+                return max(0.0, min(100.0, y0 + s * (v - x0)))
+            if v >= pts[-1][0]:
+                x0, y0 = pts[-2]
+                x1, y1 = pts[-1]
+                s = (y1 - y0) / (x1 - x0)
+                return max(0.0, min(100.0, y1 + s * (v - x1)))
+            for i in range(len(pts) - 1):
+                x0, y0 = pts[i]
+                x1, y1 = pts[i + 1]
+                if x0 <= v <= x1:
+                    t = (v - x0) / (x1 - x0)
+                    return max(0.0, min(100.0, y0 + t * (y1 - y0)))
+            return 0.0
 
         _sharpe_vals = [
             r.sharpe_ratio for r in rows
@@ -2585,18 +2624,9 @@ def create_insights_router() -> APIRouter:
         _mdd_vals = [
             r.mdd_6m for r in rows if r.mdd_6m is not None
         ]
-        _atr_vals = [
-            r.atr_pct for r in rows if r.atr_pct is not None
-        ]
-        _sma_vals = [
-            r.dist_sma200 for r in rows
-            if r.dist_sma200 is not None
-        ]
         _ns = len(_sharpe_vals)
         _nb = len(_brs_vals)
         _nm = len(_mdd_vals)
-        _na = len(_atr_vals)
-        _nw = len(_sma_vals)
         for row in rows:
             _sp = (
                 _pct_rank(_sharpe_vals, row.sharpe_ratio, _ns)
@@ -2614,13 +2644,13 @@ def create_insights_router() -> APIRouter:
                 else None
             )
             _ap = (
-                _pct_rank(_atr_vals, row.atr_pct, _na)
-                if row.atr_pct is not None and _na > 0
+                _closeness(_ATR_PTS, row.atr_pct)
+                if row.atr_pct is not None
                 else None
             )
             _wp = (
-                _pct_rank(_sma_vals, row.dist_sma200, _nw)
-                if row.dist_sma200 is not None and _nw > 0
+                _closeness(_SMA_PTS, row.dist_sma200)
+                if row.dist_sma200 is not None
                 else None
             )
             _parts = [
