@@ -123,6 +123,9 @@ def flush_bars(bars: list[Bar]) -> None:
 
         cat = _get_catalog()
         tbl = cat.load_table(_ALGO_INTRADAY_BARS_TABLE)
+        if predicate is None:
+            tbl.append(arrow)
+            return
         try:
             tbl.delete(predicate)
         except Exception as exc:  # first run on empty table is fine
