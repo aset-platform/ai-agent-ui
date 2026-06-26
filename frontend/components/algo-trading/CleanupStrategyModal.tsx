@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { usePortfolio } from "@/hooks/usePortfolio";
+import { useLiveHoldings } from "@/hooks/useLiveHoldings";
 import { useStrategies } from "@/hooks/useStrategies";
 import { useLiveCaps, upsertLiveCaps } from "@/hooks/useLiveCaps";
 
@@ -88,9 +89,24 @@ function CapsCleanupPanel({
   const [saved, setSaved] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
 
+  const colorPriority = (t: string) =>
+    holdingSet.has(t) ? 0 : filteredSet.has(t) ? 1 : 2;
+
+  const sorted = useMemo(
+    () =>
+      tickers
+        ? [...tickers].sort(
+            (a, b) =>
+              colorPriority(a) - colorPriority(b) || a.localeCompare(b),
+          )
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tickers, holdingSet, filteredSet],
+  );
+
   useEffect(() => {
     if (caps) {
-      setTickers([...caps.allowed_tickers].sort());
+      setTickers([...caps.allowed_tickers]);
       setSaved(false);
       setSaveErr(null);
     }
@@ -126,7 +142,7 @@ function CapsCleanupPanel({
     }
   }
 
-  if (capsLoading || tickers === null) {
+  if (capsLoading || tickers === null || sorted === null) {
     return (
       <p className="mt-4 text-xs text-slate-500 animate-pulse">
         Loading allowed tickers…
@@ -164,13 +180,13 @@ function CapsCleanupPanel({
           bg-slate-50 dark:bg-slate-800/50 p-3 min-h-[4rem] max-h-80 overflow-y-auto"
         data-testid="cleanup-strategy-chips"
       >
-        {tickers.length === 0 ? (
+        {sorted.length === 0 ? (
           <p className="text-xs text-slate-400 italic">
             All tickers removed — save to apply.
           </p>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {tickers.map((t) => (
+            {sorted.map((t) => (
               <TickerChip
                 key={t}
                 ticker={t}
@@ -227,9 +243,15 @@ function CapsCleanupPanel({
 
 // ── Main modal ────────────────────────────────────────────────────
 
+const EXCHANGE_SUFFIX: Record<string, string> = {
+  NSE: ".NS",
+  BSE: ".BO",
+};
+
 export function CleanupStrategyModal({ filteredTickers, onClose }: Props) {
   const { strategies: all, loading: stLoading } = useStrategies();
   const { holdings } = usePortfolio();
+  const { rows: liveRows } = useLiveHoldings();
 
   const strategies = useMemo(
     () =>
@@ -240,13 +262,21 @@ export function CleanupStrategyModal({ filteredTickers, onClose }: Props) {
     [all],
   );
 
-  const holdingSet = useMemo(
-    () =>
-      new Set(
-        holdings.filter((h) => h.quantity > 0).map((h) => h.ticker),
-      ),
-    [holdings],
-  );
+  const holdingSet = useMemo(() => {
+    const tickers = new Set<string>();
+    // Platform portfolio (non-Kite)
+    for (const h of holdings) {
+      if (h.quantity > 0) tickers.add(h.ticker);
+    }
+    // Kite live holdings — tradingsymbol + exchange → ticker
+    for (const row of liveRows ?? []) {
+      if (row.quantity > 0 || row.t1_pending) {
+        const suffix = EXCHANGE_SUFFIX[row.exchange] ?? `.${row.exchange}`;
+        tickers.add(`${row.tradingsymbol}${suffix}`);
+      }
+    }
+    return tickers;
+  }, [holdings, liveRows]);
 
   const filteredSet = useMemo(
     () => new Set(filteredTickers),
