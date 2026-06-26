@@ -1147,6 +1147,70 @@ class PaperRuntime:
             )
         return 1
 
+    def _maybe_emit_qty_zero_rejection(
+        self,
+        *,
+        action: dict,
+        ticker: str,
+        last_price: Decimal | None,
+        bar_date: date,
+    ) -> bool:
+        """Emit a ``signal_rejected`` event when a ``set_target_weight``
+        BUY intent sizes to qty=0 because available equity cannot afford
+        a single share.  Mirrors live ``_maybe_emit_qty_zero_rejection``
+        (mode='paper', no dry_run key).  Returns True iff appended.
+        """
+        if not isinstance(action, dict):
+            return False
+        if action.get("type") != "set_target_weight":
+            return False
+        if last_price is None or last_price <= 0:
+            return False
+        try:
+            weight = Decimal(str(action.get("weight", 0)))
+        except (TypeError, ValueError, ArithmeticError):
+            return False
+        if weight <= 0:
+            return False
+        current_equity = (
+            self._initial + self._positions.total_realised_pnl_inr()
+        )
+        if current_equity <= 0:
+            return False
+        target_qty = int((current_equity * weight) // last_price)
+        if target_qty > 0:
+            return False
+        self._events.append(
+            event_row(
+                session_id=self._session_id,
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                mode="paper",
+                type_="signal_rejected",
+                payload={
+                    "reason": "insufficient_capital_qty_zero",
+                    "ticker": ticker,
+                    "symbol": str(ticker).upper().removesuffix(".NS"),
+                    "side": "BUY",
+                    "qty": 0,
+                    "target_weight": float(weight),
+                    "last_price": str(last_price),
+                    "current_equity_inr": str(current_equity),
+                    "bar_date": bar_date.isoformat(),
+                },
+            )
+        )
+        _logger.info(
+            "paper entry SKIPPED — insufficient capital (qty=0): "
+            "ticker=%s target_weight=%s last_price=%s equity=%s "
+            "(raise capital / weight or use a cheaper universe)",
+            ticker,
+            float(weight),
+            last_price,
+            current_equity,
+        )
+        return True
+
     def _action_to_signal(
         self,
         action: dict,
@@ -1168,6 +1232,47 @@ class PaperRuntime:
                     bar_date_ns=bar_date_ns,
                     last_price=last_price,
                 )
+                if qty <= 0:
+                    bar_date_obj = datetime.fromtimestamp(
+                        bar_date_ns / 1_000_000_000,
+                        tz=timezone.utc,
+                    ).date()
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="paper",
+                            type_="signal_rejected",
+                            payload={
+                                "reason": (
+                                    "insufficient_capital_qty_zero"
+                                ),
+                                "ticker": ticker,
+                                "symbol": (
+                                    str(ticker).upper().removesuffix(
+                                        ".NS"
+                                    )
+                                ),
+                                "side": "BUY",
+                                "qty": 0,
+                                "last_price": str(last_price),
+                                "current_equity_inr": str(
+                                    self._initial
+                                    + self._positions
+                                    .total_realised_pnl_inr()
+                                ),
+                                "bar_date": bar_date_obj.isoformat(),
+                            },
+                        )
+                    )
+                    _logger.info(
+                        "paper entry SKIPPED — composer qty=0: "
+                        "ticker=%s last_price=%s",
+                        ticker,
+                        last_price,
+                    )
+                    return None
             else:
                 qty = int(qty_spec.get("shares") or 0)
             if qty <= 0:
@@ -1259,6 +1364,21 @@ class PaperRuntime:
                     side="SELL",
                     qty=int(-diff),
                     emitted_at_ns=bar_date_ns,
+                )
+            # diff==0: either flat+target=0 (can't afford) or holding
+            # already at target. Only the flat+target=0 case is the live
+            # parity drop to surface (matches _maybe_emit_qty_zero_rejection
+            # guard: weight>0, equity>0, target_qty==0).
+            if current_qty == 0 and target_qty == 0:
+                bar_date_obj = datetime.fromtimestamp(
+                    bar_date_ns / 1_000_000_000,
+                    tz=timezone.utc,
+                ).date()
+                self._maybe_emit_qty_zero_rejection(
+                    action=action,
+                    ticker=ticker,
+                    last_price=last_price,
+                    bar_date=bar_date_obj,
                 )
             return None
         return None

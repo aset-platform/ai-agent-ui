@@ -1,4 +1,4 @@
-"""Task 6.1 + 6.2: paper-runtime parity tests.
+"""Task 6.1 + 6.2 + 6.3: paper-runtime parity tests.
 
 Task 6.1 — mark-to-market equity + unrealised P&L parity:
   Paper runtime must produce the same equity/sizing behaviour as the
@@ -21,6 +21,12 @@ Task 6.2 — directional slippage in PaperBroker.execute():
   - bps=0 is a no-op (regression guard).
   - Fee base remains last_price regardless of slippage.
 
+Task 6.3 — emit signal_rejected instead of silent qty=0 drop:
+  Paper runtime must surface insufficient-capital drops as
+  ``signal_rejected`` events (reason=insufficient_capital_qty_zero),
+  mirroring what the live runtime emits via
+  ``_maybe_emit_qty_zero_rejection``.
+
 We bypass PaperRuntime.__init__ (which has DB/cache calls) via
 ``object.__new__`` and then seed only the attributes touched by the
 methods under test.
@@ -29,9 +35,10 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest  # noqa: F401 (imported for future parametrize use)
 
@@ -51,8 +58,8 @@ def _make_runtime(
 ) -> PaperRuntime:
     """Build a PaperRuntime without calling __init__.
 
-    Seeds only the attributes referenced by ``_account_snapshot`` and
-    ``_size_via_composer``.
+    Seeds only the attributes referenced by ``_account_snapshot``,
+    ``_size_via_composer``, and ``_action_to_signal``.
     """
     rt = object.__new__(PaperRuntime)
     rt._user_id = uuid4()
@@ -61,6 +68,10 @@ def _make_runtime(
     rt._last_marks: dict[str, Decimal] = {}
     rt._kill_switch_active = False
     rt._factor_cache: dict[Any, Any] = {}
+    # Task 6.3: required by _action_to_signal / _maybe_emit_qty_zero_rejection
+    rt._session_id: UUID = uuid4()
+    rt._strategy = SimpleNamespace(id=uuid4())
+    rt._events: list[dict[str, Any]] = []
     return rt
 
 
@@ -233,3 +244,143 @@ def test_fees_use_last_price_not_slipped(
 
     # fees_inr must be identical — fee base is last_price in both cases
     assert fill_no_slip.fees_inr == fill_slip.fees_inr
+
+
+# ---------------------------------------------------------------------------
+# Task 6.3: signal_rejected emitted on qty=0 drop (paper<->live parity)
+# ---------------------------------------------------------------------------
+
+# bar_date_ns chosen so date() == 2026-06-24 UTC (1_750_723_200_000_000_000 ns)
+_BAR_DATE_NS = 1_750_723_200_000_000_000
+_LAST_PRICE = Decimal("5000")
+_TICKER = "RELIANCE.NS"
+
+
+def _parse_event(evt: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Return (type, payload_dict) from an event_row dict.
+
+    event_row() stores type as 'type' and payload as 'payload_json'
+    (a JSON string).  This helper decodes both for assertions.
+    """
+    import json
+
+    return evt["type"], json.loads(evt["payload_json"])
+
+
+def test_set_target_weight_qty_zero_emits_signal_rejected() -> None:
+    """set_target_weight that rounds to qty=0 emits signal_rejected.
+
+    equity=100_000 INR, weight=0.001, last_price=5000
+    -> target_qty = int(100*0.001//1) == 0  (can't afford one share)
+    -> _action_to_signal returns None AND appends signal_rejected event.
+    """
+    rt = _make_runtime(initial=Decimal("100000"))
+    action = {"type": "set_target_weight", "weight": "0.001"}
+
+    result = rt._action_to_signal(
+        action,
+        ticker=_TICKER,
+        bar_date_ns=_BAR_DATE_NS,
+        last_price=_LAST_PRICE,
+    )
+
+    assert result is None, "expected None (qty=0 drop)"
+    assert len(rt._events) == 1, "expected exactly one signal_rejected event"
+    evt = rt._events[0]
+    etype, payload = _parse_event(evt)
+    assert etype == "signal_rejected"
+    assert payload["reason"] == "insufficient_capital_qty_zero"
+    assert payload["ticker"] == _TICKER
+    assert evt["mode"] == "paper"
+
+
+def test_set_target_weight_qty_positive_no_rejection() -> None:
+    """set_target_weight that sizes to qty>0 returns a Signal, no event.
+
+    equity=100_000 INR, weight=0.5, last_price=5000
+    -> target_qty = int(50_000//5000) = 10 -> BUY Signal.
+    """
+    rt = _make_runtime(initial=Decimal("100000"))
+    action = {"type": "set_target_weight", "weight": "0.5"}
+
+    result = rt._action_to_signal(
+        action,
+        ticker=_TICKER,
+        bar_date_ns=_BAR_DATE_NS,
+        last_price=_LAST_PRICE,
+    )
+
+    assert isinstance(result, Signal), "expected a BUY Signal"
+    assert result.qty == 10
+    assert len(rt._events) == 0, "no rejection event when qty>0"
+
+
+def test_buy_via_composer_qty_zero_emits_signal_rejected() -> None:
+    """buy via composer that sizes to 0 emits signal_rejected before None.
+
+    Monkeypatches _size_via_composer to return 0.
+    """
+    rt = _make_runtime(initial=Decimal("100000"))
+    action = {
+        "type": "buy",
+        "qty": {"vol_target_pct": 0.02},
+    }
+
+    with patch.object(rt, "_size_via_composer", return_value=0):
+        result = rt._action_to_signal(
+            action,
+            ticker=_TICKER,
+            bar_date_ns=_BAR_DATE_NS,
+            last_price=_LAST_PRICE,
+        )
+
+    assert result is None, "expected None when composer returns 0"
+    assert len(rt._events) == 1, "expected exactly one signal_rejected event"
+    evt = rt._events[0]
+    etype, payload = _parse_event(evt)
+    assert etype == "signal_rejected"
+    assert payload["reason"] == "insufficient_capital_qty_zero"
+    assert evt["mode"] == "paper"
+
+
+def test_signal_rejected_payload_keys() -> None:
+    """signal_rejected payload has all documented keys; mode=='paper'."""
+    rt = _make_runtime(initial=Decimal("100000"))
+    action = {"type": "set_target_weight", "weight": "0.001"}
+
+    rt._action_to_signal(
+        action,
+        ticker=_TICKER,
+        bar_date_ns=_BAR_DATE_NS,
+        last_price=_LAST_PRICE,
+    )
+
+    assert len(rt._events) == 1
+    evt = rt._events[0]
+    etype, payload = _parse_event(evt)
+
+    assert evt["mode"] == "paper"
+    assert etype == "signal_rejected"
+
+    required_keys = {
+        "reason",
+        "ticker",
+        "symbol",
+        "side",
+        "qty",
+        "last_price",
+        "current_equity_inr",
+        "bar_date",
+    }
+    missing = required_keys - set(payload.keys())
+    assert not missing, f"payload missing keys: {missing}"
+
+    assert payload["reason"] == "insufficient_capital_qty_zero"
+    assert payload["ticker"] == _TICKER
+    assert payload["symbol"] == "RELIANCE"  # .NS stripped, uppercased
+    assert payload["side"] == "BUY"
+    assert payload["qty"] == 0
+    assert payload["last_price"] == str(_LAST_PRICE)
+    assert payload["bar_date"] == "2025-06-24"
+    # no dry_run key in paper mode
+    assert "dry_run" not in payload
