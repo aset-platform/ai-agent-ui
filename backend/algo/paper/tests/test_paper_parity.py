@@ -384,3 +384,37 @@ def test_signal_rejected_payload_keys() -> None:
     assert payload["bar_date"] == "2025-06-24"
     # no dry_run key in paper mode
     assert "dry_run" not in payload
+
+
+def test_buy_via_composer_none_price_is_silent_drop() -> None:
+    """buy via composer with last_price=None is a silent drop, not an event.
+
+    When _size_via_composer returns 0 because last_price is None (no valid
+    tick has arrived yet), the qty<=0 branch must NOT emit a signal_rejected
+    event — doing so would produce a malformed payload with
+    ``"last_price": "None"`` (the string).  The live runtime never emits
+    without a valid price; paper must match that behaviour.
+
+    Expectation: _action_to_signal returns None AND appends zero events.
+    """
+    rt = _make_runtime(initial=Decimal("100000"))
+    action = {
+        "type": "buy",
+        "qty": {"vol_target_pct": 0.02},
+    }
+
+    # _size_via_composer already guards last_price is None and returns 0.
+    # Patch it to return 0 while last_price=None is passed through.
+    with patch.object(rt, "_size_via_composer", return_value=0):
+        result = rt._action_to_signal(
+            action,
+            ticker=_TICKER,
+            bar_date_ns=_BAR_DATE_NS,
+            last_price=None,  # no valid price yet
+        )
+
+    assert result is None, "expected None (silent drop when price is None)"
+    assert len(rt._events) == 0, (
+        "expected NO signal_rejected event when last_price is None — "
+        "emitting with price=None produces a malformed payload"
+    )

@@ -1233,6 +1233,12 @@ class PaperRuntime:
                     last_price=last_price,
                 )
                 if qty <= 0:
+                    # Guard: None/invalid price is an acceptable silent
+                    # drop (no valid tick yet).  Emitting an event here
+                    # would produce "last_price": "None" — a malformed
+                    # payload the live runtime never produces.
+                    if last_price is None or last_price <= 0:
+                        return None
                     bar_date_obj = datetime.fromtimestamp(
                         bar_date_ns / 1_000_000_000,
                         tz=timezone.utc,
