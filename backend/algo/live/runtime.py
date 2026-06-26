@@ -160,6 +160,18 @@ _EVENT_FLUSH_INTERVAL_S = float(
     os.environ.get("ALGO_EVENT_FLUSH_INTERVAL_S", "5")
 )
 
+# Task 7.6 — timeout for the worker-thread blocking wait when the
+# emergency STOP_HIT SELL is routed through _submit_order via
+# run_coroutine_threadsafe. Falls back to 15.0 on any parse error.
+try:
+    _EMERGENCY_SUBMIT_TIMEOUT_S = float(
+        os.getenv("ALGO_EMERGENCY_SUBMIT_TIMEOUT_S", "15")
+    )
+    if _EMERGENCY_SUBMIT_TIMEOUT_S <= 0:
+        raise ValueError("must be positive")
+except Exception:  # noqa: BLE001
+    _EMERGENCY_SUBMIT_TIMEOUT_S = 15.0
+
 # High #15 — cap per-ticker bar history so a long live session cannot
 # grow _bars_by_ticker without bound. 300 > SMA-200 (largest indicator
 # lookback) with headroom; override via ALGO_MAX_BAR_HISTORY env var.
@@ -657,6 +669,11 @@ class LiveRuntime:
         # enabled strategies only). Started in run(), cancelled in
         # finally: before terminal flush.
         self._trailing_ratchet_task: asyncio.Task | None = None
+        # Task 7.6 — event loop reference, set in run() once the loop
+        # is running. Allows _ratchet_all_gtts (a sync method run on a
+        # worker thread) to route the emergency SELL through _submit_order
+        # via run_coroutine_threadsafe. None until run() starts.
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def _load_bucket_by_ticker(self) -> dict[str, str]:
         """Read latest ``stocks.universe_snapshot`` and build a
@@ -1442,25 +1459,84 @@ class LiveRuntime:
                 old_gtt_id = self._gtt_ids.pop(ticker, None)
                 if old_gtt_id:
                     self._kite.delete_gtt(old_gtt_id)
-                raw = ticker.removesuffix(
-                    ".NS"
-                ).removesuffix(".BO")
+                # Task 7.6 — concurrency guard: detect whether we are
+                # on the event-loop thread or a worker thread.
+                # run_coroutine_threadsafe(...).result() deadlocks if
+                # called FROM the loop thread (the blocked thread IS
+                # the loop so the coro can never run). In production
+                # _ratchet_all_gtts runs via asyncio.to_thread, so the
+                # loop is free; but tests call it synchronously on the
+                # loop thread — those must fall back to direct
+                # place_order so the protective exit is never skipped.
+                _on_loop_thread = True
                 try:
-                    self._kite.place_order(
-                        tradingsymbol=raw,
-                        exchange="NSE",
-                        transaction_type="SELL",
-                        quantity=pos.qty,
-                        order_type="LIMIT",
-                        price=mgr.current_stop,
-                        product=self._strategy.product or "CNC",
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    _on_loop_thread = False
+                _use_tracked = (
+                    self._loop is not None
+                    and self._loop.is_running()
+                    and not _on_loop_thread
+                )
+                if _use_tracked:
+                    # Worker-thread path (production): route through the
+                    # tracked _submit_order which records _in_flight,
+                    # applies tick-rounding, dedup, and reconciliation.
+                    _sig = Signal(
+                        strategy_id=self._strategy.id,
+                        user_id=self._user_id,
+                        ticker=ticker,
+                        side="SELL",
+                        qty=pos.qty,
+                        emitted_at_ns=_time.time_ns(),
+                        reason="stop_loss",
                     )
-                except Exception as exc:
-                    _logger.error(
-                        "trailing: emergency SELL failed for "
-                        "%s: %s",
-                        ticker, exc, exc_info=True,
-                    )
+                    try:
+                        _fut = asyncio.run_coroutine_threadsafe(
+                            self._submit_order(
+                                signal=_sig,
+                                last_price=Decimal(
+                                    str(mgr.current_stop)
+                                ),
+                            ),
+                            self._loop,
+                        )
+                        _fut.result(
+                            timeout=_EMERGENCY_SUBMIT_TIMEOUT_S
+                        )
+                    except Exception as exc:
+                        _logger.error(
+                            "trailing: tracked emergency SELL failed"
+                            " for %s: %s",
+                            ticker,
+                            exc,
+                            exc_info=True,
+                        )
+                else:
+                    # Loop-thread / no-loop / sync-test path: fall back
+                    # to direct place_order so the protective exit is
+                    # never skipped and existing sync tests pass.
+                    raw = ticker.removesuffix(
+                        ".NS"
+                    ).removesuffix(".BO")
+                    try:
+                        self._kite.place_order(
+                            tradingsymbol=raw,
+                            exchange="NSE",
+                            transaction_type="SELL",
+                            quantity=pos.qty,
+                            order_type="LIMIT",
+                            price=mgr.current_stop,
+                            product=self._strategy.product or "CNC",
+                        )
+                    except Exception as exc:
+                        _logger.error(
+                            "trailing: emergency SELL failed for "
+                            "%s: %s",
+                            ticker,
+                            exc,
+                            exc_info=True,
+                        )
                 self._trailing_managers.pop(ticker, None)
 
     # ── v5 GTT trailing stop ─────────────────────────────────────
@@ -2307,6 +2383,11 @@ class LiveRuntime:
 
     async def run(self, source: TickSource) -> int:
         """Drain the tick source. Returns fill count."""
+        # Task 7.6 — capture the running event loop so _ratchet_all_gtts
+        # (called via to_thread on a worker thread) can route the
+        # emergency STOP_HIT SELL through _submit_order.
+        self._loop = asyncio.get_running_loop()
+
         from backend.algo.stream.sources import ReplayTickSource
 
         self._is_replay = isinstance(source, ReplayTickSource)
