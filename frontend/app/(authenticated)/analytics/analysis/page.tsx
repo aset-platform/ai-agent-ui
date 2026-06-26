@@ -2495,7 +2495,7 @@ function WatchlistStocksTab() {
     ["20to35", "35to50", "gt50"],
   );
   const [mdd6mFilter, setMdd6mFilter] = useState<Mdd6mBucket[]>(
-    ["lt10", "10to15", "15to20"],
+    ["lt10", "10to15", "15to20", "20to30"],
   );
   const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>(
     ["gt5lte15", "gt15lte35", "gt35lte50"],
