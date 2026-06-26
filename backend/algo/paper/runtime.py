@@ -197,6 +197,10 @@ class PaperRuntime:
         self._session_id = uuid4()
         self._events: list[dict[str, Any]] = []
         self._kill_switch_active = kill_switch_active
+        # Most-recent LTP per ticker, updated on every tick in run().
+        # Used by _account_snapshot to mark open positions to market
+        # so caps and sizing behave identically to the live runtime.
+        self._last_marks: dict[str, Decimal] = {}
         # Per-ticker rolling bar history for indicator computation.
         # On every closed bar we re-run compute_indicators over the
         # ticker's full series. SMA + golden_cross are O(N); paper
@@ -435,6 +439,9 @@ class PaperRuntime:
         try:
             async for tick in source:
                 last_price_per_ticker[tick.ticker] = Decimal(str(tick.ltp))
+                self._last_marks[tick.ticker] = last_price_per_ticker[
+                    tick.ticker
+                ]
                 self._resampler.feed(tick)
                 for bar in self._resampler.pop_completed():
                     fills += self._on_bar_close(
@@ -1275,6 +1282,10 @@ class PaperRuntime:
             tz=timezone.utc,
         ).date()
         nav = self._initial + self._positions.total_realised_pnl_inr()
+        deployed_cost = sum(
+            Decimal(p.qty) * p.avg_price
+            for p in self._positions.open_positions().values()
+        )
         factor_row = self._factor_cache.get(
             (ticker, bar_date_obj),
             {},
@@ -1287,7 +1298,7 @@ class PaperRuntime:
             ticker=ticker,
             bar_date=bar_date_obj,
             nav=nav,
-            cash=nav,
+            cash=nav - deployed_cost,
             stock_price=last_price,
             realized_vol_annual=realized_vol,
             sector=None,
@@ -1300,18 +1311,15 @@ class PaperRuntime:
         open_qty = {
             t: p.qty for t, p in self._positions.open_positions().items()
         }
-        # Approximate equity = initial + realised. Unrealised
-        # left to caller-supplied marks (Slice 8b reconciles
-        # with live ticks).
+        realised = self._positions.total_realised_pnl_inr()
+        unrealised = self._positions.unrealised_pnl_inr(self._last_marks)
         return AccountState(
             user_id=self._user_id,
             day_date=datetime.now(timezone.utc).date(),
             initial_capital_inr=self._initial,
-            current_equity_inr=(
-                self._initial + self._positions.total_realised_pnl_inr()
-            ),
-            daily_realised_pnl_inr=(self._positions.total_realised_pnl_inr()),
-            daily_unrealised_pnl_inr=Decimal("0"),
+            current_equity_inr=self._initial + realised + unrealised,
+            daily_realised_pnl_inr=realised,
+            daily_unrealised_pnl_inr=unrealised,
             open_positions=open_qty,
             open_position_count=len(open_qty),
             kill_switch_active=self._kill_switch_active,
