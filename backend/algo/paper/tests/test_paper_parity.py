@@ -1,17 +1,25 @@
-"""Task 6.1: mark-to-market equity + unrealised P&L parity test.
+"""Task 6.1 + 6.2: paper-runtime parity tests.
 
-Paper runtime must produce the same equity/sizing behaviour as the
-live runtime:
+Task 6.1 — mark-to-market equity + unrealised P&L parity:
+  Paper runtime must produce the same equity/sizing behaviour as the
+  live runtime:
 
-1. ``_account_snapshot`` includes open-position market value in
-   ``current_equity_inr`` and populates ``daily_unrealised_pnl_inr``
-   using ``_last_marks``.
+  1. ``_account_snapshot`` includes open-position market value in
+     ``current_equity_inr`` and populates ``daily_unrealised_pnl_inr``
+     using ``_last_marks``.
 
-2. A ticker with no mark in ``_last_marks`` contributes 0 to
-   unrealised P&L (safe skip, no crash).
+  2. A ticker with no mark in ``_last_marks`` contributes 0 to
+     unrealised P&L (safe skip, no crash).
 
-3. ``_size_via_composer`` passes ``cash = nav - deployed_cost`` into
-   ``SizingContext``, not bare ``nav``.
+  3. ``_size_via_composer`` passes ``cash = nav - deployed_cost`` into
+     ``SizingContext``, not bare ``nav``.
+
+Task 6.2 — directional slippage in PaperBroker.execute():
+  ALGO_PAPER_SLIPPAGE_BPS env var controls fill-price adjustment:
+  - BUY fills above last_price (buyer pays more).
+  - SELL fills below last_price (seller receives less).
+  - bps=0 is a no-op (regression guard).
+  - Fee base remains last_price regardless of slippage.
 
 We bypass PaperRuntime.__init__ (which has DB/cache calls) via
 ``object.__new__`` and then seed only the attributes touched by the
@@ -29,7 +37,9 @@ import pytest  # noqa: F401 (imported for future parametrize use)
 
 from backend.algo.backtest.positions import PositionTracker
 from backend.algo.backtest.types import Fill
+from backend.algo.paper.broker import PaperBroker
 from backend.algo.paper.runtime import PaperRuntime
+from backend.algo.paper.types import Signal
 
 
 # ---------------------------------------------------------------------------
@@ -141,3 +151,85 @@ def test_size_via_composer_passes_cash_minus_deployed():
     # cash = nav - deployed_cost = 95000
     assert ctx.nav == Decimal("100000")
     assert ctx.cash == Decimal("95000")
+
+
+# ---------------------------------------------------------------------------
+# Task 6.2: directional slippage in PaperBroker.execute()
+# ---------------------------------------------------------------------------
+
+def _make_signal(side: str) -> Signal:
+    return Signal(
+        strategy_id=uuid4(),
+        user_id=uuid4(),
+        ticker="INFY.NS",
+        side=side,  # type: ignore[arg-type]
+        qty=1,
+        emitted_at_ns=0,
+    )
+
+
+def _make_broker() -> PaperBroker:
+    return PaperBroker(fee_as_of=date(2026, 6, 24))
+
+
+def test_buy_slippage_bps50(monkeypatch: pytest.MonkeyPatch) -> None:
+    """BUY fill price = last_price * (1 + 50/10000) = 100.50."""
+    monkeypatch.setenv("ALGO_PAPER_SLIPPAGE_BPS", "50")
+    broker = _make_broker()
+    fill = broker.execute(
+        signal=_make_signal("BUY"),
+        last_price=Decimal("100"),
+        fill_date=date(2026, 6, 24),
+    )
+    assert fill.fill_price == Decimal("100.50")
+
+
+def test_sell_slippage_bps50(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SELL fill price = last_price * (1 - 50/10000) = 99.50."""
+    monkeypatch.setenv("ALGO_PAPER_SLIPPAGE_BPS", "50")
+    broker = _make_broker()
+    fill = broker.execute(
+        signal=_make_signal("SELL"),
+        last_price=Decimal("100"),
+        fill_date=date(2026, 6, 24),
+    )
+    assert fill.fill_price == Decimal("99.50")
+
+
+def test_zero_bps_no_slippage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """bps=0 (default) -> fill_price == last_price exactly."""
+    monkeypatch.setenv("ALGO_PAPER_SLIPPAGE_BPS", "0")
+    broker = _make_broker()
+    last_price = Decimal("250.75")
+    fill = broker.execute(
+        signal=_make_signal("BUY"),
+        last_price=last_price,
+        fill_date=date(2026, 6, 24),
+    )
+    assert fill.fill_price == last_price
+
+
+def test_fees_use_last_price_not_slipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fee base is last_price regardless of slippage bps."""
+    last_price = Decimal("100")
+
+    monkeypatch.setenv("ALGO_PAPER_SLIPPAGE_BPS", "0")
+    broker_no_slip = _make_broker()
+    fill_no_slip = broker_no_slip.execute(
+        signal=_make_signal("BUY"),
+        last_price=last_price,
+        fill_date=date(2026, 6, 24),
+    )
+
+    monkeypatch.setenv("ALGO_PAPER_SLIPPAGE_BPS", "50")
+    broker_slip = _make_broker()
+    fill_slip = broker_slip.execute(
+        signal=_make_signal("BUY"),
+        last_price=last_price,
+        fill_date=date(2026, 6, 24),
+    )
+
+    # fees_inr must be identical — fee base is last_price in both cases
+    assert fill_no_slip.fees_inr == fill_slip.fees_inr
