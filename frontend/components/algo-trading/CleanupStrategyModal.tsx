@@ -42,7 +42,7 @@ function TickerChip({
     color === "green"
       ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300 border border-green-200 dark:border-green-800"
       : color === "yellow"
-        ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-700"
+        ? "bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-300 border border-teal-200 dark:border-teal-700"
         : color === "amber"
           ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
           : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 border border-red-200 dark:border-red-800";
@@ -182,7 +182,7 @@ function CapsCleanupPanel({
           In holdings ({greenCount})
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-yellow-400 shrink-0" />
+          <span className="w-2.5 h-2.5 rounded-full bg-teal-400 shrink-0" />
           Overlap ({yellowCount})
         </span>
         <span className="flex items-center gap-1.5">
