@@ -71,6 +71,17 @@ def _make_watcher(
     kite_client._kc.orders = MagicMock(
         return_value=list(kite_orders or []),
     )
+    # Default order_history stub: return CANCELLED so the re-fetch
+    # path in _do_cancel_sync picks the normal cancel branch and
+    # existing tests keep their expected behaviour unchanged.
+    kite_client._kc.order_history = MagicMock(
+        return_value=[{
+            "status": "CANCELLED",
+            "quantity": 8,
+            "filled_quantity": 0,
+            "average_price": 0.0,
+        }],
+    )
     if cancel_side_effect is not None:
         kite_client.cancel_order = MagicMock(
             side_effect=cancel_side_effect,
