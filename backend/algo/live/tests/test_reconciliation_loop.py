@@ -122,8 +122,11 @@ async def test_kite_get_positions_wrapped_in_wait_for():
     wait_for_called = []
 
     async def fake_wait_for(coro, timeout):
+        """Record that wait_for was called, skip executing the
+        coroutine."""
         wait_for_called.append(timeout)
-        return await coro
+        coro.close()
+        return mock_kite.get_positions()
 
     with (
         patch(
@@ -167,6 +170,11 @@ async def test_kite_timeout_logs_warning_returns_empty(caplog):
     })
     mock_kite = MagicMock()
 
+    async def fake_wait_for(coro, timeout):
+        """Close the coroutine and raise TimeoutError."""
+        coro.close()
+        raise asyncio.TimeoutError
+
     with (
         patch(
             "backend.algo.live.reconciliation.disposable_pg_session",
@@ -181,7 +189,7 @@ async def test_kite_timeout_logs_warning_returns_empty(caplog):
         ),
         patch(
             "backend.algo.live.reconciliation.asyncio.wait_for",
-            side_effect=asyncio.TimeoutError,
+            side_effect=fake_wait_for,
         ),
         caplog.at_level(
             logging.WARNING,

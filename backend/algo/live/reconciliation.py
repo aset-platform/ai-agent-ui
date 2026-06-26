@@ -208,7 +208,9 @@ async def reconcile_user(user_id: UUID) -> dict:
     1. Fetch our open positions from PG.
     2. Fetch broker net positions from Kite.
     3. Compute drift (respecting per-user threshold).
-    4. For each NEW drift symbol → emit ``position_drift_detected``.
+    4. For each NEW drift symbol → emit ``position_drift_untracked``
+       (severity="high", when broker_qty>0 & our_qty==0) or
+       ``position_drift_detected`` (other drifts).
        For previously seen, same diff → only bump counter.
        For symbols that were drifting but now agree → emit
        ``drift_resolved``.
