@@ -122,6 +122,9 @@ class KiteWsMultiplexer:
         self._bp_drops: dict[UUID, int] = {}
         self._bp_last_emit_ns: dict[UUID, int] = {}
 
+        # Gap-fill single-flight task (5.2).
+        self._gap_fill_task: asyncio.Task | None = None
+
         # Health observability — OBS-1.
         # ``last_tick_at`` tracks the wall-clock time of the most
         # recent tick across all subscribed tokens (tz-naive UTC,
@@ -261,6 +264,10 @@ class KiteWsMultiplexer:
                     exc_info=True,
                 )
 
+        # Prune backpressure tracking so dicts don't leak (5.3).
+        self._bp_drops.pop(strategy_id, None)
+        self._bp_last_emit_ns.pop(strategy_id, None)
+
         # Signal queue EOF to let the consumer drain cleanly.
         q = self._queues.pop(strategy_id, None)
         if q is not None:
@@ -279,6 +286,17 @@ class KiteWsMultiplexer:
             except (asyncio.CancelledError, Exception):
                 pass
             self._reconnect_task = None
+
+        # Cancel any in-flight gap-fill (5.2).
+        if self._gap_fill_task is not None and not (
+            self._gap_fill_task.done()
+        ):
+            self._gap_fill_task.cancel()
+            try:
+                await self._gap_fill_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._gap_fill_task = None
 
         self._disconnect_kt()
         # Signal EOF to all waiting queues.
@@ -391,68 +409,91 @@ class KiteWsMultiplexer:
                     tzinfo=None,
                 )
                 self.tick_count_today += len(ticks)
+            # 5.3: accumulate valid ltp values per ticker so we can
+            # flush to Redis in ONE pipeline after the full batch.
+            ltp_batch: dict[str, str] = {}
             for raw in ticks:
-                tok = raw.get("instrument_token")
-                if tok is None:
-                    continue
-                ticker = self._token_to_ticker.get(tok)
-                if not ticker:
-                    continue
-                ltp_val = float(raw.get("last_price", 0) or 0)
-                # ASETPLTFRM-372 — capture the authoritative
-                # exchange-emission timestamp when Kite supplies
-                # it (full/quote-mode packets, NOT LTP-mode).
-                # kiteconnect SDK sets ``exchange_timestamp`` to a
-                # naive datetime from ``fromtimestamp(epoch_s)`` —
-                # round-trip via ``.timestamp()`` to ns.
-                # Parse failures collapse to None so the tick
-                # loop never crashes.
-                exch_ts_ns: int | None = None
-                exch_raw = raw.get("exchange_timestamp")
-                if exch_raw is not None:
-                    try:
-                        exch_ts_ns = int(
-                            exch_raw.timestamp() * 1_000_000_000,
-                        )
-                    except (AttributeError, TypeError, ValueError):
-                        exch_ts_ns = None
-                tick = Tick(
-                    ticker=ticker,
-                    ts_ns=now_ns,
-                    exchange_ts_ns=exch_ts_ns,
-                    ltp=ltp_val,
-                    volume=int(
-                        raw.get("last_traded_quantity", 0) or 0,
-                    ),
-                )
-                # Best-effort live-LTP cache write. 60s TTL covers
-                # market gaps; reads return None outside that window
-                # and the summary endpoint falls back to OHLCV.
-                if _ltp_cache is not None and ltp_val > 0:
-                    try:
-                        _ltp_cache.set(
-                            f"cache:ltp:{ticker}",
-                            str(ltp_val),
-                            ttl=60,
-                        )
-                    except Exception:  # noqa: BLE001
-                        pass
-                self._last_tick_ns[tok] = now_ns
-                subs = self._token_subs.get(tok, set())
-                for sid in subs:
-                    q = self._queues.get(sid)
-                    if q is None:
+                # 5.1: wrap the per-tick body so one bad packet can
+                # never kill the loop. Caught exceptions are logged
+                # at WARNING with full traceback for debugging.
+                try:
+                    tok = raw.get("instrument_token")
+                    if tok is None:
                         continue
-                    # on_ticks runs on the KiteTicker WS thread, but
-                    # asyncio.Queue is NOT thread-safe — every queue op
-                    # MUST happen on the loop thread. Do the full-check,
-                    # drop-oldest, and put atomically in one scheduled
-                    # callback so a stalled drain (e.g. during the Kite
-                    # historical warmup) yields a graceful backpressure
-                    # drop, never an uncaught QueueFull traceback.
-                    loop.call_soon_threadsafe(
-                        self._enqueue_tick, q, tick, sid, tok,
+                    ticker = self._token_to_ticker.get(tok)
+                    if not ticker:
+                        continue
+                    ltp_val = float(raw.get("last_price", 0) or 0)
+                    # 5.1: drop zero/negative LTP before constructing
+                    # Tick (Tick.ltp has Field(gt=0) — a ValidationError
+                    # from a legit pre-open/illiquid 0-price tick would
+                    # propagate out of the WS thread and kill delivery).
+                    if ltp_val <= 0:
+                        continue
+                    # ASETPLTFRM-372 — capture the authoritative
+                    # exchange-emission timestamp when Kite supplies
+                    # it (full/quote-mode packets, NOT LTP-mode).
+                    # kiteconnect SDK sets ``exchange_timestamp`` to a
+                    # naive datetime from ``fromtimestamp(epoch_s)`` —
+                    # round-trip via ``.timestamp()`` to ns.
+                    # Parse failures collapse to None so the tick
+                    # loop never crashes.
+                    exch_ts_ns: int | None = None
+                    exch_raw = raw.get("exchange_timestamp")
+                    if exch_raw is not None:
+                        try:
+                            exch_ts_ns = int(
+                                exch_raw.timestamp() * 1_000_000_000,
+                            )
+                        except (
+                            AttributeError, TypeError, ValueError,
+                        ):
+                            exch_ts_ns = None
+                    tick = Tick(
+                        ticker=ticker,
+                        ts_ns=now_ns,
+                        exchange_ts_ns=exch_ts_ns,
+                        ltp=ltp_val,
+                        volume=int(
+                            raw.get("last_traded_quantity", 0) or 0,
+                        ),
                     )
+                    # 5.3: stage the LTP update for the batch write.
+                    ltp_batch[f"cache:ltp:{ticker}"] = str(ltp_val)
+                    self._last_tick_ns[tok] = now_ns
+                    subs = self._token_subs.get(tok, set())
+                    for sid in subs:
+                        q = self._queues.get(sid)
+                        if q is None:
+                            continue
+                        # on_ticks runs on the KiteTicker WS thread,
+                        # but asyncio.Queue is NOT thread-safe — every
+                        # queue op MUST happen on the loop thread. Do
+                        # the full-check, drop-oldest, and put
+                        # atomically in one scheduled callback so a
+                        # stalled drain yields a graceful backpressure
+                        # drop, never an uncaught QueueFull traceback.
+                        loop.call_soon_threadsafe(
+                            self._enqueue_tick, q, tick, sid, tok,
+                        )
+                except Exception:  # noqa: BLE001
+                    _logger.warning(
+                        "on_ticks: error processing packet %r — "
+                        "skipping (user=%s)",
+                        raw, self._user_id,
+                        exc_info=True,
+                    )
+            # 5.3: flush all staged LTP values in one pipeline call.
+            # Best-effort — failure is swallowed to keep the tick path
+            # non-blocking. 60s TTL matches the previous per-tick TTL.
+            if _ltp_cache is not None and ltp_batch:
+                try:
+                    pipe = _ltp_cache.pipeline()
+                    for key, val in ltp_batch.items():
+                        pipe.set(key, val, ex=60)
+                    pipe.execute()
+                except Exception:  # noqa: BLE001
+                    pass
 
         def on_connect(ws, _resp):
             self._connected = True
@@ -599,9 +640,22 @@ class KiteWsMultiplexer:
     # ------------------------------------------------------------------
 
     def _schedule_gap_fill_sync(self) -> None:
-        """Called via call_soon_threadsafe — schedule gap-fill task."""
-        if self._loop is not None:
-            self._loop.create_task(self._run_gap_fill())
+        """Called via call_soon_threadsafe — single-flight gap-fill.
+
+        Cancels any prior in-flight task before scheduling a new one
+        so reconnect flaps do not pile up concurrent historical fetches
+        that hammer the Kite historical API (5.2).
+        """
+        if self._loop is None:
+            return
+        # Cancel the prior task if still running.
+        if self._gap_fill_task is not None and not (
+            self._gap_fill_task.done()
+        ):
+            self._gap_fill_task.cancel()
+        self._gap_fill_task = self._loop.create_task(
+            self._run_gap_fill(),
+        )
 
     async def _run_gap_fill(self) -> None:
         """Pull missing 1m bars for each token from Kite historical."""
@@ -657,10 +711,9 @@ class KiteWsMultiplexer:
                 if q is None:
                     continue
                 for tick in ticks:
-                    try:
-                        q.put_nowait(tick)
-                    except asyncio.QueueFull:
-                        pass
+                    # Route through _enqueue_tick so backpressure
+                    # accounting is consistent with live ticks (5.2).
+                    self._enqueue_tick(q, tick, sid, tok)
 
             self._emit_ws_event(
                 "ws_gap_filled",
