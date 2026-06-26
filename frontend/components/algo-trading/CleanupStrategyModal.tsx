@@ -277,10 +277,12 @@ export function CleanupStrategyModal({ filteredTickers, onClose }: Props) {
         tickers.add(`${row.tradingsymbol}${suffix}`);
       }
     }
-    // Algo positions tracker — catches CNC buys not yet T+2 settled
+    // Algo positions tracker — catches CNC buys not yet T+2 settled.
+    // PositionRow.exchange is absent from the backend response; default NSE.
     for (const row of posRows ?? []) {
       if (row.quantity > 0) {
-        const suffix = EXCHANGE_SUFFIX[row.exchange] ?? `.${row.exchange}`;
+        const exch = row.exchange ?? "NSE";
+        const suffix = EXCHANGE_SUFFIX[exch] ?? `.${exch}`;
         tickers.add(`${row.tradingsymbol}${suffix}`);
       }
     }
