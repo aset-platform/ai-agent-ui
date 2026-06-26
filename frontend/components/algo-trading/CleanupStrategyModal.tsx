@@ -3,9 +3,12 @@
  * CleanupStrategyModal — review and trim a strategy's allowed_tickers.
  *
  * Chips are colour-coded:
- *   green  = ticker is in the user's live portfolio holdings
- *   amber  = ticker appears in the current watchlist filter
- *   red    = ticker is in neither (candidate for removal)
+ *   green  = in holdings only
+ *   yellow = in BOTH holdings AND current filter (overlap)
+ *   amber  = in current filter only
+ *   red    = in neither (candidate for removal)
+ *
+ * Sorting: green + yellow (holdings) first → amber → red.
  *
  * Clicking the × on a chip stages a removal; Save commits the trimmed
  * list via PUT /v1/algo/live/caps/{strategy_id}.
@@ -32,15 +35,17 @@ function TickerChip({
   onRemove,
 }: {
   ticker: string;
-  color: "green" | "amber" | "red";
+  color: "green" | "yellow" | "amber" | "red";
   onRemove: () => void;
 }) {
   const cls =
     color === "green"
       ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300 border border-green-200 dark:border-green-800"
-      : color === "amber"
-        ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
-        : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 border border-red-200 dark:border-red-800";
+      : color === "yellow"
+        ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-700"
+        : color === "amber"
+          ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
+          : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 border border-red-200 dark:border-red-800";
 
   return (
     <span
@@ -111,9 +116,12 @@ function CapsCleanupPanel({
     }
   }, [caps]);
 
-  function chipColor(t: string): "green" | "amber" | "red" {
-    if (holdingSet.has(t)) return "green";
-    if (filteredSet.has(t)) return "amber";
+  function chipColor(t: string): "green" | "yellow" | "amber" | "red" {
+    const inH = holdingSet.has(t);
+    const inF = filteredSet.has(t);
+    if (inH && inF) return "yellow";
+    if (inH) return "green";
+    if (inF) return "amber";
     return "red";
   }
 
@@ -152,21 +160,38 @@ function CapsCleanupPanel({
   const original = caps?.allowed_tickers.length ?? 0;
   const removed = original - tickers.length;
 
+  const greenCount = tickers.filter(
+    (t) => holdingSet.has(t) && !filteredSet.has(t),
+  ).length;
+  const yellowCount = tickers.filter(
+    (t) => holdingSet.has(t) && filteredSet.has(t),
+  ).length;
+  const amberCount = tickers.filter(
+    (t) => !holdingSet.has(t) && filteredSet.has(t),
+  ).length;
+  const redCount = tickers.filter(
+    (t) => !holdingSet.has(t) && !filteredSet.has(t),
+  ).length;
+
   return (
     <div className="mt-4 space-y-4">
       {/* Legend */}
       <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-600 dark:text-slate-400">
         <span className="flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-full bg-green-400 shrink-0" />
-          In holdings
+          In holdings ({greenCount})
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-full bg-yellow-400 shrink-0" />
+          Overlap ({yellowCount})
         </span>
         <span className="flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0" />
-          In current filter
+          In current filter ({amberCount})
         </span>
         <span className="flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-full bg-red-400 shrink-0" />
-          Not in filter or holdings
+          Not in filter or holdings ({redCount})
         </span>
         <span className="ml-auto text-slate-400">
           {tickers.length} / {original} remaining
