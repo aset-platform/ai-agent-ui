@@ -79,3 +79,85 @@ def test_close_partial_bars_flushes_open_intervals():
     assert one_m.open == 100.0
     assert one_m.close == 102.0
     assert one_m.volume == 7
+
+
+# ---------------------------------------------------------------------------
+# Time-driven flush tests (Task 7.3)
+# ---------------------------------------------------------------------------
+
+
+def test_quiet_ticker_flushed_by_other_ticker_tick():
+    """A tick from B advances the clock past A's window, flushing A's bar."""
+    interval_sec = 60
+    interval_ns = interval_sec * 1_000_000_000
+    r = Resampler(intervals=(interval_sec,))
+
+    # A gets a single tick in bucket 0 (bar_open = 0).
+    r.feed(_tick("A", 0, 50.0, 10))
+    assert r.pop_completed() == []  # A's bar still open
+
+    # B's tick is well past A's 60-second window.
+    ts_b = interval_ns + 1  # 60_000_000_001 ns → second 60
+    r.feed(_tick("B", ts_b // 1_000_000_000, 99.0, 5))
+
+    bars = r.pop_completed()
+    a_bars = [b for b in bars if b.ticker == "A"]
+    assert len(a_bars) == 1, "A's completed bar must be flushed by B's tick"
+
+    a = a_bars[0]
+    assert a.open == 50.0
+    assert a.close == 50.0
+    assert a.high == 50.0
+    assert a.low == 50.0
+    assert a.volume == 10
+    assert a.bar_open_ts_ns == 0
+    assert a.interval_sec == interval_sec
+
+
+def test_quiet_ticker_evicted_after_sweep():
+    """After the sweep the open-bar key for A must be gone."""
+    interval_sec = 60
+    interval_ns = interval_sec * 1_000_000_000
+    r = Resampler(intervals=(interval_sec,))
+
+    r.feed(_tick("A", 0, 50.0, 10))
+    ts_b = interval_ns + 1
+    r.feed(_tick("B", ts_b // 1_000_000_000, 99.0, 5))
+
+    assert ("A", interval_sec) not in r._open, (
+        "A's key must be evicted from _open after sweep"
+    )
+
+
+def test_current_bucket_not_flushed():
+    """Ticks within A's still-open window must NOT flush A's bar."""
+    interval_sec = 60
+    r = Resampler(intervals=(interval_sec,))
+
+    # Two ticks for A inside bucket 0 (second 0 and 30).
+    r.feed(_tick("A", 0, 50.0, 10))
+    r.feed(_tick("A", 30, 55.0, 5))
+    assert r.pop_completed() == [], "A's bar still open — nothing emitted"
+
+    # B also ticks inside bucket 0.
+    r.feed(_tick("B", 15, 99.0, 1))
+    assert r.pop_completed() == [], (
+        "B within the same bucket must not flush A"
+    )
+    # A's bar must still be open.
+    assert ("A", interval_sec) in r._open
+
+
+def test_same_ticker_later_bucket_no_duplicate():
+    """Same-ticker later-bucket close emits exactly once (no sweep dupe)."""
+    interval_sec = 60
+    r = Resampler(intervals=(interval_sec,))
+
+    r.feed(_tick("X", 0, 100.0, 10))
+    # Boundary tick — rolls X's bar via _feed_one; sweep must not add a second.
+    r.feed(_tick("X", 60, 103.0, 1))
+
+    bars = r.pop_completed()
+    x_bars = [b for b in bars if b.ticker == "X"]
+    assert len(x_bars) == 1, "Exactly one bar per bucket — no duplicate"
+    assert x_bars[0].close == 100.0  # close is last ltp before boundary
