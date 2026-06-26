@@ -14,9 +14,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { usePortfolio } from "@/hooks/usePortfolio";
-import { useLiveHoldings } from "@/hooks/useLiveHoldings";
-import { useLivePositions } from "@/hooks/useLivePositions";
+import { useAlgoPortfolioPositions } from "@/hooks/useAlgoPortfolioPositions";
 import { useStrategies } from "@/hooks/useStrategies";
 import { useLiveCaps, upsertLiveCaps } from "@/hooks/useLiveCaps";
 
@@ -244,16 +242,11 @@ function CapsCleanupPanel({
 
 // ── Main modal ────────────────────────────────────────────────────
 
-const EXCHANGE_SUFFIX: Record<string, string> = {
-  NSE: ".NS",
-  BSE: ".BO",
-};
-
 export function CleanupStrategyModal({ filteredTickers, onClose }: Props) {
   const { strategies: all, loading: stLoading } = useStrategies();
-  const { holdings } = usePortfolio();
-  const { rows: liveRows } = useLiveHoldings();
-  const { rows: posRows } = useLivePositions();
+  // Single authoritative source: combines kc.positions() + kc.holdings()
+  // so it returns open positions regardless of T+1/T+2 settlement state.
+  const { rows: portfolioRows } = useAlgoPortfolioPositions();
 
   const strategies = useMemo(
     () =>
@@ -264,30 +257,16 @@ export function CleanupStrategyModal({ filteredTickers, onClose }: Props) {
     [all],
   );
 
-  const holdingSet = useMemo(() => {
-    const tickers = new Set<string>();
-    // Platform portfolio (non-Kite)
-    for (const h of holdings) {
-      if (h.quantity > 0) tickers.add(h.ticker);
-    }
-    // Kite settled holdings (T+2 done + T+1 pending)
-    for (const row of liveRows ?? []) {
-      if (row.quantity > 0 || row.t1_pending) {
-        const suffix = EXCHANGE_SUFFIX[row.exchange] ?? `.${row.exchange}`;
-        tickers.add(`${row.tradingsymbol}${suffix}`);
-      }
-    }
-    // Algo positions tracker — catches CNC buys not yet T+2 settled.
-    // PositionRow.exchange is absent from the backend response; default NSE.
-    for (const row of posRows ?? []) {
-      if (row.quantity > 0) {
-        const exch = row.exchange ?? "NSE";
-        const suffix = EXCHANGE_SUFFIX[exch] ?? `.${exch}`;
-        tickers.add(`${row.tradingsymbol}${suffix}`);
-      }
-    }
-    return tickers;
-  }, [holdings, liveRows, posRows]);
+  // internal_ticker is already "KTKBANK.NS" — no exchange mapping needed.
+  const holdingSet = useMemo(
+    () =>
+      new Set(
+        (portfolioRows ?? [])
+          .filter((r) => r.quantity > 0)
+          .map((r) => r.internal_ticker),
+      ),
+    [portfolioRows],
+  );
 
   const filteredSet = useMemo(
     () => new Set(filteredTickers),
@@ -380,7 +359,7 @@ export function CleanupStrategyModal({ filteredTickers, onClose }: Props) {
             </option>
             {strategies.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.name} [{s.mode}]
+                {s.name}
               </option>
             ))}
           </select>
