@@ -22,6 +22,8 @@ service shell.
 from __future__ import annotations
 
 import logging
+import os
+import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -197,6 +199,24 @@ class PaperRuntime:
         self._session_id = uuid4()
         self._events: list[dict[str, Any]] = []
         self._kill_switch_active = kill_switch_active
+        # Periodic flush thresholds — read from env with safe defaults.
+        try:
+            self._flush_n: int = int(
+                os.environ.get("ALGO_PAPER_EVENT_FLUSH_N", "50")
+            )
+        except Exception:  # noqa: BLE001
+            self._flush_n = 50
+        try:
+            self._flush_secs: float = float(
+                os.environ.get("ALGO_PAPER_EVENT_FLUSH_SECS", "30")
+            )
+        except Exception:  # noqa: BLE001
+            self._flush_secs = 30.0
+        # Monotonic timestamp of the last successful periodic flush.
+        # Initialised to 0.0; overwritten at run() start and after
+        # each successful flush so the time-threshold is measured
+        # from the later of run-start and last flush.
+        self._last_flush_ts: float = 0.0
         # Most-recent LTP per ticker, updated on every tick in run().
         # Used by _account_snapshot to mark open positions to market
         # so caps and sizing behave identically to the live runtime.
@@ -427,6 +447,53 @@ class PaperRuntime:
                 ticker, exc,
             )
 
+    def _maybe_flush_events(self, *, force: bool = False) -> None:
+        """Flush accumulated events to Iceberg when a threshold is met.
+
+        Thresholds (checked in order):
+        - ``force=True`` — always flush (used in finally block).
+        - ``len(_events) >= _flush_n`` — size threshold.
+        - ``_events`` non-empty AND ``now - _last_flush_ts >= _flush_secs``
+          — time threshold.
+
+        On SUCCESS: ``_events`` is cleared and ``_last_flush_ts`` advanced.
+        On FAILURE: exception is logged (exc_info=True) and ``_events`` is
+        NOT cleared so the next threshold trip (or the force-flush in the
+        finally block) can retry the same rows.
+
+        Design note: a paper observability flush failure must NOT kill the
+        run.  This is a deliberate divergence from §4.3 rule 17 (propagate
+        Iceberg write errors).  The events table is non-critical
+        observability; losing an entire paper session to a transient write
+        blip is a worse outcome than retrying at the next threshold.  The
+        brief documents this trade-off explicitly (task-6.4-brief.md §
+        "On FAILURE").
+        """
+        now = time.monotonic()
+        should_flush = (
+            force
+            or len(self._events) >= self._flush_n
+            or (
+                self._events
+                and now - self._last_flush_ts >= self._flush_secs
+            )
+        )
+        if not should_flush:
+            return
+        try:
+            flush_events(self._events)
+            self._events = []
+            self._last_flush_ts = now
+        except Exception:
+            _logger.exception(
+                "PaperRuntime: periodic event flush failed "
+                "(session_id=%s, buffered=%d rows); "
+                "events retained for retry — run continues",
+                self._session_id,
+                len(self._events),
+            )
+            # Do NOT re-raise: a flush blip must not kill the paper run.
+
     async def run(self, source: TickSource) -> int:
         """Drain the source. Returns the count of fills emitted.
 
@@ -436,6 +503,8 @@ class PaperRuntime:
         """
         fills = 0
         last_price_per_ticker: dict[str, Decimal] = {}
+        # Anchor the time threshold to run start, not object creation.
+        self._last_flush_ts = time.monotonic()
         try:
             async for tick in source:
                 last_price_per_ticker[tick.ticker] = Decimal(str(tick.ltp))
@@ -451,6 +520,8 @@ class PaperRuntime:
                             Decimal(str(bar.close)),
                         ),
                     )
+                # Periodic crash-safe flush: no-op until a threshold trips.
+                self._maybe_flush_events()
         finally:
             for bar in self._resampler.close_partial_bars():
                 fills += self._on_bar_close(
@@ -460,9 +531,8 @@ class PaperRuntime:
                         Decimal(str(bar.close)),
                     ),
                 )
-            if self._events:
-                flush_events(self._events)
-                self._events = []
+            # Force-flush all remaining events in one Iceberg commit.
+            self._maybe_flush_events(force=True)
             # ASETPLTFRM-417 / FE-5.1 — drain the per-session
             # feature snapshot buffer in ONE Iceberg commit.
             # Non-fatal: failure logs + buffer is cleared so a

@@ -418,3 +418,210 @@ def test_buy_via_composer_none_price_is_silent_drop() -> None:
         "expected NO signal_rejected event when last_price is None — "
         "emitting with price=None produces a malformed payload"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 6.4: periodic crash-safe event flush
+# ---------------------------------------------------------------------------
+
+import time as _time  # noqa: E402 — after stdlib imports above
+
+
+def _make_runtime_flush(
+    initial: Decimal = Decimal("100000"),
+) -> PaperRuntime:
+    """Extend _make_runtime with attributes needed by _maybe_flush_events."""
+    rt = _make_runtime(initial)
+    rt._last_flush_ts = 0.0
+    rt._flush_n = 50       # default; tests override via monkeypatch.setenv
+    rt._flush_secs = 30.0  # default
+    return rt
+
+
+def _fake_event() -> dict[str, Any]:
+    return {"type": "test_event", "payload_json": "{}"}
+
+
+def test_flush_size_threshold() -> None:
+    """_maybe_flush_events flushes when len(_events) >= N (size threshold).
+
+    We shrink _flush_n to 3 so we can trigger it with 3 events.
+    """
+    calls: list[int] = []
+
+    def fake_flush(rows: list[dict]) -> None:  # noqa: ANN001
+        calls.append(len(rows))
+
+    rt = _make_runtime_flush()
+    rt._flush_n = 3
+    rt._events = [_fake_event(), _fake_event(), _fake_event()]  # 3 events
+
+    with patch(
+        "backend.algo.paper.runtime.flush_events",
+        side_effect=fake_flush,
+    ):
+        rt._maybe_flush_events()
+
+    assert len(calls) == 1, "flush_events must be called exactly once"
+    assert calls[0] == 3, "flush_events must receive all 3 rows"
+    assert rt._events == [], "_events must be cleared after flush"
+    assert rt._last_flush_ts > 0, "_last_flush_ts must be advanced"
+
+
+def test_flush_time_threshold() -> None:
+    """_maybe_flush_events flushes when elapsed time >= SECS threshold.
+
+    We set _last_flush_ts to 1 hour ago so the default 30s threshold trips.
+    """
+    calls: list[int] = []
+
+    def fake_flush(rows: list[dict]) -> None:
+        calls.append(len(rows))
+
+    rt = _make_runtime_flush()
+    rt._events = [_fake_event()]
+    # Simulate last flush 1 hour ago (well past the default 30s threshold).
+    rt._last_flush_ts = _time.monotonic() - 3600
+
+    with patch(
+        "backend.algo.paper.runtime.flush_events",
+        side_effect=fake_flush,
+    ):
+        rt._maybe_flush_events()
+
+    assert len(calls) == 1, (
+        "flush_events must be called once on time threshold"
+    )
+    assert rt._events == [], "_events must be cleared after flush"
+
+
+def test_flush_below_both_thresholds() -> None:
+    """_maybe_flush_events is a no-op when below both size and time thresholds.
+
+    1 event, recent _last_flush_ts, default N (50) -> no flush.
+    """
+    calls: list[int] = []
+
+    def fake_flush(rows: list[dict]) -> None:
+        calls.append(len(rows))
+
+    rt = _make_runtime_flush()
+    rt._events = [_fake_event()]
+    # Mark as just-flushed — well within the 30s window.
+    rt._last_flush_ts = _time.monotonic()
+
+    with patch(
+        "backend.algo.paper.runtime.flush_events",
+        side_effect=fake_flush,
+    ):
+        rt._maybe_flush_events()
+
+    assert calls == [], "flush_events must NOT be called when below thresholds"
+    assert len(rt._events) == 1, "_events must remain intact"
+
+
+def test_flush_failure_does_not_raise_and_keeps_events() -> None:
+    """Flush failure: no exception propagated, _events NOT cleared (retry).
+
+    A paper observability flush blip must NOT kill the run.  The exception
+    is caught, logged, and _events are kept so the finally-block force-flush
+    can retry them.
+    """
+    call_count = [0]
+
+    def failing_flush(rows: list[dict]) -> None:
+        call_count[0] += 1
+        raise RuntimeError("simulated Iceberg write failure")
+
+    rt = _make_runtime_flush()
+    rt._flush_n = 1
+    rt._events = [_fake_event()]
+
+    with patch(
+        "backend.algo.paper.runtime.flush_events",
+        side_effect=failing_flush,
+    ):
+        # Must not raise.
+        rt._maybe_flush_events()
+
+    assert call_count[0] == 1, "flush_events should have been attempted"
+    assert len(rt._events) == 1, (
+        "_events must NOT be cleared after a failed flush "
+        "(so the force-flush in finally can retry)"
+    )
+
+
+def test_flush_failure_then_retry_clears_events() -> None:
+    """After a failed flush, second (force) call succeeds and clears events."""
+    calls: list[int] = []
+    attempt = [0]
+
+    def flaky_flush(rows: list[dict]) -> None:
+        attempt[0] += 1
+        if attempt[0] == 1:
+            raise RuntimeError("first attempt fails")
+        calls.append(len(rows))
+
+    rt = _make_runtime_flush()
+    rt._flush_n = 1
+    rt._events = [_fake_event()]
+
+    with patch(
+        "backend.algo.paper.runtime.flush_events",
+        side_effect=flaky_flush,
+    ):
+        rt._maybe_flush_events()  # fails, events kept
+        assert len(rt._events) == 1, "events kept after first failure"
+
+        rt._maybe_flush_events(force=True)  # succeeds
+
+    assert calls == [1], "second call must flush the 1 retained event"
+    assert rt._events == [], "events cleared after successful retry"
+
+
+def test_flush_force_flushes_regardless_of_thresholds() -> None:
+    """force=True flushes even when _events is below both thresholds."""
+    calls: list[int] = []
+
+    def fake_flush(rows: list[dict]) -> None:
+        calls.append(len(rows))
+
+    rt = _make_runtime_flush()
+    rt._events = [_fake_event()]
+    # Simulate very recent flush and only 1 event (below default N=50).
+    rt._last_flush_ts = _time.monotonic()
+
+    with patch(
+        "backend.algo.paper.runtime.flush_events",
+        side_effect=fake_flush,
+    ):
+        rt._maybe_flush_events(force=True)
+
+    assert calls == [1], "force=True must flush regardless of thresholds"
+    assert rt._events == [], "_events cleared on forced flush"
+
+
+def test_flush_force_on_empty_events_does_not_crash() -> None:
+    """force=True with empty _events is safe (flush_events no-ops on empty).
+
+    flush_events handles empty lists; _maybe_flush_events must not crash.
+    """
+    calls: list[int] = []
+
+    def fake_flush(rows: list[dict]) -> None:
+        calls.append(len(rows))
+
+    rt = _make_runtime_flush()
+    rt._events = []
+
+    with patch(
+        "backend.algo.paper.runtime.flush_events",
+        side_effect=fake_flush,
+    ):
+        # Should not raise.
+        rt._maybe_flush_events(force=True)
+
+    # flush_events called with empty list (it's a no-op) — no crash.
+    assert calls == [0], (
+        "flush_events called with empty list on force; must not crash"
+    )
