@@ -14,8 +14,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { useLiveHoldings } from "@/hooks/useLiveHoldings";
-import { useLivePositions } from "@/hooks/useLivePositions";
+import { useAlgoPositions } from "@/hooks/useAlgoPositions";
 import { useStrategies } from "@/hooks/useStrategies";
 import { useLiveCaps, upsertLiveCaps } from "@/hooks/useLiveCaps";
 
@@ -245,11 +244,10 @@ function CapsCleanupPanel({
 
 export function CleanupStrategyModal({ filteredTickers, onClose }: Props) {
   const { strategies: all, loading: stLoading } = useStrategies();
-  // Two complementary Kite sources (no attribution filter):
-  //   useLiveHoldings → kc.holdings()  — settled/T+1 CNC
-  //   useLivePositions → kc.positions() — same-day / unsettled CNC
-  const { rows: holdingRows } = useLiveHoldings();
-  const { rows: positionRows } = useLivePositions();
+  // Same source the watchlist widget "Algo" tab uses — combines both
+  // kc.positions() + kc.holdings() server-side and returns internal_ticker
+  // already in ".NS" / ".BO" format. Paper-mode rows excluded.
+  const { positions } = useAlgoPositions();
 
   const strategies = useMemo(
     () =>
@@ -260,22 +258,15 @@ export function CleanupStrategyModal({ filteredTickers, onClose }: Props) {
     [all],
   );
 
-  const holdingSet = useMemo(() => {
-    const set = new Set<string>();
-    // Settled / T+1-pending holdings: exchange field is set by backend
-    for (const r of holdingRows ?? []) {
-      if (r.quantity > 0 || r.t1_pending) {
-        set.add(`${r.tradingsymbol}.${r.exchange === "BSE" ? "BO" : "NS"}`);
-      }
-    }
-    // Same-day / unsettled CNC positions: exchange is "NSE" or "BSE"
-    for (const r of positionRows ?? []) {
-      if (r.quantity > 0) {
-        set.add(`${r.tradingsymbol}.${r.exchange === "BSE" ? "BO" : "NS"}`);
-      }
-    }
-    return set;
-  }, [holdingRows, positionRows]);
+  const holdingSet = useMemo(
+    () =>
+      new Set(
+        positions
+          .filter((p) => p.quantity > 0)
+          .map((p) => p.internal_ticker),
+      ),
+    [positions],
+  );
 
   const filteredSet = useMemo(
     () => new Set(filteredTickers),
