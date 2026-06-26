@@ -108,7 +108,7 @@ class PaperSupervisor:
                         _uid_tag, _sid_tag,
                     )
                     entry = self._runs.get(key)
-                    if entry is not None:
+                    if entry is not None and entry["task"] is t:
                         entry["terminal_status"] = "cancelled"
                     return
                 exc = t.exception()
@@ -119,7 +119,7 @@ class PaperSupervisor:
                         _uid_tag, _sid_tag, exc_info=exc,
                     )
                     entry = self._runs.get(key)
-                    if entry is not None:
+                    if entry is not None and entry["task"] is t:
                         entry["terminal_status"] = "failed"
                     return
                 fills = t.result()
@@ -129,7 +129,7 @@ class PaperSupervisor:
                     _uid_tag, _sid_tag, fills,
                 )
                 entry = self._runs.get(key)
-                if entry is not None:
+                if entry is not None and entry["task"] is t:
                     entry["terminal_status"] = "completed"
             except Exception:  # noqa: BLE001
                 _logger.warning(
@@ -207,7 +207,7 @@ class PaperSupervisor:
                         _uid_tag, _sid_tag,
                     )
                     entry = self._runs.get(key)
-                    if entry is not None:
+                    if entry is not None and entry["task"] is t:
                         entry["terminal_status"] = "cancelled"
                     return
                 exc = t.exception()
@@ -218,7 +218,7 @@ class PaperSupervisor:
                         _uid_tag, _sid_tag, exc_info=exc,
                     )
                     entry = self._runs.get(key)
-                    if entry is not None:
+                    if entry is not None and entry["task"] is t:
                         entry["terminal_status"] = "failed"
                     return
                 fills = t.result()
@@ -228,7 +228,7 @@ class PaperSupervisor:
                     _uid_tag, _sid_tag, fills,
                 )
                 entry = self._runs.get(key)
-                if entry is not None:
+                if entry is not None and entry["task"] is t:
                     entry["terminal_status"] = "completed"
             except Exception:  # noqa: BLE001
                 _logger.warning(

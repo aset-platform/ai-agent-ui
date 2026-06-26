@@ -335,3 +335,108 @@ async def test_replay_rebuild_exc_info_logged_and_loop_continues(
     assert any(r.exc_info is not None for r in exc_records), (
         "Expected exc_info to be set on the failure log record"
     )
+
+
+@pytest.mark.asyncio
+async def test_done_callback_does_not_clobber_reamed_run():
+    """Regression: stale done-callback from run A must NOT write
+    terminal_status onto a freshly re-armed run B for the same
+    (user, strategy) key.
+
+    Sequence exercised:
+    1. Run A (crashing) is started and awaited to completion so the
+       task is done.  At this point the callback *may* fire.
+    2. We ensure the callback has executed by yielding once.
+    3. We re-arm run B (a long sleeper) for the same (user, strategy).
+    4. We grab the _on_done callable that was registered on task A
+       and call it directly, simulating the race where the callback
+       fires AFTER B is already installed.
+    5. Assert that B's entry has NO terminal_status and that
+       _public_row reports status="running".
+    """
+    sv = PaperSupervisor()
+    uid = uuid4()
+    strategy = _fake_strategy()
+    key = (uid, strategy.id)
+
+    # ---- arm run A (crashing) ----
+    FakeCrash = _make_fake_runtime_cls(_crashing_run)
+    with patch(
+        "backend.algo.paper.supervisor.PaperRuntime", FakeCrash,
+    ):
+        await sv.start_run(
+            user_id=uid,
+            strategy=strategy,
+            source=_fake_source(),
+            initial_capital_inr=Decimal("100000"),
+        )
+
+    task_a: asyncio.Task = sv._runs[key]["task"]
+
+    # Capture A's done-callback BEFORE it fires.
+    # asyncio stores callbacks in task._callbacks; we capture them now.
+    # We have to prevent them from running automatically so we can
+    # invoke the captured callable manually after B is installed.
+    captured_callbacks: list = []
+
+    # Patch: remove the callbacks asyncio already registered so they
+    # don't fire on the next yield, then manually invoke them later.
+    # task._callbacks is a list of (fn, ctx) pairs on CPython.
+    for cb, _ctx in list(getattr(task_a, "_callbacks", [])):
+        captured_callbacks.append(cb)
+
+    # Clear the auto-callbacks so they don't fire on their own.
+    if hasattr(task_a, "_callbacks"):
+        task_a._callbacks.clear()
+
+    # Wait for task_a to finish (raises internally, so shield).
+    try:
+        await asyncio.wait_for(asyncio.shield(task_a), timeout=1.0)
+    except (RuntimeError, asyncio.TimeoutError):
+        pass
+
+    # Yield to let any already-scheduled callbacks drain (there
+    # should be none now that we cleared _callbacks).
+    await asyncio.sleep(0)
+
+    # ---- re-arm run B (sleeping, will never finish during test) ----
+    FakeSleep = _make_fake_runtime_cls(_sleeping_run)
+    with patch(
+        "backend.algo.paper.supervisor.PaperRuntime", FakeSleep,
+    ):
+        row_b = await sv.start_run(
+            user_id=uid,
+            strategy=strategy,
+            source=_fake_source(),
+            initial_capital_inr=Decimal("100000"),
+        )
+
+    task_b: asyncio.Task = sv._runs[key]["task"]
+    assert task_b is not task_a, "B must be a new task"
+    assert row_b["status"] == "running"
+
+    # ---- now manually fire A's stale done-callback ----
+    # On the buggy code this writes "failed" onto B's entry.
+    for cb in captured_callbacks:
+        cb(task_a)
+
+    # ---- assertions ----
+    entry_b = sv._runs.get(key)
+    assert entry_b is not None, "B's entry should still exist"
+
+    # The critical assertion: stale callback must NOT have planted
+    # terminal_status on B's entry.
+    assert "terminal_status" not in entry_b, (
+        f"Stale done-callback from A clobbered B's entry: "
+        f"terminal_status={entry_b.get('terminal_status')!r}"
+    )
+
+    # _public_row must still see B as running.
+    pub = PaperSupervisor._public_row(entry_b)
+    assert pub["status"] == "running", (
+        f"Expected 'running', got {pub['status']!r} — "
+        "stale callback corrupted B's status"
+    )
+
+    # Clean up B
+    await sv.stop_run(user_id=uid, strategy_id=strategy.id)
