@@ -14,7 +14,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { useAlgoPortfolioPositions } from "@/hooks/useAlgoPortfolioPositions";
+import { useLiveHoldings } from "@/hooks/useLiveHoldings";
+import { useLivePositions } from "@/hooks/useLivePositions";
 import { useStrategies } from "@/hooks/useStrategies";
 import { useLiveCaps, upsertLiveCaps } from "@/hooks/useLiveCaps";
 
@@ -244,9 +245,11 @@ function CapsCleanupPanel({
 
 export function CleanupStrategyModal({ filteredTickers, onClose }: Props) {
   const { strategies: all, loading: stLoading } = useStrategies();
-  // Single authoritative source: combines kc.positions() + kc.holdings()
-  // so it returns open positions regardless of T+1/T+2 settlement state.
-  const { rows: portfolioRows } = useAlgoPortfolioPositions();
+  // Two complementary Kite sources (no attribution filter):
+  //   useLiveHoldings → kc.holdings()  — settled/T+1 CNC
+  //   useLivePositions → kc.positions() — same-day / unsettled CNC
+  const { rows: holdingRows } = useLiveHoldings();
+  const { rows: positionRows } = useLivePositions();
 
   const strategies = useMemo(
     () =>
@@ -257,16 +260,22 @@ export function CleanupStrategyModal({ filteredTickers, onClose }: Props) {
     [all],
   );
 
-  // internal_ticker is already "KTKBANK.NS" — no exchange mapping needed.
-  const holdingSet = useMemo(
-    () =>
-      new Set(
-        (portfolioRows ?? [])
-          .filter((r) => r.quantity > 0)
-          .map((r) => r.internal_ticker),
-      ),
-    [portfolioRows],
-  );
+  const holdingSet = useMemo(() => {
+    const set = new Set<string>();
+    // Settled / T+1-pending holdings: exchange field is set by backend
+    for (const r of holdingRows ?? []) {
+      if (r.quantity > 0 || r.t1_pending) {
+        set.add(`${r.tradingsymbol}.${r.exchange === "BSE" ? "BO" : "NS"}`);
+      }
+    }
+    // Same-day / unsettled CNC positions: exchange is "NSE" or "BSE"
+    for (const r of positionRows ?? []) {
+      if (r.quantity > 0) {
+        set.add(`${r.tradingsymbol}.${r.exchange === "BSE" ? "BO" : "NS"}`);
+      }
+    }
+    return set;
+  }, [holdingRows, positionRows]);
 
   const filteredSet = useMemo(
     () => new Set(filteredTickers),
