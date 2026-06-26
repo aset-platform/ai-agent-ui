@@ -161,6 +161,19 @@ _EVENT_FLUSH_INTERVAL_S = float(
 )
 
 
+def _env_truthy(name: str) -> bool:
+    """True when env var ``name`` is set to a truthy value.
+
+    Read live (not at import) so tests can toggle it via monkeypatch
+    and operators can flip it without a restart. Truthy ⇔ one of
+    ``1/true/yes/on`` (case-insensitive); anything else is False.
+    """
+    val = os.environ.get(name)
+    if val is None:
+        return False
+    return val.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _select_last_price_ts_ns(tick: Any) -> int:
     """Return the best available ns-since-epoch stamp for ``tick``.
 
@@ -330,6 +343,15 @@ class LiveRuntime:
         # ALGO_ORDER_COOLDOWN_S is suppressed; protective exits are
         # exempt. See _submit_order's churn guard.
         self._last_submit_ts: dict[tuple[str, str], float] = {}
+
+        # Task 4.0b — capital-shrink guardrail. Set True in run() when
+        # the configured start capital is below the cost-basis of
+        # already-deployed positions (e.g. runtime restarted with ₹20k
+        # while real positions were built under ₹100k). While set, the
+        # ``set_target_weight`` branch SUPPRESSES rebalance-DOWN trims
+        # (which would liquidate real shares) — BUYs and protective
+        # exits are unaffected. See _detect_capital_below_deployed.
+        self._capital_below_deployed: bool = False
 
         # ASETPLTFRM-376 — hydrate PositionTracker from any pre-
         # existing Kite positions/holdings so EXIT logic can see
@@ -2299,6 +2321,10 @@ class LiveRuntime:
         self._load_trailing_state_from_redis()
         await self._ensure_gtts_for_hydrated_positions()
         await self._cleanup_stale_protection()
+        # Task 4.0b — once positions are hydrated, detect a start where
+        # the configured capital is below the already-deployed cost so
+        # the set_target_weight branch can suppress liquidating trims.
+        self._detect_capital_below_deployed()
         if self._ticker_locked:
             _logger.info(
                 "LiveRuntime: ticker locks restored: %s",
@@ -4543,6 +4569,55 @@ class LiveRuntime:
         )
         return True
 
+    def _detect_capital_below_deployed(self) -> None:
+        """Flag a start where capital < already-deployed cost-basis.
+
+        Task 4.0b real-money guardrail. ``set_target_weight`` sizes
+        the target off ``self._initial``; if the runtime is (re)started
+        with capital well below the cost of positions that were built
+        under a larger account, every held position looks "overweight"
+        and the strategy would issue SELLs that trim REAL shares — a
+        surprise sell-off. Called once in ``run()`` after positions are
+        hydrated; sets ``self._capital_below_deployed`` and emits a
+        HIGH-severity ``capital_below_deployed`` event + WARNING when
+        tripped. The suppression itself lives in the
+        ``set_target_weight`` branch of ``_action_to_signal``.
+        """
+        deployed_cost = sum(
+            pos.qty * float(pos.avg_price)
+            for pos in self._positions.open_positions().values()
+        )
+        initial = float(self._initial)
+        if deployed_cost <= 0 or initial >= deployed_cost:
+            self._capital_below_deployed = False
+            return
+        self._capital_below_deployed = True
+        ratio = initial / deployed_cost if deployed_cost else 0.0
+        _logger.warning(
+            "LiveRuntime: start capital ₹%.2f is BELOW already-"
+            "deployed cost ₹%.2f (ratio=%.3f) — suppressing "
+            "rebalance-DOWN trims to avoid a surprise sell-off; set "
+            "ALGO_ALLOW_REBALANCE_DOWN_ON_SHRINK=1 to override",
+            initial,
+            deployed_cost,
+            ratio,
+        )
+        self._events.append(
+            event_row(
+                session_id=self._session_id,
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                mode="live",
+                type_="capital_below_deployed",
+                payload={
+                    "severity": "high",
+                    "initial": initial,
+                    "deployed_cost": deployed_cost,
+                    "ratio": ratio,
+                },
+            )
+        )
+
     def _action_to_signal(
         self,
         action: dict,
@@ -4651,6 +4726,46 @@ class LiveRuntime:
                     reason=t,
                 )
             if diff < 0:
+                # Task 4.0b — capital-shrink guardrail. A trim-down
+                # SELL while started below already-deployed cost would
+                # liquidate REAL shares (the 2026-06-25 incident).
+                # Suppress it and surface why, UNLESS the operator
+                # opted in to genuinely reduce capital. Protective
+                # exits never reach here (separate reasons).
+                if (
+                    self._capital_below_deployed
+                    and not _env_truthy(
+                        "ALGO_ALLOW_REBALANCE_DOWN_ON_SHRINK"
+                    )
+                ):
+                    _logger.warning(
+                        "set_target_weight trim SUPPRESSED for %s "
+                        "(capital below deployed): target=%d "
+                        "current=%d — would sell %d real shares",
+                        ticker,
+                        target_qty,
+                        current_qty,
+                        -diff,
+                    )
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="live",
+                            type_=(
+                                "rebalance_down_suppressed_"
+                                "capital_shrink"
+                            ),
+                            payload={
+                                "severity": "high",
+                                "ticker": ticker,
+                                "target_qty": target_qty,
+                                "current_qty": current_qty,
+                            },
+                        )
+                    )
+                    return None
                 return Signal(
                     strategy_id=self._strategy.id,
                     user_id=self._user_id,
