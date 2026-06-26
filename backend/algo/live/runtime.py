@@ -31,6 +31,7 @@ cancel them.  Each entry is::
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import os
 import time as _time
@@ -1478,6 +1479,11 @@ class LiveRuntime:
                     and self._loop.is_running()
                     and not _on_loop_thread
                 )
+                # sold tracks whether the protective exit was actually
+                # placed. Manager is only popped when sold=True; on
+                # failure it stays so the next ratchet tick retries.
+                sold = False
+                raw = ticker.removesuffix(".NS").removesuffix(".BO")
                 if _use_tracked:
                     # Worker-thread path (production): route through the
                     # tracked _submit_order which records _in_flight,
@@ -1504,21 +1510,55 @@ class LiveRuntime:
                         _fut.result(
                             timeout=_EMERGENCY_SUBMIT_TIMEOUT_S
                         )
+                        sold = True
+                    except concurrent.futures.TimeoutError:
+                        # Order MAY already be in flight on the loop —
+                        # do NOT retry via place_order (double-sell
+                        # risk). Keep the manager so the next ratchet
+                        # tick (~30s) retries the protective exit.
+                        _logger.warning(
+                            "trailing: tracked emergency SELL timed"
+                            " out for %s — order may be in flight;"
+                            " manager retained for retry",
+                            ticker,
+                            exc_info=True,
+                        )
                     except Exception as exc:
+                        # Coroutine did NOT submit — safe to attempt a
+                        # last-resort direct place_order (no in-flight
+                        # order possible on non-timeout path).
                         _logger.error(
                             "trailing: tracked emergency SELL failed"
-                            " for %s: %s",
+                            " for %s: %s — attempting direct fallback",
                             ticker,
                             exc,
                             exc_info=True,
                         )
+                        try:
+                            self._kite.place_order(
+                                tradingsymbol=raw,
+                                exchange="NSE",
+                                transaction_type="SELL",
+                                quantity=pos.qty,
+                                order_type="LIMIT",
+                                price=mgr.current_stop,
+                                product=(
+                                    self._strategy.product or "CNC"
+                                ),
+                            )
+                            sold = True
+                        except Exception as exc2:
+                            _logger.error(
+                                "trailing: last-resort direct SELL"
+                                " also failed for %s: %s",
+                                ticker,
+                                exc2,
+                                exc_info=True,
+                            )
                 else:
                     # Loop-thread / no-loop / sync-test path: fall back
                     # to direct place_order so the protective exit is
                     # never skipped and existing sync tests pass.
-                    raw = ticker.removesuffix(
-                        ".NS"
-                    ).removesuffix(".BO")
                     try:
                         self._kite.place_order(
                             tradingsymbol=raw,
@@ -1529,6 +1569,7 @@ class LiveRuntime:
                             price=mgr.current_stop,
                             product=self._strategy.product or "CNC",
                         )
+                        sold = True
                     except Exception as exc:
                         _logger.error(
                             "trailing: emergency SELL failed for "
@@ -1537,7 +1578,12 @@ class LiveRuntime:
                             exc,
                             exc_info=True,
                         )
-                self._trailing_managers.pop(ticker, None)
+                # Only clean up the manager when the SELL was actually
+                # placed. On failure, keep it so the next ratchet tick
+                # retries the protective exit — mirrors STOP_UPDATED
+                # (test_ratchet_graceful_when_place_gtt_raises).
+                if sold:
+                    self._trailing_managers.pop(ticker, None)
 
     # ── v5 GTT trailing stop ─────────────────────────────────────
 

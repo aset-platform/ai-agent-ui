@@ -199,3 +199,53 @@ class TestStopHitTrackedPath:
         # 6. Trailing manager was cleaned up
         assert ticker not in rt._trailing_managers
         assert ticker not in rt._gtt_ids
+
+
+class TestStopHitTrackedTimeout:
+    """Timeout on run_coroutine_threadsafe.result() must NOT pop the
+    manager (no abandon) and must NOT call place_order directly
+    (no double-sell risk when the order may already be in flight).
+    """
+
+    @pytest.mark.asyncio
+    async def test_stop_hit_timeout_retains_manager_no_double_sell(
+        self,
+        monkeypatch,
+    ):
+        """When _submit_order hangs beyond _EMERGENCY_SUBMIT_TIMEOUT_S
+        the ratchet must:
+        1. Not propagate any exception.
+        2. Retain the trailing manager for next-tick retry.
+        3. Not call place_order directly (order may be in flight).
+        """
+        import backend.algo.live.runtime as _rt_mod
+
+        # Tiny timeout so the test completes quickly.
+        monkeypatch.setattr(_rt_mod, "_EMERGENCY_SUBMIT_TIMEOUT_S", 0.05)
+
+        rt = _make_runtime()
+        ticker = "INFY.NS"
+        qty = 5
+        _seed_manager(rt, ticker=ticker, qty=qty, gtt_id=11)
+        rt._ws_hwm[ticker] = 940.0  # STOP_HIT condition
+
+        rt._loop = asyncio.get_running_loop()
+
+        # _submit_order sleeps long enough to exceed the tiny timeout.
+        async def _slow_submit(**_kwargs):
+            await asyncio.sleep(5)
+            return 1
+
+        rt._submit_order = AsyncMock(  # type: ignore[assignment]
+            side_effect=_slow_submit
+        )
+
+        # Run on worker thread — must complete without raising.
+        await asyncio.to_thread(rt._ratchet_all_gtts)
+
+        # Manager RETAINED — next ratchet tick (~30s) will retry.
+        assert ticker in rt._trailing_managers
+
+        # No direct place_order called — prevents double-sell when
+        # the order may already be in flight on the event loop.
+        rt._kite.place_order.assert_not_called()

@@ -201,7 +201,8 @@ class TestRatchetAllGtts:
 
         # Must not propagate
         rt._ratchet_all_gtts()
-        assert "INFY.NS" not in rt._trailing_managers
+        # safety: failed protective SELL keeps manager for next-tick retry
+        assert "INFY.NS" in rt._trailing_managers
 
     def test_ratchet_uses_limit_headroom(self):
         rt = _make_runtime()
