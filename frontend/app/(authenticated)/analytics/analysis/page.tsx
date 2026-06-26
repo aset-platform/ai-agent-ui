@@ -28,6 +28,7 @@ import dynamic from "next/dynamic";
 import { usePreferences } from "@/hooks/usePreferences";
 import { StockAnalysisLink } from "@/components/advanced-analytics/StockAnalysisLink";
 import { AddToStrategyModal } from "@/components/algo-trading/AddToStrategyModal";
+import { CleanupStrategyModal } from "@/components/algo-trading/CleanupStrategyModal";
 
 // Dynamic imports — lightweight-charts requires window/document
 // Skeleton heights match each chart's rendered height to keep
@@ -2503,6 +2504,7 @@ function WatchlistStocksTab() {
   const [sortKey, setSortKey] = useState<SortKey>("ticker");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [addToStrategyOpen, setAddToStrategyOpen] = useState(false);
+  const [cleanupStrategyOpen, setCleanupStrategyOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -3039,6 +3041,21 @@ function WatchlistStocksTab() {
               Add to Strategy
             </button>
 
+            {/* Cleanup Strategy */}
+            <button
+              type="button"
+              data-testid="watchlist-cleanup-strategy"
+              onClick={() => setCleanupStrategyOpen(true)}
+              title="Review and trim a strategy's allowed ticker list"
+              className="inline-flex items-center gap-1.5 rounded-md border border-rose-200 dark:border-rose-700 px-3 py-1.5 text-xs font-medium text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-900/30 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+                <path d="M10 11v6M14 11v6" />
+              </svg>
+              Cleanup Strategy
+            </button>
+
             {/* Reset All Filters */}
             <button
               type="button"
@@ -3061,6 +3078,13 @@ function WatchlistStocksTab() {
         <AddToStrategyModal
           filteredTickers={filtered.map((s) => s.ticker)}
           onClose={() => setAddToStrategyOpen(false)}
+        />
+      )}
+
+      {cleanupStrategyOpen && (
+        <CleanupStrategyModal
+          filteredTickers={filtered.map((s) => s.ticker)}
+          onClose={() => setCleanupStrategyOpen(false)}
         />
       )}
 
