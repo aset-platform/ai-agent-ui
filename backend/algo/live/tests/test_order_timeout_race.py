@@ -235,6 +235,60 @@ class TestFillDuringCancel:
         assert "order_filled_before_cancel" in types
         assert "order_cancelled_timeout" not in types
 
+    @pytest.mark.asyncio
+    async def test_filled_qty_gte_quantity_non_complete_status(
+        self,
+    ) -> None:
+        """filled_quantity == quantity with status NOT "COMPLETE" →
+        exercises the qty-based fallback branch (line 354) and emits
+        order_filled_before_cancel, NOT order_cancelled_timeout."""
+        strat = uuid4()
+        order_id = "ORD_FILL_003"
+        order = _build_order(
+            order_id=order_id,
+            tag=_tag(strat),
+            status="OPEN",
+            age_seconds=120.0,
+            quantity=8,
+            filled_quantity=0,
+        )
+
+        # Re-fetch: fully filled (filled_qty == qty) but status is OPEN
+        # (not COMPLETE). This exercises the qty-check fallback.
+        history_leg = _build_kite_history_leg(
+            order_id,
+            status="OPEN",
+            quantity=8,
+            filled_quantity=8,
+            average_price=1500.5,
+        )
+
+        watcher, kite, events = _make_watcher(
+            kite_orders=[order],
+            order_history_return=[history_leg],
+            strategy_id=strat,
+        )
+
+        await watcher._tick_once()
+
+        types = [e["type"] for e in events]
+        # Must NOT appear as a cancel.
+        assert "order_cancelled_timeout" not in types, (
+            "Fully filled order (filled_qty == qty) must not be "
+            "mislabelled as cancelled, even with non-COMPLETE status"
+        )
+        # Must appear as a fill.
+        assert "order_filled_before_cancel" in types
+
+        fill_events = [
+            e for e in events if e["type"] == "order_filled_before_cancel"
+        ]
+        assert len(fill_events) == 1
+        p = _payload(fill_events[0])
+        assert p["kite_order_id"] == order_id
+        assert p["filled_qty"] == 8
+        assert p["avg_price"] == 1500.5
+
 
 # ----------------------------------------------------------------
 # (b) Genuine cancel → order_cancelled_timeout unchanged
@@ -479,3 +533,59 @@ class TestRefetchFailure:
         types = [e["type"] for e in events]
         assert "order_cancelled_timeout" in types
         assert "order_filled_before_cancel" not in types
+
+    @pytest.mark.asyncio
+    async def test_refetch_skips_when_kc_is_none(
+        self, caplog,
+    ) -> None:
+        """_kc is None on refetch → _refetch_order returns None,
+        falls back to stale snapshot and emits order_cancelled_timeout,
+        no crash, logs WARNING."""
+        strat = uuid4()
+        order_id = "ORD_NO_KC_001"
+        order = _build_order(
+            order_id=order_id,
+            tag=_tag(strat),
+            status="OPEN",
+            age_seconds=120.0,
+            quantity=5,
+        )
+
+        watcher, kite, events = _make_watcher(
+            kite_orders=[order],
+            strategy_id=strat,
+        )
+
+        # Simulate Kite connection loss AFTER cancel succeeds but
+        # BEFORE refetch. When refetch checks for _kc, it's None.
+        original_refetch = watcher._refetch_order
+
+        def refetch_with_no_kc(order_id: str):
+            # Simulate _kc becoming None between cancel and refetch.
+            kite._kc = None
+            return original_refetch(order_id)
+
+        watcher._refetch_order = refetch_with_no_kc
+
+        with caplog.at_level(
+            logging.WARNING,
+            logger="backend.algo.live.order_timeout",
+        ):
+            # Must not raise.
+            await watcher._tick_once()
+
+        # Falls back to cancel event from stale snapshot.
+        types = [e["type"] for e in events]
+        assert "order_cancelled_timeout" in types
+        assert "order_filled_before_cancel" not in types
+
+        # Logged a WARNING about missing _kc.
+        warning_records = [
+            r for r in caplog.records
+            if r.levelno >= logging.WARNING
+            and "no _kc" in r.message.lower()
+        ]
+        assert warning_records, (
+            "Expected a WARNING log mentioning 'no _kc' when "
+            "_kc is None during refetch"
+        )
