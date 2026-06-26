@@ -2562,9 +2562,11 @@ def create_insights_router() -> APIRouter:
                 except Exception:
                     pass
 
-        # Compute cross-stock percentile ranks for Sharpe, RS and ATR,
-        # then score = 0.5×SharpePercentile + 0.3×RSPercentile
-        #              + 0.2×ATRPercentile
+        # Cross-stock percentile ranks → composite score
+        # Weights: Sharpe(6M) 30% + Blended RS 30% + MDD(6M) 20%
+        #          + ATR% 10% + SMA200 Distance 10%
+        # MDD(6M) is negative; lower (more negative) = worse drawdown,
+        # so _pct_rank naturally gives high rank to shallow drawdowns.
         def _pct_rank(
             vals: list[float], v: float, n: int
         ) -> float:
@@ -2576,24 +2578,39 @@ def create_insights_router() -> APIRouter:
             r.sharpe_ratio for r in rows
             if r.sharpe_ratio is not None
         ]
-        _rs_vals = [
-            r.rs_6m for r in rows if r.rs_6m is not None
+        _brs_vals = [
+            r.blended_rs for r in rows
+            if r.blended_rs is not None
+        ]
+        _mdd_vals = [
+            r.mdd_6m for r in rows if r.mdd_6m is not None
         ]
         _atr_vals = [
             r.atr_pct for r in rows if r.atr_pct is not None
         ]
+        _sma_vals = [
+            r.dist_sma200 for r in rows
+            if r.dist_sma200 is not None
+        ]
         _ns = len(_sharpe_vals)
-        _nr = len(_rs_vals)
+        _nb = len(_brs_vals)
+        _nm = len(_mdd_vals)
         _na = len(_atr_vals)
+        _nw = len(_sma_vals)
         for row in rows:
             _sp = (
                 _pct_rank(_sharpe_vals, row.sharpe_ratio, _ns)
                 if row.sharpe_ratio is not None and _ns > 0
                 else None
             )
-            _rp = (
-                _pct_rank(_rs_vals, row.rs_6m, _nr)
-                if row.rs_6m is not None and _nr > 0
+            _bp = (
+                _pct_rank(_brs_vals, row.blended_rs, _nb)
+                if row.blended_rs is not None and _nb > 0
+                else None
+            )
+            _mp = (
+                _pct_rank(_mdd_vals, row.mdd_6m, _nm)
+                if row.mdd_6m is not None and _nm > 0
                 else None
             )
             _ap = (
@@ -2601,9 +2618,20 @@ def create_insights_router() -> APIRouter:
                 if row.atr_pct is not None and _na > 0
                 else None
             )
-            if _sp is not None and _rp is not None and _ap is not None:
+            _wp = (
+                _pct_rank(_sma_vals, row.dist_sma200, _nw)
+                if row.dist_sma200 is not None and _nw > 0
+                else None
+            )
+            _parts = [
+                (_sp, 0.30), (_bp, 0.30), (_mp, 0.20),
+                (_ap, 0.10), (_wp, 0.10),
+            ]
+            _avail = [(v, w) for v, w in _parts if v is not None]
+            if _avail:
+                _tw = sum(w for _, w in _avail)
                 row.score = round(
-                    0.5 * _sp + 0.3 * _rp + 0.2 * _ap, 4
+                    sum(v * w for v, w in _avail) / _tw, 4
                 )
 
         result = WatchlistStocksResponse(stocks=rows)
