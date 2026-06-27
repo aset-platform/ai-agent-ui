@@ -107,6 +107,7 @@ def load_ohlcv_window(
         "SELECT ticker, date, open, high, low, close, volume "
         "FROM ohlcv "
         f"WHERE ticker IN ({placeholders}) "
+        "  AND date >= '1980-01-01' "
         "  AND date BETWEEN ? AND ? "
         "ORDER BY ticker, date"
     )

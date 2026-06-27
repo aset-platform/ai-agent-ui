@@ -207,6 +207,7 @@ def _default_iceberg_reader(
         "FROM intraday_bars "
         f"WHERE ticker IN ({placeholders}) "
         "  AND interval_sec = ? "
+        "  AND bar_date >= '1980-01-01' "
         "  AND bar_date >= ? "
         "  AND bar_date <= ? "
         "ORDER BY ticker, bar_open_ts_ns"
@@ -226,25 +227,31 @@ def _default_iceberg_reader(
             h = Decimal(str(r["high"]))
             lo = Decimal(str(r["low"]))
             c = Decimal(str(r["close"]))
-        except Exception:  # noqa: BLE001
+            if any(x.is_nan() for x in (o, h, lo, c)):
+                continue
+            d_raw = r["bar_date"]
+            d_obj = (
+                d_raw if isinstance(d_raw, _date)
+                else _date.fromisoformat(str(d_raw)[:10])
+            )
+            out.setdefault(t, []).append(BarData(
+                ticker=t,
+                date=d_obj,
+                open=o,
+                high=h,
+                low=lo,
+                close=c,
+                volume=int(r.get("volume") or 0),
+                bar_open_ts_ns=int(r["bar_open_ts_ns"]),
+            ))
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "intraday warmup: skipping malformed bar row"
+                " for %s: %s",
+                t,
+                exc,
+            )
             continue
-        if any(x.is_nan() for x in (o, h, lo, c)):
-            continue
-        d_raw = r["bar_date"]
-        d_obj = (
-            d_raw if isinstance(d_raw, _date)
-            else _date.fromisoformat(str(d_raw)[:10])
-        )
-        out.setdefault(t, []).append(BarData(
-            ticker=t,
-            date=d_obj,
-            open=o,
-            high=h,
-            low=lo,
-            close=c,
-            volume=int(r.get("volume") or 0),
-            bar_open_ts_ns=int(r["bar_open_ts_ns"]),
-        ))
     return out
 
 

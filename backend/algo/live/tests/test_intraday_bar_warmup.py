@@ -13,9 +13,9 @@ Mirrors the shape of ``test_daily_bar_warmup.py``:
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -23,6 +23,7 @@ from backend.algo.backtest.types import BarData
 from backend.algo.live.intraday_bar_warmup import (
     DEFAULT_INTRADAY_WARMUP_BARS,
     INTERVAL_SEC_BY_LABEL,
+    _default_iceberg_reader,
     preload_intraday_bars,
 )
 
@@ -289,3 +290,97 @@ class TestPreloadSlicingAndValidation:
                 iceberg_reader=_fake_iceberg_reader({"ITC.NS": []}),
             )
             assert out == {"ITC.NS": []}
+
+
+# ---------------------------------------------------------------------------
+# Task 7.10: _default_iceberg_reader hardening tests
+# ---------------------------------------------------------------------------
+
+def _raw_row(
+    ticker: str,
+    bar_date: str,
+    bar_open_ts_ns: int | None,
+    close: float = 100.0,
+) -> dict:
+    """Build a synthetic raw row as returned by query_iceberg_table."""
+    return {
+        "ticker": ticker,
+        "bar_date": bar_date,
+        "bar_open_ts_ns": bar_open_ts_ns,
+        "open": close,
+        "high": close + 1.0,
+        "low": close - 1.0,
+        "close": close,
+        "volume": 1_000,
+    }
+
+
+class TestDefaultIcebergReader:
+    """Unit tests for _default_iceberg_reader (Task 7.10)."""
+
+    def test_malformed_row_skipped_universe_intact(self, caplog):
+        """A NULL bar_open_ts_ns on one row must drop only that row.
+
+        The bad row falls inside a two-ticker payload:
+          ITC.NS → [valid, MALFORMED(None ts), valid]
+          TCS.NS → [valid, valid]
+        After the call:
+          - ITC.NS has 2 BarData entries (the bad row was skipped).
+          - TCS.NS has 2 BarData entries (unaffected).
+          - No exception is raised.
+          - A WARNING is logged for the bad row.
+        """
+        good_ts = 1_700_000_000_000_000_000
+        rows = [
+            _raw_row("ITC.NS", "2026-05-12", good_ts, 100.0),
+            # This row has bar_open_ts_ns=None → int(None) raises
+            _raw_row("ITC.NS", "2026-05-12", None, 101.0),
+            _raw_row("ITC.NS", "2026-05-13", good_ts + 300_000_000_000, 102.0),
+            _raw_row("TCS.NS", "2026-05-12", good_ts, 200.0),
+            _raw_row("TCS.NS", "2026-05-13", good_ts + 300_000_000_000, 201.0),
+        ]
+
+        _module = "backend.db.duckdb_engine"
+        with patch(
+            f"{_module}.query_iceberg_table", return_value=rows,
+        ), caplog.at_level("WARNING"):
+            out = _default_iceberg_reader(
+                tickers=["ITC.NS", "TCS.NS"],
+                interval_sec=300,
+                window_start=date(2026, 5, 12),
+                today=date(2026, 5, 13),
+            )
+
+        assert len(out["ITC.NS"]) == 2, (
+            "expected 2 valid ITC bars; malformed row must be skipped"
+        )
+        assert len(out["TCS.NS"]) == 2, (
+            "TCS bars must be unaffected by the ITC malformed row"
+        )
+        assert any(
+            "malformed bar row" in rec.message
+            and "ITC.NS" in rec.message
+            for rec in caplog.records
+        ), "expected a WARNING mentioning the ticker of the bad row"
+
+    def test_sql_contains_epoch_floor(self):
+        """The generated SQL must contain bar_date >= '1980-01-01'."""
+        captured_sql: list[str] = []
+
+        def _capture(table, sql, params):
+            captured_sql.append(sql)
+            return []
+
+        _module = "backend.db.duckdb_engine"
+        with patch(f"{_module}.query_iceberg_table", side_effect=_capture):
+            _default_iceberg_reader(
+                tickers=["ITC.NS"],
+                interval_sec=300,
+                window_start=date(2026, 5, 1),
+                today=date(2026, 5, 13),
+            )
+
+        assert captured_sql, "query_iceberg_table was never called"
+        assert "1980-01-01" in captured_sql[0], (
+            "SQL must contain bar_date >= '1980-01-01' epoch floor"
+        )
