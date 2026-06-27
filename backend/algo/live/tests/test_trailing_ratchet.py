@@ -204,6 +204,55 @@ class TestRatchetAllGtts:
         # safety: failed protective SELL keeps manager for next-tick retry
         assert "INFY.NS" in rt._trailing_managers
 
+    def test_stop_hit_sell_fires_despite_delete_gtt_failure(self):
+        """Regression: Task 7.9 follow-up.
+
+        delete_gtt now raises on real Kite errors.  The try/except wrap
+        in the STOP_HIT branch (runtime.py ~line 1507) must absorb the
+        exception and still execute the emergency SELL.
+
+        Drive the FALLBACK path (self._loop=None / sync) so the direct
+        place_order call is the SELL route — no asyncio machinery needed.
+
+        Assertions:
+        1. _ratchet_all_gtts does NOT raise even when delete_gtt raises.
+        2. place_order is still called for the ticker (emergency SELL
+           proceeded).
+        3. The trailing manager is cleaned up (sold=True path reached).
+        """
+        rt = _make_runtime()
+        _seed_manager(
+            rt,
+            ticker="INFY.NS",
+            entry_price=1000.0,
+            atr=20.0,
+            gtt_id=11,
+            qty=5,
+        )
+        # HWM below stop (950) → STOP_HIT
+        rt._ws_hwm["INFY.NS"] = 940.0
+
+        # Simulate Task-7.9 behaviour: delete_gtt raises instead of
+        # silently returning None.
+        rt._kite.delete_gtt.side_effect = RuntimeError("GTT cancel: boom")
+
+        # _loop is None → fallback / sync path (no run_coroutine_threadsafe)
+        rt._loop = None
+
+        # Must not propagate
+        rt._ratchet_all_gtts()
+
+        # Emergency SELL must have fired
+        rt._kite.place_order.assert_called_once()
+        call_kwargs = rt._kite.place_order.call_args[1]
+        assert call_kwargs["tradingsymbol"] == "INFY"
+        assert call_kwargs["transaction_type"] == "SELL"
+        assert call_kwargs["quantity"] == 5
+
+        # Manager cleaned up — sold=True path was reached
+        assert "INFY.NS" not in rt._trailing_managers
+        assert "INFY.NS" not in rt._gtt_ids
+
     def test_ratchet_uses_limit_headroom(self):
         rt = _make_runtime()
         _seed_manager(rt, entry_price=1000.0, atr=20.0, gtt_id=11)

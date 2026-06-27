@@ -1500,7 +1500,19 @@ class LiveRuntime:
                 )
                 old_gtt_id = self._gtt_ids.pop(ticker, None)
                 if old_gtt_id:
-                    self._kite.delete_gtt(old_gtt_id)
+                    # Best-effort: a GTT-cancel failure (e.g. token
+                    # expiry / network — Task 7.9 made delete_gtt raise
+                    # on real errors) must NOT skip the emergency SELL
+                    # that follows. Protective exit always proceeds.
+                    try:
+                        self._kite.delete_gtt(old_gtt_id)
+                    except Exception as exc:  # noqa: BLE001
+                        _logger.error(
+                            "trailing: STOP_HIT delete_gtt %s failed "
+                            "for %s — proceeding with emergency SELL: "
+                            "%s",
+                            old_gtt_id, ticker, exc, exc_info=True,
+                        )
                 # Task 7.6 — concurrency guard: detect whether we are
                 # on the event-loop thread or a worker thread.
                 # run_coroutine_threadsafe(...).result() deadlocks if
