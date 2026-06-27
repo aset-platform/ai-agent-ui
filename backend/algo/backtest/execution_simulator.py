@@ -59,6 +59,7 @@ class ExecutionSimulator:
         if float(low) <= mgr.current_stop:
             ev = mgr.on_price_update(float(low))
             if ev is None or ev.event_type != "STOP_HIT":
+                # stop level moved but didn't fire; advance HWM with high
                 mgr.on_price_update(float(high))
                 return None
         else:

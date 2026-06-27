@@ -37,3 +37,13 @@ def test_stop_hit_returns_decision_at_current_stop():
 def test_unknown_ticker_returns_none():
     sim = ExecutionSimulator(_risk())
     assert sim.evaluate_bar("Z.NS", Decimal("1"), Decimal("2")) is None
+
+
+def test_reason_for_phase_all_branches():
+    from backend.algo.backtest.execution_simulator import (
+        _reason_for_phase,
+    )
+    assert _reason_for_phase(2) == "trail_stop"
+    assert _reason_for_phase(15) == "phase1_ratchet"
+    assert _reason_for_phase(1) == "phase1_stop"
+    assert _reason_for_phase(99) == "phase1_stop"
