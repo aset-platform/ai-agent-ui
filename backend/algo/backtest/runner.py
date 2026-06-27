@@ -1641,6 +1641,9 @@ def run_backtest(
         fee_rates_version=fee_rates_version or "n/a",
         # ASETPLTFRM-400 slice 7 — surface cadence to the UI.
         interval_sec=request.interval_sec,
+        # Task 6 — execution-resolution metadata.
+        execution_interval_sec=execution_interval_sec,
+        daily_fallback_tickers=daily_fallback_tickers,
         equity_curve=equity_points,
         trade_list=trade_rows,
     )

@@ -269,6 +269,11 @@ class BacktestSummary(BaseModel):
     # historical runs serialised before slice 7 deserialise
     # cleanly as daily.
     interval_sec: int = 86400
+    # Task 6 — execution-resolution metadata so results are honest
+    # about fidelity.  Defaults allow old serialised runs to
+    # deserialise cleanly (pure-daily assumed).
+    execution_interval_sec: int = 86400
+    daily_fallback_tickers: list[str] = Field(default_factory=list)
     equity_curve: list[EquityPoint] = Field(default_factory=list)
     trade_list: list[TradeRow] = Field(default_factory=list)
     error_text: str | None = None
