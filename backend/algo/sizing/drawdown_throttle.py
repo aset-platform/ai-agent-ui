@@ -39,7 +39,9 @@ def compute_dd_pct(
         if equity > peak:
             peak = equity
     if peak <= 0:
-        return Decimal("0")
+        # Blown or uninitialized account (zero/negative peak NAV):
+        # treat as 100% drawdown so dd_multiplier returns 0x (halt).
+        return Decimal("100")
     if current >= peak:
         return Decimal("0")
     return (peak - current) / peak * Decimal("100")

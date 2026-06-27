@@ -1,7 +1,10 @@
 """Position caps tests — per-position + per-sector + cash floor."""
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
+
+import pytest
 
 from backend.algo.sizing.caps import PositionCaps
 
@@ -79,3 +82,56 @@ def test_zero_nav_returns_zero() -> None:
         current_sector_exposure=Decimal("0"),
     )
     assert qty == 0
+
+
+# Guard 3 — cash floor zeroes entry visibility
+def test_cash_floor_zeroes_entry_logs_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When cash floor leaves room <= 0, a WARNING must be logged
+    containing 'cash floor zeroed entry'."""
+    caps = PositionCaps()  # cash_floor_pct=5%
+    # NAV=100k, current_cash=4900 (below 5% floor of 5000)
+    # room = 4900 - 5000 = -100 → zeroed
+    with caplog.at_level(
+        logging.WARNING, logger="backend.algo.sizing.caps"
+    ):
+        qty = caps.cap(
+            intended_qty=5,
+            intended_value=Decimal("4000"),
+            nav=Decimal("100000"),
+            stock_price=Decimal("1000"),
+            sector="IT",
+            current_sector_exposure=Decimal("0"),
+            current_cash=Decimal("4900"),
+        )
+    assert qty == 0
+    assert any(
+        "cash floor zeroed entry" in r.message
+        for r in caplog.records
+        if r.levelno == logging.WARNING
+    )
+
+
+def test_cash_floor_ample_cash_no_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Ample cash → entry proceeds → no warning logged."""
+    caps = PositionCaps()
+    with caplog.at_level(
+        logging.WARNING, logger="backend.algo.sizing.caps"
+    ):
+        qty = caps.cap(
+            intended_qty=5,
+            intended_value=Decimal("5000"),
+            nav=Decimal("100000"),
+            stock_price=Decimal("1000"),
+            sector="IT",
+            current_sector_exposure=Decimal("0"),
+            current_cash=Decimal("50000"),
+        )
+    assert qty == 5
+    assert not any(
+        "cash floor zeroed entry" in r.message
+        for r in caplog.records
+    )
