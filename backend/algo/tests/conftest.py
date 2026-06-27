@@ -100,7 +100,63 @@ class _StubKiteTicker:
 
 _kc_stub.KiteConnect = _StubKiteConnect  # type: ignore[attr-defined]
 _kc_stub.KiteTicker = _StubKiteTicker  # type: ignore[attr-defined]
+
+# ---------------------------------------------------------------
+# kiteconnect.exceptions stub
+# ---------------------------------------------------------------
+# ``kite_client.py`` contains a module-top-level
+#   from kiteconnect.exceptions import InputException, TokenException
+# which fails at collection time when the ``kiteconnect`` stub above
+# won the ``setdefault`` race and has no ``exceptions`` submodule.
+# Registering the dotted name in sys.modules makes Python satisfy
+# ``from kiteconnect.exceptions import X`` without treating
+# ``kiteconnect`` as a real package on disk.
+
+_kc_exc_stub = types.ModuleType("kiteconnect.exceptions")
+
+
+class _KiteException(Exception):
+    """Base for all Kite SDK exceptions."""
+
+    def __init__(self, message: str = "", code: int = 0) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+class _InputException(_KiteException):
+    """Raised for bad input parameters."""
+
+
+class _TokenException(_KiteException):
+    """Raised when the access token is invalid or expired."""
+
+
+class _NetworkException(_KiteException):
+    """Raised for network-level errors."""
+
+
+class _GeneralException(_KiteException):
+    """Raised for general Kite API errors."""
+
+
+class _DataException(_KiteException):
+    """Raised when the API returns unexpected data."""
+
+
+_kc_exc_stub.KiteException = _KiteException  # type: ignore[attr-defined]
+_kc_exc_stub.InputException = _InputException  # type: ignore[attr-defined]
+_kc_exc_stub.TokenException = _TokenException  # type: ignore[attr-defined]
+_kc_exc_stub.NetworkException = _NetworkException  # type: ignore[attr-defined]
+_kc_exc_stub.GeneralException = _GeneralException  # type: ignore[attr-defined]
+_kc_exc_stub.DataException = _DataException  # type: ignore[attr-defined]
+
+# Attach as attribute so ``import kiteconnect; kiteconnect.exceptions.X`` works.
+_kc_stub.exceptions = _kc_exc_stub  # type: ignore[attr-defined]
+
+# setdefault guards keep the real SDK when already imported.
 sys.modules.setdefault("kiteconnect", _kc_stub)
+sys.modules.setdefault("kiteconnect.exceptions", _kc_exc_stub)
 
 
 # ---------------------------------------------------------------

@@ -1335,6 +1335,7 @@ class LiveRuntime:
                         exc,
                         exc_info=True,
                     )
+            self._trailing_managers.pop(ticker, None)
             self._ws_hwm.pop(ticker, None)
 
             # ── 2. Price off live LTP; fall back to avg_price ──
