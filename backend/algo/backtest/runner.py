@@ -153,6 +153,32 @@ def run_backtest(
     # 60 / 300 / 900 → intraday loader; the runner walks
     # ``(bar_date, bar_open_ts_ns)`` tuples instead of dates.
     is_intraday = request.interval_sec != 86400
+
+    # §8 — block 1m/5m backtests when no preserved history exists.
+    # Only 15m (900s) history is stored today; a strategy requesting
+    # 60s or 300s cannot be backtested faithfully. Fail loudly so
+    # users switch to paper rather than silently receiving an empty
+    # result. The guard calls intraday_coverage (already imported at
+    # module top) and is skipped for daily (86400) and 15m (900)
+    # cadences so existing backtests are unaffected.
+    if request.interval_sec in (60, 300):
+        _cov = intraday_coverage(
+            tickers=universe,
+            period_start=request.period_start,
+            period_end=request.period_end,
+        )
+        if not any(
+            c.finest_interval_sec is not None
+            and c.finest_interval_sec <= request.interval_sec
+            for c in _cov.values()
+        ):
+            _label = "1m" if request.interval_sec == 60 else "5m"
+            raise ValueError(
+                f"No {_label} history for these tickers; faithful "
+                f"backtest unavailable. Run in paper to evaluate "
+                f"this cadence."
+            )
+
     if is_intraday:
         bars = load_intraday_bars_window(
             tickers=universe,
