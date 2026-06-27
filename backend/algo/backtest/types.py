@@ -114,6 +114,10 @@ class OrderIntent(BaseModel):
     # "period_end_mtm". Default "signal" keeps existing AST-emit
     # code backwards-compat.
     exit_reason: str = "signal"
+    # GTT trigger price — when set, SimBroker fills on the current
+    # (emitted) bar at this price ± flat-bps slippage instead of
+    # the next bar's open. Models the live broker's GTT execution.
+    trigger_price: Decimal | None = None
 
 
 class Fill(BaseModel):
@@ -137,6 +141,10 @@ class Fill(BaseModel):
     # "signal" so AST-emitted intents that don't set the field
     # serialise as ordinary strategy exits.
     exit_reason: str = "signal"
+    # Echoes the trigger price from the originating OrderIntent so
+    # the trade table and position tracker can distinguish GTT fills
+    # from ordinary next-bar-open fills.
+    trigger_price: Decimal | None = None
 
 
 class Position(BaseModel):
