@@ -662,6 +662,10 @@ class LiveRuntime:
         # ``finally:`` block when the runtime stops.
         # Daily / CNC strategies leave this as None.
         self._square_off_task: asyncio.Task | None = None
+        # Task 7.7 — per-ticker last observed LTP, written every tick
+        # inside run() so _square_off_all_open() can price its SELL
+        # off live market price instead of the stale avg_price anchor.
+        self._last_price_per_ticker: dict[str, Decimal] = {}
 
         # PR3 — periodic algo.events flush task. Started in run(),
         # cancelled in its finally: before the terminal flush.
@@ -1230,10 +1234,8 @@ class LiveRuntime:
             return time(15, 14)
 
     async def _schedule_mis_square_off(self) -> None:
-        """Sleep until ``square_off_time`` IST today, then emit a
-        synthetic SELL signal for every open position via the
-        normal ``_submit_order`` path. Caps + slippage + audit all
-        apply normally.
+        """Sleep until ``square_off_time`` IST today, then close all
+        open positions via :meth:`_square_off_all_open`.
 
         Cancelled by ``run()``'s ``finally:`` block on session stop.
         If the target time is already in the past at scheduling
@@ -1243,8 +1245,6 @@ class LiveRuntime:
         Daily / CNC strategies must never reach this method —
         ``run()`` only schedules it when ``strategy.product == "MIS"``.
         """
-        from backend.algo.paper.types import Signal
-
         target_t = self._parse_square_off_ist(
             self._strategy.square_off_time,
         )
@@ -1281,6 +1281,27 @@ class LiveRuntime:
             )
             raise
 
+        await self._square_off_all_open()
+
+    async def _square_off_all_open(self) -> None:
+        """Emit a SELL signal for every open MIS position.
+
+        Called by :meth:`_schedule_mis_square_off` after the sleep
+        fires. Also callable directly in tests or emergency paths.
+
+        For each open position with ``qty > 0``:
+
+        1. **Cancel GTT first** — pop and delete any active protective
+           GTT so it cannot fire concurrently with the SELL, causing a
+           double-sell. Failure to cancel is best-effort (logged,
+           never skips the SELL).
+        2. **Price off live LTP** — use
+           ``self._last_price_per_ticker`` (updated every tick in
+           ``run()``). Falls back to ``pos.avg_price`` when no tick
+           has been seen for the ticker (e.g. early-morning test).
+        """
+        from backend.algo.paper.types import Signal
+
         open_positions = self._positions.open_positions()
         if not open_positions:
             _logger.info(
@@ -1298,6 +1319,31 @@ class LiveRuntime:
         for ticker, pos in list(open_positions.items()):
             if pos.qty <= 0:
                 continue
+
+            # ── 1. Cancel GTT before SELL (prevents double-sell) ──
+            gtt_id = self._gtt_ids.pop(ticker, None)
+            if gtt_id:
+                try:
+                    self._kite.delete_gtt(gtt_id)
+                except Exception as exc:  # noqa: BLE001
+                    _logger.warning(
+                        "LiveRuntime: MIS auto-square could not "
+                        "cancel GTT %d for %s: %s — proceeding "
+                        "with SELL anyway",
+                        gtt_id,
+                        ticker,
+                        exc,
+                        exc_info=True,
+                    )
+            self._ws_hwm.pop(ticker, None)
+
+            # ── 2. Price off live LTP; fall back to avg_price ──
+            live_ltp = self._last_price_per_ticker.get(ticker)
+            if live_ltp is not None and live_ltp > 0:
+                last_price = live_ltp
+            else:
+                last_price = Decimal(str(pos.avg_price))
+
             signal = Signal(
                 strategy_id=self._strategy.id,
                 user_id=self._user_id,
@@ -1309,15 +1355,10 @@ class LiveRuntime:
                 ),
                 reason="mis_auto_square_off",
             )
-            # Use the position's avg price as a reference for the
-            # marketable-LIMIT calc inside _submit_order. Real-time
-            # LTP would be better, but this method runs from a
-            # standalone task and doesn't have the per-tick last
-            # price map handy. Avg-price is a conservative anchor.
             try:
                 await self._submit_order(
                     signal=signal,
-                    last_price=Decimal(str(pos.avg_price)),
+                    last_price=last_price,
                 )
             except Exception as exc:  # noqa: BLE001
                 _logger.warning(
@@ -2549,6 +2590,12 @@ class LiveRuntime:
                         tick.ticker,
                     )
                 last_price_per_ticker[tick.ticker] = Decimal(str(tick.ltp))
+                # Task 7.7 — mirror into instance dict so the MIS
+                # square-off task (_square_off_all_open) can read
+                # the latest LTP without holding a run() reference.
+                self._last_price_per_ticker[tick.ticker] = (
+                    last_price_per_ticker[tick.ticker]
+                )
                 # v5 trailing stop: lightweight HWM update per tick.
                 if (
                     self._trailing_enabled

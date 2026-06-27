@@ -316,3 +316,156 @@ async def test_mis_square_off_cancels_before_firing():
             await task
 
     submit_called.assert_not_called()
+
+
+# ---------------------------------------------------------------
+# Task 7.7 — GTT cancel-first + live-LTP tests.
+# These call _square_off_all_open() directly so they are isolated
+# from the sleep / scheduling machinery above.
+# ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_square_off_cancels_gtt_before_sell():
+    """GTT must be cancelled before the SELL is submitted so the
+    protective GTT cannot fire concurrently (double-sell guard).
+
+    Verifies ordering via a shared call log: delete_gtt appears
+    before _submit_order in the recorded sequence."""
+    runtime = _make_runtime(product="MIS")
+
+    ticker = "INFY.NS"
+    gtt_id = 99_001
+    open_positions = {
+        ticker: SimpleNamespace(qty=3, avg_price=Decimal("1700.00")),
+    }
+    runtime._positions = MagicMock()
+    runtime._positions.open_positions.return_value = open_positions
+    runtime._gtt_ids[ticker] = gtt_id
+
+    call_log: list[str] = []
+
+    def _delete_gtt(gid: int) -> None:
+        call_log.append(f"delete_gtt:{gid}")
+
+    runtime._kite.delete_gtt = _delete_gtt
+
+    async def _submit(*, signal, last_price, **_kw):
+        call_log.append(f"submit:{signal.ticker}")
+        return 1
+
+    runtime._submit_order = _submit  # type: ignore[assignment]
+
+    await runtime._square_off_all_open()
+
+    # GTT must be cancelled and position must have been submitted.
+    assert f"delete_gtt:{gtt_id}" in call_log, (
+        "delete_gtt was not called for the active GTT"
+    )
+    assert f"submit:{ticker}" in call_log, (
+        "_submit_order was not called for the ticker"
+    )
+    delete_idx = call_log.index(f"delete_gtt:{gtt_id}")
+    submit_idx = call_log.index(f"submit:{ticker}")
+    assert delete_idx < submit_idx, (
+        "delete_gtt must occur before _submit_order "
+        f"(delete_idx={delete_idx}, submit_idx={submit_idx})"
+    )
+    # GTT id must have been popped from the dict.
+    assert ticker not in runtime._gtt_ids
+
+
+@pytest.mark.asyncio
+async def test_square_off_uses_live_ltp_when_available():
+    """When a live LTP is present in _last_price_per_ticker, the
+    SELL must be priced off that value, not pos.avg_price."""
+    runtime = _make_runtime(product="MIS")
+
+    ticker = "TCS.NS"
+    avg_price = Decimal("3500.00")
+    live_ltp = Decimal("3612.50")  # different from avg_price
+    open_positions = {
+        ticker: SimpleNamespace(qty=2, avg_price=avg_price),
+    }
+    runtime._positions = MagicMock()
+    runtime._positions.open_positions.return_value = open_positions
+    runtime._last_price_per_ticker[ticker] = live_ltp
+
+    captured: list[Decimal] = []
+
+    async def _submit(*, signal, last_price, **_kw):
+        captured.append(last_price)
+        return 1
+
+    runtime._submit_order = _submit  # type: ignore[assignment]
+
+    await runtime._square_off_all_open()
+
+    assert len(captured) == 1
+    assert captured[0] == live_ltp, (
+        f"Expected live LTP {live_ltp}, got {captured[0]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_square_off_falls_back_to_avg_price_when_no_ltp():
+    """When no LTP has been received for the ticker, the SELL must
+    fall back to pos.avg_price so the order is still priceable."""
+    runtime = _make_runtime(product="MIS")
+
+    ticker = "WIPRO.NS"
+    avg_price = Decimal("480.75")
+    open_positions = {
+        ticker: SimpleNamespace(qty=10, avg_price=avg_price),
+    }
+    runtime._positions = MagicMock()
+    runtime._positions.open_positions.return_value = open_positions
+    # No entry in _last_price_per_ticker for this ticker.
+
+    captured: list[Decimal] = []
+
+    async def _submit(*, signal, last_price, **_kw):
+        captured.append(last_price)
+        return 1
+
+    runtime._submit_order = _submit  # type: ignore[assignment]
+
+    await runtime._square_off_all_open()
+
+    assert len(captured) == 1
+    assert captured[0] == Decimal(str(avg_price)), (
+        f"Expected avg_price fallback {avg_price}, got {captured[0]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_square_off_proceeds_even_when_gtt_cancel_fails():
+    """A RuntimeError from delete_gtt must NOT abort the SELL.
+
+    The GTT cancel is best-effort: the square-off SELL must still
+    be submitted even if the broker returns an error on the cancel."""
+    runtime = _make_runtime(product="MIS")
+
+    ticker = "HDFC.NS"
+    gtt_id = 77_777
+    open_positions = {
+        ticker: SimpleNamespace(qty=5, avg_price=Decimal("2800.00")),
+    }
+    runtime._positions = MagicMock()
+    runtime._positions.open_positions.return_value = open_positions
+    runtime._gtt_ids[ticker] = gtt_id
+
+    def _failing_delete(gid: int) -> None:
+        raise RuntimeError("Kite GTT not found")
+
+    runtime._kite.delete_gtt = _failing_delete
+
+    submit_called = AsyncMock(return_value=1)
+    runtime._submit_order = submit_called  # type: ignore[assignment]
+
+    # Must not raise even though delete_gtt raises.
+    await runtime._square_off_all_open()
+
+    submit_called.assert_awaited_once()
+    call_kwargs = submit_called.call_args.kwargs
+    assert call_kwargs["signal"].ticker == ticker
