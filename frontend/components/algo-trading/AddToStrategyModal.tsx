@@ -266,12 +266,16 @@ export function AddToStrategyModal({ filteredTickers, onClose }: Props) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) setMounted(true); });
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("keydown", onKey);
+    };
   }, [onClose]);
 
   if (!mounted) return null;

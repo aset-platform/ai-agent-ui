@@ -302,12 +302,16 @@ export function CleanupStrategyModal({ filteredTickers, onClose }: Props) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) setMounted(true); });
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("keydown", onKey);
+    };
   }, [onClose]);
 
   if (!mounted) return null;
@@ -338,7 +342,7 @@ export function CleanupStrategyModal({ filteredTickers, onClose }: Props) {
               Cleanup strategy allowed tickers
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Remove tickers from a strategy's allowed list. Red chips are not
+              Remove tickers from a strategy&apos;s allowed list. Red chips are not
               in your holdings or current filter.
             </p>
           </div>

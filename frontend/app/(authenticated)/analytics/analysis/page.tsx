@@ -2460,7 +2460,11 @@ function ColumnTooltip({ text }: { text: string }) {
   } | null>(null);
   const [mounted, setMounted] = useState(false);
 
-  useEffect(() => { setMounted(true); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) setMounted(true); });
+    return () => { cancelled = true; };
+  }, []);
 
   const show = useCallback(() => {
     if (!triggerRef.current) return;
