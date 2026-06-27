@@ -1,8 +1,10 @@
 """Unit tests for KiteClient GTT methods."""
+
 from unittest.mock import MagicMock
 
 import pytest
 
+from backend.algo.broker.exceptions import TokenExpiredError
 from backend.algo.broker.kite_client import KiteClient
 
 
@@ -105,6 +107,7 @@ class TestDeleteGtt:
 
     def test_noop_on_already_triggered_exception(self):
         from kiteconnect.exceptions import InputException
+
         client = _make_client()
         client._kc.delete_gtt.side_effect = InputException(
             "GTT already triggered"
@@ -130,15 +133,48 @@ class TestGetGtts:
         assert len(result) == 2
         assert result[0]["id"] == 1
 
-    def test_returns_empty_list_on_network_error(self):
+    def test_get_gtts_raises_on_network_error(self):
         from kiteconnect.exceptions import NetworkException
+
         client = _make_client()
         client._kc.get_gtts.side_effect = NetworkException("timeout")
-        result = client.get_gtts()
-        assert result == []
+        with pytest.raises(NetworkException):
+            client.get_gtts()
 
-    def test_returns_empty_list_on_generic_error(self):
+    def test_get_gtts_raises_on_generic_error(self):
         client = _make_client()
         client._kc.get_gtts.side_effect = RuntimeError("unexpected")
-        result = client.get_gtts()
-        assert result == []
+        with pytest.raises(RuntimeError):
+            client.get_gtts()
+
+    def test_get_gtts_raises_token_expired_error_on_token_exception(self):
+        from kiteconnect.exceptions import TokenException
+
+        client = _make_client()
+        client._kc.get_gtts.side_effect = TokenException(
+            "Invalid token", code=403
+        )
+        with pytest.raises(TokenExpiredError):
+            client.get_gtts()
+
+
+class TestDeleteGttErrors:
+    def test_delete_gtt_raises_token_expired_error_on_token_exception(
+        self,
+    ):
+        from kiteconnect.exceptions import TokenException
+
+        client = _make_client()
+        client._kc.delete_gtt.side_effect = TokenException(
+            "Invalid token", code=403
+        )
+        with pytest.raises(TokenExpiredError):
+            client.delete_gtt(123)
+
+    def test_delete_gtt_raises_on_network_error(self):
+        from kiteconnect.exceptions import NetworkException
+
+        client = _make_client()
+        client._kc.delete_gtt.side_effect = NetworkException("timeout")
+        with pytest.raises(NetworkException):
+            client.delete_gtt(456)

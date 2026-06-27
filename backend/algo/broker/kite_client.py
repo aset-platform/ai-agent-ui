@@ -26,6 +26,7 @@ from typing import Any, AsyncIterator, Callable
 from uuid import uuid4
 
 from kiteconnect import KiteConnect
+from kiteconnect.exceptions import InputException, TokenException
 
 from backend.algo.broker.exceptions import (
     BrokerResponseError,
@@ -34,6 +35,7 @@ from backend.algo.broker.exceptions import (
     FreezeChunkExceedsDailyCapError,
     LtpStaleError,
     PartialChunkPlacementError,
+    TokenExpiredError,
 )
 from backend.algo.broker.freeze_cache import (
     default_for_bucket,
@@ -90,7 +92,8 @@ def _read_dedup_failclosed_inr() -> int:
     with a warning (legacy behaviour).
     """
     raw = os.environ.get(
-        "ALGO_DEDUP_FAILCLOSED_INR", "",
+        "ALGO_DEDUP_FAILCLOSED_INR",
+        "",
     ).strip()
     if not raw:
         return _DEFAULT_DEDUP_FAILCLOSED_INR
@@ -98,8 +101,7 @@ def _read_dedup_failclosed_inr() -> int:
         return int(raw)
     except ValueError:
         _logger.warning(
-            "ALGO_DEDUP_FAILCLOSED_INR=%r is not an int "
-            "— using default %d",
+            "ALGO_DEDUP_FAILCLOSED_INR=%r is not an int " "— using default %d",
             raw,
             _DEFAULT_DEDUP_FAILCLOSED_INR,
         )
@@ -1158,9 +1160,7 @@ class KiteClient:
                         product=product,
                         variety=variety,
                         price=price,
-                        tag=(
-                            f"{tag}-c{idx}" if tag else f"c{idx}"
-                        ),
+                        tag=(f"{tag}-c{idx}" if tag else f"c{idx}"),
                         last_price=last_price,
                         last_price_ts=last_price_ts,
                         liquidity_bucket=liquidity_bucket,
@@ -1197,7 +1197,9 @@ class KiteClient:
                         exc_info=True,
                     )
                     raise PartialChunkPlacementError(
-                        placed, idx, exc,
+                        placed,
+                        idx,
+                        exc,
                     ) from exc
                 placed.append(oid)
             return placed[0]
@@ -1225,7 +1227,6 @@ class KiteClient:
             strategy_id=strategy_id,
             internal_order_id=internal_order_id,
         )
-
 
     def _place_single_chunk(
         self,
@@ -1927,8 +1928,7 @@ class KiteClient:
             events_sink(row)
         except Exception:  # noqa: BLE001
             _logger.warning(
-                "order_partial_chunk_failure emit failed "
-                "symbol=%s",
+                "order_partial_chunk_failure emit failed " "symbol=%s",
                 symbol,
                 exc_info=True,
             )
@@ -2151,16 +2151,19 @@ class KiteClient:
         # Round stop-trigger (is_stop=True) + limit order prices
         # to valid tick multiples before calling Kite.
         trigger_price = _round_to_tick(
-            trigger_price, tick,
-            side=transaction_type, is_stop=True,
+            trigger_price,
+            tick,
+            side=transaction_type,
+            is_stop=True,
         )
         limit_price = _round_to_tick(
-            limit_price, tick,
-            side=transaction_type, is_stop=False,
+            limit_price,
+            tick,
+            side=transaction_type,
+            is_stop=False,
         )
         raw_last = (
-            last_price if last_price is not None
-            else trigger_price * 1.01
+            last_price if last_price is not None else trigger_price * 1.01
         )
         # LTP sentinel Kite requires to differ from trigger_price —
         # floor-to-tick is direction-neutral (not an order price).
@@ -2183,15 +2186,17 @@ class KiteClient:
             exchange=exchange,
             trigger_values=[trigger_price],
             last_price=kite_last_price,
-            orders=[{
-                "exchange": exchange,
-                "tradingsymbol": tradingsymbol,
-                "transaction_type": transaction_type,
-                "quantity": qty,
-                "product": "CNC",
-                "order_type": "LIMIT",
-                "price": limit_price,
-            }],
+            orders=[
+                {
+                    "exchange": exchange,
+                    "tradingsymbol": tradingsymbol,
+                    "transaction_type": transaction_type,
+                    "quantity": qty,
+                    "product": "CNC",
+                    "order_type": "LIMIT",
+                    "price": limit_price,
+                }
+            ],
         )
         gtt_id: int = (
             int(resp.get("trigger_id", 0))
@@ -2199,14 +2204,23 @@ class KiteClient:
             else int(resp)
         )
         _logger.info(
-            "place_gtt: %s trigger=%.4f limit=%.4f qty=%d "
-            "gtt_id=%d",
-            ticker, trigger_price, limit_price, qty, gtt_id,
+            "place_gtt: %s trigger=%.4f limit=%.4f qty=%d " "gtt_id=%d",
+            ticker,
+            trigger_price,
+            limit_price,
+            qty,
+            gtt_id,
         )
         return gtt_id
 
     def delete_gtt(self, gtt_id: int) -> None:
-        """Cancel a GTT. Silently no-ops if already triggered.
+        """Cancel a GTT.
+
+        No-ops only on ``InputException`` (GTT genuinely not found or
+        already triggered). Raises ``TokenExpiredError`` on expired
+        credentials and re-raises any other error so the caller (which
+        is always wrapped in try/except) can log it rather than
+        silently masking network or unknown failures.
 
         In dry-run mode skips the Kite API call.
         """
@@ -2216,19 +2230,53 @@ class KiteClient:
         try:
             self._kc.delete_gtt(trigger_id=gtt_id)
             _logger.info("delete_gtt: gtt_id=%d", gtt_id)
-        except Exception as exc:
-            _logger.warning(
-                "delete_gtt %d failed (may be already triggered): "
-                "%s",
-                gtt_id, exc,
+        except TokenException as exc:
+            _logger.error(
+                "delete_gtt %d: token expired: %s",
+                gtt_id,
+                exc,
+                exc_info=True,
             )
+            raise TokenExpiredError(str(exc)) from exc
+        except InputException as exc:
+            # GTT not found / already triggered — genuinely benign
+            _logger.info(
+                "delete_gtt %d: already gone/triggered (benign): %s",
+                gtt_id,
+                exc,
+            )
+        except Exception as exc:
+            # Network/general/etc. = a real failure; do NOT mask as
+            # "already triggered" — raise so the caller logs it.
+            _logger.error(
+                "delete_gtt %d FAILED (not a not-found): %s",
+                gtt_id,
+                exc,
+                exc_info=True,
+            )
+            raise
 
     def get_gtts(self) -> list[dict]:
-        """List all active GTTs for the user. Returns ``[]`` on error."""
+        """List all active GTTs for the user.
+
+        Raises ``TokenExpiredError`` on expired credentials; re-raises
+        any other exception so callers can distinguish a read failure
+        from an empty list (the old silent-``[]`` behaviour was masking
+        real errors and breaking the duplicate-GTT guard).
+        """
         try:
             return self._kc.get_gtts()
-        except Exception as exc:
-            _logger.warning(
-                "get_gtts failed: %s", exc, exc_info=True,
+        except TokenException as exc:
+            _logger.error(
+                "get_gtts: token expired: %s",
+                exc,
+                exc_info=True,
             )
-            return []
+            raise TokenExpiredError(str(exc)) from exc
+        except Exception as exc:
+            _logger.error(
+                "get_gtts FAILED: %s",
+                exc,
+                exc_info=True,
+            )
+            raise

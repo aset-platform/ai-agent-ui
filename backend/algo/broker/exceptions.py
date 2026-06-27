@@ -8,6 +8,7 @@ without importing the SDK wrapper. Order-safety hardening
 (``DuplicateOrderError``, ``FreezeChunkExceedsDailyCapError``)
 land here too.
 """
+
 from __future__ import annotations
 
 
@@ -66,6 +67,15 @@ class BrokerResponseError(Exception):
     untrackable, uncancellable phantom order.  This exception surfaces
     the raw SDK response so callers can treat the placement as a hard
     failure and route it through the partial-chunk reconciler.
+    """
+
+
+class TokenExpiredError(Exception):
+    """Kite access token expired / invalid — re-auth required.
+
+    Raised instead of silently degrading so the runtime can surface
+    a re-authentication prompt rather than masking the failure as a
+    transient or empty-result error.
     """
 
 
