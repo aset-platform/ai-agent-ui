@@ -40,7 +40,7 @@ from typing import Any
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
-import pytest  # noqa: F401 (imported for future parametrize use)
+import pytest
 
 from backend.algo.backtest.positions import PositionTracker
 from backend.algo.backtest.types import Fill
@@ -384,6 +384,29 @@ def test_signal_rejected_payload_keys() -> None:
     assert payload["bar_date"] == "2025-06-24"
     # no dry_run key in paper mode
     assert "dry_run" not in payload
+
+
+# ---------------------------------------------------------------------------
+# Task 7.11 Item E: ALGO_PAPER_SLIPPAGE_BPS safe-parse
+# ---------------------------------------------------------------------------
+
+def test_bad_slippage_env_does_not_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-numeric ALGO_PAPER_SLIPPAGE_BPS falls back to bps=0 (no crash).
+
+    fill_price must equal last_price when bps falls back to 0.
+    """
+    monkeypatch.setenv("ALGO_PAPER_SLIPPAGE_BPS", "abc")
+    broker = PaperBroker(fee_as_of=date(2026, 6, 24))
+    last_price = Decimal("200")
+    fill = broker.execute(
+        signal=_make_signal("BUY"),
+        last_price=last_price,
+        fill_date=date(2026, 6, 24),
+    )
+    # bps defaults to 0 on bad env: fill_price == last_price exactly.
+    assert fill.fill_price == last_price
 
 
 def test_buy_via_composer_none_price_is_silent_drop() -> None:

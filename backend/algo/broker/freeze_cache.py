@@ -21,6 +21,7 @@ a second event-loop hop on the hot order path.
 from __future__ import annotations
 
 import logging
+from types import MappingProxyType
 from typing import Any
 
 from decimal import Decimal
@@ -38,14 +39,14 @@ _logger = logging.getLogger(__name__)
 # circular. Annual review TODO; NSE updates the circular ~quarterly.
 # Keyed on the same liquidity_bucket vocabulary used by PR #2
 # (largecap / midcap / smallcap / unknown).
-_NSE_DEFAULTS: dict[str, int] = {
+_NSE_DEFAULTS: MappingProxyType[str, int] = MappingProxyType({
     "largecap": 500_000,
     "midcap": 100_000,
     "smallcap": 50_000,
     # Most conservative — used when the runtime couldn't classify
     # the ticker (brand-new symbol, missing snapshot row, etc.).
     "unknown": 50_000,
-}
+})
 
 # Cache TTL — 25h covers a missed refresh on a long weekend.
 _FREEZE_TTL_S = 25 * 3600

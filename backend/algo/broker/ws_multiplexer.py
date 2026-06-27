@@ -283,8 +283,13 @@ class KiteWsMultiplexer:
             self._reconnect_task.cancel()
             try:
                 await self._reconnect_task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
+            except Exception:
+                _logger.warning(
+                    "ws_multiplexer: reconnect_task raised on close",
+                    exc_info=True,
+                )
             self._reconnect_task = None
 
         # Cancel any in-flight gap-fill (5.2).
@@ -294,8 +299,13 @@ class KiteWsMultiplexer:
             self._gap_fill_task.cancel()
             try:
                 await self._gap_fill_task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
+            except Exception:
+                _logger.warning(
+                    "ws_multiplexer: gap_fill_task raised on close",
+                    exc_info=True,
+                )
             self._gap_fill_task = None
 
         self._disconnect_kt()

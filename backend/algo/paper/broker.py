@@ -40,7 +40,10 @@ def _slipped_price(last_price: Decimal, side: str) -> Decimal:
     Reads ``ALGO_PAPER_SLIPPAGE_BPS`` at call time so tests can
     override via ``monkeypatch.setenv`` without patching the module.
     """
-    bps = int(os.getenv("ALGO_PAPER_SLIPPAGE_BPS", "0"))
+    try:
+        bps = int(os.getenv("ALGO_PAPER_SLIPPAGE_BPS", "0"))
+    except (TypeError, ValueError):
+        bps = 0
     if bps <= 0:
         return last_price
     factor = Decimal(bps) / Decimal(10_000)

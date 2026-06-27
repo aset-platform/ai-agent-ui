@@ -689,7 +689,11 @@ class KiteClient:
             )
         self._hist_throttle()
         keys = [
-            f"NSE:{t.removesuffix('.NS').removesuffix('.BO')}"
+            (
+                "BSE:" + t.removesuffix(".BO")
+                if t.endswith(".BO")
+                else "NSE:" + t.removesuffix(".NS")
+            )
             for t, _ in tickers
         ]
         raw = self._kc.quote(keys)
