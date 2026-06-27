@@ -1,7 +1,7 @@
 ---
 description: Route this session's new rules/patterns/gotchas into the right doc tier (CLAUDE.md hard rule · .claude/rules/*.md path-scoped · Serena memory) to keep CLAUDE.md slim
 allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, mcp__serena__list_memories, mcp__serena__read_memory]
-version: 1.0.0
+version: 1.1.0
 rollback: git checkout -- CLAUDE.md .claude/rules/ (uncommitted) or revert the commit
 observe: log each candidate, chosen tier, target file, and net lines added to CLAUDE.md
 feedback: user approves/edits the routing table before any file is written
@@ -26,18 +26,26 @@ The 3-tier system (established commit `1d66720`):
 
 ### Step 1: Gather candidates
 
-Invoked with no arguments. Build a candidate list from two sources:
+Invoked with no arguments. **The conversation is the primary source** —
+the diff is corroboration, not the candidate list. A long-lived feature
+branch holds weeks of already-shipped, already-documented work; scoping to
+the whole branch (`dev..HEAD`) over-captures it. Scope to THIS session.
 
-1. **This conversation** — rules, conventions, gotchas, or decisions the
-   user confirmed or that emerged from debugging. Look for: "always/never
-   X", "X breaks when Y", config decisions, regression fixes.
-2. **Recent git diff** — run the commands below to see what actually
-   changed; a code change that prevents a class of bug is a candidate rule.
+1. **This conversation (primary)** — rules, conventions, gotchas, or
+   decisions the user confirmed or that emerged from debugging this
+   session. Look for: "always/never X", "X breaks when Y", config
+   decisions, regression fixes. Every candidate should trace to something
+   that actually came up in the conversation.
+2. **Recent git diff (corroboration)** — scope to this session's work, not
+   the whole branch. Use it to confirm/sharpen conversation candidates and
+   catch a regression-preventing change that wasn't discussed.
 
 ```bash
-git log --oneline dev..HEAD           # commits on this branch
-git diff --stat dev...HEAD            # files touched
-git log --since="6am" --oneline       # today's work if not branch-based
+git diff --stat HEAD                   # uncommitted work-in-progress
+git log --oneline --since="6am"        # today's commits (this session)
+# Whole-branch sweep — opt-in ONLY when the user asks to capture the
+# entire branch's learnings, not for a normal session run:
+#   git log --oneline dev..HEAD ; git diff --stat dev...HEAD
 ```
 
 Skip anything already covered by CLAUDE.md, an existing rules file, or a
@@ -63,9 +71,17 @@ For each candidate, confirm it is not already documented:
 grep -rn "<keyword>" CLAUDE.md .claude/rules/
 ```
 
-Use `mcp__serena__list_memories` (and `read_memory` on near-matches) to
-check the memory tier. If a candidate already exists, drop it or propose
-an **update** to the existing location instead of a new entry.
+For the memory tier, prefer `mcp__serena__list_memories` +
+`mcp__serena__read_memory` on near-matches. **Serena MCP is often not
+connected** — if the tool is unavailable, fall back to grepping the
+memories on disk (do NOT skip the memory dedup silently):
+
+```bash
+grep -rlni "<keyword>" .serena/memories/
+```
+
+If a candidate already exists, drop it or propose an **update** to the
+existing location instead of a new entry.
 
 ### Step 4: Present the routing table — WAIT for approval
 
