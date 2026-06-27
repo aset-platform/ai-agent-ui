@@ -33,7 +33,7 @@ def intraday_coverage(
     """Return per-ticker finest available intraday grain in-window."""
     if not tickers:
         return {}
-    placeholders = ",".join(f"'{t}'" for t in tickers)
+    placeholders = ",".join(["?"] * len(tickers))
     sql = (
         "SELECT ticker, interval_sec, "
         "MIN(bar_date) AS min_d, MAX(bar_date) AS max_d, "
@@ -48,6 +48,7 @@ def intraday_coverage(
         _INTRADAY_TABLE,
         sql,
         [
+            *tickers,
             period_start.isoformat()[:7],
             period_end.isoformat()[:7],
             period_start.isoformat(),
