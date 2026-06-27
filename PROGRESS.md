@@ -2,6 +2,57 @@
 
 ---
 
+### 2026-06-27 — `/capture-learnings` doc-router command + algo.md parity/safety rules (branch `feature/rsi2-exit-strategy`)
+
+**What:** Built a project slash command to keep the always-loaded `CLAUDE.md` slim by routing new learnings into the right tier of the 3-tier docs system (established `1d66720`): CLAUDE.md hard rule · `.claude/rules/*.md` path-scoped · Serena memory.
+
+**Context:** Of the ~12.7k "memory files" loaded every session, ~11k is `CLAUDE.md` — the only real pressure point. PROGRESS.md and `.serena/` do NOT auto-load; only the two `CLAUDE.md` files + the AutoMem `MEMORY.md` index do.
+
+- **`b2d6091`** — new `.claude/commands/capture-learnings.md` (router, not auditor). Scans the session + git diff for new rules/patterns, classifies each by rubric, presents a confirm-first routing table with per-item CLAUDE.md line-delta, writes the approved placements. Memory tier hands off to `/promote-memory` (no duplication). Frontmatter matches the `promote-memory.md` house style.
+- **Dry-run on this session** validated it: correctly deduped 4 of 6 candidates, +0 CLAUDE.md lines — and exposed two skill bugs.
+- **`ac4123d`** — v1.1.0 fixes: (1) `dev..HEAD` over-captured a long-lived branch's already-shipped work → conversation is now primary, diff scoped to this session (`git diff HEAD` + today's commits); whole-branch sweep is opt-in only. (2) memory dedup silently no-op'd when Serena MCP was absent → documented the `.serena/memories/` on-disk grep fallback.
+- **`8e464d5`** — routed the two branch-historical `KEEP*` survivors into `.claude/rules/algo.md` (lazy-loaded, +0 CLAUDE.md): **paper/live parity** (MTM equity + `cash=nav−deployed` sizing, directional `ALGO_PAPER_SLIPPAGE_BPS`, `signal_rejected` over silent qty=0) and **live safety** (delete_gtt failure must never skip the emergency STOP_HIT SELL; routes through tracked `_submit_order`; → `algo-gtt-trailing-stop`).
+
+**NOT done (user decision):** PR to `dev` (squash-only; never push without confirm).
+
+---
+
+### 2026-06-27 — Live-trading hardening Phases 6–7 COMPLETE (branch `feature/rsi2-exit-strategy`)
+
+**What:** Finished the subagent-driven hardening from the 2026-06-24 review. Phase 6 (paper↔live parity) + Phase 7 (scale/memory/correctness) — every task implemented TDD, individually spec+quality reviewed, then a final whole-branch review + a definitive zero-regression sign-off. HEAD `24e638f`.
+
+**Phase 6 (paper↔live parity):**
+- **6.1** (`11ae79e`) mark-to-market paper equity/unrealised (`self._last_marks`) so caps/sizing match live; `cash = nav − deployed_cost`.
+- **6.2** (`15fc1dc`) directional `ALGO_PAPER_SLIPPAGE_BPS` slippage on paper fills (fees on unslipped price).
+- **6.3** (`eaf5489`+`24ee3f0`) paper qty=0 silent drop now emits live's `signal_rejected`/`insufficient_capital_qty_zero` (parity); fix: composer None-price = silent drop, not malformed event.
+- **6.4** (`0fd7c39`) periodic crash-safe batched event flush (size/time threshold; flush failure keeps events + doesn't kill the run).
+- **6.5** (`9aec3b5`+`ad6c128`) supervisor reaps completed/crashed runs + re-arm; done-callback **same-task identity guard** (late callback can't clobber a re-armed run); `rebuild_all` exc_info.
+
+**Phase 7 (scale/memory/correctness):**
+- **7.1** (`ea09953`) offload per-bar Iceberg reads off the event loop (`asyncio.to_thread`, awaited before assemble).
+- **7.2** (`f6456f0`) bound `_bars_by_ticker` (cap 300, in-place trim alias-preserving) + evict stale `_closed_entry_cache`.
+- **7.3** (`2fda280`) resampler time-driven flush — quiet ticker's bar emitted when any tick advances the clock.
+- **7.4** (`a785654`+`b93b6fa`) idempotent `flush_bars` (exact per-(ticker,interval,bar_open) OR-delete — NOT a cross-product that would lose data).
+- **7.5** (`7de0d84`) batch reconciliation: one `orders()` call/user, per-order history fallback. **Fixed 3 stale tests.**
+- **7.6** (`4ed70e8`+`75eb58a`) STOP_HIT emergency SELL via tracked `_submit_order` (concurrency guard vs deadlock); `sold`-flag retry (no abandon, no double-sell on timeout).
+- **7.7** (`71703cb`) MIS square-off cancels GTT first + prices off live LTP (cancel failure never skips the SELL).
+- **7.8** (`08bda87`) sizing guards: vol floor (clamp <5%), observable DD/cash-floor zero-drops, `peak≤0`→halt.
+- **7.9** (`ca049d5`+`64dcf2c`) `get_gtts` raises (activates the dead 3.3 fail-visible path), `delete_gtt` narrows (InputException=benign), `TokenExpiredError`; STOP_HIT GTT-cancel wrapped.
+- **7.10** (`7f66eef`) intraday warmup per-row isolation (one bad row ≠ universe wipe) + explicit pre-1980 epoch floor on both readers.
+- **7.11** (`378d9b2`) low-sev batch: `_iceberg_retry` releases lock during sleep, `quote()` BSE prefix, `_NSE_DEFAULTS` MappingProxyType, teardown exc_info, slippage env safe-parse. **3 risky items deferred to a ticket** (STT rate, NSE holiday calendar, order_timeout full-id tag).
+
+**Final whole-branch review (opus):** 1 Critical fixed (`24e638f`) — `backend/algo/tests/conftest.py` `kiteconnect` stub lacked an `exceptions` submodule, so 7.9's top-level import aborted whole-suite collection (invisible to per-task isolated runs). Zero runtime-correctness defects across all cross-task real-money paths.
+
+**Zero-regression sign-off:** full `backend/algo` suite (2095 tests) at pre-session `ed17408` = **68 failed/1942 passed**; at HEAD `24e638f` = **63 failed/2032 passed**. Per-file diff identical except the 5 I fixed (test_budget_reconciliation 3→0, test_kite_gtt 2→0). **+90 new passing tests, 0 new failures.** Remaining 63 are pre-existing (stub-leakage tech debt + the known 10 live + 2 backtest baseline).
+
+**Post-completion (2026-06-27, Sat — market closed):** backend RESTARTED (user-approved) → Phases 4–7 active. **GTT-protection path verified live** on the closed market: all 7 held positions hydrated (positions() empty on weekend → holdings fallback), `ensure_gtts` verified each vs live Kite (all protected, no duplicates), token valid (no `gtt_verification_failed`), `_cleanup_stale_protection` clean no-op, no `capital_below_deployed` (~₹100k), reconciliation clean. A live runtime is **running idle** — stop before Monday open if it shouldn't trade unattended. Filed ASETPLTFRM-453 (deferred 7.11 cleanups) and ASETPLTFRM-454 (same-user multi-strategy hardening: engine guard + position→strategy GTT ownership + scoped fill attribution; Relates 453).
+
+**⏭ PICK-UP ITEM — the full TRADING-guardrail re-test still wants Monday market hours.** The GTT/protective-exit lifecycle is verified, but **anti-churn, capital-shrink trim-suppression, and sizing guards only exercise on real bar-evals during NSE hours (Mon–Fri 09:15–15:30 IST)**. Re-test with the original ~₹100k capital (NOT ₹20k → capital-shrink would suppress trims). Watch for: `order_suppressed_churn`, `rebalance_down_suppressed_capital_shrink`, `signal_rejected`/`insufficient_capital_qty_zero`, and entries/exits routing through the tracked order path.
+
+**NOT done (user decision):** PR to `dev` (squash-only; never push without confirm).
+
+---
+
 ### 2026-06-24 — fix: SOUTHBANK GTT missing + locked-but-not-hydrated recovery (branch `feature/rsi2-exit-strategy`)
 
 **Why:** SOUTHBANK.NS (50 shares, avg ₹45.56, filled 14:31:50 IST) had no GTT protecting it. Two-part root cause: (1) fill arrived while runtime `bb9d9161` was stopping — `get_live_runtime` returned None → `on_buy_fill_trailing` never called; (2) on subsequent restarts `kite.positions()['net']` returned 0 rows (intraday API timing race during market hours) → hydration only loaded overnight holdings → `ensure_gtts` never saw SOUTHBANK.
