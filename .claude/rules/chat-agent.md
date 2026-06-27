@@ -6,6 +6,8 @@ paths:
   - "backend/ws.py"
   - "backend/tools/agent_tool.py"
   - "backend/tools/sentiment_agent.py"
+  - "backend/memory_extractor.py"
+  - "backend/memory_retriever.py"
 ---
 
 # Chat agent rules (auto-loads when touching chat-agent code)
@@ -34,3 +36,12 @@ paths:
 - **Currency-aware prompt**: `_build_context_block()` injects portfolio currency mix.
 - **Tool-forcing prompts**: directive ("YOUR FIRST RESPONSE MUST ONLY be a tool call"). → `llm-tool-forcing`
 - **WebSocket**: auth-first handshake; events `thinking`/`tool_start`/`tool_done`/`warning`/`final`/`error`/`timeout`; close codes 4001/4002/4003. `_handle_chat` MUST send `error` + `final` events (not just return queue). → `streaming-protocol`
+
+## Chat memory layer (pgvector)
+
+- **Write**: async fire-and-forget from WS worker via `asyncio.run_coroutine_threadsafe()`. Skip responses <50 chars.
+- **Read**: sync before `graph.invoke()` — top-5 cosine, 3s timeout, `[Memory context]` block in prompt.
+- **Embeddings**: Ollama `nomic-embed-text` (768 dim). Falls back to `ConversationContext.summary` when Ollama down.
+- **ConversationContext**: dual-layer (in-memory + PG via `ConversationContextStore.upsert()` SYNCHRONOUS — daemon thread fails inside uvicorn).
+- Cross-session resume via `get_latest_for_user(user_id)`.
+→ `memory-augmented-chat`, `conversation-context-persistence`

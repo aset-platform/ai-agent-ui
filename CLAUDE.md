@@ -17,14 +17,7 @@
 
 ## 2. MCP Tools
 
-| Server | Purpose |
-|---|---|
-| Serena | Code/symbol nav, shared memories |
-| Ollama | Local LLM delegation (Qwen code-gen) |
-| Context7 | Library/framework docs |
-| Playwright / Chrome DevTools | Browser automation, perf |
-| Atlassian (Jira) | Sprint/ticket management |
-| Sequential Thinking | Multi-step reasoning |
+Serena (code/memories) · Ollama (code-gen delegation) · Context7 (docs) · Playwright/Chrome (browser) · Jira (sprints) · Sequential Thinking (multi-step)
 
 ## 3. Stack
 
@@ -76,19 +69,12 @@ DB inventory: 19 PG OLTP + 12 Iceberg OLAP → `db-table-inventory`. Data home: 
 20. **NEVER `rm` Iceberg metadata/parquet** — use `overwrite()` / `delete_rows()` API or `cleanup_orphans_v2()`. → `iceberg-orphan-sweep-design`
 21. **New write-heavy Iceberg table → enroll in BOTH** `_HOT_ICEBERG_TABLES` (`backend/jobs/executor.py`) AND `ALL_TABLES` (`backend/maintenance/iceberg_maintenance.py`) — same PR as DDL. → `iceberg-maintenance-enrollment`
 22. **★ Iceberg table storage design — universal checklist** (every new table, no exceptions). → `iceberg-table-design-checklist`
-    a. **Partition spec** — NEVER `IdentityTransform` on a column with cardinality > 50 (ticker, user_id, session_id). Use `BucketTransform(N)` (N ∈ {8, 16, 32}). For ticker × time data the canonical spec is `BucketTransform(16, ticker) + MonthTransform(date)` → ~192 partitions/year.
-    b. **Time grain** — `MonthTransform` on a `DateType` column for any table writing > 100 commits/day. `DayTransform` only for daily-aggregate tables. `IdentityTransform` on a `StringType("YYYY-MM-DD")` is forbidden (defeats Iceberg date pruning).
-    c. **Sort order** — declare a `SortOrder` on `(bucket_or_partition_key, primary_filter, timestamp)` at create time. Drives compaction layout + predicate pushdown.
-    d. **Schema** — `DateType` for date columns (not `StringType("YYYY-MM-DD")`); primitives only; tz-naive `TimestampType` (strip tz before write).
-    e. **1-year file budget** — estimate `writes/day × distinct_partitions × 365`; reject the spec if projected active file count > 5,000.
-    f. **Enrollment in same PR as DDL** — write-heavy (≥ 10 commits/day): `_HOT_ICEBERG_TABLES` + `ALL_TABLES` + the writing pipeline's scoped maintenance payload. Low-write (< 10 commits/day): `ALL_TABLES` + Weekly Long-Tail Iceberg Maintenance pipeline.
-    g. **Type evolution is one-way** — `StringType` cannot become `DateType` post-hoc without a nuke-rebuild. Get types right on day 1.
 
 ### 4.4 Process & git
 
 23. Branch off `dev`; never push to `dev`/`qa`/`release`/`main`. Hotfix: branch off `main`, PR to `main`, sync DOWN. Keep feature branch until sprint history stale.
 24. Co-Authored-By: `Abhay Kumar Singh <asequitytrading@gmail.com>`.
-25. Update `PROGRESS.md` per session (dated); `git add .serena/` before push. Doc triggers: `docs/` for API changes · new Serena memory per new pattern · `README.md` env-vars table for new config · `stocks/create_tables.py` + `docs/` for new Iceberg table · this file for new regression-preventing rule.
+25. Update `PROGRESS.md` per session (dated); `git add .serena/` before push. Doc triggers: `docs/` for API changes · new Serena memory per new pattern · `README.md` env-vars table for new config.
 26. Test-after-feature — write immediately after smoke test passes; happy + 1 error path minimum.
 27. **PR merge on `dev`: squash only** (merge-commit + rebase blocked).
 28. Jira 3-phase: create → In Progress → comment+Done. Both `customfield_10016` (numeric) + `customfield_10036` (string) for story points. → `jira-3phase-lifecycle`
@@ -136,9 +122,9 @@ DB inventory: 19 PG OLTP + 12 Iceberg OLAP → `db-table-inventory`. Data home: 
 - **SSR safety**: localStorage in `useEffect`; `crypto.randomUUID` guarded by `typeof window`; explicit locale in `toLocaleString`.
 - **`<span>` not `<div>` inside `<p>`** (hydration).
 - **Loading shells need text/img/svg** (Lighthouse FCP doesn't fire on pure-CSS divs). → `lighthouse-fcp-text-heuristic`
-- **LCP anti-pattern**: top-level `if (loading) return <Skeleton/>` over prop-driven hero text hides LCP candidate. Render structure with `?? 0` placeholders; keep inner gate for conditional charts / wide cells / heatmaps. → `loading-gate-lcp-anti-pattern`
+- **LCP anti-pattern**: top-level `if (loading) return <Skeleton/>` hides LCP candidate. → `loading-gate-lcp-anti-pattern`
 - **`<Suspense fallback={null}>` blanks SSR** when subtree calls `useSearchParams`. Replace with `<h1>` + `min-h-[Npx]` mirror. → `suspense-fallback-null-ssr-hole`
-- **React effects** must satisfy `react-hooks/set-state-in-effect`: defer synchronous setState via `queueMicrotask` + cancellation flag, OR use `useState` lazy initializer. Avoid impure calls (`Date.now()`) in render — track in state with interval tick.
+- **React effects**: defer setState via `queueMicrotask` + cancel flag, or `useState` lazy init. No impure calls in render.
 - **Sign Out** MUST POST `/v1/auth/logout` BEFORE `clearTokens()` — proxy.ts edge gate accepts either cookie. Canonical: `AppHeader.handleSignOut`, `ChatHeader.handleSignOut`. Wrap try/catch.
 
 ### 5.4 ★ Tabular pages (Insights, Admin)
@@ -148,7 +134,7 @@ DB inventory: 19 PG OLTP + 12 Iceberg OLAP → `db-table-inventory`. Data home: 
 
 ### 5.5 ★ Stale-data transparency chip
 
-Aggregating N entities with stale inputs → amber chip in panel title with hover tooltip. Backend: `stale_tickers: list[StaleTicker]` or `unanalyzed_tickers: list[str]`. Frontend: auto-clears when empty. Reference: `PLTrendWidget::StaleTickerChip`. → `portfolio-pl-stale-ticker-chip`
+Aggregating N entities with stale inputs → amber chip in panel title with hover tooltip (auto-clears when empty). Backend: `stale_tickers: list[StaleTicker]` or `unanalyzed_tickers: list[str]`. Reference: `PLTrendWidget::StaleTickerChip`. → `portfolio-pl-stale-ticker-chip`
 
 ### 5.6 ★ Modals
 
@@ -188,21 +174,14 @@ Full-universe filter: `ticker_type IN ('stock', 'etf')`. Per-user cache key MUST
 
 ### 5.12 Chat memory layer (pgvector)
 
-- **Write**: async fire-and-forget from WS worker via `asyncio.run_coroutine_threadsafe()`. Skip responses <50 chars.
-- **Read**: sync before `graph.invoke()` — top-5 cosine, 3s timeout, `[Memory context]` block in prompt.
-- **Embeddings**: Ollama `nomic-embed-text` (768 dim). Falls back to `ConversationContext.summary` when Ollama down.
-- **ConversationContext**: dual-layer (in-memory + PG via `ConversationContextStore.upsert()` SYNCHRONOUS — daemon thread fails inside uvicorn).
-- Cross-session resume via `get_latest_for_user(user_id)`.
-
-→ `memory-augmented-chat`, `conversation-context-persistence`
+Write/read/embed/context rules → `.claude/rules/chat-agent.md`. → `memory-augmented-chat`, `conversation-context-persistence`
 
 ### 5.13 ★ Redis caching
 
 Every new endpoint returning Iceberg-derived data:
 - **TTL constants**: `TTL_VOLATILE=60` (per-user), `TTL_STABLE=300` (charts, insights), `TTL_ADMIN=30`. Don't invent new TTLs.
-- **Key schema**: `cache:<area>:<endpoint>:<scope>` (e.g. `cache:dash:home:{user_id}`). Per-user keys MUST include `user_id`.
+- **Key schema**: `cache:<area>:<endpoint>:<scope>` (e.g. `cache:dash:home:{user_id}`). Per-user keys MUST include `user_id`. Pattern: get→return; else compute+`cache.set(key, json, TTL_*)`.
 - **Write-through invalidation**: every Iceberg write through `_retry_commit()` calls `_invalidate_cache(table)` via `_CACHE_INVALIDATION_MAP`. New Iceberg table → add map entry.
-- **Pattern**: `cache.get(key)` → return; else compute, `cache.set(key, json, TTL_*)`, return.
 - **kwarg is `ttl`** NOT `ex` (silent `TypeError`). `cache.invalidate(pattern)` glob; `cache.invalidate_exact(*keys)` exact.
 - No-op when `REDIS_URL` empty (graceful). → `redis-cache-layer`
 
@@ -213,22 +192,7 @@ Every new endpoint returning Iceberg-derived data:
 
 ### 5.15 ★ Performance budgets
 
-Pre-PR `npm run perf:check` (LHCI on /login) soft gate; full audit via 34-route containerized Lighthouse (§7) before major frontend ship.
-
-**Iterating on LCP fixes**: save `pw-lh-summary.json` per cycle, diff LCP **and** CLS (every gate removal can spike CLS — verify ≤ 0.02). Phase 0: read LCP element + phase breakdown from per-route JSON before fixing. `Render Delay = 100% of LCP` ≠ "chart paints late". → `loading-gate-lcp-anti-pattern`, `suspense-fallback-null-ssr-hole`
-
-| Bucket | Perf | LCP | CLS |
-|---|---:|---:|---:|
-| `/`, `/login`, `/auth/oauth/callback` | ≥ 90 | ≤ 2.0–2.5 s | ≤ 0.1 |
-| `/dashboard`, `/analytics` | ≥ 80 | ≤ 2.5 s | ≤ 0.1 |
-| `/analytics/*`, `/insights` | ≥ 75 | ≤ 3.0 s | ≤ 0.1 |
-| `/admin` | ≥ 70 | ≤ 3.5 s | ≤ 0.1 |
-| `/docs` | ≥ 85 | ≤ 2.0 s | ≤ 0.1 |
-| All pages | TBT ≤ 200 ms | — | ≤ 0.02 |
-
-Hard: JS < 500 KB gzipped/route · mobile baseline (4× CPU, slow 4G) · heavy chart libs via `next/dynamic({ssr:false})` · `<Suspense>` around chart Client Components in RSC migration · `react-markdown` lazy.
-
-→ `lighthouse-performance-workflow`, `auth-layout-ssr-unlock`, `lighthouse-runner-gotchas`
+Pre-PR `npm run perf:check` (LHCI on /login); full 34-route containerized Lighthouse (§7) before major ship. Budget table + LCP iteration guidance → `.claude/rules/performance.md` (path-scoped; auto-loads on `frontend/app/**`).
 
 ### 5.16 Algo trading
 
@@ -243,24 +207,11 @@ Hard: JS < 500 KB gzipped/route · mobile baseline (4× CPU, slow 4G) · heavy c
 - **String sentinels** `"NaN"`/`"None"`/`"null"`/`"N/A"`/`"na"`/`"NaT"` are truthy. Use `safe_str`/`safe_sector` from `market_utils.py`.
 - **Arithmetic propagation**: `val += qty * NaN` → NaN; `NaN > 0` is False. Guard with `math.isnan`.
 - **`val or default`** broken for pandas numerics — use `_safe_float(val)`. → `nan-handling-iceberg-pandas`
-- **Iceberg dedup**: NaN row blocks re-fetch. Filter dedup to non-NaN AND scoped pre-delete NaN. → `iceberg-nan-replaceable-dedup`
-- **NaN→PG sanitize** before insert (PG rejects NaT/NaN).
-- **PyArrow `pa.string()` rejects NaN** — error: "Expected bytes, got a 'float' object". Sanitise at every `pa.table(...)` boundary.
+- **Sanitise NaN at write boundaries**: PG rejects NaT/NaN; PyArrow `pa.string()` rejects NaN ("Expected bytes, got a 'float' object") — sanitise at every `pa.table(...)` call.
 
 ### 6.2 Backend restart triggers (uvicorn --reload isn't enough)
 
-| Change | Action |
-|---|---|
-| New `@router.get/post/...` decorator | `restart` |
-| New field on `response_model` class | `restart` |
-| New `app.include_router()` | `restart` |
-| New `@register_job(...)` | `restart` |
-| Iceberg `add_column()` | `restart` + Redis FLUSHALL |
-| New env var in `.env` | `up -d --force-recreate backend` |
-| Renamed Alembic migration | edit `revision:` + clear `__pycache__/*.pyc` + `restart` |
-| `Dockerfile.backend` / `requirements.txt` | `compose build backend` + `up -d` |
-
-After restart, sleep 5s before auth-dependent calls (asyncpg shutdown race). → `backend-restart-triggers`
+New routes/Pydantic fields/routers/jobs all need `restart`; `add_column()` needs `restart` + Redis FLUSHALL; new env var needs `up -d --force-recreate`. Sleep 5s before auth calls after restart (asyncpg shutdown race). → `backend-restart-triggers`
 
 ### 6.3 Cookie hostname
 
@@ -272,9 +223,8 @@ After restart, sleep 5s before auth-dependent calls (asyncpg shutdown race). →
 - Concurrent writes: use `tbl.refresh().scan(filter)` (PyIceberg) over DuckDB filesystem-glob.
 - **Backup BEFORE maintenance** — `run_backup()` mandatory step 0 (fail-closed).
 - **NEVER `rm` metadata/parquet** — SQLite catalog stores absolute paths. → `iceberg-table-corruption-recovery`
-- `ObservabilityCollector` flushes 30s — restart loses unflushed. Seed on startup.
-- **`cleanup_orphans_v2(dry_run=True)` misleading** — `dry_run` only gates *file deletion*; snapshot expiry commits regardless. Run with `skip_backup=False` (default). First run 5-15 min; subsequent ~20s.
-- **Commit conflicts** under concurrent writers (`Requirement failed: branch main has changed`): wrap writes in `retry_iceberg_op()` with backoff. Watch for cross-pipeline writers (keeper + retention + maintenance) competing on same table.
+- **`cleanup_orphans_v2(dry_run=True)` misleading** — `dry_run` only gates file deletion; snapshot expiry commits regardless. Run with `skip_backup=False`.
+- **Commit conflicts** under concurrent writers (`Requirement failed: branch main has changed`): wrap writes in `retry_iceberg_op()` with backoff.
 
 ### 6.5 yfinance / data
 
@@ -282,7 +232,7 @@ After restart, sleep 5s before auth-dependent calls (asyncpg shutdown race). →
 - **Bulk download**: `yf.download()` batches of 100 (99.8% vs 56%). `^`-indices fail in bulk — fetch separately.
 - **Sectors casing**: `"Technology"` not `"IT"`, `"Financial Services"` not `"Financials"`.
 - **jugaad-data timeout**: `NseSource` wraps in `asyncio.wait_for(timeout=60.0)`.
-- **Yahoo `^BSESN` freezes mid-session** (~10 min after open). `_is_yahoo_quote_stale()` falls back to Google Finance (`SENSEX:INDEXBOM`).
+- **Yahoo `^BSESN` freezes mid-session**: `_is_yahoo_quote_stale()` falls back to `SENSEX:INDEXBOM` (Google Finance).
 - **Per-source 10s timeout** in sentiment fetchers (`yf.Ticker().news` deadlocks pool).
 - **Pre-1980 dates** corrupt yfinance (`date=1970-01-01`). Backend filter `df[df["date"] >= "1980-01-01"]`; frontend regex `/^(19[89]\d|2\d{3})-/`. → `iceberg-epoch-dates`
 
@@ -290,19 +240,15 @@ After restart, sleep 5s before auth-dependent calls (asyncpg shutdown race). →
 
 - `<div>` inside `<p>` → hydration error.
 - Mount-gate (`if (!mounted) return <Spinner/>`) in layout floors LCP. Audit providers for SSR safety. → `auth-layout-ssr-unlock`
-- **LCP regression**: Render Delay = 100% w/ FCP healthy → loading-gate hides hero text, OR empty SSR HTML → `<Suspense fallback={null}>`. → `loading-gate-lcp-anti-pattern`, `suspense-fallback-null-ssr-hole`
+- **LCP regression**: Render Delay = 100% w/ FCP healthy → loading-gate or `<Suspense fallback={null}>`. → `loading-gate-lcp-anti-pattern`, `suspense-fallback-null-ssr-hole`
 - **Sign Out bounces to /dashboard** — must POST `/v1/auth/logout` before `clearTokens()`. See §5.3.
-- Modal z-index opened from slideover MUST be `z-[70]`.
 - React `set-state-in-effect` rule: see §5.3 (queueMicrotask pattern).
 
 ### 6.7 Sync→async migration
 
-Coroutines returned silently — no compile-time error.
-- **Missing `await`** on async repo methods — grep `repo\.` across codebase.
+- **Missing `await`** on async repo methods (coroutines fail silently) — grep `repo\.` across codebase.
 - **Test mocks**: `AsyncMock` not `MagicMock` for async repos.
-- **Sync→async PG**: pass callable not coroutine (`_run_pg(_call)`). Use `_pg_session()`/`disposable_pg_session()` NOT `get_session_factory()` (loop-bound).
-- **`threading.local()`** across executor boundaries: set INSIDE worker closure.
-- **`pool_pre_ping=True`** mandatory in `create_async_engine()`.
+- **`threading.local()`** across executor boundaries: set INSIDE worker closure. **`pool_pre_ping=True`** mandatory in `create_async_engine()`.
 
 → `sync-async-migration-patterns`, `asyncpg-sync-async-bridge`
 
